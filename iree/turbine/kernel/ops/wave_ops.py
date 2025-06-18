@@ -276,8 +276,15 @@ def select(
 
 
 def gather_to_lds(
-    src: fx.Node,
-    dst: fx.Node,
+    src: Memory,
+    src_idx: dict[IndexSymbol, IndexSequence],
+    src_type: DataType,
+    dst: Memory,
+    dst_idx: dict[IndexSymbol, IndexSequence],
+    dst_type: DataType,
+    src_mapping: Optional[IndexMapping] = None,
+    dst_mapping: Optional[IndexMapping] = None,
+    elements_per_thread: Optional[IndexExpr | int] = None,
 ):
     ...
 
@@ -2509,5 +2516,12 @@ class GatherToLDS(CustomOp):
     and the destination node points to shared memory.
     """
 
-    src: fx.Node
-    dst: fx.Node
+    src: Memory
+    src_idx: dict[IndexSymbol, IndexSequence]
+    src_type: DataType
+    dst: Memory
+    dst_idx: dict[IndexSymbol, IndexSequence]
+    dst_type: DataType
+    src_mapping: Optional[IndexMapping]
+    dst_mapping: Optional[IndexMapping]
+    elements_per_thread: Optional[IndexExpr | int]
