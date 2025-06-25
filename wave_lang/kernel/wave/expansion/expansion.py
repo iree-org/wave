@@ -32,6 +32,7 @@ from ...ops.wave_ops import (
     SetSymbol,
     Write,
     get_custom,
+    ScatterAdd,
 )
 from ..constraints import (
     Constraint,
@@ -752,6 +753,7 @@ def is_leaf_node(node):
         isinstance(custom, Write)
         or (isinstance(custom, GetResult) and not custom.users)
         or isinstance(custom, SetSymbol)
+        or isinstance(custom, ScatterAdd)
     )
 
 
