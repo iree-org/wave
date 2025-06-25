@@ -36,6 +36,42 @@ from ...ops.wave_ops import (
 from ..constraints import (
     Constraint,
 )
+from ...ops.wave_ops import (
+    Allocate,
+    CustomOp,
+    Conditional,
+    get_custom,
+    Output,
+    Write,
+    Iterate,
+    ReduceOp,
+    IterArg,
+    Reshape,
+    GetResult,
+    MMA,
+    ScaledMMA,
+    SetSymbol,
+    ScatterAdd,
+    ApplyExpr,
+    Broadcast,
+)
+from ..._support.indexing import IndexingContext, IndexSymbol
+import itertools
+from torch import fx
+from dataclasses import dataclass
+from .expansion_utils import (
+    get_dim_scaling,
+    flatten_list,
+    get_indexed_dims,
+    is_expandable,
+    get_expanded_name,
+    compute_strides,
+    ExpansionMetadata,
+    get_reshape_dim_queries,
+    remove_original_nodes,
+    remove_unused_registers,
+    remove_unused_iter_args,
+)
 from ..utils.graph_utils import (
     get_inputs,
     get_users,
@@ -752,6 +788,7 @@ def is_leaf_node(node):
         isinstance(custom, Write)
         or (isinstance(custom, GetResult) and not custom.users)
         or isinstance(custom, SetSymbol)
+        or isinstance(custom, ScatterAdd)
     )
 
 
