@@ -1905,6 +1905,56 @@ def test_binary_lowerings():
 
 
 @run_test
+def test_thread_printf_lowering():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, waves_per_block=(1, 1, 1), vector_shapes={M: 16, N: 16}
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    @tkw.wave(constraints)
+    def thread_printf_lowering(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        a_reg = tkw.read(a, elements_per_thread=4)
+        b_reg = tkw.read(b, elements_per_thread=4)
+        i_M = tkw.self_index(M, tkl.i32)
+        i_N = tkw.self_index(N, tkl.i32)
+        cM = tkw.extract_scalar(i_M, [0]) == tkw.scalar(0, tkl.i32)
+        cN = tkw.extract_scalar(i_N, [0]) == tkw.scalar(0, tkl.i32)
+
+        @tkw.conditional(cM)
+        def then():
+            @tkw.conditional(cN)
+            def then():
+                @tkw.conditional(
+                    tkw.scalar(THREAD_0, tkl.i32) == tkw.scalar(0, tkl.i32)
+                )
+                def then():
+                    tkw.thread_printf(
+                        "in kernel, t:%d, %f\n",
+                        tkw.scalar(THREAD_0, tkl.i32),
+                        tkw.extract_scalar(tkw.extract(a_reg, [0]), [0]),
+                    )
+
+        res = a_reg - b_reg
+        tkw.write(res, a, elements_per_thread=4)
+
+    thread_printf_lowering = wave_compile(
+        get_wave_compile_options(), thread_printf_lowering
+    )
+    print(thread_printf_lowering.asm)
+
+    # CHECK-LABEL: test_thread_printf_lowering
+    # CHECK: "gpu.printf"(%[[ARG1:[0-9]+]], %[[ARG2:[0-9]+]])
+
+
+@run_test
 def test_int_comparisons():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})

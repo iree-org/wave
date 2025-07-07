@@ -74,6 +74,7 @@ from ...ops.wave_ops import (
     exp2,
     extract,
     extract_slice,
+    extract_scalar,
     ge,
     get_custom,
     get_result,
@@ -89,6 +90,7 @@ from ...ops.wave_ops import (
     ne,
     permute,
     powf,
+    thread_printf,
     reciprocal,
     register,
     reshape,
@@ -1488,6 +1490,21 @@ def handle_extract(emitter: WaveEmitter, node: fx.Node):
     emitter.bind_node_proxy(node, IRProxyValue(element))
 
 
+@handle_op(extract_scalar)
+def handle_extract_scalar(emitter: WaveEmitter, node: fx.Node):
+    try:
+        register, offset = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+    assert isinstance(offset, list) and len(offset) == 1
+    extract_vector = cast_vector(emitter, register)
+    result_type = VectorType.get([1], extract_vector.type.element_type)
+    element = vector_d.extract(
+        extract_vector, dynamic_position=[], static_position=offset
+    )
+    emitter.bind_node_proxy(node, IRProxyValue(element))
+
+
 @handle_op(extract_slice)
 def handle_extract_slice(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -1589,6 +1606,20 @@ def handle_select(emitter: WaveEmitter, node: fx.Node):
     unwrap = lambda x: cast_py_value(emitter, x).ir_value
     selected = arith_d.select(unwrap(cond), unwrap(if_true), unwrap(if_false))
     emitter.bind_node_proxy(node, IRProxyValue(selected))
+
+
+@handle_op(thread_printf)
+def handle_thread_printf(emitter: WaveEmitter, node: fx.Node):
+    try:
+        format, format_args = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    result = gpu_d.printf(
+        format=format,
+        args=[cast_py_value(emitter, arg).ir_value for arg in format_args],
+    )
+    return result
 
 
 @handle_op(get_result)

@@ -72,6 +72,12 @@ def extract_slice(
 ) -> "Register": ...
 
 
+def extract_scalar(
+    register: "Register",
+    offsets: tuple[IndexExpr],
+) -> "Register": ...
+
+
 def set_wave_prio(priority: int): ...
 
 
@@ -286,6 +292,9 @@ def gather_to_lds(
     src_mapping: Optional[IndexMapping] = None,
     dst_mapping: Optional[IndexMapping] = None,
 ): ...
+
+
+def thread_printf(format: str, *args: Tuple["Register", ...]): ...
 
 
 def define_op(op_name: str) -> Callable[[T], T]:
@@ -854,7 +863,8 @@ class BinaryOpBase(CustomOp, ABC):
 
         lhs_dim_set = set(lhs_type.symbolic_shape)
         rhs_dim_set = set(rhs_type.symbolic_shape)
-        if lhs_dim_set.isdisjoint(rhs_dim_set):
+        # Allow disjoint when one of the lists is empty, since scalars have empty shape
+        if lhs_dim_set.isdisjoint(rhs_dim_set) and lhs_dim_set and rhs_dim_set:
             raise ValueError(
                 "BinaryPyOp requires lhs and rhs shape to be at least broadcastable."
                 f" got {lhs_type.symbolic_shape} vs {rhs_type.symbolic_shape}"
@@ -995,6 +1005,31 @@ class SelectOp(CustomOp):
             raise ValueError("SelectOp doesn't support broadcasting. (yet?)")
 
         self.type = if_true_type
+
+
+@define_op("thread_printf")
+@dataclass(init=False)
+class ThreadPrintfOp(CustomOp):
+    format: str
+    format_args: tuple[fx.Node, ...]
+
+    def __init__(self, format, *args):
+        self.format = format
+        self.format_args = args
+        super(ThreadPrintfOp, self).__init__()
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        combined_dims = []
+        for arg in self.format_args:
+            if isinstance(arg, fx.Node):
+                combined_dims += get_custom(arg).indexing_dims
+        unique_dims = list(dict.fromkeys(combined_dims))
+        return unique_dims
 
 
 @final
@@ -2128,7 +2163,9 @@ class Extract(CustomOp):
 
         # Typically fastest dim is the last dimension,
         # If non-unit dim exists => non-unit dim is fastest dim.
-        non_unit_dim = [k for k, v in self.register_.index.items() if v.size != 1]
+        # TODO - this is broken because it is accessing indices during type checking, but I'm not certain I really understand what this extract op is supposed to be.  I'm using it because it looked like what I wanted, and now I'm not confident that it is, but I need something like this.  But at the moment, nothing uses extract at all.
+        # non_unit_dim = [k for k, v in self.register_.index.items() if v.size != 1]
+        non_unit_dim = []
         if len(non_unit_dim) > 1:
             raise NotImplementedError(
                 f"NYI: Extract only support 1 non-unit dim, but found: {len(non_unit_dim)}"
@@ -2161,6 +2198,35 @@ class ExtractSlice(CustomOp):
             offset_rank == size_rank == stride_rank
         ), "Expected offset, size, and stride to have same rank."
         return size_rank
+
+
+@define_op("extract_scalar")
+@dataclass
+class ExtractScalar(CustomOp):
+    """
+    Op Rationale:
+
+    extract_scalar is an op used to represent extracting of
+    a scalar from TKW's 1-D vector on the specified index.
+    """
+
+    register_: fx.Proxy
+    offset: IndexExpr | int
+
+    def infer_type(self):
+        # Intuition here is we are trying to extract an element
+        # from fastest dim => we reduce the fastest dim.
+        src_type = get_custom(self.register_).type
+        # Return itself if just 0-D/1-D symbolic.
+        if len(src_type.symbolic_shape) <= 1:
+            self.type = src_type
+            return
+
+        dst_shape = list(src_type.symbolic_shape)
+        dim_to_remove = dst_shape[-1] if not non_unit_dim else non_unit_dim[0]
+        dst_shape.remove(dim_to_remove)
+        dst_type = Register[(*dst_shape, src_type.dtype)]
+        self.type = dst_type
 
 
 @define_op("broadcast")

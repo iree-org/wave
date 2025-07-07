@@ -31,6 +31,7 @@ from ...ops.wave_ops import (
     NestedRegionOp,
     Output,
     Placeholder,
+    ThreadPrintfOp,
     Read,
     ReduceOp,
     ScaledMMA,
@@ -212,11 +213,15 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
             continue
         if isinstance(custom, (Output, NestedRegionOp)):
             continue
-        if isinstance(custom, (SharedMemoryBarrier, SetWavePrio, WorkgroupBarrier)):
+        if isinstance(
+            custom, (SharedMemoryBarrier, SetWavePrio, WorkgroupBarrier, ThreadPrintfOp)
+        ):
             continue
         if isinstance(custom.type, DataType):
             continue
-        assert custom.index, f"Index not set for node {custom.fx_node}: {custom}"
+        assert (
+            custom.index != None
+        ), f"Index not set for node {custom.fx_node}: {custom}"
 
         if not custom.vector_shapes:
             # If vector_shapes is not set, see if it can be derived from the hardware constraints.
@@ -228,12 +233,12 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
             update_vector_shapes = [
                 dim for dim in custom.index if dim in hw_constraint.vector_shapes
             ]
+            custom.vector_shapes = {}
             if update_vector_shapes:
-                custom.vector_shapes = {}
                 for dim in update_vector_shapes:
                     custom.vector_shapes[dim] = hw_constraint.vector_shapes[dim]
         assert (
-            custom.vector_shapes
+            custom.vector_shapes != None
         ), f"Vector shapes not set for node {custom.fx_node}: {custom}"
 
 
