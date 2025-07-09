@@ -64,7 +64,7 @@ class WaveKernel:
 
             self.launchable = Launchable.from_vm_module(
                 loader,
-                entry_point=options.func_name,
+                entry_point=options.func_name + "$async",
             )
 
     def get_trace(self) -> Optional["CapturedTrace"]:
