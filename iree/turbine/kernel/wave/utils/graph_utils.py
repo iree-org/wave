@@ -41,14 +41,14 @@ def DCE(trace: CapturedTrace):
             in [GLOBAL_ADDRESS_SPACE, tkl.AddressSpace.GLOBAL_MEMORY.value]
         )
 
-    def has_nested_writes(node: fx.Node) -> bool:
+    def has_nested_irremovable(node: fx.Node) -> bool:
         custom = get_custom(node)
         if not isinstance(custom, NestedRegionOp):
             return False
 
         subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
         for node in subgraph.nodes:
-            if is_global_write(node) or has_nested_writes(node):
+            if not is_removable_operator(node):
                 return True
 
         return False
@@ -64,7 +64,7 @@ def DCE(trace: CapturedTrace):
             # arguments and removing them will change the kernel signature.
             return False
 
-        if has_nested_writes(node):
+        if has_nested_irremovable(node):
             return False
 
         return True
