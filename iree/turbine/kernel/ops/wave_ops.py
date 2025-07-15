@@ -285,8 +285,7 @@ def gather_to_lds(
     src_mapping: Optional[IndexMapping] = None,
     dst_mapping: Optional[IndexMapping] = None,
     elements_per_thread: Optional[IndexExpr | int] = None,
-):
-    ...
+): ...
 
 
 def define_op(op_name: str) -> Callable[[T], T]:
