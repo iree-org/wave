@@ -171,7 +171,6 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         # last_dim = list(index)[fastest_dim]
 
         element_type = read.type.dtype
-        # element_type = tkl.i32
         bitwidth = element_type.bitwidth()
         logger.info(f"element_type={element_type}, bitwidth={bitwidth}")
 
@@ -215,6 +214,11 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
         global_index = remove_thread_indexing(read.index)
 
+        drop_padding = (
+            materialized_shape[-1] % (elements_per_thread * total_number_of_threads)
+            != 0
+        )
+
         new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
             write_index = {}
@@ -243,6 +247,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                 ).add_to_graph(write.graph)
 
                 new_writes[write.memory].append(new_write)
+                if drop_padding:
+                    write.memory.padding = 0
 
         update_write_dependencies(new_writes, trace)
 
