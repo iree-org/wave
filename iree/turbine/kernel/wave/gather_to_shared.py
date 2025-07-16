@@ -248,7 +248,15 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
                 new_writes[write.memory].append(new_write)
                 if drop_padding:
-                    write.memory.padding = 0
+                    custom_memory = get_custom(write.memory)
+                    padding = custom_memory.padding
+                    if padding != 0:
+                        custom_memory.update_arg("padding", 0)
+                        new_distributed_shape = list(custom_memory.distributed_shape)
+                        new_distributed_shape[-1] -= padding
+                        custom_memory.update_arg(
+                            "distributed_shape", tuple(new_distributed_shape)
+                        )
 
         update_write_dependencies(new_writes, trace)
 
