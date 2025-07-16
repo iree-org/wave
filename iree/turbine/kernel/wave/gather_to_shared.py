@@ -210,23 +210,22 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         expected_number_of_loads *= ratio
         elements_per_thread //= ratio
 
-        nd_index = delinearize_index(thread_id, symbolic_shape)
-
         global_index = remove_thread_indexing(read.index)
 
-        drop_padding = (
-            materialized_shape[-1] % (elements_per_thread * total_number_of_threads)
-            != 0
-        )
+        elements_per_wave = elements_per_thread * total_number_of_threads
+        logger.info(f"elements_per_wave={elements_per_wave}")
+        drop_padding = materialized_shape[-1] % elements_per_wave != 0
 
         new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
+            nd_index = delinearize_index(
+                thread_id + i * elements_per_wave, symbolic_shape
+            )
             write_index = {}
             for dim, idx in zip(symbolic_shape, nd_index):
                 last = dim == symbolic_shape[-1]
 
-                idx = idx + i * elements_per_thread if not last else idx
-                size = elements_per_thread * expected_number_of_loads if last else 1
+                size = elements_per_thread if last else 1
                 stride = 1
                 write_index[dim] = IndexSequence(idx, size, stride)
 
