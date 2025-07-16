@@ -217,10 +217,13 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         global_index = remove_thread_indexing(read.index)
         logger.info(f"global_index={global_index}")
 
+        symbolic_shape_adjusted = list(symbolic_shape)
+        symbolic_shape_adjusted[-1] = ceildiv(symbolic_shape[-1], ratio)
+
         new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
             nd_index = delinearize_index(
-                thread_id * ratio + i * elements_per_wave, symbolic_shape
+                thread_id + i * elements_per_wave, symbolic_shape_adjusted
             )
             logger.info(f"nd_index={nd_index}")
             write_index = {}
@@ -232,7 +235,13 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                 write_index[dim] = IndexSequence(idx, size, stride)
 
             read_index = combine_index(global_index, write_index)
-            write_index = {k: v.subs({THREAD_0: 0}) for k, v in write_index.items()}
+
+            if (
+                hardware_constraint.threads_per_block[0]
+                == hardware_constraint.threads_per_wave
+            ):
+                write_index = {k: v.subs({THREAD_0: 0}) for k, v in write_index.items()}
+
             logger.info(f"read_index={read_index}")
             logger.info(f"write_index={write_index}")
             with write.graph.inserting_before(write.fx_node):
