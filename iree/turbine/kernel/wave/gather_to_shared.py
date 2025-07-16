@@ -219,7 +219,9 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         logger.info(f"global_index={global_index}")
 
         materialized_shape_adjusted = list(materialized_shape)
-        materialized_shape_adjusted[-1] = sympy.ceiling(materialized_shape[-1] / ratio)
+        materialized_shape_adjusted[-1] = sympy.ceiling(
+            materialized_shape[-1] / elements_per_thread
+        )
         logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
         new_writes = defaultdict(list)
@@ -232,7 +234,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
             for dim, idx in zip(symbolic_shape, nd_index):
                 last = dim == symbolic_shape[-1]
 
-                idx = idx * ratio if last else idx
+                idx = idx * elements_per_thread if last else idx
                 size = elements_per_thread if last else 1
                 stride = 1
                 write_index[dim] = IndexSequence(idx, size, stride)
