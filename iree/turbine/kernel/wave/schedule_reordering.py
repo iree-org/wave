@@ -480,20 +480,6 @@ def select_reorder_strategy(
         return SchedReorderStrategy.NONE
 
 
-def split_local_load_from_chain(sliced_local_load_chain: list):
-    assert isinstance(sliced_local_load_chain, list)
-    assert all(isinstance(chain, list) for chain in sliced_local_load_chain)
-    assert len(set(len(chain) for chain in sliced_local_load_chain)) == 1
-    if len(sliced_local_load_chain[0]) == 1:
-        return sliced_local_load_chain, []
-    local_loads = []
-    chain_ops = []
-    for chain in sliced_local_load_chain:
-        local_loads.append(chain[0])
-        chain_ops.extend(chain[1:])
-    return local_loads, chain_ops
-
-
 def transform_two_PP_clusters(
     mma_nodes,
     local_load_lhs,
