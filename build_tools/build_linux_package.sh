@@ -116,10 +116,9 @@ function run_in_docker() {
     export PATH="${python_dir}/bin:${orig_path}"
     echo ":::: Python version $(python --version)"
 
-    # TODO: Switch to wave on repo change
-    clean_wheels "iree_turbine" "${python_version}"
+    clean_wheels "wave_lang" "${python_version}"
     build_wave
-    run_audit_wheel "iree_turbine" "${python_version}"
+    run_audit_wheel "wave_lang" "${python_version}"
 
     if ! [ -z "$CACHE_DIR" ]; then
       echo "ccache stats:"

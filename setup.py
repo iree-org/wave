@@ -113,11 +113,11 @@ class BuildCommand(distutils.command.build.build):
 
 
 setup(
-    name="iree-turbine",
+    name="wave-lang",
     version=f"{PACKAGE_VERSION}",
     author="IREE Authors",
     author_email="iree-technical-discussion@lists.lfaidata.foundation",
-    description="IREE Turbine Machine Learning Deployment Tools",
+    description="Wave Language for Machine Learning",
     long_description=README,
     long_description_content_type="text/markdown",
     license="Apache-2.0",
@@ -128,8 +128,8 @@ setup(
     ],
     project_urls={
         "homepage": "https://iree.dev/",
-        "repository": "https://github.com/iree-org/iree-turbine/",
-        "documentation": "https://iree-turbine.readthedocs.io/en/latest/",
+        "repository": "https://github.com/iree-org/wave/",
+        "documentation": "https://wave.readthedocs.io/en/latest/",
     },
     packages=packages,
     include_package_data=True,
