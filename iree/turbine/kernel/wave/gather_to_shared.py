@@ -160,8 +160,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         # fastest_dim = get_fastest_index(index)
         # last_dim = list(index)[fastest_dim]
 
-        # element_type = read.type.dtype
-        element_type = tkl.i32
+        element_type = read.type.dtype
+        # element_type = tkl.i32
 
         symbolic_shape = read.type.symbolic_shape
 
@@ -206,7 +206,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                         element_type,
                         read.mapping,
                         write.mapping,
-                        1,
+                        store_elems_per_thread,
                     ).add_to_graph(write.graph)
                 )
         for _, write in reads_writes:
