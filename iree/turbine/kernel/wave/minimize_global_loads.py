@@ -302,7 +302,7 @@ def update_shared_memory_read(
 
 
 def update_write_dependencies(
-    optimized_writes: list[fx.Node],
+    optimized_writes: dict[fx.Node, list[fx.Node]],
     trace: CapturedTrace,
     shared_read_metadata: SharedReadMetadata = None,
 ):

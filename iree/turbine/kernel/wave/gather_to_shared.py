@@ -184,6 +184,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
         global_index = remove_thread_indexing(read.index)
 
+        new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
             write_index = {}
             for dim, idx in zip(symbolic_shape, nd_index):
@@ -196,21 +197,21 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
             read_index = combine_index(global_index, write_index)
             with write.graph.inserting_before(write.fx_node):
-                write.replace_all_uses_with(
-                    GatherToLDS(
-                        read.memory,
-                        read_index,
-                        element_type,
-                        write.memory,
-                        write_index,
-                        element_type,
-                        read.mapping,
-                        write.mapping,
-                        store_elems_per_thread,
-                    ).add_to_graph(write.graph)
-                )
-        for _, write in reads_writes:
-            write.erase()
+                new_write = GatherToLDS(
+                    read.memory,
+                    read_index,
+                    element_type,
+                    write.memory,
+                    write_index,
+                    element_type,
+                    read.mapping,
+                    write.mapping,
+                    store_elems_per_thread,
+                ).add_to_graph(write.graph)
+
+                new_writes[write.memory].append(new_write)
+
+        update_write_dependencies(new_writes, trace)
 
     DCE(trace)
     return
