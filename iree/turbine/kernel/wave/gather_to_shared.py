@@ -220,14 +220,13 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
             nd_index = delinearize_index(
-                thread_id + i * elements_per_wave, symbolic_shape
+                thread_id * ratio + i * elements_per_wave, symbolic_shape
             )
             logger.info(f"nd_index={nd_index}")
             write_index = {}
             for dim, idx in zip(symbolic_shape, nd_index):
                 last = dim == symbolic_shape[-1]
 
-                idx = idx * elements_per_thread if last else idx
                 size = elements_per_thread if last else 1
                 stride = 1
                 write_index[dim] = IndexSequence(idx, size, stride)
