@@ -35,6 +35,7 @@ from .minimize_global_loads import (
     materialize_shape,
     update_write_dependencies,
 )
+from typing import Optional
 from math import prod
 import logging
 import torch.fx as fx
@@ -113,6 +114,13 @@ def remove_thread_indexing(
     return {key: safe_subs(index[key], subs) for key in index}
 
 
+def get_load_width(supported_load_widths: list[int], bitwidth: int) -> Optional[int]:
+    for width in supported_load_widths:
+        if bitwidth % width == 0:
+            return width
+    return None
+
+
 def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
     """
     This pass enables direct memory load from global to lds without passing
@@ -142,6 +150,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         hardware_constraint.waves_per_block
     )
 
+    supported_load_widths = [32, 96, 128]
+
     thread_id = hardware_constraint.linearized_thread_id
 
     constraint_tile_size = {
@@ -162,6 +172,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
         element_type = read.type.dtype
         # element_type = tkl.i32
+        bitwidth = element_type.bitwidth()
+        logger.info(f"element_type={element_type}, bitwidth={bitwidth}")
 
         symbolic_shape = read.type.symbolic_shape
 
@@ -173,12 +185,31 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         )
 
         materialized_shape = materialize_shape(constraint_tile_size, symbolic_shape)
+        logger.info(f"materialized_shape={materialized_shape}")
 
         total_number_of_elements = prod(materialized_shape)
+        logger.info(f"total_number_of_elements={total_number_of_elements}")
         expected_number_of_loads = ceildiv(
             total_number_of_elements, max_elements_per_store
         )
         logger.info(f"expected_number_of_loads={expected_number_of_loads}")
+        elements_per_thread = ceildiv(
+            total_number_of_elements, expected_number_of_loads * total_number_of_threads
+        )
+        logger.info(f"elements_per_thread={elements_per_thread}")
+
+        vector_width = elements_per_thread * bitwidth
+        load_width = get_load_width(supported_load_widths, vector_width)
+        if load_width is None:
+            logger.error(f"No supported load width found for bitwidth={vector_width}")
+            continue
+
+        logger.info(f"load_width={load_width}")
+
+        ratio = vector_width // load_width
+        logger.info(f"ratio={ratio}")
+        expected_number_of_loads *= ratio
+        elements_per_thread //= ratio
 
         nd_index = delinearize_index(thread_id, symbolic_shape)
 
@@ -196,6 +227,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                 write_index[dim] = IndexSequence(idx, size, stride)
 
             read_index = combine_index(global_index, write_index)
+            logger.info(f"read_index={read_index}")
+            logger.info(f"write_index={write_index}")
             with write.graph.inserting_before(write.fx_node):
                 new_write = GatherToLDS(
                     read.memory,
@@ -206,7 +239,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                     element_type,
                     read.mapping,
                     write.mapping,
-                    store_elems_per_thread,
+                    elements_per_thread,
                 ).add_to_graph(write.graph)
 
                 new_writes[write.memory].append(new_write)
