@@ -42,6 +42,7 @@ from ...compiler.vector_codegen import (
 from ...ops.wave_ops import get_custom, read, write, gather_to_lds, CustomOp
 
 from ..utils.general_utils import get_fastest_index, infer_dim
+from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.symbol_utils import safe_subs, subs_idxc
 
 from ..._support.indexing import IndexingContext, IndexExpr, IndexSequence, IndexSymbol

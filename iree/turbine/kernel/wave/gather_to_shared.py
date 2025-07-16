@@ -4,25 +4,74 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import iree.turbine.kernel.lang as tkl
+
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
-from ..ops.wave_ops import GatherToLDS, Write, get_custom
+from ..ops.wave_ops import GatherToLDS, Read, Write, get_custom, CustomOp
+from ..ops.wave_ops import IndexSequence
+from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from ..wave.constraints import (
     Constraint,
+    TilingConstraint,
+    WorkgroupConstraint,
 )
 from ..wave.utils.run_utils import get_default_arch
-from .utils.general_utils import get_fastest_index, is_valid_global_read
+from ..wave.utils.graph_utils import DCE
+from .utils.general_utils import (
+    get_fastest_index,
+    is_valid_global_read,
+    get_hardware_constraint,
+    ceildiv,
+    delinearize_index,
+)
 from .utils.graph_utils import DCE
 from .utils.mapping_utils import transform_index_on_mapping
 from .utils.symbol_utils import (
+    safe_subs,
     subs_idxc,
 )
+from .minimize_global_loads import (
+    materialize_shape,
+    update_write_dependencies,
+)
+from math import prod
+import logging
+import torch.fx as fx
+from collections import defaultdict
+import sympy
+
+logger = logging.getLogger(__name__)
 
 
 gather_to_shared_supported_arch = ["gfx950"]
 
 
-def get_write_node_consumers(read_custom):
+def is_valid_read(node: fx.Node) -> bool:
+    read = get_custom(node)
+    if not isinstance(read, Read):
+        return False
+
+    if subs_idxc(read.memory_type.address_space) != GLOBAL_ADDRESS_SPACE:
+        return False
+
+    return True
+
+
+def is_valid_write(write: CustomOp) -> bool:
+    if not isinstance(write, Write):
+        return False
+
+    if subs_idxc(write.memory_type.address_space) != SHARED_ADDRESS_SPACE:
+        return False
+
+    if not write.has_identity_mapping():
+        return False
+
+    return True
+
+
+def get_write_node_consumers(read_custom: CustomOp) -> list[fx.Node]:
     write_node = []
 
     for user in read_custom.users:
@@ -35,15 +84,136 @@ def get_write_node_consumers(read_custom):
     return write_node
 
 
+def combine_index(
+    index1: dict[IndexSymbol, IndexSequence],
+    index2: dict[IndexSymbol, IndexSequence],
+) -> dict[IndexSymbol, IndexSequence]:
+    """
+    This function takes two index sequences and combines them.
+    """
+    assert set(index1.keys()) == set(index2.keys())
+    return {
+        key: IndexSequence(
+            index1[key].start + index2[key].start,
+            sympy.Max(index1[key].size, index2[key].size),
+            1,
+        )
+        for key in index2
+    }
+
+
+def remove_thread_indexing(
+    index: dict[IndexSymbol, IndexSequence],
+) -> dict[IndexSymbol, IndexSequence]:
+    """
+    This function takes the index sequence for a global read and removes all
+    thread level indexing.
+    """
+    subs = {t: 0 for t in [THREAD_0, THREAD_1, THREAD_2, GPR_NUM]}
+    return {key: safe_subs(index[key], subs) for key in index}
+
+
 def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
     """
     This pass enables direct memory load from global to lds without passing
     through register reducing the data movement. This instruction is supported
     only on specific architectures (gfx950).
     """
+    logger.info("gather_to_shared")
 
     # if get_default_arch() not in gather_to_shared_supported_arch:
     #     return
+
+    id_to_read_write = defaultdict(list)
+    for read in trace.walk(is_valid_read):
+        read = get_custom(read)
+        for write in read.users:
+            if not is_valid_write(write):
+                continue
+
+            key = (read.pre_expansion_id, write.pre_expansion_id)
+            id_to_read_write[key].append((read, write))
+
+    if not id_to_read_write:
+        return
+
+    hardware_constraint = get_hardware_constraint(constraints)
+    total_number_of_threads = hardware_constraint.threads_per_wave * prod(
+        hardware_constraint.waves_per_block
+    )
+
+    thread_id = hardware_constraint.linearized_thread_id
+
+    constraint_tile_size = {
+        c.dim: c.tile_size
+        for c in constraints
+        if isinstance(c, TilingConstraint) or isinstance(c, WorkgroupConstraint)
+    }
+
+    for reads_writes in id_to_read_write.values():
+        read, write = reads_writes[0]
+        logger.info(f"processing read={read}, write={write}")
+
+        index = read.index
+        assert index == write.index
+
+        # fastest_dim = get_fastest_index(index)
+        # last_dim = list(index)[fastest_dim]
+
+        # element_type = read.type.dtype
+        element_type = tkl.i32
+
+        symbolic_shape = read.type.symbolic_shape
+
+        store_elems_per_thread = hardware_constraint.max_elems_per_load(element_type)
+        max_elements_per_store = total_number_of_threads * store_elems_per_thread
+        logger.info(
+            f"store_elems_per_thread={store_elems_per_thread}, "
+            f"max_elements_per_store={max_elements_per_store}"
+        )
+
+        materialized_shape = materialize_shape(constraint_tile_size, symbolic_shape)
+
+        total_number_of_elements = prod(materialized_shape)
+        expected_number_of_loads = ceildiv(
+            total_number_of_elements, max_elements_per_store
+        )
+        logger.info(f"expected_number_of_loads={expected_number_of_loads}")
+
+        nd_index = delinearize_index(thread_id, symbolic_shape)
+
+        global_index = remove_thread_indexing(read.index)
+
+        for i in range(expected_number_of_loads):
+            write_index = {}
+            for dim, idx in zip(symbolic_shape, nd_index):
+                last = dim == symbolic_shape[-1]
+
+                idx = idx + i * store_elems_per_thread if not last else idx
+                size = store_elems_per_thread * expected_number_of_loads if last else 1
+                stride = 1
+                write_index[dim] = IndexSequence(idx, size, stride)
+
+            read_index = combine_index(global_index, write_index)
+            with write.graph.inserting_before(write.fx_node):
+                write.replace_all_uses_with(
+                    GatherToLDS(
+                        read.memory,
+                        read_index,
+                        element_type,
+                        write.memory,
+                        write_index,
+                        element_type,
+                        read.mapping,
+                        write.mapping,
+                        1,
+                    ).add_to_graph(write.graph)
+                )
+        for _, write in reads_writes:
+            write.erase()
+
+    DCE(trace)
+    return
 
     global_read_nodes = trace.walk(is_valid_global_read)
     for read_node in global_read_nodes:
