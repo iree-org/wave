@@ -1,165 +1,35 @@
-# IREE Turbine
+# TKW: A Wave Kernel Language for GPUs
 
-[![PyPI version](https://badge.fury.io/py/iree-turbine.svg)](https://badge.fury.io/py/iree-turbine)
-[![Documentation status](https://readthedocs.org/projects/iree-turbine/badge/?version=latest)](https://app.readthedocs.org/projects/iree-turbine/builds/?version__slug=latest)
+> [!IMPORTANT]
+> This repository is a fork of https://github.com/iree-org/iree-turbine. Code is
+> currently being migrated from the
+> [`iree/turbine/kernel/wave/`](./iree/turbine/kernel/wave/) directory.
 
-<img src="https://netl.doe.gov/sites/default/files/2020-11/Turbine-8412270026_83cfc8ee8f_c.jpg" height="300px" width="300px">
+TKW is a high-level programming language designed to simplify the development of GPU micro-kernels by abstracting over intricate details of GPU hardware. It allows developers to write efficient micro-kernels, focusing on core computations while inferring the required data transfers and indexing automatically. TKW implements a wave-based programming model to express programs leveraging coalesced memory accesses effortlessly and supports the explicit use of matrix multiplication intrinsics.
 
-Turbine is [IREE's](https://iree.dev/) frontend for
-[PyTorch](https://pytorch.org/).
+## Design Goals
 
-Turbine provides a collection of tools:
+TKW is designed with several key goals in mind to facilitate efficient GPU programming and maximize performance:
 
-* *AOT Export*: For compiling one or more `nn.Module`s to compiled, deployment
-  ready artifacts. This operates via both a simple one-shot export API
-  (also available via
-  [torch-mlir](https://github.com/llvm/torch-mlir/blob/main/python/torch_mlir/extras/fx_importer.py))
-  for simple models and an underlying
-  [advanced API](https://github.com/iree-org/iree-turbine/blob/main/iree/turbine/aot/compiled_module.py)
-  for complicated models and accessing the full features of the runtime.
-* *Eager Execution*: A `torch.compile` backend is provided and a Turbine Tensor/Device
-  is available for more native, interactive use within a PyTorch session.
-* *Custom Ops*: Integration for defining custom PyTorch ops and implementing them in
-  terms of IREE's backend IR or a Pythonic kernel language.
+1. Abstract over hardware details: Simplify the development of GPU micro-kernels by hiding the complex details of synchronization, thread management, and memory transactions.
+    - Automatically infer efficient data movement strategies across the memory hierarchy, ensuring efficient use of memory bandwidth.
+    - Leverage hardware details (such as instruction specifications) to determine indexing.
+2. Provide users with low-level control
+    - Expose an interface to customize the instruction scheduling
+    - Provide low-level control over how the computation is performed by exposing low-level GPU instructions. This empowers developers to directly leverage hardware-specific features to achieve maximum performance.
+3. Systematically expressing constraints to leverage solvers / auto-tuning
+    - Represent specific tiling possibilities around a micro-kernel using symbolic constraints. This forms a searchable space that allows for fine-tuning by exploring various tiling configurations.
 
-## Documentation
+## Wave-based Programming Model
 
-* API reference pages and project documentation: https://iree-turbine.readthedocs.io/
-* Guides for using Turbine as a bridge between PyTorch and IREE:
-  https://iree.dev/guides/ml-frameworks/pytorch/
+TKW leverages a wave-based programming model that is specifically designed to take advantage of the parallel processing power of GPUs.
 
-## Contact us
+In GPU programming, a wavefront is a group of threads (or work items) that execute the same instruction in lockstep. In particular, coalesced memory accesses by all threads in a wavefront are executed together. This is analogous to the concept of a "warp" in NVIDIA's CUDA programming model.
+Typically, on AMD GPUs, a wavefront contains 32 or 64 threads, all of which participate in executing the same instruction at the same time.
 
-Turbine is under active development. Feel free to reach out on one of
-[IREE's communication channels](https://github.com/iree-org/iree?tab=readme-ov-file#communication-channels)
-(specifically, we monitor the `#pytorch` and `#turbine` channels on the IREE
-Discord server).
+In this representation, memory access patterns are more naturally optimized for coalescing, reducing the complexity and manual effort required to achieve optimized memory transactions. In consequence, programmers can focus more on the core computational logic rather than the intricacies of thread coordination and memory management.
+This approach contrasts with traditional models like OpenCL and CUDA, which often require more explicit management of threads and synchronization.
 
-## Quick start for users
+## Gemm example
 
-1. Install from PyPI:
-
-    Install a torch version that fulfills your needs:
-
-    ```bash
-    # Fast installation of torch with just CPU support.
-    # See other options at https://pytorch.org/get-started/locally/
-    pip install torch --index-url https://download.pytorch.org/whl/cpu
-    ```
-
-    Then install iree-turbine:
-
-    ```bash
-    # Stable releases
-    pip install iree-turbine
-
-    # Nightly releases
-    pip install --find-links https://iree.dev/pip-release-links.html --upgrade --pre iree-turbine
-    ```
-
-    (or follow the "Developers" instructions below)
-
-2. Try one of the [examples](https://github.com/iree-org/iree-turbine/blob/main/examples/):
-
-    * [AOT MLP With Static Shapes](https://github.com/iree-org/iree-turbine/blob/main/examples/aot_mlp/mlp_export_simple.py)
-    * [Eager MNIST with `torch.compile`](https://github.com/iree-org/iree-turbine/blob/main/examples/eager_mlp/mlp_eager_simple.py)
-    * [Dynamic AOT resnet-18](https://github.com/iree-org/iree-turbine/blob/main/examples/resnet-18/)
-
-    Generally, we use Turbine to produce valid, dynamic shaped Torch IR (from the
-    [torch-mlir `torch` dialect](https://github.com/llvm/torch-mlir/tree/main/include/torch-mlir/Dialect/Torch/IR)
-    with various approaches to handling globals). Depending on the use-case and status of the
-    compiler, these should be compilable via IREE with `--iree-input-type=torch` for
-    end to end execution. Dynamic shape support in torch-mlir is a work in progress,
-    and not everything works at head with release binaries at present.
-
-## Developers
-
-Use this as a guide to get started developing the project using pinned,
-pre-release dependencies. You are welcome to deviate as you see fit, but
-these canonical directions mirror what the CI does.
-
-### Setup a venv
-
-We recommend setting up a
-[virtual environment (venv)](https://docs.python.org/3/library/venv.html). The
-project is configured to ignore `.venv` directories, and editors like VSCode
-pick them up by default.
-
-```bash
-python -m venv --prompt iree-turbine .venv
-source .venv/bin/activate
-```
-
-### Install PyTorch for your system
-
-You need to explicit install a PyTorch version that fulfills your needs.
-On Linux, install a variant by either following the
-[official instructions](https://pytorch.org/get-started/locally/) or by using
-one of our `requirements.txt` files:
-
-* *CPU: [`pytorch-cpu-requirements.txt`](https://github.com/iree-org/iree-turbine/blob/main/pytorch-cpu-requirements.txt)*
-
-  ```bash
-  pip install -r pytorch-cpu-requirements.txt
-  ```
-
-* *ROCM: [`pytorch-rocm-requirements.txt`](https://github.com/iree-org/iree-turbine/blob/main/pytorch-rocm-requirements.txt)*
-
-  ```bash
-  pip install -r pytorch-rocm-requirements.txt
-  ```
-
-### Install development packages
-
-```bash
-# Install editable local projects.
-pip install -r requirements.txt -e .
-```
-
-### Running tests
-
-```bash
-# Python unit tests
-pytest .
-
-# Lit tests
-lit lit_tests/ -v
-```
-
-### Optional: Pre-commits and developer settings
-
-This project is set up to use the [`pre-commit`](https://pre-commit.com/)
-tooling. To install it in your local repo, run: `pre-commit install`. After
-this point, when making commits locally, hooks will run automatically.
-
-### Using a development compiler
-
-If doing native development of the compiler, it can be useful to switch to
-source builds for the
-[iree-base-compiler](https://pypi.org/project/iree-base-compiler/) and
-[iree-base-runtime](https://pypi.org/project/iree-base-runtime/) packages.
-
-In order to do this, check out [IREE](https://github.com/iree-org/iree) and
-follow the instructions to
-[build from source](https://iree.dev/building-from-source/getting-started/),
-making sure to specify
-[additional options for the Python bindings](https://iree.dev/building-from-source/getting-started/#building-with-cmake):
-
-```bash
--DIREE_BUILD_PYTHON_BINDINGS=ON -DPython3_EXECUTABLE="$(which python)"
-```
-
-#### Configuring python
-
-Uninstall existing packages (including any with the old package names):
-
-```bash
-pip uninstall iree-compiler iree-base-compiler iree-runtime iree-base-runtime
-```
-
-Copy the `.env` file from `iree/` to this source directory to get IDE
-support and add to your path for use from your shell:
-
-```bash
-source .env && export PYTHONPATH
-```
+[wave_gemm_test.py](/tests/kernel/wave/wave_gemm_test.py)
