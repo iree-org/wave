@@ -218,14 +218,14 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         global_index = remove_thread_indexing(read.index)
         logger.info(f"global_index={global_index}")
 
-        symbolic_shape_adjusted = list(symbolic_shape)
-        symbolic_shape_adjusted[-1] = sympy.ceiling(symbolic_shape[-1] / ratio)
-        logger.info(f"symbolic_shape_adjusted={symbolic_shape_adjusted}")
+        materialized_shape_adjusted = list(materialized_shape)
+        materialized_shape_adjusted[-1] = sympy.ceiling(materialized_shape[-1] / ratio)
+        logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
         new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
             nd_index = delinearize_index(
-                thread_id + i * elements_per_wave // ratio, symbolic_shape_adjusted
+                thread_id + i * elements_per_wave // ratio, materialized_shape_adjusted
             )
             logger.info(f"nd_index={nd_index}")
             write_index = {}
