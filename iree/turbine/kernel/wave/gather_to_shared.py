@@ -115,7 +115,7 @@ def remove_thread_indexing(
 
 
 def get_load_width(supported_load_widths: list[int], bitwidth: int) -> Optional[int]:
-    for width in supported_load_widths:
+    for width in supported_load_widths[::-1]:
         if bitwidth % width == 0:
             return width
     return None
