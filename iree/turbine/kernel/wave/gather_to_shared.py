@@ -175,6 +175,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         logger.info(f"element_type={element_type}, bitwidth={bitwidth}")
 
         symbolic_shape = read.type.symbolic_shape
+        logger.info(f"symbolic_shape={symbolic_shape}")
 
         store_elems_per_thread = hardware_constraint.max_elems_per_load(element_type)
         max_elements_per_store = total_number_of_threads * store_elems_per_thread
@@ -218,7 +219,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         logger.info(f"global_index={global_index}")
 
         symbolic_shape_adjusted = list(symbolic_shape)
-        symbolic_shape_adjusted[-1] = ceildiv(symbolic_shape[-1], ratio)
+        symbolic_shape_adjusted[-1] = sympy.ceiling(symbolic_shape[-1] / ratio)
+        logger.info(f"symbolic_shape_adjusted={symbolic_shape_adjusted}")
 
         new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
@@ -230,6 +232,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
             for dim, idx in zip(symbolic_shape, nd_index):
                 last = dim == symbolic_shape[-1]
 
+                idx = idx * ratio if last else idx
                 size = elements_per_thread if last else 1
                 stride = 1
                 write_index[dim] = IndexSequence(idx, size, stride)
