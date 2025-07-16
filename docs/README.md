@@ -1,14 +1,14 @@
-# IREE Turbine Documentation
+# Wave Documentation
 
 This directory uses Sphinx to build documentation that is hosted at
-https://iree-turbine.readthedocs.io/.
+https://wave-lang.readthedocs.io/.
 
 ## Publishing on Read the Docs
 
 The project dashboard is here:
-https://app.readthedocs.org/projects/iree-turbine/.
+https://app.readthedocs.org/projects/wave-lang/.
 
-A webhook is configured in the iree-turbine GitHub repository to notify
+A webhook is configured in the wave GitHub repository to notify
 readthedocs when new changes are pushed, at which point it automatically starts
 a website build and publishes the latest content.
 
@@ -26,7 +26,7 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m pip install -r ../pytorch-cpu-requirements.txt
 
-# Install iree-turbine itself.
+# Install wave itself.
 # Editable so you can make local changes and preview them easily.
 python -m pip install -e ..
 ```

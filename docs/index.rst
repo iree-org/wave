@@ -1,7 +1,7 @@
-IREE Turbine documentation
+Wave documentation
 ==========================
 
-Welcome to the documentation for https://github.com/iree-org/iree-turbine!
+Welcome to the documentation for https://github.com/iree-org/wave!
 
 API reference material
 ======================

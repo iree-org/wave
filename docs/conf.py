@@ -21,7 +21,7 @@ except ImportError:
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "IREE Turbine"
+project = "Wave"
 copyright = "2025, The IREE Authors"
 author = "The IREE Authors"
 
