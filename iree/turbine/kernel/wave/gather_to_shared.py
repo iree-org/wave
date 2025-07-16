@@ -221,8 +221,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
             for dim, idx in zip(symbolic_shape, nd_index):
                 last = dim == symbolic_shape[-1]
 
-                idx = idx + i * store_elems_per_thread if not last else idx
-                size = store_elems_per_thread * expected_number_of_loads if last else 1
+                idx = idx + i * elements_per_thread if not last else idx
+                size = elements_per_thread * expected_number_of_loads if last else 1
                 stride = 1
                 write_index[dim] = IndexSequence(idx, size, stride)
 
