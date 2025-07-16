@@ -149,6 +149,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
     total_number_of_threads = hardware_constraint.threads_per_wave * prod(
         hardware_constraint.waves_per_block
     )
+    logger.info(f"total_number_of_threads={total_number_of_threads}")
 
     supported_load_widths = [32, 96, 128]
 
@@ -278,41 +279,3 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         update_write_dependencies(new_writes, trace)
 
     DCE(trace)
-    return
-
-    global_read_nodes = trace.walk(is_valid_global_read)
-    for read_node in global_read_nodes:
-        read_custom = get_custom(read_node)
-        write_consumers = get_write_node_consumers(read_custom)
-        if not write_consumers:
-            continue
-        read_memory, read_mapping, read_type = (
-            read_custom.memory,
-            read_custom.mapping,
-            read_custom.type,
-        )
-
-        elements_per_thread = read_custom.elements_per_thread
-
-        for write_custom in write_consumers:
-            write_memory, write_mapping, write_type = (
-                write_custom.memory,
-                write_custom.mapping,
-                write_custom.type,
-            )
-            with write_custom.graph.inserting_before(write_custom.fx_node):
-                write_custom.replace_all_uses_with(
-                    GatherToLDS(
-                        read_memory,
-                        read_custom.index,
-                        read_type,
-                        write_memory,
-                        write_memory.index,
-                        write_type,
-                        read_mapping,
-                        write_mapping,
-                        elements_per_thread,
-                    ).add_to_graph(write_custom.graph)
-                )
-                write_custom.erase()
-        read_custom.erase()
