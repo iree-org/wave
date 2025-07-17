@@ -152,16 +152,20 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
     total_number_of_threads = prod(threads_per_block)
     logger.info(f"total_number_of_threads={total_number_of_threads}")
 
-    threads_subs = {
-        THREAD_0: (SUBGROUP_ID % waves_per_block[0]) * threads_per_wave,
-        THREAD_1: (SUBGROUP_ID // waves_per_block[0]) % waves_per_block[1],
-        THREAD_2: (SUBGROUP_ID // (waves_per_block[0] * waves_per_block[1]))
-        % waves_per_block[2],
+    thread_id = hardware_constraint.linearized_thread_id
+
+    # Make LDS write index to be wave-uniform.
+    wave_subs = {
+        THREAD_0: (
+            ((THREAD_0 // threads_per_wave) * threads_per_wave)
+            if waves_per_block[0] > 1
+            else 0
+        ),
+        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
+        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
     }
 
     supported_load_widths = [32, 96, 128]
-
-    thread_id = hardware_constraint.linearized_thread_id
 
     constraint_tile_size = {
         c.dim: c.tile_size
@@ -251,7 +255,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
             read_index = combine_index(global_index, write_index)
 
-            write_index = {k: v.subs(threads_subs) for k, v in write_index.items()}
+            write_index = {k: v.subs(wave_subs) for k, v in write_index.items()}
 
             logger.info(f"read_index={read_index}")
             logger.info(f"write_index={write_index}")
