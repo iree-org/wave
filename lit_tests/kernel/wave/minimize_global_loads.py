@@ -1,37 +1,37 @@
 # RUN: python %s | FileCheck %s
 
 import logging
+
 import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.wave.promotion import promote_placeholders
-from iree.turbine.kernel.wave.hoisting import hoist_loop_invariant_ops
-from iree.turbine.kernel.wave.barriers import add_shared_memory_barriers
-from iree.turbine.kernel.wave.expansion.expansion import expand_graph, add_get_results
-from iree.turbine.kernel.wave.type_inference import infer_types
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel._support.tracing import CapturedTrace
 from iree.turbine.kernel._support.indexing import IndexingContext
+from iree.turbine.kernel._support.tracing import CapturedTrace
+from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.ops.wave_ops import *
-from iree.turbine.kernel.wave.utils.general_utils import (
-    run_test,
-)
-from iree.turbine.kernel.wave.utils.print_utils import (
-    print_trace,
-)
-from iree.turbine.kernel.wave.utils.graph_utils import (
-    initialize_iter_args,
-)
-from iree.turbine.kernel.wave.minimize_global_loads import minimize_global_loads
-from iree.turbine.kernel.wave.visualization import visualize_graph
-from iree.turbine.kernel.wave.shared_memory_indexing import (
-    apply_shared_memory_indexing_corrections,
-)
 from iree.turbine.kernel.wave.analysis.index_sequence_analysis import (
     set_node_indices,
     set_post_expansion_indices,
 )
-
+from iree.turbine.kernel.wave.barriers import add_shared_memory_barriers
+from iree.turbine.kernel.wave.expansion.expansion import add_get_results, expand_graph
+from iree.turbine.kernel.wave.hoisting import hoist_loop_invariant_ops
+from iree.turbine.kernel.wave.minimize_global_loads import minimize_global_loads
+from iree.turbine.kernel.wave.promotion import promote_placeholders
+from iree.turbine.kernel.wave.shared_memory_indexing import (
+    apply_shared_memory_indexing_corrections,
+)
+from iree.turbine.kernel.wave.type_inference import infer_types
+from iree.turbine.kernel.wave.utils.general_utils import (
+    run_test,
+)
+from iree.turbine.kernel.wave.utils.graph_utils import (
+    initialize_iter_args,
+)
+from iree.turbine.kernel.wave.utils.print_utils import (
+    print_trace,
+)
+from iree.turbine.kernel.wave.visualization import visualize_graph
 
 # Input sizes
 M = tkl.sym.M

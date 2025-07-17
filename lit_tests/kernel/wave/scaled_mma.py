@@ -3,12 +3,12 @@
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
+from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
 from iree.turbine.kernel.wave.constraints import ScaledMMAType
 from iree.turbine.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     run_test,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
 
 # Note this is specified by the HW and cannot be changed.
 SCALE_GROUP_SIZE = 32

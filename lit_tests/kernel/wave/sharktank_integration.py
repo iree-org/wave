@@ -1,49 +1,49 @@
 # RUN: python %s | FileCheck %s
 
-import iree.turbine.aot as aot
-import torch
 import textwrap
-from jinja2 import Environment, BaseLoader
+from typing import Optional
+
+import torch
+from jinja2 import BaseLoader, Environment
+
+import iree.turbine.aot as aot
 import iree.turbine.kernel.wave as tkw
+from iree.compiler.ir import (
+    Context,
+    MLIRError,
+    Module,
+    Operation,
+    RankedTensorType,
+)
 from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.general_utils import (
-    run_test,
+from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
+from iree.turbine.kernel.wave.templates.attention_common import (
+    AttentionShape,
 )
 from iree.turbine.kernel.wave.templates.vanilla_attention import (
     get_bhsd_attention_kernel,
 )
-from iree.turbine.kernel.wave.templates.attention_common import (
-    AttentionShape,
+from iree.turbine.kernel.wave.utils.compile_utils import (
+    get_kernel_name,
+    get_wave_module_body_asm,
 )
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
 from iree.turbine.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
+    run_test,
 )
 from iree.turbine.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.compile_utils import (
-    get_wave_module_body_asm,
-    get_kernel_name,
-)
 from iree.turbine.runtime.op_reg.base import (
     CustomOp,
-    KernelSelection,
     KernelBuilder,
+    KernelSelection,
 )
 from iree.turbine.runtime.op_reg.impl_helper import (
     call_function,
 )
-from iree.compiler.ir import (
-    Module,
-    Context,
-    RankedTensorType,
-    Operation,
-    MLIRError,
-)
 from iree.turbine.transforms.merger import Merger
-from typing import Optional
 
 _JINJA2_ENVIRONMENT: Optional[Environment] = None
 

@@ -3,44 +3,42 @@
 import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.wave.promotion import promote_placeholders
-from iree.turbine.kernel.wave.hoisting import hoist_loop_invariant_ops
-from iree.turbine.kernel.wave.expansion.expansion import expand_graph
-from iree.turbine.kernel.wave.type_inference import infer_types
-from iree.turbine.kernel.wave.unrolling import unroll
-from iree.turbine.kernel.wave.utils.print_utils import print_graph
+from iree.turbine.kernel._support.indexing import IndexingContext
+from iree.turbine.kernel._support.tracing import CapturedTrace
 from iree.turbine.kernel.lang.global_symbols import (
     GLOBAL_ADDRESS_SPACE,
-    SHARED_ADDRESS_SPACE,
-    READ_SHARED_DELAY,
-    WRITE_SHARED_DELAY,
-    READ_GLOBAL_DELAY,
-    WRITE_GLOBAL_DELAY,
-    MMA_DELAY,
-    SHARED_MEMORY_UNITS,
     GLOBAL_MEMORY_UNITS,
+    MMA_DELAY,
     MMA_UNITS,
-    VALU_DELAY,
-    VALU_UNITS,
+    READ_GLOBAL_DELAY,
+    READ_SHARED_DELAY,
+    SHARED_ADDRESS_SPACE,
+    SHARED_MEMORY_UNITS,
     SHUFFLE_DELAY,
     SHUFFLE_UNITS,
+    VALU_DELAY,
+    VALU_UNITS,
+    WRITE_GLOBAL_DELAY,
+    WRITE_SHARED_DELAY,
 )
-from iree.turbine.kernel._support.tracing import CapturedTrace
-from iree.turbine.kernel._support.indexing import IndexingContext
 from iree.turbine.kernel.ops.wave_ops import Iterate, get_custom
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.expansion.expansion import add_get_results
-from iree.turbine.kernel.wave.utils.general_utils import run_test
-from iree.turbine.kernel.wave.utils.graph_utils import initialize_iter_args
-from iree.turbine.kernel.wave.minimize_global_loads import minimize_global_loads
-from iree.turbine.kernel.wave.shared_memory_indexing import (
-    apply_shared_memory_indexing_corrections,
-)
 from iree.turbine.kernel.wave.analysis.index_sequence_analysis import (
     set_node_indices,
     set_post_expansion_indices,
 )
-
+from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+from iree.turbine.kernel.wave.expansion.expansion import add_get_results, expand_graph
+from iree.turbine.kernel.wave.hoisting import hoist_loop_invariant_ops
+from iree.turbine.kernel.wave.minimize_global_loads import minimize_global_loads
+from iree.turbine.kernel.wave.promotion import promote_placeholders
+from iree.turbine.kernel.wave.shared_memory_indexing import (
+    apply_shared_memory_indexing_corrections,
+)
+from iree.turbine.kernel.wave.type_inference import infer_types
+from iree.turbine.kernel.wave.unrolling import unroll
+from iree.turbine.kernel.wave.utils.general_utils import run_test
+from iree.turbine.kernel.wave.utils.graph_utils import initialize_iter_args
+from iree.turbine.kernel.wave.utils.print_utils import print_graph
 
 M = tkl.sym.M
 N = tkl.sym.N

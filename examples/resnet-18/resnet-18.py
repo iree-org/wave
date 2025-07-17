@@ -1,7 +1,8 @@
-from transformers import AutoModelForImageClassification
 import torch
-from iree.turbine.aot import *
+from transformers import AutoModelForImageClassification
+
 import iree.runtime as rt
+from iree.turbine.aot import *
 
 # Loading feature extractor and pretrained model from huggingface
 # extractor = AutoFeatureExtractor.from_pretrained("microsoft/resnet-18")

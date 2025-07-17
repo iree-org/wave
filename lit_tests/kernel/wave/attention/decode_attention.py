@@ -2,12 +2,10 @@
 
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.general_utils import (
-    run_test,
-)
-from iree.turbine.kernel.wave.templates.paged_decode_attention import (
-    get_paged_decode_attention_kernels,
-    paged_decode_attention_shape,
+from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
+from iree.turbine.kernel.wave.templates.attention_common import (
+    AttentionShape,
 )
 from iree.turbine.kernel.wave.templates.decode_attention import (
     get_decode_attention_kernels,
@@ -15,10 +13,12 @@ from iree.turbine.kernel.wave.templates.decode_attention import (
 from iree.turbine.kernel.wave.templates.gqa_decode_attention import (
     get_gqa_decode_attention_kernels,
 )
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.templates.attention_common import (
-    AttentionShape,
+from iree.turbine.kernel.wave.templates.paged_decode_attention import (
+    get_paged_decode_attention_kernels,
+    paged_decode_attention_shape,
+)
+from iree.turbine.kernel.wave.utils.general_utils import (
+    run_test,
 )
 
 

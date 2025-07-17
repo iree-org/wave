@@ -4,3 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [pytest]
 timeout = 300
+
+[tool.ruff]
+lint.select = ["F401", "I001"]  # remove unused imports and sort imports
+fix = true
+force-exclude = true
+# as we refactor wave repo, we will include relevant dir
+extend-exclude = ["docs/*", "build_tools/*", "tests/*", "iree/*", ".*__init__.py"]

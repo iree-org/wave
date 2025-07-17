@@ -4,15 +4,15 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import iree.runtime as rt
 import logging
+import unittest
+
 import numpy as np
 import torch
 import torch.nn as nn
-import unittest
 
+import iree.runtime as rt
 import iree.turbine.aot as aot
-
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)

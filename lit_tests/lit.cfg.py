@@ -3,9 +3,8 @@ import shutil
 import sys
 
 import lit.formats
-import lit.util
-
 import lit.llvm
+import lit.util
 
 from iree.turbine.support.logging import get_logger
 

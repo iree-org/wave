@@ -1,17 +1,18 @@
 # RUN: python %s | FileCheck %s
 
 import pytest
+import sympy
+
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.utils.general_utils import (
-    run_test,
-)
 from iree.turbine.kernel.wave.utils.compile_utils import (
     set_default_compile_config,
 )
-import sympy
+from iree.turbine.kernel.wave.utils.general_utils import (
+    run_test,
+)
 
 M = tkl.sym.M
 N = tkl.sym.N

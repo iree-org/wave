@@ -5,9 +5,9 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import distutils.command.build
 import json
 import os
-import distutils.command.build
 from pathlib import Path
 
 from setuptools import find_namespace_packages, setup
