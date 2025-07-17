@@ -7,9 +7,9 @@
 from .utils.graph_utils import is_reduction_subgraph, is_barrier_between
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
+    AsyncGatherToLDS,
     AtomicOp,
     CustomOp,
-    GatherToLDS,
     NestedRegionOp,
     Read,
     SharedMemoryBarrier,
@@ -34,7 +34,7 @@ class MemoryAccessType(Enum):
 def is_shared_memory_op(node: CustomOp) -> bool:
     if isinstance(node, (Read, Write, AtomicOp)):
         return node.memory_type.address_space == SHARED_ADDRESS_SPACE
-    elif isinstance(node, GatherToLDS):
+    elif isinstance(node, AsyncGatherToLDS):
         return True
 
     return False
@@ -47,7 +47,7 @@ def get_memory_access_type(node: CustomOp) -> MemoryAccessType:
         return MemoryAccessType.WRITE
     elif isinstance(node, AtomicOp):
         return MemoryAccessType.READ_WRITE
-    elif isinstance(node, GatherToLDS):
+    elif isinstance(node, AsyncGatherToLDS):
         return MemoryAccessType.WRITE
     else:
         return MemoryAccessType.NONE

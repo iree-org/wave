@@ -275,7 +275,7 @@ def select(
 ) -> "Register": ...
 
 
-def gather_to_lds(
+def async_gather_to_lds(
     src: Memory,
     src_idx: dict[IndexSymbol, IndexSequence],
     src_type: DataType,
@@ -288,7 +288,7 @@ def gather_to_lds(
 ): ...
 
 
-def wait_for_mem(count: int = 0): ...
+def async_wait(): ...
 
 
 def define_op(op_name: str) -> Callable[[T], T]:
@@ -2509,9 +2509,9 @@ class Reshape(CustomOp, ABC):
         self.type = get_custom(_to_sequence(self.args)[0]).type
 
 
-@define_op("gather_to_lds")
+@define_op("async_gather_to_lds")
 @dataclass
-class GatherToLDS(CustomOp):
+class AsyncGatherToLDS(CustomOp):
     """
     Represents an instruction that performs direct load from global
     to lds. Source node points to the global memory to load from
@@ -2529,14 +2529,16 @@ class GatherToLDS(CustomOp):
     elements_per_thread: Optional[IndexExpr | int]
 
 
-@define_op("wait_for_mem")
+@define_op("async_wait")
 @dataclass
-class WaitForMem(CustomOp):
+class AsyncWait(CustomOp):
     """
-    Represents an instruction that waits for memory read/write to complete.
+    Represents a wait operation that synchronizes asynchronous operations.
+    This operation is used to ensure that all previous asynchronous operations
+    (like loads) have completed before proceeding.
     """
 
-    count: int = 0
+    ops: list[fx.Node] = field(default_factory=list)
 
     @property
     def has_side_effects(self) -> bool:

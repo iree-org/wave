@@ -41,12 +41,12 @@ from ...compiler.vector_codegen import (
 )
 
 from ...ops.wave_ops import (
+    CustomOp,
+    async_gather_to_lds,
+    async_wait,
     get_custom,
     read,
     write,
-    gather_to_lds,
-    wait_for_mem,
-    CustomOp,
 )
 
 from ..utils.general_utils import get_fastest_index, infer_dim
@@ -897,8 +897,8 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         )
 
 
-@handle_op(gather_to_lds)
-def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
+@handle_op(async_gather_to_lds)
+def handle_async_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
         (
             src,
@@ -967,12 +967,15 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     )
 
 
-@handle_op(wait_for_mem)
-def handle_wait_for_mem(emitter: WaveEmitter, node: fx.Node):
+@handle_op(async_wait)
+def handle_async_wait(emitter: WaveEmitter, node: fx.Node):
     try:
-        (count,) = node.args
+        (args,) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
+
+    # Args are not used for now.
+    count = 0
 
     # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
     vmCnt = min(63, count)
