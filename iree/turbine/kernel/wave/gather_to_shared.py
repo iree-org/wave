@@ -9,12 +9,11 @@ import iree.turbine.kernel.lang as tkl
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
-    AsyncWait,
-    AsyncGatherToLDS,
+    CustomOp,
+    GatherToLDS,
     Read,
     Write,
     get_custom,
-    CustomOp,
 )
 from ..ops.wave_ops import IndexSequence
 from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
@@ -23,11 +22,8 @@ from ..wave.constraints import (
     TilingConstraint,
     WorkgroupConstraint,
 )
-from ..wave.utils.run_utils import get_default_arch
 from ..wave.utils.graph_utils import DCE
 from .utils.general_utils import (
-    get_fastest_index,
-    is_valid_global_read,
     get_hardware_constraint,
     ceildiv,
     delinearize_index,
@@ -245,7 +241,6 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
         new_writes = defaultdict(list)
-        deps = []
         for i in range(expected_number_of_loads):
             nd_index = delinearize_index(
                 thread_id + i * total_number_of_threads,
@@ -268,7 +263,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
             logger.info(f"read_index={read_index}")
             logger.info(f"write_index={write_index}")
             with write.graph.inserting_before(write.fx_node):
-                new_write = AsyncGatherToLDS(
+                new_write = GatherToLDS(
                     read.memory,
                     write.memory,
                     read_index,
@@ -280,7 +275,6 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                 ).add_to_graph(write.graph)
 
                 new_writes[write.memory].append(new_write)
-                deps.append(new_write)
                 if drop_padding:
                     custom_memory = get_custom(write.memory)
                     padding = custom_memory.padding
@@ -291,10 +285,6 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                         custom_memory.update_arg(
                             "distributed_shape", tuple(new_distributed_shape)
                         )
-
-        with write.graph.inserting_before(write.fx_node):
-            wait = AsyncWait(ops=deps).add_to_graph(write.graph)
-            new_writes[write.memory].append(wait)
 
         update_write_dependencies(new_writes, trace)
 

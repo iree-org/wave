@@ -26,7 +26,6 @@ from ...compiler.ir import (
     amdgpu_d,
     arith_d,
     memref_d,
-    rocdl_d,
     vector_d,
 )
 
@@ -42,8 +41,7 @@ from ...compiler.vector_codegen import (
 
 from ...ops.wave_ops import (
     CustomOp,
-    async_gather_to_lds,
-    async_wait,
+    gather_to_lds,
     get_custom,
     read,
     write,
@@ -897,8 +895,8 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         )
 
 
-@handle_op(async_gather_to_lds)
-def handle_async_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
+@handle_op(gather_to_lds)
+def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
         (
             src,
@@ -974,25 +972,3 @@ def handle_async_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         dst_indices=dst_index,
         transfer_type=store_type,
     )
-
-
-@handle_op(async_wait)
-def handle_async_wait(emitter: WaveEmitter, node: fx.Node):
-    try:
-        (args,) = node.args
-    except ValueError as e:
-        raise ValidationError("Malformed arguments") from e
-
-    # Args are not used for now.
-    count = 0
-
-    # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-    vmCnt = min(63, count)
-
-    # Extract low and high bits and combine while setting all other bits to 1
-    lowBits = vmCnt & 0xF
-    highBits = (vmCnt >> 4) << 14
-    otherCnts = ~0xC00F  # C00F has bits 15:14 and 3:0 set
-    waitValue = lowBits | highBits | otherCnts
-
-    rocdl_d.s_waitcnt(waitValue)
