@@ -154,9 +154,13 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
     threads_subs = {
         THREAD_0: SUBGROUP_ID * threads_per_wave if waves_per_block[0] > 1 else 0,
-        THREAD_1: (SUBGROUP_ID * waves_per_block[0] if waves_per_block[1] > 1 else 0),
+        THREAD_1: (
+            SUBGROUP_ID * threads_per_wave * waves_per_block[0]
+            if waves_per_block[1] > 1
+            else 0
+        ),
         THREAD_2: (
-            SUBGROUP_ID * waves_per_block[0] * waves_per_block[1]
+            SUBGROUP_ID * threads_per_wave * waves_per_block[0] * waves_per_block[1]
             if waves_per_block[2] > 1
             else 0
         ),
