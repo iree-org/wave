@@ -146,9 +146,18 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         return
 
     hardware_constraint = get_hardware_constraint(constraints)
-    total_number_of_threads = hardware_constraint.threads_per_wave * prod(
-        hardware_constraint.waves_per_block
-    )
+    threads_per_wave = hardware_constraint.threads_per_wave
+    waves_per_block = hardware_constraint.waves_per_block
+    threads_per_block = hardware_constraint.threads_per_block
+    total_number_of_threads = prod(threads_per_block)
+    threads_subs = {
+        THREAD_0: SUBGROUP_ID * threads_per_wave,
+        THREAD_1: SUBGROUP_ID * threads_per_wave * waves_per_block[0],
+        THREAD_2: SUBGROUP_ID
+        * threads_per_wave
+        * waves_per_block[0]
+        * waves_per_block[1],
+    }
     logger.info(f"total_number_of_threads={total_number_of_threads}")
 
     supported_load_widths = [32, 96, 128]
@@ -243,11 +252,12 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
 
             read_index = combine_index(global_index, write_index)
 
-            if (
-                hardware_constraint.threads_per_block[0]
-                == hardware_constraint.threads_per_wave
-            ):
-                write_index = {k: v.subs({THREAD_0: 0}) for k, v in write_index.items()}
+            # if (
+            #     hardware_constraint.threads_per_block[0]
+            #     == hardware_constraint.threads_per_wave
+            # ):
+            #     write_index = {k: v.subs({THREAD_0: 0, THREAD_1: 0, THREAD_2: 0}) for k, v in write_index.items()}
+            write_index = {k: v.subs(threads_subs) for k, v in write_index.items()}
 
             logger.info(f"read_index={read_index}")
             logger.info(f"write_index={write_index}")
