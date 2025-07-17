@@ -8,7 +8,14 @@ import iree.turbine.kernel.lang as tkl
 
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
-from ..ops.wave_ops import GatherToLDS, WaitForMem, Read, Write, get_custom, CustomOp
+from ..ops.wave_ops import (
+    AsyncWait,
+    AsyncGatherToLDS,
+    Read,
+    Write,
+    get_custom,
+    CustomOp,
+)
 from ..ops.wave_ops import IndexSequence
 from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from ..wave.constraints import (
@@ -238,6 +245,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
         new_writes = defaultdict(list)
+        deps = []
         for i in range(expected_number_of_loads):
             nd_index = delinearize_index(
                 thread_id + i * total_number_of_threads,
@@ -260,7 +268,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
             logger.info(f"read_index={read_index}")
             logger.info(f"write_index={write_index}")
             with write.graph.inserting_before(write.fx_node):
-                new_write = GatherToLDS(
+                new_write = AsyncGatherToLDS(
                     read.memory,
                     read_index,
                     element_type,
@@ -273,6 +281,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                 ).add_to_graph(write.graph)
 
                 new_writes[write.memory].append(new_write)
+                deps.append(new_write)
                 if drop_padding:
                     custom_memory = get_custom(write.memory)
                     padding = custom_memory.padding
@@ -285,7 +294,8 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                         )
 
         with write.graph.inserting_before(write.fx_node):
-            new_write = WaitForMem().add_to_graph(write.graph)
+            wait = AsyncWait(ops=deps).add_to_graph(write.graph)
+            new_writes[write.memory].append(wait)
 
         update_write_dependencies(new_writes, trace)
 
