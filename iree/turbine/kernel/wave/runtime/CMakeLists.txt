@@ -6,6 +6,10 @@
 cmake_minimum_required(VERSION 3.19...3.27)
 project(wave_runtime)
 
+# Set the C++ standard (for nanobind)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 find_package(Python 3.10 COMPONENTS Interpreter Development.Module REQUIRED)
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)

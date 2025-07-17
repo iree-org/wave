@@ -151,7 +151,7 @@ function install_ccache() {
 }
 
 function build_wave() {
-  python -m pip wheel --disable-pip-version-check -v -w "${OUTPUT_DIR}" "${REPO_ROOT}"
+  python -m pip wheel --disable-pip-version-check --no-deps -v -w "${OUTPUT_DIR}" "${REPO_ROOT}"
 }
 
 function run_audit_wheel() {

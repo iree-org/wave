@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from setuptools import find_namespace_packages, setup, Extension
+from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
 
 THIS_DIR = os.path.realpath(os.path.dirname(__file__))
