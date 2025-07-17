@@ -1,14 +1,10 @@
 # RUN: python %s | FileCheck %s
 
-import pytest
-from typing import Callable
-import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.compile import wave_compile, WaveCompileOptions
 from iree.turbine.kernel.wave.utils.general_utils import run_test
-import torch
 
 M = tkl.sym.M
 N = tkl.sym.N

@@ -4,8 +4,6 @@ import iree.turbine.aot as aot
 import torch
 import textwrap
 from jinja2 import Environment, BaseLoader
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.utils.general_utils import (
@@ -33,9 +31,6 @@ from iree.turbine.runtime.op_reg.base import (
     CustomOp,
     KernelSelection,
     KernelBuilder,
-)
-from iree.turbine.support.ir_imports import (
-    PassManager,
 )
 from iree.turbine.runtime.op_reg.impl_helper import (
     call_function,

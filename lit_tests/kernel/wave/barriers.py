@@ -8,7 +8,7 @@ from iree.turbine.kernel.wave.analysis.index_sequence_analysis import (
     set_node_indices,
     set_post_expansion_indices,
 )
-from iree.turbine.kernel.wave.promotion import promote_node, promote_placeholders
+from iree.turbine.kernel.wave.promotion import promote_node
 from iree.turbine.kernel.wave.barriers import add_shared_memory_barriers
 from iree.turbine.kernel.wave.hoisting import hoist_loop_invariant_ops
 from iree.turbine.kernel.wave.expansion.expansion import expand_graph, add_get_results

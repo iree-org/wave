@@ -1,4 +1,4 @@
-from transformers import AutoFeatureExtractor, AutoModelForImageClassification
+from transformers import AutoModelForImageClassification
 import torch
 from iree.turbine.aot import *
 import iree.runtime as rt

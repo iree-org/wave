@@ -1,6 +1,5 @@
 # RUN: python %s | FileCheck %s
 
-import iree.turbine.kernel as tk
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.utils.general_utils import (
@@ -14,7 +13,6 @@ from iree.turbine.kernel.wave.templates.attention_common import (
 )
 from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
 from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-import torch
 
 
 @run_test

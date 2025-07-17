@@ -32,7 +32,6 @@ from iree.turbine.kernel.ops.wave_ops import (
     Iterate,
     Write,
     get_custom,
-    GetResult,
 )
 from iree.turbine.kernel.wave.utils.general_utils import run_test
 from iree.turbine.kernel.wave.utils.graph_utils import initialize_iter_args

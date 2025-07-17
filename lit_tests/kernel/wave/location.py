@@ -1,7 +1,5 @@
 # RUN: python %s | FileCheck %s
 
-import pytest
-import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
