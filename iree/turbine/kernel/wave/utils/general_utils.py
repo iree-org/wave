@@ -538,10 +538,13 @@ def topological_sort_with_dependencies(
             for node_dep in node_deps
             if isinstance(node_dep, fx.Node) and node_dep.graph == node.graph
         ]
+        # Initializes root ops(ops with no loop deps)
         if not node_loop_deps:
             non_solved_counter = 0
             schedule_weight[node] = 0
             continue
+        # Push unsolved op to end of queue, and detect and
+        # fail for cyclic or incomplete graph.
         if any([dep not in schedule_weight for dep in node_loop_deps]):
             non_solved_counter += 1
             if non_solved_counter > len(workqueue):
