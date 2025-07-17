@@ -7,22 +7,57 @@
 from .utils.graph_utils import is_reduction_subgraph, is_barrier_between
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
+    AtomicOp,
     CustomOp,
-    get_custom,
-    MemoryAccessType,
+    GatherToLDS,
     NestedRegionOp,
+    Read,
     SharedMemoryBarrier,
+    Write,
+    get_custom,
 )
 from ..lang.global_symbols import SHARED_ADDRESS_SPACE
 import torch.fx as fx
 from typing import Optional
+from enum import Enum, auto
+
+
+class MemoryAccessType(Enum):
+    """Enum to classify memory access operations."""
+
+    NONE = auto()
+    READ = auto()
+    WRITE = auto()
+    READ_WRITE = auto()
+
+
+def is_shared_memory_op(node: CustomOp) -> bool:
+    if isinstance(node, (Read, Write, AtomicOp)):
+        return node.memory_type.address_space == SHARED_ADDRESS_SPACE
+    elif isinstance(node, GatherToLDS):
+        return True
+
+    return False
+
+
+def get_memory_access_type(node: CustomOp) -> MemoryAccessType:
+    if isinstance(node, Read):
+        return MemoryAccessType.READ
+    elif isinstance(node, Write):
+        return MemoryAccessType.WRITE
+    elif isinstance(node, AtomicOp):
+        return MemoryAccessType.READ_WRITE
+    elif isinstance(node, GatherToLDS):
+        return MemoryAccessType.WRITE
+    else:
+        return MemoryAccessType.NONE
 
 
 def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
-    access_type1 = node1.memory_access_type
+    access_type1 = get_memory_access_type(node1)
     if access_type1 == MemoryAccessType.NONE:
         return False
-    access_type2 = node2.memory_access_type
+    access_type2 = get_memory_access_type(node2)
     if access_type2 == MemoryAccessType.NONE:
         return False
 
@@ -55,10 +90,7 @@ def add_shared_memory_barriers(
 
     for node in graph.nodes:
         custom = get_custom(node)
-        if (
-            custom.memory_access_type != MemoryAccessType.NONE
-            and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
-        ):
+        if is_shared_memory_op(custom):
             if last_node is None:
                 last_node = custom
                 continue
