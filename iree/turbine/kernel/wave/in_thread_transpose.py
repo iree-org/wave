@@ -59,7 +59,9 @@ def combine_index(
     """
     This function takes two index sequences and combines them.
     """
-    assert set(index1.keys()) == set(index2.keys())
+    assert set(index1.keys()) == set(
+        index2.keys()
+    ), f"index keys mismatch, index1={index1}, index2={index2}"
     return {
         key: IndexSequence(
             index1[key].start + index2[key].start,
@@ -137,6 +139,7 @@ def get_transpose_config(
     Return None if no transpose is possible.
     """
     read, _ = reads_writes[0]
+
     element_type = read.type.dtype
     store_elems_per_thread = hardware_constraint.max_elems_per_load(element_type)
     max_elements_per_store = total_number_of_threads * store_elems_per_thread
@@ -146,6 +149,11 @@ def get_transpose_config(
     )
 
     dst_symbolic_shape = read.type.symbolic_shape
+    if set(dst_symbolic_shape) != set(read.index.keys()):
+        logger.info(
+            f"scaled dimensions are not supported, dst_symbolic_shape={dst_symbolic_shape}, read.index={read.index}"
+        )
+        return None
 
     materialized_shape = materialize_shape(constraint_tile_size, dst_symbolic_shape)
     if any(s > 1 for s in materialized_shape[:-2]) or any(
