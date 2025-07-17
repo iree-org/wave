@@ -27,7 +27,6 @@ from .._support.regions import RegionGraph
 from .._support.location import FileLineColInfo, StackTraceInfo, capture_location
 from .base import OpDispatcher
 import numpy as np
-from enum import Enum, auto
 
 if TYPE_CHECKING:
     from ..wave.constraints import Constraint
@@ -37,15 +36,6 @@ T = TypeVar("T", bound=Type[Any])
 AccT = TypeVar("AccT")
 CustomOpT = TypeVar("CustomOpT", bound="CustomOp")
 PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
-
-
-class MemoryAccessType(Enum):
-    """Enum to classify memory access operations."""
-
-    NONE = auto()
-    READ = auto()
-    WRITE = auto()
-    READ_WRITE = auto()
 
 
 # Stubs to enable type checking of the custom ops:
@@ -789,10 +779,6 @@ class CustomOp(ABC):
         return False
 
     @property
-    def memory_access_type(self) -> MemoryAccessType:
-        return MemoryAccessType.NONE
-
-    @property
     def pre_expansion_id(self) -> int:
         if hasattr(self.fx_node, "pre_expansion_id"):
             return self.fx_node.pre_expansion_id
@@ -1288,10 +1274,6 @@ class AtomicOp(BinaryOpBase, ABC):
     def memory_type(self) -> "Memory":
         return get_custom(self.lhs).type
 
-    @property
-    def memory_access_type(self) -> MemoryAccessType:
-        return MemoryAccessType.READ_WRITE
-
 
 @define_op("scheduling_group_barrier")
 @dataclass
@@ -1613,10 +1595,6 @@ class Read(CustomOp):
     @property
     def write_dependency(self) -> fx.Node:
         return self._write_dependency
-
-    @property
-    def memory_access_type(self) -> MemoryAccessType:
-        return MemoryAccessType.READ
 
     @write_dependency.setter
     def write_dependency(self, value: fx.Node):
@@ -1946,10 +1924,6 @@ class Write(CustomOp):
     def register_index(self) -> dict[IndexSymbol, IndexSequence]:
         custom = get_custom(self.register_)
         return custom.index
-
-    @property
-    def memory_access_type(self) -> MemoryAccessType:
-        return MemoryAccessType.WRITE
 
     def transform_index_backwards(
         self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
@@ -2550,11 +2524,3 @@ class GatherToLDS(CustomOp):
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
     elements_per_thread: Optional[IndexExpr | int]
-
-    @property
-    def memory_type(self) -> "Memory":
-        return get_custom(self.dst).type
-
-    @property
-    def memory_access_type(self) -> MemoryAccessType:
-        return MemoryAccessType.READ_WRITE
