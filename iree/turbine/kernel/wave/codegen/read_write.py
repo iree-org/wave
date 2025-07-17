@@ -956,7 +956,7 @@ def handle_async_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
     dst_index, _, _ = _build_start_indices(emitter, dst_idx)
 
-    if True:
+    if False:  # TODO: Buffer stuff nedds upstream fixes
         strides = strides_from_symbolic_shape(
             IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
         )
