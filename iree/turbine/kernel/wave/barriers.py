@@ -6,10 +6,33 @@
 
 from .utils.graph_utils import is_reduction_subgraph, is_barrier_between
 from .._support.tracing import CapturedTrace
-from ..ops.wave_ops import get_custom, Read, SharedMemoryBarrier, Write, NestedRegionOp
+from ..ops.wave_ops import (
+    CustomOp,
+    get_custom,
+    MemoryAccessType,
+    NestedRegionOp,
+    SharedMemoryBarrier,
+)
 from ..lang.global_symbols import SHARED_ADDRESS_SPACE
 import torch.fx as fx
 from typing import Optional
+
+
+def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
+    access_type1 = node1.memory_access_type
+    if access_type1 == MemoryAccessType.NONE:
+        return False
+    access_type2 = node2.memory_access_type
+    if access_type2 == MemoryAccessType.NONE:
+        return False
+
+    if access_type1 != access_type2:
+        return True
+
+    if access_type1 == MemoryAccessType.READ_WRITE:
+        return True
+
+    return False
 
 
 def add_shared_memory_barriers(
@@ -33,13 +56,13 @@ def add_shared_memory_barriers(
     for node in graph.nodes:
         custom = get_custom(node)
         if (
-            isinstance(custom, (Read, Write))
+            custom.memory_access_type != MemoryAccessType.NONE
             and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
         ):
             if last_node is None:
                 last_node = custom
                 continue
-            if type(custom) != type(last_node) and not is_barrier_between(
+            if need_barrier(custom, last_node) and not is_barrier_between(
                 last_node.fx_node, custom.fx_node
             ):
                 # Synchronize after the write to shared memory before we read from it.
