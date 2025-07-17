@@ -8,7 +8,7 @@ import iree.turbine.kernel.lang as tkl
 
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
-from ..ops.wave_ops import GatherToLDS, Read, Write, get_custom, CustomOp
+from ..ops.wave_ops import GatherToLDS, WaitForMem, Read, Write, get_custom, CustomOp
 from ..ops.wave_ops import IndexSequence
 from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from ..wave.constraints import (
@@ -283,6 +283,9 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
                         custom_memory.update_arg(
                             "distributed_shape", tuple(new_distributed_shape)
                         )
+
+        with write.graph.inserting_before(write.fx_node):
+            new_write = WaitForMem().add_to_graph(write.graph)
 
         update_write_dependencies(new_writes, trace)
 

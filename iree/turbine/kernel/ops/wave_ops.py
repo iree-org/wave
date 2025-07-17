@@ -288,6 +288,9 @@ def gather_to_lds(
 ): ...
 
 
+def wait_for_mem(count: int = 0): ...
+
+
 def define_op(op_name: str) -> Callable[[T], T]:
     def decorator(cls: T) -> T:
         cls.tkw_op_name = op_name
@@ -2524,3 +2527,17 @@ class GatherToLDS(CustomOp):
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
     elements_per_thread: Optional[IndexExpr | int]
+
+
+@define_op("wait_for_mem")
+@dataclass
+class WaitForMem(CustomOp):
+    """
+    Represents an instruction that waits for memory read/write to complete.
+    """
+
+    count: int = 0
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True

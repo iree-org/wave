@@ -26,6 +26,7 @@ from ...compiler.ir import (
     amdgpu_d,
     arith_d,
     memref_d,
+    rocdl_d,
     vector_d,
 )
 
@@ -39,7 +40,14 @@ from ...compiler.vector_codegen import (
     cast_vector,
 )
 
-from ...ops.wave_ops import get_custom, read, write, gather_to_lds, CustomOp
+from ...ops.wave_ops import (
+    get_custom,
+    read,
+    write,
+    gather_to_lds,
+    wait_for_mem,
+    CustomOp,
+)
 
 from ..utils.general_utils import get_fastest_index, infer_dim
 from ..utils.mapping_utils import transform_index_on_mapping
@@ -957,3 +965,22 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         dst_indices=dst_index_transformed_,
         transfer_type=store_type,
     )
+
+
+@handle_op(wait_for_mem)
+def handle_wait_for_mem(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (count,) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
+    vmCnt = min(63, count)
+
+    # Extract low and high bits and combine while setting all other bits to 1
+    lowBits = vmCnt & 0xF
+    highBits = (vmCnt >> 4) << 14
+    otherCnts = ~0xC00F  # C00F has bits 15:14 and 3:0 set
+    waitValue = lowBits | highBits | otherCnts
+
+    rocdl_d.s_waitcnt(waitValue)
