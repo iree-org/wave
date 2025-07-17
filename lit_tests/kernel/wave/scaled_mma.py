@@ -72,6 +72,7 @@ def test_mxfp4_scaled_mma_16x16x128():
         canonicalize=True,
         backend="rocm",
         target="gfx950",
+        compile_to_mlir=True,
     )
     scaled_mma = wave_compile(options, scaled_mma)
     print(scaled_mma.asm)
@@ -196,6 +197,7 @@ def test_mxfp8_scaled_mma_16x16x128():
         canonicalize=True,
         backend="rocm",
         target="gfx950",
+        compile_to_mlir=True,
     )
     scaled_mma = wave_compile(options, scaled_mma)
     print(scaled_mma.asm)
@@ -347,6 +349,7 @@ def test_mxfp4_scaled_mma_256x256x256():
         canonicalize=True,
         backend="rocm",
         target="gfx950",
+        compile_to_mlir=True,
     )
     scaled_mma = wave_compile(options, scaled_mma)
     print(scaled_mma.asm)

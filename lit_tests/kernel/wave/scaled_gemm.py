@@ -83,6 +83,7 @@ def test_scaled_gemm_mxfp4():
         schedule=SchedulingType.NONE,
         backend="rocm",
         target="gfx950",
+        compile_to_mlir=True,
     )
 
     scaled_gemm = wave_compile(options, scaled_gemm)
@@ -181,6 +182,7 @@ def test_scaled_gemm_mxfp8():
         schedule=SchedulingType.NONE,
         backend="rocm",
         target="gfx950",
+        compile_to_mlir=True,
     )
 
     scaled_gemm = wave_compile(options, scaled_gemm)
