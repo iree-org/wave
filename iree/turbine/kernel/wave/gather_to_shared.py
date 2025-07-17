@@ -270,13 +270,12 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
             with write.graph.inserting_before(write.fx_node):
                 new_write = AsyncGatherToLDS(
                     read.memory,
-                    read_index,
-                    element_type,
                     write.memory,
+                    read_index,
                     write_index,
-                    element_type,
                     read.mapping,
                     write.mapping,
+                    element_type,
                     elements_per_thread,
                 ).add_to_graph(write.graph)
 

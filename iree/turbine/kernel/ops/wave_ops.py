@@ -2519,13 +2519,12 @@ class AsyncGatherToLDS(CustomOp):
     """
 
     src: Memory
-    src_idx: dict[IndexSymbol, IndexSequence]
-    src_type: DataType
     dst: Memory
+    src_idx: dict[IndexSymbol, IndexSequence]
     dst_idx: dict[IndexSymbol, IndexSequence]
-    dst_type: DataType
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
+    transfer_type: DataType
     elements_per_thread: Optional[IndexExpr | int]
 
 
