@@ -243,7 +243,7 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         new_writes = defaultdict(list)
         for i in range(expected_number_of_loads):
             nd_index = delinearize_index(
-                thread_id + (i * elements_per_wave) // elements_per_thread,
+                thread_id + i * total_number_of_threads,
                 materialized_shape_adjusted,
             )
             logger.info(f"nd_index={nd_index}")
