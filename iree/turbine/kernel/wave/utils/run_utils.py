@@ -3,12 +3,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from dataclasses import dataclass
+import os
 import torch
 import functools
 import iree.runtime as rt
 from typing import Callable, Optional, Any
-import ctypes
 from ..compile_options import WaveCompileOptions
 from ..profiling import benchmark_module
 from itertools import chain
@@ -231,11 +230,19 @@ def invoke_with_wave_runtime(
 
 def get_default_arch() -> str:
     """Return default ROCM architecture"""
+
+    default_arch = os.environ.get("WAVE_DEFAULT_ARCH", None)
+    if default_arch:
+        return default_arch
+
     if not torch.cuda.is_available():
         return "cpu"
+
     device = torch.device("cuda")
     gcnArch = torch.cuda.get_device_properties(device).gcnArchName
-    assert "gfx" in gcnArch, "Currently only support GFX/ROCm for get_default_arch."
+    if "gfx" not in gcnArch:
+        return "cpu"
+
     # The gcnArchName comes back like gfx90a:sramecc+:xnack.
     colon_pos = gcnArch.find(":")
     return gcnArch[0:colon_pos]
