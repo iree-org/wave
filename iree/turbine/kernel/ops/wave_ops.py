@@ -74,7 +74,7 @@ def extract_slice(
 def set_wave_prio(priority: int): ...
 
 
-def shared_memory_barrier(): ...
+def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
 def workgroup_barrier(): ...
@@ -275,7 +275,7 @@ def select(
 ) -> "Register": ...
 
 
-def async_gather_to_lds(
+def gather_to_lds(
     src: Memory,
     src_idx: dict[IndexSymbol, IndexSequence],
     src_type: DataType,
@@ -286,9 +286,6 @@ def async_gather_to_lds(
     dst_mapping: Optional[IndexMapping] = None,
     elements_per_thread: Optional[IndexExpr | int] = None,
 ): ...
-
-
-def async_wait(): ...
 
 
 def define_op(op_name: str) -> Callable[[T], T]:
@@ -1233,6 +1230,8 @@ class SharedMemoryBarrier(CustomOp):
     """
     Represents a shared memory barrier in the graph.
     """
+
+    wait_async_ops: bool = False
 
     @property
     def has_side_effects(self) -> bool:
@@ -2509,9 +2508,9 @@ class Reshape(CustomOp, ABC):
         self.type = get_custom(_to_sequence(self.args)[0]).type
 
 
-@define_op("async_gather_to_lds")
+@define_op("gather_to_lds")
 @dataclass
-class AsyncGatherToLDS(CustomOp):
+class GatherToLDS(CustomOp):
     """
     Represents an instruction that performs direct load from global
     to lds. Source node points to the global memory to load from
@@ -2526,19 +2525,3 @@ class AsyncGatherToLDS(CustomOp):
     dst_mapping: Optional[IndexMapping]
     transfer_type: DataType
     elements_per_thread: Optional[IndexExpr | int]
-
-
-@define_op("async_wait")
-@dataclass
-class AsyncWait(CustomOp):
-    """
-    Represents a wait operation that synchronizes asynchronous operations.
-    This operation is used to ensure that all previous asynchronous operations
-    (like loads) have completed before proceeding.
-    """
-
-    ops: list[fx.Node] = field(default_factory=list)
-
-    @property
-    def has_side_effects(self) -> bool:
-        return True

@@ -30,12 +30,12 @@ from ...compiler.ir import (
     amdgpu_d,
     arith_d,
     gpu_d,
+    llvm_d,
     math_d,
     memref_d,
     rocdl_d,
     scf_d,
     vector_d,
-    llvm_d,
 )
 from iree.turbine.aot.support.ir_utils import (
     _is_float_type,
@@ -1398,8 +1398,28 @@ def handle_set_wave_prio(emitter: WaveEmitter, node: fx.Node):
     rocdl_d.s_setprio(prio)
 
 
+def waitcnt(count: int):
+    # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
+    vmCnt = min(63, count)
+
+    # Extract low and high bits and combine while setting all other bits to 1
+    lowBits = vmCnt & 0xF
+    highBits = (vmCnt >> 4) << 14
+    otherCnts = ~0xC00F  # C00F has bits 15:14 and 3:0 set
+    waitValue = lowBits | highBits | otherCnts
+
+    rocdl_d.s_waitcnt(waitValue)
+
+
 @handle_op(shared_memory_barrier)
 def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (wait_async_ops,) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+    if wait_async_ops:
+        waitcnt(0)
+
     amdgpu_d.lds_barrier()
 
 

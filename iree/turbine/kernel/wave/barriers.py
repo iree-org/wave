@@ -7,9 +7,9 @@
 from .utils.graph_utils import is_reduction_subgraph, is_barrier_between
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
-    AsyncGatherToLDS,
     AtomicOp,
     CustomOp,
+    GatherToLDS,
     NestedRegionOp,
     Read,
     SharedMemoryBarrier,
@@ -34,7 +34,7 @@ class MemoryAccessType(Enum):
 def is_shared_memory_op(node: CustomOp) -> bool:
     if isinstance(node, (Read, Write, AtomicOp)):
         return node.memory_type.address_space == SHARED_ADDRESS_SPACE
-    elif isinstance(node, AsyncGatherToLDS):
+    elif isinstance(node, GatherToLDS):
         return True
 
     return False
@@ -47,7 +47,7 @@ def get_memory_access_type(node: CustomOp) -> MemoryAccessType:
         return MemoryAccessType.WRITE
     elif isinstance(node, AtomicOp):
         return MemoryAccessType.READ_WRITE
-    elif isinstance(node, AsyncGatherToLDS):
+    elif isinstance(node, GatherToLDS):
         return MemoryAccessType.WRITE
     else:
         return MemoryAccessType.NONE
@@ -97,9 +97,10 @@ def add_shared_memory_barriers(
             if need_barrier(custom, last_node) and not is_barrier_between(
                 last_node.fx_node, custom.fx_node
             ):
+                is_async = isinstance(last_node, GatherToLDS)
                 # Synchronize after the write to shared memory before we read from it.
                 with graph.inserting_before(node):
-                    SharedMemoryBarrier().add_to_graph(graph)
+                    SharedMemoryBarrier(wait_async_ops=is_async).add_to_graph(graph)
             last_node = custom
         if isinstance(custom, NestedRegionOp):
             last_node = add_shared_memory_barriers(
