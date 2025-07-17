@@ -957,5 +957,3 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         dst_indices=dst_index_transformed_,
         transfer_type=store_type,
     )
-
-    amdgpu_d.lds_barrier()
