@@ -40,9 +40,16 @@ from ..ops.wave_ops import (
 from ..lang.global_symbols import *
 
 from .scheduling.schedule_enums import SchedulingType
-from .utils.general_utils import get_hardware_constraint, is_shared_read
+from .utils.general_utils import (
+    get_hardware_constraint,
+    is_shared_read,
+    flatten_list,
+    topological_sort_with_dependencies,
+)
 from .utils.symbol_utils import subs_idxc
 from collections import deque
+from typing import Iterable
+
 
 ##############################################################
 # General graph helper functions
@@ -62,18 +69,19 @@ Values: 0xAB where:
 * C = Type of MMA.
     * 0 = MMA
     * 1 = ScaledMMA
-* C enumerates different strategy that share the same 0xAB* bits.
+* D enumerates different strategy that share the same 0xAB* bits.
 """
 
 
 class SchedReorderStrategy(Enum):
     NONE = 0x00
     TWO_PP_CLUSTER = 0x220
-    MXFP4_PP_CLUSTER = 0x211
+    MXFP4_PP_CLUSTER = 0x101
 
 
 def is_pingpong_strategy(strategy):
-    return int(hex(strategy.value)[3]) == 2
+    """Convert enum value to hex string and checks A-bit"""
+    return int(hex(strategy.value)[2]) == 2
 
 
 """
@@ -87,10 +95,11 @@ class CompatibleBlockSize:
     block_n: int
     block_k: int
     bitwidth: int
+    mma_type: type
 
 
-twoPPConfig = CompatibleBlockSize(128, 256, 64, 16)
-MXFP4PPConfig = CompatibleBlockSize(256, 128, 256, 4)
+twoPPConfig = CompatibleBlockSize(128, 256, 64, 16, MMA)
+MXFP4PPConfig = CompatibleBlockSize(256, 128, 256, 4, ScaledMMA)
 
 
 class InsertionMode(Enum):
@@ -105,7 +114,9 @@ class InsertionPoint(object):
     (referred here as "anchor op".)
     """
 
-    def __init__(self, mode, op, anchor_op):
+    def __init__(
+        self, mode: InsertionMode, op: fx.Node, anchor_op: fx.Node | Iterable[fx.Node]
+    ):
         # Initialize insertion mode.
         if not isinstance(mode, InsertionMode):
             raise ValueError("Unexpected insetion mode.")
@@ -114,7 +125,7 @@ class InsertionPoint(object):
         # Initialize source location.
         if isinstance(anchor_op, fx.Node):
             self.anchor_op = anchor_op
-        elif isinstance(anchor_op, (list, tuple)):
+        elif isinstance(anchor_op, Iterable):
             if mode == InsertionMode.AFTER:
                 self.anchor_op = flatten_list(anchor_op)[-1]
             else:
@@ -143,11 +154,6 @@ def get_graph_node(custom: CustomOp, graph: fx.Graph) -> fx.Node:
     custom.add_to_graph(graph)
     custom = custom.fx_node
     return custom
-
-
-def flatten_list(input_list: list):
-    flattened_list, _ = pytree.tree_flatten(input_list)
-    return flattened_list
 
 
 def get_mma_bitwidth(mma_node):
@@ -196,48 +202,6 @@ def schedule_nodes_to_graph(graph, node_map, nodes):
         node_map[node] = new_node.fx_node
 
 
-def schedule_cluster_dependencies(
-    cluster_nodes, exhaustive_cluster_nodes, pre_cluster_nodes
-):
-    """
-    This function help add dependencies nodes that are not explicitly specified
-    inside the cluster.
-    """
-    schedule_weight = dict.fromkeys(pre_cluster_nodes, 0)
-    workqueue = deque(exhaustive_cluster_nodes)
-    non_solved_counter = 0
-    order_dependency = {
-        cluster_nodes[i + 1]: cluster_nodes[i] for i in range(len(cluster_nodes) - 1)
-    }
-    edge_weight = 1
-    while workqueue:
-        node = workqueue.popleft()
-        # Combine graph depedency + order dependency
-        node_deps = flatten_list(node.args) + [order_dependency.get(node)]
-        node_loop_deps = [
-            node_dep
-            for node_dep in node_deps
-            if isinstance(node_dep, fx.Node) and node_dep.graph == node.graph
-        ]
-        if not node_loop_deps:
-            non_solved_counter = 0
-            schedule_weight[node] = 0
-            continue
-        if any([dep not in schedule_weight for dep in node_loop_deps]):
-            non_solved_counter += 1
-            if non_solved_counter > len(workqueue):
-                raise ValueError(
-                    "Cannot find producer(s) for remaining item in workqueue."
-                )
-            workqueue.append(node)
-            continue
-        non_solved_counter = 0
-        schedule_weight[node] = (
-            max([schedule_weight[dep] for dep in node_loop_deps]) + edge_weight
-        )
-    return sorted(exhaustive_cluster_nodes, key=lambda x: schedule_weight[x])
-
-
 def insert_scheduling_nodes(reordered_original_nodes, insertion_points):
     """
     This function helps output a new list/order of nodes with scheduling
@@ -245,9 +209,12 @@ def insert_scheduling_nodes(reordered_original_nodes, insertion_points):
     """
     reordered_nodes = reordered_original_nodes.copy()
     for insertion_point in insertion_points:
-        insert_index = reordered_nodes.index(insertion_point.anchor_op)
-        if insertion_point.mode == InsertionMode.AFTER:
-            insert_index += 1
+        if insertion_point.mode == InsertionMode.BEFORE:
+            insert_index = reordered_nodes.index(insertion_point.anchor_op)
+        elif insertion_point.mode == InsertionMode.AFTER:
+            insert_index = reordered_nodes.index(insertion_point.anchor_op) + 1
+        else:
+            raise ValueError("Invalid InsertionMode found!")
         reordered_nodes.insert(insert_index, insertion_point.op)
     return reordered_nodes
 
@@ -281,7 +248,7 @@ def reorder_graph(graph, clusters):
         x for x in node_list if x >= earliest_cluster_node and x <= latest_cluster_node
     ]
 
-    reordered_original_nodes = schedule_cluster_dependencies(
+    reordered_original_nodes = topological_sort_with_dependencies(
         original_cluster_nodes, exhaustive_cluster_nodes, pre_cluster_nodes
     )
 
@@ -454,26 +421,26 @@ def insert_prefetch_loop_barriers(custom_iterate, cluster_graph, clusters):
 ##############################################################
 
 
+def is_compatible_strategy(mTile, nTile, kTile, mma_bitwidth, mma_type, strategy):
+    return (
+        mTile % strategy.block_m == 0
+        and nTile % strategy.block_n == 0
+        and kTile % strategy.block_k == 0
+        and mma_bitwidth == strategy.bitwidth
+        and mma_type == strategy.mma_type
+    )
+
+
 def select_reorder_strategy(
     mma_type, mTile, nTile, kTile, mma_bitwidth, hardware_constraint
 ):
     flat_wave_count = math.prod(hardware_constraint.waves_per_block)
     if flat_wave_count != 8:
         return SchedReorderStrategy.NONE
-    if (
-        mTile % twoPPConfig.block_m == 0
-        and nTile % twoPPConfig.block_n == 0
-        and kTile % twoPPConfig.block_k == 0
-        and mma_bitwidth == twoPPConfig.bitwidth
-        and mma_type == MMA
-    ):
+    if is_compatible_strategy(mTile, nTile, kTile, mma_bitwidth, mma_type, twoPPConfig):
         return SchedReorderStrategy.TWO_PP_CLUSTER
-    elif (
-        mTile % MXFP4PPConfig.block_m == 0
-        and nTile % MXFP4PPConfig.block_n == 0
-        and kTile % MXFP4PPConfig.block_k == 0
-        and mma_bitwidth == MXFP4PPConfig.bitwidth
-        and mma_type == ScaledMMA
+    elif is_compatible_strategy(
+        mTile, nTile, kTile, mma_bitwidth, mma_type, MXFP4PPConfig
     ):
         return SchedReorderStrategy.MXFP4_PP_CLUSTER
     else:
@@ -643,7 +610,6 @@ def transform_MXFP4_PP_clusters(
 
 def get_closest_local_load(node: fx.Node):
     workqueue = deque([node])
-    local_load_chain = [node]
     seen = set()
     can_extend = lambda x: isinstance(x, fx.Node) and x not in seen
     while workqueue:
@@ -654,7 +620,6 @@ def get_closest_local_load(node: fx.Node):
 
         # Update ancestor and seen tracker, and workqueue with new child nodes.
         seen.update(child_nodes)
-        local_load_chain.extend(child_nodes)
         workqueue.extend(child_nodes)
     return None
 

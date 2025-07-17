@@ -10,6 +10,7 @@ import os
 import sympy
 import torch
 from typing import Any, Callable, Optional
+from collections import deque
 
 
 from ..._support.indexing import IndexExpr, IndexSequence, IndexSymbol
@@ -25,6 +26,10 @@ from ..constraints import (
 )
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
 
+
+import torch
+import torch.fx as fx
+from torch.utils import _pytree as pytree
 
 # TODO: Monkey-patching f16 support, need to fix in iree.
 
@@ -492,3 +497,61 @@ def infer_dim(expr):
         return expr
     dim_symbol = list(expr.free_symbols)[0]
     return dim_symbol
+
+
+def flatten_list(input_list: list):
+    flattened_list, _ = pytree.tree_flatten(input_list)
+    return flattened_list
+
+
+def topological_sort_with_dependencies(
+    node_ordering_constraint: list[fx.Node],
+    nodes_to_reorder: list[fx.Node],
+    reorder_node_dependencies: list[fx.Node] = [],
+):
+    """
+    This function help add dependencies nodes that are not explicitly specified
+    inside the cluster.
+
+    node_ordering_constraint: A list of nodes that is a subset of the nodes in `nodes_to_reorder` that represent the
+                              ordering constraint of nodes we'd like to enforce.
+
+    nodes_to_reorder: An list of nodes that we'd like to reorder and enforce the ordering from `node_ordering_constraint onto.
+
+    reorder_node_dependencies: If `node_to_reorder` is not a "complete" list of ops in the graph, we would need to suplement the
+                               function with it's misssing dependencies/argument nodes.
+    """
+    schedule_weight = dict.fromkeys(reorder_node_dependencies, 0)
+    workqueue = deque(nodes_to_reorder)
+    non_solved_counter = 0
+    order_dependency = {
+        node_ordering_constraint[i + 1]: node_ordering_constraint[i]
+        for i in range(len(node_ordering_constraint) - 1)
+    }
+    edge_weight = 1
+    while workqueue:
+        node = workqueue.popleft()
+        # Combine graph depedency + order dependency
+        node_deps = flatten_list(node.args) + [order_dependency.get(node)]
+        node_loop_deps = [
+            node_dep
+            for node_dep in node_deps
+            if isinstance(node_dep, fx.Node) and node_dep.graph == node.graph
+        ]
+        if not node_loop_deps:
+            non_solved_counter = 0
+            schedule_weight[node] = 0
+            continue
+        if any([dep not in schedule_weight for dep in node_loop_deps]):
+            non_solved_counter += 1
+            if non_solved_counter > len(workqueue):
+                raise ValueError(
+                    "Cannot find producer(s) for remaining item in workqueue."
+                )
+            workqueue.append(node)
+            continue
+        non_solved_counter = 0
+        schedule_weight[node] = (
+            max([schedule_weight[dep] for dep in node_loop_deps]) + edge_weight
+        )
+    return sorted(nodes_to_reorder, key=lambda x: schedule_weight[x])
