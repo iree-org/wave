@@ -153,17 +153,10 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
     logger.info(f"total_number_of_threads={total_number_of_threads}")
 
     threads_subs = {
-        THREAD_0: SUBGROUP_ID * threads_per_wave if waves_per_block[0] > 1 else 0,
-        THREAD_1: (
-            SUBGROUP_ID * threads_per_wave * waves_per_block[0]
-            if waves_per_block[1] > 1
-            else 0
-        ),
-        THREAD_2: (
-            SUBGROUP_ID * threads_per_wave * waves_per_block[0] * waves_per_block[1]
-            if waves_per_block[2] > 1
-            else 0
-        ),
+        THREAD_0: (SUBGROUP_ID % waves_per_block[0]) * threads_per_wave,
+        THREAD_1: (SUBGROUP_ID // waves_per_block[0]) % waves_per_block[1],
+        THREAD_2: (SUBGROUP_ID // (waves_per_block[0] * waves_per_block[1]))
+        % waves_per_block[2],
     }
 
     supported_load_widths = [32, 96, 128]
