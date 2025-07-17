@@ -44,6 +44,7 @@ import logging
 import torch.fx as fx
 from collections import defaultdict
 import sympy
+from .compile_options import WaveCompileOptions
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,11 @@ def get_load_width(supported_load_widths: list[int], bitwidth: int) -> Optional[
     return None
 
 
-def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
+def gather_to_shared(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+):
     """
     This pass enables direct memory load from global to lds without passing
     through register reducing the data movement. This instruction is supported
@@ -168,7 +173,10 @@ def gather_to_shared(trace: CapturedTrace, constraints: list[Constraint]):
         THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
     }
 
-    supported_load_widths = [32, 96, 128]
+    supported_load_widths = [32]
+
+    if "gfx95" in options.target:
+        supported_load_widths += [96, 128]
 
     constraint_tile_size = {
         c.dim: c.tile_size
