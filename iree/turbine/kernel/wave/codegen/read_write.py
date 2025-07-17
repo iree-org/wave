@@ -902,21 +902,21 @@ def handle_async_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
         (
             src,
-            src_idx,
-            src_type,
             dst,
+            src_idx,
             dst_idx,
-            dst_type,
             src_mapping,
             dst_mapping,
+            element_type,
             elements_per_thread,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    element_type = IrType.parse(src_type.dtype.ir_type_asm())
+    element_type = IrType.parse(element_type.dtype.ir_type_asm())
 
-    symbolic_shape = _get_symbolic_shape(src)
+    src_symbolic_shape = _get_symbolic_shape(src)
+    dst_symbolic_shape = _get_symbolic_shape(dst)
 
     src = cast_py_value(emitter, src)
     dst = cast_py_value(emitter, dst)
@@ -947,13 +947,9 @@ def handle_async_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     dst = dst.ir_value
 
     if src_mapping:
-        src_idx = transform_index_on_mapping(
-            src_mapping, src_type.symbolic_shape, src_idx
-        )
+        src_idx = transform_index_on_mapping(src_mapping, src_symbolic_shape, src_idx)
     if dst_mapping:
-        dst_idx = transform_index_on_mapping(
-            dst_mapping, dst_type.symbolic_shape, dst_idx
-        )
+        dst_idx = transform_index_on_mapping(dst_mapping, dst_symbolic_shape, dst_idx)
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
@@ -962,7 +958,7 @@ def handle_async_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     if True:
         strides = strides_from_symbolic_shape(
-            IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
+            IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
         )
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
 
