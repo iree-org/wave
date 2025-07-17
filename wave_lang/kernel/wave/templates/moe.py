@@ -19,6 +19,8 @@ import math
 import sympy
 
 
+# Writing our own version of GEMM kernel to support more datatypes
+# We'll be improving this kernel with more operations too.
 def get_gemm_kernel(
     m: int,
     k: int,
@@ -54,7 +56,7 @@ def get_gemm_kernel(
             threads_per_wave=64,
             waves_per_block=(2, 2, 1),
             mma_type=mfma_variant,
-          # vector_shapes={M: 0, N: 0, K: 64},
+            # vector_shapes={M: 0, N: 0, K: 64},
         )
     ]
 

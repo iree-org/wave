@@ -10,10 +10,10 @@ import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
 from iree.turbine.kernel.lang.global_symbols import *
 from .common.utils import (
-    require_cdna3,
     require_e2e,
     enable_scheduling_barriers,
     dump_generated_mlir,
+    check_individual_kernels,
 )
 from iree.turbine.kernel.wave.utils.run_utils import (
     set_default_run_config,
@@ -43,11 +43,12 @@ def get_wave_silu_and_mul_kernel(
     n: int,
     datatype: DataType,
 ):
-    assert datatype in [torch.float16, torch.bfloat16], f"Unsupported datatype: {datatype}"
+    assert datatype in [
+        torch.float16,
+        torch.bfloat16,
+    ], f"Unsupported datatype: {datatype}"
     silu_and_mul_kernel, symbols, _, _ = get_silu_and_mul_kernel(
-        m,
-        n,
-        tkl.f16 if datatype == torch.float16 else tkl.bf16
+        m, n, tkl.f16 if datatype == torch.float16 else tkl.bf16
     )
     symbols.update(get_default_scheduling_params())
 
@@ -69,12 +70,11 @@ def silu_and_mul(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     wave_kernel = get_wave_silu_and_mul_kernel(gate.shape[0], gate.shape[1], gate.dtype)
 
     out = torch.zeros(gate.shape, dtype=gate.dtype, device=gate.device)
-    asm = wave_kernel(gate, up, out)
+    wave_kernel(gate, up, out)
     ref = silu_and_mul_ref(gate, up)
     rtol, atol = 1e-1, 1e-2
-    torch.testing.assert_close(
-        out, ref, rtol=rtol, atol=atol, check_device=False
-    )
+    if check_individual_kernels:
+        torch.testing.assert_close(out, ref, rtol=rtol, atol=atol, check_device=False)
     return out
 
 
@@ -110,9 +110,9 @@ def get_wave_gemm_kernel(
 
 
 def torch_ref_moe(a, w1, w2, score, topk):
-    B, D = a.shape
-    a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
-    out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
+    m, k = a.shape
+    a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
+    out = torch.zeros(m * topk, w2.shape[1], dtype=a.dtype, device=a.device)
     score = torch.softmax(score, dim=-1, dtype=torch.float32)
     topk_weight, topk_ids = torch.topk(score, topk)
     topk_weight = topk_weight.view(-1)
@@ -122,35 +122,41 @@ def torch_ref_moe(a, w1, w2, score, topk):
         if mask.sum():
             x = a[mask] @ w1[i].transpose(0, 1)
             d = x.shape[-1] // 2
-            out[mask] = silu_and_mul_ref(x[..., :d], x[..., d:]) @ w2[
-                i
-            ].transpose(0, 1)
+            out[mask] = silu_and_mul_ref(x[..., :d], x[..., d:]) @ w2[i].transpose(0, 1)
     return (
-        out.view(B, -1, w2.shape[1]) * topk_weight.view(B, -1, 1).to(out.dtype)
+        out.view(m, -1, w2.shape[1]) * topk_weight.view(m, -1, 1).to(out.dtype)
     ).sum(dim=1)
 
 
 def torch_ref_moe_split_w1(a, w1_gate, w1_up, w2, score, topk):
-    B, D = a.shape
-    a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
-    out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
-    score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    m, k = a.shape
+    a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)  # [m * topk, k]
+    out = torch.zeros(
+        m * topk, w2.shape[1], dtype=a.dtype, device=a.device
+    )  # [m * topk, k]
+    score = torch.softmax(score, dim=-1, dtype=torch.float32)  # [m, e]
     topk_weight, topk_ids = torch.topk(score, topk)
-    topk_weight = topk_weight.view(-1)
-    topk_ids = topk_ids.view(-1)
+    topk_weight = topk_weight.view(-1)  # [m * topk]
+    topk_ids = topk_ids.view(-1)  # [m * topk]
     for i in range(w1_gate.shape[0]):
-        mask = topk_ids == i
+        mask = (
+            topk_ids == i
+        )  # num_selected (which of the m * topk tokens selected this expert)
         if mask.sum():
             # Split into gate and up projections
-            gate = F.silu(a[mask] @ w1_gate[i].transpose(0, 1))
-            up = a[mask] @ w1_up[i].transpose(0, 1)
-            out[mask] = (gate * up) @ w2[i].transpose(0, 1)
+            gate = F.silu(a[mask] @ w1_gate[i].transpose(0, 1))  # [num_selected, n]
+            up = a[mask] @ w1_up[i].transpose(0, 1)  # [num_selected, n]
+            out[mask] = (gate * up) @ w2[i].transpose(0, 1)  # [num_selected, k]
     return (
-        out.view(B, -1, w2.shape[1]) * topk_weight.view(B, -1, 1).to(out.dtype)
-    ).sum(dim=1)
+        out.view(m, -1, w2.shape[1]) * topk_weight.view(m, -1, 1).to(out.dtype)
+    ).sum(
+        dim=1
+    )  # [m, k]
 
 
-def softmax(x: torch.Tensor, dim: int = -1, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+def softmax(
+    x: torch.Tensor, dim: int = -1, dtype: torch.dtype = torch.float32
+) -> torch.Tensor:
     # Convert input to float32 for stable calculations
     x_float = x.to(dtype)
 
@@ -165,7 +171,7 @@ def softmax(x: torch.Tensor, dim: int = -1, dtype: torch.dtype = torch.float32) 
     return result
 
 
-def torch_tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk):
+def tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk):
     B, D = a.shape
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
     out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
@@ -181,43 +187,59 @@ def torch_tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk):
         mask = topk_ids == i
         if mask.sum():
             m = int(mask.sum())
-            gate = torch.zeros(m, w1_gate[i].shape[0], dtype=torch.float32, device=a.device)
-            up = torch.zeros(m, w1_gate[i].shape[0], dtype=torch.float32, device=a.device)
+            gate = torch.zeros(
+                m, w1_gate[i].shape[0], dtype=torch.float32, device=a.device
+            )
+            up = torch.zeros(
+                m, w1_gate[i].shape[0], dtype=torch.float32, device=a.device
+            )
             assert w1_gate[i].shape == w1_up[i].shape
             gemm_kernel_gate_up = get_wave_gemm_kernel(
-                m, # M
-                w1_gate[i].shape[-1], # K
-                w1_gate[i].shape[0], # N
+                m,  # M
+                w1_gate[i].shape[-1],  # K
+                w1_gate[i].shape[0],  # N
                 MMAType.F32_16x16x16_F16,
                 dtype,
             )
-            asm = gemm_kernel_gate_up(a[mask], w1_gate[i], gate)
-            asm = gemm_kernel_gate_up(a[mask], w1_up[i], up)
+            gemm_kernel_gate_up(a[mask], w1_gate[i], gate)
+            gemm_kernel_gate_up(a[mask], w1_up[i], up)
             gate = gate.to(dtype=a.dtype)
             up = up.to(dtype=a.dtype)
-            torch.testing.assert_close(
-                gate, a[mask] @ w1_gate[i].transpose(0, 1), rtol=rtol, atol=atol, check_device=False
-            )
-            torch.testing.assert_close(
-                up, a[mask] @ w1_up[i].transpose(0, 1), rtol=rtol, atol=atol, check_device=False
-            )
+            if check_individual_kernels:
+                torch.testing.assert_close(
+                    gate,
+                    a[mask] @ w1_gate[i].transpose(0, 1),
+                    rtol=rtol,
+                    atol=atol,
+                    check_device=False,
+                )
+                torch.testing.assert_close(
+                    up,
+                    a[mask] @ w1_up[i].transpose(0, 1),
+                    rtol=rtol,
+                    atol=atol,
+                    check_device=False,
+                )
             lhs = torch.zeros(m, w2.shape[-1], dtype=a.dtype, device=a.device)
             lhs = silu_and_mul(gate, up)
             rhs = w2[i]
-            partial_out = torch.zeros(m, w2.shape[1], dtype=torch.float32, device=a.device)
+            partial_out = torch.zeros(
+                m, w2.shape[1], dtype=torch.float32, device=a.device
+            )
             gemm_kernel_out = get_wave_gemm_kernel(
-                m, # M
-                w2[i].shape[-1], # K
-                w2[i].shape[0], # N
+                m,  # M
+                w2[i].shape[-1],  # K
+                w2[i].shape[0],  # N
                 MMAType.F32_16x16x16_F16,
                 dtype,
             )
             gemm_kernel_out(lhs, rhs, partial_out)
             partial_out = partial_out.to(dtype=a.dtype)
             ref = lhs @ rhs.transpose(0, 1)
-            torch.testing.assert_close(
-                partial_out, ref, rtol=rtol, atol=atol, check_device=False
-            )
+            if check_individual_kernels:
+                torch.testing.assert_close(
+                    partial_out, ref, rtol=rtol, atol=atol, check_device=False
+                )
             out[mask] = partial_out
     return (
         out.view(B, -1, w2.shape[1]) * topk_weight.view(B, -1, 1).to(out.dtype)
@@ -226,8 +248,8 @@ def torch_tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk):
 
 num_experts = [8, 64]
 top_ks = [2, 6]
+# 1024 * 128 might take some time to run
 m_values = [1, 33, 64, 222, 1024 * 128]
-#m_values = [1, 33, 64, 222]
 n_values = [128, 1024, 2048]
 k_values = [128, 511, 1024]
 dtypes = [torch.float16, torch.bfloat16]
@@ -261,13 +283,17 @@ def testReferenceMoe(
     score = torch.rand((m, e), dtype=dtype, device=device)
 
     ref_output = torch_ref_moe(a, w1, w2, score, topk)
+
+    # We need to manually split w1 into 2 halves, since this is
+    # required by `silu_and_mul` kernel, and currently we can't
+    # do this in Wave.
     w1_gate = w1[:, :n, :]  # First half for gate
-    w1_up = w1[:, n:, :]    # Second half for up projection
+    w1_up = w1[:, n:, :]  # Second half for up projection
+
+    # Make sure the algorithm with w1 splitting works in PyTorch.
     ref_split_output = torch_ref_moe_split_w1(a, w1_gate, w1_up, w2, score, topk)
-    torch.testing.assert_close(
-        ref_split_output, ref_output, rtol=rtol, atol=atol
-    )
-    tkw_output = torch_tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk)
-    torch.testing.assert_close(
-        tkw_output, ref_output, rtol=rtol, atol=atol
-    )
+    torch.testing.assert_close(ref_split_output, ref_output, rtol=rtol, atol=atol)
+
+    # The implementation in Wave should also work.
+    tkw_output = tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk)
+    torch.testing.assert_close(tkw_output, ref_output, rtol=rtol, atol=atol)
