@@ -69,6 +69,50 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
 
 
 @require_e2e
+def testGemmBench(tmp_path):
+    shape = (64, 64, 64)
+    perf_filename_tk = tmp_path / "wave_gemm_bench.txt"
+    perf_filename_iree = tmp_path / "iree_gemm_bench.txt"
+    enable_scheduling = SchedulingType.NONE
+    dynamic_dims = False
+    mfma_variant = MMAType.F32_16x16x16_F16
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
+        shape, dynamic_dims, mfma_variant, tkl.f16
+    )
+
+    assert not perf_filename_tk.exists()
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=True,
+        schedule=enable_scheduling,
+        use_scheduling_barriers=enable_scheduling_barriers,
+        dynamic_symbols=dynamic_symbols,
+        benchmark_batch_size=10,
+        benchmark_repetitions=3,
+        benchmark_results_file=perf_filename_tk,
+    )
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm)
+
+    a = device_randn(shape[0], shape[2], dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], dtype=torch.float16)
+    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    gemm(a, b, c)
+    assert perf_filename_tk.exists()
+    assert "real_time" in perf_filename_tk.read_text()
+
+    assert not perf_filename_iree.exists()
+    options.benchmark_results_file = perf_filename_iree
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert perf_filename_iree.exists()
+    assert "real_time" in perf_filename_iree.read_text()
+
+
+@require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
