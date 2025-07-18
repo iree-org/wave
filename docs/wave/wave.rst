@@ -70,3 +70,4 @@ For more detailed information about Wave's architecture and optimization passes,
    schedule_modifier
    fused_softmax
    aplp
+   gather_to_shared
