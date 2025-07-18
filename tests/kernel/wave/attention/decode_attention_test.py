@@ -59,7 +59,7 @@ def testFlashDecoding(
     dynamic_dims: bool,
     mfma_variant: MMAType,
     run_bench,
-    perf_filename_tk,
+    perf_filename_tk2,
 ):
     (
         phase_0,
@@ -92,11 +92,7 @@ def testFlashDecoding(
         dynamic_symbols=dynamic_symbols_0,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[0],
     )
     options = set_default_run_config(options)
     phase_0 = wave_compile(options, phase_0)
@@ -119,11 +115,7 @@ def testFlashDecoding(
         dynamic_symbols=dynamic_symbols_1,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[1],
     )
     options = set_default_run_config(options)
     phase_1 = wave_compile(options, phase_1)
