@@ -418,6 +418,7 @@ def testAttentionBHSDCausal(
     perf_filename_tk,
 ):
     shape = AttentionShape(
+        batch_size=shape[0],
         num_query_heads=shape[1],
         num_kv_heads=shape[1],
         query_seq_len=shape[2],
