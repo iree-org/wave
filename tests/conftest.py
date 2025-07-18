@@ -15,10 +15,9 @@ def serialize_execution(request):
         return
 
     from pathlib import Path
+    from filelock import FileLock
 
     lock_file_path = Path.home() / ".wave_tests_lock"
-
-    from filelock import FileLock
 
     lock_file = FileLock(lock_file_path)
 
@@ -34,8 +33,9 @@ def serialize_execution(request):
             lock_file.acquire()
 
     wave_compile_module._wave_compile = compile_wrapper
-    with lock_file:
-        yield
+    lock_file.acquire()
+    yield
+    lock_file.release()
 
     wave_compile_module._wave_compile = wave_compile
 
