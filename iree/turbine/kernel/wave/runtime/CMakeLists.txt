@@ -6,6 +6,12 @@
 cmake_minimum_required(VERSION 3.19...3.27)
 project(wave_runtime)
 
+# Skip building on macOS and Windows
+if(APPLE OR WIN32)
+  message(STATUS "Skipping wave_runtime build on ${CMAKE_SYSTEM_NAME}")
+  return()
+endif()
+
 # Set the C++ standard (for nanobind)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
