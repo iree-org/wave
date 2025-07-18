@@ -615,6 +615,7 @@ def testGemmDumpOverrideSchedule(
     dynamic_dims: bool,
     mfma_variant: MMAType,
     datatype: DataType,
+    tmp_path,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
@@ -622,6 +623,8 @@ def testGemmDumpOverrideSchedule(
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, dynamic_dims, mfma_variant, datatype
     )
+    schedule_path = tmp_path / "schedule.txt"
+    assert not schedule_path.exists()
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -631,7 +634,7 @@ def testGemmDumpOverrideSchedule(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        dump_schedule="./schedule.txt",
+        dump_schedule=schedule_path,
     )
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
@@ -639,7 +642,9 @@ def testGemmDumpOverrideSchedule(
     a = device_randn(shape[0], shape[2], dtype=datatype)
     b = device_randn(shape[1], shape[2], dtype=datatype)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+
     compiled_gemm(a, b, c)
+    assert schedule_path.exists()
 
     if run_bench:
         options.benchmark_results_file = perf_filename_iree
@@ -662,7 +667,7 @@ def testGemmDumpOverrideSchedule(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        override_schedule="./schedule.txt",
+        override_schedule=schedule_path,
     )
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
