@@ -222,7 +222,7 @@ def generate_iree_ref(
         vm_instance = device.vm_instance
         return rt.VmModule.copy_buffer(vm_instance, vmfb)
 
-    launchable = Launchable.jit_compile(loader, entry_point=func_name)
+    launchable = Launchable.from_vm_module(loader, entry_point=func_name)
     res = launchable(*kernel_inputs, outputs=kernel_outputs)
     if len(kernel_outputs) == 1:
         kernel_outputs[0][:] = res
