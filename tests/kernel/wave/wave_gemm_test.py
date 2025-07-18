@@ -87,17 +87,19 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
         MMAType.F32_32x32x8_F16,
     ],
 )
+@pytest.mark.parametrize("datatype", [torch.float16])
 def testPureGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
+    datatype: torch.dtype,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
 ):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant
+        shape, dynamic_dims, mfma_variant, datatype
     )
 
     options = WaveCompileOptions(
@@ -114,9 +116,9 @@ def testPureGemm(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
-    a = device_randn(shape[0], shape[2], dtype=torch.float16)
-    b = device_randn(shape[1], shape[2], dtype=torch.float16)
-    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    a = device_randn(shape[0], shape[2], dtype=datatype)
+    b = device_randn(shape[1], shape[2], dtype=datatype)
+    c = device_zeros(shape[0], shape[1], dtype=datatype)
     asm = gemm(a, b, c)
 
     if dump_generated_mlir:
@@ -155,17 +157,19 @@ _xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
         MMAType.F32_32x32x8_F16,
     ],
 )
+@pytest.mark.parametrize("datatype", [torch.float16])
 def testGemmGatherToLDS(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
+    datatype: torch.dtype,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
 ):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant
+        shape, dynamic_dims, mfma_variant, datatype
     )
 
     options = WaveCompileOptions(
@@ -183,9 +187,9 @@ def testGemmGatherToLDS(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
-    a = device_randn(shape[0], shape[2], dtype=torch.float16)
-    b = device_randn(shape[1], shape[2], dtype=torch.float16)
-    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    a = device_randn(shape[0], shape[2], dtype=datatype)
+    b = device_randn(shape[1], shape[2], dtype=datatype)
+    c = device_zeros(shape[0], shape[1], dtype=datatype)
     asm = gemm(a, b, c)
     assert "amdgpu.gather_to_lds" in asm, "gather_to_lds not found in asm"
 
