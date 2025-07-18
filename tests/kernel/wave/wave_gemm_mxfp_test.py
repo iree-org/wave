@@ -228,7 +228,7 @@ def testScaledGemmMXFP4(
         ScaledMMAType.F32_16x16x128_F8F6F4,
     ],
 )
-@pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
+@pytest.mark.parametrize("enable_scheduling", [SchedulingType.PREFETCH])
 def testScaledBatchedGemmMXFP4(
     batch: int,
     shape: tuple[int],

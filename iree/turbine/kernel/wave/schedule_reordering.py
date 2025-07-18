@@ -174,15 +174,19 @@ def get_mma_tile_size(mma_nodes, constraints):
     # Just using first one because we know it all came from same source,
     # and hence all the dims should be the same.
     mma_node = mma_nodes[0]
+    filter_batch_dims = lambda dims: [
+        dim for dim in dims if mma_node.vector_shapes[dim] != 0
+    ]
     custom = get_custom(mma_node)
     lhs_dim = set(get_custom(custom.lhs).indexing_dims)
     rhs_dim = set(get_custom(custom.rhs).indexing_dims)
     acc_dim = set(get_custom(custom.acc).indexing_dims)
 
-    m_dims = list(lhs_dim - rhs_dim)
-    n_dims = list(rhs_dim - lhs_dim)
+    m_dims = filter_batch_dims(list(lhs_dim - rhs_dim))
+    n_dims = filter_batch_dims(list(rhs_dim - lhs_dim))
     # Subtract by acc dim to remove batch dims.
-    k_dims = list(rhs_dim.intersection(lhs_dim) - acc_dim)
+    k_dims = filter_batch_dims(list(rhs_dim.intersection(lhs_dim) - acc_dim))
+
     # Only expected single dim for each M,N,K.
     if len(m_dims) != 1 or len(n_dims) != 1 or len(k_dims) != 1:
         return None, None, None
