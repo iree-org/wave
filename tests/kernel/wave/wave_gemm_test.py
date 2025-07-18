@@ -118,7 +118,7 @@ def testPureGemm(
 
     a = device_randn(shape[0], shape[2], dtype=datatype)
     b = device_randn(shape[1], shape[2], dtype=datatype)
-    c = device_zeros(shape[0], shape[1], dtype=datatype)
+    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     asm = gemm(a, b, c)
 
     if dump_generated_mlir:
@@ -189,7 +189,7 @@ def testGemmGatherToLDS(
 
     a = device_randn(shape[0], shape[2], dtype=datatype)
     b = device_randn(shape[1], shape[2], dtype=datatype)
-    c = device_zeros(shape[0], shape[1], dtype=datatype)
+    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     asm = gemm(a, b, c)
     assert "amdgpu.gather_to_lds" in asm, "gather_to_lds not found in asm"
 
