@@ -49,9 +49,6 @@ from .compile_options import WaveCompileOptions
 logger = logging.getLogger(__name__)
 
 
-gather_to_shared_supported_arch = ["gfx950"]
-
-
 def is_valid_read(node: fx.Node) -> bool:
     read = get_custom(node)
     if not isinstance(read, Read):
@@ -135,10 +132,14 @@ def gather_to_shared(
     through register reducing the data movement. This instruction is supported
     only on specific architectures (gfx950).
     """
+    if not options.use_global_to_shared:
+        return
+
     logger.info("gather_to_shared")
 
-    # if get_default_arch() not in gather_to_shared_supported_arch:
-    #     return
+    if "gfx9" not in options.target:
+        logger.info("gather_to_shared not supported on this architecture")
+        return
 
     id_to_read_write = defaultdict(list)
     for read in trace.walk(is_valid_read):
