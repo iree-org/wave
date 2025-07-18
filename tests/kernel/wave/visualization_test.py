@@ -83,7 +83,9 @@ def test_gemm():
     constraints += [tkw.TilingConstraint(K, BLOCK_K, ARGK)]
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2, THREAD_0 / 64)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2, THREAD_1)]
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64)]
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
+    ]
     with tk.gen.TestLaunchContext(
         {
             BLOCK_M: 32,
