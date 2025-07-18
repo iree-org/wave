@@ -136,6 +136,7 @@ _xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
 
 
 @require_e2e
+@require_cdna3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
