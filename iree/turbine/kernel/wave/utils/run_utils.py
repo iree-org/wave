@@ -162,7 +162,6 @@ def invoke_vmfb(
         func,
         kernel_inputs,
         kernel_outputs,
-        dynamic_symbols,
         scalar_args,
         dynamic_symbols,
     )
@@ -172,6 +171,7 @@ def invoke_vmfb(
             options,
             kernel_inputs,
             kernel_outputs,
+            dynamic_symbols,
             vmfb,
             options.func_name,
             **benchmark_flags,
