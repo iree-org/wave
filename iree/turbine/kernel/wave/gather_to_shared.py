@@ -4,8 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import iree.turbine.kernel.lang as tkl
-
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -16,7 +14,7 @@ from ..ops.wave_ops import (
     get_custom,
 )
 from ..ops.wave_ops import IndexSequence
-from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
+from .._support.indexing import IndexSequence, IndexSymbol
 from ..wave.constraints import (
     Constraint,
     TilingConstraint,
@@ -29,7 +27,6 @@ from .utils.general_utils import (
     delinearize_index,
 )
 from .utils.graph_utils import DCE
-from .utils.mapping_utils import transform_index_on_mapping
 from .utils.symbol_utils import (
     safe_subs,
     subs_idxc,
