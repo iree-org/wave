@@ -165,7 +165,7 @@ def benchmark_module(
 
     err = err.decode()
     if "INVALID_ARGUMENT;" in err:
-        raise ValueError("Invalid inputs specified for benchmarking")
+        raise ValueError(f"Invalid inputs specified for benchmarking:\n{err}")
 
     # In the event benchmarking runs but encounteres an internal error,
     # return the internal error instead of benchmark results.
