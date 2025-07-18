@@ -227,6 +227,9 @@ def generate_iree_ref(
         vmfb = bytes(next(iter(modules))[1].stashed_flatbuffer_blob)
         benchmark_flags = get_benchmark_flags(options)
 
+        # TODO: Need a way to pass `--iree-hal-benchmark-dispatch-repeat-count` to launchable
+        benchmark_flags["batch_size"] = 1
+
         benchmark_results = benchmark_module(
             options,
             kernel_inputs,
