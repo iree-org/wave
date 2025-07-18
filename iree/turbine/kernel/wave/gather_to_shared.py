@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from dataclasses import dataclass
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -98,6 +99,72 @@ def combine_index(
         )
         for key in index2
     }
+
+
+@dataclass
+class GatherToSharedConfig:
+    materialized_shape: list[IndexSymbol]
+    elements_per_thread: int
+    expected_number_of_loads: int
+
+
+def get_gather_to_shared_config(
+    read: Read,
+    constraint_tile_size: dict[IndexSymbol, int],
+    total_number_of_threads,
+    element_type: "DataType",
+    supported_load_widths: list[int],
+    hardware_constraint: "HardwareConstraint",
+) -> Optional[GatherToSharedConfig]:
+    """
+    Get the gather to shared config for the given read and write.
+    """
+
+    bitwidth = element_type.bitwidth()
+    logger.info(f"element_type={element_type}, bitwidth={bitwidth}")
+
+    symbolic_shape = read.type.symbolic_shape
+    logger.info(f"symbolic_shape={symbolic_shape}")
+
+    store_elems_per_thread = hardware_constraint.max_elems_per_load(element_type)
+    max_elements_per_store = total_number_of_threads * store_elems_per_thread
+    logger.info(
+        f"store_elems_per_thread={store_elems_per_thread}, "
+        f"max_elements_per_store={max_elements_per_store}"
+    )
+
+    materialized_shape = materialize_shape(constraint_tile_size, symbolic_shape)
+    logger.info(f"materialized_shape={materialized_shape}")
+
+    total_number_of_elements = prod(materialized_shape)
+    logger.info(f"total_number_of_elements={total_number_of_elements}")
+    expected_number_of_loads = ceildiv(total_number_of_elements, max_elements_per_store)
+    logger.info(f"expected_number_of_loads={expected_number_of_loads}")
+    elements_per_thread = ceildiv(
+        total_number_of_elements, expected_number_of_loads * total_number_of_threads
+    )
+    logger.info(f"elements_per_thread={elements_per_thread}")
+
+    vector_width = elements_per_thread * bitwidth
+    load_width = get_load_width(supported_load_widths, vector_width)
+    if load_width is None:
+        logger.error(f"No supported load width found for bitwidth={vector_width}")
+        return None
+
+    logger.info(f"load_width={load_width}")
+
+    # Get supported load width for the given bitwidth and if they are not
+    # equal then we need to adjust the number of loads and elements per thread.
+    ratio = vector_width // load_width
+    logger.info(f"ratio={ratio}")
+    expected_number_of_loads *= ratio
+    elements_per_thread //= ratio
+
+    return GatherToSharedConfig(
+        materialized_shape,
+        elements_per_thread,
+        expected_number_of_loads,
+    )
 
 
 def create_writes(
@@ -229,7 +296,7 @@ def gather_to_shared(
 
     thread_id = hardware_constraint.linearized_thread_id
 
-    # Make LDS write index to be wave-uniform.
+    # Make LDS write index to be wave-uniform by doing (THREAD_0 // 64) * 64
     wave_subs = {
         THREAD_0: (
             ((THREAD_0 // threads_per_wave) * threads_per_wave)
@@ -262,45 +329,23 @@ def gather_to_shared(
         assert read.index == write.index
 
         element_type = read.type.dtype
-        bitwidth = element_type.bitwidth()
-        logger.info(f"element_type={element_type}, bitwidth={bitwidth}")
 
-        symbolic_shape = read.type.symbolic_shape
-        logger.info(f"symbolic_shape={symbolic_shape}")
-
-        store_elems_per_thread = hardware_constraint.max_elems_per_load(element_type)
-        max_elements_per_store = total_number_of_threads * store_elems_per_thread
-        logger.info(
-            f"store_elems_per_thread={store_elems_per_thread}, "
-            f"max_elements_per_store={max_elements_per_store}"
+        config = get_gather_to_shared_config(
+            read,
+            constraint_tile_size,
+            total_number_of_threads,
+            element_type,
+            supported_load_widths,
+            hardware_constraint,
         )
 
-        materialized_shape = materialize_shape(constraint_tile_size, symbolic_shape)
-        logger.info(f"materialized_shape={materialized_shape}")
-
-        total_number_of_elements = prod(materialized_shape)
-        logger.info(f"total_number_of_elements={total_number_of_elements}")
-        expected_number_of_loads = ceildiv(
-            total_number_of_elements, max_elements_per_store
-        )
-        logger.info(f"expected_number_of_loads={expected_number_of_loads}")
-        elements_per_thread = ceildiv(
-            total_number_of_elements, expected_number_of_loads * total_number_of_threads
-        )
-        logger.info(f"elements_per_thread={elements_per_thread}")
-
-        vector_width = elements_per_thread * bitwidth
-        load_width = get_load_width(supported_load_widths, vector_width)
-        if load_width is None:
-            logger.error(f"No supported load width found for bitwidth={vector_width}")
+        if config is None:
+            logger.info("no gather to shared config found")
             continue
 
-        logger.info(f"load_width={load_width}")
-
-        ratio = vector_width // load_width
-        logger.info(f"ratio={ratio}")
-        expected_number_of_loads *= ratio
-        elements_per_thread //= ratio
+        materialized_shape = config.materialized_shape
+        elements_per_thread = config.elements_per_thread
+        expected_number_of_loads = config.expected_number_of_loads
 
         new_writes = create_writes(
             read,
@@ -310,7 +355,7 @@ def gather_to_shared(
             expected_number_of_loads,
             total_number_of_threads,
             thread_id,
-            symbolic_shape,
+            read.type.symbolic_shape,
             wave_subs,
             element_type,
         )
