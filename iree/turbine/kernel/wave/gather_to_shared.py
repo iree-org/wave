@@ -191,6 +191,8 @@ def create_writes(
     )
     logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
+    # GatherToLDS writes `elements_per_wave` elements contiguously to LDS, so we
+    # cannot have any padding if it crosses a array row boundary.
     drop_padding = materialized_shape[-1] % elements_per_wave != 0
 
     global_index = remove_thread_indexing(read.index)
