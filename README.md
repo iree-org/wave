@@ -1,35 +1,52 @@
-# TKW: A Wave Kernel Language for GPUs
+# Wave: Python Domain-Specific Language for High Performance Machine Learning
 
 > [!IMPORTANT]
 > This repository is a fork of https://github.com/iree-org/iree-turbine. Code is
 > currently being migrated from the
 > [`iree/turbine/kernel/wave/`](./iree/turbine/kernel/wave/) directory.
 
-TKW is a high-level programming language designed to simplify the development of GPU micro-kernels by abstracting over intricate details of GPU hardware. It allows developers to write efficient micro-kernels, focusing on core computations while inferring the required data transfers and indexing automatically. TKW implements a wave-based programming model to express programs leveraging coalesced memory accesses effortlessly and supports the explicit use of matrix multiplication intrinsics.
+## Motivation
 
-## Design Goals
+Wave is a high-level programming language designed to accelerate the development and optimization of machine learning kernels. it aims to dramatically improve kernel author velocity in two critical dimensions:
 
-TKW is designed with several key goals in mind to facilitate efficient GPU programming and maximize performance:
+### Implementation Velocity
+Wave enables rapid prototyping of new optimization ideas and algorithms through its high-level abstractions and symbolic programming model. Kernel authors can quickly express complex tensor operations and experiment with different optimization strategies without getting bogged down in low-level implementation details.
 
-1. Abstract over hardware details: Simplify the development of GPU micro-kernels by hiding the complex details of synchronization, thread management, and memory transactions.
-    - Automatically infer efficient data movement strategies across the memory hierarchy, ensuring efficient use of memory bandwidth.
-    - Leverage hardware details (such as instruction specifications) to determine indexing.
-2. Provide users with low-level control
-    - Expose an interface to customize the instruction scheduling
-    - Provide low-level control over how the computation is performed by exposing low-level GPU instructions. This empowers developers to directly leverage hardware-specific features to achieve maximum performance.
-3. Systematically expressing constraints to leverage solvers / auto-tuning
-    - Represent specific tiling possibilities around a micro-kernel using symbolic constraints. This forms a searchable space that allows for fine-tuning by exploring various tiling configurations.
+### Performance Velocity
+The language is designed to achieve high performance with minimal tuning effort. Through its declarative constraints and hardware-aware abstractions, Wave automatically generates optimized GPU code, allowing kernel authors to focus on algorithmic innovation rather than manual optimization.
 
-## Wave-based Programming Model
+Wave is particularly focused on the machine learning domain, with deep integration into the PyTorch ecosystem. This integration enables:
 
-TKW leverages a wave-based programming model that is specifically designed to take advantage of the parallel processing power of GPUs.
+1. Seamless transition from PyTorch models to optimized GPU kernels
+2. Easy experimentation with new ML algorithms and optimizations
+3. Rapid deployment of custom kernels in production ML pipelines
+4. Direct reuse of PyTorch’s tensor abstractions and operator semantics
 
-In GPU programming, a wavefront is a group of threads (or work items) that execute the same instruction in lockstep. In particular, coalesced memory accesses by all threads in a wavefront are executed together. This is analogous to the concept of a "warp" in NVIDIA's CUDA programming model.
-Typically, on AMD GPUs, a wavefront contains 32 or 64 threads, all of which participate in executing the same instruction at the same time.
+The language bridges the gap between high-level ML programming and low-level GPU performance by providing a flexible and expressive programming model that maintains close control over hardware resources while enabling rapid innovation in the ML space.
 
-In this representation, memory access patterns are more naturally optimized for coalescing, reducing the complexity and manual effort required to achieve optimized memory transactions. In consequence, programmers can focus more on the core computational logic rather than the intricacies of thread coordination and memory management.
-This approach contrasts with traditional models like OpenCL and CUDA, which often require more explicit management of threads and synchronization.
+## Core Design Principles
 
-## Gemm example
+Wave is built around several key design principles that guide its architecture and implementation:
 
-[wave_gemm_test.py](/tests/kernel/wave/wave_gemm_test.py)
+- Symbolic Programming Model
+- Heavy use of symbolic variables to represent tensor dimensions
+- Symbolic expressions for memory access patterns and layouts
+- Enables compile-time optimization and analysis
+- Provides flexibility in expressing complex tensor operations
+- Separation of Distribution and Computation
+- Clear separation between distribution strategy and computation graph
+- Distribution strategy defined through declarative constraints
+- Computation graph expressed independently of parallelization
+- Enables better optimization and code reuse
+- Dual Programming Models
+- Support for both tile-based and SIMT-based programming models
+- Tile-based model for coarse-grained parallelism
+- SIMT model for fine-grained vector operations
+- Flexible mapping to different GPU architectures
+- Hardware-Aware Abstractions
+- Direct mapping to GPU hardware concepts (workgroups, waves, etc.)
+- Explicit control over memory hierarchy
+- Hardware-specific optimizations (MMA operations, memory layouts)
+- Performance portability across different GPU architectures
+
+For more information, visit the documentation here: https://wave-lang.readthedocs.io/en/latest/wave/wave.html
