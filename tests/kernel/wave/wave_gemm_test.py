@@ -595,9 +595,8 @@ def testGemmDumpOverrideSchedule(
     perf_filename_tk,
     perf_filename_iree,
 ):
-    dtype = tkl.f16 if datatype == torch.float16 else tkl.bf16
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant, dtype
+        shape, dynamic_dims, mfma_variant, datatype
     )
     options = WaveCompileOptions(
         subs=hyperparams,
@@ -634,7 +633,7 @@ def testGemmDumpOverrideSchedule(
     # Now reload the schedule and run the kernel again.
     # The results should be the same.
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant, dtype
+        shape, dynamic_dims, mfma_variant, datatype
     )
     options = WaveCompileOptions(
         subs=hyperparams,

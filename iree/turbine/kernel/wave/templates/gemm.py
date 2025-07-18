@@ -4,13 +4,14 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import torch
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel._support.dtype import DataType
 from iree.turbine.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
+    torch_dtype_to_wave,
 )
 
 
@@ -18,7 +19,7 @@ def get_gemm_kernel(
     shape: tuple[int, int, int],
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    dtype: DataType,
+    dtype: torch.dtype = torch.float16,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -30,7 +31,7 @@ def get_gemm_kernel(
     BLOCK_K = tkl.sym.BLOCK_K
     # Address space (for GPU, shared(1) or global(0))
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
+    dtype = torch_dtype_to_wave(dtype)
     # Expose user-constraints
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
