@@ -392,6 +392,8 @@ TORCH_DTYPE_TO_WAVE = {
     torch.bool: tkl.bool,
 }
 
+WAVE_DTYPE_TO_TORCH = {value: key for key, value in TORCH_DTYPE_TO_WAVE.items()}
+
 TORCH_DTYPE_RANGE = {
     torch.bfloat16: [-3.3895313892515355e38, 3.3895313892515355e38],
     torch.float8_e5m2: [-57344.0, 57344.0],
@@ -412,6 +414,13 @@ def torch_dtype_to_wave(torch_dtype: torch.dtype) -> Any:
         return TORCH_DTYPE_TO_WAVE[torch_dtype]
     except KeyError:
         raise ValueError(f"Unable to map torch dtype {torch_dtype} to Wave.")
+
+
+def wave_dtype_to_torch(wave_dtype: Any) -> torch.dtype:
+    try:
+        return WAVE_DTYPE_TO_TORCH[wave_dtype]
+    except KeyError:
+        raise ValueError(f"Unable to map Wave dtype {wave_dtype} to Torch.")
 
 
 def torch_dtype_range(torch_dtype: torch.dtype) -> Any:

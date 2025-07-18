@@ -1,7 +1,7 @@
 import glob
 from copy import copy
 from itertools import chain
-from typing import Any, Optional, Callable
+from typing import Any, Optional, Callable, Sequence
 
 import torch
 
@@ -19,6 +19,7 @@ from .cache import (
 )
 from .compile_options import WaveCompileOptions
 from .utils.compile_utils import compile_to_vmfb
+from .utils.general_utils import wave_dtype_to_torch
 from .utils.run_utils import (
     write_file,
     print_bench_result,
@@ -28,6 +29,7 @@ from .utils.run_utils import (
 from .water import water_leak_in_bounds_check
 from wave_lang.runtime.launch import Launchable
 from .profiling import benchmark_module
+from .debug_log_hoist import DebugArgInfo
 import iree.runtime as rt
 
 
@@ -45,6 +47,7 @@ class WaveKernel:
         bound_scalar_symbols: dict[IndexSymbol, int],
         symbols_args_map: dict[IndexSymbol, tuple[int, int]],
         trace: Optional["CapturedTrace"] = None,
+        debug_outputs: Optional[Sequence[DebugArgInfo]] = None,
     ):
         self.options = options
         self.executable = executable
@@ -63,6 +66,7 @@ class WaveKernel:
             self.gpu_func = None
         self.bound_scalar_symbols = bound_scalar_symbols
         self.symbols_args_map = symbols_args_map
+        self.debug_outputs = debug_outputs
 
         if not options.wave_runtime:
             # Disable async dispatch for benchmarking.
@@ -113,6 +117,21 @@ class WaveKernel:
                 kernel_inputs.append(arg)
             if usage == kernel_codegen.KernelBufferUsage.OUTPUT:
                 kernel_outputs.append(arg)
+
+        debug_args = []
+        debug_logs = kwargs.get("debug_logs", {})
+        if self.debug_outputs:
+            # Process backwards so that the debug_logs output is ordered.
+            for info_dict in self.debug_outputs[::-1]:
+                shape = [
+                    self.options.subs[sdim] for sdim in info_dict["symbolic_shape"]
+                ]
+                memory = torch.zeros(
+                    shape, dtype=wave_dtype_to_torch(info_dict["dtype"]), device="cuda"
+                )
+                debug_args.append(memory)
+                debug_logs[info_dict["symbol_name"]] = memory
+        kernel_outputs = kernel_outputs + debug_args
 
         dynamic_symbols = []
         for sym in self.options.dynamic_symbols:
@@ -231,6 +250,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 binary_path,
                 bound_scalar_symbols,
                 symbols_args_map,
+                None,  # TODO - this means that the cache is broken for kernels with debug logging.  But I want to focus on getting the feature at all before figuring out how to add extra info to the cache.
             )
 
     # Create an indexing context and populate substitutions.
@@ -255,6 +275,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         kernel_sig,
         entrypoint_name,
         options,
+        debug_arg_info,
     ) = kernel._trace_and_get_kernel_signature(options)
     options.kernel_sig = kernel_sig
 
@@ -296,7 +317,15 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         asm = options.override_mlir
 
     if options.compile_to_mlir:
-        return cls(options, None, asm, None, bound_scalar_symbols, symbols_args_map)
+        return cls(
+            options,
+            None,
+            asm,
+            None,
+            bound_scalar_symbols,
+            symbols_args_map,
+            debug_arg_info,
+        )
 
     compiled_wave_vmfb = compile_to_vmfb(asm, options)
     if options.create_vmfb_file:
@@ -328,6 +357,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         bound_scalar_symbols,
         symbols_args_map,
         trace,
+        debug_arg_info,
     )
 
 

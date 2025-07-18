@@ -2203,3 +2203,64 @@ def test_scatter_add(shape, elems_per_thread, request):
 
     torch_output = scatter_add_baseline(input, index)
     assert_close(output, torch_output)
+
+
+@require_e2e
+def test_debug_log_write():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    shape = (256, 128)
+
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        )
+    ]
+
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        lhs = tkw.read(a)
+        rhs = tkw.read(b)
+        tkw.debug_log_write(lhs)
+        tkw.debug_log_write(rhs, log_name="rhslog")
+        res = lhs + rhs
+        tkw.debug_log_write(res)
+        tkw.write(res, c)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_randn(shape, dtype=torch.float16)
+    c = device_zeros(shape, dtype=torch.float16)
+    ref = a + b
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+    )
+    options = set_default_run_config(options)
+
+    test = wave_compile(options, test)
+
+    debug_logs = {}
+    test(a, b, c, debug_logs=debug_logs)
+    assert_close(a, debug_logs["debug_log_output_0"])
+    assert_close(b, debug_logs["rhslog"])
+    assert_close(c, debug_logs["debug_log_output_2"])

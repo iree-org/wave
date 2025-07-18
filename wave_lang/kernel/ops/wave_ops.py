@@ -128,6 +128,14 @@ def write(
 ): ...
 
 
+def debug_log_write(
+    register_: "Register",
+    elements_per_thread: Optional[IndexExpr | int] = None,
+    mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+): ...
+
+
 def apply_expr(
     value: "Register" | Sequence["Register"], expr: Callable
 ) -> "Register": ...
@@ -2009,6 +2017,47 @@ class Write(CustomOp):
             elements_per_thread=self.elements_per_thread,
             is_read=False,
         )
+
+
+@define_op("debug_log_write")
+@dataclass
+class DebugLogWrite(CustomOp):
+    """
+    An op for debugging.
+    Represents a write to an implicit global memory location.
+    The kernel will implicitly have an extra memory input added that will be injected by the Python kernel launcher.
+    The memory can be accessed by passing an an extra keyword to kernel invokation "debug_logs" with an empty dictionary.
+    The dictionary will be mutated to contain the logs.
+
+    This is intended as a primitive for building more convenient debug logging tools.
+
+    The API and semantics of this operation are not yet stable, but since it is just a debugging tool, you want to take any debug logging out of your kernel before shipping it anyway.
+    """
+
+    register_: fx.Proxy
+    log_name: Optional[str] = None
+
+    @property
+    def memory(self) -> Optional[fx.Proxy]:
+        return self.fx_node.memory
+
+    @memory.setter
+    def memory(self, value):
+        self.fx_node.memory = value
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+    def infer_type(self):
+
+        regtype = get_custom(self.register_).type
+        mem = get_custom(self.memory)
+        type_expr = Memory[regtype.symbolic_shape, GLOBAL_ADDRESS_SPACE, regtype.dtype]
+        mem.type = type_expr
+
+        self.type = type_expr
+        self.fx_node.type = type_expr
 
 
 @define_op("apply_expr")
