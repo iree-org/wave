@@ -14,7 +14,7 @@ from ..ops.wave_ops import (
     get_custom,
 )
 from ..ops.wave_ops import IndexSequence
-from .._support.indexing import IndexSequence, IndexSymbol
+from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from ..wave.constraints import (
     Constraint,
     TilingConstraint,
@@ -100,7 +100,88 @@ def combine_index(
     }
 
 
+def create_writes(
+    read: Read,
+    write: Write,
+    materialized_shape: list[IndexSymbol],
+    elements_per_thread: int,
+    expected_number_of_loads: int,
+    total_number_of_threads: int,
+    thread_id: IndexExpr,
+    symbolic_shape: list[IndexSymbol],
+    wave_subs: dict[IndexSymbol, IndexExpr],
+    element_type: "DataType",
+) -> defaultdict[fx.Node, list[Write]]:
+    """
+    Create new writes for the given read and write.
+    """
+    elements_per_wave = elements_per_thread * total_number_of_threads
+    logger.info(f"elements_per_wave={elements_per_wave}")
+
+    materialized_shape_adjusted = list(materialized_shape)
+    materialized_shape_adjusted[-1] = sympy.ceiling(
+        materialized_shape[-1] / elements_per_thread
+    )
+    logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
+
+    drop_padding = materialized_shape[-1] % elements_per_wave != 0
+
+    global_index = remove_thread_indexing(read.index)
+    logger.info(f"global_index={global_index}")
+
+    new_writes = defaultdict(list)
+    for i in range(expected_number_of_loads):
+        nd_index = delinearize_index(
+            thread_id + i * total_number_of_threads,
+            materialized_shape_adjusted,
+        )
+        logger.info(f"nd_index={nd_index}")
+        write_index = {}
+        for dim, idx in zip(symbolic_shape, nd_index):
+            last = dim == symbolic_shape[-1]
+
+            idx = idx * elements_per_thread if last else idx
+            size = elements_per_thread if last else 1
+            stride = 1
+            write_index[dim] = IndexSequence(idx, size, stride)
+
+        read_index = combine_index(global_index, write_index)
+
+        write_index = {k: v.subs(wave_subs) for k, v in write_index.items()}
+
+        logger.info(f"read_index={read_index}")
+        logger.info(f"write_index={write_index}")
+        with write.graph.inserting_before(write.fx_node):
+            new_write = GatherToLDS(
+                read.memory,
+                write.memory,
+                read_index,
+                write_index,
+                read.mapping,
+                write.mapping,
+                element_type,
+                elements_per_thread,
+            ).add_to_graph(write.graph)
+
+            new_writes[write.memory].append(new_write)
+            if drop_padding:
+                custom_memory = get_custom(write.memory)
+                padding = custom_memory.padding
+                if padding != 0:
+                    custom_memory.update_arg("padding", 0)
+                    new_distributed_shape = list(custom_memory.distributed_shape)
+                    new_distributed_shape[-1] -= padding
+                    custom_memory.update_arg(
+                        "distributed_shape", tuple(new_distributed_shape)
+                    )
+
+    return new_writes
+
+
 def get_load_width(supported_load_widths: list[int], bitwidth: int) -> Optional[int]:
+    """
+    Get the largest suitable load width for the given bitwidth.
+    """
     for width in supported_load_widths[::-1]:
         if bitwidth % width == 0:
             return width
@@ -174,8 +255,11 @@ def gather_to_shared(
         read, write = reads_writes[0]
         logger.info(f"processing read={read}, write={write}")
 
-        index = read.index
-        assert index == write.index
+        if not read.has_identity_mapping():
+            logger.info("non-identity read mapping is not supported yet")
+            continue
+
+        assert read.index == write.index
 
         element_type = read.type.dtype
         bitwidth = element_type.bitwidth()
@@ -218,64 +302,18 @@ def gather_to_shared(
         expected_number_of_loads *= ratio
         elements_per_thread //= ratio
 
-        elements_per_wave = elements_per_thread * total_number_of_threads
-        logger.info(f"elements_per_wave={elements_per_wave}")
-        drop_padding = materialized_shape[-1] % elements_per_wave != 0
-
-        global_index = remove_thread_indexing(read.index)
-        logger.info(f"global_index={global_index}")
-
-        materialized_shape_adjusted = list(materialized_shape)
-        materialized_shape_adjusted[-1] = sympy.ceiling(
-            materialized_shape[-1] / elements_per_thread
+        new_writes = create_writes(
+            read,
+            write,
+            materialized_shape,
+            elements_per_thread,
+            expected_number_of_loads,
+            total_number_of_threads,
+            thread_id,
+            symbolic_shape,
+            wave_subs,
+            element_type,
         )
-        logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
-
-        new_writes = defaultdict(list)
-        for i in range(expected_number_of_loads):
-            nd_index = delinearize_index(
-                thread_id + i * total_number_of_threads,
-                materialized_shape_adjusted,
-            )
-            logger.info(f"nd_index={nd_index}")
-            write_index = {}
-            for dim, idx in zip(symbolic_shape, nd_index):
-                last = dim == symbolic_shape[-1]
-
-                idx = idx * elements_per_thread if last else idx
-                size = elements_per_thread if last else 1
-                stride = 1
-                write_index[dim] = IndexSequence(idx, size, stride)
-
-            read_index = combine_index(global_index, write_index)
-
-            write_index = {k: v.subs(wave_subs) for k, v in write_index.items()}
-
-            logger.info(f"read_index={read_index}")
-            logger.info(f"write_index={write_index}")
-            with write.graph.inserting_before(write.fx_node):
-                new_write = GatherToLDS(
-                    read.memory,
-                    write.memory,
-                    read_index,
-                    write_index,
-                    read.mapping,
-                    write.mapping,
-                    element_type,
-                    elements_per_thread,
-                ).add_to_graph(write.graph)
-
-                new_writes[write.memory].append(new_write)
-                if drop_padding:
-                    custom_memory = get_custom(write.memory)
-                    padding = custom_memory.padding
-                    if padding != 0:
-                        custom_memory.update_arg("padding", 0)
-                        new_distributed_shape = list(custom_memory.distributed_shape)
-                        new_distributed_shape[-1] -= padding
-                        custom_memory.update_arg(
-                            "distributed_shape", tuple(new_distributed_shape)
-                        )
 
         update_write_dependencies(new_writes, trace)
 
