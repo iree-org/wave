@@ -25,7 +25,6 @@ def get_workgroup_symbol(i: int):
 THREAD_0 = index_symbol("$T0")
 THREAD_1 = index_symbol("$T1")
 THREAD_2 = index_symbol("$T2")
-SUBGROUP_ID = index_symbol("$SUBGROUP_ID")
 
 # MMA symbols.
 MMA_LHS = index_symbol("$MMA_LHS")

@@ -6,7 +6,6 @@
 
 from os import environ
 import sympy
-from math import prod
 from typing import Any, Callable, ClassVar, Optional, List, Type, Dict
 from dataclasses import dataclass
 from collections import namedtuple
@@ -113,12 +112,6 @@ class WaveEmitter:
                 gpu_d.Dimension.z, upper_bound=_get_upper_bound(threads_per_block[2])
             ),
         ]
-        num_subgroups = sympy.ceiling(
-            prod(threads_per_block) / self.hardware_constraint.threads_per_wave
-        )
-        self.subgroup_id = gpu_d.subgroup_id(
-            upper_bound=_get_upper_bound(num_subgroups)
-        )
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
 
@@ -233,23 +226,10 @@ def add_emitter_subs(
     induction_vars, induction_var_syms = emitter.get_induction_vars_and_syms()
 
     # TODO: factor this out
-    all_symbols = (
-        emitter.thread_ids
-        + [emitter.subgroup_id]
-        + emitter.workgroup_ids
-        + induction_vars
-    )
+    all_symbols = emitter.thread_ids + emitter.workgroup_ids + induction_vars
     dynamics = dict(
         zip(
-            [
-                THREAD_0,
-                THREAD_1,
-                THREAD_2,
-                SUBGROUP_ID,
-                WORKGROUP_0,
-                WORKGROUP_1,
-                WORKGROUP_2,
-            ]
+            [THREAD_0, THREAD_1, THREAD_2, WORKGROUP_0, WORKGROUP_1, WORKGROUP_2]
             + induction_var_syms,
             all_symbols,
         )
