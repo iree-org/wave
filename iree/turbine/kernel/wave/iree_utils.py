@@ -9,6 +9,8 @@ from ...support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
 from iree.turbine.runtime.launch import Launchable
 from .utils.run_utils import get_benchmark_flags, print_bench_result
 from .profiling import benchmark_module
+from .utils.compile_utils import compile_to_vmfb
+import iree.runtime as rt
 
 
 def get_chain_mmt_asm(
@@ -213,7 +215,13 @@ def generate_iree_ref(
     else:
         raise ValueError(f"Unknown kernel type: {kernel_type}")
 
-    launchable = Launchable.jit_compile(asm, entry_point=func_name)
+    vmfb = compile_to_vmfb(asm, options)
+
+    def loader(device):
+        vm_instance = device.vm_instance
+        return rt.VmModule.copy_buffer(vm_instance, vmfb)
+
+    launchable = Launchable.jit_compile(loader, entry_point=func_name)
     res = launchable(*kernel_inputs, outputs=kernel_outputs)
     if len(kernel_outputs) == 1:
         kernel_outputs[0][:] = res
@@ -222,12 +230,7 @@ def generate_iree_ref(
             k[:] = r
 
     if options.run_bench:
-        modules = launchable._target_vm_modules.values()
-        vmfb = bytes(next(iter(modules))[1].stashed_flatbuffer_blob)
         benchmark_flags = get_benchmark_flags(options)
-
-        # TODO: Need a way to pass `--iree-hal-benchmark-dispatch-repeat-count` to launchable
-        benchmark_flags["batch_size"] = 1
 
         benchmark_results = benchmark_module(
             options,
