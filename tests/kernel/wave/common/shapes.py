@@ -114,19 +114,6 @@ _perf_test_shapes["extend"] = [
 ]
 
 
-def construct_test_name(
-    base_name: str,
-    mfma_variant: tuple[MMAType],
-    is_causal: bool,
-    shape: AttentionShape | Sequence[int],
-):
-    test_name = base_name
-    test_name += mfma_variant[0].name + "_" + mfma_variant[1].name + "_"
-    test_name += "causal" if is_causal else "noncausal"
-    test_name += "_" + "x".join([str(s) for s in shape])
-    return test_name + ".json"
-
-
 def make_shape_param(shape: Sequence[int], is_perf: bool):
     name = "x".join(map(str, shape))
     if is_perf:
