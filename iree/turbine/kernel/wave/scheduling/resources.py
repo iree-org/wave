@@ -7,26 +7,27 @@
 from ...lang.global_symbols import *
 from ..utils.symbol_utils import subs_idxc
 from ...ops.wave_ops import (
-    Read,
-    Write,
-    MMA,
-    ScaledMMA,
-    IterArg,
-    Output,
-    get_custom,
-    CustomOp,
-    CastOp,
-    BitcastOp,
-    UnaryPyOp,
-    BinaryOpBase,
     ApplyExpr,
+    BinaryOpBase,
+    BitcastOp,
+    Broadcast,
+    CastOp,
+    CustomOp,
+    Extract,
+    GatherToLDS,
+    IterArg,
+    MMA,
+    Output,
+    Permute,
+    Read,
+    Reshape,
+    ScaledMMA,
     SelectOp,
     SelfIndex,
     ShuffleOp,
-    Permute,
-    Extract,
-    Broadcast,
-    Reshape,
+    UnaryPyOp,
+    Write,
+    get_custom,
 )
 import torch.fx as fx
 from enum import Enum
@@ -60,6 +61,7 @@ class Operation(Enum):
     WRITE_SHARED = "write_shared"
     READ_GLOBAL = "read_global"
     WRITE_GLOBAL = "write_global"
+    GLOBAL_TO_SHARED = "global_to_shared"
     MMA = "mma"
     ALU = "alu"
     VALU = "valu"
@@ -85,6 +87,7 @@ delay_table = {
     Operation.WRITE_SHARED: WRITE_SHARED_DELAY,
     Operation.READ_GLOBAL: READ_GLOBAL_DELAY,
     Operation.WRITE_GLOBAL: WRITE_GLOBAL_DELAY,
+    Operation.GLOBAL_TO_SHARED: GLOBAL_TO_SHARED_DELAY,
     Operation.MMA: MMA_DELAY,
     Operation.NOOP: 0,
     Operation.VALU: VALU_DELAY,
@@ -98,6 +101,7 @@ resource_reservation_table = {
     Operation.WRITE_SHARED: np.array([[0, 1, 0, 0, 0]]),
     Operation.READ_GLOBAL: np.array([[1, 0, 0, 0, 0]]),
     Operation.WRITE_GLOBAL: np.array([[1, 0, 0, 0, 0]]),
+    Operation.GLOBAL_TO_SHARED: np.array([[1, 1, 0, 0, 0]]),
     Operation.MMA: np.array([[0, 0, 1, 0, 0]]),
     Operation.NOOP: np.array([[0, 0, 0, 0, 0]]),
     Operation.VALU: np.array([[0, 0, 0, 1, 0]]),
@@ -120,6 +124,8 @@ def get_custom_operation_type(custom: CustomOp) -> Operation:
             and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
             else Operation.WRITE_GLOBAL
         )
+    elif isinstance(custom, GatherToLDS):
+        return Operation.GLOBAL_TO_SHARED
     elif isinstance(custom, (MMA, ScaledMMA)):
         return Operation.MMA
     elif isinstance(custom, SCHEDULING_NOOPS + (Output,)):
@@ -152,6 +158,8 @@ def annotate_resource_usage(
                 if custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
                 else resource_reservation_table[Operation.WRITE_SHARED]
             )
+        elif isinstance(custom, GatherToLDS):
+            custom.rrt = resource_reservation_table[Operation.GLOBAL_TO_SHARED]
         elif isinstance(custom, (MMA, ScaledMMA)):
             custom.rrt = resource_reservation_table[Operation.MMA]
         elif isinstance(custom, ShuffleOp):

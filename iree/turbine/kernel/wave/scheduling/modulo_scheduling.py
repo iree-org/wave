@@ -284,5 +284,5 @@ class ModuloScheduler:
         """
         Returns the number of stages in the kernel of the pipelined loop.
         """
-        max_cycle = max([t for t in self.schedule.values()])
+        max_cycle = max(t for t in self.schedule.values())
         return math.ceil(max_cycle / self.initiation_interval)

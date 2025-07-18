@@ -32,6 +32,7 @@ operation_stage_table = {
     Operation.READ_SHARED: PrefetchStage.LOCAL_LOAD,
     Operation.WRITE_SHARED: PrefetchStage.LOCAL_STORE,
     Operation.READ_GLOBAL: PrefetchStage.GLOBAL_LOAD,
+    Operation.GLOBAL_TO_SHARED: PrefetchStage.GLOBAL_LOAD,
     Operation.MMA: PrefetchStage.COMPUTE,
     Operation.NOOP: PrefetchStage.COMPUTE,
     Operation.VALU: PrefetchStage.COMPUTE,
@@ -41,6 +42,7 @@ operation_stage_table = {
 
 def get_scheduling_stage(op: fx.Node) -> Operation:
     op_ty = get_custom_operation_type(get_custom(op))
+    assert op_ty is not None, f"get_custom_operation_type returned None for {op}"
     if op_ty not in operation_stage_table:
         raise NotImplementedError(f"Cannot find {op_ty} in operation_stage_table")
     return operation_stage_table[op_ty]
@@ -114,6 +116,10 @@ class PrefetchScheduler:
         2. Set initiation interval to generate valid 2 stage prefetch.
         """
         self.schedule, success = self.prefetch_scheduling(self.graph, self.edges)
+        if not success:
+            return {}, False
+
+        assert self.schedule, "Schedule is empty"
         self._initiation_interval = 2
         if self.num_stages != self._initiation_interval:
             return {}, False
@@ -131,5 +137,5 @@ class PrefetchScheduler:
         """
         Returns the number of stages in the kernel of the pipelined loop.
         """
-        max_cycle = max([t for t in self.schedule.values()])
+        max_cycle = max(t for t in self.schedule.values())
         return math.ceil(max_cycle / self.initiation_interval)
