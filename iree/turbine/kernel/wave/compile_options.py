@@ -67,6 +67,7 @@ class WaveCompileOptions:
     use_buffer_store_ops: bool = False
     use_stride_cache_swizzle: bool = False
     use_fast_math: bool = False
+    use_global_to_shared: bool = False
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True
