@@ -9,6 +9,38 @@ import pytest
 
 
 @pytest.fixture(scope="function", autouse=True)
+def serialize_execution(request):
+    if not request.config.getoption("--serialize-execution"):
+        yield
+        return
+
+    from pathlib import Path
+
+    lock_file_path = Path.home() / ".wave_tests_lock"
+
+    from filelock import FileLock
+
+    lock_file = FileLock(lock_file_path)
+
+    import iree.turbine.kernel.wave.compile as wave_compile_module
+
+    wave_compile = wave_compile_module._wave_compile
+
+    def compile_wrapper(*args, **kwargs):
+        lock_file.release()
+        try:
+            return wave_compile(*args, **kwargs)
+        finally:
+            lock_file.acquire()
+
+    wave_compile_module._wave_compile = compile_wrapper
+    with lock_file:
+        yield
+
+    wave_compile_module._wave_compile = wave_compile
+
+
+@pytest.fixture(scope="function", autouse=True)
 def seed_torch():
     import torch
 
@@ -39,6 +71,12 @@ def pytest_addoption(parser):
         type=int,
         default=0,
         help="Distribute over N gpu devices when running with pytest-xdist",
+    )
+    parser.addoption(
+        "--serialize-execution",
+        action="store_true",
+        default=False,
+        help="serialize execution of tests, so only one test runs at a time, besides some safe-to-execute parallel parts",
     )
 
 

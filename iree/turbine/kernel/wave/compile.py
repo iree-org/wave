@@ -107,6 +107,10 @@ class WaveKernel:
 
 
 def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveKernel:
+    return _wave_compile(options, kernel)
+
+
+def _wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveKernel:
     """
     Compiles the wave kernel to an executable.
     """
