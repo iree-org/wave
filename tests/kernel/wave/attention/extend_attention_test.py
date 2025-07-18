@@ -10,7 +10,6 @@ import torch
 from torch.nn import functional as F
 from dataclasses import replace
 
-import iree.turbine.kernel as tk
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
@@ -34,14 +33,10 @@ from iree.turbine.kernel.wave.templates.extend_attention import (
 from iree.turbine.kernel.wave.templates.extend_attention_rpe import (
     get_extend_attention_rpe_kernel,
 )
-from iree.turbine.kernel.wave.templates.prefill_attention import (
-    get_prefill_attention_kernel,
-)
 from iree.turbine.kernel.wave.templates.attention_common import (
     AttentionShape,
 )
 from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
-import os
 from enum import Enum
 from torch.testing import assert_close
 
@@ -52,9 +47,7 @@ from ..common.utils import (
     dump_generated_mlir,
     param_bool,
 )
-from ..common.shapes import get_test_shapes, construct_test_name
-from torch.nn.attention.flex_attention import flex_attention
-from torch.nn.attention.flex_attention import create_block_mask
+from ..common.shapes import get_test_shapes
 
 
 def t5_rpe_masked_cond(
