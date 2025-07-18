@@ -220,12 +220,12 @@ jobs:
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
           nproc
-          WAVE_CACHE_ON=1 pytest --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
 
       - name: Run e2e tests on AMD GPU
         if: "(contains(toJSON(matrix.os), 'amdgpu') || contains(toJSON(matrix.os), 'mi300')) && (github.event_name == 'pull_request') && !cancelled()"
         run: |
-          WAVE_CACHE_ON=0 pytest -n 4 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+          WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
 
       - name: Run expensive e2e tests on AMD GPU
         if: "(contains(toJSON(matrix.os), 'amdgpu') || contains(toJSON(matrix.os), 'mi300')) && (github.event_name != 'pull_request') && !cancelled()"
