@@ -598,6 +598,7 @@ def testPingPongGemm(
 
 
 @require_e2e
+@require_cdna3
 @pytest.mark.parametrize("shape", [get_test_shapes("test_gemm")[0]])
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.MODULO])
 @param_bool("dynamic_dims", "dyn")
