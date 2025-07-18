@@ -176,7 +176,7 @@ def invoke_vmfb(
             options.func_name,
             **benchmark_flags,
         )
-        _print_bench_result(benchmark_results, options.bench_file)
+        _print_bench_result(benchmark_results, options.benchmark_results_file)
 
 
 def invoke_with_wave_runtime(
