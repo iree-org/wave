@@ -87,7 +87,7 @@ def _inplace_invoke(
         ) from e
 
 
-def _print_bench_result(result, filename):
+def print_bench_result(result, filename):
     import json
 
     res = json.dumps(result, sort_keys=True, indent=4)
@@ -95,6 +95,15 @@ def _print_bench_result(result, filename):
         _write_file(filename, "w", res)
     else:
         print(res)
+
+
+def get_benchmark_flags(options: WaveCompileOptions):
+    benchmark_flags = {}
+    benchmark_flags["batch_size"] = options.benchmark_batch_size
+
+    if options.benchmark_repetitions is not None:
+        benchmark_flags["benchmark_repetitions"] = int(options.benchmark_repetitions)
+    return benchmark_flags
 
 
 def invoke_vmfb(
@@ -120,16 +129,6 @@ def invoke_vmfb(
         return
 
     device = options.device
-    if options.run_bench:
-        benchmark_flags = {}
-        # If we use 1000 for bench_batch_size during compilation, and set this batch size to 1,
-        # then the latency is in milliseconds.
-        benchmark_flags["batch_size"] = 1
-
-        if options.benchmark_repetitions is not None:
-            benchmark_flags["benchmark_repetitions"] = int(
-                options.benchmark_repetitions
-            )
 
     # Select device as the GPU, where input tensors are coming from.
     device_list = tuple(
@@ -170,6 +169,7 @@ def invoke_vmfb(
     )
 
     if options.run_bench:
+        benchmark_flags = get_benchmark_flags(options)
         benchmark_results = benchmark_module(
             options,
             kernel_inputs,
@@ -179,7 +179,7 @@ def invoke_vmfb(
             options.func_name,
             **benchmark_flags,
         )
-        _print_bench_result(benchmark_results, options.benchmark_results_file)
+        print_bench_result(benchmark_results, options.benchmark_results_file)
 
 
 def invoke_with_wave_runtime(

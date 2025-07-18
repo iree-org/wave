@@ -8,6 +8,8 @@ import torch
 
 from wave_lang.runtime.launch import Launchable
 from wave_lang.support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
+from .utils.run_utils import get_benchmark_flags, print_bench_result
+from .profiling import benchmark_module
 
 
 def get_chain_mmt_asm(
@@ -161,6 +163,7 @@ def generate_iree_ref(
     kernel_type: str,
     kernel_inputs: list[torch.Tensor],
     kernel_outputs: list[torch.Tensor],
+    options: "WaveCompileOptions",
 ):
     """
     Generate a reference output for the given kernel type and arguments.
@@ -218,3 +221,18 @@ def generate_iree_ref(
     else:
         for r, k in zip(res, kernel_outputs):
             k[:] = r
+
+    if options.run_bench:
+        vmfb = bytes(next(launchable._target_vm_modules)[1].stashed_flatbuffer_blob)
+        benchmark_flags = get_benchmark_flags(options)
+
+        benchmark_results = benchmark_module(
+            options,
+            kernel_inputs,
+            kernel_outputs,
+            [],
+            vmfb,
+            options.func_name,
+            **benchmark_flags,
+        )
+        print_bench_result(benchmark_results, options.benchmark_results_file)

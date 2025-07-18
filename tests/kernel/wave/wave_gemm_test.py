@@ -130,7 +130,7 @@ def testPureGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
@@ -336,7 +336,7 @@ def testGemmSmallTiles(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
@@ -574,7 +574,7 @@ def testPingPongGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
@@ -627,7 +627,7 @@ def testGemmDumpOverrideSchedule(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
     # Now reload the schedule and run the kernel again.
@@ -784,7 +784,7 @@ def testGemmDot(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False, atol=1e-3, rtol=1e-3)
 
 
@@ -913,7 +913,7 @@ def testVMFMAGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, atol=2e-4, rtol=3e-4, check_device=False)
 
 
@@ -1044,7 +1044,7 @@ def testCDNA2IntGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.int32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
@@ -1151,7 +1151,7 @@ def testCDNA3IntGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.int32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
@@ -1255,7 +1255,7 @@ def testF8Gemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt_f8", [a, b], [iree_ref])
+    generate_iree_ref("mmt_f8", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, atol=3e-5, rtol=3e-4, check_device=False)
 
 
@@ -1382,7 +1382,7 @@ def testPackedGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
@@ -1516,7 +1516,7 @@ def testPackedNonTransposeGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
@@ -1615,7 +1615,7 @@ def testBatchedGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], shape[2], dtype=torch.float32)
-    generate_iree_ref("bmmt", [a, b], [iree_ref])
+    generate_iree_ref("bmmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
     torch_ref = torch.matmul(a, b.transpose(-2, -1))
@@ -1719,7 +1719,7 @@ def testSequentialBatchedGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], shape[2], dtype=torch.float32)
-    generate_iree_ref("bmmt", [a, b], [iree_ref])
+    generate_iree_ref("bmmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
     torch_ref = torch.matmul(a, b.transpose(-2, -1))

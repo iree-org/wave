@@ -89,5 +89,5 @@ def testReorderedPureGemm(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
