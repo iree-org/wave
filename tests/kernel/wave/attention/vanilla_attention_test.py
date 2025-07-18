@@ -70,10 +70,9 @@ def testTransposedVAttentionPure(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     shape = AttentionShape(
         num_query_heads=input_shape[0],
         num_kv_heads=input_shape[0],
@@ -95,7 +94,6 @@ def testTransposedVAttentionPure(
     o_shape = (shape.num_query_heads, shape.query_seq_len, shape.head_size_kv)
     hyperparams.update(get_default_scheduling_params())
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
@@ -106,9 +104,7 @@ def testTransposedVAttentionPure(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
 
     options = set_default_run_config(options)
@@ -149,10 +145,9 @@ def testAttentionPure(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     shape = AttentionShape(
         num_query_heads=input_shape[0],
         num_kv_heads=input_shape[0],
@@ -172,7 +167,6 @@ def testAttentionPure(
     o_shape = (shape.num_query_heads, shape.query_seq_len, shape.head_size_kv)
     hyperparams.update(get_default_scheduling_params())
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
@@ -183,9 +177,7 @@ def testAttentionPure(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
 
     options = set_default_run_config(options)
@@ -226,10 +218,9 @@ def testAttentionCausal(
     sliding_window: int,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     shape = AttentionShape(
         num_query_heads=shape[0],
         num_kv_heads=shape[0],
@@ -256,7 +247,6 @@ def testAttentionCausal(
     o_shape = (shape.num_query_heads, shape.query_seq_len, shape.head_size_kv)
     hyperparams.update(get_default_scheduling_params())
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
@@ -267,9 +257,7 @@ def testAttentionCausal(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention)
@@ -318,10 +306,9 @@ def testAttentionBSHD(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     shape = AttentionShape(
         num_query_heads=shape[0],
         num_kv_heads=shape[0],
@@ -354,7 +341,6 @@ def testAttentionBSHD(
     k_shape = (1, shape.num_kv_heads, shape.kv_seq_len, shape.head_size)
     v_shape = (1, shape.num_kv_heads, shape.kv_seq_len, shape.head_size_kv)
     hyperparams.update(get_default_scheduling_params())
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
@@ -365,9 +351,7 @@ def testAttentionBSHD(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention_func)
@@ -430,10 +414,10 @@ def testAttentionBHSDCausal(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
     shape = AttentionShape(
-        batch_size=shape[0],
         num_query_heads=shape[1],
         num_kv_heads=shape[1],
         query_seq_len=shape[2],
@@ -487,6 +471,10 @@ def testAttentionBHSDCausal(
         dynamic_symbols=dynamic_symbols,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
+        run_bench=run_bench,
+        benchmark_batch_size=10,
+        benchmark_repetitions=3,
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention_func)
@@ -554,10 +542,9 @@ def testAttentionBias(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -690,11 +677,7 @@ def testAttentionBias(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
 
     options = set_default_run_config(options)
@@ -746,10 +729,9 @@ def testAttentionSoftCap(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -884,11 +866,7 @@ def testAttentionSoftCap(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
 
     options = set_default_run_config(options)
@@ -940,10 +918,9 @@ def testAttentionF8(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -1055,11 +1032,7 @@ def testAttentionF8(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
 
     options = set_default_run_config(options)

@@ -58,11 +58,9 @@ def testGQABSHDAttention(
     causal: bool,
     sliding_window: int,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
-
     if not causal:
         sliding_window = -1
 
@@ -86,7 +84,6 @@ def testGQABSHDAttention(
     k_shape = (shape.num_seqs, shape.num_kv_heads, shape.kv_seq_len, shape.head_size)
     v_shape = (shape.num_seqs, shape.num_kv_heads, shape.kv_seq_len, shape.head_size_kv)
     hyperparams.update(get_default_scheduling_params())
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
@@ -97,9 +94,7 @@ def testGQABSHDAttention(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention_func)
@@ -156,11 +151,9 @@ def testCausalGQABSHDAttentionF8(
     enable_scheduling: SchedulingType,
     sliding_window: int,
     mfma_variant: tuple[MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
-
     # Sample tensor scaling from Brevitas SDXL-FP8.
     q_scale = 0.02578124962747097
     k_scale = 0.02363281324505806
@@ -189,7 +182,6 @@ def testCausalGQABSHDAttentionF8(
     k_shape = (shape.num_seqs, shape.num_kv_heads, shape.kv_seq_len, shape.head_size)
     v_shape = (shape.num_seqs, shape.num_kv_heads, shape.kv_seq_len, shape.head_size_kv)
     hyperparams.update(get_default_scheduling_params())
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
@@ -200,9 +192,7 @@ def testCausalGQABSHDAttentionF8(
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention_func)

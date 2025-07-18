@@ -53,10 +53,9 @@ def testChainedGemm(
     shape: tuple[int],
     enable_scheduling: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -142,7 +141,6 @@ def testChainedGemm(
     }
     hyperparams.update(get_default_scheduling_params())
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -150,9 +148,7 @@ def testChainedGemm(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     chained_gemm = wave_compile(options, chained_gemm)
@@ -200,10 +196,9 @@ def testChainedGemmF8(
     shape: tuple[int],
     enable_scheduling: bool,
     mfma_variant: tuple[MMAType, MMAType],
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -299,11 +294,7 @@ def testChainedGemmF8(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     chained_gemm_f8 = wave_compile(options, chained_gemm_f8)

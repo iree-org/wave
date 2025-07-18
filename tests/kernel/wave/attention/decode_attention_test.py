@@ -58,10 +58,9 @@ def testFlashDecoding(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     (
         phase_0,
         phase_1,
@@ -161,11 +160,9 @@ def testGqaFlashDecoding(
     shape: AttentionShape,
     enable_scheduling: SchedulingType,
     mfma_variant: tuple[MMAType, MMAType],
-    request,
+    run_bench,
+    perf_filename_tk2,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
-
     num_kv_splits = 8
     k_shape = (shape.num_seqs, shape.kv_seq_len, shape.num_kv_heads, shape.head_size)
     v_shape = (shape.num_seqs, shape.kv_seq_len, shape.num_kv_heads, shape.head_size_kv)
@@ -209,11 +206,7 @@ def testGqaFlashDecoding(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[0],
     )
     options = set_default_run_config(options)
     phase_0 = wave_compile(options, phase_0)
@@ -228,11 +221,7 @@ def testGqaFlashDecoding(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[1],
     )
     options = set_default_run_config(options)
     phase_1 = wave_compile(options, phase_1)

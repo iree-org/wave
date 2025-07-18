@@ -201,7 +201,8 @@ def testPagedFlashDecoding(
     num_kv_splits: int,
     mfma_variant: MMAType,
     use_wave_runtime: bool,
-    request,
+    run_bench,
+    perf_filename_tk2,
 ):
     kv_lens = shape[6]
     shape = paged_decode_attention_shape(
@@ -268,8 +269,6 @@ def testPagedFlashDecoding(
     )
     hyperparams_0.update(get_default_scheduling_params())
     hyperparams_1.update(get_default_scheduling_params())
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
 
     phase_0_output_shape, phase_0_output_max_shape = (
         get_paged_decode_intermediate_arrays_shapes(shape, num_kv_splits)
@@ -291,11 +290,7 @@ def testPagedFlashDecoding(
         wave_runtime=use_wave_runtime,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[0],
     )
     options = set_default_run_config(options)
     phase_0 = wave_compile(options, phase_0)
@@ -321,11 +316,7 @@ def testPagedFlashDecoding(
         wave_runtime=use_wave_runtime,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[1],
     )
     options = set_default_run_config(options)
     phase_1 = wave_compile(options, phase_1)
@@ -387,7 +378,8 @@ def testPagedFlashDecodingMHA(
     enable_scheduling: SchedulingType,
     num_kv_splits: int,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk2,
 ):
     kv_lens = shape[5]
     shape = paged_decode_attention_shape(
@@ -451,8 +443,6 @@ def testPagedFlashDecodingMHA(
     )
     hyperparams_0.update(get_default_scheduling_params())
     hyperparams_1.update(get_default_scheduling_params())
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
 
     phase_0_output_shape, phase_0_output_max_shape = (
         get_paged_decode_intermediate_arrays_shapes(shape, num_kv_splits)
@@ -473,11 +463,7 @@ def testPagedFlashDecodingMHA(
         dynamic_symbols=dynamic_symbols_0,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[0],
     )
     options = set_default_run_config(options)
     phase_0 = wave_compile(options, phase_0)
@@ -502,11 +488,7 @@ def testPagedFlashDecodingMHA(
         dynamic_symbols=dynamic_symbols_1,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk2[1],
     )
     options = set_default_run_config(options)
     phase_1 = wave_compile(options, phase_1)

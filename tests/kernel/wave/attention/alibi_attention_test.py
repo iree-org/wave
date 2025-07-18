@@ -115,7 +115,8 @@ def test_alibi_attention(
     shape: tuple[int],
     dtype: torch.dtype,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
     shape = AttentionShape(
         num_query_heads=shape[0],
@@ -134,8 +135,6 @@ def test_alibi_attention(
     output_shape = (shape.num_query_heads, shape.query_seq_len, shape.head_size_kv)
 
     hyperparams.update(get_default_scheduling_params())
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
 
     log2e = 1.44269504089
     dk_sqrt = math.sqrt(1.0 / shape.head_size)
@@ -148,11 +147,7 @@ def test_alibi_attention(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     alibi_attention = wave_compile(options, alibi_attention)

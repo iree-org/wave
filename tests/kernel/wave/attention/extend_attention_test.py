@@ -339,7 +339,8 @@ def testExtendAttention(
     use_wave_runtime: bool,
     use_custom_mask: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
     if is_causal and use_custom_mask:
         pytest.skip(
@@ -396,11 +397,6 @@ def testExtendAttention(
         use_custom_mask=use_custom_mask,
     )
     hyperparams.update(get_default_scheduling_params())
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
-    perf_filename = construct_test_name(
-        "wave_extend_attention", mfma_variant, is_causal, shape
-    )
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -412,9 +408,7 @@ def testExtendAttention(
         use_buffer_store_ops=use_buffer_ops,
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
         dump_intermediates="./inter",
         gpu_native_math_precision=True,
         wave_runtime=(True if use_wave_runtime else False),
@@ -497,7 +491,8 @@ def testExtendRpeAttention(
     enable_scheduling: SchedulingType,
     is_causal: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
     assert shape.num_query_heads % shape.num_kv_heads == 0
     (
@@ -550,11 +545,6 @@ def testExtendRpeAttention(
         max_rpe_context_length=max_rpe_context_length,
     )
     hyperparams.update(get_default_scheduling_params())
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
-    perf_filename = construct_test_name(
-        "wave_extend_attention", mfma_variant, is_causal, shape
-    )
 
     options = WaveCompileOptions(
         subs=hyperparams,
@@ -565,9 +555,7 @@ def testExtendRpeAttention(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     extend_attention_rpe = wave_compile(options, extend_attention_rpe)

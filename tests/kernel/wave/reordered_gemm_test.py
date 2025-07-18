@@ -44,10 +44,10 @@ def testReorderedPureGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = shape[0]
     N = shape[1]
@@ -63,7 +63,6 @@ def testReorderedPureGemm(
         M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_N, mfma_variant
     )
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -72,9 +71,7 @@ def testReorderedPureGemm(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     reordered_gemm = wave_compile(options, reordered_gemm)
@@ -89,10 +86,7 @@ def testReorderedPureGemm(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])

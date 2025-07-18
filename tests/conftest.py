@@ -15,6 +15,44 @@ def seed_torch():
     torch.manual_seed(0)
 
 
+@pytest.fixture
+def run_bench(request):
+    return request.config.getoption("--runperf")
+
+
+@pytest.fixture
+def dump_perf_path(request):
+    return request.config.getoption("--dump-perf-files-path")
+
+
+@pytest.fixture
+def perf_filename_tk(dump_perf_path, request):
+    if dump_perf_path is None:
+        return None
+
+    return os.path.join(dump_perf_path, "tk_" + request.node.name + ".json")
+
+
+@pytest.fixture
+def perf_filename_tk2(dump_perf_path, request):
+    if dump_perf_path is None:
+        return (None, None)
+
+    name = request.node.name
+    return (
+        os.path.join(dump_perf_path, "tk_" + name + "_1.json"),
+        os.path.join(dump_perf_path, "tk_" + name + "_2.json"),
+    )
+
+
+@pytest.fixture
+def perf_filename_iree(dump_perf_path, request):
+    if dump_perf_path is None:
+        return None
+
+    return os.path.join(dump_perf_path, "iree_" + request.node.name + ".json")
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--run-e2e", action="store_true", default=False, help="run e2e tests"

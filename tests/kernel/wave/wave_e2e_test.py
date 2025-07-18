@@ -1477,7 +1477,9 @@ def test_igemm_conv(
     layout,
     optimization_level,
     use_buffer_ops,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
     cf = c
     padding = 0  # TODO: only pad=0 is supported for now
@@ -1515,10 +1517,6 @@ def test_igemm_conv(
     )
     hyperparams.update(get_default_scheduling_params())
 
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
-
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -1527,9 +1525,7 @@ def test_igemm_conv(
         use_buffer_store_ops=use_buffer_ops,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
         dump_intermediates="./inter",
         optimization_level=optimization_level,
     )
@@ -1541,10 +1537,7 @@ def test_igemm_conv(
     assert_close(out, out_ref, rtol=1e-03, atol=1e-03)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
 
         options.iree_preprocessing_pass_pipeline = "builtin.module(iree-preprocessing-transpose-convolution-pipeline, iree-preprocessing-pad-to-intrinsics)"
         iree_ref = torch.zeros_like(out_ref)

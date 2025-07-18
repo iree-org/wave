@@ -92,10 +92,10 @@ def testPureGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -170,7 +170,6 @@ def testPureGemm(
         del hyperparams[N]
         del hyperparams[K]
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -180,9 +179,7 @@ def testPureGemm(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -198,10 +195,8 @@ def testPureGemm(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -231,11 +226,11 @@ def testGemmSmallTiles(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
     # Test gemm with tiles smaller than MMA vector sizes.
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -310,7 +305,6 @@ def testGemmSmallTiles(
         del hyperparams[N]
         del hyperparams[K]
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -322,9 +316,7 @@ def testGemmSmallTiles(
         benchmark_repetitions=3,
         use_buffer_load_ops=True,
         use_buffer_store_ops=True,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -340,10 +332,8 @@ def testGemmSmallTiles(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -373,10 +363,10 @@ def testNonTransposeGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -446,7 +436,6 @@ def testNonTransposeGemm(
         del hyperparams[N]
         del hyperparams[K]
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -456,9 +445,7 @@ def testNonTransposeGemm(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -473,10 +460,8 @@ def testNonTransposeGemm(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     # TODO: switch to comparison against generated iree_ref
     torch_ref = torch.matmul(a, b)
     assert_close(
@@ -496,10 +481,10 @@ def testNonTransposeGemm(
 def testPingPongGemm(
     shape: tuple[int],
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -560,7 +545,6 @@ def testPingPongGemm(
     }
     hyperparams.update(get_default_scheduling_params())
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -570,9 +554,7 @@ def testPingPongGemm(
         dynamic_symbols=[],
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -588,10 +570,8 @@ def testPingPongGemm(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -610,16 +590,14 @@ def testGemmDumpOverrideSchedule(
     dynamic_dims: bool,
     mfma_variant: MMAType,
     datatype: DataType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
-
     dtype = tkl.f16 if datatype == torch.float16 else tkl.bf16
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, dynamic_dims, mfma_variant, dtype
     )
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -648,10 +626,8 @@ def testGemmDumpOverrideSchedule(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -670,9 +646,7 @@ def testGemmDumpOverrideSchedule(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
         override_schedule="./schedule.txt",
     )
     options = set_default_run_config(options)
@@ -709,10 +683,10 @@ def testGemmDot(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -782,7 +756,6 @@ def testGemmDot(
         del hyperparams[N]
         del hyperparams[K]
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -792,9 +765,7 @@ def testGemmDot(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -812,10 +783,8 @@ def testGemmDot(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False, atol=1e-3, rtol=1e-3)
@@ -840,10 +809,10 @@ def testVMFMAGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -927,11 +896,7 @@ def testVMFMAGemm(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -946,10 +911,9 @@ def testVMFMAGemm(
         with open(filename, "w") as f:
             f.write(asm)
 
-    if run_bench and dump_perf is not None:
-        options.benchmark_results_file = os.path.join(
-            dump_perf, "iree_" + request.node.name + ".json"
-        )
+    if run_bench:
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, atol=2e-4, rtol=3e-4, check_device=False)
@@ -975,10 +939,10 @@ def testCDNA2IntGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1062,11 +1026,7 @@ def testCDNA2IntGemm(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1082,10 +1042,9 @@ def testCDNA2IntGemm(
         with open(filename, "w") as f:
             f.write(asm)
 
-    if run_bench and dump_perf is not None:
-        options.benchmark_results_file = os.path.join(
-            dump_perf, "iree_" + request.node.name + ".json"
-        )
+    if run_bench:
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.int32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -1106,10 +1065,13 @@ def testCDNA2IntGemm(
     ],
 )
 def testCDNA3IntGemm(
-    shape: tuple[int], enable_scheduling: SchedulingType, mfma_variant: MMAType, request
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    mfma_variant: MMAType,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1171,11 +1133,7 @@ def testCDNA3IntGemm(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1191,10 +1149,9 @@ def testCDNA3IntGemm(
         with open(filename, "w") as f:
             f.write(asm)
 
-    if run_bench and dump_perf is not None:
-        options.benchmark_results_file = os.path.join(
-            dump_perf, "iree_" + request.node.name + ".json"
-        )
+    if run_bench:
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.int32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -1216,10 +1173,13 @@ def testCDNA3IntGemm(
     ],
 )
 def testF8Gemm(
-    shape: tuple[int], enable_scheduling: SchedulingType, mfma_variant: MMAType, request
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    mfma_variant: MMAType,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1278,11 +1238,7 @@ def testF8Gemm(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1297,10 +1253,9 @@ def testF8Gemm(
         with open(filename, "w") as f:
             f.write(asm)
 
-    if run_bench and dump_perf is not None:
-        options.benchmark_results_file = os.path.join(
-            dump_perf, "iree_" + request.node.name + ".json"
-        )
+    if run_bench:
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt_f8", [a, b], [iree_ref])
     assert_close(c, iree_ref, atol=3e-5, rtol=3e-4, check_device=False)
@@ -1327,11 +1282,11 @@ def testPackedGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
     # TODO: Convert this to i8 -> bitcast f16 gemm
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1401,7 +1356,6 @@ def testPackedGemm(
         del hyperparams[N]
         del hyperparams[K]
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -1411,9 +1365,7 @@ def testPackedGemm(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1429,10 +1381,8 @@ def testPackedGemm(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -1459,11 +1409,11 @@ def testPackedNonTransposeGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
     # TODO: Convert this to i8 -> bitcast f16 gemm
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1540,7 +1490,6 @@ def testPackedNonTransposeGemm(
         del hyperparams[N]
         del hyperparams[K]
 
-    perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -1550,9 +1499,7 @@ def testPackedNonTransposeGemm(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + perf_filename) if dump_perf else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1568,10 +1515,8 @@ def testPackedNonTransposeGemm(
             f.write(asm)
 
     if run_bench:
-        if dump_perf is not None:
-            options.benchmark_results_file = os.path.join(
-                dump_perf, "iree_" + perf_filename
-            )
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -1583,9 +1528,13 @@ def testPackedNonTransposeGemm(
     "enable_scheduling",
     [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.MODULO_MULTI_BUFFERED],
 )
-def testBatchedGemm(shape: tuple[int], enable_scheduling: SchedulingType, request):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
+def testBatchedGemm(
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
+):
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -1649,11 +1598,7 @@ def testBatchedGemm(shape: tuple[int], enable_scheduling: SchedulingType, reques
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
@@ -1668,10 +1613,9 @@ def testBatchedGemm(shape: tuple[int], enable_scheduling: SchedulingType, reques
         with open(filename, "w") as f:
             f.write(asm)
 
-    if run_bench and dump_perf is not None:
-        options.benchmark_results_file = os.path.join(
-            dump_perf, "iree_" + request.node.name + ".json"
-        )
+    if run_bench:
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], shape[2], dtype=torch.float32)
     generate_iree_ref("bmmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -1687,10 +1631,12 @@ def testBatchedGemm(shape: tuple[int], enable_scheduling: SchedulingType, reques
     [SchedulingType.NONE],
 )
 def testSequentialBatchedGemm(
-    shape: tuple[int], enable_scheduling: SchedulingType, request
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -1756,11 +1702,7 @@ def testSequentialBatchedGemm(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
@@ -1775,10 +1717,9 @@ def testSequentialBatchedGemm(
         with open(filename, "w") as f:
             f.write(asm)
 
-    if run_bench and dump_perf is not None:
-        options.benchmark_results_file = os.path.join(
-            dump_perf, "iree_" + request.node.name + ".json"
-        )
+    if run_bench:
+        options.benchmark_results_file = perf_filename_iree
+
     iree_ref = device_zeros(shape[0], shape[1], shape[2], dtype=torch.float32)
     generate_iree_ref("bmmt", [a, b], [iree_ref])
     assert_close(c, iree_ref, check_device=False)
@@ -1795,10 +1736,11 @@ def testSequentialBatchedGemm(
     [SchedulingType.NONE],
 )
 def testSequentialBatchedGemmWhile(
-    shape: tuple[int], enable_scheduling: SchedulingType, request
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -1870,11 +1812,7 @@ def testSequentialBatchedGemmWhile(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
         wave_runtime=True,
     )
     options = set_default_run_config(options)
@@ -1902,10 +1840,11 @@ def testSequentialBatchedGemmWhile(
     [SchedulingType.NONE],
 )
 def testSequentialBatchedGemmWhileWithOutputSum(
-    shape: tuple[int], enable_scheduling: SchedulingType, request
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -1986,11 +1925,7 @@ def testSequentialBatchedGemmWhileWithOutputSum(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
         wave_runtime=True,
     )
     options = set_default_run_config(options)
@@ -2019,10 +1954,11 @@ def testSequentialBatchedGemmWhileWithOutputSum(
     [SchedulingType.NONE],
 )
 def testBatchedGemmWithPermute(
-    shape: tuple[int], enable_scheduling: SchedulingType, request
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -2092,11 +2028,7 @@ def testBatchedGemmWithPermute(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     batched_gemm_with_permute = wave_compile(options, batched_gemm_with_permute)

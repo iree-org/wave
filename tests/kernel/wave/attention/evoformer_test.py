@@ -85,10 +85,9 @@ def testEvoformerAttentionForward(
     enable_scheduling: bool,
     mfma_variant: MMAType,
     dtype: DataType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
     shapes_and_tile_sizes = [(x, y) for x, y in zip(shape, tile_sizes)]
     evoformer_fwd, symbols = get_evoformer_kernel(
         *shapes_and_tile_sizes, mfma_variant, dtype
@@ -106,11 +105,7 @@ def testEvoformerAttentionForward(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     evoformer_fwd = wave_compile(options, evoformer_fwd)

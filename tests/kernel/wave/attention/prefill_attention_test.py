@@ -112,7 +112,8 @@ def testPrefillAttention(
     dtype: torch.dtype,
     enable_scheduling: SchedulingType,
     mfma_variant: MMAType,
-    request,
+    run_bench,
+    perf_filename_tk,
 ):
     seq_lens = shape[4]
     shape = AttentionShape(
@@ -140,8 +141,6 @@ def testPrefillAttention(
     )
 
     hyperparams.update(get_default_scheduling_params())
-    run_bench = request.config.getoption("--runperf")
-    dump_perf = request.config.getoption("--dump-perf-files-path")
 
     log2e = 1.44269504089
     dk_sqrt = math.sqrt(1.0 / shape.head_size)
@@ -154,11 +153,7 @@ def testPrefillAttention(
         use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        benchmark_results_file=(
-            os.path.join(dump_perf, "tk_" + request.node.name + ".json")
-            if dump_perf
-            else None
-        ),
+        benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)
     prefill = wave_compile(options, prefill)
