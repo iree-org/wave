@@ -223,11 +223,8 @@ def generate_iree_ref(
             k[:] = r
 
     if options.run_bench:
-        vmfb = bytes(
-            next(iter(launchable._target_vm_modules.values()))[
-                1
-            ].stashed_flatbuffer_blob
-        )
+        modules = launchable._target_vm_modules.values()
+        vmfb = bytes(next(iter(modules))[1].stashed_flatbuffer_blob)
         benchmark_flags = get_benchmark_flags(options)
 
         benchmark_results = benchmark_module(
@@ -236,7 +233,7 @@ def generate_iree_ref(
             kernel_outputs,
             [],
             vmfb,
-            options.func_name,
+            func_name,
             **benchmark_flags,
         )
         print_bench_result(benchmark_results, options.benchmark_results_file)
