@@ -35,6 +35,7 @@ from .common.utils import (
 )
 from iree.turbine.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
 from iree.turbine.kernel.wave.templates.gemm import get_gemm_kernel
+from iree.turbine.kernel.lang import DataType
 import os
 import json
 from torch.testing import assert_close
@@ -601,18 +602,21 @@ def testPingPongGemm(
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.MODULO])
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@pytest.mark.parametrize("datatype", [torch.float16, torch.bfloat16])
 def testGemmDumpOverrideSchedule(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
+    datatype: DataType,
     request,
 ):
     run_bench = request.config.getoption("--runperf")
     dump_perf = request.config.getoption("--dump-perf-files-path")
 
+    dtype = tkl.f16 if datatype == torch.float16 else tkl.bf16
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant
+        shape, dynamic_dims, mfma_variant, dtype
     )
     perf_filename = request.node.name + ".json"
     options = WaveCompileOptions(
@@ -632,8 +636,8 @@ def testGemmDumpOverrideSchedule(
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
 
-    a = device_randn(shape[0], shape[2], dtype=torch.float16)
-    b = device_randn(shape[1], shape[2], dtype=torch.float16)
+    a = device_randn(shape[0], shape[2], dtype=datatype)
+    b = device_randn(shape[1], shape[2], dtype=datatype)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     asm = compiled_gemm(a, b, c)
 
@@ -654,7 +658,7 @@ def testGemmDumpOverrideSchedule(
     # Now reload the schedule and run the kernel again.
     # The results should be the same.
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant
+        shape, dynamic_dims, mfma_variant, dtype
     )
     options = WaveCompileOptions(
         subs=hyperparams,

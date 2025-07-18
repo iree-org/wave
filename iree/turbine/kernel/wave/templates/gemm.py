@@ -8,6 +8,7 @@ import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.constraints import MMAType
+from iree.turbine.kernel._support.dtype import DataType
 from iree.turbine.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
@@ -17,6 +18,7 @@ def get_gemm_kernel(
     shape: tuple[int, int, int],
     dynamic_dims: bool,
     mfma_variant: MMAType,
+    dtype: DataType,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -51,8 +53,8 @@ def get_gemm_kernel(
     # These can be influenced by introducing constraints.
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        a: tkl.Memory[M, K, ADDRESS_SPACE, dtype],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, dtype],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
@@ -61,9 +63,9 @@ def get_gemm_kernel(
         # dimension were tiled, then we would need to materialize a loop.
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            # a_reg: tkw.Register[M, K, tkl.f16]
+            # a_reg: tkw.Register[M, K, dtype]
             a_reg = tkw.read(a)
-            # b_reg: tkw.Register[N, K, tkl.f16]
+            # b_reg: tkw.Register[N, K, dtype]
             b_reg = tkw.read(b)
             # acc: tkw.Register[M, N, tkl.f32]
             acc = tkw.mma(a_reg, b_reg, acc)
