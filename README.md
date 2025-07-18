@@ -7,7 +7,7 @@
 
 ## Motivation
 
-Wave is a high-level programming language designed to accelerate the development and optimization of machine learning kernels. it aims to dramatically improve kernel author velocity in two critical dimensions:
+Wave is a high-level programming language designed to accelerate the development and optimization of machine learning kernels. It aims to dramatically improve kernel author velocity in two critical dimensions:
 
 ### Implementation Velocity
 Wave enables rapid prototyping of new optimization ideas and algorithms through its high-level abstractions and symbolic programming model. Kernel authors can quickly express complex tensor operations and experiment with different optimization strategies without getting bogged down in low-level implementation details.
