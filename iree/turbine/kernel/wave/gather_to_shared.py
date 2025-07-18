@@ -22,19 +22,18 @@ from ..wave.constraints import (
 )
 from ..wave.utils.graph_utils import DCE
 from .utils.general_utils import (
-    get_hardware_constraint,
     ceildiv,
     delinearize_index,
+    get_hardware_constraint,
+    remove_thread_indexing,
 )
 from .utils.graph_utils import DCE
-from .utils.symbol_utils import (
-    safe_subs,
-    subs_idxc,
-)
+from .utils.symbol_utils import subs_idxc
 from .minimize_global_loads import (
     materialize_shape,
     update_write_dependencies,
 )
+
 from typing import Optional
 from math import prod
 import logging
@@ -101,17 +100,6 @@ def combine_index(
     }
 
 
-def remove_thread_indexing(
-    index: dict[IndexSymbol, IndexSequence],
-) -> dict[IndexSymbol, IndexSequence]:
-    """
-    This function takes the index sequence for a global read and removes all
-    thread level indexing.
-    """
-    subs = {t: 0 for t in [THREAD_0, THREAD_1, THREAD_2, GPR_NUM]}
-    return {key: safe_subs(index[key], subs) for key in index}
-
-
 def get_load_width(supported_load_widths: list[int], bitwidth: int) -> Optional[int]:
     for width in supported_load_widths[::-1]:
         if bitwidth % width == 0:
@@ -134,7 +122,7 @@ def gather_to_shared(
 
     logger.info("gather_to_shared")
 
-    if "gfx9" not in options.target:
+    if "gfx94" not in options.target and "gfx95" not in options.target:
         logger.info("gather_to_shared not supported on this architecture")
         return
 
@@ -188,9 +176,6 @@ def gather_to_shared(
 
         index = read.index
         assert index == write.index
-
-        # fastest_dim = get_fastest_index(index)
-        # last_dim = list(index)[fastest_dim]
 
         element_type = read.type.dtype
         bitwidth = element_type.bitwidth()
