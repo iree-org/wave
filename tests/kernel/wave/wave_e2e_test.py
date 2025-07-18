@@ -80,7 +80,7 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy")[:1])
-def test_dump_vmfb(shape, tmp_path, request):
+def test_dump_vmfb(shape, tmp_path):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -134,8 +134,7 @@ def test_dump_vmfb(shape, tmp_path, request):
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 @check_leaks
-def test_copy(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_copy(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -191,8 +190,7 @@ def test_copy(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_dynamic_copy(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_dynamic_copy(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -248,8 +246,7 @@ def test_dynamic_copy(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_transpose_read"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_transpose_read(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_transpose_read(shape, use_buffer_ops, run_bench):
     shape = shape[::-1]
     M = tkl.sym.M
     N = tkl.sym.N
@@ -307,8 +304,7 @@ def test_transpose_read(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_transpose_write"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_transpose_write(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_transpose_write(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -365,8 +361,7 @@ def test_transpose_write(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_offset_read(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_offset_read(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -440,8 +435,7 @@ def test_offset_read(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_offset_read_one(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_offset_read_one(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     N1 = tkl.sym.N1
@@ -521,8 +515,7 @@ def test_offset_read_one(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_read_write_same(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_read_write_same(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -575,8 +568,7 @@ def test_read_write_same(shape, use_buffer_ops, request):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
-def test_set_symbol(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_set_symbol(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     S = tkl.sym.S
@@ -654,8 +646,7 @@ def test_set_symbol(shape, request):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
-def test_apply_expr(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_apply_expr(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     S = tkl.sym.S
@@ -734,8 +725,7 @@ def test_apply_expr(shape, request):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
-def test_conditional(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_conditional(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -798,8 +788,7 @@ def test_conditional(shape, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_offset_write(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_offset_write(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -881,8 +870,7 @@ def test_offset_write(shape, use_buffer_ops, request):
     "shape", mark_shapes_xfail(get_test_shapes("test_copy"), [(111, 813)])
 )
 @param_bool("use_buffer_ops", "buf_ops")
-def test_offset_write_one(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
+def test_offset_write_one(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     N1 = tkl.sym.N1
@@ -971,8 +959,7 @@ def test_offset_write_one(shape, use_buffer_ops, request):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_reduce_sum"))
-def test_reduce_sum(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_reduce_sum(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     wave_size = 64
@@ -1026,8 +1013,7 @@ def test_reduce_sum(shape, request):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_common_test_shape("test_block_reduce"))
-def test_block_reduce_sum(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_block_reduce_sum(shape, run_bench):
     round_to_divisible = lambda src, denom: sympy.ceiling(src / denom) * denom
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1156,8 +1142,7 @@ def test_toy_online_softmax(shape):
 
 
 @require_e2e
-def test_im2col(request):
-    run_bench = request.config.getoption("--runperf")
+def test_im2col(run_bench):
     # TODO: we don't support unaligned access at the moment so all sizes must
     # be aligned to WG/Wave sizes, c * hw * wf == 8 and number of windows == 64.
     n, c, h, w = 1, 2, 9, 9  # Image.
@@ -1258,8 +1243,7 @@ def test_im2col(request):
 
 # TODO: Fix test for CDNA2. CDNA2 seem to have worse accuracy, atol=0.0094, rtol=10.2405
 @require_e2e
-def test_im2col_mma(request):
-    run_bench = request.config.getoption("--runperf")
+def test_im2col_mma(run_bench):
     # igemm without final col2im
     n, c, h, w = 1, 4, 9, 9  # Image.
     nf, cf, hf, wf = 64, c, 2, 2  # Filters.
@@ -1548,8 +1532,7 @@ def test_igemm_conv(
 
 @require_e2e
 @pytest.mark.parametrize("shape", [(256, 64)])
-def test_cast(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_cast(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -1616,9 +1599,8 @@ def test_cast(shape, request):
 )
 @param_bool("use_wave_runtime", "wr", [False, True])
 def test_scalar_codegen(
-    shape, tkl_dtype, torch_dtype, arg_vals, request, use_wave_runtime
+    shape, tkl_dtype, torch_dtype, arg_vals, use_wave_runtime, run_bench
 ):
-    run_bench = request.config.getoption("--runperf")
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -1688,8 +1670,7 @@ def test_scalar_codegen(
 #     as well as on select ops.
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
-def test_scalar_cond_copy(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_scalar_cond_copy(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -1773,8 +1754,7 @@ def test_scalar_cond_copy(shape, request):
         (64, 500),
     ],
 )
-def test_scanop_cumsum(shape, request):
-    run_bench = request.config.getoption("--runperf")
+def test_scanop_cumsum(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     wave_size = 64
@@ -1826,9 +1806,7 @@ def test_scanop_cumsum(shape, request):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_vector_add")[:2])
 @param_bool("use_buffer_ops", "buf_ops")
-def test_vector_add(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
-
+def test_vector_add(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -1887,8 +1865,7 @@ def test_vector_add(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", [(2, 128), (256, 1024)])
 @param_bool("use_buffer_ops", "buf_ops")
-def test_fused_softmax(shape, use_buffer_ops, request):
-
+def test_fused_softmax(shape, use_buffer_ops):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -1946,9 +1923,7 @@ def test_fused_softmax(shape, use_buffer_ops, request):
 @require_e2e
 @pytest.mark.parametrize("shape", [(2, 64)])
 @param_bool("use_buffer_ops", "buf_ops")
-def test_atomic_min(shape, use_buffer_ops, request):
-    run_bench = request.config.getoption("--runperf")
-
+def test_atomic_min(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -2030,9 +2005,7 @@ def test_atomic_min(shape, use_buffer_ops, request):
 
 @require_e2e
 @pytest.mark.parametrize("shape", [(48, 4, 128)])
-def test_self_index(shape, request):
-    run_bench = request.config.getoption("--runperf")
-
+def test_self_index(shape, run_bench):
     M = tkl.sym.M
     K = tkl.sym.K
     N = tkl.sym.N
