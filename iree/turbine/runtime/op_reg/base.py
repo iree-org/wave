@@ -156,13 +156,7 @@ class CustomOp(ABC):
         if register_meta:
             library.impl(name, _get_meta_impl(self), "Meta")
 
-        if register_impl:
-            if dispatch_key is None:
-                dispatch_key = default_dispatch_keys()
-            elif isinstance(dispatch_key, str):
-                dispatch_key = [dispatch_key]
-            for k in dispatch_key:
-                library.impl(name, _create_impl_trampoline(self), k)
+        # Note: Implementation registration removed as eager functionality is not used by tests
 
         fq_name = f"{library.ns}.{name}"
         ALL_CUSTOM_OP_REGS[fq_name] = self
@@ -990,29 +984,6 @@ def _get_meta_impl(op: CustomOp):
         return sel.generate_meta_returns()
 
     return meta
-
-
-def _create_impl_trampoline(op: CustomOp):
-    # Import lazily when an implementation trampoline is requested to avoid
-    # circular dependency between base objects and eager runtime goo.
-    from .eager import (
-        eager_dispatch,
-    )
-
-    def handler(*args):
-        eager_override = op.eager_execute(*args)
-        if eager_override is not NotImplemented:
-            return eager_override
-
-        ksel = EagerKernelSelection(op, args)
-        op.select(ksel)
-        if logger.isEnabledFor(logging.DEBUG):
-            logging.debug(
-                "Dispatch on %s for specialization %s", op.name, ksel.spec_key
-            )
-        return eager_dispatch(ksel)
-
-    return handler
 
 
 def _define_signature_in_library(lib: torch.library.Library, signature: str) -> str:
