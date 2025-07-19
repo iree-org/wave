@@ -9,24 +9,22 @@
 Note that there are ad-hoc type conversions spread around a bit, and we
 should consolidate them here.
 """
-from typing import List, Optional
-
 import functools
 import re
+from typing import List, Optional
 
 from ..support.ir_imports import (
-    tensor_d,
     Context,
     F64Type,
     IntegerType,
-    RankedTensorType,
-    ShapedType,
     IrType,
     Location,
     Operation,
+    RankedTensorType,
+    ShapedType,
     Value,
+    tensor_d,
 )
-
 
 # Match an overall torch type declaration. Groups:
 #   1. Local name (int, float, vtensor)

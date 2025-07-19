@@ -4,10 +4,9 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Callable, Dict, List, Optional, Sequence, Union
-
 import contextlib
 import threading
+from typing import Callable, Dict, List, Optional, Sequence, Union
 
 import torch
 from torch._decomp import get_decompositions, remove_decompositions
