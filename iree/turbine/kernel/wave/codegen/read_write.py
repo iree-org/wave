@@ -903,10 +903,10 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             dst,
             src_idx,
             dst_idx,
-            src_mapping,
-            dst_mapping,
             element_type,
             elements_per_thread,
+            src_mapping,
+            dst_mapping,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e

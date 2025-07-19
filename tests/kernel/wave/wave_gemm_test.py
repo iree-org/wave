@@ -27,7 +27,7 @@ from .common.utils import (
     require_e2e,
     require_cdna2,
     require_cdna3,
-    require_cdna3_or_4,
+    require_cdna_3_or_4,
     perf_test,
     enable_scheduling_barriers,
     dump_generated_mlir,
@@ -138,7 +138,7 @@ _xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
 
 
 @require_e2e
-@require_cdna3_or_4
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",

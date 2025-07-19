@@ -70,19 +70,6 @@ def is_valid_write(write: CustomOp) -> bool:
     return True
 
 
-def get_write_node_consumers(read_custom: CustomOp) -> list[fx.Node]:
-    write_node = []
-
-    for user in read_custom.users:
-        if (
-            isinstance(user, Write)
-            and subs_idxc(user.memory_type.address_space) == SHARED_ADDRESS_SPACE
-        ):
-            write_node.append(user)
-
-    return write_node
-
-
 def combine_index(
     index1: dict[IndexSymbol, IndexSequence],
     index2: dict[IndexSymbol, IndexSequence],
@@ -216,6 +203,8 @@ def create_writes(
 
         read_index = combine_index(global_index, write_index)
 
+        # GatherToLDS only uses write index from the first thread in wave,
+        # so make the index wave-uniform, simplifying the calculation.
         write_index = {k: v.subs(wave_subs) for k, v in write_index.items()}
 
         logger.info(f"read_index={read_index}")
@@ -226,10 +215,10 @@ def create_writes(
                 write.memory,
                 read_index,
                 write_index,
-                read.mapping,
-                write.mapping,
                 element_type,
                 elements_per_thread,
+                read.mapping,
+                write.mapping,
             ).add_to_graph(write.graph)
 
             new_writes[write.memory].append(new_write)
