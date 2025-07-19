@@ -134,10 +134,7 @@ setup(
     packages=packages,
     include_package_data=True,
     package_data={
-        "iree.turbine": [
-            "ops/templates/*.mlir",
-            "kernel/boo/conv_exports/tuning_specs.mlir",
-        ],  # Include MLIR templates
+        "iree.turbine": [],
     },
     entry_points={
         "torch_dynamo_backends": [],
