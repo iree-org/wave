@@ -160,7 +160,7 @@ def is_shared_mem_access(custom: "CustomOp") -> bool:
     return custom.memory_type.address_space == SHARED_ADDRESS_SPACE
 
 
-def is_scaled_dim(expr: sympy.Expr):
+def is_scaled_dim(expr: sympy.Expr) -> bool:
     """
     Function that checks if expression is a scaled sympy expression.
     """
@@ -180,6 +180,7 @@ def find_index_bounds(
     constraints: list[Constraint],
     index: dict[IndexExpr, IndexExpr],
     vector_shapes: Optional[dict[IndexSymbol, int]],
+    symbolic_type: Optional[list[IndexExpr]],
 ) -> Optional[dict[IndexExpr, IndexExpr]]:
     """
     Find the bounds for the index variables is partial access/masking is needed.
@@ -219,6 +220,16 @@ def find_index_bounds(
 
     if not bounds:
         return None
+
+    # Build map for all scaled dims to it's scaled expression.
+    scaled_dim_map = {
+        infer_dim(expr): expr for expr in symbolic_type if is_scaled_dim(expr)
+    }
+    # Apply scaled expression to scaled dim if any.
+    bounds = {
+        dim: safe_subs(bound, {bound: scaled_dim_map.get(bound, bound)})
+        for dim, bound in bounds.items()
+    }
 
     return bounds
 

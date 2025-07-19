@@ -13,8 +13,6 @@ from .utils.graph_utils import get_custom
 from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
-    infer_dim,
-    is_scaled_dim,
     is_shared_mem_access,
     remove_global_indexing,
 )
@@ -50,9 +48,12 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
         node = get_custom(node)
         if node.bounds is not None:
             continue
+
         vector_shapes = node.vector_shapes or hardware_constraint.vector_shapes
         is_shared_mem = is_shared_mem_access(node)
-        bounds = find_index_bounds(constraints, node.index, vector_shapes)
+        bounds = find_index_bounds(
+            constraints, node.index, vector_shapes, node.type.symbolic_shape
+        )
         if is_shared_mem and bounds:
             bounds = remove_global_indexing(bounds, constraints)
             # Masking against global bounds was already handled when reading from
@@ -76,17 +77,5 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
 
         if not bounds:
             continue
-
-        # Build map for all scaled dims to it's scaled expression.
-        scaled_dim_map = {
-            infer_dim(expr): expr
-            for expr in node.type.symbolic_shape
-            if is_scaled_dim(expr)
-        }
-        # Apply scaled expression to scaled dim if any.
-        bounds = {
-            dim: safe_subs(bound, {bound: scaled_dim_map.get(bound, bound)})
-            for dim, bound in bounds.items()
-        }
 
         node.update_arg("bounds", bounds)
