@@ -147,6 +147,13 @@ def get_gather_to_shared_config(
     expected_number_of_loads *= ratio
     elements_per_thread //= ratio
 
+    if materialized_shape[-1] % elements_per_thread != 0:
+        logger.info(
+            f"materialized_shape[-1]={materialized_shape[-1]} is not divisible by "
+            f"elements_per_thread={elements_per_thread}"
+        )
+        return None
+
     return GatherToSharedConfig(
         materialized_shape,
         elements_per_thread,
@@ -172,10 +179,10 @@ def create_writes(
     elements_per_wave = elements_per_thread * total_number_of_threads
     logger.info(f"elements_per_wave={elements_per_wave}")
 
+    # For index delinearization, assume our shape in `elements_per_thread` chunks.
     materialized_shape_adjusted = list(materialized_shape)
-    materialized_shape_adjusted[-1] = sympy.ceiling(
-        materialized_shape[-1] / elements_per_thread
-    )
+    materialized_shape_adjusted[-1] = materialized_shape[-1] // elements_per_thread
+
     logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
     # GatherToLDS writes `elements_per_wave` elements contiguously to LDS, so we
@@ -187,10 +194,10 @@ def create_writes(
 
     new_writes = defaultdict(list)
     for i in range(expected_number_of_loads):
-        nd_index = delinearize_index(
-            thread_id + i * total_number_of_threads,
-            materialized_shape_adjusted,
-        )
+        # As we adjusted our shape to be in `elements_per_thread` chunks, each
+        # subsequent load will be `total_number_of_threads` elements apart.
+        thread_id_adjusted = thread_id + i * total_number_of_threads
+        nd_index = delinearize_index(thread_id_adjusted, materialized_shape_adjusted)
         logger.info(f"nd_index={nd_index}")
         write_index = {}
         for dim, idx in zip(symbolic_shape, nd_index):
@@ -243,6 +250,7 @@ def get_load_width(supported_load_widths: list[int], bitwidth: int) -> Optional[
     for width in supported_load_widths[::-1]:
         if bitwidth % width == 0:
             return width
+
     return None
 
 
