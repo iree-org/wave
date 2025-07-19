@@ -1398,9 +1398,13 @@ def handle_set_wave_prio(emitter: WaveEmitter, node: fx.Node):
     rocdl_d.s_setprio(prio)
 
 
-def waitcnt(count: int):
+def waitcnt(vmcnt: int):
+    """
+    Create `s_waitcnt` with the specified vmcnt and all other counters set to max.
+    """
+
     # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-    vmCnt = min(63, count)
+    vmCnt = min(63, vmcnt)
 
     # Extract low and high bits and combine while setting all other bits to 1
     lowBits = vmCnt & 0xF
