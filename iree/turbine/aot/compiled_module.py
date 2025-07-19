@@ -29,7 +29,7 @@ from ..support.ir_imports import (
     StringAttr,
 )
 from ..support.logging import aot_logger as logger
-from ..transforms.general.custom_op_expansion import ExpandCustomOpsPass
+from wave.transforms.general.custom_op_expansion import ExpandCustomOpsPass
 
 from .support.procedural import (
     GlobalsDef,

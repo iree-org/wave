@@ -14,7 +14,6 @@ from iree.compiler.ir import (
     SymbolTable,
 )
 
-
 __all__ = [
     "Merger",
 ]

@@ -2,6 +2,7 @@
 
 import textwrap
 from typing import Optional
+from wave.transforms.merger import Merger
 
 import torch
 from jinja2 import BaseLoader, Environment
@@ -43,7 +44,6 @@ from iree.turbine.runtime.op_reg.base import (
 from iree.turbine.runtime.op_reg.impl_helper import (
     call_function,
 )
-from iree.turbine.transforms.merger import Merger
 
 _JINJA2_ENVIRONMENT: Optional[Environment] = None
 
