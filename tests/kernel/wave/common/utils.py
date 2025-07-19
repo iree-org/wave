@@ -34,6 +34,8 @@ require_cdna4 = pytest.mark.skipif(
 dump_generated_mlir = int(os.environ.get("WAVE_DUMP_MLIR", 0))
 # Whether to use scheduling group barriers (needs LLVM fix).
 enable_scheduling_barriers = int(os.environ.get("WAVE_USE_SCHED_BARRIERS", 0))
+# Whether to verify each individual kernels when there are multiple ones.
+check_individual_kernels = int(os.environ.get("WAVE_CHECK_INDIV_KERNS", 0))
 
 # Add test shapes for validation and performance testing.
 perf_test = lambda *a: pytest.param(*a, marks=pytest.mark.perf_only)
