@@ -1411,6 +1411,7 @@ def waitcnt(vmcnt: int):
     highBits = (vmCnt >> 4) << 14
     otherCnts = ~0xC00F  # C00F has bits 15:14 and 3:0 set
     waitValue = lowBits | highBits | otherCnts
+    waitValue &= 0xFFFF
 
     rocdl_d.s_waitcnt(waitValue)
 
