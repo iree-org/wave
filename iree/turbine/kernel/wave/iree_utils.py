@@ -7,6 +7,10 @@
 import torch
 from ...support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
 from iree.turbine.runtime.launch import Launchable
+from .utils.run_utils import get_benchmark_flags, print_bench_result
+from .profiling import benchmark_module
+from .utils.compile_utils import compile_to_vmfb
+import iree.runtime as rt
 
 
 def get_chain_mmt_asm(
@@ -160,6 +164,7 @@ def generate_iree_ref(
     kernel_type: str,
     kernel_inputs: list[torch.Tensor],
     kernel_outputs: list[torch.Tensor],
+    options: "WaveCompileOptions",
 ):
     """
     Generate a reference output for the given kernel type and arguments.
@@ -210,10 +215,30 @@ def generate_iree_ref(
     else:
         raise ValueError(f"Unknown kernel type: {kernel_type}")
 
-    launchable = Launchable.jit_compile(asm, entry_point=func_name)
+    vmfb = compile_to_vmfb(asm, options)
+
+    def loader(device):
+        vm_instance = device.vm_instance
+        return rt.VmModule.copy_buffer(vm_instance, vmfb)
+
+    launchable = Launchable.from_vm_module(loader, entry_point=func_name)
     res = launchable(*kernel_inputs, outputs=kernel_outputs)
     if len(kernel_outputs) == 1:
         kernel_outputs[0][:] = res
     else:
         for r, k in zip(res, kernel_outputs):
             k[:] = r
+
+    if options.run_bench:
+        benchmark_flags = get_benchmark_flags(options)
+
+        benchmark_results = benchmark_module(
+            options,
+            kernel_inputs,
+            [],  # kernel_outputs,
+            [],  # dynamic_symbols,
+            vmfb,
+            func_name,
+            **benchmark_flags,
+        )
+        print_bench_result(benchmark_results, options.benchmark_results_file)
