@@ -45,9 +45,59 @@ from ...support.ir_imports import (
     Value,
 )
 
-from ..rewriter import (
-    Pass,
-)
+
+class Pass:
+    """Minimal Pass base class for custom op expansion."""
+
+    def __init__(self, root_op: Operation):
+        self.root_op = root_op
+
+    def run(self):
+        raise NotImplementedError
+
+    @property
+    def funcs(self):
+        """Get all func.func operations in the module."""
+        results = []
+        # Traverse all regions and blocks to find func.func operations
+        for region in self.root_op.regions:
+            for block in region.blocks:
+                for op in block.operations:
+                    actual_op = op.operation
+                    if actual_op.name == "func.func":
+                        results.append(type("OpMatchResult", (), {"op": op})())
+        return results
+
+    def erase_unused_op(self, op: Operation):
+        """Recursively erases any unused torch ops, starting with op."""
+        from ...support.ir_imports import OpResult
+
+        worklist = set()
+        worklist.add(op)
+        while worklist:
+            ops = worklist
+            worklist = set()
+            for op in ops:
+                if not self._is_erasable_value_op(op):
+                    continue
+                if not self._op_is_live(op):
+                    for operand in op.operands:
+                        if OpResult.isinstance(operand):
+                            worklist.add(operand.owner)
+                    op.erase()
+
+    def _is_erasable_value_op(self, op: Operation):
+        name = op.name
+        return name.startswith("torch.") or name.startswith("torch_c.")
+
+    def _op_is_live(self, op: Operation) -> bool:
+        for r in op.results:
+            try:
+                next(r.uses)
+                return True
+            except StopIteration:
+                pass
+        return False
 
 
 class ExpandCustomOpsPass(Pass):
@@ -173,7 +223,7 @@ class AOTKernelSelection(KernelSelection):
         element_type_asm = str(rtt.element_type)
         try:
             dtype = MLIR_TYPE_ASM_TO_TORCH_DTYPE[element_type_asm]
-        except KeyError as e:
+        except KeyError:
             raise AssertionError(
                 f"Could not find dtype mapping for {element_type_asm} in MLIR_TYPE_ASM_TO_TORCH_DTYPE"
             )
@@ -410,7 +460,7 @@ class InlineKernelBuilder(KernelBuilder):
             torch_op_results: list[Value] = list(self.torch_op.results)
             assert len(results) == len(
                 torch_op_results
-            ), f"Mismatched yield_results with custom op results"
+            ), "Mismatched yield_results with custom op results"
             for new_result, old_result in zip(results, torch_op_results):
                 torch_type = old_result.type
                 new_result = self.type_converter.materialize_native_to_torch(
