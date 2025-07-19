@@ -76,6 +76,8 @@ packages = find_namespace_packages(
     include=[
         "iree.turbine",
         "iree.turbine.*",
+        "wave",
+        "wave.*",
     ],
 )
 

@@ -6,7 +6,7 @@
 
 from typing import List, Optional, Sequence
 
-from ..dynamo import type_conversion
+from wave.dynamo import type_conversion
 
 from iree.compiler.ir import (
     Context,

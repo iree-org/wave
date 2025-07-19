@@ -23,7 +23,7 @@ from iree.compiler.extras.fx_importer import (
     RefTracker,
 )
 
-from ...dynamo.type_conversion import (
+from wave.dynamo.type_conversion import (
     NativeTypeConverter,
 )
 

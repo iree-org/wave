@@ -1,7 +1,7 @@
-`iree.turbine.dynamo`
-=====================
+`wave.dynamo`
+=============
 
-.. automodule:: iree.turbine.dynamo
+.. automodule:: wave.dynamo
   :imported-members:
   :members:
   :undoc-members:

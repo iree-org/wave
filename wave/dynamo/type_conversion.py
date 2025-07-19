@@ -13,7 +13,7 @@ import functools
 import re
 from typing import List, Optional
 
-from ..support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     Context,
     F64Type,
     IntegerType,
