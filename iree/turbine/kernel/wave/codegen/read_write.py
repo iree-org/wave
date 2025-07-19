@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import copy
 import sympy
 import functools
 from typing import Any, Optional, Dict
@@ -34,12 +35,20 @@ from ...compiler.builder import IRProxyValue
 from ...compiler.vector_codegen import (
     cast_kernel_buffer,
     cast_py_literal,
+    cast_py_value,
     cast_vector,
 )
 
-from ...ops.wave_ops import get_custom, read, write, CustomOp
+from ...ops.wave_ops import (
+    CustomOp,
+    gather_to_lds,
+    get_custom,
+    read,
+    write,
+)
 
 from ..utils.general_utils import get_fastest_index, infer_dim
+from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.symbol_utils import safe_subs, subs_idxc
 
 from ..._support.indexing import IndexingContext, IndexExpr, IndexSequence, IndexSymbol
@@ -48,10 +57,11 @@ from ...lang.wave_types import IndexMapping
 
 from .emitter import (
     WaveEmitter,
-    handle_op,
     add_emitter_subs,
     gen_sympy_index,
     get_constant_attr,
+    get_type_or_element_type,
+    handle_op,
 )
 
 
@@ -883,3 +893,82 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             mask,
             offsets_vec,
         )
+
+
+@handle_op(gather_to_lds)
+def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (
+            src,
+            dst,
+            src_idx,
+            dst_idx,
+            element_type,
+            elements_per_thread,
+            src_mapping,
+            dst_mapping,
+        ) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    element_type = IrType.parse(element_type.dtype.ir_type_asm())
+
+    src_symbolic_shape = _get_symbolic_shape(src)
+    dst_symbolic_shape = _get_symbolic_shape(dst)
+
+    src = cast_py_value(emitter, src)
+    dst = cast_py_value(emitter, dst)
+    src_data_type = get_type_or_element_type(src.ir_value.type)
+    dst_data_type = get_type_or_element_type(dst.ir_value.type)
+
+    if not (
+        MemRefType.isinstance(src.ir_value.type)
+        and MemRefType.isinstance(dst.ir_value.type)
+    ):
+        op = get_custom(node)
+        raise ValidationError(
+            f"Expected src and dst to be of Memref type for\n"
+            f"{op}\nGot\n"
+            f"src: {src.ir_value.type}\n"
+            f"dst: {dst.ir_value.type}\n"
+        )
+
+    if src_data_type != dst_data_type:
+        op = get_custom(node)
+        raise ValidationError(
+            f"Expected src and dst to have same data type for\n"
+            f"{op}\nGot\n"
+            f"src: {src_data_type} vs dst: {dst_data_type}\n"
+        )
+
+    src = src.ir_value
+    dst = dst.ir_value
+
+    if src_mapping:
+        src_idx = transform_index_on_mapping(src_mapping, src_symbolic_shape, src_idx)
+    if dst_mapping:
+        dst_idx = transform_index_on_mapping(dst_mapping, dst_symbolic_shape, dst_idx)
+
+    store_type = VectorType.get((elements_per_thread,), element_type)
+
+    src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
+    dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+
+    if False:  # TODO: Buffer stuff needs upstream fixes
+        strides = strides_from_symbolic_shape(
+            IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
+        )
+        strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
+
+        src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
+        src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
+
+        src_index = [offset_th]
+
+    amdgpu_d.gather_to_lds(
+        src=src,
+        src_indices=src_index,
+        dst=dst,
+        dst_indices=dst_index,
+        transfer_type=store_type,
+    )

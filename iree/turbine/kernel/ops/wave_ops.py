@@ -8,7 +8,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    List,
     Optional,
     Sequence,
     Type,
@@ -74,7 +73,7 @@ def extract_slice(
 def set_wave_prio(priority: int): ...
 
 
-def shared_memory_barrier(): ...
+def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
 def workgroup_barrier(): ...
@@ -273,6 +272,18 @@ def reshape(
 def select(
     cond: "Register", if_true: "Register", if_false: "Register"
 ) -> "Register": ...
+
+
+def gather_to_lds(
+    src: Memory,
+    dst: Memory,
+    src_idx: dict[IndexSymbol, IndexSequence],
+    dst_idx: dict[IndexSymbol, IndexSequence],
+    dtype: DataType,
+    elements_per_thread: Optional[IndexExpr | int] = None,
+    src_mapping: Optional[IndexMapping] = None,
+    dst_mapping: Optional[IndexMapping] = None,
+): ...
 
 
 def define_op(op_name: str) -> Callable[[T], T]:
@@ -1217,6 +1228,8 @@ class SharedMemoryBarrier(CustomOp):
     """
     Represents a shared memory barrier in the graph.
     """
+
+    wait_async_ops: bool = False
 
     @property
     def has_side_effects(self) -> bool:
@@ -2491,3 +2504,22 @@ class Reshape(CustomOp, ABC):
 
     def infer_type(self):
         self.type = get_custom(_to_sequence(self.args)[0]).type
+
+
+@define_op("gather_to_lds")
+@dataclass
+class GatherToLDS(CustomOp):
+    """
+    Represents an instruction that performs direct load from global
+    to lds. Source node points to the global memory to load from
+    and the destination node points to shared memory.
+    """
+
+    src: Memory
+    dst: Memory
+    src_idx: dict[IndexSymbol, IndexSequence]
+    dst_idx: dict[IndexSymbol, IndexSequence]
+    dtype: DataType
+    elements_per_thread: Optional[IndexExpr | int]
+    src_mapping: Optional[IndexMapping]
+    dst_mapping: Optional[IndexMapping]
