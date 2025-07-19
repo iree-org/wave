@@ -161,7 +161,7 @@ def get_gather_to_shared_config(
     )
 
 
-def create_writes(
+def emit_global_to_lds(
     read: Read,
     write: Write,
     materialized_shape: list[IndexSymbol],
@@ -174,7 +174,7 @@ def create_writes(
     element_type: "DataType",
 ) -> defaultdict[fx.Node, list[Write]]:
     """
-    Create new writes for the given read and write.
+    Emit `GatherToLDS` for the given read and write.
     """
     elements_per_wave = elements_per_thread * total_number_of_threads
     logger.info(f"elements_per_wave={elements_per_wave}")
@@ -346,7 +346,7 @@ def gather_to_shared(
         elements_per_thread = config.elements_per_thread
         expected_number_of_loads = config.expected_number_of_loads
 
-        new_writes = create_writes(
+        new_writes = emit_global_to_lds(
             read,
             write,
             materialized_shape,
