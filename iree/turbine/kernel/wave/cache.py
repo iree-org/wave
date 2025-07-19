@@ -205,6 +205,7 @@ class WaveCacheManager(object):
             options.use_buffer_store_ops,
             options.use_stride_cache_swizzle,
             options.use_fast_math,
+            options.use_global_to_shared,
             options.minimize_shared_allocs,
             options.reorder_allocs,
             options.override_schedule,
