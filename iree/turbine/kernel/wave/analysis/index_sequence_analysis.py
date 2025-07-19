@@ -43,6 +43,7 @@ from ..utils.general_utils import (
     get_largest_index_and_size,
     get_workgroup_constraints,
     infer_dim,
+    is_scaled_dim,
     partial,
 )
 from ..utils.mma_utils import (
@@ -107,22 +108,6 @@ def set_derived_index(trace):
         for inp in get_inputs(current)[0]:
             new_index = custom.transform_index_backwards(custom.index, inp)
             worklist.append((inp, new_index))
-
-
-def is_scaled_dim(expr: sympy.Expr):
-    """
-    Function that checks if expression is a scaled sympy expression.
-    """
-    # Skip for cases where it is a single symbol or number.
-    if expr.is_Symbol or expr.is_Number:
-        return False
-    # Unhandled case where expression is multiple operations.
-    if sympy.count_ops(expr) != 1:
-        return False
-    # Skip if cannot find a multiply which represents a scale
-    if not isinstance(expr, sympy.Mul):
-        return False
-    return True
 
 
 def has_scaled_indices(node: fx.Node):

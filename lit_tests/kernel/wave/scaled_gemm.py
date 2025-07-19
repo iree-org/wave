@@ -506,3 +506,104 @@ def batched_prefetch_mxfp4_test():
 
     # Epilogue MFMA
     # CHECK-COUNT-64: amdgpu.scaled_mfma
+
+
+@run_test
+def test_unaligned_scaled_gemm_mxfp4():
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+
+    @tkw.wave(constraints)
+    def unaligned_scaled_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 128,
+        M: 1024,
+        N: 1024,
+        K: 192,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=SchedulingType.NONE,
+        backend="rocm",
+        target="gfx950",
+        compile_to_mlir=True,
+    )
+
+    unaligned_scaled_gemm = wave_compile(options, unaligned_scaled_gemm)
+    print(unaligned_scaled_gemm.asm)
+
+    # Importance of this test is to ensure unaligned K dim works. The main
+    # thing to observe is the bounds that is used to compute the mask
+    # for vector.maskedload is indeed scaled.
+
+    # We check that for logits (K: K/2) the bounds is 192/2 = 96.
+    # We also ensure for scales (K: K/32) the bound is 192/32 = 6.
+
+    # CHECK-LABEL: unaligned_scaled_gemm
+
+    # CHECK-DAG:    %[[CST:.+]] = arith.constant dense<0> : vector<1xi8>
+    # CHECK-DAG:    %[[CST_0:.+]] = arith.constant dense<0> : vector<16xi8>
+    # CHECK-DAG:    %[[C1:.+]] = arith.constant 1 : index
+    # CHECK-DAG:    %[[C2:.+]] = arith.constant 2 : index
+    # CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
+    # CHECK-DAG:    %[[SCALED_SCALES_BOUND:.+]] = arith.constant 6 : index
+    # CHECK-DAG:    %[[SCALED_LOGITS_BOUND:.+]] = arith.constant dense<96> : vector<16xindex>
+    # CHECK:        scf.for %{{.*}} = %[[C0]] to %[[C2]] step %[[C1]]
+    # CHECK:          %[[SCALED_LOGITS_MASK:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_LOGITS_BOUND]] : vector<16xindex>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1], offset: ?>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
+    # CHECK:          %[[SCALED_SCALES_MASK_VAL:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_SCALES_BOUND]] : index
+    # CHECK:          %[[SCALED_SCALES_MASK:.+]] = vector.splat %[[SCALED_SCALES_MASK_VAL]] : vector<1xi1>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1], offset: ?>>, vector<1xi1>, vector<1xi8> into vector<1xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1], offset: ?>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
+    # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1], offset: ?>>, vector<1xi1>, vector<1xi8> into vector<1xi8>
+    # CHECK:          amdgpu.scaled_mfma
+    # CHECK:          scf.yield
+    # CHECK:         }

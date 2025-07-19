@@ -160,6 +160,22 @@ def is_shared_mem_access(custom: "CustomOp") -> bool:
     return custom.memory_type.address_space == SHARED_ADDRESS_SPACE
 
 
+def is_scaled_dim(expr: sympy.Expr):
+    """
+    Function that checks if expression is a scaled sympy expression.
+    """
+    # Skip for cases where it is a single symbol or number.
+    if expr.is_Symbol or expr.is_Number:
+        return False
+    # Unhandled case where expression is multiple operations.
+    if sympy.count_ops(expr) != 1:
+        return False
+    # Skip if cannot find a multiply which represents a scale
+    if not isinstance(expr, sympy.Mul):
+        return False
+    return True
+
+
 def find_index_bounds(
     constraints: list[Constraint],
     index: dict[IndexExpr, IndexExpr],

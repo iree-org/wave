@@ -220,7 +220,8 @@ def testScaledGemmMXFP4(
 @require_cdna4
 @pytest.mark.parametrize("batch", [4, 8])
 @pytest.mark.parametrize(
-    "shape", [(1024, 1024, 1024), (8192, 8192, 8192), (16384, 16384, 16384)]
+    "shape",
+    [(1024, 1024, 1024), (8192, 8192, 8192), (16384, 16384, 16384), (1, 16384, 1664)],
 )
 @pytest.mark.parametrize(
     "mfma_variant",
