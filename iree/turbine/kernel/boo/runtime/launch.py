@@ -19,7 +19,7 @@ from iree.runtime import VmModule
 
 from .cache import *
 from ....aot import export
-from ....importers.ir import Attribute, MLIRError
+from ....support.ir_imports import Attribute, MLIRError
 from ....runtime import Launchable
 from ....support.logging import runtime_logger as logger
 
