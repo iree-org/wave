@@ -8,7 +8,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    List,
     Optional,
     Sequence,
     Type,
@@ -277,14 +276,13 @@ def select(
 
 def gather_to_lds(
     src: Memory,
-    src_idx: dict[IndexSymbol, IndexSequence],
-    src_type: DataType,
     dst: Memory,
+    src_idx: dict[IndexSymbol, IndexSequence],
     dst_idx: dict[IndexSymbol, IndexSequence],
-    dst_type: DataType,
+    dtype: DataType,
+    elements_per_thread: Optional[IndexExpr | int] = None,
     src_mapping: Optional[IndexMapping] = None,
     dst_mapping: Optional[IndexMapping] = None,
-    elements_per_thread: Optional[IndexExpr | int] = None,
 ): ...
 
 
@@ -2521,7 +2519,7 @@ class GatherToLDS(CustomOp):
     dst: Memory
     src_idx: dict[IndexSymbol, IndexSequence]
     dst_idx: dict[IndexSymbol, IndexSequence]
+    dtype: DataType
+    elements_per_thread: Optional[IndexExpr | int]
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
-    transfer_type: DataType
-    elements_per_thread: Optional[IndexExpr | int]

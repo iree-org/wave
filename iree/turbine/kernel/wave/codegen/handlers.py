@@ -1417,6 +1417,7 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
         (wait_async_ops,) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
+
     if wait_async_ops:
         waitcnt(0)
 
