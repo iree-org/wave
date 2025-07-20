@@ -1,15 +1,16 @@
 import argparse
-import torch
-from ..support.logging import get_logger
 import re
 from typing import Callable
-from collections import namedtuple
+
 import numpy as np
+import torch
+
+from iree.turbine.support.logging import get_logger
 
 logger = get_logger("turbine.wave.interpreter")
 
 
-from ..kernel.compiler.ir import (
+from iree.turbine.kernel.compiler.ir import (
     Context,
     F16Type,
     F32Type,

@@ -1,7 +1,7 @@
-`iree.turbine.tools`
+`wave.tools`
 =====================
 
-.. py:module:: iree.turbine.tools
+.. py:module:: wave.tools
 
 .. autoclass:: Interpreter
   :members:

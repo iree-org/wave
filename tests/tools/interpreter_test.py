@@ -1,4 +1,4 @@
-from iree.turbine.tools.interpreter import Interpreter
+from wave.tools.interpreter import Interpreter
 import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
