@@ -1,11 +1,11 @@
 # RUN: python %s | FileCheck %s
 
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.constraints import ScaledMMAType
-from iree.turbine.kernel.wave.utils.general_utils import (
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import ScaledMMAType
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     run_test,
 )

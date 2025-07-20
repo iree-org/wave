@@ -6,27 +6,27 @@
 
 import pytest
 import torch
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.iree_utils import generate_iree_ref
-from iree.turbine.kernel.wave.utils.run_utils import (
+import wave_lang.kernel as tk
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.iree_utils import generate_iree_ref
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.mma_utils import (
+from wave_lang.kernel.wave.utils.mma_utils import (
     get_mfma_load_elems_per_thread,
     get_mfma_store_elems_per_thread,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
 import os
 from torch.testing import assert_close
 from ..common.utils import (

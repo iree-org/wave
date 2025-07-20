@@ -6,28 +6,28 @@
 
 import pytest
 import torch
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_arange,
     device_full,
     device_randint,
     device_randn,
     device_zeros,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.constraints import MMAType, GenericDot, MMAOperand
-from iree.turbine.kernel.wave.templates.paged_decode_attention import (
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType, GenericDot, MMAOperand
+from wave_lang.kernel.wave.templates.paged_decode_attention import (
     get_paged_decode_attention_kernels,
     get_paged_decode_intermediate_arrays_shapes,
     paged_decode_attention_shape,
 )
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 import os
 from torch.testing import assert_close
 from ..common.utils import (

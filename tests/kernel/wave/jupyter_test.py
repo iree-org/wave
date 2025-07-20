@@ -4,14 +4,14 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from iree.turbine.kernel._support.indexing import sym
-from iree.turbine.kernel._support.dtype import f16, f32
-from iree.turbine.kernel.lang.wave_types import *
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.run_utils import set_default_run_config
-import iree.turbine.kernel as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel._support.indexing import sym
+from wave_lang.kernel._support.dtype import f16, f32
+from wave_lang.kernel.lang.wave_types import *
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+import wave_lang.kernel as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from .common.utils import require_e2e
 import torch
 

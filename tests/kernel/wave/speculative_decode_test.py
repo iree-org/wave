@@ -6,20 +6,20 @@
 
 import pytest
 import torch
-from iree.turbine.kernel.lang.global_symbols import *
+from wave_lang.kernel.lang.global_symbols import *
 from .common.utils import (
     require_cdna3,
     require_e2e,
     enable_scheduling_barriers,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.templates.speculative_decoding import (
+from wave_lang.kernel.wave.templates.speculative_decoding import (
     get_speculative_decoding_kernel,
     get_speculative_sampling_kernel,
 )

@@ -21,14 +21,14 @@ First, we need to import the necessary modules and define our symbolic dimension
 
 .. code-block:: python
 
-    from iree.turbine.kernel._support.indexing import sym
-    from iree.turbine.kernel._support.dtype import f16, f32
-    from iree.turbine.kernel.lang.wave_types import *
-    from iree.turbine.kernel.lang.global_symbols import *
-    from iree.turbine.kernel.wave.utils.run_utils import set_default_run_config
-    import iree.turbine.kernel as tkl
-    import iree.turbine.kernel.wave as tkw
-    from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+    from wave_lang.kernel._support.indexing import sym
+    from wave_lang.kernel._support.dtype import f16, f32
+    from wave_lang.kernel.lang.wave_types import *
+    from wave_lang.kernel.lang.global_symbols import *
+    from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+    import wave_lang.kernel as tkl
+    import wave_lang.kernel.wave as tkw
+    from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
     import torch
 
     # Define symbolic dimensions for our matrices

@@ -74,8 +74,6 @@ with open(os.path.join(REPO_ROOT, "README.md"), "rt") as f:
 
 packages = find_namespace_packages(
     include=[
-        "iree.turbine",
-        "iree.turbine.*",
         "wave_lang",
         "wave_lang.*",
     ],
@@ -135,9 +133,7 @@ setup(
     },
     packages=packages,
     include_package_data=True,
-    package_data={
-        "iree.turbine": [],
-    },
+    package_data={},
     entry_points={
         "torch_dynamo_backends": [],
     },
@@ -157,6 +153,6 @@ setup(
         ],
     },
     cmdclass={"build": BuildCommand, "build_ext": CMakeBuild},
-    ext_modules=[CMakeExtension("wave_runtime", "iree/turbine/kernel/wave/runtime")],
+    ext_modules=[CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime")],
     zip_safe=False,
 )

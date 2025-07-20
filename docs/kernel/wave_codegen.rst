@@ -1,6 +1,6 @@
 Wave Codegen
 ============
 
-.. automodule:: iree.turbine.kernel.wave.codegen
+.. automodule:: wave_lang.kernel.wave.codegen
   :members:
   :undoc-members:

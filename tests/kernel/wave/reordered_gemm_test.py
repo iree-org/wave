@@ -1,18 +1,18 @@
 import pytest
 import torch
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.iree_utils import generate_iree_ref
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.iree_utils import generate_iree_ref
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel.wave.templates.reordered_gemm import get_reordered_matmul
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.templates.reordered_gemm import get_reordered_matmul
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 import os
 from torch.testing import assert_close
 

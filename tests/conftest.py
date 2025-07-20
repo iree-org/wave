@@ -125,13 +125,13 @@ def _set_default_device(config):
 
     device_id = worker_id % distribute
 
-    import iree.turbine.kernel.wave.utils.general_utils as general_utils
+    import wave_lang.kernel.wave.utils.general_utils as general_utils
 
     general_utils.DEFAULT_GPU_DEVICE = device_id
 
 
 def _disable_cache(config):
-    import iree.turbine.kernel.wave.cache as cache
+    import wave_lang.kernel.wave.cache as cache
 
     cache.WAVE_CACHE_ON = int(os.environ.get("WAVE_CACHE_ON", 0))
 
@@ -144,7 +144,7 @@ def _set_cache_dir(config):
     if worker_id is None:
         return
 
-    import iree.turbine.kernel.wave.cache as cache
+    import wave_lang.kernel.wave.cache as cache
 
     base_cache_dir = cache.CACHE_BASE_DIR
     cache.CACHE_BASE_DIR = base_cache_dir / f"worker_{worker_id}"

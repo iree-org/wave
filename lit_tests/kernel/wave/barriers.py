@@ -2,29 +2,29 @@
 
 import logging
 
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel._support.indexing import IndexingContext
-from iree.turbine.kernel._support.tracing import CapturedTrace
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.ops.wave_ops import *
-from iree.turbine.kernel.wave.analysis.index_sequence_analysis import (
+import wave_lang.kernel as tk
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel._support.indexing import IndexingContext
+from wave_lang.kernel._support.tracing import CapturedTrace
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.ops.wave_ops import *
+from wave_lang.kernel.wave.analysis.index_sequence_analysis import (
     set_node_indices,
     set_post_expansion_indices,
 )
-from iree.turbine.kernel.wave.barriers import add_shared_memory_barriers
-from iree.turbine.kernel.wave.expansion.expansion import add_get_results, expand_graph
-from iree.turbine.kernel.wave.hoisting import hoist_loop_invariant_ops
-from iree.turbine.kernel.wave.promotion import promote_node
-from iree.turbine.kernel.wave.type_inference import infer_types
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.barriers import add_shared_memory_barriers
+from wave_lang.kernel.wave.expansion.expansion import add_get_results, expand_graph
+from wave_lang.kernel.wave.hoisting import hoist_loop_invariant_ops
+from wave_lang.kernel.wave.promotion import promote_node
+from wave_lang.kernel.wave.type_inference import infer_types
+from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
-from iree.turbine.kernel.wave.utils.graph_utils import (
+from wave_lang.kernel.wave.utils.graph_utils import (
     initialize_iter_args,
 )
-from iree.turbine.kernel.wave.utils.print_utils import (
+from wave_lang.kernel.wave.utils.print_utils import (
     print_trace,
 )
 

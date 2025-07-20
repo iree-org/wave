@@ -35,11 +35,11 @@ Here's a complete example of how to use `tune_attention`:
 
 .. code-block:: python
 
-    from iree.turbine.kernel.wave.tuner.tune_attention import (
+    from wave_lang.kernel.wave.tuner.tune_attention import (
         tune_attention, AttentionConfig
     )
-    from iree.turbine.kernel.wave.constraints import MMAType
-    from iree.turbine.kernel.wave.scheduling import SchedulingType
+    from wave_lang.kernel.wave.constraints import MMAType
+    from wave_lang.kernel.wave.scheduling import SchedulingType
 
     # Configure the attention kernel
     config = AttentionConfig(

@@ -6,23 +6,23 @@
 
 import pytest
 import torch
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.iree_utils import generate_iree_ref
-from iree.turbine.kernel.wave.utils.general_utils import (
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.iree_utils import generate_iree_ref
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_randint,
     device_zeros,
 )
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from .common.utils import (
     require_e2e,
     require_cdna2,
@@ -33,9 +33,9 @@ from .common.utils import (
     dump_generated_mlir,
     param_bool,
 )
-from iree.turbine.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
-from iree.turbine.kernel.wave.templates.gemm import get_gemm_kernel
-from iree.turbine.kernel.lang import DataType
+from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
+from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.lang import DataType
 import os
 import json
 from torch.testing import assert_close

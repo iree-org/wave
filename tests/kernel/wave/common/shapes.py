@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 import pytest
 from typing import Sequence
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel.wave.templates.attention_common import (
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.templates.attention_common import (
     AttentionShape,
 )
 

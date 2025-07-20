@@ -10,7 +10,7 @@ from wave_lang.support.logging import get_logger
 logger = get_logger("turbine.wave.interpreter")
 
 
-from iree.turbine.kernel.compiler.ir import (
+from wave_lang.support.ir_imports import (
     Context,
     F16Type,
     F32Type,
@@ -229,7 +229,11 @@ class Interpreter:
                     shape = mtype.shape
                     dtype = mtype.element_type
                     input = self.symbol_table[op.input][0]
-                    value = torch.full(shape, input, dtype=self.get_dtype(dtype))
+                    if isinstance(input, torch.Tensor):
+                        fill_value = input.item()
+                    else:
+                        fill_value = input
+                    value = torch.full(shape, fill_value, dtype=self.get_dtype(dtype))
                 case stream_d.DispatchWorkgroupIDOp:
                     index = int(op.attributes["dimension"])
                     value = self.workgroup_ids[index]
@@ -314,7 +318,7 @@ class Interpreter:
     ):
         for wg in np.ndindex(*workgroup_count):
             for t in np.ndindex(*workgroup_size):
-                Interpreter([(*wg,)], [(*t,)]).interpret(asm)
+                Interpreter(list(wg), list(t)).interpret(asm)
 
 
 if __name__ == "__main__":

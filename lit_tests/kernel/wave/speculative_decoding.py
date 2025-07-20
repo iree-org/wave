@@ -1,11 +1,11 @@
 # RUN: python %s | FileCheck %s
 
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.templates.speculative_decoding import (
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.templates.speculative_decoding import (
     get_speculative_sampling_kernel,
 )
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
 

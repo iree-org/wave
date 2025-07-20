@@ -12,21 +12,21 @@ import sympy
 import torch
 from torch.testing import assert_close
 
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.iree_utils import generate_iree_ref
-from iree.turbine.kernel.wave.templates.conv import get_igemm_conv2d
-from iree.turbine.kernel.wave.utils.general_utils import (
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.iree_utils import generate_iree_ref
+from wave_lang.kernel.wave.templates.conv import get_igemm_conv2d
+from wave_lang.kernel.wave.utils.general_utils import (
     ceildiv,
     check_leaks,
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_arange,
     device_full,
     device_ones,
@@ -36,7 +36,7 @@ from iree.turbine.kernel.wave.utils.torch_utils import (
     device_zeros,
     to_default_device,
 )
-from iree.turbine.kernel.wave.wave_sim import wave_sim
+from wave_lang.kernel.wave.wave_sim import wave_sim
 
 from .common.utils import (
     param_bool,

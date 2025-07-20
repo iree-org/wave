@@ -10,6 +10,12 @@
 # ruff: noqa: F401
 
 from iree.compiler.dialects import (
+    affine as affine_d,
+)
+from iree.compiler.dialects import (
+    amdgpu as amdgpu_d,
+)
+from iree.compiler.dialects import (
     arith as arith_d,
 )
 from iree.compiler.dialects import (
@@ -22,12 +28,46 @@ from iree.compiler.dialects import (
     func as func_d,
 )
 from iree.compiler.dialects import (
+    gpu as gpu_d,
+)
+from iree.compiler.dialects import (
+    iree_codegen as iree_codegen_d,
+)
+from iree.compiler.dialects import (
+    llvm as llvm_d,
+)
+from iree.compiler.dialects import (
+    math as math_d,
+)
+from iree.compiler.dialects import (
+    memref as memref_d,
+)
+from iree.compiler.dialects import (
+    rocdl as rocdl_d,
+)
+from iree.compiler.dialects import (
+    scf as scf_d,
+)
+from iree.compiler.dialects import (
+    stream as stream_d,
+)
+from iree.compiler.dialects import (
     tensor as tensor_d,
+)
+from iree.compiler.dialects import (
+    transform as transform_d,
 )
 from iree.compiler.dialects import (
     util as util_d,
 )
+from iree.compiler.dialects import (
+    vector as vector_d,
+)
 from iree.compiler.ir import (
+    AffineConstantExpr,
+    AffineExpr,
+    AffineMap,
+    AffineMapAttr,
     ArrayAttr,
     AsmState,
     Attribute,
@@ -58,6 +98,7 @@ from iree.compiler.ir import (
     IntegerAttr,
     IntegerType,
     Location,
+    MemRefType,
     MLIRError,
     Module,
     Operation,
@@ -65,10 +106,13 @@ from iree.compiler.ir import (
     RankedTensorType,
     ShapedType,
     StringAttr,
+    SymbolRefAttr,
     SymbolTable,
     TypeAttr,
     UnitAttr,
     Value,
+    VectorType,
+    WalkResult,
 )
 from iree.compiler.ir import (
     Type as IrType,

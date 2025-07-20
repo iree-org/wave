@@ -6,8 +6,8 @@ from typing import Optional
 import torch
 from jinja2 import BaseLoader, Environment
 
-import iree.turbine.kernel.wave as tkw
 import wave_lang.aot as aot
+import wave_lang.kernel.wave as tkw
 from iree.compiler.ir import (
     Context,
     MLIRError,
@@ -15,24 +15,24 @@ from iree.compiler.ir import (
     Operation,
     RankedTensorType,
 )
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
-from iree.turbine.kernel.wave.templates.attention_common import (
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.templates.attention_common import (
     AttentionShape,
 )
-from iree.turbine.kernel.wave.templates.vanilla_attention import (
+from wave_lang.kernel.wave.templates.vanilla_attention import (
     get_bhsd_attention_kernel,
 )
-from iree.turbine.kernel.wave.utils.compile_utils import (
+from wave_lang.kernel.wave.utils.compile_utils import (
     get_kernel_name,
     get_wave_module_body_asm,
 )
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     run_test,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
 from wave_lang.runtime.op_reg.base import (

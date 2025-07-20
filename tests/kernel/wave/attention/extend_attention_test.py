@@ -10,14 +10,14 @@ import torch
 from torch.nn import functional as F
 from dataclasses import replace
 
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
     device_empty,
@@ -25,18 +25,18 @@ from iree.turbine.kernel.wave.utils.torch_utils import (
     device_randint,
     device_full,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel.wave.templates.extend_attention import (
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.templates.extend_attention import (
     get_extend_attention_kernel,
 )
-from iree.turbine.kernel.wave.templates.extend_attention_rpe import (
+from wave_lang.kernel.wave.templates.extend_attention_rpe import (
     get_extend_attention_rpe_kernel,
 )
-from iree.turbine.kernel.wave.templates.attention_common import (
+from wave_lang.kernel.wave.templates.attention_common import (
     AttentionShape,
 )
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from enum import Enum
 from torch.testing import assert_close
 

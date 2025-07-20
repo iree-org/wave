@@ -1,10 +1,10 @@
 # RUN: python %s | FileCheck %s
 
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.ops.wave_ops import Read, Write
-from iree.turbine.kernel.wave.utils.general_utils import run_test
-from iree.turbine.kernel.wave.utils.print_utils import print_trace
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.ops.wave_ops import Read, Write
+from wave_lang.kernel.wave.utils.general_utils import run_test
+from wave_lang.kernel.wave.utils.print_utils import print_trace
 
 M = tkl.sym.M
 N = tkl.sym.N

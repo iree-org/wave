@@ -8,26 +8,26 @@ import pytest
 import torch
 from torch.nn import functional as F
 import math
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.general_utils import (
+import wave_lang.kernel as tk
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
     device_randint,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel.wave.templates.evoformer import get_evoformer_kernel
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
-from iree.turbine.kernel.lang import DataType
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.templates.evoformer import get_evoformer_kernel
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.lang import DataType
 import os
 from ..common.utils import (
     require_e2e,

@@ -9,21 +9,21 @@ from typing import Callable
 import unittest
 import os
 import pytest
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.wave.expansion.expansion import expand_graph, add_get_results
-from iree.turbine.kernel.wave.type_inference import infer_types
-from iree.turbine.kernel._support.tracing import CapturedTrace
-from iree.turbine.kernel._support.indexing import IndexingContext
-from iree.turbine.kernel.ops.wave_ops import get_custom
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.visualization import visualize_graph
-from iree.turbine.kernel.wave.analysis.index_sequence_analysis import (
+import wave_lang.kernel as tk
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.wave.expansion.expansion import expand_graph, add_get_results
+from wave_lang.kernel.wave.type_inference import infer_types
+from wave_lang.kernel._support.tracing import CapturedTrace
+from wave_lang.kernel._support.indexing import IndexingContext
+from wave_lang.kernel.ops.wave_ops import get_custom
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.visualization import visualize_graph
+from wave_lang.kernel.wave.analysis.index_sequence_analysis import (
     set_node_indices,
     set_post_expansion_indices,
 )
-from iree.turbine.kernel.wave.utils.graph_utils import initialize_iter_args
+from wave_lang.kernel.wave.utils.graph_utils import initialize_iter_args
 
 
 def run(func: Callable[[], None]) -> Callable[[], None]:

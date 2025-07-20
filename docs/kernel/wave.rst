@@ -1,7 +1,7 @@
 TKW (`turbine.kernel.wave`)
 ===========================
 
-.. py:module:: iree.turbine.kernel.wave.wave
+.. py:module:: wave_lang.kernel.wave.wave
 
 .. autoclass:: LaunchableWave
   :members:

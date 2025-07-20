@@ -15,37 +15,37 @@ import pytest
 import torch
 from torch.testing import assert_close
 import math
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
+import wave_lang.kernel as tk
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
 import sympy
 
-from iree.turbine.kernel.wave.cache import (
+from wave_lang.kernel.wave.cache import (
     is_cache_enabled,
     get_cache_manager,
     reset_cache_manager,
 )
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.mma_utils import (
+from wave_lang.kernel.wave.utils.mma_utils import (
     get_mfma_load_elems_per_thread,
     get_mfma_store_elems_per_thread,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
 )
-from iree.turbine.kernel.wave.constraints import Constraint, MMAType
-from iree.turbine.kernel.wave.templates.attention_common import AttentionShape
-from iree.turbine.kernel.wave.templates.vanilla_attention import (
+from wave_lang.kernel.wave.constraints import Constraint, MMAType
+from wave_lang.kernel.wave.templates.attention_common import AttentionShape
+from wave_lang.kernel.wave.templates.vanilla_attention import (
     get_vanilla_attention_kernel,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from ..common.utils import (
     require_e2e,
 )

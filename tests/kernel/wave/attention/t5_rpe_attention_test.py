@@ -12,22 +12,22 @@ import os
 from torch.nn import functional as F
 from torch.testing import assert_close
 
-import iree.turbine.kernel as tk
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel.wave.templates.attention_common import AttentionShape
-from iree.turbine.kernel.wave.utils.general_utils import (
+import wave_lang.kernel as tk
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.templates.attention_common import AttentionShape
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
     to_default_device,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.templates.t5_rpe_attention import (
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.templates.t5_rpe_attention import (
     get_t5_rpe_attention_kernel,
 )
 from ..common.shapes import make_shape_param

@@ -7,10 +7,10 @@
 import logging
 import pytest
 import unittest
-from iree.turbine.kernel.wave.memory_analysis.solver import (
+from wave_lang.kernel.wave.memory_analysis.solver import (
     determine_allocations_offsets,
 )
-from iree.turbine.kernel.wave.memory_analysis.visualize import (
+from wave_lang.kernel.wave.memory_analysis.visualize import (
     visualize_memory_allocations,
 )
 

@@ -13,10 +13,10 @@ import os
 import sys
 
 try:
-    import iree.turbine  # noqa
+    import wave_lang  # noqa
 except ImportError:
     sys.path.insert(0, os.path.abspath("../"))
-    import iree.turbine  # noqa
+    import wave_lang  # noqa
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information

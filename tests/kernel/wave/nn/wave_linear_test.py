@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.testing import assert_close
 
-import iree.turbine.kernel.wave.nn as wave_nn
+import wave_lang.kernel.wave.nn as wave_nn
 from ..common.utils import require_e2e
 
 

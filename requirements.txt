@@ -27,4 +27,4 @@ torchvision
 pre-commit
 
 # For scheduling in wave
-./iree/turbine/kernel/wave/scheduling/aplp
+./wave_lang/kernel/wave/scheduling/aplp

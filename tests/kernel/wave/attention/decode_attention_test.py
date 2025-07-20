@@ -7,24 +7,24 @@
 import pytest
 import torch
 import math
-import iree.turbine.kernel as tk
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.run_utils import (
+import wave_lang.kernel as tk
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.utils.torch_utils import (
+from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel.wave.templates.decode_attention import (
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.templates.decode_attention import (
     get_decode_attention_kernels,
 )
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 import os
 from torch.testing import assert_close
 from ..common.utils import (
@@ -34,10 +34,10 @@ from ..common.utils import (
     dump_generated_mlir,
 )
 from ..common.shapes import get_test_shapes
-from iree.turbine.kernel.wave.templates.gqa_decode_attention import (
+from wave_lang.kernel.wave.templates.gqa_decode_attention import (
     get_gqa_decode_attention_kernels,
 )
-from iree.turbine.kernel.wave.templates.attention_common import (
+from wave_lang.kernel.wave.templates.attention_common import (
     AttentionShape,
 )
 

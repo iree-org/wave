@@ -6,9 +6,9 @@
 
 import pytest
 import torch
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.wave.wave_sim import wave_sim
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.wave.wave_sim import wave_sim
 from torch.testing import assert_close
 
 

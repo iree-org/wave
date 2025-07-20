@@ -6,57 +6,59 @@
 
 import unittest
 import logging
-from iree.turbine.kernel.wave.scheduling.modulo_scheduling import (
+from wave_lang.kernel.wave.scheduling.modulo_scheduling import (
     ModuloScheduler,
+)
+from wave_lang.kernel.wave.scheduling.graph_utils import (
     EdgeWeight,
     Edge,
 )
 import torch.fx as fx
 import numpy as np
 import multiprocessing as mp
-from iree.turbine.kernel.wave.visualization import visualize_graph
-from iree.turbine.kernel.wave.scheduling.graph_utils import (
+from wave_lang.kernel.wave.visualization import visualize_graph
+from wave_lang.kernel.wave.scheduling.graph_utils import (
     find_strongly_connected_components,
     find_cycles_in_scc,
     all_pairs_longest_paths,
     evaluate_all_pairs_longest_paths,
 )
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel._support.tracing import CapturedTrace
-from iree.turbine.kernel._support.indexing import IndexingContext
-from iree.turbine.kernel.wave.promotion import promote_placeholders
-from iree.turbine.kernel.wave.hoisting import hoist_loop_invariant_ops
-from iree.turbine.kernel.wave.expansion.expansion import expand_graph, add_get_results
-from iree.turbine.kernel.wave.type_inference import infer_types
-from iree.turbine.kernel.wave.minimize_global_loads import minimize_global_loads
-from iree.turbine.kernel.wave.scheduling.schedule import schedule_graph
-from iree.turbine.kernel.ops.wave_ops import get_custom
-from iree.turbine.kernel.wave.analysis.index_sequence_analysis import (
+import wave_lang.kernel as tk
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel._support.tracing import CapturedTrace
+from wave_lang.kernel._support.indexing import IndexingContext
+from wave_lang.kernel.wave.promotion import promote_placeholders
+from wave_lang.kernel.wave.hoisting import hoist_loop_invariant_ops
+from wave_lang.kernel.wave.expansion.expansion import expand_graph, add_get_results
+from wave_lang.kernel.wave.type_inference import infer_types
+from wave_lang.kernel.wave.minimize_global_loads import minimize_global_loads
+from wave_lang.kernel.wave.scheduling.schedule import schedule_graph
+from wave_lang.kernel.ops.wave_ops import get_custom
+from wave_lang.kernel.wave.analysis.index_sequence_analysis import (
     set_node_indices,
     set_post_expansion_indices,
 )
-from iree.turbine.kernel.wave.utils.graph_utils import initialize_iter_args
+from wave_lang.kernel.wave.utils.graph_utils import initialize_iter_args
 from typing import Tuple, List, Dict
-from iree.turbine.kernel.wave.scheduling.verifier import (
+from wave_lang.kernel.wave.scheduling.verifier import (
     ScheduleValidator,
 )
-from iree.turbine.kernel.wave.utils.print_utils import (
+from wave_lang.kernel.wave.utils.print_utils import (
     load_schedule,
     parse_node_specs_from_schedule_file,
 )
 import os
-from iree.turbine.kernel.wave.scheduling.resources import (
+from wave_lang.kernel.wave.scheduling.resources import (
     resource_reservation_table,
     get_custom_operation_type,
     Operation,
 )
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.ops.wave_ops import Read, Write, MMA, IterArg
+from wave_lang.kernel.ops.wave_ops import Read, Write, MMA, IterArg
 
 # Map node types from schedule file to custom operation classes
 NODE_TYPE_TO_CUSTOM_OP = {

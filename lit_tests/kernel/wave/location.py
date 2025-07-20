@@ -1,13 +1,13 @@
 # RUN: python %s | FileCheck %s
 
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel._support.location_config import (
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel._support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
 )
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
 
@@ -143,7 +143,7 @@ def test_stack_trace():
 
     # A relatively high-level check for stack trace. Verify that it is represented
     # as callsite locations and that we see not only this file, but also torch fx.
-    # But not the "system frames" from iree/turbine/kernel.
+    # But not the "system frames" from wave_lang/kernel.
     #
     # CHECK-LABEL: @add_stack_trace
     # CHECK:       arith.addf
@@ -152,7 +152,7 @@ def test_stack_trace():
     # CHECK-SAME:      location.py
     # CHECK-SAME:      at callsite(
     # CHECK-SAME:        torch/fx
-    # CHECK-NOT:     iree/turbine/kernel
+    # CHECK-NOT:     wave_lang/kernel
     # CHECK:       return
 
 
@@ -176,7 +176,7 @@ def test_stack_trace_with_system():
 
     # A relatively high-level check for stack trace. Verify that it is represented
     # as callsite locations and that we see not only this file, but also torch fx
-    # and "system frames" from iree/turbine/kernel.
+    # and "system frames" from wave_lang/kernel.
     #
     # CHECK-LABEL: @add_stack_trace_with_system
     # CHECK:       arith.addf
@@ -185,7 +185,7 @@ def test_stack_trace_with_system():
     # CHECK-SAME:      location.py
     # CHECK-SAME:      at callsite(
     # CHECK-SAME:        torch/fx
-    # CHECK-SAME:     iree/turbine/kernel
+    # CHECK-SAME:     wave_lang/kernel
     # CHECK:       return
 
 
