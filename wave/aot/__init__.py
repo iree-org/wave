@@ -1,6 +1,4 @@
-"""
-Toolkit for ahead-of-time (AOT) compilation and export of PyTorch programs.
-"""
+"""Toolkit for ahead-of-time (AOT) compilation and export of PyTorch programs."""
 
 # Copyright 2023 Nod Labs, Inc
 #
@@ -13,5 +11,10 @@ from .compiled_module import *
 from .decompositions import *
 from .exporter import *
 from .fx_programs import FxPrograms, FxProgramsBuilder
-from .tensor_traits import *
 from .params import *
+from .tensor_traits import *
+
+__all__ = [
+    "FxPrograms",
+    "FxProgramsBuilder",
+]

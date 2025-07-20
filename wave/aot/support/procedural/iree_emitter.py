@@ -6,13 +6,16 @@
 
 """Python API for IREE's high-level tensor dialects."""
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
-
 import functools
+from collections.abc import Sequence
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from ....support.ir_imports import (
+from iree.turbine.support.conversions import (
+    TORCH_DTYPE_TO_IREE_TYPE,
+)
+from iree.turbine.support.ir_imports import (
     IndexType,
     IntegerType,
     IrType,
@@ -23,25 +26,19 @@ from ....support.ir_imports import (
     flow_d,
 )
 
-from ....support.conversions import (
-    TORCH_DTYPE_TO_IREE_TYPE,
-)
-
 from ..ir_utils import (
     build_index_value,
 )
-
 from .base import (
     Intrinsic,
-    current_ir_trace,
     ShapedTypeDynamicSizeSentinel,
+    current_ir_trace,
 )
-
 from .primitives import (
-    IrScalar,
     IrImmediateScalar,
-    IrTensor,
     IrImmediateTensor,
+    IrScalar,
+    IrTensor,
 )
 
 BuildableScalarValue = Union[IrScalar, Value]
@@ -49,7 +46,8 @@ BuildableTensorDimDecl = Union[int, Value]
 BuildableTensorType = IrTensor
 BuildableIndexType = Union[BuildableScalarValue, int]
 BuildableIndexLengthType = Union[
-    BuildableTensorDimDecl, Tuple[BuildableTensorDimDecl, BuildableTensorDimDecl]
+    BuildableTensorDimDecl,
+    Tuple[BuildableTensorDimDecl, BuildableTensorDimDecl],
 ]
 BuildableSliceType = Sequence[BuildableIndexLengthType]
 StaticIndexType = int
@@ -68,13 +66,14 @@ def cast_tensor_value(x: BuildableTensorType) -> IrTensor:
 
 
 def cast_index_value(
-    x: BuildableIndexType, *, constant_cache: Optional[Dict[int, Value]] = None
+    x: BuildableIndexType,
+    *,
+    constant_cache: Optional[Dict[int, Value]] = None,
 ) -> Value:
     x = unwrap_intrinsic_value(x)
     if isinstance(x, int):
         return build_index_value(x, constant_cache=constant_cache)
-    else:
-        return x
+    return x
 
 
 def cast_static_bounded_index(x: int, min_value: int, max_value: int) -> int:
@@ -82,7 +81,7 @@ def cast_static_bounded_index(x: int, min_value: int, max_value: int) -> int:
         raise ValueError(f"Expected int but got {type(x)}")
     if x < min_value or x > max_value:
         raise ValueError(
-            f"Expected int in range [{min_value}, {max_value}] but got {x}"
+            f"Expected int in range [{min_value}, {max_value}] but got {x}",
         )
     return x
 
@@ -91,7 +90,8 @@ def cast_tensor_dim_decl(
     xs: Sequence[BuildableTensorDimDecl],
 ) -> Tuple[Sequence[int], Sequence[Value]]:
     """Casts a sequence of tensor declaration dimensions to dims suitable
-    for construction of a TensorType and a sequence of dynamic dim values."""
+    for construction of a TensorType and a sequence of dynamic dim values.
+    """
     dim_decls: List[int] = []
     dynamic_dim_values: List[Value] = []
     for x in xs:
@@ -104,7 +104,7 @@ def cast_tensor_dim_decl(
             dim_decls.append(x)
         else:
             raise ValueError(
-                f"Expected a tensor dimension as a positive integer or None but got {x}"
+                f"Expected a tensor dimension as a positive integer or None but got {x}",
             )
     return dim_decls, dynamic_dim_values
 
@@ -115,7 +115,7 @@ def cast_scalar_to_element_type(scalar: Value, element_type: IrType) -> Value:
     if scalar_type == IndexType.get() and IntegerType.isinstance(element_type):
         return arith_d.IndexCastUIOp(element_type, scalar).result
     raise ValueError(
-        f"Provided splat value ({scalar_type}) does not match dtype {element_type} (and cannot be cast)"
+        f"Provided splat value ({scalar_type}) does not match dtype {element_type} (and cannot be cast)",
     )
 
 
@@ -130,7 +130,7 @@ def unwrap_intrinsic_value(x) -> Any:
         x, *rest = x.resolve_ir_values(current_ir_trace())
         if rest:
             raise ValueError(
-                f"Expected a value that has an arity of one component but for {len(rest) + 1}"
+                f"Expected a value that has an arity of one component but for {len(rest) + 1}",
             )
     return x
 
@@ -168,7 +168,9 @@ class IREEEmitter:
 
     @emitter
     def tensor_empty(
-        self, *dims: BuildableTensorDimDecl, dtype: torch.dtype = torch.float32
+        self,
+        *dims: BuildableTensorDimDecl,
+        dtype: torch.dtype = torch.float32,
     ) -> IrTensor:
         """Constructs a tensor with uninitialized values.
 
@@ -188,13 +190,16 @@ class IREEEmitter:
 
     @emitter
     def tensor_reshape(
-        self, source: BuildableTensorType, *result_dims: BuildableTensorDimDecl
+        self,
+        source: BuildableTensorType,
+        *result_dims: BuildableTensorDimDecl,
     ) -> "IrTensor":
         constant_cache: Dict[int, Value] = {}
         source = cast_tensor_value(source)
         result_dim_decls, result_dynamic_dims = cast_tensor_dim_decl(result_dims)
         result_type = RankedTensorType.get(
-            result_dim_decls, source.ir_type.element_type
+            result_dim_decls,
+            source.ir_type.element_type,
         )
         result_value = flow_d.TensorReshapeOp(
             result_type,
@@ -208,7 +213,9 @@ class IREEEmitter:
 
     @emitter
     def tensor_slice(
-        self, source: BuildableTensorType, *indices: BuildableSliceType
+        self,
+        source: BuildableTensorType,
+        *indices: BuildableSliceType,
     ) -> "IrTensor":
         """Extracts a slice of a tensor.
 
@@ -221,7 +228,7 @@ class IREEEmitter:
         rank = source.rank
         if len(indices) != rank:
             raise ValueError(
-                f"Slice indices must match the source rank. Got {len(indices)}, expected {rank}"
+                f"Slice indices must match the source rank. Got {len(indices)}, expected {rank}",
             )
         # Unpack start_indices and lengths.
         start_indices: List[BuildableIndexType] = []
@@ -237,7 +244,7 @@ class IREEEmitter:
                 lengths.append(1)
                 continue
             raise ValueError(
-                f"Slice indices expected to be a single value or a 2-tuple. Got {index_pack}"
+                f"Slice indices expected to be a single value or a 2-tuple. Got {index_pack}",
             )
 
         # Process the lengths into a result shape and input length.
@@ -265,7 +272,7 @@ class IREEEmitter:
                 result_dynamic_dims.append(length_value)
         assert len(length_values) == rank
         assert result_shape.count(ShapedTypeDynamicSizeSentinel) == len(
-            result_dynamic_dims
+            result_dynamic_dims,
         )
 
         # Process start indices.

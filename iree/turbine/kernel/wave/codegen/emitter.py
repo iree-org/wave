@@ -14,7 +14,7 @@ from ..._support.location import FileLineColInfo
 import torch.fx as fx
 
 from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.aot.support.ir_utils import (
+from wave.aot.support.ir_utils import (
     _is_float_type,
     _is_integer_like_type,
 )

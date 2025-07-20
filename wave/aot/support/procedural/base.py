@@ -5,21 +5,20 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import threading
+from collections.abc import Sequence
+from contextlib import contextmanager
 from typing import (
     Any,
     Callable,
     List,
     Optional,
-    Sequence,
 )
-
-from contextlib import contextmanager
-import threading
 
 import torch
 from torch.utils._pytree import tree_map
 
-from ....support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     F32Type,
     F64Type,
     IndexType,
@@ -56,14 +55,13 @@ class IrTrace(FunctionBuilder):
 
     def finalize(self):
         """Called when the trace is finished (popped off the stack)."""
-        pass
 
     def handle_call(self, target: "Intrinsic", args, kwargs):
-        raise NotImplementedError(f"The current trace scope does not support calls")
+        raise NotImplementedError("The current trace scope does not support calls")
 
     def handle_assignment(self, scope, target, updated_value):
         raise NotImplementedError(
-            f"The current trace scope does not support assignment"
+            "The current trace scope does not support assignment",
         )
 
 
@@ -97,17 +95,17 @@ class Intrinsic:
 
     def resolve_ir_values(self, proc_trace: "IrTrace") -> Sequence[Value]:
         raise NotImplementedError(
-            f"Cannot use {self} as an expression in a procedural function"
+            f"Cannot use {self} as an expression in a procedural function",
         )
 
     def resolve_call(self, proc_trace: "IrTrace", *args, **kwargs):
         raise NotImplementedError(
-            f"Cannot use {self} as the target of a call in a procedural function"
+            f"Cannot use {self} as the target of a call in a procedural function",
         )
 
     def resolve_assignment(self, proc_trace: "IrTrace", ir_values: Sequence[Value]):
         raise NotImplementedError(
-            f"Cannot use {self} as the target of an assignment in a procedural function"
+            f"Cannot use {self} as the target of an assignment in a procedural function",
         )
 
     # Helpers for accessing the ir_value within the current trace.
@@ -179,8 +177,8 @@ class AbstractTensor(AbstractIntrinsic, AbstractTypedef):
     """Represents a tensor of known rank and dtype."""
 
     __slots__ = [
-        "size",
         "dtype",
+        "size",
     ]
 
     def __init__(self, *size: Optional[int], dtype: torch.dtype = torch.float32):
@@ -246,7 +244,7 @@ def abstractify_single_value(value) -> AbstractTypedef:
     if isinstance(value, torch.Tensor):
         return AbstractTensor(*value.shape, dtype=value.dtype)
     raise TypeError(
-        f"Cannot convert type {value.__class__} to an abstract type: {value}"
+        f"Cannot convert type {value.__class__} to an abstract type: {value}",
     )
 
 

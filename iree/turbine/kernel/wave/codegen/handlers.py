@@ -37,7 +37,7 @@ from ...compiler.ir import (
     scf_d,
     vector_d,
 )
-from iree.turbine.aot.support.ir_utils import (
+from wave.aot.support.ir_utils import (
     _is_float_type,
     _is_integer_like_type,
     _is_signed_or_signless_type,

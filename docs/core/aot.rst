@@ -1,10 +1,10 @@
-`iree.turbine.aot`
+`wave.aot`
 =====================
 
 aot
 --------------
 
-.. automodule:: iree.turbine.aot
+.. automodule:: wave.aot
   :imported-members:
   :members:
   :undoc-members:
@@ -12,7 +12,7 @@ aot
 passes
 --------------
 
-.. automodule:: iree.turbine.aot.passes
+.. automodule:: wave.aot.passes
   :imported-members:
   :members:
   :undoc-members:
@@ -20,19 +20,19 @@ passes
 support
 --------------
 
-.. automodule:: iree.turbine.aot.support.procedural
+.. automodule:: wave.aot.support.procedural
   :imported-members:
   :members:
   :undoc-members:
 
-.. automodule:: iree.turbine.aot.support.procedural.exported_program
+.. automodule:: wave.aot.support.procedural.exported_program
   :members:
   :undoc-members:
 
 build actions
 --------------
 
-.. py:module:: iree.turbine.aot.build_actions
+.. py:module:: wave.aot.build_actions
 
 .. autofunction:: turbine_generate
 .. autoclass:: RemoteGenerator

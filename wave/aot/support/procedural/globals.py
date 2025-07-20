@@ -7,45 +7,36 @@
 
 # Global references in a module.
 
+from collections.abc import Generator, Sequence
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Generator,
-    Optional,
-    Sequence,
     Tuple,
 )
 
 import torch
-
 from torch.utils._pytree import (
     TreeSpec,
     tree_unflatten,
 )
 
-from ....support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     IrType,
     Operation,
     Value,
     util_d,
 )
-
-from ....support.logging import aot_logger as logger
+from iree.turbine.support.logging import aot_logger as logger
 
 from ..ir_utils import (
     GlobalAttributes,
     ModuleBuilder,
 )
-
 from .base import (
     AbstractScalar,
     AbstractTensor,
-    Intrinsic,
     IrTrace,
     current_ir_trace,
 )
-
 from .primitives import (
     IrScalar,
     IrTensor,
@@ -68,8 +59,7 @@ class LiveGlobalCollectionProxy:
         actual = self._raw_collection[key]
         if isinstance(actual, MaterializedGlobal):
             return actual
-        else:
-            return LiveGlobalCollectionProxy(actual)
+        return LiveGlobalCollectionProxy(actual)
 
     def __setitem__(self, key, value):
         item = self._raw_collection[key]
@@ -77,7 +67,7 @@ class LiveGlobalCollectionProxy:
             current_ir_trace().handle_assignment(self, item, value)
         else:
             raise AttributeError(
-                f"Globals collection {self._raw_collection.__class__} only supports assignment of leaves"
+                f"Globals collection {self._raw_collection.__class__} only supports assignment of leaves",
             )
 
     def __len__(self):
@@ -115,7 +105,9 @@ class GlobalsDef:
                 mapping = module_builder.global_ref_tracker.track(value)
                 if not mapping.is_empty:
                     logger.debug(
-                        "IGNORE EXISTING TRACKED TENSOR(%s): %r", fq_name, mapping
+                        "IGNORE EXISTING TRACKED TENSOR(%s): %r",
+                        fq_name,
+                        mapping,
                     )
                     flat_globals.append(mapping.value)
                     continue
@@ -140,7 +132,7 @@ class GlobalsDef:
                 logger.debug("TRACK NEW TENSOR(%s): %r", fq_name, mapping)
                 flat_globals.append(mapping.value)
                 continue
-            elif isinstance(value, AbstractTensor):
+            if isinstance(value, AbstractTensor):
                 global_type = value.get_ir_type(module_builder)
                 (
                     actual_symbol_name,
@@ -159,10 +151,10 @@ class GlobalsDef:
                         global_op=global_op,
                         global_type=global_type,
                         dtype=value.dtype,
-                    )
+                    ),
                 )
                 continue
-            elif isinstance(value, AbstractScalar):
+            if isinstance(value, AbstractScalar):
                 global_type = value.get_ir_type(module_builder)
                 (
                     actual_symbol_name,
@@ -180,7 +172,7 @@ class GlobalsDef:
                         symbol_name=actual_symbol_name,
                         global_op=global_op,
                         global_type=global_type,
-                    )
+                    ),
                 )
                 continue
 
@@ -188,8 +180,7 @@ class GlobalsDef:
         tree_globals = tree_unflatten(flat_globals, self.schema())
         if isinstance(tree_globals, MaterializedGlobal):
             return tree_globals
-        else:
-            return LiveGlobalCollectionProxy(tree_globals)
+        return LiveGlobalCollectionProxy(tree_globals)
 
 
 class MaterializedGlobal:
@@ -205,10 +196,10 @@ class IrGlobalScalar(IrScalar, MaterializedGlobal):
     """An IrScalar that is loaded from a global and associated with its aggregate."""
 
     __slots__ = [
+        "export_name",
         "global_op",
         "global_type",
         "info",
-        "export_name",
         "symbol_name",
     ]
 
@@ -235,12 +226,12 @@ class IrGlobalScalar(IrScalar, MaterializedGlobal):
     def resolve_assignment(self, proc_trace: "IrTrace", ir_values: Sequence[Value]):
         if len(ir_values) != 1:
             raise ValueError(
-                f"Can only assign a single value to a global. Got {len(ir_values)}"
+                f"Can only assign a single value to a global. Got {len(ir_values)}",
             )
         source_ir_type = ir_values[0].type
         if source_ir_type != self.ir_type:
             raise TypeError(
-                f"Cannot assign to a global with a different type: {self.ir_type} != {source_ir_type}"
+                f"Cannot assign to a global with a different type: {self.ir_type} != {source_ir_type}",
             )
         with proc_trace.loc, proc_trace.ip:
             util_d.GlobalStoreOp(ir_values[0], self.symbol_name)
@@ -259,9 +250,9 @@ class IrGlobalTensor(IrTensor, MaterializedGlobal):
     """An IrScalar that is loaded from a global and associated with its aggregate."""
 
     __slots__ = [
+        "export_name",
         "global_op",
         "info",
-        "export_name",
         "symbol_name",
     ]
 
@@ -289,12 +280,12 @@ class IrGlobalTensor(IrTensor, MaterializedGlobal):
     def resolve_assignment(self, proc_trace: "IrTrace", ir_values: Sequence[Value]):
         if len(ir_values) != 1:
             raise ValueError(
-                f"Can only assign a single value to a global. Got {len(ir_values)}"
+                f"Can only assign a single value to a global. Got {len(ir_values)}",
             )
         source_ir_type = ir_values[0].type
         if source_ir_type != self.ir_type:
             raise TypeError(
-                f"Cannot assign to a global with a different type: {self.ir_type} != {source_ir_type}"
+                f"Cannot assign to a global with a different type: {self.ir_type} != {source_ir_type}",
             )
         with proc_trace.loc, proc_trace.ip:
             util_d.GlobalStoreOp(ir_values[0], self.symbol_name)

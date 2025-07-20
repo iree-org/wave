@@ -5,42 +5,39 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-import torch.nn as nn
-
-from ..support.procedural import (
-    AbstractTypedef,
-    Abstractifiable,
-    GlobalsDef,
-    TreeAbstractifiable,
-    abstractify_single_value,
-)
-
-from ..support.ir_utils import (
-    NameMapCallback,
-    GlobalAttributes,
-)
-
+from torch import nn
 from torch.utils._pytree import (
     TreeSpec,
     tree_flatten,
     tree_map,
 )
 
+from ..support.ir_utils import (
+    GlobalAttributes,
+    NameMapCallback,
+)
+from ..support.procedural import (
+    Abstractifiable,
+    AbstractTypedef,
+    GlobalsDef,
+    TreeAbstractifiable,
+    abstractify_single_value,
+)
 
 __all__ = [
+    "export_buffers",
     "export_global",
     "export_global_tree",
     "export_parameters",
-    "export_buffers",
 ]
 
 
 class export_global(GlobalsDef, Abstractifiable):
     """Exports a single global into a CompiledModule."""
 
-    __slots__ = ["_name", "_value", "_schema"]
+    __slots__ = ["_name", "_schema", "_value"]
 
     def __init__(
         self,
@@ -104,7 +101,7 @@ class export_global_tree(GlobalsDef, Abstractifiable):
         self._items, self._schema = tree_flatten(tree)
         self._names, _ = tree_flatten(_transform_tree_to_names("", tree))
         assert len(self._items) == len(
-            self._names
+            self._names,
         ), f"Name and value tree are different sizes: {len(self._items)} != {len(self._names)}"
 
     def items(self):
@@ -235,10 +232,9 @@ def _transform_tree_to_names(prefix: str, tree):
         return tree.__class__(
             (k, _transform_tree_to_names(join(k), v)) for k, v in tree.items()
         )
-    elif isinstance(tree, (list, tuple)):
+    if isinstance(tree, (list, tuple)):
         return tree.__class__(
             _transform_tree_to_names(join(str(index)), v)
             for index, v in enumerate(tree)
         )
-    else:
-        return prefix
+    return prefix

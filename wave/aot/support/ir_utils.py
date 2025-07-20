@@ -5,29 +5,28 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Callable, Dict, Optional, Sequence, Tuple
-
-from dataclasses import dataclass
-from pathlib import Path
 import tempfile
-from itertools import zip_longest
+from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import partial
+from itertools import zip_longest
+from pathlib import Path
+from typing import Callable, Dict, Optional, Tuple
+from wave.dynamo.type_conversion import (
+    NativeTypeConverter,
+)
 
 import numpy as np
 import torch
 
 from iree.compiler.extras.fx_importer import (
     ContextCache,
-    Empty,
-    EmptyType,
     RefTracker,
 )
-
-from wave.dynamo.type_conversion import (
-    NativeTypeConverter,
+from iree.turbine.support.conversions import (
+    TORCH_DTYPE_TO_IREE_TYPE,
 )
-
-from ...support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     ArrayAttr,
     Attribute,
     BF16Type,
@@ -38,13 +37,13 @@ from ...support.ir_imports import (
     F16Type,
     F32Type,
     F64Type,
+    Float4E2M1FNType,
+    Float6E2M3FNType,
     Float8E4M3FNType,
     Float8E4M3FNUZType,
-    Float8E5M2Type,
     Float8E5M2FNUZType,
+    Float8E5M2Type,
     Float8E8M0FNUType,
-    Float6E2M3FNType,
-    Float4E2M1FNType,
     FloatAttr,
     FunctionType,
     IndexType,
@@ -65,12 +64,7 @@ from ...support.ir_imports import (
     func_d,
     tensor_d,
 )
-
-from ...support.conversions import (
-    TORCH_DTYPE_TO_IREE_TYPE,
-)
-
-from ...support.logging import aot_logger as logger
+from iree.turbine.support.logging import aot_logger as logger
 
 from ..tensor_traits import (
     DeviceAffinity,
@@ -91,9 +85,9 @@ class GlobalAttributes:
     """Settings for how to initialize the global."""
 
     __slots__ = [
-        "mutable",
         "external",
         "external_scope",
+        "mutable",
         "name_mapper",
         "noinline",
         "uninitialized",
@@ -110,11 +104,11 @@ class GlobalAttributes:
     ):
         if external and uninitialized:
             raise ValueError(
-                f"Globals with external=True cannot also have uninitialized=True"
+                "Globals with external=True cannot also have uninitialized=True",
             )
         if uninitialized and not mutable:
             raise ValueError(
-                f"Globals with uninitialized=True must also be mutable=True"
+                "Globals with uninitialized=True must also be mutable=True",
             )
         self.mutable = mutable
         self.external = external
@@ -131,7 +125,8 @@ class GlobalAttributes:
         return name
 
     def infer_external_from_tensor(
-        self, t: torch.Tensor
+        self,
+        t: torch.Tensor,
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """If externality is not specified, infers it from the tensor."""
         # We check for the first item in a list because this lets us in the
@@ -144,9 +139,9 @@ class GlobalAttributes:
             try:
                 external_scope = trait.external_scope
                 external_name = trait.external_name
-            except AttributeError as e:
+            except AttributeError:
                 raise AttributeError(
-                    f"Tensor defines _is_turbine_external_tensor but not other fields: {type(t)} = {t}"
+                    f"Tensor defines _is_turbine_external_tensor but not other fields: {type(t)} = {t}",
                 )
             return (
                 True,
@@ -172,22 +167,25 @@ class ModuleBuilder:
     """Wrapper around module and IR accounting for a module being built."""
 
     __slots__ = [
+        "_auto_symbol_counts",
         "body",
         "cache",
         "context",
         "fx_py_attr_tracker",
-        "last_global_op",
+        "global_ref_tracker",
         "ip",
+        "last_global_op",
         "module_op",
+        "native_type_converter",
         "options",
         "symbol_table",
-        "global_ref_tracker",
-        "native_type_converter",
-        "_auto_symbol_counts",
     ]
 
     def __init__(
-        self, module_op: Operation, *, options: Optional[ModuleBuilderOptions] = None
+        self,
+        module_op: Operation,
+        *,
+        options: Optional[ModuleBuilderOptions] = None,
     ):
         self.module_op = module_op
         self.options = options or ModuleBuilderOptions()
@@ -299,12 +297,12 @@ class ModuleBuilder:
             if device:
                 if device.queues is None:
                     ir_attrs["stream.affinity"] = Attribute.parse(
-                        f"#hal.device.promise<@__device_{device.ordinal}>"
+                        f"#hal.device.promise<@__device_{device.ordinal}>",
                     )
                 else:
                     queues = ", ".join(device.queues)
                     ir_attrs["stream.affinity"] = Attribute.parse(
-                        f"#hal.device.promise<@__device_{device.ordinal}, [{queues}]>"
+                        f"#hal.device.promise<@__device_{device.ordinal}, [{queues}]>",
                     )
 
             if external:
@@ -314,20 +312,20 @@ class ModuleBuilder:
                     external_name
                     if external_name is not None
                     else attrs.map_name(
-                        logical_name if logical_name is not None else symbol_name
+                        logical_name if logical_name is not None else symbol_name,
                     )
                 )
                 external_name_attr = StringAttr.get(external_name)
                 # TODO: Have real Python builders for this.
                 ir_attrs["initial_value"] = Attribute.parse(
-                    f"#stream.parameter.named<{external_scope_attr}::{external_name_attr}> : {tensor_type}"
+                    f"#stream.parameter.named<{external_scope_attr}::{external_name_attr}> : {tensor_type}",
                 )
             elif attrs.uninitialized:
                 # Emit unitialized initial_value to signal that the memory
                 # is valid but has undefined contents.
                 # TODO: Have real Python builders for this.
                 ir_attrs["initial_value"] = Attribute.parse(
-                    f"#util.uninitialized : {tensor_type}"
+                    f"#util.uninitialized : {tensor_type}",
                 )
             else:
                 # Emit inline initialized.
@@ -337,7 +335,9 @@ class ModuleBuilder:
                 contents = memoryview(array)  # type: ignore
                 blob_name = symbol_name
                 elements_attr = DenseResourceElementsAttr.get_from_buffer(
-                    contents, blob_name, tensor_type
+                    contents,
+                    blob_name,
+                    tensor_type,
                 )
                 ir_attrs["initial_value"] = elements_attr
 
@@ -375,12 +375,12 @@ class ModuleBuilder:
                 # is valid but has undefined contents.
                 # TODO: Have real Python builders for this.
                 ir_attrs["initial_value"] = Attribute.parse(
-                    f"#util.uninitialized : {global_type}"
+                    f"#util.uninitialized : {global_type}",
                 )
             else:
                 # Initialized by default.
                 ir_attrs["initial_value"] = self._create_initial_value_for_type(
-                    global_type
+                    global_type,
                 )
             global_op = Operation.create("util.global", attributes=ir_attrs)
             self.symbol_table.insert(global_op)
@@ -397,33 +397,32 @@ class ModuleBuilder:
             rtt = RankedTensorType(t)
             if not rtt.has_static_shape:
                 raise ValueError(
-                    "Cannot create initialization value for dynamic shaped tensor"
+                    "Cannot create initialization value for dynamic shaped tensor",
                 )
             element_attr = self._create_initial_value_for_type(rtt.element_type)
             return DenseElementsAttr.get_splat(t, element_attr)
-        elif IntegerType.isinstance(t):
+        if IntegerType.isinstance(t):
             return IntegerAttr.get(t, 0)
-        elif F32Type.isinstance(t) or F64Type.isinstance(t) or F16Type.isinstance(t):
+        if F32Type.isinstance(t) or F64Type.isinstance(t) or F16Type.isinstance(t):
             # TODO(#170): There should be a common way to check if a FloatType.
             return FloatAttr.get(t, 0.0)
-        elif IndexType.isinstance(t):
+        if IndexType.isinstance(t):
             return IntegerAttr.get(IndexType.get(), 0)
-        else:
-            raise ValueError(
-                f"Cannot create a default initialization value for type {t}"
-            )
+        raise ValueError(
+            f"Cannot create a default initialization value for type {t}",
+        )
 
 
 class FunctionBuilder:
     """Helpers for building function bodies."""
 
     __slots__ = [
-        "module_builder",
-        "func_op",
         "context",
+        "func_op",
         "ip",
-        "return_types",
         "loc",
+        "module_builder",
+        "return_types",
     ]
 
     def __init__(
@@ -448,7 +447,7 @@ class FunctionBuilder:
                 if value_types != self.return_types:
                     raise ValueError(
                         f"Multi-return function must return same types. "
-                        f"{value_types} vs {self.return_types}"
+                        f"{value_types} vs {self.return_types}",
                     )
                 return
             self.return_types = value_types
@@ -459,7 +458,9 @@ class FunctionBuilder:
                 self.func_op.verify()
             except MLIRError as e:
                 self.module_builder.handle_mlir_error(
-                    self.func_op, e, "created function does not verify"
+                    self.func_op,
+                    e,
+                    "created function does not verify",
                 )
                 raise
 
@@ -474,7 +475,8 @@ def build_index_attribute(value: int) -> IntegerAttr:
 
 
 def build_index_value(
-    value: int, constant_cache: Optional[dict[int, Value]] = None
+    value: int,
+    constant_cache: Optional[dict[int, Value]] = None,
 ) -> Value:
     if constant_cache is not None and value in constant_cache:
         return constant_cache[value]
@@ -485,7 +487,9 @@ def build_index_value(
 
 
 def build_tensor_dim_value(
-    t: Value, dim: int, constant_cache: Optional[dict[int, Value]] = None
+    t: Value,
+    dim: int,
+    constant_cache: Optional[dict[int, Value]] = None,
 ) -> Value:
     dim_value = build_index_value(dim, constant_cache=constant_cache)
     return tensor_d.DimOp(t, dim_value).result
@@ -564,10 +568,12 @@ def get_conversion_op(src_elem_type, dst_elem_type, fastmath=None):
 
 
 def _attribute_from_device_affinity(
-    affinity: DeviceAffinity, context: Context
+    affinity: DeviceAffinity,
+    context: Context,
 ) -> Attribute:
     return Attribute.parse(
-        f'#hal.device.promise<@"__device_{affinity.ordinal}">', context
+        f'#hal.device.promise<@"__device_{affinity.ordinal}">',
+        context,
     )
 
 
@@ -583,8 +589,9 @@ def attributes_from_argument_device_affinities(
         (
             {
                 "iree.abi.affinity": _attribute_from_device_affinity(
-                    affinities[i], context
-                )
+                    affinities[i],
+                    context,
+                ),
             }
             if i in affinities
             else {}
@@ -594,7 +601,8 @@ def attributes_from_argument_device_affinities(
 
 
 def update_func_op_argument_attributes(
-    func_op: func_d.FuncOp, attributes: list[dict[str, Attribute]]
+    func_op: func_d.FuncOp,
+    attributes: list[dict[str, Attribute]],
 ):
     if func_d.ARGUMENT_ATTRIBUTE_NAME not in func_op.attributes:
         mutable_arg_attrs: list[dict[str, Attribute]] = [

@@ -7,11 +7,11 @@
 
 # Concrete tracer for running buildable code.
 
+from collections.abc import Sequence
 from typing import (
     Any,
     Callable,
     List,
-    Sequence,
 )
 
 from torch.utils._pytree import (
@@ -20,18 +20,17 @@ from torch.utils._pytree import (
     treespec_dumps,
 )
 
-from ....support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     DictAttr,
     Location,
     StringAttr,
     Value,
     func_d,
 )
+from iree.turbine.support.logging import aot_logger as logger
 
-from ....support.logging import aot_logger as logger
-
+from ...tensor_traits import DeviceAffinity
 from ..ir_utils import ModuleBuilder, attributes_from_argument_device_affinities
-
 from .base import (
     AbstractIntrinsic,
     Intrinsic,
@@ -39,12 +38,9 @@ from .base import (
     ProcedureTraceError,
     new_ir_trace_scope,
 )
-
 from .globals import (
     LiveGlobalCollectionProxy,
 )
-
-from ...tensor_traits import DeviceAffinity
 
 ###############################################################################
 # Concrete procedure building IrTracer.
@@ -55,8 +51,8 @@ class ProcedureTrace(IrTrace):
     """Captures execution of a Python func into IR."""
 
     __slots__ = [
-        "proxy_posargs",
         "proxy_kwargs",
+        "proxy_posargs",
     ]
 
     def __init__(
@@ -99,25 +95,30 @@ class ProcedureTrace(IrTrace):
                 )
             ]
             _, func_op = module_builder.create_func_op(
-                symbol_name, argument_ir_types, argument_attributes=argument_attributes
+                symbol_name,
+                argument_ir_types,
+                argument_attributes=argument_attributes,
             )
 
         # Bind proxy arguments to an IR value.
         ir_proxy_arguments_flat = []
         for ir_value, arg_proxy_type in zip(
-            func_op.body.blocks[0].arguments, arguments_flat
+            func_op.body.blocks[0].arguments,
+            arguments_flat,
         ):
             ir_proxy_arguments_flat.append(arg_proxy_type.create_intrinsic(ir_value))
 
         # Unflatten.
         proxy_posargs, proxy_kwargs = tree_unflatten(
-            ir_proxy_arguments_flat, arguments_tree_def
+            ir_proxy_arguments_flat,
+            arguments_tree_def,
         )
 
         # Metadata.
         if arguments_flat:
             func_op.attributes["torch.args_schema"] = StringAttr.get(
-                treespec_dumps(arguments_tree_def), context=module_builder.context
+                treespec_dumps(arguments_tree_def),
+                context=module_builder.context,
             )
 
         return ProcedureTrace(
@@ -140,7 +141,8 @@ class ProcedureTrace(IrTrace):
                 for py_value in flat_return_py_values:
                     flat_return_ir_values.extend(convert_py_value_to_ir(self, py_value))
                 self.func_op.attributes["torch.return_schema"] = StringAttr.get(
-                    treespec_dumps(schema), context=self.context
+                    treespec_dumps(schema),
+                    context=self.context,
                 )
                 self.emit_return(*flat_return_ir_values)
 
@@ -151,7 +153,10 @@ class ProcedureTrace(IrTrace):
 
     def handle_assignment(self, scope, target, updated_value):
         logger.debug(
-            "ASSIGN %r.%r = %r", scope.__class__, target.__class__, updated_value
+            "ASSIGN %r.%r = %r",
+            scope.__class__,
+            target.__class__,
+            updated_value,
         )
         self._recursive_assign(target, updated_value, set())
 
@@ -162,7 +167,7 @@ class ProcedureTrace(IrTrace):
         # Check for cycles.
         target_id = id(target)
         if target_id in encountered_set:
-            raise TypeError(f"Cycle in tree assignment target")
+            raise TypeError("Cycle in tree assignment target")
         encountered_set.add(target_id)
 
         # Leaves/terminals.
@@ -170,7 +175,7 @@ class ProcedureTrace(IrTrace):
             if not isinstance(source, Intrinsic):
                 raise TypeError(
                     f"Cannot assign mismatched leaf types in a tree: "
-                    f"{target.__class__} vs {source.__class__}"
+                    f"{target.__class__} vs {source.__class__}",
                 )
             leaf_values = source.resolve_ir_values(self)
             target.resolve_assignment(self, leaf_values)
@@ -180,13 +185,13 @@ class ProcedureTrace(IrTrace):
         if isinstance(target, dict):
             if not isinstance(source, dict):
                 raise TypeError(
-                    f"Mismatched dict assignment in a tree: {target.__class__} vs {source.__class__}"
+                    f"Mismatched dict assignment in a tree: {target.__class__} vs {source.__class__}",
                 )
             target_keys = target.keys()
             source_keys = source.keys()
             if target_keys != source_keys:
                 raise TypeError(
-                    f"Mismatched dict keys in tree assignment: {target_keys} vs {source_keys}"
+                    f"Mismatched dict keys in tree assignment: {target_keys} vs {source_keys}",
                 )
             for k in target_keys:
                 target_child = target[k]
@@ -199,19 +204,20 @@ class ProcedureTrace(IrTrace):
             if not isinstance(source, (list, tuple)):
                 if len(target) != len(source):
                     raise TypeError(
-                        f"Mismatched sequence length in tree assignment: {len(target)} vs {len(source)}"
+                        f"Mismatched sequence length in tree assignment: {len(target)} vs {len(source)}",
                     )
             for target_child, source_child in zip(target, source):
                 self._recursive_assign(target_child, source_child, encountered_set)
             return
 
         raise TypeError(
-            f"Cannot recursively assign through a container of {target.__class__}"
+            f"Cannot recursively assign through a container of {target.__class__}",
         )
 
 
 def convert_py_value_to_ir(
-    proc_trace: ProcedureTrace, py_value: Any
+    proc_trace: ProcedureTrace,
+    py_value: Any,
 ) -> Sequence[Value]:
     """Given procedurally traced python values, type check and convert to IR."""
     if isinstance(py_value, Intrinsic):
@@ -219,7 +225,7 @@ def convert_py_value_to_ir(
     if isinstance(py_value, Value):
         return [py_value]
     raise TypeError(
-        f"Illegal type passed in procedural trace: {py_value.__class__} ({py_value})"
+        f"Illegal type passed in procedural trace: {py_value.__class__} ({py_value})",
     )
 
 

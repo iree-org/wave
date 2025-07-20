@@ -4,39 +4,38 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import overload, Any, Dict, List, Optional, Sequence, Tuple, Type, Union
 import io
-from pathlib import Path
 import platform
 import warnings
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Type, Union, overload
 
 import torch
 
 from iree.compiler.api import (
+    Output,
     Session,
     Source,
-    Output,
 )
-
-from ..support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     Context,
     Operation,
 )
 
+from . import decompositions
 from .builtins import *
 from .compiled_module import (
     CompiledModule,
-    ModuleBuilderOptions,
     ImportPhase,
+    ModuleBuilderOptions,
 )
 from .fx_programs import FxPrograms
-from . import decompositions
-
 from .tensor_traits import DeviceAffinity
 
 __all__ = [
-    "export",
     "ExportOutput",
+    "export",
 ]
 
 _is_windows = platform.system() == "Windows"
@@ -86,6 +85,7 @@ class ExportOutput:
             file_path: Path to save the file. If it has a ".mlirbc"
               extension, it will be saved as bytecode. Otherwise as
               text.
+
         """
         file_path = Path(file_path)
         with open(file_path, "wb") as f:
@@ -123,6 +123,7 @@ class ExportOutput:
           None unless if `save_to=None`, in which case, we return the backing compiler API
           Ouptut object. It can be queried for its backing memory via its `map_memory()`
           method.
+
         """
         return_memory_view = False
         if save_to is None:
@@ -163,8 +164,7 @@ class ExportOutput:
         output.keep()
         if return_memory_view:
             return output
-        else:
-            return None
+        return None
 
 
 @overload
@@ -186,13 +186,11 @@ def export(
     This is done by first invoking torch.export.export with args, kwargs,
     and dynamic_shapes.
     """
-    ...
 
 
 @overload
 def export(compiled_module: Type[CompiledModule], /) -> ExportOutput:
     """Exports a CompiledModule and returns the output."""
-    ...
 
 
 @overload
@@ -205,7 +203,6 @@ def export(
     arg_device: dict[int, DeviceAffinity] | None = None,
 ) -> ExportOutput:
     """Exports a single entry-point module consisting of an ExportedProgram."""
-    ...
 
 
 @overload
@@ -216,7 +213,6 @@ def export(
     module_name: Optional[str] = None,
 ) -> ExportOutput:
     """Exports a multi entry-point ExportedProgram."""
-    ...
 
 
 def export(
@@ -260,19 +256,20 @@ def export(
     Returns:
       An ExportOutput object that wraps the compilation and provides
       easy access.
+
     """
     if len(example_args) > 0:
         warnings.warn(
             DeprecationWarning(
-                "extra `example_args` positional parameters are deprecated: pass `args=tuple(...)` instead."
-            )
+                "extra `example_args` positional parameters are deprecated: pass `args=tuple(...)` instead.",
+            ),
         )
 
     if not strict_export:
         warnings.warn(
             "When strict_export == False, Python interpreter is used and code will execute exactly as it would in eager mode. "
             "Therefore, graph optimizations and safety are not garaunteed to be at the same level as TorchDynamo. "
-            "This is an experimental feature in PyTorch that the IREE Turbine project is still evaluating. Please report issues or experiences."
+            "This is an experimental feature in PyTorch that the IREE Turbine project is still evaluating. Please report issues or experiences.",
         )
 
     from .compiled_module import ExportTargetDef
@@ -304,7 +301,7 @@ def export(
             args = example_args
         elif len(example_args) > 0:
             raise ValueError(
-                "Cannot pass args= and positional example_args at the same time"
+                "Cannot pass args= and positional example_args at the same time",
             )
         nn_module = mdl
         exported_program = torch.export.export(
@@ -326,7 +323,7 @@ def export(
                 (function_name or "main"): ExportTargetDef(
                     exported_program,
                     arg_device=arg_device,
-                )
+                ),
             },
             export_name=module_name or "module",
             options=ModuleBuilderOptions(

@@ -5,21 +5,20 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
-
 import enum
 import inspect
 import logging
-from pathlib import Path
 import re
-import weakref
 import sys
+import weakref
+from collections.abc import Generator
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple, Union
+from wave.transforms.general.custom_op_expansion import ExpandCustomOpsPass
 
 from torch.export import ExportedProgram
 
-from . import builtins
-
-from ..support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     Context,
     Location,
     MLIRError,
@@ -28,24 +27,20 @@ from ..support.ir_imports import (
     PassManager,
     StringAttr,
 )
-from ..support.logging import aot_logger as logger
-from wave.transforms.general.custom_op_expansion import ExpandCustomOpsPass
+from iree.turbine.support.logging import aot_logger as logger
 
+from . import builtins
+from .support.ir_utils import (
+    ModuleBuilder,
+    ModuleBuilderOptions,
+)
 from .support.procedural import (
     GlobalsDef,
     ProcedureTrace,
     current_ir_trace,
 )
-
 from .support.procedural.exported_program import import_exported_program
-
-from .support.ir_utils import (
-    ModuleBuilder,
-    ModuleBuilderOptions,
-)
-
 from .tensor_traits import DeviceAffinity
-
 
 __all__ = [
     "CompiledModule",
@@ -83,7 +78,7 @@ class ImportPhase(enum.IntEnum):
         if spec not in ImportPhase.__members__:
             raise ValueError(
                 f"For import_phase= argument, expected one of: "
-                f"{', '.join(ImportPhase.__members__.keys())}"
+                f"{', '.join(ImportPhase.__members__.keys())}",
             )
         return ImportPhase[spec]
 
@@ -125,11 +120,11 @@ class ExportTargetDef:
 
 class ExportProcDef:
     __slots__ = [
+        "arg_device",
         "callable",
         "export_name",
-        "signature",
         "file_line_loc",
-        "arg_device",
+        "signature",
     ]
 
     def __init__(
@@ -258,7 +253,9 @@ class CompiledModuleClassInfo:
         # Promote a torch ExportedProgram to an ExportedProgramDef.
         if isinstance(value, ExportedProgram):
             value = ExportedProgramDef(
-                value, export_name=key, public=not key.startswith("_")
+                value,
+                export_name=key,
+                public=not key.startswith("_"),
             )
 
         # Detect our own descriptors.
@@ -277,7 +274,8 @@ class CompiledModuleClassInfo:
             self.add_export(key, value)
             return value
         if isinstance(value, ExportTargetDef) and isinstance(
-            value.target, ExportedProgram
+            value.target,
+            ExportedProgram,
         ):
             value = ExportedProgramDef(
                 value.target,
@@ -298,8 +296,7 @@ class CompiledModuleClassInfo:
             return self.def_export_proc(key, value)
 
         raise TypeError(
-            f"cannot set arbitrary Python value '{key}' on "
-            f"compiled module: {value!r}"
+            f"cannot set arbitrary Python value '{key}' on compiled module: {value!r}",
         )
 
     def def_export_proc(
@@ -322,7 +319,7 @@ class CompiledModuleClassInfo:
         sig = inspect.signature(f)
         if len(sig.parameters) < 1:
             raise TypeError(
-                f"export proc '{name}' is expected to have a 'self' parameter"
+                f"export proc '{name}' is expected to have a 'self' parameter",
             )
 
         # By default, we discover signature details from default values
@@ -337,7 +334,7 @@ class CompiledModuleClassInfo:
                 and param.kind != inspect.Parameter.POSITIONAL_OR_KEYWORD
             ):
                 raise TypeError(
-                    f"exported functions only support positional parameters"
+                    "exported functions only support positional parameters",
                 )
             param_desc = param.default
             if param_desc is inspect.Parameter.empty:
@@ -345,7 +342,7 @@ class CompiledModuleClassInfo:
                 # See: https://github.com/nod-ai/SHARK-ModelDev/issues/126
                 raise TypeError(
                     f"export function {name} missing required default value annotation "
-                    f"for '{param.name}'"
+                    f"for '{param.name}'",
                 )
             input_sig.append(param_desc)
 
@@ -365,13 +362,15 @@ class CompiledModuleInstanceInfo:
 
     __slots__ = [
         "class_info",
+        "current_import_phase",
         "module_builder",
         "shadow_dict",
-        "current_import_phase",
     ]
 
     def __init__(
-        self, class_info: CompiledModuleClassInfo, module_builder: ModuleBuilder
+        self,
+        class_info: CompiledModuleClassInfo,
+        module_builder: ModuleBuilder,
     ):
         self.class_info = class_info
         self.module_builder = module_builder
@@ -386,10 +385,12 @@ class CompiledModuleInstanceInfo:
 ################################################################################
 
 _all_compiled_module_class_infos: weakref.WeakKeyDictionary[
-    "CompiledModuleMeta", CompiledModuleClassInfo
+    "CompiledModuleMeta",
+    CompiledModuleClassInfo,
 ] = weakref.WeakKeyDictionary()
 _all_compiled_module_instance_infos: weakref.WeakKeyDictionary[
-    "CompiledModule", CompiledModuleInstanceInfo
+    "CompiledModule",
+    CompiledModuleInstanceInfo,
 ] = weakref.WeakKeyDictionary()
 
 
@@ -408,7 +409,7 @@ def _blackhole_instance_attribute(self):
 
 
 def _uncallable_public_export(*args, **kwargs):
-    raise RuntimeError(f"Calls to exported functions not yet supported")
+    raise RuntimeError("Calls to exported functions not yet supported")
 
 
 _COMPILED_MODULE_API_ATTRIBUTES = [
@@ -451,7 +452,8 @@ class CompiledModuleMeta(type):
         ir_module_name = _derive_ir_module_name(name, export_name)
         logger.debug("Create new CompiledModule: %s", ir_module_name)
         info = CompiledModuleClassInfo(
-            ir_module_name=ir_module_name, options=options or ModuleBuilderOptions()
+            ir_module_name=ir_module_name,
+            options=options or ModuleBuilderOptions(),
         )
 
         # Process that attributes that were set as part of class definition.
@@ -524,7 +526,11 @@ class CompiledModule(metaclass=CompiledModuleMeta):
         ```
         """
         return CompiledModuleMeta(
-            name, (cls,), dct, export_name=export_name, options=options
+            name,
+            (cls,),
+            dct,
+            export_name=export_name,
+            options=options,
         )
 
     @staticmethod
@@ -539,7 +545,7 @@ class CompiledModule(metaclass=CompiledModuleMeta):
     def get_module_builder(inst: "CompiledModule") -> Operation:
         if not isinstance(inst, CompiledModule):
             raise ValueError(
-                f"Expected a CompiledModule instance but got: {inst.__class__}"
+                f"Expected a CompiledModule instance but got: {inst.__class__}",
             )
         info = CompiledModule.get_info(inst)
         return info.module_builder
@@ -550,7 +556,8 @@ class CompiledModule(metaclass=CompiledModuleMeta):
 
     @staticmethod
     def run_import(
-        inst: "CompiledModule", import_to: Union[ImportPhase, str, None] = "import"
+        inst: "CompiledModule",
+        import_to: Union[ImportPhase, str, None] = "import",
     ):
         import_to = ImportPhase.parse(import_to)
         info = CompiledModule.get_info(inst)
@@ -586,13 +593,16 @@ class CompiledModule(metaclass=CompiledModuleMeta):
 
     @staticmethod
     def run_pass_pipeline(
-        inst: "CompiledModule", pipeline: str, enable_ir_printing: bool = False
+        inst: "CompiledModule",
+        pipeline: str,
+        enable_ir_printing: bool = False,
     ):
         """Runs an arbitrary pass pipeline against the current IR.
 
         Args:
           pipeline: The text format pass pipeline as supported by PassManager.parse.
           enable_ir_printing: Enables print-after-all to stderr.
+
         """
         logger.debug("Run pass pipeline: %s", pipeline)
         module_op = CompiledModule.get_mlir_module(inst)
@@ -619,6 +629,7 @@ class CompiledModule(metaclass=CompiledModuleMeta):
         Args:
           path: The file path to write to. If the extension is ".mlirbc", it
             will be written as bytecode.
+
         """
         path = Path(path)
         bytecode = path.suffix == ".mlirbc"
@@ -638,7 +649,8 @@ class CompiledModule(metaclass=CompiledModuleMeta):
     ) -> Callable:
         """Annotate an export target function.
         This annotation is only required when additional information needs to be
-        provided."""
+        provided.
+        """
 
         def _decorator(f: Callable):
             return ExportTargetDef(f, arg_device=arg_device)
@@ -687,7 +699,8 @@ class CompiledModule(metaclass=CompiledModuleMeta):
                 module = Module.create(loc)
                 module_op = module.operation
                 module_op.attributes["sym_name"] = StringAttr.get(
-                    class_info.ir_module_name, context=context
+                    class_info.ir_module_name,
+                    context=context,
                 )
         module_builder = ModuleBuilder(module_op, options=class_info.options)
         info = CompiledModuleInstanceInfo(class_info, module_builder=module_builder)
@@ -778,5 +791,4 @@ def _to_snake_case(s: str) -> str:
 def _strip_suffix(s: str, optional_suffix: str) -> str:
     if s.endswith(optional_suffix):
         return s[0 : len(s) - len(optional_suffix)]
-    else:
-        return s
+    return s

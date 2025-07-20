@@ -10,21 +10,18 @@ This uses the `torch.export` machinery. However, it provides some extra
 services for handling multiple modules, save/load, and state management.
 """
 
+import functools
 import json
 import os
 from pathlib import Path
-from typing import Any, Optional, Union
-from .compiled_module import ExportTargetDef
-
-import functools
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import torch
-import torch.nn as nn
+from torch import nn
 
+from .compiled_module import ExportTargetDef
 from .decompositions import current_aot_decompositions
 from .tensor_traits import DeviceAffinity
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .compiled_module import ExportTargetDef
@@ -119,7 +116,7 @@ class FxPrograms:
                 constants_dict.update(orig_constants)
 
         # Save the descriptor.
-        with open(path, "wt") as f:
+        with open(path, "w") as f:
             json.dump(descriptor, f)
         return count_deduped
 
@@ -225,7 +222,7 @@ class FxProgramsBuilder(FxPrograms):
         def new_forward(self, *forward_args, **forward_kwargs):
             return f(self.root, *forward_args, **forward_kwargs)
 
-        setattr(LambdaModule, "forward", new_forward)
+        LambdaModule.forward = new_forward
         lambda_module = LambdaModule()
 
         # Export our franken-module.
@@ -233,11 +230,15 @@ class FxProgramsBuilder(FxPrograms):
         if dynamic_shapes:
             if not _supports_dynamic_shapes:
                 raise ValueError(
-                    f"torch.export with dynamic_shapes= not supported for this version of torch"
+                    "torch.export with dynamic_shapes= not supported for this version of torch",
                 )
             extra_kwargs["dynamic_shapes"] = dynamic_shapes
         program = torch.export.export(
-            lambda_module, args=args, kwargs=kwargs, strict=strict, **extra_kwargs
+            lambda_module,
+            args=args,
+            kwargs=kwargs,
+            strict=strict,
+            **extra_kwargs,
         )
         current_decomps = current_aot_decompositions()
         if current_decomps:
@@ -287,7 +288,8 @@ class SharedStateTensor(torch.Tensor):
 
 
 def _create_shared_state_tensor(
-    like: torch.Tensor, shared_state_dict_key: str
+    like: torch.Tensor,
+    shared_state_dict_key: str,
 ) -> SharedStateTensor:
     t = SharedStateTensor(
         like.size(),
@@ -326,10 +328,10 @@ def _unsharify_state_dict(shared_dict: dict, local_dict: dict):
             shared_key = local_value.shared_state_dict_key
             try:
                 shared_value = shared_dict[shared_key]
-            except KeyError as e:
+            except KeyError:
                 raise KeyError(
                     f"Shared tensor not found during deserialization. Corrupt metadata? "
-                    f"{shared_key}"
+                    f"{shared_key}",
                 )
             local_dict[key] = shared_value
         else:

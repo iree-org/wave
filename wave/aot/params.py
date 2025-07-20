@@ -4,15 +4,15 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Iterator, List, Optional, Set, Tuple, Union
-
 import json
-from pathlib import Path
 import warnings
+from collections.abc import Iterator
+from pathlib import Path
+from typing import List, Optional, Set, Tuple, Union
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 from iree.runtime import (
     ParameterIndex,
@@ -23,13 +23,12 @@ from .tensor_traits import (
     ExternalTensorTrait,
 )
 
-
 __all__ = [
+    "ParameterArchive",
+    "ParameterArchiveBuilder",
+    "ParameterArchiveEntry",
     "externalize_module_parameters",
     "save_module_parameters",
-    "ParameterArchive",
-    "ParameterArchiveEntry",
-    "ParameterArchiveBuilder",
 ]
 
 ################################################################################
@@ -38,13 +37,16 @@ __all__ = [
 
 
 def externalize_module_parameters(
-    module: nn.Module, *, external_scope: str = "", prefix: str = ""
+    module: nn.Module,
+    *,
+    external_scope: str = "",
+    prefix: str = "",
 ):
     """Externalizes parameters and persistent buffers in a module by name."""
-
     for tensor_name, tensor in _yield_saveable_tensors(module, prefix=prefix):
         trait = ExternalTensorTrait(
-            external_scope=external_scope, external_name=tensor_name
+            external_scope=external_scope,
+            external_name=tensor_name,
         )
         trait.set(tensor)
 
@@ -100,7 +102,7 @@ def _make_tensor_metadata(t: torch.Tensor) -> str:
     except KeyError:
         dtype_name = "unknown"
         warnings.warn(
-            f"Unknown dtype saving params: {dtype} (missing entry in params._dtype_to_name)"
+            f"Unknown dtype saving params: {dtype} (missing entry in params._dtype_to_name)",
         )
     dtype_desc = {
         "class_name": type(dtype).__name__,
@@ -125,7 +127,10 @@ def _make_tensor_metadata(t: torch.Tensor) -> str:
 
 
 def save_module_parameters(
-    file_path: Union[str, Path], module: nn.Module, *, prefix: str = ""
+    file_path: Union[str, Path],
+    module: nn.Module,
+    *,
+    prefix: str = "",
 ):
     """One shot save of parameters and persistent buffers on a module.
 
@@ -171,7 +176,7 @@ class ParameterArchiveEntry:
         metadata = self.raw.metadata.decode()
         if not metadata.startswith(_metadata_prefix):
             raise ValueError(
-                f"No metadata for parameter entry {self.key}: Cannot convert to tensor"
+                f"No metadata for parameter entry {self.key}: Cannot convert to tensor",
             )
         metadata = metadata[len(_metadata_prefix) :]
         d = json.loads(metadata)
@@ -179,7 +184,7 @@ class ParameterArchiveEntry:
             type_name = d["type"]
             if d["type"] != "Tensor":
                 raise ValueError(
-                    f"Metadata for parameter entry {self.key} is not a Tensor ('{type_name}')"
+                    f"Metadata for parameter entry {self.key} is not a Tensor ('{type_name}')",
                 )
             dtype_name = d["dtype"]
             shape = d["shape"]
@@ -232,7 +237,10 @@ class ParameterArchive:
     ):
         """Loads index entries from a file adding them to the in-memory archive."""
         self._index.load(
-            str(file_path), mmap=mmap, readable=readable, writable=writable
+            str(file_path),
+            mmap=mmap,
+            readable=readable,
+            writable=writable,
         )
 
     @property
@@ -294,7 +302,9 @@ class ParameterArchiveBuilder:
 
 
 def _yield_saveable_tensors(
-    module: nn.Module, *, prefix: str = ""
+    module: nn.Module,
+    *,
+    prefix: str = "",
 ) -> Iterator[Tuple[str, torch.Tensor]]:
     """Yields tuple of name/tensor for all saveable tensors in a module.
 

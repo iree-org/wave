@@ -4,17 +4,15 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import contextlib
 from typing import Optional
-
-import torch
-
 from wave.dynamo.decompositions import (
-    _current,
-    _extend_context_manager,
     DecompositionOpsList,
     DecompositionTable,
+    _current,
+    _extend_context_manager,
 )
+
+import torch
 
 __all__ = [
     "current_aot_decompositions",
@@ -31,11 +29,14 @@ def extend_aot_decompositions(
     *,
     from_current: bool = True,
     add_ops: Optional[DecompositionOpsList] = None,
-    remove_ops: Optional[DecompositionOpsList] = None
+    remove_ops: Optional[DecompositionOpsList] = None,
 ):
     """Context manager which extends the list of decompositions used for AOT."""
     return _extend_context_manager(
-        "aot", from_current=from_current, add_ops=add_ops, remove_ops=remove_ops
+        "aot",
+        from_current=from_current,
+        add_ops=add_ops,
+        remove_ops=remove_ops,
     )
 
 

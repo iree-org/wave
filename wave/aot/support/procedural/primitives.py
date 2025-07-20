@@ -8,19 +8,16 @@
 # Live types during runtime of a procedure trace. User code will
 # operate on instances of these.
 
+from collections.abc import Sequence
 from typing import (
-    cast,
     Dict,
     List,
     Optional,
-    Sequence,
-    Tuple,
-    Union,
 )
 
 import torch
 
-from ....support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     F32Type,
     IrType,
     RankedTensorType,
@@ -29,17 +26,13 @@ from ....support.ir_imports import (
 )
 
 from ..ir_utils import (
-    build_tensor_dim_value,
     _is_float_type,
     _is_integer_like_type,
-    Empty,
-    EmptyType,
+    build_tensor_dim_value,
 )
-
 from .base import (
     Intrinsic,
     IrTrace,
-    ShapedTypeDynamicSizeSentinel,
     current_ir_trace,
 )
 
@@ -71,13 +64,13 @@ class IrScalar(Intrinsic):
             if isinstance(other, IrScalar):
                 # Assumes when both are Value, they have same type.
                 rhs = other.ir_value
-            elif isinstance(other, (int, bool)) and _is_integer_like_type(self.ir_type):
-                rhs = arith_d.ConstantOp(lhs.type, other).result
-            elif isinstance(other, (float)) and _is_float_type(self.ir_type):
+            elif (
+                isinstance(other, (int, bool)) and _is_integer_like_type(self.ir_type)
+            ) or (isinstance(other, (float)) and _is_float_type(self.ir_type)):
                 rhs = arith_d.ConstantOp(lhs.type, other).result
             if rhs is None or lhs.type != rhs.type:
                 raise ValueError(
-                    f"Cannot handle src type of {self.ir_type} to dst python type of {type(other)}."
+                    f"Cannot handle src type of {self.ir_type} to dst python type of {type(other)}.",
                 )
             return IrImmediateScalar(rhs)
 
@@ -105,12 +98,11 @@ class IrScalar(Intrinsic):
             # Emit computation.
             if _is_integer_like_type(lhs.type):
                 return IrImmediateScalar(arith_d.AddIOp(lhs, rhs).result)
-            elif _is_float_type(lhs.type):
+            if _is_float_type(lhs.type):
                 return IrImmediateScalar(arith_d.AddFOp(lhs, rhs).result)
-            else:
-                raise ValueError(
-                    f"Expected operand to be either Int or Float but got {self.ir_type} instead."
-                )
+            raise ValueError(
+                f"Expected operand to be either Int or Float but got {self.ir_type} instead.",
+            )
 
 
 class IrImmediateScalar(IrScalar):
@@ -137,13 +129,13 @@ class IrTensor(Intrinsic):
     """
 
     __slots__ = [
-        "ir_type",
-        "dtype",
         "_cached_dim_values",
         "_dynamic_dims",
-        "_shape",
         "_meta_tensor",
         "_meta_tensor_constraints",
+        "_shape",
+        "dtype",
+        "ir_type",
     ]
 
     def __init__(self, ir_type: IrType, dtype: torch.dtype):
@@ -192,7 +184,9 @@ class IrTensor(Intrinsic):
         # earliest point.
         # See: https://github.com/nod-ai/SHARK-ModelDev/issues/133
         dim_value = build_tensor_dim_value(
-            resolved_ir_value, index, constant_cache=constant_cache
+            resolved_ir_value,
+            index,
+            constant_cache=constant_cache,
         )
         self._cached_dim_values[index] = dim_value
         return dim_value

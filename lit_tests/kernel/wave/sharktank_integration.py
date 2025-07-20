@@ -1,13 +1,13 @@
 # RUN: python %s | FileCheck %s
 
 import textwrap
+import wave.aot as aot
 from typing import Optional
 from wave.transforms.merger import Merger
 
 import torch
 from jinja2 import BaseLoader, Environment
 
-import iree.turbine.aot as aot
 import iree.turbine.kernel.wave as tkw
 from iree.compiler.ir import (
     Context,

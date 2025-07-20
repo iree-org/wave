@@ -11,7 +11,11 @@
 # order here and must perform the import at the end of the module.
 
 from .base import *
+from .globals import *
 from .iree_emitter import IREEEmitter
 from .primitives import *
-from .globals import *
 from .tracer import *
+
+__all__ = [
+    "IREEEmitter",
+]

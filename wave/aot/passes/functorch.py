@@ -7,11 +7,11 @@
 from typing import Any, Callable
 
 import torch
+from torch._subclasses.fake_tensor import unset_fake_temporarily
 from torch.fx import (
     GraphModule,
 )
 from torch.fx.experimental import proxy_tensor
-from torch._subclasses.fake_tensor import unset_fake_temporarily
 from torch.utils import _pytree as pytree
 
 
@@ -59,7 +59,9 @@ def functorch_functionalize(gm_callable: Any, *args) -> GraphModule:
 def _functionalize_callabale(function: Callable) -> Callable:
     def wrapped(*args):
         args_functional = pytree.tree_map_only(
-            torch.Tensor, torch._to_functional_tensor, args
+            torch.Tensor,
+            torch._to_functional_tensor,
+            args,
         )
         torch._enable_functionalization(reapply_views=True)
         try:

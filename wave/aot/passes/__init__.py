@@ -5,3 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from .functorch import functorch_functionalize
+
+__all__ = [
+    "functorch_functionalize",
+]

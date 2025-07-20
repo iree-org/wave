@@ -7,13 +7,12 @@
 
 """Tracing builtins."""
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
-
-import warnings
+from collections.abc import Sequence
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
-from torch._decomp import get_decompositions
 import torch._dynamo as dynamo
+from torch._decomp import get_decompositions
 from torch.fx import (
     GraphModule,
 )
@@ -23,13 +22,12 @@ from torch.utils._pytree import (
 )
 
 from iree.compiler.extras.fx_importer import (
-    GraphNodeImporter,
     FxImporter,
     FxImporterHooks,
+    GraphNodeImporter,
     InputInfo,
 )
-
-from ...support.ir_imports import (
+from iree.turbine.support.ir_imports import (
     FlatSymbolRefAttr,
     FunctionType,
     Operation,
@@ -40,18 +38,15 @@ from ...support.ir_imports import (
     func_d,
     util_d,
 )
-
-from ...support.logging import aot_logger as logger
+from iree.turbine.support.logging import aot_logger as logger
 
 from ..decompositions import current_aot_decompositions
 from ..passes import (
     functorch_functionalize,
 )
-
 from ..support.ir_utils import (
     ModuleBuilder,
 )
-
 from ..support.procedural import (
     CallableIntrinsic,
     IrImmediateTensor,
@@ -79,7 +74,10 @@ class _Hooks(FxImporterHooks):
         self.cloned_global_symbols: set[str] = set()
 
     def resolve_literal(
-        self, gni: GraphNodeImporter, literal: Any, info: Optional[InputInfo] = None
+        self,
+        gni: GraphNodeImporter,
+        literal: Any,
+        info: Optional[InputInfo] = None,
     ) -> Optional[Value]:
         module_builder = self.module_builder
         cloned_global_symbols = self.cloned_global_symbols
@@ -110,7 +108,8 @@ class _Hooks(FxImporterHooks):
         # Emit a global load and conversion.
         vtensor_type = gni._cc.tensor_to_vtensor_type(literal)
         loaded_value = util_d.GlobalLoadOp(
-            materialized_global.ir_type, materialized_global.symbol_name
+            materialized_global.ir_type,
+            materialized_global.symbol_name,
         ).result
         converted_value = Operation.create(
             "torch_c.from_builtin_tensor",
@@ -131,11 +130,11 @@ class jittable(CallableIntrinsic):
     """
 
     __slots__ = [
-        "dynamic_shapes",
-        "decomposition_table",
-        "wrapped_f",
-        "function_name",
         "_passes",
+        "decomposition_table",
+        "dynamic_shapes",
+        "function_name",
+        "wrapped_f",
     ]
 
     def __init__(
@@ -266,10 +265,10 @@ class jittable(CallableIntrinsic):
         # TODO: Debug upstream why iteration over children isn't creating a typed view.
         # This should just be `target_op.function_type`
         target_ftype = FunctionType(
-            TypeAttr(target_op.attributes["function_type"]).value
+            TypeAttr(target_op.attributes["function_type"]).value,
         )
         target_symbol_ref = FlatSymbolRefAttr.get(
-            StringAttr(target_op.attributes["sym_name"]).value
+            StringAttr(target_op.attributes["sym_name"]).value,
         )
 
         assert len(flat_ir_args) == len(target_ftype.inputs), (
@@ -287,7 +286,9 @@ class jittable(CallableIntrinsic):
 
         with proc_trace.ip, proc_trace.loc:
             flat_ir_results = func_d.CallOp(
-                target_ftype.results, target_symbol_ref, flat_ir_args
+                target_ftype.results,
+                target_symbol_ref,
+                flat_ir_args,
             ).results
 
         assert len(flat_ir_results) == len(result_tensor_infos)
@@ -300,7 +301,7 @@ class jittable(CallableIntrinsic):
                 flat_py_results.append(IrImmediateTensor(native_ir_result, dtype))
             else:
                 raise TypeError(
-                    f"Unknown PyTorch->IREE value mapping for jittable result: {result_tensor_info}->{native_ir_result}"
+                    f"Unknown PyTorch->IREE value mapping for jittable result: {result_tensor_info}->{native_ir_result}",
                 )
 
         tree_py_results = tree_unflatten(flat_py_results, out_spec)
@@ -317,14 +318,14 @@ class jittable(CallableIntrinsic):
 class _Merger:
     __slots__ = [
         "context",
-        "to_module_builder",
         "from_module_op",
         "from_symbol_table",
         "import_function_name",
-        "rename_map",
         "nested_symbol_ops",
         "nested_symbol_table_ops",
         "private_attr",
+        "rename_map",
+        "to_module_builder",
     ]
 
     def __init__(
@@ -440,7 +441,7 @@ def _extract_graph_output_metadata(
         out_spec = gm._out_spec
     except AttributeError:
         raise AssertionError(
-            "Expected PyTorch to add an _out_spec attribute to the GraphModule"
+            "Expected PyTorch to add an _out_spec attribute to the GraphModule",
         )
 
     output_nodes = []
