@@ -88,5 +88,6 @@ class WaveCompileOptions:
     print_grid: bool = False
     print_signature: bool = False
     print_mlir: bool = False
+    print_mlir_file: Optional[str] = None
     print_ir_after_all: bool = False
     print_pass_times: bool = False

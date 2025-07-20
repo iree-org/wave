@@ -114,8 +114,26 @@ def get_default_arch() -> str:
     return gcnArch[0:colon_pos]
 
 
+# Whether to dump the generated MLIR module.
+dump_generated_mlir = int(os.environ.get("WAVE_DUMP_MLIR", 0))
+
+# Dump the generated MLIR module to a file.
+dump_generated_mlir_file = os.environ.get("WAVE_DUMP_MLIR_FILE", None)
+
+# Whether to use scheduling group barriers (needs LLVM fix).
+enable_scheduling_barriers = int(os.environ.get("WAVE_USE_SCHED_BARRIERS", 0))
+
+
 def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:
     """Return default config for running."""
+
+    if dump_generated_mlir:
+        options.print_mlir = True
+
+    if dump_generated_mlir_file is not None and not options.print_mlir_file:
+        # Do not override file if `print_mlir_file` is already set.
+        options.print_mlir_file = str(dump_generated_mlir_file)
+
     options.backend = "rocm"
     options.target = get_default_arch()
     return options

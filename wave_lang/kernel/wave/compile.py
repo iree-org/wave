@@ -283,7 +283,10 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         use_local_scope=options.use_local_scope,
     )
     if options.print_mlir:
-        print(asm)
+        if options.print_mlir_file:
+            _write_file(options.print_mlir_file, "w", asm)
+        else:
+            print(asm)
 
     if options.use_water_leak_check:
         water_leak_in_bounds_check(mb.module_op)
