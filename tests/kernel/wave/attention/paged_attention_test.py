@@ -31,7 +31,6 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 import os
 from torch.testing import assert_close
 from ..common.utils import (
-    dump_generated_mlir,
     expensive_test_param,
     param_bool,
     require_cdna3,
@@ -294,7 +293,7 @@ def testPagedFlashDecoding(
     phase_0 = wave_compile(options, phase_0)
 
     # TODO: Add variant of non-transposed V attention kernel.
-    asm_qk = phase_0(
+    phase_0(
         query,
         key_cache,
         value_cache,
@@ -318,15 +317,7 @@ def testPagedFlashDecoding(
     options = set_default_run_config(options)
     phase_1 = wave_compile(options, phase_1)
 
-    asm_sv = phase_1(phase_0_output, phase_0_output_max, request_indices, output)
-
-    if dump_generated_mlir:
-        filename = f"wave_paged_phase_0_kernel_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm_qk)
-        filename = f"wave_paged_phase_1_kernel_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm_sv)
+    phase_1(phase_0_output, phase_0_output_max, request_indices, output)
 
     if not artifact_directory:
         # Run the reference implementation.
@@ -465,7 +456,7 @@ def testPagedFlashDecodingMHA(
     phase_0 = wave_compile(options, phase_0)
 
     # TODO: Add variant of non-transposed V attention kernel.
-    asm_qk = phase_0(
+    phase_0(
         query,
         key_cache,
         value_cache,
@@ -488,15 +479,7 @@ def testPagedFlashDecodingMHA(
     options = set_default_run_config(options)
     phase_1 = wave_compile(options, phase_1)
 
-    asm_sv = phase_1(phase_0_output, phase_0_output_max, request_indices, output)
-
-    if dump_generated_mlir:
-        filename = f"wave_paged_mha_phase_0_kernel_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm_qk)
-        filename = f"wave_paged_mha_phase_1_kernel_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm_sv)
+    phase_1(phase_0_output, phase_0_output_max, request_indices, output)
 
     if not artifact_directory:
         # Run the reference implementation.

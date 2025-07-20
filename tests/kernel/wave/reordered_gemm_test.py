@@ -73,12 +73,7 @@ def testReorderedPureGemm(
     a = device_randn(shape[0], shape[2], dtype=torch.float16)
     b = device_randn(shape[1], shape[2], dtype=torch.float16)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    asm = reordered_gemm(a, b, c)
-
-    if dump_generated_mlir:
-        filename = f"wave_gemm_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
+    reordered_gemm(a, b, c)
 
     if run_bench:
         options.benchmark_results_file = perf_filename_iree

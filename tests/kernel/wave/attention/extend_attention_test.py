@@ -407,7 +407,7 @@ def testExtendAttention(
     extend_attention = wave_compile(options, extend_attention)
 
     if use_custom_mask:
-        asm_qk = extend_attention(
+        extend_attention(
             q_extend,
             k_extend,
             v_extend,
@@ -422,7 +422,7 @@ def testExtendAttention(
             output,
         )
     else:
-        asm_qk = extend_attention(
+        extend_attention(
             q_extend,
             k_extend,
             v_extend,
@@ -434,11 +434,6 @@ def testExtendAttention(
             max_len_extend,
             output,
         )
-
-    if dump_generated_mlir:
-        filename = f"wave_extend_attention_kernel_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm_qk)
 
     # Run the reference implementation.
     ref_output = ref_extend_attn(
@@ -549,7 +544,7 @@ def testExtendRpeAttention(
     options = set_default_run_config(options)
     extend_attention_rpe = wave_compile(options, extend_attention_rpe)
 
-    asm_qk = extend_attention_rpe(
+    extend_attention_rpe(
         q_extend,
         k_extend,
         v_extend,
@@ -562,11 +557,6 @@ def testExtendRpeAttention(
         max_len_extend,
         output,
     )
-
-    if dump_generated_mlir:
-        filename = f"wave_extend_attention_kernel_rpe_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm_qk)
 
     # Run the reference implementation.
     ref_output = ref_extend_attn(

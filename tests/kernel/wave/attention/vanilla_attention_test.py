@@ -8,7 +8,6 @@ import pytest
 import torch
 from torch.nn import functional as F
 import math
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
@@ -25,10 +24,8 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-import os
 from torch.testing import assert_close
 from ..common.utils import (
-    dump_generated_mlir,
     expensive_test_param,
     param_bool,
     require_cdna3,
@@ -112,15 +109,10 @@ def testTransposedVAttentionPure(
     k = device_randn(k_shape, dtype=torch.float16)
     v = device_randn(v_shape, dtype=torch.float16)
     output = device_zeros(o_shape, dtype=torch.float32)
-    asm = base_attention(q, k, v.permute([0, 2, 1]), output)
+    base_attention(q, k, v.permute([0, 2, 1]), output)
     torch_ref = torch.nn.functional.scaled_dot_product_attention(
         q, k, v, attn_mask=None
     )
-
-    if dump_generated_mlir:
-        filename = f"wave_attention_{'x'.join(map(str, input_shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
 
     assert_close(output, torch_ref, check_dtype=False, atol=1e-3, rtol=1e-3)
 
@@ -184,15 +176,10 @@ def testAttentionPure(
     k = device_randn(k_shape, dtype=torch.float16)
     v = device_randn(v_shape, dtype=torch.float16)
     output = device_zeros(o_shape, dtype=torch.float32)
-    asm = base_attention(q, k, v, output)
+    base_attention(q, k, v, output)
     torch_ref = torch.nn.functional.scaled_dot_product_attention(
         q, k, v, attn_mask=None
     )
-
-    if dump_generated_mlir:
-        filename = f"wave_attention_{'x'.join(map(str, input_shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
 
     assert_close(output, torch_ref, check_dtype=False, atol=1e-3, rtol=1e-3)
 
@@ -263,7 +250,7 @@ def testAttentionCausal(
     k = device_randn(k_shape, dtype=torch.float16)
     v = device_randn(v_shape, dtype=torch.float16)
     output = device_zeros(o_shape, dtype=torch.float32)
-    asm = base_attention(q, k, v.permute([0, 2, 1]), output)
+    base_attention(q, k, v.permute([0, 2, 1]), output)
     if sliding_window >= 0:
 
         def sliding_window_mask(q_seq_length, kv_seq_length, window_size):
@@ -277,11 +264,6 @@ def testAttentionCausal(
         torch_ref = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
     else:
         torch_ref = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-
-    if dump_generated_mlir:
-        filename = f"wave_attention_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
 
     assert_close(output, torch_ref, check_dtype=False, atol=1e-3, rtol=1e-3)
 
@@ -686,7 +668,7 @@ def testAttentionBias(
     dk_sqrt = math.sqrt(1.0 / shape[3])
     # TODO: Add scaling of QK as part of kernel.
     # TODO: Add variant of non-transposed V attention kernel.
-    asm = base_attention_bias(
+    base_attention_bias(
         q * dk_sqrt * log2e, k, v.permute([0, 2, 1]), bias * log2e, output
     )
     k_t = k.transpose(-1, -2)
@@ -694,11 +676,6 @@ def testAttentionBias(
     a += bias
     a = F.softmax(a, dim=-1)
     torch_ref = torch.matmul(a, v)
-
-    if dump_generated_mlir:
-        filename = f"wave_attention_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
 
     if "gfx94" in options.target:
         assert_close(output, torch_ref, atol=2e-3, rtol=5e-3, check_dtype=False)
@@ -874,17 +851,12 @@ def testAttentionSoftCap(
     dk_sqrt = math.sqrt(1.0 / shape[3])
     # TODO: Add scaling of QK as part of kernel.
     # TODO: Add variant of non-transposed V attention kernel.
-    asm = base_attention_softcap(q * dk_sqrt * log2e, k, v.permute([0, 2, 1]), output)
+    base_attention_softcap(q * dk_sqrt * log2e, k, v.permute([0, 2, 1]), output)
     k_t = k.transpose(-1, -2)
     a = torch.matmul(q, k_t) * dk_sqrt
     a = softcap_val * torch.tanh(a / softcap_val)
     a = F.softmax(a, dim=-1)
     torch_ref = torch.matmul(a, v)
-
-    if dump_generated_mlir:
-        filename = f"wave_attention_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
 
     if "gfx94" in options.target:
         assert_close(output, torch_ref, atol=2e-3, rtol=5e-3, check_dtype=False)
@@ -1038,13 +1010,10 @@ def testAttentionF8(
     dk_sqrt = math.sqrt(1.0 / shape[3])
     # TODO: Add scaling of QK as part of kernel.
     # TODO: Add variant of non-transposed V attention kernel.
-    asm = base_attention(q * dk_sqrt * log2e, k, v.permute([0, 2, 1]), output)
+    base_attention(q * dk_sqrt * log2e, k, v.permute([0, 2, 1]), output)
     torch_ref = torch.nn.functional.scaled_dot_product_attention(
         q, k, v, attn_mask=None
     )
-    if dump_generated_mlir:
-        filename = f"wave_attention_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
+
     rmse = torch.sqrt(torch.mean(torch.square(output - torch_ref)))
     assert rmse <= 0.006

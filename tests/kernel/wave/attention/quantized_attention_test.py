@@ -100,17 +100,12 @@ def testAttentionPure(
     v = quantized_tensor(v_shape, dtype=torch.float16, scale=MAX_RANGE)
 
     output = device_zeros(o_shape, dtype=torch.float32)
-    asm = base_attention(q, k, v, output)
+    base_attention(q, k, v, output)
     torch_ref = torch.nn.functional.scaled_dot_product_attention(
         q.to(torch.float32) * q_scale,
         k.to(torch.float32) * k_scale,
         v.to(torch.float32) * v_scale,
     )
-
-    if dump_generated_mlir:
-        filename = f"wave_attention_{'x'.join(map(str, input_shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
 
     rmse = torch.sqrt(torch.mean(torch.square(output - torch_ref)))
     # Higher tolerance because, we are testing a higher range

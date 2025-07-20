@@ -152,13 +152,7 @@ def testChainedGemm(
     k = device_randn(batch, kv_seq_len, qk_head_dim, dtype=torch.float16)
     v = device_randn(batch, v_head_dim, kv_seq_len, dtype=torch.float16)
     output = device_zeros(batch, v_head_dim, q_seq_len, dtype=torch.float32)
-    asm = chained_gemm(q, k, v, output)
-
-    if dump_generated_mlir:
-        filename = f"wave_cgemm_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
-            print(f"IR dumped to {filename}")
+    chained_gemm(q, k, v, output)
 
     iree_ref = device_zeros(batch, v_head_dim, q_seq_len, dtype=torch.float32)
     generate_iree_ref("chain_mmt", [q, k, v], [iree_ref], options)
@@ -297,12 +291,7 @@ def testChainedGemmF8(
     k = device_randn(batch, kv_seq_len, qk_head_dim, dtype=torch.float16)
     v = device_randn(batch, v_head_dim, kv_seq_len, dtype=torch.float16)
     output = device_zeros(batch, v_head_dim, q_seq_len, dtype=torch.float32)
-    asm = chained_gemm_f8(q, k, v, output)
-
-    if dump_generated_mlir:
-        filename = f"wave_cgemm_{'x'.join(map(str, shape))}.mlir"
-        with open(filename, "w") as f:
-            f.write(asm)
+    chained_gemm_f8(q, k, v, output)
 
     iree_ref = device_zeros(batch, v_head_dim, q_seq_len, dtype=torch.float32)
     generate_iree_ref("chain_mmt_f8", [q, k, v], [iree_ref], options)
