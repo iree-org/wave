@@ -36,11 +36,27 @@ from ..support.conversions import (
     torch_dtype_to_numpy,
 )
 
-from ..support.exceptions import (
-    NoCurrentDeviceError,
-    MismatchedDeviceSetClearError,
-    UnsupportedTorchDeviceError,
-)
+
+class NoCurrentDeviceError(Exception):
+    def __init__(self):
+        super().__init__(
+            "You accessed a method which requires a current device but none was set on this thread. "
+            "Either pass an explicit 'device=' or set a current device via "
+            "`with device:`"
+        )
+
+
+class MismatchedDeviceSetClearError(AssertionError):
+    def __init__(self):
+        super().__init__("Calls to Device.set()/clear() are mismatched or unbalanced.")
+
+
+class UnsupportedTorchDeviceError(Exception):
+    def __init__(self, torch_device):
+        super().__init__(
+            f"Attempt to use turbine with a torch.device that is not supported by this build: {torch_device}"
+        )
+
 
 from ..support.logging import runtime_logger as logger
 

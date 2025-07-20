@@ -18,9 +18,12 @@ from iree.compiler.extras.fx_importer import (
     TORCH_DTYPE_TO_MLIR_TYPE_ASM,
 )
 
-from .exceptions import (
-    UnknownDTypeError,
-)
+
+class UnknownDTypeError(ValueError):
+    def __init__(self, dtype):
+        self.dtype = dtype
+        super().__init__(f"Unable to map torch dtype {dtype} to Turbine")
+
 
 from .ir_imports import (
     Float8E4M3FNUZType,
