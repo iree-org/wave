@@ -53,6 +53,21 @@ def perf_filename_iree(dump_perf_path, request):
     return os.path.join(dump_perf_path, "iree_" + request.node.name + ".json")
 
 
+@pytest.fixture(scope="function", autouse=True)
+def set_mlir_filename(request):
+    option = request.config.getoption("--dump-mlir-files-path")
+    if not option:
+        return
+
+    import iree.turbine.kernel.wave.utils.run_utils as run_utils
+
+    run_utils.dump_generated_mlir = True
+    run_utils.dump_generated_mlir_file = os.path.join(
+        option,
+        "mlir_" + request.node.name + ".mlir",
+    )
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--run-e2e", action="store_true", default=False, help="run e2e tests"
@@ -77,6 +92,12 @@ def pytest_addoption(parser):
         type=int,
         default=0,
         help="Distribute over N gpu devices when running with pytest-xdist",
+    )
+    parser.addoption(
+        "--dump-mlir-files-path",
+        action="store",
+        default=None,
+        help="save mlir files into provided directory, filename based on current test name",
     )
 
 
