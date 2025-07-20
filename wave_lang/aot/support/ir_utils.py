@@ -12,9 +12,6 @@ from functools import partial
 from itertools import zip_longest
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
-from wave.dynamo.type_conversion import (
-    NativeTypeConverter,
-)
 
 import numpy as np
 import torch
@@ -65,6 +62,9 @@ from iree.turbine.support.ir_imports import (
     tensor_d,
 )
 from iree.turbine.support.logging import aot_logger as logger
+from wave_lang.dynamo.type_conversion import (
+    NativeTypeConverter,
+)
 
 from ..tensor_traits import (
     DeviceAffinity,

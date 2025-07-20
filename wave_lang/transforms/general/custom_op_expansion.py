@@ -5,9 +5,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from typing import Callable, Optional
-from wave.dynamo.type_conversion import (
-    NativeTypeConverter,
-)
 
 import torch
 from torch import Tensor
@@ -40,6 +37,9 @@ from iree.turbine.support.ir_imports import (
     StringAttr,
     SymbolTable,
     Value,
+)
+from wave_lang.dynamo.type_conversion import (
+    NativeTypeConverter,
 )
 
 

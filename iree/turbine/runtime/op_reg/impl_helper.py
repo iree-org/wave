@@ -36,7 +36,7 @@ from ...support.ir_imports import (
     Value,
 )
 
-from wave.transforms.merger import Merger
+from wave_lang.transforms.merger import Merger
 
 from .base import (
     KernelBuilder,

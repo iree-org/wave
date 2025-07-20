@@ -14,7 +14,6 @@ import weakref
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
-from wave.transforms.general.custom_op_expansion import ExpandCustomOpsPass
 
 from torch.export import ExportedProgram
 
@@ -28,6 +27,7 @@ from iree.turbine.support.ir_imports import (
     StringAttr,
 )
 from iree.turbine.support.logging import aot_logger as logger
+from wave_lang.transforms.general.custom_op_expansion import ExpandCustomOpsPass
 
 from . import builtins
 from .support.ir_utils import (

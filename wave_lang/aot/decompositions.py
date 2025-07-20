@@ -5,14 +5,15 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from typing import Optional
-from wave.dynamo.decompositions import (
+
+import torch
+
+from wave_lang.dynamo.decompositions import (
     DecompositionOpsList,
     DecompositionTable,
     _current,
     _extend_context_manager,
 )
-
-import torch
 
 __all__ = [
     "current_aot_decompositions",

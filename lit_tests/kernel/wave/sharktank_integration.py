@@ -1,14 +1,13 @@
 # RUN: python %s | FileCheck %s
 
 import textwrap
-import wave.aot as aot
 from typing import Optional
-from wave.transforms.merger import Merger
 
 import torch
 from jinja2 import BaseLoader, Environment
 
 import iree.turbine.kernel.wave as tkw
+import wave_lang.aot as aot
 from iree.compiler.ir import (
     Context,
     MLIRError,
@@ -44,6 +43,7 @@ from iree.turbine.runtime.op_reg.base import (
 from iree.turbine.runtime.op_reg.impl_helper import (
     call_function,
 )
+from wave_lang.transforms.merger import Merger
 
 _JINJA2_ENVIRONMENT: Optional[Environment] = None
 
