@@ -8,7 +8,6 @@ import pytest
 import torch
 from torch.nn import functional as F
 import math
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
@@ -29,8 +28,6 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
 from ..common.utils import (
-    dump_generated_mlir,
-    enable_scheduling_barriers,
     expensive_test,
     require_e2e,
 )
@@ -1142,7 +1139,6 @@ def testAttentionForward(mfma_variant: MMAType, shape: tuple[int, ...]):
     hyperparams.update(get_default_scheduling_params())
     options = WaveCompileOptions(
         subs=hyperparams,
-        use_scheduling_barriers=enable_scheduling_barriers,
         run_bench=False,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
@@ -1209,7 +1205,6 @@ def testAttentionBackward(mfma_variant: MMAType, shape: tuple[int, ...]):
     hyperparams.update(get_default_scheduling_params())
     options = WaveCompileOptions(
         subs=hyperparams,
-        use_scheduling_barriers=enable_scheduling_barriers,
         run_bench=False,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
@@ -1305,7 +1300,6 @@ def testAttentionBackward_dv(mfma_variant: MMAType, shape: tuple[int, ...]):
     hyperparams_dv.update(get_default_scheduling_params())
     options = WaveCompileOptions(
         subs=hyperparams_dv,
-        use_scheduling_barriers=enable_scheduling_barriers,
         run_bench=False,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
@@ -1367,7 +1361,6 @@ def testAttentionBackward_dk(mfma_variant: MMAType, shape: tuple[int, ...]):
     hyperparams_dk.update(get_default_scheduling_params())
     options = WaveCompileOptions(
         subs=hyperparams_dk,
-        use_scheduling_barriers=enable_scheduling_barriers,
         run_bench=False,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
@@ -1452,7 +1445,6 @@ def testAttentionBackward_dq(mfma_variant: MMAType, shape: tuple[int, ...]):
     hyperparams_dq.update(get_default_scheduling_params())
     options = WaveCompileOptions(
         subs=hyperparams_dq,
-        use_scheduling_barriers=enable_scheduling_barriers,
         run_bench=False,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",

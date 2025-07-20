@@ -29,7 +29,6 @@ import os
 from torch.testing import assert_close
 from ..common.utils import (
     dump_generated_mlir,
-    enable_scheduling_barriers,
     expensive_test_param,
     param_bool,
     require_cdna3,
@@ -97,7 +96,6 @@ def testTransposedVAttentionPure(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
@@ -170,7 +168,6 @@ def testAttentionPure(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
@@ -250,7 +247,6 @@ def testAttentionCausal(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
@@ -344,7 +340,6 @@ def testAttentionBSHD(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
@@ -468,7 +463,6 @@ def testAttentionBHSDCausal(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
@@ -671,7 +665,6 @@ def testAttentionBias(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
@@ -860,7 +853,6 @@ def testAttentionSoftCap(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
@@ -1027,7 +1019,6 @@ def testAttentionF8(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         run_bench=run_bench,
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",

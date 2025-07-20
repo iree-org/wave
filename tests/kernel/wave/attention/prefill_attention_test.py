@@ -7,7 +7,6 @@
 import pytest
 import torch
 import math
-import wave_lang.kernel as tk
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
@@ -16,8 +15,6 @@ from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
 from wave_lang.kernel.wave.utils.torch_utils import (
-    device_arange,
-    device_full,
     device_randn,
     device_zeros,
 )
@@ -30,14 +27,10 @@ from wave_lang.kernel.wave.templates.attention_common import (
     AttentionShape,
 )
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-import os
 from torch.testing import assert_close
 from ..common.utils import (
     require_e2e,
     require_cdna3,
-    enable_scheduling_barriers,
-    dump_generated_mlir,
-    param_bool,
 )
 from ..common.shapes import get_test_shapes
 from typing import List, Optional
@@ -150,7 +143,6 @@ def testPrefillAttention(
         canonicalize=True,
         run_bench=run_bench,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,

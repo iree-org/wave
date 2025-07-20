@@ -7,12 +7,10 @@
 import math
 import pytest
 import torch
-import os
 
 from torch.nn import functional as F
 from torch.testing import assert_close
 
-import wave_lang.kernel as tk
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.templates.attention_common import AttentionShape
 from wave_lang.kernel.wave.utils.general_utils import (
@@ -34,7 +32,6 @@ from ..common.shapes import make_shape_param
 from ..common.utils import (
     require_e2e,
     require_cdna3,
-    enable_scheduling_barriers,
 )
 from typing import Tuple
 
@@ -146,7 +143,6 @@ def test_t5_rpe_attention(
         subs=hyperparams,
         canonicalize=True,
         run_bench=run_bench,
-        use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,

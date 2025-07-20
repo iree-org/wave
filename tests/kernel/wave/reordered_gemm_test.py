@@ -18,10 +18,6 @@ from torch.testing import assert_close
 
 from .common.utils import (
     require_e2e,
-    require_cdna3,
-    enable_scheduling_barriers,
-    dump_generated_mlir,
-    param_bool,
 )
 
 
@@ -68,7 +64,6 @@ def testReorderedPureGemm(
         canonicalize=True,
         run_bench=run_bench,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,

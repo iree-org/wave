@@ -16,8 +16,6 @@ from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
 from wave_lang.kernel.wave.utils.torch_utils import (
-    device_arange,
-    device_full,
     device_randn,
     device_zeros,
     to_default_device,
@@ -30,14 +28,11 @@ from wave_lang.kernel.wave.templates.attention_common import (
     AttentionShape,
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-import os
 from torch.testing import assert_close
 from ..common.utils import (
     require_e2e,
-    enable_scheduling_barriers,
 )
-from ..common.shapes import get_test_shapes
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 shapes = [(128, 128, 128, 128, 128, 128)]
 
@@ -144,7 +139,6 @@ def test_alibi_attention(
         subs=hyperparams,
         canonicalize=True,
         run_bench=run_bench,
-        use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,

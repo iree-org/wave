@@ -20,10 +20,8 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-import os
 from torch.testing import assert_close
 from ..common.utils import (
-    enable_scheduling_barriers,
     param_bool,
     require_e2e,
     require_cdna3,
@@ -87,7 +85,6 @@ def testGQABSHDAttention(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
@@ -185,7 +182,6 @@ def testCausalGQABSHDAttentionF8(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,

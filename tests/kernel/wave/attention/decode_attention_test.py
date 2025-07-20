@@ -7,7 +7,6 @@
 import pytest
 import torch
 import math
-import wave_lang.kernel as tk
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
@@ -25,13 +24,10 @@ from wave_lang.kernel.wave.templates.decode_attention import (
     get_decode_attention_kernels,
 )
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-import os
 from torch.testing import assert_close
 from ..common.utils import (
     require_e2e,
     param_bool,
-    enable_scheduling_barriers,
-    dump_generated_mlir,
 )
 from ..common.shapes import get_test_shapes
 from wave_lang.kernel.wave.templates.gqa_decode_attention import (
@@ -88,7 +84,6 @@ def testFlashDecoding(
         canonicalize=True,
         run_bench=run_bench,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols_0,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
@@ -111,7 +106,6 @@ def testFlashDecoding(
         canonicalize=True,
         run_bench=run_bench,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols_1,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
@@ -195,7 +189,6 @@ def testGqaFlashDecoding(
         canonicalize=True,
         run_bench=run_bench,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk2[0],
@@ -210,7 +203,6 @@ def testGqaFlashDecoding(
         canonicalize=True,
         run_bench=run_bench,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk2[1],

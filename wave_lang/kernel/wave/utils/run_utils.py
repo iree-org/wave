@@ -121,7 +121,7 @@ dump_generated_mlir = int(os.environ.get("WAVE_DUMP_MLIR", 0))
 dump_generated_mlir_file = os.environ.get("WAVE_DUMP_MLIR_FILE", None)
 
 # Whether to use scheduling group barriers (needs LLVM fix).
-enable_scheduling_barriers = int(os.environ.get("WAVE_USE_SCHED_BARRIERS", 0))
+enable_scheduling_barriers = os.environ.get("WAVE_USE_SCHED_BARRIERS", None)
 
 
 def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:
@@ -133,6 +133,9 @@ def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:
     if dump_generated_mlir_file is not None and not options.print_mlir_file:
         # Do not override file if `print_mlir_file` is already set.
         options.print_mlir_file = str(dump_generated_mlir_file)
+
+    if enable_scheduling_barriers is not None:
+        options.use_scheduling_barriers = bool(int(enable_scheduling_barriers))
 
     options.backend = "rocm"
     options.target = get_default_arch()

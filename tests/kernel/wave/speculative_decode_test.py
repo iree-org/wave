@@ -10,7 +10,6 @@ from wave_lang.kernel.lang.global_symbols import *
 from .common.utils import (
     require_cdna3,
     require_e2e,
-    enable_scheduling_barriers,
 )
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
@@ -48,7 +47,6 @@ def get_wave_speculative_decoding_kernel(
         denorm_fp_math_f32="preserve-sign",
         schedule=False,
         wave_runtime=True,
-        use_scheduling_barriers=enable_scheduling_barriers,
     )
     options = set_default_run_config(options)
     speculative_decoding = wave_compile(options, speculative_decoding)

@@ -5,12 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import pytest
-from wave_lang.kernel.wave.utils.run_utils import (
-    get_default_arch,
-    dump_generated_mlir,
-    dump_generated_mlir_file,
-    enable_scheduling_barriers,
-)
+from wave_lang.kernel.wave.utils.run_utils import get_default_arch
 
 require_e2e = pytest.mark.require_e2e
 expensive_test = pytest.mark.expensive_test

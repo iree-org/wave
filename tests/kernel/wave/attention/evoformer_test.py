@@ -8,9 +8,7 @@ import pytest
 import torch
 from torch.nn import functional as F
 import math
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
-import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
@@ -32,9 +30,6 @@ import os
 from ..common.utils import (
     require_e2e,
     require_cdna3,
-    enable_scheduling_barriers,
-    dump_generated_mlir,
-    param_bool,
 )
 from ..common.shapes import get_test_shapes
 
@@ -102,7 +97,6 @@ def testEvoformerAttentionForward(
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,

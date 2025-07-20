@@ -14,19 +14,14 @@ from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
 from wave_lang.kernel.wave.utils.torch_utils import (
-    device_randn,
     device_zeros,
     quantized_tensor,
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-import os
-from torch.testing import assert_close
 from ..common.utils import (
     require_e2e,
     require_cdna3,
-    enable_scheduling_barriers,
-    dump_generated_mlir,
     param_bool,
 )
 from ..common.shapes import get_test_shapes
@@ -86,7 +81,6 @@ def testAttentionPure(
     options = WaveCompileOptions(
         subs=hyperparams,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         run_bench=run_bench,
         waves_per_eu=2,
