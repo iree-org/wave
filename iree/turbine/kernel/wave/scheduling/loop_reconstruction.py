@@ -18,7 +18,7 @@ from ..utils.graph_utils import replace_uses_in
 import torch.fx as fx
 from collections import deque, defaultdict
 from ..visualization import visualize_mapped_graphs, visualize_graph
-from ....support.logging import get_logger
+from wave_lang.support.logging import get_logger
 from .loop_reconstruction_utils import (
     ArgumentContext,
     create_fill_stage_schedule,

@@ -6,14 +6,15 @@
 
 """Debug flags and settings."""
 
-from typing import Callable, Optional
-from dataclasses import dataclass
 import logging
-import re
 import os
+import re
 import sys
-import torch
+from dataclasses import dataclass
+from typing import Callable, Optional
+
 import numpy as np
+import torch
 
 __all__ = [
     "default_trace_tensor_callback",

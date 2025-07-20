@@ -13,7 +13,7 @@ import functools
 import re
 from typing import List, Optional
 
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     Context,
     F64Type,
     IntegerType,

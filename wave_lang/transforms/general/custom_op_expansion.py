@@ -22,10 +22,13 @@ from iree.turbine.runtime.op_reg.base import (
     TensorArg,
     TensorListArg,
 )
-from iree.turbine.support.conversions import (
+from wave_lang.dynamo.type_conversion import (
+    NativeTypeConverter,
+)
+from wave_lang.support.conversions import (
     MLIR_TYPE_ASM_TO_TORCH_DTYPE,
 )
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     Block,
     FloatAttr,
     InsertionPoint,
@@ -37,9 +40,6 @@ from iree.turbine.support.ir_imports import (
     StringAttr,
     SymbolTable,
     Value,
-)
-from wave_lang.dynamo.type_conversion import (
-    NativeTypeConverter,
 )
 
 
@@ -67,7 +67,7 @@ class Pass:
 
     def erase_unused_op(self, op: Operation):
         """Recursively erases any unused torch ops, starting with op."""
-        from iree.turbine.support.ir_imports import OpResult
+        from wave_lang.support.ir_imports import OpResult
 
         worklist = set()
         worklist.add(op)

@@ -1,7 +1,7 @@
-`iree.turbine.support`
+`wave_lang.support`
 ======================
 
-.. automodule:: iree.turbine.support
+.. automodule:: wave_lang.support
   :imported-members:
   :members:
   :undoc-members:
@@ -9,7 +9,7 @@
 conversions
 --------------
 
-.. py:module:: iree.turbine.support.conversions
+.. py:module:: wave_lang.support.conversions
 
 .. autofunction:: dtype_to_element_type
 .. autofunction:: torch_dtype_to_numpy
@@ -18,7 +18,7 @@ conversions
 debugging
 --------------
 
-.. py:module:: iree.turbine.support.debugging
+.. py:module:: wave_lang.support.debugging
 
 .. autoclass:: DebugFlags
   :members:
@@ -27,7 +27,7 @@ debugging
 logging
 --------------
 
-.. py:module:: iree.turbine.support.logging
+.. py:module:: wave_lang.support.logging
 
 .. autoclass:: DefaultFormatter
 .. autofunction:: get_logger
@@ -35,7 +35,7 @@ logging
 tools
 --------------
 
-.. py:module:: iree.turbine.support.tools
+.. py:module:: wave_lang.support.tools
 
 .. autofunction:: iree_tool_format_cli_input_arg
 .. autofunction:: iree_tool_prepare_input_args

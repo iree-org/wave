@@ -20,10 +20,13 @@ from iree.compiler.extras.fx_importer import (
     ContextCache,
     RefTracker,
 )
-from iree.turbine.support.conversions import (
+from wave_lang.dynamo.type_conversion import (
+    NativeTypeConverter,
+)
+from wave_lang.support.conversions import (
     TORCH_DTYPE_TO_IREE_TYPE,
 )
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     ArrayAttr,
     Attribute,
     BF16Type,
@@ -61,10 +64,7 @@ from iree.turbine.support.ir_imports import (
     func_d,
     tensor_d,
 )
-from iree.turbine.support.logging import aot_logger as logger
-from wave_lang.dynamo.type_conversion import (
-    NativeTypeConverter,
-)
+from wave_lang.support.logging import aot_logger as logger
 
 from ..tensor_traits import (
     DeviceAffinity,

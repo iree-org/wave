@@ -5,7 +5,7 @@ from typing import Callable
 import numpy as np
 import torch
 
-from iree.turbine.support.logging import get_logger
+from wave_lang.support.logging import get_logger
 
 logger = get_logger("turbine.wave.interpreter")
 

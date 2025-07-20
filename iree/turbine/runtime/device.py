@@ -31,7 +31,7 @@ from iree.runtime import (
     get_driver,
 )
 
-from ..support.conversions import (
+from wave_lang.support.conversions import (
     dtype_to_element_type,
     torch_dtype_to_numpy,
 )
@@ -58,7 +58,7 @@ class UnsupportedTorchDeviceError(Exception):
         )
 
 
-from ..support.logging import runtime_logger as logger
+from wave_lang.support.logging import runtime_logger as logger
 
 __all__ = [
     "get_vm_instance",

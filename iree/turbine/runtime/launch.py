@@ -29,7 +29,7 @@ from iree.runtime import (
     VmVariantList,
 )
 
-from ..support.logging import runtime_logger as logger
+from wave_lang.support.logging import runtime_logger as logger
 
 from .device import (
     get_device_from_torch,

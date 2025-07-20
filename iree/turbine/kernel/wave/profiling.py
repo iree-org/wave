@@ -15,7 +15,7 @@ from typing import Any
 
 import torch
 import iree.runtime
-from ...support.conversions import TORCH_DTYPE_TO_SIGNED_MLIR_TYPE_ASM
+from wave_lang.support.conversions import TORCH_DTYPE_TO_SIGNED_MLIR_TYPE_ASM
 from .compile_options import WaveCompileOptions
 
 BenchmarkResult = namedtuple(

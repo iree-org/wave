@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 from torch.export import ExportedProgram
 
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     Context,
     Location,
     MLIRError,
@@ -26,7 +26,7 @@ from iree.turbine.support.ir_imports import (
     PassManager,
     StringAttr,
 )
-from iree.turbine.support.logging import aot_logger as logger
+from wave_lang.support.logging import aot_logger as logger
 from wave_lang.transforms.general.custom_op_expansion import ExpandCustomOpsPass
 
 from . import builtins

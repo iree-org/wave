@@ -6,7 +6,7 @@ import lit.formats
 import lit.llvm
 import lit.util
 
-from iree.turbine.support.logging import get_logger
+from wave_lang.support.logging import get_logger
 
 logger = get_logger("turbine.lit_tests")
 

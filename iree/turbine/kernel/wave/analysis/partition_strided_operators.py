@@ -19,7 +19,7 @@ from ...ops.wave_ops import (
 )
 from ..._support.indexing import IndexSequence, IndexSymbol
 from ..._support.tracing import CapturedTrace
-from ....support.logging import get_logger
+from wave_lang.support.logging import get_logger
 from ..utils.general_utils import (
     all_equal,
 )

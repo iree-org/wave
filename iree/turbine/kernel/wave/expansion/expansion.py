@@ -49,7 +49,7 @@ from ..utils.graph_utils import (
     get_users,
     get_inputs,
 )
-from ....support.logging import get_logger
+from wave_lang.support.logging import get_logger
 from copy import deepcopy
 import math
 

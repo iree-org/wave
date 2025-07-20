@@ -20,14 +20,14 @@ from torch.utils._pytree import (
     treespec_dumps,
 )
 
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     DictAttr,
     Location,
     StringAttr,
     Value,
     func_d,
 )
-from iree.turbine.support.logging import aot_logger as logger
+from wave_lang.support.logging import aot_logger as logger
 
 from ...tensor_traits import DeviceAffinity
 from ..ir_utils import ModuleBuilder, attributes_from_argument_device_affinities

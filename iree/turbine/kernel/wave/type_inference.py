@@ -7,7 +7,7 @@
 from ..ops.wave_ops import *
 from .._support.tracing import CapturedTrace
 import torch.fx as fx
-from ...support.logging import get_logger
+from wave_lang.support.logging import get_logger
 
 logger = get_logger("turbine.wave.type_inference")
 

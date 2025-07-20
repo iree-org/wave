@@ -18,7 +18,7 @@ from iree.compiler.api import (
     Session,
     Source,
 )
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     Context,
     Operation,
 )

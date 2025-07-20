@@ -20,7 +20,7 @@ import threading
 import torch
 from torch import Tensor
 
-from ...support.ir_imports import (
+from wave_lang.support.ir_imports import (
     Block,
     Context,
     FunctionType,
@@ -37,9 +37,9 @@ from ...support.ir_imports import (
     func_d,
 )
 
-from ...support.logging import runtime_logger as logger
+from wave_lang.support.logging import runtime_logger as logger
 
-from ...support.conversions import (
+from wave_lang.support.conversions import (
     TORCH_DTYPE_TO_IREE_TYPE_ASM,
 )
 

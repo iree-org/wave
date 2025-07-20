@@ -24,9 +24,9 @@ from abc import ABC, abstractmethod
 import logging
 import textwrap
 
-from ...support.logging import runtime_logger as logger
+from wave_lang.support.logging import runtime_logger as logger
 
-from ...support.ir_imports import (
+from wave_lang.support.ir_imports import (
     FlatSymbolRefAttr,
     FunctionType,
     MLIRError,

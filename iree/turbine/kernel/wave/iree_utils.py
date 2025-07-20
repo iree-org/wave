@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import torch
-from ...support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
+from wave_lang.support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
 from iree.turbine.runtime.launch import Launchable
 
 

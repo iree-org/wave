@@ -18,7 +18,7 @@ from typing import (
 import torch
 from torch.utils._pytree import tree_map
 
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     F32Type,
     F64Type,
     IndexType,

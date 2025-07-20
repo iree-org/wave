@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from .._support.tracing import CapturedTrace
-from ...support.logging import get_logger
+from wave_lang.support.logging import get_logger
 from .._support.indexing import IndexingContext
 from ..ops.wave_ops import *
 from ..lang.global_symbols import *

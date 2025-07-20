@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from ....support.logging import get_logger
+from wave_lang.support.logging import get_logger
 
 logger = get_logger("wave.memory_analysis.solver")
 

@@ -12,10 +12,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from iree.turbine.support.conversions import (
+from wave_lang.support.conversions import (
     TORCH_DTYPE_TO_IREE_TYPE,
 )
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     IndexType,
     IntegerType,
     IrType,

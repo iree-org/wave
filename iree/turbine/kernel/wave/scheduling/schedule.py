@@ -41,7 +41,7 @@ from ...lang.global_symbols import (
     SHUFFLE_UNITS,
 )
 import torch.fx as fx
-from ....support.logging import get_logger
+from wave_lang.support.logging import get_logger
 import json
 import os
 

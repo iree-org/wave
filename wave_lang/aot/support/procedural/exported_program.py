@@ -28,7 +28,7 @@ from iree.compiler.extras.fx_importer import (
     GraphNodeImporter,
     InputInfo,
 )
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     FlatSymbolRefAttr,
     FunctionType,
     IrType,
@@ -39,7 +39,7 @@ from iree.turbine.support.ir_imports import (
     func_d,
     util_d,
 )
-from iree.turbine.support.logging import aot_logger as logger
+from wave_lang.support.logging import aot_logger as logger
 
 from ...tensor_traits import (
     DeviceAffinity,

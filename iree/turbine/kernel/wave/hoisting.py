@@ -6,7 +6,7 @@
 
 from .constraints import Constraint
 from .utils.general_utils import get_induction_variable
-from ...support.logging import get_logger
+from wave_lang.support.logging import get_logger
 from iree.turbine.kernel._support.tracing import CapturedTrace
 import torch.fx as fx
 from ..ops.wave_ops import *

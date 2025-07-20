@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import torch.fx as fx
-from ....support.logging import get_logger
+from wave_lang.support.logging import get_logger
 from .graph_utils import (
     Edge,
     EdgeWeight,

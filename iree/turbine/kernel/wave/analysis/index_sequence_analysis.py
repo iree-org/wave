@@ -57,7 +57,7 @@ from ..utils.print_utils import (
     print_trace,
     try_apply_pass,
 )
-from ....support.logging import get_logger
+from wave_lang.support.logging import get_logger
 
 from copy import deepcopy, copy
 from enum import Enum

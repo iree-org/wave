@@ -17,7 +17,7 @@ from typing import (
 
 import torch
 
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     F32Type,
     IrType,
     RankedTensorType,

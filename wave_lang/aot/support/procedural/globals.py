@@ -19,13 +19,13 @@ from torch.utils._pytree import (
     tree_unflatten,
 )
 
-from iree.turbine.support.ir_imports import (
+from wave_lang.support.ir_imports import (
     IrType,
     Operation,
     Value,
     util_d,
 )
-from iree.turbine.support.logging import aot_logger as logger
+from wave_lang.support.logging import aot_logger as logger
 
 from ..ir_utils import (
     GlobalAttributes,
