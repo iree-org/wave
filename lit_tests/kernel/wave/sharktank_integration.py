@@ -35,12 +35,12 @@ from iree.turbine.kernel.wave.utils.general_utils import (
 from iree.turbine.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from iree.turbine.runtime.op_reg.base import (
+from wave_lang.runtime.op_reg.base import (
     CustomOp,
     KernelBuilder,
     KernelSelection,
 )
-from iree.turbine.runtime.op_reg.impl_helper import (
+from wave_lang.runtime.op_reg.impl_helper import (
     call_function,
 )
 from wave_lang.transforms.merger import Merger

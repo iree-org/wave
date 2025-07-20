@@ -4,33 +4,30 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import atexit
+import ctypes
+import platform
 from functools import lru_cache
 from hashlib import sha1
+from threading import Lock, local
 from typing import Any, Callable, Dict, Optional, Union
-from threading import local, Lock
 
-import warnings
-import platform
-import atexit
-
-import ctypes
 import torch
 
 from iree.runtime import (
     BufferUsage,
+    ExternalTimepointFlags,
     HalBufferView,
     HalDevice,
     HalDriver,
     HalExternalTimepoint,
     MemoryType,
+    SemaphoreCompatibility,
     VmInstance,
     VmModule,
-    SemaphoreCompatibility,
-    ExternalTimepointFlags,
     create_hal_module,
     get_driver,
 )
-
 from wave_lang.support.conversions import (
     dtype_to_element_type,
     torch_dtype_to_numpy,

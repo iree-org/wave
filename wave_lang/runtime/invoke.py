@@ -5,20 +5,17 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from typing import (
-    Any,
     Callable,
-    Sequence,
 )
 
-from .device import Device
-
 from iree.runtime import (
+    HalFence,
     VmContext,
     VmFunction,
-    HalFence,
     VmVariantList,
 )
 
+from .device import Device
 
 __all__ = [
     "invoke_vm_function",
@@ -33,7 +30,7 @@ def invoke_vm_function(
     arg_list: VmVariantList,
     ret_list: VmVariantList,
     *,
-    timer: Callable[[], float] = (lambda: 0.0)
+    timer: Callable[[], float] = (lambda: 0.0),
 ):
     """Invokes a vm function on a device, adding async fences to the arg_list if is_async.
 

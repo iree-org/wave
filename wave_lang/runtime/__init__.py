@@ -7,4 +7,3 @@
 from .device import *
 from .invoke import *
 from .launch import *
-from . import op_reg

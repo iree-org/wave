@@ -8,18 +8,20 @@
 dispatcher.
 """
 
-from typing import Any, Callable, List, Optional, Sequence, Type, Union, cast
-
-from abc import ABC, abstractmethod
 import functools
 import logging
 import re
 import textwrap
 import threading
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Optional, Sequence, Type, Union, cast
 
 import torch
 from torch import Tensor
 
+from wave_lang.support.conversions import (
+    TORCH_DTYPE_TO_IREE_TYPE_ASM,
+)
 from wave_lang.support.ir_imports import (
     Block,
     Context,
@@ -27,21 +29,16 @@ from wave_lang.support.ir_imports import (
     IndexType,
     InsertionPoint,
     IntegerAttr,
+    IrType,
     Location,
     StringAttr,
     SymbolTable,
-    IrType,
     Value,
     arith_d,
     builtin_d,
     func_d,
 )
-
 from wave_lang.support.logging import runtime_logger as logger
-
-from wave_lang.support.conversions import (
-    TORCH_DTYPE_TO_IREE_TYPE_ASM,
-)
 
 __all__ = [
     "ArgDescriptor",

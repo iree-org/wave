@@ -6,7 +6,7 @@
 
 import torch
 from wave_lang.support.conversions import TORCH_DTYPE_TO_IREE_TYPE_ASM
-from iree.turbine.runtime.launch import Launchable
+from wave_lang.runtime.launch import Launchable
 
 
 def get_chain_mmt_asm(

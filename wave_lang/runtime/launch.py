@@ -11,31 +11,27 @@ import torch
 from torch import Tensor
 
 from iree.compiler.api import (
+    Output,
     Session,
     Source,
-    Output,
 )
-
 from iree.runtime import (
-    create_io_parameters_module,
     HalBufferView,
     HalElementType,
-    HalFence,
     ParameterProvider,
     VmContext,
     VmFunction,
     VmModule,
     VmRef,
     VmVariantList,
+    create_io_parameters_module,
 )
-
 from wave_lang.support.logging import runtime_logger as logger
 
 from .device import (
-    get_device_from_torch,
     Device,
+    get_device_from_torch,
 )
-
 from .invoke import invoke_vm_function
 
 __all__ = [

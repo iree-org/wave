@@ -11,7 +11,10 @@ from torch import Tensor
 from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.symbolic_shapes import ShapeEnv
 
-from iree.turbine.runtime.op_reg.base import (
+from wave_lang.dynamo.type_conversion import (
+    NativeTypeConverter,
+)
+from wave_lang.runtime.op_reg.base import (
     ALL_CUSTOM_OP_REGS,
     AttrArg,
     CustomOp,
@@ -21,9 +24,6 @@ from iree.turbine.runtime.op_reg.base import (
     KernelSelection,
     TensorArg,
     TensorListArg,
-)
-from wave_lang.dynamo.type_conversion import (
-    NativeTypeConverter,
 )
 from wave_lang.support.conversions import (
     MLIR_TYPE_ASM_TO_TORCH_DTYPE,

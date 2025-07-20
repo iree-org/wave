@@ -18,13 +18,10 @@ Typical usage:
 ```
 """
 
-from typing import Sequence
-
-from abc import ABC, abstractmethod
 import logging
 import textwrap
-
-from wave_lang.support.logging import runtime_logger as logger
+from abc import ABC, abstractmethod
+from typing import Sequence
 
 from wave_lang.support.ir_imports import (
     FlatSymbolRefAttr,
@@ -35,13 +32,12 @@ from wave_lang.support.ir_imports import (
     TypeAttr,
     Value,
 )
-
+from wave_lang.support.logging import runtime_logger as logger
 from wave_lang.transforms.merger import Merger
 
 from .base import (
     KernelBuilder,
 )
-
 
 __all__ = [
     "TemplateLoader",
@@ -64,7 +60,7 @@ class TemplateLoader(ABC):
         except MLIRError as e:
             lines = asm.splitlines()
             lines_numbered = "\n".join(
-                [f"      {str(i+1):>5}: {l}" for i, l in enumerate(lines)]
+                [f"      {str(i + 1):>5}: {l}" for i, l in enumerate(lines)]
             )
             raise RuntimeError(
                 f"Error parsing generated op template:"
@@ -152,7 +148,7 @@ class JinjaTemplateLoader(TemplateLoader):
         suffix: str = ".mlir",
     ):
         try:
-            from jinja2 import Environment, PackageLoader, select_autoescape
+            from jinja2 import Environment, PackageLoader
         except ModuleNotFoundError as e:
             raise ModuleNotFoundError(
                 "Cannot use JinjaTemplateLoader if jinja2 is not installed"

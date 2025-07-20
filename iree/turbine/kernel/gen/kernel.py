@@ -30,7 +30,7 @@ from ..compiler.ir import (
     IrType,
 )
 
-from ...runtime.op_reg import (
+from wave_lang.runtime.op_reg import (
     def_library,
     CustomOp,
     KernelBuilder,
