@@ -144,7 +144,9 @@ class WaveKernel:
                     self.func_name,
                     **benchmark_flags,
                 )
-                print_bench_result(benchmark_results, self.options.bench_file)
+                print_bench_result(
+                    benchmark_results, self.options.benchmark_results_file
+                )
 
         return self.asm
 
