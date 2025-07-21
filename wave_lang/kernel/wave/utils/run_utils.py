@@ -24,6 +24,7 @@ def write_file(name, mode, data):
     with open(name, mode) as file:
         file.write(data)
 
+
 def print_bench_result(result, filename):
     import json
 
@@ -32,6 +33,7 @@ def print_bench_result(result, filename):
         write_file(filename, "w", res)
     else:
         print(res)
+
 
 def get_benchmark_flags(options: WaveCompileOptions):
     benchmark_flags = {}

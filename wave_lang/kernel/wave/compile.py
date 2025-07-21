@@ -19,7 +19,12 @@ from .cache import (
 )
 from .compile_options import WaveCompileOptions
 from .utils.compile_utils import compile_to_vmfb
-from .utils.run_utils import write_file, print_bench_result, invoke_with_wave_runtime, get_benchmark_flags
+from .utils.run_utils import (
+    write_file,
+    print_bench_result,
+    invoke_with_wave_runtime,
+    get_benchmark_flags,
+)
 from .water import water_leak_in_bounds_check
 from wave_lang.runtime.launch import Launchable
 from .profiling import benchmark_module
