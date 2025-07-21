@@ -85,7 +85,6 @@ def testGemmBench(tmp_path):
         canonicalize=True,
         run_bench=True,
         schedule=enable_scheduling,
-        use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
