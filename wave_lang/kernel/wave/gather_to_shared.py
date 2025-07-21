@@ -358,7 +358,7 @@ def gather_to_shared(
             )
 
         logger.info(f"bounds={bounds}")
-        contiguous_bound = bounds.get(symbolic_shape[-1], None)
+        contiguous_bound = bounds.get(symbolic_shape[-1], None) if bounds else None
 
         config = get_gather_to_shared_config(
             read,
