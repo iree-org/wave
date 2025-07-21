@@ -77,7 +77,7 @@ def testGemmBench(tmp_path):
     dynamic_dims = False
     mfma_variant = MMAType.F32_16x16x16_F16
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant, tkl.f16
+        shape, dynamic_dims, mfma_variant, torch.float16
     )
 
     assert not perf_filename_tk.exists()
@@ -246,7 +246,7 @@ def testGemmGatherToLDS(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    generate_iree_ref("mmt", [a, b], [iree_ref])
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
 
 
