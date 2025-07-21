@@ -25,6 +25,7 @@ from wave_lang.runtime.launch import Launchable
 from .profiling import benchmark_module
 import iree.runtime as rt
 
+
 class WaveKernel:
     """
     Represents a wave kernel that can be invoked by the user.

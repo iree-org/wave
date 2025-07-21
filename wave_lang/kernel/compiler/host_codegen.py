@@ -32,6 +32,7 @@ from .builder import (
 from .dispatch_codegen import StreamExecutable
 from .kernel_codegen import BindingDesc, KernelSignature
 
+
 def memref_to_tensor(memrefs: list[IrType], use_views: bool = False):
     if use_views:
         view_type = IrType.parse("!hal.buffer_view")

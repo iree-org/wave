@@ -6,15 +6,13 @@
 import functools
 import os
 from itertools import chain
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
-import iree.runtime as rt
 import torch
 
 from wave_lang.kernel.lang import IndexSymbol
 
 from ..compile_options import WaveCompileOptions
-from ..profiling import benchmark_module
 
 
 @functools.lru_cache
