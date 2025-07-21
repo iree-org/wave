@@ -199,6 +199,7 @@ class WaveCacheManager(object):
             options.optimization_level,
             options.denorm_fp_math_f32,
             options.waves_per_eu,
+            options.iree_launch_async,
             options.use_buffer_load_ops,
             options.use_buffer_store_ops,
             options.use_stride_cache_swizzle,

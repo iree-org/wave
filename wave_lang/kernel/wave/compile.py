@@ -65,10 +65,11 @@ class WaveKernel:
         self.symbols_args_map = symbols_args_map
 
         if not options.wave_runtime:
+            # Disable async dispatch for benchmarking.
+            is_async = options.iree_launch_async and not options.run_bench
+
             # 'launchable' decides if function is async or not based on name.
-            self.func_name = options.func_name + (
-                "$async" if options.iree_launch_async else ""
-            )
+            self.func_name = options.func_name + ("$async" if is_async else "")
 
             def loader(device):
                 vm_instance = device.vm_instance
@@ -262,6 +263,8 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     # don't want to cache the kernel in that case.
     trace = kernel._trace()
 
+    # Disable async dispatch for benchmarking.
+    is_async = options.iree_launch_async and not options.run_bench
     host_codegen.isolated_test_call(
         mb,
         exe,
@@ -270,7 +273,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         options.func_name,
         options.dynamic_symbols,
         location_capture_config=options.location_capture_config,
-        async_dispatch=options.iree_launch_async,
+        async_dispatch=is_async,
     )
     asm = mb.module_op.get_asm(
         enable_debug_info=options.location_capture_config.level
