@@ -282,9 +282,10 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         != LocationCaptureLevel.NONE,
         use_local_scope=options.use_local_scope,
     )
+
     if options.print_mlir:
         if options.print_mlir_file:
-            _write_file(options.print_mlir_file, "w", asm)
+            write_file(options.print_mlir_file, "w", asm)
         else:
             print(asm)
 

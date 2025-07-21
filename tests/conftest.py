@@ -59,7 +59,7 @@ def set_mlir_filename(request):
     if not option:
         return
 
-    import iree.turbine.kernel.wave.utils.run_utils as run_utils
+    import wave_lang.kernel.wave.utils.run_utils as run_utils
 
     run_utils.dump_generated_mlir = True
     run_utils.dump_generated_mlir_file = os.path.join(
