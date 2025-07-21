@@ -185,6 +185,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     """
     Compiles the wave kernel to an executable.
     """
+    validate_options(options)
 
     cls = WaveKernelWithProfile if options.profile_python_wrapper else WaveKernel
 
@@ -319,3 +320,8 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         symbols_args_map,
         trace,
     )
+
+
+def validate_options(options: WaveCompileOptions):
+    if options.wave_runtime and options.run_bench:
+        raise ValueError("Banchmarking is not supported in wave_runtime yet")
