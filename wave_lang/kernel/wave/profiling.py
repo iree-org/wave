@@ -10,6 +10,8 @@ import tempfile
 from collections import namedtuple
 from pathlib import Path
 
+from wave_lang.runtime.device import get_device_from_torch
+
 import iree.runtime
 import ml_dtypes
 import numpy
@@ -148,7 +150,9 @@ def benchmark_module(
     )
     args += inputs
     args.append("--module=-")
-    args.append(f"--device={options.device}")
+
+    device = get_device_from_torch(kernel_inputs[0].device).driver_id
+    args.append(f"--device={device}")
 
     try:
         benchmark_process = subprocess.run(
