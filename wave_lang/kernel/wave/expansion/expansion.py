@@ -19,6 +19,7 @@ from ..._support.indexing import IndexingContext, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
     MMA,
+    ScatterAdd,
     Allocate,
     Conditional,
     CustomOp,
@@ -752,6 +753,7 @@ def is_leaf_node(node):
         isinstance(custom, Write)
         or (isinstance(custom, GetResult) and not custom.users)
         or isinstance(custom, SetSymbol)
+        or isinstance(custom, ScatterAdd)
     )
 
 

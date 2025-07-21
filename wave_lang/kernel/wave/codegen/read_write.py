@@ -27,6 +27,9 @@ from wave_lang.support.ir_imports import (
     memref_d,
     vector_d,
 )
+from wave_lang.aot.support.ir_utils import (
+    _is_float_type,
+)
 
 from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, IndexSymbol
 from ...compiler.base import ValidationError
@@ -46,6 +49,7 @@ from ...ops.wave_ops import (
     get_custom,
     read,
     write,
+    scatter_add,
 )
 from ..utils.general_utils import get_fastest_index, infer_dim
 from ..utils.mapping_utils import transform_index_on_mapping
@@ -978,3 +982,97 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         dst_indices=dst_index,
         transfer_type=store_type,
     )
+
+
+def _handle_scatter_op(
+    emitter: WaveEmitter,
+    node: fx.Node,
+    rmw_kind: arith_d.AtomicRMWKind,
+):
+    try:
+        (
+            register_src,
+            register_idx,
+            dim,
+            memory,
+            mapping,
+            elements_per_thread,
+            bounds,
+        ) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    output_shape = _get_symbolic_shape(memory)
+    elements_per_thread = int(cast_py_literal(emitter, elements_per_thread))
+    cast_vector(emitter, register_idx, element_type=IndexType.get())
+
+    index_mapping = mapping.map_output_indices(output_shape)
+
+    idxc = IndexingContext.current()
+    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
+    iters = mapping.iters
+    index = node.index
+    subs = [
+        (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
+    ] + list(idxc.subs.items())
+
+    result_index = {key: m.subs(subs) for key, m in zip(output_shape, index_mapping)}
+
+    mask = _build_mask(emitter, index, elements_per_thread, bounds)
+    if mask is None:
+        mask_vec_type = VectorType.get(
+            [elements_per_thread], IntegerType.get_signless(1)
+        )
+        mask = _constant_mask(mask_vec_type)
+
+    start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+        emitter, result_index
+    )
+
+    register_idx = cast_py_value(emitter, register_idx).ir_value
+    register_src = cast_py_value(emitter, register_src).ir_value
+    memory = cast_py_value(emitter, memory).ir_value
+
+    results = []
+    for i in range(elements_per_thread):
+        index_elem = vector_d.extract(
+            register_idx, static_position=[i], dynamic_position=[]
+        )
+        index_elem = arith_d.index_cast(IndexType.get(), index_elem)
+        reg_elem = vector_d.extract(
+            register_src, static_position=[i], dynamic_position=[]
+        )
+        indices = list(start_indices)
+        if dim >= len(indices):
+            raise ValueError(
+                f"Invalid scatter dim {dim} for rank-{len(indices)} memory"
+            )
+
+        indices[dim] = index_elem
+
+        # In case 4 elements per thread are used, makes sure values are stored at the right non-scatter dimension
+        if elements_per_thread > 1:
+            other_dims = [d for d in range(len(indices)) if d != dim]
+            if other_dims:
+                # Heuristic: offset the innermost (fastest varying) dimension
+                # TODO: Ideally emit a vectorized atomic op instead of 4 scalar atomics that store to consecutive locations
+                fast_dim = other_dims[-1]
+                indices[fast_dim] = arith_d.addi(
+                    indices[fast_dim], arith_d.constant(IndexType.get(), i)
+                )
+        result = memref_d.atomic_rmw(rmw_kind, reg_elem, memory, indices)
+        results.append(result)
+
+    result_type = VectorType.get([elements_per_thread], register_src.type.element_type)
+    result_vector = vector_d.from_elements(result_type, results)
+
+
+@handle_op(scatter_add)
+def handle_scatter_add(emitter: WaveEmitter, node: fx.Node):
+    register_src = cast_py_value(emitter, node.args[0])
+    src_data_type = get_type_or_element_type(register_src.ir_value.type)
+    if _is_float_type(src_data_type):
+        rmw_kind = arith_d.AtomicRMWKind.addf
+    else:
+        rmw_kind = arith_d.AtomicRMWKind.addi
+    _handle_scatter_op(emitter, node, rmw_kind)
