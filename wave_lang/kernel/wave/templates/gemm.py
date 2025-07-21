@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import torch
+from typing import Sequence
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -18,10 +19,13 @@ from wave_lang.kernel.wave.utils.general_utils import (
 
 def get_gemm_kernel(
     shape: tuple[int, int, int],
-    dynamic_dims: bool,
+    dynamic_dims: bool | tuple[bool, bool, bool],
     mfma_variant: MMAType,
     dtype: torch.dtype = torch.float16,
 ):
+    if not isinstance(dynamic_dims, Sequence):
+        dynamic_dims = (dynamic_dims,) * 3
+
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -44,7 +48,7 @@ def get_gemm_kernel(
 
     # With dynamic dimensions, we need to add an assumption on how big
     # the iterate dimension is to determine whether we can schedule or not.
-    if dynamic_dims:
+    if dynamic_dims[2]:
         constraints += [tkw.Assumption(K > BLOCK_K * 4)]
 
     # Wave-level micro-kernel.
@@ -88,12 +92,16 @@ def get_gemm_kernel(
     hyperparams.update(get_default_scheduling_params())
 
     dynamic_symbols = []
-    if dynamic_dims:
+    if dynamic_dims[0]:
         dynamic_symbols.append(M)
-        dynamic_symbols.append(N)
-        dynamic_symbols.append(K)
         del hyperparams[M]
+
+    if dynamic_dims[1]:
+        dynamic_symbols.append(N)
         del hyperparams[N]
+
+    if dynamic_dims[2]:
+        dynamic_symbols.append(K)
         del hyperparams[K]
 
     return gemm, hyperparams, dynamic_symbols

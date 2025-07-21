@@ -899,6 +899,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             elements_per_thread,
             src_mapping,
             dst_mapping,
+            src_bounds,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
@@ -946,16 +947,24 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
     dst_index, _, _ = _build_start_indices(emitter, dst_idx)
 
-    if False:  # TODO: Buffer stuff needs upstream fixes
-        strides = strides_from_symbolic_shape(
-            IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
-        )
-        strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
+    strides = strides_from_symbolic_shape(
+        IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
+    )
+    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
 
-        src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
-        src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
+    src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
+    src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
 
-        src_index = [offset_th]
+    # We previously checked mask is same for all elements, so we can use
+    # elements_per_thread=1 to build the mask.
+    mask = _build_mask(emitter, src_idx, elements_per_thread=1, bounds=src_bounds)
+    if mask:
+        mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
+        oob_index_value = _get_out_of_bounds_index(element_type)
+        oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+        offset_th = arith_d.select(mask, offset_th, oob_index)
+
+    src_index = [offset_th]
 
     amdgpu_d.gather_to_lds(
         src=src,

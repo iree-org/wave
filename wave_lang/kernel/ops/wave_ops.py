@@ -2524,3 +2524,4 @@ class GatherToLDS(CustomOp):
     elements_per_thread: Optional[IndexExpr | int]
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
+    src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
