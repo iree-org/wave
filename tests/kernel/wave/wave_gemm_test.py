@@ -86,6 +86,7 @@ def testGemmBench(tmp_path):
         subs=hyperparams,
         canonicalize=True,
         run_bench=True,
+        iree_launch_async=False,
         schedule=enable_scheduling,
         use_scheduling_barriers=enable_scheduling_barriers,
         dynamic_symbols=dynamic_symbols,
