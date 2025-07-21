@@ -2167,6 +2167,8 @@ def test_scalar_codegen_f32():
     scalar_codegen_f32 = wave_compile(options, scalar_codegen_f32)
     print(scalar_codegen_f32.asm)
 
+    # CHECK-LABEL: test_scalar_codegen_f32
+
     # Passed scalars' dtype
     # CHECK: func.func @scalar_codegen_f32(
     # CHECK-SAME: %arg2: f32, %arg3: f32)
@@ -2177,8 +2179,11 @@ def test_scalar_codegen_f32():
     # CHECK: arith.addf
 
     # Final dispatch args dtype
+    # CHECK: func.func @isolated_benchmark$async(%[[ARG0:.*]]: !hal.buffer_view, %[[ARG1:.*]]: !hal.buffer_view, %[[ARG2:.*]]: f32, %[[ARG3:.*]]: f32
+    # CHECK: %[[V0:.*]] = hal.tensor.import wait(%{{.*}}) => %[[ARG0]]
+    # CHECK: %[[V1:.*]] = hal.tensor.import wait(%{{.*}}) => %[[ARG1]]
     # CHECK: flow.dispatch @scalar_codegen_f32::@scalar_codegen_f32(
-    # CHECK-SAME: %{{.*}}, %{{.*}}, %arg2, %arg3)
+    # CHECK-SAME: %[[V0]], %[[V1]], %[[ARG2]], %[[ARG3]])
 
 
 @run_test
@@ -2220,6 +2225,8 @@ def test_scalar_codegen_i32():
     scalar_codegen_i32 = wave_compile(options, scalar_codegen_i32)
     print(scalar_codegen_i32.asm)
 
+    # CHECK-LABEL: test_scalar_codegen_i32
+
     # Passed scalars' dtype: i32
     # CHECK: func.func @scalar_codegen_i32(
     # CHECK-SAME: %arg2: i32, %arg3: i32)
@@ -2230,8 +2237,11 @@ def test_scalar_codegen_i32():
     # CHECK: arith.addi
 
     # Final dispatch args dtype
+    # CHECK: func.func @isolated_benchmark$async(%[[ARG0:.*]]: !hal.buffer_view, %[[ARG1:.*]]: !hal.buffer_view, %[[ARG2:.*]]: i32, %[[ARG3:.*]]: i32
+    # CHECK: %[[V0:.*]] = hal.tensor.import wait(%{{.*}}) => %[[ARG0]]
+    # CHECK: %[[V1:.*]] = hal.tensor.import wait(%{{.*}}) => %[[ARG1]]
     # CHECK: flow.dispatch @scalar_codegen_i32::@scalar_codegen_i32(
-    # CHECK-SAME: %{{.*}}, %{{.*}}, %arg2, %arg3)
+    # CHECK-SAME: %[[V0]], %[[V1]], %[[ARG2]], %[[ARG3]])
 
 
 #  This kernel copies of data from a into b if tid.x < threshold.
