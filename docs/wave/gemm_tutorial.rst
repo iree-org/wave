@@ -26,7 +26,7 @@ First, we need to import the necessary modules and define our symbolic dimension
     from wave_lang.kernel.lang.wave_types import *
     from wave_lang.kernel.lang.global_symbols import *
     from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-    import wave_lang.kernel as tkl
+    import wave_lang.kernel.lang as tkl
     import wave_lang.kernel.wave as tkw
     from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
     import torch
