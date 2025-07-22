@@ -2518,8 +2518,8 @@ class GatherToLDS(CustomOp):
 
     src: Memory
     dst: Memory
-    src_idx: dict[IndexSymbol, IndexSequence]
-    dst_idx: dict[IndexSymbol, IndexSequence]
+    src_index: dict[IndexSymbol, IndexSequence]
+    dst_index: dict[IndexSymbol, IndexSequence]
     dtype: DataType
     elements_per_thread: Optional[IndexExpr | int]
     src_mapping: Optional[IndexMapping]

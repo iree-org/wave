@@ -5,13 +5,13 @@ import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
 
-from ..._support.indexing import IndexSymbol
+from ..._support.indexing import IndexSymbol, IndexSequence
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
-    MMA,
     GetResult,
     IterArg,
     Iterate,
+    MMA,
     NewRegister,
     Output,
     Placeholder,
@@ -40,6 +40,27 @@ class PipelineStage(Enum):
     PROLOGUE = 0
     KERNEL = 1
     EPILOGUE = 2
+
+
+def update_index(
+    index: dict[IndexSymbol, IndexSequence], subs: dict[IndexSymbol, IndexSymbol]
+) -> dict[IndexSymbol, IndexSequence]:
+    return {k: v.subs(subs) for k, v in index.items()}
+
+
+def update_node_index(
+    node: "CustomOp",
+    induction_variable: IndexSymbol,
+    current_induction_variable: IndexSymbol,
+):
+    subs = {induction_variable: current_induction_variable}
+    if node.index:
+        node.index = update_index(node.index, subs)
+
+    if src_idx := getattr(node, "src_index", None):
+        node.update_arg("src_index", update_index(src_idx, subs))
+    if dst_idx := getattr(node, "dst_index", None):
+        node.update_arg("dst_index", update_index(dst_idx, subs))
 
 
 def add_nodes_by_schedule(
@@ -105,12 +126,9 @@ def add_nodes_by_schedule(
             )
             # Set the index for the new node by substituting the induction variable
             # for the current iteration.
-            new_node.index = node.index
-            if new_node.index:
-                for dim in new_node.index:
-                    new_node.index[dim] = new_node.index[dim].subs(
-                        {induction_variable: current_induction_variables[iteration]}
-                    )
+            update_node_index(
+                new_node, induction_variable, current_induction_variables[iteration]
+            )
             if custom_node.expanded_dims:
                 new_node.expanded_dims = custom_node.expanded_dims
             if custom_node.pre_expansion_id:
