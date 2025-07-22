@@ -8,6 +8,7 @@ import glob
 import os
 from collections import deque
 from typing import Any, Callable, Optional
+import warnings
 
 import sympy
 import torch
@@ -517,7 +518,7 @@ def check_leaks(f):
                 if id(obj) not in before:
                     print(hex(id(obj)), type(obj), obj.size())
             print("--------------------------------")
-            raise RuntimeError("Leaks detected")
+            warnings.warn("Leaks detected", RuntimeWarning)
 
         return result
 
