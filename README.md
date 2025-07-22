@@ -94,6 +94,7 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    ```bash
    python -m venv .venv
    source .venv/bin/activate
+   pip install --upgrade pip
    pip install -r requirements-iree-pinned.txt
    pip install -r pytorch-rocm-requirements.txt
    pip install -r requirements.txt -e .
