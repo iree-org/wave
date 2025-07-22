@@ -1,4 +1,4 @@
-# Copyright 2024 The IREE Authors
+# Copyright 2025 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
@@ -23,7 +23,11 @@ from ..ops.wave_ops import (
     Write,
     get_custom,
 )
-from .utils.graph_utils import is_barrier_between, is_reduction_subgraph
+from .utils.graph_utils import (
+    is_barrier_between,
+    is_reduction_subgraph,
+    propagate_placeholders,
+)
 
 
 class MemoryAccessType(Enum):
@@ -40,9 +44,9 @@ def is_shared_memory_op(node: CustomOp) -> Optional[fx.Node]:
         isinstance(node, (Read, Write, AtomicOp))
         and node.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
-        return node.memory
+        return propagate_placeholders(node.memory)
     elif isinstance(node, GatherToLDS):
-        return node.dst
+        return propagate_placeholders(node.dst)
 
     return None
 
