@@ -2096,3 +2096,140 @@ def test_self_index(shape, request):
 
     test(a, result_self_index)
     assert_close(ref, result_self_index[0, 0, :])
+
+@require_e2e
+@pytest.mark.parametrize(
+        "n, c, h, w, upsamp_stride",
+        [
+            (1, 1, 2, 2, 2),
+            (3, 3, 10, 10, 2),
+            (1, 1, 5, 5, 3),
+            (2, 3, 20, 20, 3),
+            (1, 1, 64, 64, 2),
+            (10, 3, 5, 5, 2),
+            (3, 3, 32, 32, 2),
+            (3, 1, 64, 64, 2),
+            (2, 1, 4, 4, 6), 
+            (20, 1, 5, 5, 2),
+            (7, 3, 2, 2, 2),
+            (5, 1, 3, 3, 2),
+            (2, 3, 3, 3, 9),
+            (4, 1, 2, 2, 5)
+        ]
+)
+def test_upsample_kernel(
+    n: int,
+    c: int,
+    h: int,
+    w: int,
+    upsamp_stride: int,
+    input_dtype=tkl.f16,
+    block_m=64,
+    block_k=32,
+    ratio_m=2
+    ):
+
+    output_dtype = input_dtype
+
+    sym = tkl.sym
+    N, C, H, W = sym.N, sym.C, sym.H, sym.W
+
+    H_UP = H * upsamp_stride
+    W_UP = W * upsamp_stride
+
+    UPSAMP_STRIDE = sym.UPSAMP_STRIDE
+
+    K = H_UP * C
+    M = W_UP * N
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    k = tkw.IndexMapping.iterator(2)
+    l = tkw.IndexMapping.iterator(3)
+
+
+    upsamp_mapping = tkw.IndexMapping(
+        num_iterators=4,
+        inputs={N: i, C: j, H: k, W: l},
+        outputs={
+            N: i,
+            C: j,
+            H_UP: k * UPSAMP_STRIDE,
+            W_UP: l * UPSAMP_STRIDE,
+        },
+    )
+
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    # Other hyperparameters
+    ELEMS_PER_THREAD = tkl.sym.ELEMS_PER_THREAD
+
+    x_type = tkl.Memory[N, C, H, W, ADDRESS_SPACE, input_dtype]
+    upsamp_type = tkl.Memory[N, C, H_UP, W_UP, ADDRESS_SPACE, output_dtype]
+
+    constraints: list[tkw.Constraint] = []
+
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / ratio_m)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(ratio_m, ratio_m, 1),
+            vector_shapes={N: 1, C: 1, H: 1, W: 1},
+
+        )
+    ]
+    @tkw.wave(constraints)
+    def upsample(
+        x: x_type,
+        upsamp_stride: tkl.i32,
+        upsamp_holder: upsamp_type,
+    ):
+        # Read input matrix
+        x_input = tkw.read(x)
+        # Set Symbolic symbol
+        tkw.set_symbol(UPSAMP_STRIDE, upsamp_stride)
+        # Write output with upsampled mapping
+        tkw.write(x_input, upsamp_holder, mapping=upsamp_mapping)
+
+
+    def upsample_with_zeros(x, upsamp_stride):
+        """Helper for upsampling, spreads elements out by upsamp_stride in h and w dims."""
+        N, C, H, W = x.shape
+        H_out = H * upsamp_stride
+        W_out = W * upsamp_stride
+        out = torch.zeros((N, C, H_out, W_out), dtype=x.dtype, device=x.device)
+        out[:, :, ::upsamp_stride, ::upsamp_stride] = x
+        return out
+    
+    x = device_randn(n, c, h, w, dtype=torch.float16)
+    x_up = upsample_with_zeros(x, upsamp_stride)
+    upsamp_holder = torch.zeros_like(x_up).to(torch.float16)
+
+    symbols = {
+        N: n,
+        C: c,
+        W: w,
+        H: h,
+        BLOCK_M: block_m,
+        BLOCK_K: block_k,
+        ELEMS_PER_THREAD: 4,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+
+    options = WaveCompileOptions(
+        subs=symbols,
+        canonicalize=True,
+    )
+
+    options = set_default_run_config(options)
+
+    test = wave_compile(options, upsample)
+    test(x, upsamp_stride, upsamp_holder)
+    assert_close(x_up, upsamp_holder)
+    
