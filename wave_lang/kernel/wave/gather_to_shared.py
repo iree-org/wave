@@ -137,7 +137,9 @@ def get_gather_to_shared_config(
     logger.info(f"elements_per_thread={elements_per_thread}")
 
     vector_width = elements_per_thread * bitwidth
-    fastest_dim_bound = fastest_dim_bound * bitwidth
+    if fastest_dim_bound is not None:
+        fastest_dim_bound = fastest_dim_bound * bitwidth
+
     load_width = get_load_width(supported_load_widths, vector_width, fastest_dim_bound)
     if load_width is None:
         logger.info(
