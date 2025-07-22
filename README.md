@@ -50,3 +50,77 @@ Wave is built around several key design principles that guide its architecture a
 - Performance portability across different GPU architectures
 
 For more information, visit the documentation here: https://wave-lang.readthedocs.io/en/latest/wave/wave.html
+
+## Quickstart
+
+Wave supports both end users (who want to use Wave kernels in their ML workflows) and developers (who want to contribute to or extend Wave). Follow the relevant guide below to get started quickly.
+
+### For Users
+
+1. **Install ROCm PyTorch Dependencies**
+
+   Before installing Wave, ensure you have the appropriate ROCm-enabled PyTorch dependencies:
+
+   ```bash
+   pip install -r pytorch-rocm-requirements.txt
+   ```
+
+2. **Install Wave**
+
+   You can then install Wave and its dependencies using pip:
+
+   ```bash
+   pip install wave-lang
+   ```
+
+3. **Try the Example Notebook**
+
+   To get started, try the [examples/jupyter/wave_gemm_example.ipynb](examples/jupyter/wave_gemm_example.ipynb) notebook.
+
+
+### For Developers
+
+1. **Clone the Repository**
+
+   ```bash
+   git clone https://github.com/iree-org/wave.git
+   cd wave
+   ```
+
+2. **Install Development Dependencies**
+
+   It's recommended to use a virtual environment:
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements-iree-pinned.txt
+   pip install -r pytorch-rocm-requirements.txt
+   pip install -r requirements.txt -e .
+   ```
+
+   > **Note:** If you do not have access to Instinct GPUs, you can still install Wave as above but with the CPU version of PyTorch:
+   >
+   > ```bash
+   > pip install -r pytorch-cpu-requirements.txt
+   > ```
+   >
+   > Currently, you can only run lit tests in this mode.
+
+
+3. **Run Tests**
+
+   To verify your setup:
+
+   ```bash
+   # Python tests
+   pytest -s tests/
+   # To run end to end tests, add --run-e2e flag
+
+   # Lit tests
+   lit lit_tests/ -v
+   ```
+
+4. **Contributing**
+
+   Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to Wave.
