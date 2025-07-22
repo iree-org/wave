@@ -136,7 +136,8 @@ def get_gather_to_shared_config(
     )
     logger.info(f"elements_per_thread={elements_per_thread}")
 
-    vector_width = (elements_per_thread * bitwidth) // 8
+    vector_width = elements_per_thread * bitwidth
+    fastest_dim_bound = fastest_dim_bound * bitwidth
     load_width = get_load_width(supported_load_widths, vector_width, fastest_dim_bound)
     if load_width is None:
         logger.info(
@@ -327,10 +328,10 @@ def gather_to_shared(
         THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
     }
 
-    supported_load_widths = [4]
+    supported_load_widths = [32]
 
     if "gfx95" in options.target:
-        supported_load_widths += [12, 16]
+        supported_load_widths += [96, 128]
 
     constraint_tile_size = {
         c.dim: c.tile_size
