@@ -140,6 +140,9 @@ def get_gather_to_shared_config(
     if fastest_dim_bound is not None:
         fastest_dim_bound = fastest_dim_bound * bitwidth
 
+    # `vector_width` is the the vector size each thread loads.
+    # `fastest_dim_bound` is the bound against which we are checking our loads,
+    # it is larger than `vector_width` but it must be aligned with chosen load width.
     load_width = get_load_width(supported_load_widths, vector_width, fastest_dim_bound)
     if load_width is None:
         logger.info(
