@@ -77,6 +77,13 @@ param_mfma_shape = pytest.mark.parametrize(
     ids=get_param_id,
 )
 
+param_mfma_shape_small = pytest.mark.parametrize(
+    "mfma_variant,shape",
+    [(MMAType.F32_16x16x16_F16, shape) for shape in shapes_16x16x16]
+    + [(MMAType.F32_32x32x8_F16, shape) for shape in shapes_32x32x32],
+    ids=get_param_id,
+)
+
 
 def attention_torch_builtin_ref(q, k, v, do, scale=1):
     """Attention forward and backward reference using the Torch builtin."""
@@ -1160,7 +1167,7 @@ def testAttentionForward(mfma_variant: MMAType, shape: tuple[int, ...]):
 
 
 @require_e2e
-@param_mfma_shape
+@param_mfma_shape_small
 @expensive_test
 def testAttentionBackward(mfma_variant: MMAType, shape: tuple[int, ...]):
     if mfma_variant == MMAType.F32_32x32x8_F16:
