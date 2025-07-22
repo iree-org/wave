@@ -200,7 +200,7 @@ def get_users(
     return users, reduction
 
 
-def propagate_placeholders(n):
+def propagate_placeholders(n: fx.Node) -> fx.Node:
     """
     Returns the captured node of a placeholder if it exists.
     """

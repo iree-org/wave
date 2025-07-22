@@ -112,7 +112,7 @@ def add_shared_memory_barriers(
         custom = get_custom(node)
         if mem := is_shared_memory_op(custom):
             state = info[mem]
-            if isinstance(state.last_node, GatherToLDS):
+            if isinstance(custom, GatherToLDS):
                 state.is_async = True
 
             if state.last_node is None:
@@ -125,6 +125,7 @@ def add_shared_memory_barriers(
 
             if barrier := is_barrier_between(state.last_node.fx_node, custom.fx_node):
                 barrier = get_custom(barrier)
+                # Promote the barrier to wait for async ops
                 if state.is_async and not barrier.wait_async_ops:
                     barrier.update_arg("wait_async_ops", True)
             else:
