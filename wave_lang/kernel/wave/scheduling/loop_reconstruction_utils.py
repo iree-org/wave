@@ -8,6 +8,7 @@ from wave_lang.support.logging import get_logger
 
 from ...lang.global_symbols import SHARED_ADDRESS_SPACE
 from ...ops.wave_ops import (
+    GatherToLDS,
     GetResult,
     IterArg,
     Iterate,
@@ -262,6 +263,10 @@ def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]
             and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
         ):
             continue
+
+        if isinstance(custom, GatherToLDS):
+            continue
+
         if l > 0:
             num_rotating_registers[node] = l
 
