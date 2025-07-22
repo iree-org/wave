@@ -104,12 +104,12 @@ def get_gather_to_shared_config(
     element_type: "DataType",
     supported_load_widths: list[int],
     hardware_constraint: "HardwareConstraint",
-    contiguous_bound: Optional[IndexExpr],
+    fastest_dim_bound: Optional[IndexExpr],
 ) -> Optional[GatherToSharedConfig]:
     """
     Get the gather to shared config for the given read and write.
     """
-    logger.info(f"contiguous_bound={contiguous_bound}")
+    logger.info(f"fastest_dim_bound={fastest_dim_bound}")
 
     bitwidth = element_type.bitwidth()
     logger.info(f"element_type={element_type}, bitwidth={bitwidth}")
@@ -137,11 +137,11 @@ def get_gather_to_shared_config(
     logger.info(f"elements_per_thread={elements_per_thread}")
 
     vector_width = (elements_per_thread * bitwidth) // 8
-    load_width = get_load_width(supported_load_widths, vector_width, contiguous_bound)
+    load_width = get_load_width(supported_load_widths, vector_width, fastest_dim_bound)
     if load_width is None:
         logger.info(
             f"No supported load width found for width={vector_width}, "
-            f"contiguous_bound={subs_idxc(contiguous_bound)}"
+            f"fastest_dim_bound={subs_idxc(fastest_dim_bound)}"
         )
         return None
 
@@ -255,7 +255,7 @@ def emit_global_to_lds(
 def get_load_width(
     supported_load_widths: list[int],
     target_width: int,
-    contiguous_bound: Optional[IndexExpr],
+    fastest_dim_bound: Optional[IndexExpr],
 ) -> Optional[int]:
     """
     Get the largest suitable load width for the given bitwidth.
@@ -264,8 +264,10 @@ def get_load_width(
         if target_width % width != 0:
             continue
 
-        if contiguous_bound is not None:
-            if not (subs_idxc(contiguous_bound % width) == 0):
+        if fastest_dim_bound is not None:
+            # `subs_idxc` can return symbolic values which will also be != 0,
+            # so we need to check `not (subs_idxc(...) == 0)`.
+            if not (subs_idxc(fastest_dim_bound % width) == 0):
                 continue
 
         return width
@@ -358,7 +360,7 @@ def gather_to_shared(
             )
 
         logger.info(f"bounds={bounds}")
-        contiguous_bound = bounds.get(symbolic_shape[-1], None) if bounds else None
+        fastest_dim_bound = bounds.get(symbolic_shape[-1], None) if bounds else None
 
         config = get_gather_to_shared_config(
             read,
@@ -367,7 +369,7 @@ def gather_to_shared(
             element_type,
             supported_load_widths,
             hardware_constraint,
-            contiguous_bound,
+            fastest_dim_bound,
         )
 
         if config is None:
