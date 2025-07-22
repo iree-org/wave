@@ -1474,11 +1474,10 @@ def test_gemm_two_cluter_pingpong():
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-32:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
-    # CHECK:            rocdl.s.barrier
+    # CHECK:            amdgpu.lds_barrier
     # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
 
     # 2nd cluster local writes.
-    # CHECK:            amdgpu.lds_barrier
     # CHECK-COUNT-6:    vector.store
     # CHECK:            rocdl.s.barrier
     # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
