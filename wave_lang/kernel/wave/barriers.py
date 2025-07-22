@@ -143,6 +143,6 @@ def add_shared_memory_barriers(
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
-    if is_reduction_subgraph(graph) and not checking_next_iter:
+    if is_reduction_subgraph(graph) and info and not checking_next_iter:
         # Add barriers between ops from different iterations in the same loop.
         add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
