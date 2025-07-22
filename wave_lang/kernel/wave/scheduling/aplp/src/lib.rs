@@ -88,7 +88,7 @@ fn perform_aplp_pyo3(
 ) -> PyResult<PyObject> {
     // Return a Python object (e.g., a PyDict)
     if node_count == 0 {
-        return Ok(PyDict::new_bound(py).into()); // Return empty dict
+        return Ok(PyDict::new(py).into()); // Return empty dict
     }
 
     // Convert PyList of Python tuples to Vec<PyRawEdge>
@@ -104,17 +104,17 @@ fn perform_aplp_pyo3(
 
     // Convert the Rust result (Vec<Vec<Vec<(f32,f32)>>>) to a Python dictionary
     // The dictionary will map (u_idx, v_idx) to a list of (delay, iter_diff) tuples
-    let result_dict = PyDict::new_bound(py);
+    let result_dict = PyDict::new(py);
     for r_idx in 0..node_count {
         for c_idx in 0..node_count {
             if !final_d_matrix[r_idx][c_idx].is_empty() {
-                let paths_for_pair_py_list = PyList::empty_bound(py);
+                let paths_for_pair_py_list = PyList::empty(py);
                 for &(delay, iter_diff) in &final_d_matrix[r_idx][c_idx] {
                     let path_tuple =
-                        PyTuple::new_bound(py, &[delay.into_py(py), iter_diff.into_py(py)]);
+                        PyTuple::new(py, &[delay, iter_diff])?;
                     paths_for_pair_py_list.append(path_tuple)?;
                 }
-                let key = PyTuple::new_bound(py, &[r_idx.into_py(py), c_idx.into_py(py)]);
+                let key = PyTuple::new(py, &[r_idx, c_idx])?;
                 result_dict.set_item(key, paths_for_pair_py_list)?;
             }
         }
