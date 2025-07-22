@@ -2097,25 +2097,29 @@ def test_self_index(shape, request):
     test(a, result_self_index)
     assert_close(ref, result_self_index[0, 0, :])
 
+
 @require_e2e
 @pytest.mark.parametrize(
-        "n, c, h, w, upsamp_stride",
-        [
-            (1, 1, 2, 2, 2),
-            (3, 3, 10, 10, 2),
-            (1, 1, 5, 5, 3),
-            (2, 3, 20, 20, 3),
-            (1, 1, 64, 64, 2),
-            (10, 3, 5, 5, 2),
-            (3, 3, 32, 32, 2),
-            (3, 1, 64, 64, 2),
-            (2, 1, 4, 4, 6), 
-            (20, 1, 5, 5, 2),
-            (7, 3, 2, 2, 2),
-            (5, 1, 3, 3, 2),
-            (2, 3, 3, 3, 9),
-            (4, 1, 2, 2, 5)
-        ]
+    "n, c, h, w, upsamp_stride",
+    [
+        (1, 1, 2, 2, 2),
+        (3, 3, 10, 10, 2),
+        (1, 1, 5, 5, 3),
+        (2, 3, 20, 20, 3),
+        (1, 1, 64, 64, 2),
+        (10, 3, 5, 5, 2),
+        (2, 3, 32, 32, 2),
+        (1, 1, 21, 21, 2),
+        (2, 1, 4, 4, 6),
+        (5, 1, 5, 5, 2),
+        (7, 3, 2, 2, 2),
+        (5, 1, 3, 3, 2),
+        (2, 3, 3, 3, 9),
+        (4, 1, 2, 2, 5),
+        (3, 3, 3, 1, 2),
+        (8, 2, 2, 1, 6),
+        (18, 2, 2, 1, 2),
+    ],
 )
 def test_upsample_kernel(
     n: int,
@@ -2126,8 +2130,8 @@ def test_upsample_kernel(
     input_dtype=tkl.f16,
     block_m=64,
     block_k=32,
-    ratio_m=2
-    ):
+    ratio_m=2,
+):
 
     output_dtype = input_dtype
 
@@ -2146,7 +2150,6 @@ def test_upsample_kernel(
     j = tkw.IndexMapping.iterator(1)
     k = tkw.IndexMapping.iterator(2)
     l = tkw.IndexMapping.iterator(3)
-
 
     upsamp_mapping = tkw.IndexMapping(
         num_iterators=4,
@@ -2181,9 +2184,9 @@ def test_upsample_kernel(
             threads_per_wave=64,
             waves_per_block=(ratio_m, ratio_m, 1),
             vector_shapes={N: 1, C: 1, H: 1, W: 1},
-
         )
     ]
+
     @tkw.wave(constraints)
     def upsample(
         x: x_type,
@@ -2197,7 +2200,6 @@ def test_upsample_kernel(
         # Write output with upsampled mapping
         tkw.write(x_input, upsamp_holder, mapping=upsamp_mapping)
 
-
     def upsample_with_zeros(x, upsamp_stride):
         """Helper for upsampling, spreads elements out by upsamp_stride in h and w dims."""
         N, C, H, W = x.shape
@@ -2206,7 +2208,7 @@ def test_upsample_kernel(
         out = torch.zeros((N, C, H_out, W_out), dtype=x.dtype, device=x.device)
         out[:, :, ::upsamp_stride, ::upsamp_stride] = x
         return out
-    
+
     x = device_randn(n, c, h, w, dtype=torch.float16)
     x_up = upsample_with_zeros(x, upsamp_stride)
     upsamp_holder = torch.zeros_like(x_up).to(torch.float16)
@@ -2232,4 +2234,160 @@ def test_upsample_kernel(
     test = wave_compile(options, upsample)
     test(x, upsamp_stride, upsamp_holder)
     assert_close(x_up, upsamp_holder)
-    
+
+
+@require_e2e
+@pytest.mark.parametrize("n, h, w, c, hf, wf, nf, conv_stride", _igemm_cases)
+def test_flipped_filter_iGEMM(
+    n: int,
+    h: int,
+    w: int,
+    c: int,
+    hf: int,
+    wf: int,
+    nf: int,
+    conv_stride: int,
+    input_dtype=tkl.f16,
+    output_dtype=tkl.f32,
+    block_m=64,
+    block_n=128,
+    block_k=32,
+    ratio_m=2,
+    ratio_n=2,
+):
+    padding = 0
+    cf = c
+    sym = tkl.sym
+    N, C, H, W = sym.N, sym.C, sym.H, sym.W
+    NF, HF, WF = sym.NF, sym.HF, sym.WF
+
+    H_OUT = (H + 2 * padding - HF) // conv_stride + 1
+    W_OUT = (W + 2 * padding - WF) // conv_stride + 1
+    SZ_OUT = H_OUT * W_OUT
+
+    K = HF * WF * C
+    M = SZ_OUT * N
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+
+    x_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={
+            N: i // SZ_OUT,
+            C: j % C,
+            H: (i % SZ_OUT) % W_OUT * conv_stride + (j // C) % WF,
+            W: (i % SZ_OUT) // W_OUT * conv_stride + (j // C) // WF,
+        },
+        outputs={M: i, K: j},
+    )
+    # Flips weight matrix across spatial dims in index mapping
+    w_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={
+            NF: i % NF,
+            C: j % C,
+            HF: HF - 1 - (j // C) % WF,
+            WF: WF - 1 - (j // C) // WF,
+        },
+        outputs={NF: i, K: j},
+    )
+    out_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, NF: j},
+        outputs={
+            N: i // SZ_OUT,
+            NF: j,
+            H_OUT: (i % SZ_OUT) % W_OUT,
+            W_OUT: (i % SZ_OUT) // W_OUT,
+        },
+    )
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    # Other hyperparameters
+    ELEMS_PER_THREAD = tkl.sym.ELEMS_PER_THREAD
+    x_type = tkl.Memory[N, C, H, W, ADDRESS_SPACE, input_dtype]
+    we_type = tkl.Memory[NF, C, HF, WF, ADDRESS_SPACE, input_dtype]
+    out_type = tkl.Memory[N, NF, H_OUT, W_OUT, GLOBAL_ADDRESS_SPACE, output_dtype]
+
+    constraints: list[tkw.Constraint] = []
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(NF, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / ratio_m)]
+    constraints += [tkw.WaveConstraint(NF, BLOCK_N / ratio_n)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(ratio_m, ratio_n, 1),
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def flipped_filter_igemm(
+        x: x_type,
+        we: we_type,
+        out: out_type,
+    ):
+        c_reg = tkl.Register[M, NF, output_dtype](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(
+            acc: tkl.Register[M, NF, output_dtype],
+        ) -> tkl.Register[M, NF, output_dtype]:
+            a_reg = tkw.read(
+                x,
+                mapping=x_mapping,
+                elements_per_thread=ELEMS_PER_THREAD,
+            )
+            b_reg = tkw.read(
+                we,
+                mapping=w_mapping,
+                elements_per_thread=ELEMS_PER_THREAD,
+            )
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(
+            repeat, out, mapping=out_mapping, elements_per_thread=ELEMS_PER_THREAD
+        )
+
+    symbols = {
+        N: n,
+        C: c,
+        W: w,
+        H: h,
+        NF: nf,
+        WF: wf,
+        HF: hf,
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        ELEMS_PER_THREAD: 4,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+
+    x = device_randn(n, c, h, w, dtype=torch.float16)
+    we = device_randn(nf, cf, hf, wf, dtype=torch.float16)
+    we_flipped = torch.flip(we, dims=[2, 3])
+
+    convRef = torch.nn.Conv2d(
+        c, nf, hf, stride=conv_stride, padding=padding, bias=False
+    )
+
+    # Use flipped weight matrix for reference
+    convRef.weight = torch.nn.Parameter(we_flipped)
+    out_ref = convRef(x).detach().to(torch.float32)
+    out = torch.zeros_like(out_ref)
+
+    options = WaveCompileOptions(subs=symbols, canonicalize=True)
+    options = set_default_run_config(options)
+    flipped_filter_igemm = wave_compile(options, flipped_filter_igemm)
+
+    flipped_filter_igemm(x, we, out)
+
+    assert_close(out, out_ref, rtol=1e-03, atol=1e-03)

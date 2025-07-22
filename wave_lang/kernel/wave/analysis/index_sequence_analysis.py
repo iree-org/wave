@@ -151,6 +151,10 @@ def get_scale_from_dim(expr: sympy.Expr):
     # Check that denom is not fractional, one, or negative.
     # note int(fractional_expr) -> 0.
     if num != dim_symbol or int(denom) <= 1:
+        # Check if scaling is Multiplication
+        if int(denom) == 1 and len(expr.args) > 1:
+            # return dim_symbol, multiply scaling type, and scale factor
+            return dim_symbol, ScalingType.MULTIPLY, expr.args[0]
         return expr, None, None
     return dim_symbol, ScalingType.DIVIDE, int(denom)
 
@@ -193,9 +197,12 @@ def resolve_scaled_indices(trace):
                     )
                     assert scaled_elem_per_thread != 0
                     custom.update_arg("elements_per_thread", scaled_elem_per_thread)
+            elif scale_type == ScalingType.MULTIPLY:
+                # Nothing to do for resolving scaled indices with multiplication
+                pass
             else:
                 raise NotImplementedError(
-                    "Currently only handle case of scaled index where scaling is division."
+                    "Currently only handle case of scaled index where scaling is division or multiplication."
                 )
 
 
