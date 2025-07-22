@@ -114,16 +114,23 @@ def add_shared_memory_barriers(
             if state.last_node is None:
                 state.last_node = custom
                 continue
-            if need_barrier(custom, state.last_node) and not is_barrier_between(
-                state.last_node.fx_node, custom.fx_node
-            ):
+
+            if not need_barrier(custom, state.last_node):
+                state.last_node = custom
+                continue
+
+            if barrier := is_barrier_between(state.last_node.fx_node, custom.fx_node):
+                barrier = get_custom(barrier)
+                if state.is_async and not barrier.wait_async_ops:
+                    barrier.update_arg("wait_async_ops", True)
+            else:
                 # Synchronize after the write to shared memory before we read from it.
                 with graph.inserting_before(node):
                     SharedMemoryBarrier(wait_async_ops=state.is_async).add_to_graph(
                         graph
                     )
 
-                state.is_async = False
+            state.is_async = False
             state.last_node = custom
         if isinstance(custom, NestedRegionOp):
             add_shared_memory_barriers(

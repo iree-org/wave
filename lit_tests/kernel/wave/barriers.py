@@ -237,8 +237,7 @@ def test_gemm():
         # CHECK-NEXT: %read_M:0_N:0_K:1
         # CHECK-NEXT: %read_M:1_N:0_K:0
         # CHECK-NEXT: %read_M:1_N:0_K:1
-        # Barrier is from read_shared of previous iter.
-        # CHECK-NEXT: %shared_memory_barrier
+        # We don't actually need a berrier here as the reads from the prev iteration are to the different buffer
         # CHECK-NEXT: %write_shared_M:0_N:0_K:0
         # CHECK-NEXT: %write_shared_M:0_N:0_K:1
         # CHECK-NEXT: %write_shared_M:1_N:0_K:0
@@ -252,12 +251,12 @@ def test_gemm():
         # CHECK-NEXT: %read_1_M:0_N:0_K:1
         # CHECK-NEXT: %read_1_M:0_N:1_K:0
         # CHECK-NEXT: %read_1_M:0_N:1_K:1
-        # CHECK-NEXT: %shared_memory_barrier_1
+        # We don't actually need a berrier here as reads and writes to the different buffers
         # CHECK-NEXT: %write_1_shared_M:0_N:0_K:0
         # CHECK-NEXT: %write_1_shared_M:0_N:0_K:1
         # CHECK-NEXT: %write_1_shared_M:0_N:1_K:0
         # CHECK-NEXT: %write_1_shared_M:0_N:1_K:1
-        # CHECK-NEXT: %shared_memory_barrier_2
+        # CHECK-NEXT: %shared_memory_barrier
         # CHECK-NEXT: %read_3_shared_M:0_N:0_K:0
         # CHECK-NEXT: %read_3_shared_M:0_N:0_K:1
         # CHECK-NEXT: %read_3_shared_M:0_N:1_K:0
