@@ -65,7 +65,13 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    pip install -r pytorch-rocm-requirements.txt
    ```
 
-2. **Install Wave**
+2. **Install Rust**
+
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+3. **Install Wave**
 
    You can then install Wave and its dependencies using pip:
 
@@ -73,7 +79,7 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    pip install wave-lang
    ```
 
-3. **Try the Example Notebook**
+4. **Try the Example Notebook**
 
    To get started, try the [examples/jupyter/wave_gemm_example.ipynb](examples/jupyter/wave_gemm_example.ipynb) notebook.
 
@@ -97,6 +103,7 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    pip install --upgrade pip
    pip install -r requirements-iree-pinned.txt
    pip install -r pytorch-rocm-requirements.txt
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    pip install -r requirements.txt -e .
    ```
 
