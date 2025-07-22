@@ -2099,6 +2099,7 @@ def test_self_index(shape, request):
 
 
 @require_e2e
+@require_cdna3
 @pytest.mark.parametrize(
     "n, c, h, w, upsamp_stride",
     [
@@ -2237,6 +2238,7 @@ def test_upsample_kernel(
 
 
 @require_e2e
+@require_cdna3
 @pytest.mark.parametrize("n, h, w, c, hf, wf, nf, conv_stride", _igemm_cases)
 def test_flipped_filter_iGEMM(
     n: int,
