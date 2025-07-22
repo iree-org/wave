@@ -71,3 +71,4 @@ For more detailed information about Wave's architecture and optimization passes,
    fused_softmax
    aplp
    gather_to_shared
+   trace
