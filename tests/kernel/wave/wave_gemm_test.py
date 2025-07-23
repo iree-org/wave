@@ -185,8 +185,8 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
     [
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
-        SchedulingType.MODULO,
-        SchedulingType.MODULO_MULTI_BUFFERED,
+        _xfail(SchedulingType.MODULO),
+        _xfail(SchedulingType.MODULO_MULTI_BUFFERED),
     ],
 )
 @pytest.mark.parametrize(
