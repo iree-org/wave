@@ -13,6 +13,10 @@ from ...ops.wave_ops import get_custom
 from .graph_utils import Edge, sort_graph_by_edge_weight
 from .resources import Operation, get_custom_operation_type
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class PrefetchStage(Enum):
     GLOBAL_LOAD = 0
@@ -20,12 +24,19 @@ class PrefetchStage(Enum):
     LOCAL_LOAD = 2
     COMPUTE = 3
 
+    GLOBAL_TO_SHARED = 4
+
     def next(self):
         # Helper function to get next stage from the current.
         # If at stage 3 returns itself to prevent crash
         # since it is final stage.
         if self.value == 3:
             return PrefetchStage(3)
+
+        # GLOBAL_TO_SHARED combines both GLOBAL_LOAD and LOCAL_STORE.
+        if self.value == 4:
+            return PrefetchStage(2)
+
         v = self.value + 1
         return PrefetchStage(v)
 
@@ -34,7 +45,7 @@ operation_stage_table = {
     Operation.READ_SHARED: PrefetchStage.LOCAL_LOAD,
     Operation.WRITE_SHARED: PrefetchStage.LOCAL_STORE,
     Operation.READ_GLOBAL: PrefetchStage.GLOBAL_LOAD,
-    Operation.GLOBAL_TO_SHARED: PrefetchStage.GLOBAL_LOAD,
+    Operation.GLOBAL_TO_SHARED: PrefetchStage.GLOBAL_TO_SHARED,
     Operation.MMA: PrefetchStage.COMPUTE,
     Operation.NOOP: PrefetchStage.COMPUTE,
     Operation.VALU: PrefetchStage.COMPUTE,
@@ -97,17 +108,24 @@ class PrefetchScheduler:
         """
         sorted_nodes = sort_graph_by_edge_weight(graph.nodes, edges)
         schedule = {}
-        current_stage = PrefetchStage.GLOBAL_LOAD
+        # current_stage = PrefetchStage.GLOBAL_LOAD
+        current_stage = get_scheduling_stage(sorted_nodes[0])
+        current_stage_idx = 0
         for node in sorted_nodes:
             node_stage = get_scheduling_stage(node)
             next_stage = current_stage.next()
+            logger.info(
+                f"Node {node} is in stage {node_stage}, next stage {next_stage}"
+            )
             if node_stage == current_stage:
-                schedule[node] = current_stage.value
+                schedule[node] = current_stage_idx
             elif node_stage == next_stage:
-                schedule[node] = next_stage.value
+                current_stage_idx += 1
+                schedule[node] = current_stage_idx
                 current_stage = next_stage
             else:
                 # Node do not move contigously through stages.
+                logger.warning(f"Node {node} does not move contigously through stages.")
                 return {}, False
         return schedule, True
 
@@ -119,12 +137,16 @@ class PrefetchScheduler:
         """
         self.schedule, success = self.prefetch_scheduling(self.graph, self.edges)
         if not success:
+            logger.warning("Prefetch scheduling failed")
             return {}, False
 
+        logger.info(f"Schedule: {self.schedule}")
         assert self.schedule, "Schedule is empty"
-        self._initiation_interval = 2
-        if self.num_stages != self._initiation_interval:
-            return {}, False
+        self._initiation_interval = 1
+        # self._initiation_interval = 2
+        # if self.num_stages != self._initiation_interval:
+        #     logger.warning(f"Initiation interval {self._initiation_interval} does not match number of stages {self.num_stages}")
+        #     return {}, False
         return self.schedule, success
 
     @property

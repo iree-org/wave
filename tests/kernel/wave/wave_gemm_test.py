@@ -184,7 +184,7 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
     "enable_scheduling",
     [
         SchedulingType.NONE,
-        _xfail(SchedulingType.PREFETCH),
+        SchedulingType.PREFETCH,
         SchedulingType.MODULO,
         SchedulingType.MODULO_MULTI_BUFFERED,
     ],
@@ -228,6 +228,7 @@ def testGemmGatherToLDS(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
+        # dump_schedule="schedule.txt",
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
