@@ -112,31 +112,27 @@ def add_shared_memory_barriers(
         custom = get_custom(node)
         if mem := is_shared_memory_op(custom):
             state = info[mem]
+            if state.last_node and need_barrier(custom, state.last_node):
+                if barrier := is_barrier_between(
+                    state.last_node.fx_node, custom.fx_node
+                ):
+                    barrier = get_custom(barrier)
+                    # Promote the barrier to wait for async ops
+                    if state.is_async and not barrier.wait_async_ops:
+                        barrier.update_arg("wait_async_ops", True)
+                else:
+                    # Synchronize after the write to shared memory before we read from it.
+                    with graph.inserting_before(node):
+                        SharedMemoryBarrier(wait_async_ops=state.is_async).add_to_graph(
+                            graph
+                        )
+
+                state.is_async = False
+
+            state.last_node = custom
             if isinstance(custom, GatherToLDS):
                 state.is_async = True
 
-            if state.last_node is None:
-                state.last_node = custom
-                continue
-
-            if not need_barrier(custom, state.last_node):
-                state.last_node = custom
-                continue
-
-            if barrier := is_barrier_between(state.last_node.fx_node, custom.fx_node):
-                barrier = get_custom(barrier)
-                # Promote the barrier to wait for async ops
-                if state.is_async and not barrier.wait_async_ops:
-                    barrier.update_arg("wait_async_ops", True)
-            else:
-                # Synchronize after the write to shared memory before we read from it.
-                with graph.inserting_before(node):
-                    SharedMemoryBarrier(wait_async_ops=state.is_async).add_to_graph(
-                        graph
-                    )
-
-            state.is_async = False
-            state.last_node = custom
         if isinstance(custom, NestedRegionOp):
             add_shared_memory_barriers(
                 trace, trace.get_subgraph(custom.subgraph_name), info
