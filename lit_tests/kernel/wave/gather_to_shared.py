@@ -270,8 +270,7 @@ def test_gather_to_shared_scaled_dims():
     # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
     # CHECK:              vector.load {{.*}} vector<1xi8>
     # CHECK:              vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
-    # TODO: Missing rocdl.waintcnt here, right now, barrier pass last_op is regular write, because of the scale.
-    #       Need to teach compiler to keep track that we have not added any barrier related to async yet.
+    # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-8:      vector.load
     # CHECK-COUNT-2:      amdgpu.scaled_mfma
