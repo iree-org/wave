@@ -445,6 +445,9 @@ def batched_prefetch_mxfp4_test():
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,
+        use_buffer_load_ops=True,
+        use_buffer_store_ops=True,
+        use_stride_cache_swizzle=True,
         compile_to_mlir=True,
     )
     batched_gemm_mxfp4_prefetch = wave_compile(options, batched_gemm_mxfp4_prefetch)
@@ -452,11 +455,18 @@ def batched_prefetch_mxfp4_test():
 
     # CHECK-LABEL:    batched_gemm_mxfp4_prefetch
 
+    # CHECK-DAG:      %[[C32_I14:.+]] = arith.constant 32 : i14
+    # CHECK-DAG:      %[[C512_I14:.+]] = arith.constant 512 : i14
+
     # Prologue Global Read
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<8x1024x512xi8, strided<[524288, 512, 1], offset: ?>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<8x1024x32xi8, strided<[32768, 32, 1], offset: ?>>, vector<4xi8>
-    # CHECK-COUNT-4:  vector.load {{.*}} : memref<1024x512xi8, strided<[512, 1], offset: ?>>, vector<16xi8>
-    # CHECK:          vector.load {{.*}} : memref<1024x32xi8, strided<[32, 1], offset: ?>>, vector<4xi8>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}], strides: [1] : memref<8x1024x512xi8, strided<[524288, 512, 1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
+    # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C512_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}], strides: [1] : memref<8x1024x32xi8, strided<[32768, 32, 1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
+    # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%c2147483646_i32) cacheSwizzleStride(%[[C32_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
+    # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+    # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
 
     # Prologue Local Write
     # CHECK-COUNT-4:  vector.store {{.*}} : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
@@ -468,22 +478,22 @@ def batched_prefetch_mxfp4_test():
     # CHECK:          scf.for
 
     # Steady State global_load_rhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<1024x32xi8, strided<[32, 1], offset: ?>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
     # Steady State local_load_rhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_lhs_scale
-    # CHECK:            vector.load %{{.*}} : memref<8x1024x32xi8, strided<[32768, 32, 1], offset: ?>>, vector<4xi8>
+    # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
     # Steady State local_load_lhs_scale
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<1x256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_rhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<1024x512xi8, strided<[512, 1], offset: ?>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
     # Steady State local_load_rhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Steady State global_load_lhs
-    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<8x1024x512xi8, strided<[524288, 512, 1], offset: ?>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
     # Steady State local_load_lhs
     # CHECK=COUNT-16:   vector.load %{{.*}} : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 

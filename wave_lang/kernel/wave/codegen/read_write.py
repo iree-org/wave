@@ -459,7 +459,7 @@ def _cast_buffer_and_encode_stride(
             ptr,
             cache_swizzle_stride=stride,
             bounds_check=True,
-            reset_offset=False,
+            reset_offset=True,
             valid_bytes=valid_bytes_constant,
         )
 
@@ -467,7 +467,7 @@ def _cast_buffer_and_encode_stride(
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
             bounds_check=True,
-            reset_offset=False,
+            reset_offset=True,
             valid_bytes=valid_bytes_constant,
         )
 

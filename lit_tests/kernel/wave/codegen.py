@@ -162,7 +162,7 @@ def test_read_mapped_buffer():
     # CHECK-LABEL:    func.func @read_mapped_buffer
     # CHECK: %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast
     # CHECK: %[[COND:.*]] = arith.select {{%[0-9a-zA-Z_]+}}, {{%[0-9a-zA-Z_]+}}, {{%[0-9a-zA-Z_]+}} : index
-    # CHECK: %[[RES:.*]] = vector.load %[[BUF]][%[[COND]]] : memref<?xf16, strided<[1], offset: ?>, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf16>
+    # CHECK: %[[RES:.*]] = vector.load %[[BUF]][%[[COND]]] : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf16>
     # CHECK: %[[EXTRACT:.*]] = vector.extract %[[RES]][0] : f16 from vector<1xf16>
     # CHECK: %[[FROM:.*]] = vector.from_elements %[[EXTRACT]]
 
@@ -207,7 +207,7 @@ def test_read_dynamic_3d_buffer():
     # CHECK:            %[[ARG0:.*]] = stream.binding.subspan {{.*}} : !stream.binding -> memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>>
     # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] {{.*}} : memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
     # CHECK:            %[[SWIZZLE_CAST:.*]] = arith.index_cast %c16{{.*}} : index to i14
-    # CHECK:            %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast %[[MEMREF_CAST]] {{.*}} : memref<?xf16, strided<[1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK:            %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast %[[MEMREF_CAST]] validBytes{{.*}} cacheSwizzleStride{{.*}} resetOffset : memref<?xf16, strided<[1], offset: ?>> to memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
 
 
 @run_test
