@@ -446,10 +446,11 @@ def _cast_buffer_and_encode_stride(
     stride_rank = len(strides)
     stride = None
 
-    if stride_rank > 2 and emitter.options.use_stride_cache_swizzle:
+    if stride_rank >= 2 and emitter.options.use_stride_cache_swizzle:
         # fastest_dim_bound == second to last stride.
         stride_candidate = strides[-2]
         stride_int = stride_candidate.owner.attributes["value"].value
+        # Swizzle is only useful upto swizzle stride <= 8192.
         if stride_int <= 8192:
             stride = arith_d.index_cast(uint14, stride_candidate)
 
