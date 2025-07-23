@@ -136,7 +136,13 @@ def torchScaledGemmMXFP8(x, w, x_scales, w_scales):
     ],
 )
 @param_bool("use_global_to_shared")
-@pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.NONE,
+        SchedulingType.PREFETCH,
+    ],
+)
 def testScaledGemmMXFP4(
     shape: tuple[int],
     mfma_variant: ScaledMMAType,
