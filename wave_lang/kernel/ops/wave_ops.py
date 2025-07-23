@@ -1252,6 +1252,17 @@ class SetWavePrio(CustomOp):
         return True
 
 
+@define_op("null_async_dep")
+@dataclass
+class NullAsyncDep(CustomOp):
+    """
+    Represents a null async dependency in the graph.
+
+    It is used to represent a dependency that is not a real dependency, but
+    required to satisfy control flow.
+    """
+
+
 @define_op("shared_memory_barrier")
 @dataclass
 class SharedMemoryBarrier(CustomOp):
