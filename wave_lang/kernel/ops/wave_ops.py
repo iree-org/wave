@@ -1249,7 +1249,7 @@ class SharedMemoryBarrier(CustomOp):
     Represents a shared memory barrier in the graph.
     """
 
-    wait_async_ops: bool = False
+    async_deps: list[fx.Node] = field(default_factory=list)
 
     @property
     def has_side_effects(self) -> bool:

@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from enum import Enum, auto
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Optional
 
@@ -83,7 +83,7 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
 
 @dataclass
 class SharedMemoryBarrierInfo:
-    is_async: bool = False
+    async_deps: list[fx.Node] = field(default_factory=list)
     last_node: Optional[fx.Node] = None
 
 
@@ -117,26 +117,28 @@ def add_shared_memory_barriers(
                     state.last_node.fx_node, custom.fx_node
                 ):
                     barrier = get_custom(barrier)
-                    # Promote the barrier to wait for async ops
-                    if state.is_async and not barrier.wait_async_ops:
-                        barrier.update_arg("wait_async_ops", True)
+                    # Add async deps to the barrier.
+                    if state.async_deps:
+                        deps = list(
+                            dict.fromkeys(barrier.async_deps)
+                            | dict.fromkeys(state.async_deps)
+                        )
+                        barrier.update_arg("async_deps", deps)
                 else:
                     # Synchronize after the write to shared memory before we read from it.
+                    deps = list(dict.fromkeys(state.async_deps))
                     with graph.inserting_before(node):
-                        SharedMemoryBarrier(wait_async_ops=state.is_async).add_to_graph(
-                            graph
-                        )
+                        SharedMemoryBarrier(async_deps=deps).add_to_graph(graph)
 
-                state.is_async = False
+                state.async_deps = []
 
             state.last_node = custom
             if isinstance(custom, GatherToLDS):
-                state.is_async = True
+                state.async_deps.append(node)
 
         if isinstance(custom, NestedRegionOp):
-            add_shared_memory_barriers(
-                trace, trace.get_subgraph(custom.subgraph_name), info
-            )
+            subgraph = trace.get_subgraph(custom.subgraph_name)
+            add_shared_memory_barriers(trace, subgraph, info)
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
