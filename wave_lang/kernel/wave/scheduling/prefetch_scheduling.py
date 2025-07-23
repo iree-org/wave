@@ -143,11 +143,12 @@ class PrefetchScheduler:
 
         logger.info(f"Schedule: {self.schedule}")
         assert self.schedule, "Schedule is empty"
-        self._initiation_interval = 1
-        # self._initiation_interval = 2
-        # if self.num_stages != self._initiation_interval:
-        #     logger.warning(f"Initiation interval {self._initiation_interval} does not match number of stages {self.num_stages}")
-        #     return {}, False
+        self._initiation_interval = 2
+        if self.num_stages != self._initiation_interval:
+            logger.warning(
+                f"Initiation interval {self._initiation_interval} does not match number of stages {self.num_stages}"
+            )
+            return {}, False
         return self.schedule, success
 
     @property
