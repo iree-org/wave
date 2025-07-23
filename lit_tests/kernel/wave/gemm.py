@@ -1274,6 +1274,102 @@ def test_gemm_prefetch():
 
 
 @run_test
+def test_gemm_gemm_four_stage():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_four_stage(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 128,
+            N: 128,
+            K: 256,
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+            BLOCK_K: 32,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            READ_SHARED_DELAY: 1,
+            WRITE_SHARED_DELAY: 1,
+            READ_GLOBAL_DELAY: 2,
+            WRITE_GLOBAL_DELAY: 2,
+            MMA_DELAY: 1,
+            VALU_DELAY: 1,
+            SHUFFLE_DELAY: 1,
+            SHARED_MEMORY_UNITS: 4,
+            GLOBAL_MEMORY_UNITS: 4,
+            MMA_UNITS: 4,
+            VALU_UNITS: 8,
+            SHUFFLE_UNITS: 8,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.GEMM_FOUR_STAGE,
+        use_scheduling_barriers=True,
+        compile_to_mlir=True,
+    )
+
+    gemm_four_stage = wave_compile(options, gemm_four_stage)
+    print(gemm_four_stage.asm)
+    # CHECK-LABEL: func.func @gemm_four_stage
+    # Test multibuffering: verify shared memory views are correctly allocated
+    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<18432xi8
+    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<18432xi8
+    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c9216][] : memref<18432xi8
+
+    # Prologue
+    # Verify prologue stores to shared memory
+    # CHECK: %[[STORE_IDX:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %thread_id_y]
+    # CHECK: vector.store %{{.*}}, %[[VIEW1]][%[[STORE_IDX]], %{{.*}}] : memref<128x36xf16
+    # CHECK: vector.store %{{.*}}, %[[VIEW0]][%[[STORE_IDX]], %{{.*}}] : memref<128x36xf16
+
+    # Verify prologue loads from shared memory
+    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %thread_id_y]
+    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #map[0-9]+()[%thread_id_x]
+    # CHECK: vector.load %[[VIEW0]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]] : memref<128x36xf16
+
+    # Main Loop:
+    # Verify Pipelined Loop, iter_args should contain vector values from prologue
+    # CHECK: scf.for %[[ARG3:.*]] = %c0 to %c5 step %c1 iter_args(%{{.*}} = %cst, %{{.*}} = %cst, %{{.*}} = %cst, %{{.*}} = %cst, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}})
+
+    # Verify MFMA exists
+    # CHECK: amdgpu.mfma %{{.*}} * %{{.*}} + %{{.*}}
+
+    # Verify that affine maps using iter_arg %[[ARG3]] are used for pipelined indexing
+    # CHECK: %[[PIPE_IDX1:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %[[ARG3]], %thread_id_y]
+    # CHECK: vector.load %[[VIEW0]][%[[PIPE_IDX1]], %{{.*}}] : memref<128x36xf16
+
+    # Verify that stores use iter arg for indexing as well
+    # CHECK: %[[STORE_PIPE_IDX:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %thread_id_y, %[[ARG3]]]
+    # CHECK: vector.store %{{.*}}, %[[VIEW1]][%[[STORE_PIPE_IDX]], %{{.*}}] : memref<128x36xf16
+
+
+@run_test
 def test_dynamic_gemm_pipelined():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]

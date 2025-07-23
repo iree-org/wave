@@ -24,9 +24,36 @@ from ...ops.wave_ops import (
     get_custom,
 )
 from ..utils.mapping_utils import get_dict_with_updated_key
+from .schedule_enums import SchedulingType
 
 
-def multi_buffer(trace: CapturedTrace):
+def _increase_dimensions_for_multibuffering(
+    original_buffer: CustomOp, reduction_axis: IndexSymbol, buffer_count: int
+):
+    # Create new shape with increased non-reduction dimensions
+    reduction_dim_indices = [
+        i for i, dim in enumerate(original_buffer.shape) if dim == reduction_axis
+    ]
+    new_shape = []
+    new_distributed_shape = []
+
+    for i, dim in enumerate(original_buffer.shape):
+        if i in reduction_dim_indices:
+            # Keep reduction dimensions as is
+            new_shape.append(dim)
+            new_distributed_shape.append(original_buffer.distributed_shape[i])
+        else:
+            # Increase non-reduction dimensions
+            new_shape.append(dim * buffer_count)
+            new_distributed_shape.append(
+                original_buffer.distributed_shape[i] * buffer_count
+            )
+
+    original_buffer.update_arg(0, tuple(new_shape))
+    original_buffer.update_arg(1, tuple(new_distributed_shape))
+
+
+def multi_buffer(trace: CapturedTrace, scheduling_type: SchedulingType):
     """Perform multi buffering for all supported shared memory locations"""
 
     # Find all reductions
@@ -60,12 +87,31 @@ def multi_buffer(trace: CapturedTrace):
 
     # Perform multi buffering for all collected memory locations
     for memory_location in set(memory_to_reads.keys()) | set(memory_to_writes.keys()):
-        read_nodes = memory_to_reads.get(memory_location, [])
-        write_nodes = memory_to_writes.get(memory_location, [])
+        if scheduling_type == SchedulingType.GEMM_FOUR_STAGE:
+            _increase_dimensions_for_multibuffering(
+                original_buffer=memory_location,
+                reduction_axis=reduction_axis,
+                buffer_count=2,
+            )
+            # rest of multibuffering logic pre-handled in loop_reconstruction.py
 
-        _multi_buffer_memory_location(
-            trace, memory_location, read_nodes, write_nodes, reduction_axis, 2
-        )
+        elif scheduling_type == SchedulingType.MODULO_MULTI_BUFFERED:
+            read_nodes = memory_to_reads.get(memory_location, [])
+            write_nodes = memory_to_writes.get(memory_location, [])
+            _multi_buffer_memory_location(
+                trace,
+                memory_location,
+                read_nodes,
+                write_nodes,
+                reduction_axis,
+                2,
+                scheduling_type,
+            )
+            _increase_dimensions_for_multibuffering(
+                original_buffer=memory_location,
+                reduction_axis=reduction_axis,
+                buffer_count=2,
+            )
 
 
 def _multi_buffer_memory_location(
@@ -75,6 +121,7 @@ def _multi_buffer_memory_location(
     write_nodes: list[Write],
     reduction_axis: IndexSymbol,
     buffer_count: int,
+    scheduling_type: SchedulingType,
 ):
     """
     Implements multi buffering for all reads and write of a shared memory buffer.
@@ -137,25 +184,6 @@ def _multi_buffer_memory_location(
                             op.mapping.output_mapping = get_dict_with_updated_key(
                                 output_mapping, dim, dim * buffer_count
                             )
-
-    # Create new shape with increased non-reduction dimensions
-    new_shape = []
-    new_distributed_shape = []
-
-    for i, dim in enumerate(original_buffer.shape):
-        if i in reduction_dim_indices:
-            # Keep reduction dimensions as is
-            new_shape.append(dim)
-            new_distributed_shape.append(original_buffer.distributed_shape[i])
-        else:
-            # Increase non-reduction dimensions
-            new_shape.append(dim * buffer_count)
-            new_distributed_shape.append(
-                original_buffer.distributed_shape[i] * buffer_count
-            )
-
-    original_buffer.update_arg(0, tuple(new_shape))
-    original_buffer.update_arg(1, tuple(new_distributed_shape))
 
 
 def _partition_by_memory(nodes: list[CustomOp]) -> dict[CustomOp, list[CustomOp]]:
