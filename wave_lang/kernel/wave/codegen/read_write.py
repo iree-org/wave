@@ -443,20 +443,17 @@ def _cast_buffer_and_encode_stride(
     )  # max bytes that are in range to be addressed from a buffer
     valid_bytes_constant = get_constant_attr(valid_bytes, uint32)
     valid_bytes_constant = arith_d.constant(uint32, valid_bytes_constant)
-    stride_larger_than_8192 = False
+    stride_rank = len(strides)
+    stride = None
 
-    if emitter.options.use_stride_cache_swizzle:
-        assert len(strides) >= 2
+    if stride_rank > 2 and emitter.options.use_stride_cache_swizzle:
         # fastest_dim_bound == second to last stride.
-        stride = strides[-2]
-        stride_int = stride.owner.attributes["value"].value
-        if stride_int > 8192:
-            stride_larger_than_8192 = True
-            stride = None
-        else:
+        stride_candidate = strides[-2]
+        stride_int = stride_candidate.owner.attributes["value"].value
+        if stride_int <= 8192:
             stride = arith_d.index_cast(uint14, stride)
 
-    if not stride_larger_than_8192 and emitter.options.use_stride_cache_swizzle:
+    if stride and emitter.options.use_stride_cache_swizzle:
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
             cache_swizzle_stride=stride,
