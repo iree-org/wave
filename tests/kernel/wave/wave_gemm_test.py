@@ -228,7 +228,6 @@ def testGemmGatherToLDS(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
-        # dump_schedule="schedule.txt",
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
