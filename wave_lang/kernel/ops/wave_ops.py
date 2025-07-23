@@ -75,6 +75,9 @@ def extract_slice(
 def set_wave_prio(priority: int): ...
 
 
+def null_async_dep(): ...
+
+
 def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
