@@ -116,6 +116,7 @@ def testGemmBench(tmp_path):
     [
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
+        SchedulingType.GEMM_FOUR_STAGE,
         SchedulingType.MODULO,
         SchedulingType.MODULO_MULTI_BUFFERED,
     ],
@@ -185,6 +186,7 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
     [
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
+        _xfail(SchedulingType.GEMM_FOUR_STAGE),
         _xfail(SchedulingType.MODULO),
         _xfail(SchedulingType.MODULO_MULTI_BUFFERED),
     ],
@@ -382,6 +384,7 @@ def testGemmSmallTiles(
     [
         SchedulingType.NONE,
         _xfail(SchedulingType.PREFETCH),
+        SchedulingType.GEMM_FOUR_STAGE,
         SchedulingType.MODULO,
         _xfail(SchedulingType.MODULO_MULTI_BUFFERED),
     ],
@@ -808,7 +811,7 @@ def testGemmDot(
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.NONE, SchedulingType.MODULO],
+    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
 )
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
@@ -1057,7 +1060,12 @@ def testCDNA2IntGemm(
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.MODULO_MULTI_BUFFERED],
+    [
+        SchedulingType.NONE,
+        SchedulingType.MODULO,
+        SchedulingType.MODULO_MULTI_BUFFERED,
+        SchedulingType.GEMM_FOUR_STAGE,
+    ],
 )
 @pytest.mark.parametrize(
     "mfma_variant",
@@ -1157,7 +1165,8 @@ def testCDNA3IntGemm(
 @require_cdna3
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
-    "enable_scheduling", [SchedulingType.NONE, SchedulingType.MODULO]
+    "enable_scheduling",
+    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
 )
 @pytest.mark.parametrize(
     "mfma_variant",
@@ -1504,7 +1513,12 @@ def testPackedNonTransposeGemm(
 @pytest.mark.parametrize("shape", get_test_shapes("test_batched_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.MODULO_MULTI_BUFFERED],
+    [
+        SchedulingType.NONE,
+        SchedulingType.MODULO,
+        SchedulingType.MODULO_MULTI_BUFFERED,
+        SchedulingType.GEMM_FOUR_STAGE,
+    ],
 )
 def testBatchedGemm(
     shape: tuple[int],
