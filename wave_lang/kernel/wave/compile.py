@@ -311,7 +311,14 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             print(asm)
 
     if options.use_water_leak_check:
-        water_leak_in_bounds_check(mb.module_op)
+        water_leak_in_bounds_check(
+            mb.module_op,
+            (
+                options.use_water_leak_check
+                if isinstance(options.use_water_leak_check, str)
+                else ""
+            ),
+        )
 
     if options.override_mlir:
         asm = options.override_mlir

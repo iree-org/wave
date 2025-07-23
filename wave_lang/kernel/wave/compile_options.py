@@ -61,7 +61,7 @@ class WaveCompileOptions:
         default_factory=LocationCaptureConfig
     )
     use_local_scope: bool = False
-    use_water_leak_check: bool = False
+    use_water_leak_check: bool | str = False  # If string, check the given IR instead.
 
     # === Performance options ===
     optimization_level: bool = True
