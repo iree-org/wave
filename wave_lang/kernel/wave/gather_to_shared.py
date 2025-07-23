@@ -39,6 +39,7 @@ from .utils.general_utils import (
     ceildiv,
     delinearize_index,
     get_hardware_constraint,
+    infer_dim,
     remove_thread_indexing,
     find_index_bounds,
 )
@@ -214,8 +215,9 @@ def emit_global_to_lds(
         nd_index = delinearize_index(thread_id_adjusted, materialized_shape_adjusted)
         logger.info(f"nd_index={nd_index}")
         write_index = {}
-        for dim, idx in zip(symbolic_shape, nd_index):
-            last = dim == symbolic_shape[-1]
+        for bound_expr, idx in zip(symbolic_shape, nd_index):
+            last = bound_expr == symbolic_shape[-1]
+            dim = infer_dim(bound_expr)
 
             idx = idx * elements_per_thread if last else idx
             size = elements_per_thread if last else 1

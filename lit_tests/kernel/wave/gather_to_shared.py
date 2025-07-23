@@ -195,3 +195,84 @@ def test_gather_to_shared_dyn_k():
 
     # CHECK-LABEL:    test_gather_to_shared_dyn_k
     # CHECK-NOT:        amdgpu.gather_to_lds
+
+
+@run_test
+def test_gather_to_shared_scaled_dims():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.ScaledMMAType.F32_16x16x128_F8F6F4,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def scaled_gemm(
+        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 1024,
+            N: 1024,
+            K: 1024,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 256,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        use_global_to_shared=True,
+        target="gfx950",
+    )
+    scaled_gemm = wave_compile(options, scaled_gemm)
+    print(scaled_gemm.asm)
+
+    # CHECK-LABEL:    test_gather_to_shared_scaled_dims
+    # CHECK:          func.func @scaled_gemm
+    # CHECK-COUNT-1:    memref.alloc()
+    # CHECK:            scf.for
+    # CHECK:              amdgpu.lds_barrier
+    # Use gather_to_lds for lhs, and vector.load + vector.store for lhs scale.
+    # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
+    # CHECK:              vector.load {{.*}} vector<1xi8>
+    # CHECK:              vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+
+    # Use gather_to_lds for rhs, and vector.load + vector.store for rhs scale.
+    # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
+    # CHECK:              vector.load {{.*}} vector<1xi8>
+    # CHECK:              vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # TODO: Missing rocdl.waintcnt here, right now, barrier pass last_op is regular write, because of the scale.
+    #       Need to teach compiler to keep track that we have not added any barrier related to async yet.
+    # CHECK:              amdgpu.lds_barrier
+    # CHECK-COUNT-8:      vector.load
+    # CHECK-COUNT-2:      amdgpu.scaled_mfma
+    # CHECK-COUNT-4:    vector.store

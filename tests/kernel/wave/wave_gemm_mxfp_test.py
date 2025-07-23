@@ -22,7 +22,7 @@ from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
 
-from .common.utils import require_e2e, require_cdna4
+from .common.utils import param_bool, require_e2e, require_cdna4
 
 # Note this is specified by the HW and cannot be changed.
 SCALE_GROUP_SIZE = 32
@@ -135,11 +135,13 @@ def torchScaledGemmMXFP8(x, w, x_scales, w_scales):
         ScaledMMAType.F32_16x16x128_F8F6F4,
     ],
 )
+@param_bool("use_global_to_shared")
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 def testScaledGemmMXFP4(
     shape: tuple[int],
     mfma_variant: ScaledMMAType,
     enable_scheduling: SchedulingType,
+    use_global_to_shared: bool,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -201,6 +203,7 @@ def testScaledGemmMXFP4(
         subs=hyperparams,
         canonicalize=True,
         schedule=enable_scheduling,
+        use_global_to_shared=use_global_to_shared,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
