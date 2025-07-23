@@ -159,9 +159,12 @@ def add_shared_memory_barriers(
             with subgraph.inserting_before(first):
                 for node, inf in info.items():
                     for i, async_dep in enumerate(inf.async_deps):
-                        placeholder = Placeholder().add_to_graph(subgraph)
+                        placeholder = Placeholder(str(async_dep)).add_to_graph(subgraph)
                         placeholder.meta["lifted"] = async_dep
                         inf.async_deps[i] = placeholder
+                        custom.update_arg(
+                            "implicit_captures", [async_dep] + custom.implicit_captures
+                        )
 
             add_shared_memory_barriers(trace, subgraph, info)
 
@@ -185,21 +188,24 @@ def add_shared_memory_barriers(
         for node, inf in info.items():
             inf_copy = info_copy[node]
             for i, async_dep in enumerate(inf.async_deps):
-                out_idx = len(output.return_vals)
-                output.return_vals.append(async_dep)
+                return_vals = output.return_vals[0]
+                out_idx = len(return_vals)
+                output.update_arg("return_vals", (return_vals + [async_dep],))
 
                 with parent_graph.inserting_before(parent_node):
                     init = NullAsyncDep().add_to_graph(parent_graph)
-                iterate.init_args.append(init)
+
+                iterate.update_arg("init_args", iterate.init_args + [init])
 
                 with parent_graph.inserting_after(parent_node):
-                    inf.async_deps[i] = GetResult(parent_node, out_idx).add_to_graph(
-                        parent_graph
-                    )
+                    result = GetResult(parent_node, out_idx).add_to_graph(parent_graph)
+
+                inf.async_deps[i] = result
 
                 with graph.inserting_before(first):
-                    inf_copy.async_deps.append(
-                        IterArg(parent_node, out_idx).add_to_graph(graph)
-                    )
+                    iter_arg = IterArg(str(async_dep)).add_to_graph(graph)
+                    iter_arg.iter_idx = out_idx
+
+                inf_copy.async_deps.append(iter_arg)
 
         add_shared_memory_barriers(trace, graph, info_copy, checking_next_iter=True)
