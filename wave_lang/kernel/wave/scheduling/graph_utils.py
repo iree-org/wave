@@ -478,7 +478,7 @@ def sort_graph_by_edge_weight(nodes: list[fx.Node], edges: list[Edge]):
         ]
 
         # Save for later if producer not registered yet.
-        if any([edge._from not in schedule_weight for edge in filter_producer_edge]):
+        if any(edge._from not in schedule_weight for edge in filter_producer_edge):
             # If we went over entire workqueue and still cannot find producer,
             # means it is missing producer from the edges.
             non_solved_counter += 1
