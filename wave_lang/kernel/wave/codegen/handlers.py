@@ -82,6 +82,7 @@ from ...ops.wave_ops import (
     minimum,
     mma,
     ne,
+    null_async_dep,
     permute,
     powf,
     reciprocal,
@@ -1491,33 +1492,22 @@ def handle_set_wave_prio(emitter: WaveEmitter, node: fx.Node):
     rocdl_d.s_setprio(prio)
 
 
-def waitcnt(vmcnt: int):
-    """
-    Create `s_waitcnt` with the specified vmcnt and all other counters set to max.
-    """
-
-    # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-    vmCnt = min(63, vmcnt)
-
-    # Extract low and high bits and combine while setting all other bits to 1
-    lowBits = vmCnt & 0xF
-    highBits = (vmCnt >> 4) << 14
-    otherCnts = ~0xC00F  # C00F has bits 15:14 and 3:0 set
-    waitValue = lowBits | highBits | otherCnts
-    waitValue &= 0xFFFF
-
-    rocdl_d.s_waitcnt(waitValue)
+@handle_op(null_async_dep)
+def handle_null_async_dep(emitter: WaveEmitter, node: fx.Node):
+    # return dummy value
+    val = arith_d.constant(IndexType.get(), 0)
+    emitter.bind_node_proxy(node, IRProxyValue(val))
 
 
 @handle_op(shared_memory_barrier)
 def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     try:
-        (wait_async_ops,) = node.args
+        async_deps, read_counter, write_counter = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if wait_async_ops:
-        waitcnt(0)
+    if read_counter is not None or write_counter is not None:
+        amdgpu_d.memory_counter_wait(load=read_counter, store=write_counter)
 
     amdgpu_d.lds_barrier()
 
