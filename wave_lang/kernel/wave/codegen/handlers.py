@@ -80,13 +80,14 @@ from ...ops.wave_ops import (
     gt,
     iterate,
     le,
-    log2,
     log10,
+    log2,
     lt,
     maximum,
     minimum,
     mma,
     ne,
+    null_async_dep,
     permute,
     powf,
     reciprocal,
@@ -1399,6 +1400,13 @@ def handle_set_wave_prio(emitter: WaveEmitter, node: fx.Node):
     if not isinstance(prio, int):
         raise ValueError("Expected prio in SetWavePrioOp to be integer.")
     rocdl_d.s_setprio(prio)
+
+
+@handle_op(null_async_dep)
+def handle_null_async_dep(emitter: WaveEmitter, node: fx.Node):
+    # return dummy value
+    val = arith_d.constant(IndexType.get(), 0)
+    emitter.bind_node_proxy(node, IRProxyValue(val))
 
 
 def waitcnt(vmcnt: int):
