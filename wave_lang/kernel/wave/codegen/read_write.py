@@ -446,7 +446,7 @@ def _cast_buffer_and_encode_stride(
     stride_larger_than_8192 = False
 
     if emitter.options.use_stride_cache_swizzle:
-        assert len(strides) >= 1
+        assert len(strides) >= 2
         # fastest_dim_bound == second to last stride.
         stride = strides[-2]
         stride_int = stride.owner.attributes["value"].value
