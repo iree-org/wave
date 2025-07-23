@@ -79,7 +79,7 @@ def test_gather_to_shared():
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
-    # CHECK-COUNT-2       amdgpu.gather_to_lds {{.*}} vector<2xf16>
+    # CHECK-COUNT-2:      amdgpu.gather_to_lds {{.*}} vector<2xf16>
     # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      vector.load
