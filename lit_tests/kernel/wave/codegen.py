@@ -168,24 +168,26 @@ def test_read_mapped_buffer():
 
 
 @run_test
-def test_read_dynamic_buffer():
+def test_read_dynamic_3d_buffer():
     constraints: list[tkw.Constraint] = [
-        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={B: 0, M: 16, N: 16})
     ]
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
     constraints += [tkw.WaveConstraint(M, BLOCK_M)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N)]
 
     @tkw.wave(constraints)
-    def read_dynamic_buffer(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16]):
+    def read_dynamic_buffer(a: tkl.Memory[B, M, N, ADDRESS_SPACE, tkl.f16]):
         tkw.read(a, elements_per_thread=16)
 
-    dynamic_symbols = [M]
+    dynamic_symbols = [B, M]
     options = WaveCompileOptions(
         subs={
             N: 16,
             K: 16,
+            BLOCK_B: 1,
             BLOCK_M: 16,
             BLOCK_N: 16,
             BLOCK_K: 16,
@@ -194,6 +196,7 @@ def test_read_dynamic_buffer():
         dynamic_symbols=dynamic_symbols,
         use_buffer_load_ops=True,
         use_buffer_store_ops=True,
+        use_stride_cache_swizzle=True,
         compile_to_mlir=True,
         canonicalize=False,
     )
@@ -201,8 +204,9 @@ def test_read_dynamic_buffer():
     print(read_dynamic_buffer.asm)
 
     # CHECK-LABEL:    func.func @read_dynamic_buffer
-    # CHECK:            %[[ARG0:.*]] = stream.binding.subspan {{.*}} : !stream.binding -> memref<?x16xf16, strided<[16, 1], offset: ?>>
-    # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] {{.*}} : memref<?x16xf16, strided<[16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
+    # CHECK:            %[[ARG0:.*]] = stream.binding.subspan {{.*}} : !stream.binding -> memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>>
+    # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] {{.*}} : memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
+    # CHECK:            %[[SWIZZLE_CAST:.*]] = arith.index_cast %c16{{.*}} : index to i14
     # CHECK:            %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast %[[MEMREF_CAST]] {{.*}} : memref<?xf16, strided<[1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>, #amdgpu.address_space<fat_raw_buffer>>
 
 

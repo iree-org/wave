@@ -451,7 +451,7 @@ def _cast_buffer_and_encode_stride(
         stride_candidate = strides[-2]
         stride_int = stride_candidate.owner.attributes["value"].value
         if stride_int <= 8192:
-            stride = arith_d.index_cast(uint14, stride)
+            stride = arith_d.index_cast(uint14, stride_candidate)
 
     if stride and emitter.options.use_stride_cache_swizzle:
         ptr = amdgpu_d.fat_raw_buffer_cast(
