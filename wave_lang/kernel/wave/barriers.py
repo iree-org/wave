@@ -7,7 +7,7 @@
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Any, Iterable
 
 import torch.fx as fx
 
@@ -17,7 +17,13 @@ from ..ops.wave_ops import (
     AtomicOp,
     CustomOp,
     GatherToLDS,
+    GetResult,
+    IterArg,
+    Iterate,
     NestedRegionOp,
+    NullAsyncDep,
+    Output,
+    Placeholder,
     Read,
     SharedMemoryBarrier,
     Write,
@@ -81,6 +87,15 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
     return False
 
 
+def get_first(seq: Iterable[Any]) -> Any:
+    return next(iter(seq))
+
+
+def get_last(seq: Iterable[Any]) -> Any:
+    *_, last = iter(seq)
+    return last
+
+
 @dataclass
 class SharedMemoryBarrierInfo:
     async_deps: list[fx.Node] = field(default_factory=list)
@@ -138,10 +153,53 @@ def add_shared_memory_barriers(
 
         if isinstance(custom, NestedRegionOp):
             subgraph = trace.get_subgraph(custom.subgraph_name)
+            first = get_first(subgraph.nodes)
+
+            # Convert dependencies to placeholders.
+            with subgraph.inserting_before(first):
+                for node, inf in info.items():
+                    for i, async_dep in enumerate(inf.async_deps):
+                        placeholder = Placeholder().add_to_graph(subgraph)
+                        placeholder.meta["lifted"] = async_dep
+                        inf.async_deps[i] = placeholder
+
             add_shared_memory_barriers(trace, subgraph, info)
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
     if is_reduction_subgraph(graph) and info and not checking_next_iter:
         # Add barriers between ops from different iterations in the same loop.
-        add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
+        parent_node = graph.parent_op
+        parent_graph = parent_node.graph
+
+        iterate = get_custom(parent_node)
+        assert isinstance(iterate, Iterate), f"Expected Iterate, but got {iterate}"
+
+        first = get_first(graph.nodes)
+
+        output = get_custom(get_last(graph.nodes))
+        assert isinstance(output, Output), f"Expected Output, but got {output}"
+
+        # Convert dependencies to iter args.
+        info_copy = defaultdict(SharedMemoryBarrierInfo)
+        for node, inf in info.items():
+            inf_copy = info_copy[node]
+            for i, async_dep in enumerate(inf.async_deps):
+                out_idx = len(output.return_vals)
+                output.return_vals.append(async_dep)
+
+                with parent_graph.inserting_before(parent_node):
+                    init = NullAsyncDep().add_to_graph(parent_graph)
+                iterate.init_args.append(init)
+
+                with parent_graph.inserting_after(parent_node):
+                    inf.async_deps[i] = GetResult(parent_node, out_idx).add_to_graph(
+                        parent_graph
+                    )
+
+                with graph.inserting_before(first):
+                    inf_copy.async_deps.append(
+                        IterArg(parent_node, out_idx).add_to_graph(graph)
+                    )
+
+        add_shared_memory_barriers(trace, graph, info_copy, checking_next_iter=True)
