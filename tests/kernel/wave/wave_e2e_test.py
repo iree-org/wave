@@ -2266,6 +2266,7 @@ def test_debug_log_write():
     assert_close(b, debug_logs["rhslog"])
     assert_close(c, debug_logs["debug_log_output_2"])
 
+
 _trans_conv_cases = [
     (1, 4, 4, 1, 2, 2, 1, 2, "nchw_fchw"),
     (3, 16, 16, 3, 3, 3, 1, 2, "nchw_fchw"),
