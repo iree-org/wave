@@ -117,7 +117,7 @@ def get_nested_functions(root_fn: Callable):
     return fn_list
 
 
-def anonymize_constraints(input_constraints: list[Constraint]):
+def anonymize_constraints(input_constraints: list[Constraint]) -> list[Constraint]:
     """
     Helper function to anonymize constraint S.T we can have the same generate
     hash before and after initializing constraints and induction variables.
@@ -137,6 +137,7 @@ def anonymize_constraints(input_constraints: list[Constraint]):
             constraint.wave_id = None
         else:
             continue
+    return processed_constraints
 
 
 class WaveCacheManager(object):

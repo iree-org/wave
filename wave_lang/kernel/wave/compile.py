@@ -215,6 +215,20 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     cache_manager = None
     binary_path = None
 
+    # Create an indexing context and populate substitutions.
+    push(IndexingContext, IndexingContext())
+    idxc = IndexingContext.current()
+
+    # Make a copy of the substitutions to avoid mutating the original
+    # options.subs.
+    idxc.subs = copy(options.subs)
+
+    # Since constraints are used to lookup the compiled kernel in the cache,
+    # we initialize/update the constraints _before_ the cache lookup.
+    kernel.initialize_wave_constraints()
+    kernel.initialize_symbolic_constraints()
+    kernel.initialize_workgroup_constraints()
+
     def get_binary_path():
         if is_cache_enabled():
             return (
@@ -252,14 +266,6 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 symbols_args_map,
                 None,  # TODO - this means that the cache is broken for kernels with debug logging.  But I want to focus on getting the feature at all before figuring out how to add extra info to the cache.
             )
-
-    # Create an indexing context and populate substitutions.
-    push(IndexingContext, IndexingContext())
-    idxc = IndexingContext.current()
-
-    # Make a copy of the substitutions to avoid mutating the original
-    # options.subs.
-    idxc.subs = copy(options.subs)
 
     # For the wave runtime, we need the hsaco binary. So we turn on
     # dumping of binaries and store in wave runtime directory. If we
