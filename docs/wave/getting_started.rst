@@ -12,13 +12,6 @@ Before installing Wave, ensure you have the following prerequisites:
 2. PyTorch
 3. ROCm (for AMD GPU support)
 4. A compatible AMD GPU with ROCm support (MI250, MI300, etc.)
-5. Rust 1.70 or later
-
-   To install follow - 
-
-   .. code-block:: bash
-
-      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 Quickstart
 --------------
@@ -58,6 +51,14 @@ For Developers
 2. **Install Development Dependencies**
 
    It's recommended to use a virtual environment:
+
+   Rust Installation
+
+   .. code-block:: bash
+
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+   Python Installations
 
    .. code-block:: bash
 
