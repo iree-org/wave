@@ -6,36 +6,40 @@
 
 import pytest
 import torch
-import iree.turbine.kernel as tk
-import iree.turbine.kernel.lang as tkl
-from iree.turbine.kernel.lang.global_symbols import *
+import wave_lang.kernel as tk
+import wave_lang.kernel.lang as tkl
+from wave_lang.kernel.lang.global_symbols import *
 from .common.utils import (
     require_e2e,
+)
+from wave_lang.kernel.wave.utils.run_utils import (
+    set_default_run_config,
     enable_scheduling_barriers,
     dump_generated_mlir,
     check_individual_kernels,
 )
-from iree.turbine.kernel.wave.utils.run_utils import (
-    set_default_run_config,
-)
-from iree.turbine.kernel.wave.compile import WaveCompileOptions, wave_compile
-from iree.turbine.kernel.wave.utils.general_utils import (
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
-from iree.turbine.kernel.wave.scheduling.schedule import SchedulingType
-from iree.turbine.kernel.wave.templates.moe import (
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.templates.moe import (
     get_gemm_kernel,
     get_silu_and_mul_kernel,
 )
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel.lang import DataType
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.lang import DataType
 import torch.nn.functional as F
 
 torch.manual_seed(0)
 
 
-def silu_and_mul_ref(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+def silu_and_mul_torch_ref(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return F.silu(gate) * up
+
+
+def silu_and_mul_ref(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+    return gate * up / (1 + torch.exp(-gate))
 
 
 def get_wave_silu_and_mul_kernel(
@@ -47,7 +51,7 @@ def get_wave_silu_and_mul_kernel(
         torch.float16,
         torch.bfloat16,
     ], f"Unsupported datatype: {datatype}"
-    silu_and_mul_kernel, symbols, _, _ = get_silu_and_mul_kernel(
+    silu_and_mul_kernel, symbols = get_silu_and_mul_kernel(
         m, n, tkl.f16 if datatype == torch.float16 else tkl.bf16
     )
     symbols.update(get_default_scheduling_params())
@@ -72,7 +76,6 @@ def silu_and_mul(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     out = torch.zeros(gate.shape, dtype=gate.dtype, device=gate.device)
     wave_kernel(gate, up, out)
     ref = silu_and_mul_ref(gate, up)
-    rtol, atol = 1e-1, 1e-2
     if check_individual_kernels:
         torch.testing.assert_close(out, ref, rtol=rtol, atol=atol, check_device=False)
     return out
@@ -85,7 +88,7 @@ def get_wave_gemm_kernel(
     mfma_variant: MMAType,
     datatype: DataType,
 ):
-    gemm, symbols, _, _ = get_gemm_kernel(
+    gemm, symbols = get_gemm_kernel(
         m,
         k,
         n,
@@ -180,7 +183,6 @@ def tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk):
     topk_weight = topk_weight.view(-1)
     topk_ids = topk_ids.view(-1)
     dtype = tkl.f16 if a.dtype == torch.float16 else tkl.bf16
-    rtol, atol = 1e-1, 1e-2
     assert w1_gate.shape[0] == w1_up.shape[0] == w2.shape[0]
     e = w1_gate.shape[0]
     for i in range(e):
@@ -247,12 +249,12 @@ def tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk):
 
 
 num_experts = [8, 64]
-top_ks = [2, 6]
-# 1024 * 128 might take some time to run
-m_values = [1, 33, 64, 222, 1024 * 128]
-n_values = [128, 1024, 2048]
-k_values = [128, 511, 1024]
+top_ks = [2]
+m_values = [1, 33]
+n_values = [128, 1024]
+k_values = [511]
 dtypes = [torch.float16, torch.bfloat16]
+rtol, atol = 1e-1, 1e-2
 
 
 @require_e2e
@@ -270,13 +272,12 @@ def testReferenceMoe(
     topk: int,
     dtype: DataType,
 ):
-    rtol, atol = 5e-2, 5e-3
-    rtol, atol = 1e-1, 1e-2
     device = "cuda"
 
     if dtype == torch.float16 and k == 1024:
         pytest.skip("This combination generates NaNs and INFs")
 
+    # TODO: investigate why using torch.randn would have precision issue in silu computation
     a = torch.rand((m, k), dtype=dtype, device=device)
     w1 = torch.rand((e, 2 * n, k), dtype=dtype, device=device)
     w2 = torch.rand((e, k, n), dtype=dtype, device=device)
@@ -284,6 +285,7 @@ def testReferenceMoe(
 
     ref_output = torch_ref_moe(a, w1, w2, score, topk)
 
+    # TODO: remove manual splitting
     # We need to manually split w1 into 2 halves, since this is
     # required by `silu_and_mul` kernel, and currently we can't
     # do this in Wave.

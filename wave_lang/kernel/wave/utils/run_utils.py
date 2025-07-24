@@ -126,6 +126,7 @@ enable_scheduling_barriers = os.environ.get("WAVE_USE_SCHED_BARRIERS", None)
 # Whether to verify each individual kernels when there are multiple ones.
 check_individual_kernels = os.environ.get("WAVE_CHECK_INDIV_KERNS", None)
 
+
 def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:
     """Return default config for running."""
 

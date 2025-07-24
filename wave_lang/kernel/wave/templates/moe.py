@@ -4,18 +4,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import iree.turbine.kernel.lang as tkl
-import iree.turbine.kernel.wave as tkw
-from iree.turbine.kernel.lang.global_symbols import *
-from iree.turbine.kernel.wave.utils.mma_utils import (
-    get_mfma_load_elems_per_thread,
-    get_mfma_store_elems_per_thread,
-)
-from iree.turbine.kernel.wave.constraints import MMAType
-from iree.turbine.kernel._support.dtype import DataType
-from .attention_common import AttentionShape
-from dataclasses import dataclass
-import math
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel._support.dtype import DataType
 import sympy
 
 
@@ -56,7 +49,6 @@ def get_gemm_kernel(
             threads_per_wave=64,
             waves_per_block=(2, 2, 1),
             mma_type=mfma_variant,
-            # vector_shapes={M: 0, N: 0, K: 64},
         )
     ]
 
@@ -91,10 +83,7 @@ def get_gemm_kernel(
         K: k,
     }
 
-    dynamic_symbols = []
-    dynamic_symbols_map = {}
-
-    return gemm, hyperparams, dynamic_symbols, dynamic_symbols_map
+    return gemm, hyperparams
 
 
 def get_silu_and_mul_kernel(
@@ -153,7 +142,4 @@ def get_silu_and_mul_kernel(
         N: n,
     }
 
-    dynamic_symbols = []
-    dynamic_symbols_map = {}
-
-    return silu_and_mul, hyperparams, dynamic_symbols, dynamic_symbols_map
+    return silu_and_mul, hyperparams
