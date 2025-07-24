@@ -1,1 +1,2 @@
 Testing dashboard workflow triggers
+- Trigger 1
