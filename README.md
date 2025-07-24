@@ -55,6 +55,22 @@ For more information, visit the documentation here: https://wave-lang.readthedoc
 
 Wave supports both end users (who want to use Wave kernels in their ML workflows) and developers (who want to contribute to or extend Wave). Follow the relevant guide below to get started quickly.
 
+### Prequisites
+Before installing Wave, ensure you have the following prerequisites:
+
+* Python 3.10 or later
+* PyTorch
+* ROCm (for AMD GPU support)
+* A compatible AMD GPU with ROCm support (MI250, MI300, etc.) or CPU
+* Rust 1.70 or later
+
+   To install follow - 
+
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+   
+
 ### For Users
 
 1. **Install ROCm PyTorch Dependencies**
@@ -65,13 +81,7 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    pip install -r pytorch-rocm-requirements.txt
    ```
 
-2. **Install Rust**
-
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-
-3. **Install Wave**
+2. **Install Wave**
 
    You can then install Wave and its dependencies using pip:
 
@@ -79,7 +89,7 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    pip install wave-lang
    ```
 
-4. **Try the Example Notebook**
+3. **Try the Example Notebook**
 
    To get started, try the [examples/jupyter/wave_gemm_example.ipynb](examples/jupyter/wave_gemm_example.ipynb) notebook.
 
@@ -103,7 +113,6 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    pip install --upgrade pip
    pip install -r requirements-iree-pinned.txt
    pip install -r pytorch-rocm-requirements.txt
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    pip install -r requirements.txt -e .
    ```
 
