@@ -18,6 +18,7 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.templates.conv import get_igemm_conv2d
+from wave_lang.kernel.wave.templates.transpose_conv import get_transpose_conv2d
 from wave_lang.kernel.wave.utils.general_utils import (
     ceildiv,
     check_leaks,
@@ -2257,3 +2258,107 @@ def test_debug_log(dynamic_dims: bool):
     assert_close(
         a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"][0 : shape[0] // 2, :]
     )
+
+
+_trans_conv_cases = [
+    (1, 4, 4, 1, 2, 2, 1, 2, "nchw_fchw"),
+    (3, 16, 16, 3, 3, 3, 1, 2, "nchw_fchw"),
+    (10, 10, 10, 3, 2, 2, 1, 2, "nchw_fchw"),
+    (4, 11, 11, 1, 7, 7, 1, 2, "nchw_fchw"),
+    (1, 32, 32, 3, 3, 3, 2, 2, "nchw_fchw"),
+    (1, 4, 4, 1, 2, 2, 1, 3, "nchw_fchw"),
+    (3, 16, 16, 3, 3, 3, 1, 3, "nchw_fchw"),
+    (10, 10, 10, 3, 2, 2, 1, 3, "nchw_fchw"),
+    (4, 11, 11, 1, 7, 7, 1, 3, "nchw_fchw"),
+    (1, 32, 32, 3, 3, 3, 2, 3, "nchw_fchw"),
+    (1, 4, 4, 1, 2, 2, 1, 4, "nchw_fchw"),
+    (3, 16, 16, 3, 3, 3, 1, 5, "nchw_fchw"),
+    (10, 10, 10, 3, 2, 2, 1, 4, "nchw_fchw"),
+    (4, 11, 11, 1, 7, 7, 1, 5, "nchw_fchw"),
+    (1, 32, 32, 3, 3, 3, 2, 4, "nchw_fchw"),
+    (10, 21, 21, 3, 5, 5, 2, 4, "nchw_fchw"),
+    (4, 31, 31, 1, 9, 9, 1, 5, "nchw_fchw"),
+    (2, 18, 18, 3, 8, 8, 2, 4, "nchw_fchw"),
+    (12, 3, 3, 3, 2, 2, 2, 11, "nchw_fchw"),
+    (8, 12, 12, 1, 9, 9, 1, 3, "nchw_fchw"),
+    (4, 64, 64, 1, 15, 15, 2, 2, "nchw_fchw"),
+    (1, 4, 4, 1, 2, 2, 1, 8, "nhwc_hwcf"),
+    (3, 16, 16, 3, 3, 3, 1, 2, "nhwc_hwcf"),
+    (1, 4, 4, 1, 2, 2, 1, 4, "nhwc_hwcf"),
+    (1, 128, 128, 1, 3, 3, 1, 2, "nhwc_hwcf"),
+    (3, 15, 15, 3, 3, 3, 1, 3, "nhwc_hwcf"),
+    (1, 6, 6, 1, 2, 2, 1, 4, "nhwc_hwcf"),
+    (1, 145, 145, 1, 3, 3, 1, 2, "nhwc_hwcf"),
+    (4, 2, 2, 1, 2, 2, 1, 7, "nhwc_hwcf"),
+    (1, 80, 80, 1, 12, 12, 1, 2, "nhwc_hwcf"),
+]
+
+
+@require_e2e
+@require_cdna3
+@pytest.mark.parametrize(
+    "n, h, w, c, hf, wf, nf, upsamp_stride, layout", _trans_conv_cases
+)
+def test_transpose_conv(n, h, w, c, hf, wf, nf, upsamp_stride, layout):
+    cf = c
+    padding = 0  # TODO: only pad=0 is supported for now
+    conv_stride = 1
+
+    torch.manual_seed(1)
+    x = device_randn(n, c, h, w, dtype=torch.float16)
+    we = device_randn(nf, cf, hf, wf, dtype=torch.float16)
+
+    def upsample_with_zeros(x, upsamp_stride):
+        """Helper for upsampling, spreads elements out by upsamp_stride in h and w dims."""
+        N, C, H, W = x.shape
+        H_out = H * upsamp_stride
+        W_out = W * upsamp_stride
+        out = torch.zeros((N, C, H_out, W_out), dtype=x.dtype, device=x.device)
+        out[:, :, ::upsamp_stride, ::upsamp_stride] = x
+        return out
+
+    # Preprocessing Steps: 1. Flip Weight matrix about spatial dims, 2. upsample input tensor by upsamp_stride in spatial dims
+    we_flipped = torch.flip(we, dims=[2, 3])  # Flip Weight tensor across spatial dims
+    x_up = upsample_with_zeros(x, upsamp_stride)
+
+    convRef = torch.nn.Conv2d(
+        c, nf, hf, stride=conv_stride, padding=padding, bias=False
+    )
+    convRef.weight = torch.nn.Parameter(we_flipped)
+    out_ref = convRef(x_up).detach().to(torch.float32)
+
+    if layout == "nchw_fchw":
+        pass  # Nothing
+    elif layout == "nhwc_hwcf":
+        x = torch.permute(x, (0, 2, 3, 1)).contiguous()
+        we = torch.permute(we, (2, 3, 1, 0)).contiguous()
+        out_ref = torch.permute(out_ref, (0, 2, 3, 1)).contiguous()
+    else:
+        raise ValueError(f"Invalid layout: {layout}")
+
+    trans_conv, hyperparams = get_transpose_conv2d(
+        layout=layout,
+        n=n,
+        h=h,
+        w=w,
+        c=c,
+        hf=hf,
+        wf=wf,
+        nf=nf,
+        upsamp_stride=upsamp_stride,
+        conv_stride=conv_stride,
+        input_dtype=tkl.f16,
+        output_dtype=tkl.f32,
+    )
+    hyperparams.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+    out = torch.zeros_like(out_ref)
+    trans_conv = wave_compile(options, trans_conv)
+
+    trans_conv(x, we, upsamp_stride, out)
+
+    assert_close(out, out_ref, rtol=1e-03, atol=1e-02)

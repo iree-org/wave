@@ -7,7 +7,11 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.dtype import DataType
 from typing import Any, Optional
-from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE
+from wave_lang.kernel.lang.global_symbols import (
+    SHARED_ADDRESS_SPACE,
+    GLOBAL_ADDRESS_SPACE,
+)
+
 
 def get_transpose_conv2d(
     layout: str,
@@ -30,16 +34,16 @@ def get_transpose_conv2d(
     ratio_n: Optional[int] = None,
 ) -> tuple["LaunchableWave", dict[tkl.IndexSymbol, Any]]:
     """This Kernel computes the transpose convolution with a set upsampling stride. An upsample stride of 1 leaves the input matrix in its orginal form. The weight matrix is flipped in both spatial dims and the input matrix is upsampled before doing the convolution process.
-    
+
     Parameters:
         layout (str): Either "nchw_fchw" or "nhwc_hwcf" based on the ordering of the dims of the input tensors.
-        n (int): Number of input  (Batch size). 
+        n (int): Number of input  (Batch size).
         h (int): Height of input matrix.
         w (int): Width of input matrix.
         c (int): Number of channels in input matrix.
         hf (int): Height of weight (filter) matrix.
         wf (int): Width of weight (filter) matrix.
-        nf (int): Number of filters. 
+        nf (int): Number of filters.
         upsamp_stride (int): Stride to determine placement of 0 row/col inserts, upsamp_stride = 1 is no upsampling.
         conv_stride (int): Convolution stride distance.
         input_dtype (DataType): Input and filter datatype, currently only supports tkl.f16.
@@ -48,23 +52,26 @@ def get_transpose_conv2d(
         block_m (int | None): M dim tile size.
         block_n (int | None): N dim tile size.
         block_k (int | None): K dim tile size.
-        ratio_m (int | None): Divider for M dim tile size and number of waves. 
-        ratio_n (int | None): Divider for N dim tile size and number of waves. 
+        ratio_m (int | None): Divider for M dim tile size and number of waves.
+        ratio_n (int | None): Divider for N dim tile size and number of waves.
 
     Returns:
         output (tuple["LaunchableWave", dict[tkl.IndexSymbol, Any]]): Wave kernel to be compiled and hyperparameters.
     """
-    
+
     # Input Checks
     assert input_dtype == tkl.f16, f"Unsupported input dtype: {input_dtype}"
     assert output_dtype == tkl.f32, f"Unsupported input dtype: {output_dtype}"
     if h != w:
         raise ValueError(f"Input matrix must have square spatial dims, {h=} and {w=}")
     if hf != wf:
-        raise ValueError(f"Weight Matrix must have square spatial dims, {hf=} and {wf=}")
+        raise ValueError(
+            f"Weight Matrix must have square spatial dims, {hf=} and {wf=}"
+        )
     if upsamp_stride < 1:
-        raise ValueError(f"upsamp_stride must be >= 1 not {upsamp_stride}, for no stride use upsamp_stride = 1")
-    
+        raise ValueError(
+            f"upsamp_stride must be >= 1 not {upsamp_stride}, for no stride use upsamp_stride = 1"
+        )
 
     padding = 0  # only pad=0 is supported for now
 
@@ -99,10 +106,11 @@ def get_transpose_conv2d(
     w_mapping = tkw.IndexMapping(
         num_iterators=2,
         inputs={
-            NF: i % NF, 
-            C: j % C, 
-            HF: HF - 1 - (j // C) % WF, 
-            WF: WF - 1 - (j // C) // WF},
+            NF: i % NF,
+            C: j % C,
+            HF: HF - 1 - (j // C) % WF,
+            WF: WF - 1 - (j // C) // WF,
+        },
         outputs={NF: i, K: j},
     )
 
@@ -165,7 +173,6 @@ def get_transpose_conv2d(
         tkw.HardwareConstraint(
             threads_per_wave=64,
             waves_per_block=(ratio_m, ratio_n, 1),
-            vector_shapes={M: 16, K: 16},
         )
     ]
 
@@ -194,7 +201,7 @@ def get_transpose_conv2d(
             )
 
             # Get i and j indx
-            i_idx = tkw.self_index(M, tkl.i32) 
+            i_idx = tkw.self_index(M, tkl.i32)
             j_idx = tkw.self_index(K, tkl.i32)
 
             # Broadcast indices to M, K shape
@@ -202,13 +209,16 @@ def get_transpose_conv2d(
             j_idx = tkw.broadcast(j_idx, target_shape=[M, K])
 
             # Mask function for computing valid indices of MxK matrix
-            mask_func = lambda i, j: (((((i % SZ_OUT) % W_OUT) + (j // C) % wf) % UPSAMP_STRIDE) + (((((i % SZ_OUT) // W_OUT) + (j // C) // wf) % UPSAMP_STRIDE)) < 1)
+            mask_func = lambda i, j: (
+                ((((i % SZ_OUT) % W_OUT) + (j // C) % wf) % UPSAMP_STRIDE)
+                + (((((i % SZ_OUT) // W_OUT) + (j // C) // wf) % UPSAMP_STRIDE))
+                < 1
+            )
 
-            # Calculate mask (TODO: Currently evaulates to -1 if true, want to evaluate to just 1)
+            # Create mask and cast to f16
             mask = tkw.apply_expr((i_idx, j_idx), mask_func)
-            neg_1_reg = tkw.Register[M, K, input_dtype](-1.0)
             mask = tkw.broadcast(mask, target_shape=[M, K])
-            mask = tkw.cast(mask, input_dtype) * neg_1_reg
+            mask = tkw.cast(mask, input_dtype)
 
             # Apply mask to input matrix
             a_reg = a_reg * mask
@@ -223,7 +233,7 @@ def get_transpose_conv2d(
             # compute mma for MxK x KxNF
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
-        
+
         # Write result using unflattening output mapping
         tkw.write(
             repeat, out, mapping=out_mapping, elements_per_thread=ELEMS_PER_THREAD
