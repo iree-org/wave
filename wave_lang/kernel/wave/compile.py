@@ -121,8 +121,7 @@ class WaveKernel:
         debug_args = []
         debug_logs = kwargs.get("debug_logs", {})
         if self.debug_outputs:
-            # Process backwards so that the debug_logs output is ordered.
-            for info_dict in self.debug_outputs[::-1]:
+            for info_dict in self.debug_outputs:
                 shape = [
                     self.options.subs[sdim] for sdim in info_dict["symbolic_shape"]
                 ]
@@ -166,6 +165,12 @@ class WaveKernel:
                 print_bench_result(
                     benchmark_results, self.options.benchmark_results_file
                 )
+
+        # Print global logs if any
+        if self.debug_outputs:
+            for info in self.debug_outputs:
+                if info.get("debug_print_style", None) == "global":
+                    print(f"{info['symbol_name']}:\n{debug_logs[info['symbol_name']]}")
 
         return self.asm
 

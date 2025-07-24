@@ -130,9 +130,13 @@ def write(
 
 def debug_log_write(
     register_: "Register",
-    elements_per_thread: Optional[IndexExpr | int] = None,
-    mapping: Optional[IndexMapping] = None,
-    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    label: Optional[str],
+): ...
+
+
+def debug_print_global(
+    register_: "Register",
+    label: Optional[str],
 ): ...
 
 
@@ -2035,7 +2039,7 @@ class DebugLogWrite(CustomOp):
     """
 
     register_: fx.Proxy
-    log_name: Optional[str] = None
+    label: Optional[str] = None
 
     @property
     def memory(self) -> Optional[fx.Proxy]:
@@ -2058,6 +2062,20 @@ class DebugLogWrite(CustomOp):
 
         self.type = type_expr
         self.fx_node.type = type_expr
+
+
+@define_op("debug_print_global")
+@dataclass
+class DebugPrintGlobal(DebugLogWrite):
+    """
+    An op for debugging.
+
+    Like debug_log_write, it adds an implicit global memory location for debug logging.
+    While you can access the debug log like with debug_log_write, it is also automatically printed after the kernel is run.
+    Note that it prints the entire global tensor once, probably in an abbreviated form.
+
+    The API and semantics of this operation are not yet stable, but since it is just a debugging tool, you want to take any debug logging out of your kernel before shipping it anyway.
+    """
 
 
 @define_op("apply_expr")

@@ -2238,7 +2238,7 @@ def test_debug_log_write():
         lhs = tkw.read(a)
         rhs = tkw.read(b)
         tkw.debug_log_write(lhs)
-        tkw.debug_log_write(rhs, log_name="rhslog")
+        tkw.debug_log_write(rhs, label="rhslog")
         res = lhs + rhs
         tkw.debug_log_write(res)
         tkw.write(res, c)
