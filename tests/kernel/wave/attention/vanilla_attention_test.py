@@ -588,11 +588,11 @@ def testAttentionBias(
             partial_max: tkl.Register[B, M, tkl.f32],
             partial_sum: tkl.Register[B, M, tkl.f32],
             acc: tkl.Register[B, N, M, tkl.f32],
-        ) -> (
+        ) -> tuple[
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, N, M, tkl.f32],
-        ):
+        ]:
             imm_reg = tkl.Register[B, K2, M, tkl.f32](0.0)
             q_reg = tkw.read(q)
             # b_reg: tkw.Register[B, N, K, tkl.f16]
@@ -772,11 +772,11 @@ def testAttentionSoftCap(
             partial_max: tkl.Register[B, M, tkl.f32],
             partial_sum: tkl.Register[B, M, tkl.f32],
             acc: tkl.Register[B, N, M, tkl.f32],
-        ) -> (
+        ) -> tuple[
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, N, M, tkl.f32],
-        ):
+        ]:
             imm_reg = tkl.Register[B, K2, M, tkl.f32](0.0)
             q_reg = tkw.read(q)
             # b_reg: tkw.Register[B, N, K, tkl.f16]
@@ -945,11 +945,11 @@ def testAttentionF8(
             partial_max: tkl.Register[B, M, tkl.f32],
             partial_sum: tkl.Register[B, M, tkl.f32],
             acc: tkl.Register[B, N, M, tkl.f32],
-        ) -> (
+        ) -> tuple[
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, N, M, tkl.f32],
-        ):
+        ]:
             imm_reg = tkl.Register[B, K2, M, tkl.f32](0.0)
             q_reg = tkw.read(q)
             k_reg = tkw.read(k)

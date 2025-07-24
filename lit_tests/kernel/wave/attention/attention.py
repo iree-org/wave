@@ -87,11 +87,11 @@ def test_attention_32x32x8():
             partial_max: tkl.Register[B, M, tkl.f32],
             partial_sum: tkl.Register[B, M, tkl.f32],
             acc: tkl.Register[B, N, M, tkl.f32],
-        ) -> (
+        ) -> tuple[
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, N, M, tkl.f32],
-        ):
+        ]:
             imm_reg = tkl.Register[B, K2, M, tkl.f32](0.0)
             q_reg = tkw.read(q, elements_per_thread=LOAD_ELEMS_PER_THREAD)
             k_reg = tkw.read(k, elements_per_thread=LOAD_ELEMS_PER_THREAD)
@@ -220,11 +220,11 @@ def test_dynamic_attention_32x32x8():
             partial_max: tkl.Register[B, M, tkl.f32],
             partial_sum: tkl.Register[B, M, tkl.f32],
             acc: tkl.Register[B, N, M, tkl.f32],
-        ) -> (
+        ) -> tuple[
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, M, tkl.f32],
             tkl.Register[B, N, M, tkl.f32],
-        ):
+        ]:
             imm_reg = tkl.Register[B, K2, M, tkl.f32](0.0)
             q_reg = tkw.read(q, elements_per_thread=LOAD_ELEMS_PER_THREAD)
             k_reg = tkw.read(k, elements_per_thread=LOAD_ELEMS_PER_THREAD)
