@@ -10,6 +10,7 @@ from ..ops.wave_ops import (
     Write,
     Placeholder,
     DebugLogWrite,
+    DebugPrintGlobal,
 )
 from .._support.dtype import DataType
 from .._support.indexing import IndexSymbol
@@ -41,12 +42,14 @@ def debug_log_hoist(trace: CapturedTrace):
         debug_log_ops = trace.walk(is_debug_log_transformer)
         for index, debug_op in enumerate(debug_log_ops):
             custom = get_custom(debug_op)
-            placeholder_name = custom.log_name or f"debug_log_output_{index}"
+            placeholder_name = custom.label or f"debug_log_output_{index}"
             type_expr = None
             placeholder = Placeholder(placeholder_name, type_expr).add_to_graph(root)
             custom.fx_node.memory = placeholder
             placeholder.meta["debug_output_arg_id"] = index
             placeholder.meta["symbol_name"] = placeholder_name
+            if isinstance(custom, DebugPrintGlobal):
+                placeholder.meta["debug_print_style"] = "global"
 
 
 def debug_log_write_replace(trace: CapturedTrace, debug_arg_info: list[DebugArgInfo]):
@@ -93,4 +96,5 @@ def debug_log_write_replace(trace: CapturedTrace, debug_arg_info: list[DebugArgI
         custom = get_custom(debug_placeholder_op)
         debug_placeholder_op.meta["dtype"] = custom.type.dtype
         debug_placeholder_op.meta["symbolic_shape"] = custom.type.symbolic_shape
-        debug_arg_info.append(debug_placeholder_op.meta)
+        # insert since we find them in reverse order of the log statements.
+        debug_arg_info.insert(0, debug_placeholder_op.meta)
