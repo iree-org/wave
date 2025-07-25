@@ -182,15 +182,15 @@ def add_shared_memory_barriers(
 
         output = get_custom(get_last(graph.nodes))
         assert isinstance(output, Output), f"Expected Output, but got {output}"
+        return_vals = list(output.return_vals[0])
 
         # Convert dependencies to iter args.
         info_copy = defaultdict(SharedMemoryBarrierInfo)
         for node, inf in info.items():
             inf_copy = info_copy[node]
             for i, async_dep in enumerate(inf.async_deps):
-                return_vals = output.return_vals[0]
                 out_idx = len(return_vals)
-                output.update_arg("return_vals", (return_vals + [async_dep],))
+                return_vals.append(async_dep)
 
                 with parent_graph.inserting_before(parent_node):
                     init = NullAsyncDep().add_to_graph(parent_graph)
@@ -207,5 +207,7 @@ def add_shared_memory_barriers(
                     iter_arg.iter_idx = out_idx
 
                 inf_copy.async_deps.append(iter_arg)
+
+        output.update_arg("return_vals", return_vals)
 
         add_shared_memory_barriers(trace, graph, info_copy, checking_next_iter=True)
