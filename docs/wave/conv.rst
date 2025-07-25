@@ -15,10 +15,11 @@ What is 2D Convolution?
 A 2D convolution slides a filter over a 2D input image or feature map, applying dot products at each location. Each filter produces one output channel.
 
 .. image:: conv_example.gif
-    :width: 600
+    :width: 400
     :alt: Conv gif
     :align: center
 
+The above gif is an example of conv where the blue matrix is the input matrix, the gray matrix is the filter which is sliding across the input matrix and the green matrix is the output matrix.
 Variable Definitions
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -104,6 +105,7 @@ Each mapping transforms flat loop indices `(i, j)` into multi-dimensional indice
 The kernel loops over the dimension `K`, loading tiles from input and weight tensors, and accumulating partial results using `tkw.mma(...)`. Final results are written using `tkw.write(...)`.
 
 .. code-block:: python
+
    @tkw.wave(constraints)
    def conv(x, we, out):
        c_reg = tkl.Register[M, NF, output_dtype](0.0)
@@ -114,6 +116,8 @@ The kernel loops over the dimension `K`, loading tiles from input and weight ten
            acc = tkw.mma(a_reg, b_reg, acc)
            return acc
        tkw.write(repeat, out, mapping=out_mapping, ...)
+
+
 Tiling and Scheduling
 ---------------------
 
@@ -141,4 +145,4 @@ Summary
 
 The `get_igemm_conv2d` function offers a flexible and tunable approach to implement
 2D convolution using the Wave DSL. It transforms the convolution into a matrix multiply,
-applies GPU-friendly tiling, and uses register and warp-level operations for efficiency.
+applies GPU-friendly tiling, and uses register and wave-level operations for efficiency.
