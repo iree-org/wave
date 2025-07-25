@@ -2250,7 +2250,7 @@ def test_debug_log_write(dynamic_dims: bool):
     ref = a + b
 
     subs = {
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
     }
     dynamic_symbols = []
     if dynamic_dims:
