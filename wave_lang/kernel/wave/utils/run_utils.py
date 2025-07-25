@@ -64,6 +64,9 @@ def invoke_with_wave_runtime(
     ) + tuple(dynamic_symbols)
     # Update the grid size as this may vary depending
     # on the dynamic symbols.
+    import math
+
+    options.kernel_launch_info.grid.__globals__.setdefault("math", math)
     grid = compute_grid(dynamic_dims, options.kernel_launch_info.grid)
 
     stream = torch.cuda.current_stream().cuda_stream
