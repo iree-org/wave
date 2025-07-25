@@ -23,30 +23,17 @@ A 2D convolution slides a filter over a 2D input image or feature map, applying 
 The above gif is an example of conv where the blue matrix is the input matrix, the gray matrix is the filter which is sliding across the input matrix and the green matrix is the output matrix.
 
 Variable Definitions
------------------------
+--------------------
 
 The following table defines the variables used in the convolution shapes:
 
-+------------+--------------------------------------------------------------+
-| Variable   | Meaning                                                      |
-+============+==============================================================+
-| N          | Batch size (number of input images)                          |
-+------------+--------------------------------------------------------------+
-| H, W       | Input image height and width                                 |
-+------------+--------------------------------------------------------------+
-| C          | Number of input channels (e.g., 3 for RGB)                   |
-+------------+--------------------------------------------------------------+
-| HF, WF     | Filter (kernel) height and width                             |
-+------------+--------------------------------------------------------------+
-| NF         | Number of filters (also the number of output channels)       |
-+------------+--------------------------------------------------------------+
-| P          | Padding size (same for top/bottom and left/right)           |
-+------------+--------------------------------------------------------------+
-| S          | Stride (distance between adjacent convolution windows)       |
-+------------+--------------------------------------------------------------+
-| H_out,     | Output spatial height and width after convolution            |
-| W_out      |                                                              |
-+------------+--------------------------------------------------------------+
+Variables:
+- **N**: Batch size (number of input images)
+- **H, W**: Input image height and width
+- **C**: Number of input channels (e.g., 3 for RGB)
+- **HF, WF**: Filter (kernel) height and width
+- **NF**: Number of filters (also the number of output channels)
+- **H_out, W_out**: Output spatial height and width after convolution
 
 For an input tensor of shape:
 
