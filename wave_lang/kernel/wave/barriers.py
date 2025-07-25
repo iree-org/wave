@@ -105,7 +105,7 @@ def get_last(seq: Iterable[Any]) -> Any:
 @dataclass
 class SharedMemoryBarrierInfo:
     async_deps: list[fx.Node] = field(default_factory=list)
-    last_node: Optional[fx.Node] = None
+    last_node: Optional[CustomOp] = None
 
 
 def add_shared_memory_barriers(
@@ -133,8 +133,8 @@ def add_shared_memory_barriers(
         custom = get_custom(node)
         if mem := is_shared_memory_op(custom):
             state = info[mem]
-            if state.last_node and need_barrier(custom, get_custom(state.last_node)):
-                if barrier := is_barrier_between(state.last_node, node):
+            if state.last_node and need_barrier(custom, state.last_node):
+                if barrier := is_barrier_between(state.last_node.fx_node, node):
                     barrier = get_custom(barrier)
                     # Add async deps to the barrier.
                     if state.async_deps:
@@ -151,12 +151,16 @@ def add_shared_memory_barriers(
 
                 state.async_deps = []
 
-            state.last_node = node
+            state.last_node = custom
             if isinstance(custom, GatherToLDS):
                 state.async_deps.append(node)
 
         if isinstance(custom, NestedRegionOp):
             subgraph = trace.get_subgraph(custom.subgraph_name)
+            if not any(i.async_deps for i in info.values()):
+                add_shared_memory_barriers(trace, subgraph, info)
+                continue
+
             first = get_first(subgraph.nodes)
 
             # Convert dependencies to placeholders.
@@ -176,6 +180,10 @@ def add_shared_memory_barriers(
     # shared reads in the previous iteration of a loop.
     if is_reduction_subgraph(graph) and info and not checking_next_iter:
         # Add barriers between ops from different iterations in the same loop.
+        if not any(i.async_deps for i in info.values()):
+            add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
+            return
+
         parent_node = graph.parent_op
         parent_graph = parent_node.graph
 
