@@ -1225,6 +1225,10 @@ class Allocate(CustomOp):
             * self.dtype.bitwidth()
         ) // 8
 
+    @property
+    def get_final_dim_unpadded_size(self):
+        return self.distributed_shape[-1] - self.padding
+
 
 @define_op("self_index")
 @dataclass
