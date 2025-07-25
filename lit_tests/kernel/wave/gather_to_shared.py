@@ -80,7 +80,7 @@ def test_gather_to_shared():
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      amdgpu.gather_to_lds {{.*}} vector<2xf16>
-    # CHECK:              rocdl.s.waitcnt
+    # CHECK:              amdgpu.memory_counter_wait load(0) store(0)
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      vector.load
     # CHECK:              amdgpu.mfma
@@ -270,7 +270,7 @@ def test_gather_to_shared_scaled_dims():
     # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
     # CHECK:              vector.load {{.*}} vector<1xi8>
     # CHECK:              vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
-    # CHECK:              rocdl.s.waitcnt
+    # CHECK:              amdgpu.memory_counter_wait load(1) store(0)
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-8:      vector.load
     # CHECK-COUNT-2:      amdgpu.scaled_mfma
