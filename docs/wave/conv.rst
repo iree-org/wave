@@ -66,9 +66,7 @@ where:
 
     H_OUT = (H + 2 * padding - HF) // stride + 1
     W_OUT = (W + 2 * padding - WF) // stride + 1
-    SZ_OUT = H_OUT * W_OUT
-    K = HF * WF * C
-    M = SZ_OUT * N
+
 Currently Padding can only be set to 0 (no padding).
 
 Lowering to iGEMM
@@ -78,11 +76,19 @@ To optimize the convolution for GPU execution, we flatten it into a matrix multi
 
 - The input is reshaped to an ``(M × K)`` matrix, where:
   - ``M = N × H_out × W_out`` (one row per output spatial location)
-  - ``K = HF × WF × C`` (flattened receptive field)
+  - ``K = HF × WF × C`` (flattened filter field)
 - The filter weights are reshaped to ``(K × NF)``
 - The result is an ``(M × NF)`` output matrix
 
 This is then reshaped back to ``(N, H_out, W_out, NF)``.
+
+M and K are calculated in the Kernel here using Symbolics:
+
+.. code-block:: python
+
+    SZ_OUT = H_OUT * W_OUT
+    K = HF * WF * C
+    M = SZ_OUT * N
 
 Wave DSL Implementation
 -----------------------
