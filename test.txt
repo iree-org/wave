@@ -19,3 +19,4 @@ Testing dashboard workflow triggers
 - Trigger 18
 - Trigger 19
 - Trigger 20
+- Trigger 21
