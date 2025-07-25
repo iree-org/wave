@@ -25,3 +25,4 @@ Testing dashboard workflow triggers
 - Trigger 24
 - Trigger 25
 - Trigger 26
+- Trigger 27
