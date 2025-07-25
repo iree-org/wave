@@ -97,15 +97,13 @@ Before installing Wave, ensure you have the following prerequisites:
 
 2. **Install Development Dependencies**
 
-   It's recommended to use a virtual environment:
-
-   Rust Installation
+   If you don't have Rust already installed on your system, install Rust using the following command:
 
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
-   Python Installations
+   Next, install the python dependencies. It is recommended to use a virtual environment.
 
    ```bash
    python -m venv .venv

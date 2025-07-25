@@ -50,15 +50,13 @@ For Developers
 
 2. **Install Development Dependencies**
 
-   It's recommended to use a virtual environment:
-
-   Rust Installation
+   If you don't have Rust already installed on your system, install Rust using the following command:
 
    .. code-block:: bash
 
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-   Python Installations
+   Next, install the python dependencies. It is recommended to use a virtual environment.
 
    .. code-block:: bash
 
