@@ -4,12 +4,15 @@ from enum import Enum
 from .graph_utils import Edge
 from ...ops.wave_ops import get_custom
 import math
+from typing import TypeVar
+from enum import Enum
+from .resources import Operation
 
-ScheduleStage = Enum  # alias
+ScheduleStage = TypeVar("ScheduleStage", bound=Enum)
 
 
 def get_scheduling_stage(
-    op: fx.Node, operation_stage_table: dict[ScheduleStage:int]
+    op: fx.Node, operation_stage_table: dict[Operation, ScheduleStage]
 ) -> ScheduleStage:
     op_ty = get_custom_operation_type(get_custom(op))
     assert op_ty is not None, f"get_custom_operation_type returned None for {op}"
@@ -25,7 +28,6 @@ class BaseScheduler:
         edges: list[Edge],
         resources: list[int],
     ) -> None:
-        # assert False
         self.graph = graph
         self.edges = edges
         self.resources = resources

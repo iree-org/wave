@@ -34,8 +34,8 @@ from .loop_reconstruction_utils import (
     liveness_analysis,
     partition_graph_by_stage,
 )
+from .multi_buffering import heuristically_multi_buffer_shared_memory
 from .resources import get_custom_operation_type
-from .schedule_enums import SchedulingType
 
 logger = get_logger("wave.scheduling.loop_reconstruction")
 
@@ -67,26 +67,6 @@ def update_node_index(
         node.update_arg("dst_index", update_index(dst_idx, subs))
 
 
-def _heuristically_multi_buffer_shared_memory(
-    new_node: CustomOp,
-    induction_variable: IndexSymbol,
-    reduction: Iterate,
-    node: fx.Node,
-):
-    original_buffer = get_custom(new_node.memory)
-    reduction_axis = reduction.axis
-    reduction_dim_indices = [
-        i for i, dim in enumerate(original_buffer.shape) if dim == reduction_axis
-    ]
-    for i, dim in enumerate(original_buffer.shape):
-        if i in reduction_dim_indices or dim not in new_node.index:
-            continue
-        block_size = original_buffer.distributed_shape[i]
-        which_buffer = induction_variable % 2
-        offset = block_size * which_buffer
-        new_node.index[dim].start = node.index[dim].start + offset
-
-
 def add_nodes_by_schedule(
     reduction: Iterate,
     reduction_graph: fx.Graph,
@@ -99,7 +79,7 @@ def add_nodes_by_schedule(
     rotating_registers: dict[fx.Node, list[fx.Node]],
     pipelining_stage: PipelineStage = PipelineStage.KERNEL,
     use_scheduling_barriers: bool = False,
-    scheduling_type: SchedulingType = SchedulingType.NONE,
+    multi_buffer_count: int = -1,
 ):
     """
     Interleave the instructions in the partitioned graph by stage
@@ -150,20 +130,21 @@ def add_nodes_by_schedule(
             logger.debug(
                 f"Copying Node: {node}, Stage: {stage}, Iteration: {iteration} -> {new_node.fx_node}"
             )
+            multi_buffering_enabled = multi_buffer_count != -1
+            if (
+                multi_buffering_enabled
+                and isinstance(new_node, Write | Read)
+                and new_node.memory_type.address_space == SHARED_ADDRESS_SPACE
+            ):
+                heuristically_multi_buffer_shared_memory(
+                    new_node=new_node,
+                    induction_variable=induction_variable,
+                    reduction=reduction,
+                    multi_buffer_count=multi_buffer_count,
+                )
+
             # Set the index for the new node by substituting the induction variable
             # for the current iteration.
-            if scheduling_type == SchedulingType.GEMM_FOUR_STAGE:
-                if (
-                    isinstance(new_node, Write | Read)
-                    and new_node.memory_type.address_space == SHARED_ADDRESS_SPACE
-                ):
-                    _heuristically_multi_buffer_shared_memory(
-                        new_node=new_node,
-                        induction_variable=induction_variable,
-                        reduction=reduction,
-                        node=node,
-                    )
-
             update_node_index(
                 new_node, induction_variable, current_induction_variables[iteration]
             )
@@ -284,7 +265,7 @@ def construct_prologue(
     induction_variable: IndexSymbol,
     new_induction_variables: list[int],
     stages: list[int],
-    scheduling_type: SchedulingType = SchedulingType.NONE,
+    multi_buffer_count: int = -1,
 ):
     """
     Construct the prologue of the pipelined loop.
@@ -325,7 +306,7 @@ def construct_prologue(
                 new_induction_variables,
                 rotating_registers,
                 PipelineStage.PROLOGUE,
-                scheduling_type=scheduling_type,
+                multi_buffer_count=multi_buffer_count,
             )
 
     # During the prologue, we may have computed results that need to be passed as init args
@@ -449,7 +430,7 @@ def construct_kernel(
     node_map: dict[fx.Node, fx.Node],
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
-    scheduling_type=SchedulingType.NONE,
+    multi_buffer_count: int = -1,
 ) -> tuple[Iterate, fx.Graph]:
     """
     Construct the kernel of the pipelined loop.
@@ -515,7 +496,7 @@ def construct_kernel(
             new_rotating_registers,
             PipelineStage.KERNEL,
             use_scheduling_barriers,
-            scheduling_type=scheduling_type,
+            multi_buffer_count=multi_buffer_count,
         )
 
         # Create output node (last node in the graph).
@@ -557,7 +538,7 @@ def construct_epilogue(
     num_rotating_registers: dict[fx.Node, int],
     node_map: dict[fx.Node, fx.Node],
     visualize: bool = False,
-    scheduling_type: SchedulingType = SchedulingType.NONE,
+    multi_buffer_count: int = -1,
 ):
     """
     Construct the epilogue of the pipelined loop.
@@ -643,7 +624,7 @@ def construct_epilogue(
                 new_induction_variables,
                 rotating_registers,
                 PipelineStage.EPILOGUE,
-                scheduling_type=scheduling_type,
+                multi_buffer_count=multi_buffer_count,
             )
 
         # Replace the existing uses with the new results.
@@ -678,7 +659,7 @@ def construct_pipelined_loop(
     max_induction_variable: int,
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
-    scheduling_type: SchedulingType = SchedulingType.NONE,
+    multi_buffer_count: int = -1,
 ) -> fx.Node:
     """
     Given a graph annotated with scheduling parameters, construct a pipelined loop
@@ -701,7 +682,7 @@ def construct_pipelined_loop(
         induction_variable,
         list(range(num_stages)),
         create_fill_stage_schedule(num_stages),
-        scheduling_type=scheduling_type,
+        multi_buffer_count=multi_buffer_count,
     )
     # Construct kernel.
     pipelined_reduction, pipelined_reduction_graph = construct_kernel(
@@ -716,7 +697,7 @@ def construct_pipelined_loop(
         node_map,
         visualize,
         use_scheduling_barriers,
-        scheduling_type=scheduling_type,
+        multi_buffer_count=multi_buffer_count,
     )
     pipelined_reduction_graph.parent_op = graph.parent_op
     trace.add_subgraph(
@@ -737,7 +718,7 @@ def construct_pipelined_loop(
         num_rotating_registers,
         node_map,
         visualize,
-        scheduling_type=scheduling_type,
+        multi_buffer_count=multi_buffer_count,
     )
 
     # Remove the unpipelined reduction and the corresponding subgraph

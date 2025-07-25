@@ -62,6 +62,7 @@ def schedule_reduction(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     override_schedule_file: str = None,
     dump_schedule_file: str = None,
+    multi_buffer_count: int = -1,
 ):
     """
     Clones the reduction graph and does the following:
@@ -215,16 +216,14 @@ def schedule_reduction(
         max_induction_variable,
         visualize,
         use_scheduling_barriers,
-        scheduling_type,
+        multi_buffer_count,
     )
 
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (num_stages - 1)
-    if (
-        scheduling_type == SchedulingType.MODULO_MULTI_BUFFERED
-        or scheduling_type == SchedulingType.GEMM_FOUR_STAGE
-    ):
-        multi_buffer(trace, scheduling_type)
+
+    if multi_buffer_count != -1:
+        multi_buffer(trace, multi_buffer_count)
 
 
 def schedule_graph(
@@ -234,6 +233,7 @@ def schedule_graph(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     override_schedule: str = None,
     dump_schedule: str = None,
+    multi_buffer_count: int = -1,
 ):
     """
     Given a graph, pipelines the reductions in the graph.
@@ -261,4 +261,5 @@ def schedule_graph(
             scheduling_type,
             override_schedule,
             dump_schedule,
+            multi_buffer_count,
         )
