@@ -1466,6 +1466,11 @@ def find_async_read_write_counts(
                 custom.elements_per_thread * custom.type.dtype.bitwidth(), 32
             )
 
+        elif isinstance(custom, GatherToLDS) and node.node != node.dep_node:
+            read_count += ceildiv(
+                custom.elements_per_thread * custom.dtype.bitwidth(), 32
+            )
+
         if node.node == node.dep_node:
             if isinstance(custom, IterArg):
                 idx = custom.iter_idx
