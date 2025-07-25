@@ -4,6 +4,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from dataclasses import dataclass
+from wave_lang.kernel.wave.utils.graph_utils import find_all_paths
 import copy
 import math
 import operator
@@ -80,13 +82,14 @@ from ...ops.wave_ops import (
     gt,
     iterate,
     le,
-    log2,
     log10,
+    log2,
     lt,
     maximum,
     minimum,
     mma,
     ne,
+    null_async_dep,
     permute,
     powf,
     reciprocal,
@@ -114,7 +117,7 @@ from ..compile_options import WaveCompileOptions
 from ..constraints import GenericDot, HardwareConstraint
 from ..scheduling.resources import get_scheduling_mask
 from ..utils.classes import ShuffleMode
-from ..utils.general_utils import get_fastest_index
+from ..utils.general_utils import ceildiv, get_fastest_index
 from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.symbol_utils import subs_idxc
 from .emitter import (
@@ -1395,33 +1398,159 @@ def handle_set_wave_prio(emitter: WaveEmitter, node: fx.Node):
     rocdl_d.s_setprio(prio)
 
 
-def waitcnt(vmcnt: int):
-    """
-    Create `s_waitcnt` with the specified vmcnt and all other counters set to max.
-    """
+@handle_op(null_async_dep)
+def handle_null_async_dep(emitter: WaveEmitter, node: fx.Node):
+    # return dummy value
+    val = arith_d.constant(IndexType.get(), 0)
+    emitter.bind_node_proxy(node, IRProxyValue(val))
 
-    # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-    vmCnt = min(63, vmcnt)
 
-    # Extract low and high bits and combine while setting all other bits to 1
-    lowBits = vmCnt & 0xF
-    highBits = (vmCnt >> 4) << 14
-    otherCnts = ~0xC00F  # C00F has bits 15:14 and 3:0 set
-    waitValue = lowBits | highBits | otherCnts
-    waitValue &= 0xFFFF
+@dataclass
+class AsyncDepNode:
+    node: fx.Node
+    dep_node: fx.Node
+    read_count: int = 0
+    write_count: int = 0
 
-    rocdl_d.s_waitcnt(waitValue)
+
+_MAX_ASYNC_READ_WRITE_COUNT = 8
+
+
+def find_async_read_write_counts(
+    barrier: fx.Node, async_dep: fx.Node
+) -> tuple[int, int]:
+    from wave_lang.kernel.ops.wave_ops import (
+        GatherToLDS,
+        GetResult,
+        IterArg,
+        Iterate,
+        NullAsyncDep,
+        Output,
+        Placeholder,
+        Read,
+        Write,
+    )
+
+    def get_edges(node: AsyncDepNode) -> list[AsyncDepNode]:
+        if (
+            node.read_count > _MAX_ASYNC_READ_WRITE_COUNT
+            or node.write_count > _MAX_ASYNC_READ_WRITE_COUNT
+        ):
+            return []
+
+        custom = get_custom(node.node)
+        if isinstance(custom, NullAsyncDep):
+            return []
+
+        read_count = node.read_count
+        write_count = node.write_count
+        if (
+            isinstance(custom, Read)
+            and custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
+        ):
+            read_count += ceildiv(
+                custom.elements_per_thread * custom.type.dtype.bitwidth(), 32
+            )
+
+        elif (
+            isinstance(custom, Write)
+            and custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
+        ):
+            write_count += ceildiv(
+                custom.elements_per_thread * custom.type.dtype.bitwidth(), 32
+            )
+
+        elif isinstance(custom, GatherToLDS) and node.node != node.dep_node:
+            read_count += ceildiv(
+                custom.elements_per_thread * custom.dtype.bitwidth(), 32
+            )
+
+        if node.node == node.dep_node:
+            if isinstance(custom, IterArg):
+                idx = custom.iter_idx
+                graph = node.node.graph
+                iterate = get_custom(graph.parent_op)
+                assert isinstance(
+                    iterate, Iterate
+                ), f"Expected Iterate, but got {iterate}"
+                async_dep_iterate = iterate.init_args[idx]
+
+                output = get_custom(list(graph.nodes)[-1])
+                assert isinstance(output, Output), f"Expected Output, but got {output}"
+                async_dep_output = output.return_vals[0][idx]
+                return [
+                    AsyncDepNode(
+                        iterate.fx_node, async_dep_iterate, read_count, write_count
+                    ),
+                    AsyncDepNode(
+                        output.fx_node, async_dep_output, read_count, write_count
+                    ),
+                ]
+
+            elif isinstance(custom, GetResult):
+                idx = custom.res_idx
+                iterate = get_custom(custom.value)
+                graph = iterate.get_root_graph().subgraphs[iterate.subgraph_name]
+                assert isinstance(
+                    iterate, Iterate
+                ), f"Expected Iterate, but got {iterate}"
+                async_dep_iterate = iterate.init_args[idx]
+
+                output = get_custom(list(graph.nodes)[-1])
+                assert isinstance(output, Output), f"Expected Output, but got {output}"
+                async_dep_output = output.return_vals[0][idx]
+                return [
+                    AsyncDepNode(
+                        iterate.fx_node, async_dep_iterate, read_count, write_count
+                    ),
+                    AsyncDepNode(
+                        output.fx_node, async_dep_output, read_count, write_count
+                    ),
+                ]
+
+            elif isinstance(custom, Placeholder):
+                if parent_op := getattr(node.node, "parent_op", None):
+                    lifted = node.node.meta["lifted"]
+                    return [AsyncDepNode(parent_op, lifted, read_count, write_count)]
+                else:
+                    return []
+            else:
+                return []
+
+        return [AsyncDepNode(node.node.prev, node.dep_node, read_count, write_count)]
+
+    paths = find_all_paths(AsyncDepNode(barrier, async_dep), get_edges)
+
+    read_count = _MAX_ASYNC_READ_WRITE_COUNT
+    write_count = _MAX_ASYNC_READ_WRITE_COUNT
+    for path in paths:
+
+        last_node = path[-1]
+        if not isinstance(get_custom(last_node.node), GatherToLDS):
+            continue
+
+        read_count = min(read_count, last_node.read_count)
+        write_count = min(write_count, last_node.write_count)
+
+    return read_count, write_count
 
 
 @handle_op(shared_memory_barrier)
 def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     try:
-        (wait_async_ops,) = node.args
+        (async_deps,) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if wait_async_ops:
-        waitcnt(0)
+    if async_deps:
+        read_count = _MAX_ASYNC_READ_WRITE_COUNT
+        write_count = _MAX_ASYNC_READ_WRITE_COUNT
+        for dep in async_deps:
+            r, w = find_async_read_write_counts(node, dep)
+            read_count = min(read_count, r)
+            write_count = min(write_count, w)
+
+        amdgpu_d.memory_counter_wait(load=read_count, store=write_count)
 
     amdgpu_d.lds_barrier()
 

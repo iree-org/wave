@@ -144,7 +144,7 @@ def _warn_iree_is_too_old():
 
     # Increment only when IREE has breaking changes.
     # We don't want to enforce it on package level or make it a hard error just yet.
-    min_iree_version = Version("3.6.0rc20250721")
+    min_iree_version = Version("3.7.0rc20250725")
     if iree_compiler_ver < min_iree_version:
         warnings.warn(
             f"IREE version is too old: {iree_compiler_ver}, min version: {min_iree_version}"

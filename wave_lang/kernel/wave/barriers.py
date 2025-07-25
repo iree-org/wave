@@ -5,9 +5,9 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from enum import Enum, auto
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Any, Iterable
 
 import torch.fx as fx
 
@@ -17,7 +17,13 @@ from ..ops.wave_ops import (
     AtomicOp,
     CustomOp,
     GatherToLDS,
+    GetResult,
+    IterArg,
+    Iterate,
     NestedRegionOp,
+    NullAsyncDep,
+    Output,
+    Placeholder,
     Read,
     SharedMemoryBarrier,
     Write,
@@ -81,10 +87,25 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
     return False
 
 
+def get_first(seq: Iterable[Any]) -> Any:
+    """
+    Get the first element of the sequence or generator.
+    """
+    return next(iter(seq))
+
+
+def get_last(seq: Iterable[Any]) -> Any:
+    """
+    Get the last element of the sequence or generator.
+    """
+    *_, last = iter(seq)
+    return last
+
+
 @dataclass
 class SharedMemoryBarrierInfo:
-    is_async: bool = False
-    last_node: Optional[fx.Node] = None
+    async_deps: list[fx.Node] = field(default_factory=list)
+    last_node: Optional[CustomOp] = None
 
 
 def add_shared_memory_barriers(
@@ -113,33 +134,93 @@ def add_shared_memory_barriers(
         if mem := is_shared_memory_op(custom):
             state = info[mem]
             if state.last_node and need_barrier(custom, state.last_node):
-                if barrier := is_barrier_between(
-                    state.last_node.fx_node, custom.fx_node
-                ):
+                if barrier := is_barrier_between(state.last_node.fx_node, node):
                     barrier = get_custom(barrier)
-                    # Promote the barrier to wait for async ops
-                    if state.is_async and not barrier.wait_async_ops:
-                        barrier.update_arg("wait_async_ops", True)
+                    # Add async deps to the barrier.
+                    if state.async_deps:
+                        deps = list(
+                            dict.fromkeys(barrier.async_deps)
+                            | dict.fromkeys(state.async_deps)
+                        )
+                        barrier.update_arg("async_deps", deps)
                 else:
                     # Synchronize after the write to shared memory before we read from it.
+                    deps = list(dict.fromkeys(state.async_deps))
                     with graph.inserting_before(node):
-                        SharedMemoryBarrier(wait_async_ops=state.is_async).add_to_graph(
-                            graph
-                        )
+                        SharedMemoryBarrier(async_deps=deps).add_to_graph(graph)
 
-                state.is_async = False
+                state.async_deps = []
 
             state.last_node = custom
             if isinstance(custom, GatherToLDS):
-                state.is_async = True
+                state.async_deps.append(node)
 
         if isinstance(custom, NestedRegionOp):
-            add_shared_memory_barriers(
-                trace, trace.get_subgraph(custom.subgraph_name), info
-            )
+            subgraph = trace.get_subgraph(custom.subgraph_name)
+            if not any(i.async_deps for i in info.values()):
+                add_shared_memory_barriers(trace, subgraph, info)
+                continue
+
+            first = get_first(subgraph.nodes)
+
+            # Convert dependencies to placeholders.
+            with subgraph.inserting_before(first):
+                for node, inf in info.items():
+                    for i, async_dep in enumerate(inf.async_deps):
+                        placeholder = Placeholder(str(async_dep)).add_to_graph(subgraph)
+                        placeholder.meta["lifted"] = async_dep
+                        inf.async_deps[i] = placeholder
+                        custom.update_arg(
+                            "implicit_captures", [async_dep] + custom.implicit_captures
+                        )
+
+            add_shared_memory_barriers(trace, subgraph, info)
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
     if is_reduction_subgraph(graph) and info and not checking_next_iter:
         # Add barriers between ops from different iterations in the same loop.
-        add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
+        if not any(i.async_deps for i in info.values()):
+            add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
+            return
+
+        parent_node = graph.parent_op
+        parent_graph = parent_node.graph
+
+        iterate = get_custom(parent_node)
+        assert isinstance(iterate, Iterate), f"Expected Iterate, but got {iterate}"
+
+        first = get_first(graph.nodes)
+
+        output = get_custom(get_last(graph.nodes))
+        assert isinstance(output, Output), f"Expected Output, but got {output}"
+        return_vals = list(output.return_vals[0])
+
+        # Convert dependencies to iter args.
+        info_copy = defaultdict(SharedMemoryBarrierInfo)
+        for node, inf in info.items():
+            inf_copy = info_copy[node]
+            inf_copy.last_node = inf.last_node
+            for i, async_dep in enumerate(inf.async_deps):
+                out_idx = len(return_vals)
+                return_vals.append(async_dep)
+
+                with parent_graph.inserting_before(parent_node):
+                    init = NullAsyncDep().add_to_graph(parent_graph)
+
+                iterate.update_arg("init_args", iterate.init_args + [init])
+
+                with parent_graph.inserting_after(parent_node):
+                    result = GetResult(parent_node, out_idx).add_to_graph(parent_graph)
+
+                inf.async_deps[i] = result
+
+                with graph.inserting_before(first):
+                    iter_arg = IterArg(str(async_dep)).add_to_graph(graph)
+                    iter_arg.iter_idx = out_idx
+
+                inf_copy.async_deps.append(iter_arg)
+
+        output.update_arg("return_vals", return_vals)
+
+        add_shared_memory_barriers(trace, graph, info_copy, checking_next_iter=True)
