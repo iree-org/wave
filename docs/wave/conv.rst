@@ -21,8 +21,9 @@ A 2D convolution slides a filter over a 2D input image or feature map, applying 
     :align: center
 
 The above gif is an example of conv where the blue matrix is the input matrix, the gray matrix is the filter which is sliding across the input matrix and the green matrix is the output matrix.
+
 Variable Definitions
-~~~~~~~~~~~~~~~~~~~~
+-----------------------
 
 The following table defines the variables used in the convolution shapes:
 
@@ -97,11 +98,7 @@ Three index mappings define how loop indices correspond to tensor memory accesse
    x_mapping = tkw.IndexMapping(...)
    w_mapping = tkw.IndexMapping(...)
    out_mapping = tkw.IndexMapping(...)
-Each mapping transforms flat loop indices `(i, j)` into multi-dimensional indices such as:
 
-- `x[n, h + hf, w + wf, c]`
-- `we[hf, wf, c, nf]`
-- `out[n, h_out, w_out, nf]`
 
 **2. Loop Nest and MMA**
 
@@ -139,7 +136,7 @@ Symbol Table
 The function returns both the kernel and a symbol dictionary:
 
 .. code-block:: python
-    
+
    conv_kernel, symbols = get_igemm_conv2d(...)
    # symbols = { N: 1, C: 3, H: 32, ... }
 These values are used during compilation to resolve symbolic shapes.
