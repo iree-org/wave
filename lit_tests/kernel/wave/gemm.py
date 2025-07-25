@@ -1366,7 +1366,7 @@ def test_dynamic_gemm_pipelined():
 
 
 @run_test
-def test_gemm_two_cluter_pingpong():
+def test_gemm_two_cluster_pingpong():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
