@@ -118,7 +118,6 @@ def testGemmBench(tmp_path):
         SchedulingType.PREFETCH,
         SchedulingType.GEMM_FOUR_STAGE,
         SchedulingType.MODULO,
-        SchedulingType.MODULO_MULTI_BUFFERED,
     ],
 )
 @param_bool("dynamic_dims", "dyn")
@@ -130,6 +129,7 @@ def testGemmBench(tmp_path):
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
+@param_bool("enable_multi_buffering", "multibuf")
 def testPureGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
@@ -139,6 +139,7 @@ def testPureGemm(
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, dynamic_dims, mfma_variant, datatype
@@ -153,6 +154,8 @@ def testPureGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_multi_buffering=enable_multi_buffering,
+        multi_buffer_count=2,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -188,7 +191,6 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
         SchedulingType.PREFETCH,
         _xfail(SchedulingType.GEMM_FOUR_STAGE),
         _xfail(SchedulingType.MODULO),
-        _xfail(SchedulingType.MODULO_MULTI_BUFFERED),
     ],
 )
 @pytest.mark.parametrize(
@@ -206,6 +208,7 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
+@param_bool("enable_multi_buffering", "multibuf")
 def testGemmGatherToLDS(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
@@ -215,6 +218,7 @@ def testGemmGatherToLDS(
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, dynamic_dims, mfma_variant, datatype
@@ -230,6 +234,7 @@ def testGemmGatherToLDS(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
+        use_multi_buffering=enable_multi_buffering,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -386,7 +391,6 @@ def testGemmSmallTiles(
         _xfail(SchedulingType.PREFETCH),
         SchedulingType.GEMM_FOUR_STAGE,
         SchedulingType.MODULO,
-        _xfail(SchedulingType.MODULO_MULTI_BUFFERED),
     ],
 )
 @param_bool("dynamic_dims", "dyn")
@@ -397,6 +401,7 @@ def testGemmSmallTiles(
         MMAType.F32_32x32x8_F16,
     ],
 )
+@param_bool("enable_multi_buffering", "multibuf")
 def testNonTransposeGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
@@ -405,6 +410,7 @@ def testNonTransposeGemm(
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -484,6 +490,7 @@ def testNonTransposeGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_multi_buffering=enable_multi_buffering,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -816,6 +823,7 @@ def testGemmDot(
         MMAType.F32_16x16x32_K8_F16,
     ],
 )
+@param_bool("enable_multi_buffering", "multibuf")
 def testVMFMAGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
@@ -824,6 +832,7 @@ def testVMFMAGemm(
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -908,6 +917,7 @@ def testVMFMAGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_multi_buffering=enable_multi_buffering,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -930,8 +940,9 @@ def testVMFMAGemm(
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.MODULO_MULTI_BUFFERED],
+    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
 )
+@param_bool("enable_multi_buffering", "multibuf")
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
     "mfma_variant",
@@ -948,6 +959,7 @@ def testCDNA2IntGemm(
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -1032,6 +1044,7 @@ def testCDNA2IntGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_multi_buffering=enable_multi_buffering,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1058,7 +1071,6 @@ def testCDNA2IntGemm(
     [
         SchedulingType.NONE,
         SchedulingType.MODULO,
-        SchedulingType.MODULO_MULTI_BUFFERED,
         SchedulingType.GEMM_FOUR_STAGE,
     ],
 )
@@ -1069,6 +1081,7 @@ def testCDNA2IntGemm(
         MMAType.I32_32x32x16_I8,
     ],
 )
+@param_bool("enable_multi_buffering", "multibuf")
 def testCDNA3IntGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
@@ -1076,6 +1089,7 @@ def testCDNA3IntGemm(
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -1138,6 +1152,7 @@ def testCDNA3IntGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_multi_buffering=enable_multi_buffering,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1172,6 +1187,7 @@ def testCDNA3IntGemm(
         MMAType.F32_32x32x16_K4_F8,
     ],
 )
+@param_bool("enable_multi_buffering", "multibuf")
 def testF8Gemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
@@ -1179,6 +1195,7 @@ def testF8Gemm(
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     # Input sizes
     M = tkl.sym.M
@@ -1238,6 +1255,7 @@ def testF8Gemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_multi_buffering=enable_multi_buffering,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1511,16 +1529,17 @@ def testPackedNonTransposeGemm(
     [
         SchedulingType.NONE,
         SchedulingType.MODULO,
-        SchedulingType.MODULO_MULTI_BUFFERED,
         SchedulingType.GEMM_FOUR_STAGE,
     ],
 )
+@param_bool("enable_multi_buffering", "multibuf")
 def testBatchedGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    enable_multi_buffering,
 ):
     # Input sizes
     B = tkl.sym.B
@@ -1585,6 +1604,7 @@ def testBatchedGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_multi_buffering=enable_multi_buffering,
     )
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)

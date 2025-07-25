@@ -15,10 +15,9 @@ class GemmFourStageStage(Enum):
     # Helper function to get next stage from the current.
     # If at stage 3 returns itself to prevent crash
     # since it is final stage.
-    def next(self):
-
+    def next(self) -> "GemmFourStageStage":
         if self.value == 3:
-            return GemmFourStageStage(3)
+            return self
         v = self.value + 1
         return GemmFourStageStage(v)
 
@@ -78,11 +77,14 @@ class GemmFourStageScheduler(BaseScheduler):
 
     """
 
-    def mega_pipelined_scheduling(self, graph: fx.Graph, edges: list[Edge]):
+    def gemm_four_stage_scheduling(
+        self, graph: fx.Graph, edges: list[Edge]
+    ) -> tuple[dict[fx.Node, int], bool]:
         """
-        Classify node to different stages. Based on it's stage,
-        program schedules clock for each node. This function also checks
-        that sorted node "contiguously" move between stages.
+        Classify node to different stages. Based on its stage,
+        program schedules the node to a specific cycle for  each node.
+        This function also checks that the sorted nodes move contiguously through
+        expected stages.
         """
         sorted_nodes = sort_graph_by_edge_weight(graph.nodes, edges)
         schedule = {}
@@ -97,7 +99,7 @@ class GemmFourStageScheduler(BaseScheduler):
                 schedule[node] = next_stage.value
                 current_stage = next_stage
             else:
-                # Node do not move contigously through stages.
+                # Node does not move contigously through stages.
                 return {}, False
         return schedule, True
 
@@ -107,6 +109,6 @@ class GemmFourStageScheduler(BaseScheduler):
         2. Set nodes to clock (0,1,2,3) based on phase.
         3. Set initiation interval to 1.
         """
-        self.schedule, success = self.mega_pipelined_scheduling(self.graph, self.edges)
+        self.schedule, success = self.gemm_four_stage_scheduling(self.graph, self.edges)
         self._initiation_interval = 1
         return self.schedule, success
