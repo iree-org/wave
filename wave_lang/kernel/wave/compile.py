@@ -118,6 +118,10 @@ class WaveKernel:
             if usage == kernel_codegen.KernelBufferUsage.OUTPUT:
                 kernel_outputs.append(arg)
 
+        def get_dynamic_dimension_actual(sym):
+            arg_idx, dim = self.symbols_args_map[sym]
+            return args[arg_idx].shape[dim]
+
         debug_args = []
         debug_logs = kwargs.get("debug_logs", {})
         debug_extra_dimensions = {}
