@@ -20,6 +20,7 @@ from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
     MMA,
     ScatterAdd,
+    ScatterMax,
     Allocate,
     Conditional,
     CustomOp,
@@ -754,6 +755,7 @@ def is_leaf_node(node):
         or (isinstance(custom, GetResult) and not custom.users)
         or isinstance(custom, SetSymbol)
         or isinstance(custom, ScatterAdd)
+        or isinstance(custom, ScatterMax)
     )
 
 

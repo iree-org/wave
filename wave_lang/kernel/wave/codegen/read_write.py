@@ -50,6 +50,7 @@ from ...ops.wave_ops import (
     read,
     write,
     scatter_add,
+    scatter_max,
 )
 from ..utils.general_utils import get_fastest_index, infer_dim
 from ..utils.mapping_utils import transform_index_on_mapping
@@ -1005,18 +1006,23 @@ def _handle_scatter_op(
     output_shape = _get_symbolic_shape(memory)
     elements_per_thread = int(cast_py_literal(emitter, elements_per_thread))
     cast_vector(emitter, register_idx, element_type=IndexType.get())
-
-    index_mapping = mapping.map_output_indices(output_shape)
-
-    idxc = IndexingContext.current()
-    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
-    iters = mapping.iters
     index = node.index
-    subs = [
-        (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
-    ] + list(idxc.subs.items())
+    idxc = IndexingContext.current()
 
-    result_index = {key: m.subs(subs) for key, m in zip(output_shape, index_mapping)}
+    if get_custom(node).has_identity_mapping():
+        result_index = {k: v.start.subs(idxc.subs) for k, v in index.items()}
+    else:
+        output_shape = _get_symbolic_shape(memory)
+        index_mapping = mapping.map_output_indices(output_shape)
+        index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
+        iters = mapping.iters
+        subs = [
+            (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
+        ] + list(idxc.subs.items())
+
+        result_index = {
+            key: m.subs(subs) for key, m in zip(output_shape, index_mapping)
+        }
 
     mask = _build_mask(emitter, index, elements_per_thread, bounds)
     if mask is None:
@@ -1075,4 +1081,15 @@ def handle_scatter_add(emitter: WaveEmitter, node: fx.Node):
         rmw_kind = arith_d.AtomicRMWKind.addf
     else:
         rmw_kind = arith_d.AtomicRMWKind.addi
+    _handle_scatter_op(emitter, node, rmw_kind)
+
+
+@handle_op(scatter_max)
+def handle_scatter_max(emitter: WaveEmitter, node: fx.Node):
+    register_src = cast_py_value(emitter, node.args[0])
+    src_data_type = get_type_or_element_type(register_src.ir_value.type)
+    if _is_float_type(src_data_type):
+        rmw_kind = arith_d.AtomicRMWKind.maximumf
+    else:
+        rmw_kind = arith_d.AtomicRMWKind.maxs
     _handle_scatter_op(emitter, node, rmw_kind)
