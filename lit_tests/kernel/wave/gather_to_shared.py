@@ -80,7 +80,7 @@ def test_gather_to_shared():
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      amdgpu.gather_to_lds {{.*}} vector<2xf16>
-    # CHECK:              rocdl.s.waitcnt
+    # CHECK:              amdgpu.memory_counter_wait load(0) store(0)
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      vector.load
     # CHECK:              amdgpu.mfma
