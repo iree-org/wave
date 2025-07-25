@@ -22,4 +22,3 @@ class SchedulingType(Enum):
     MODULO = 0x10
     PREFETCH = 0x20
     GEMM_FOUR_STAGE = 0x21
-    MODULO_MULTI_BUFFERED = 0x11

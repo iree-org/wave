@@ -1332,6 +1332,8 @@ def test_gemm_gemm_four_stage():
         schedule=SchedulingType.GEMM_FOUR_STAGE,
         use_scheduling_barriers=True,
         compile_to_mlir=True,
+        use_multi_buffering=True,
+        multi_buffer_count=2,
     )
 
     gemm_four_stage = wave_compile(options, gemm_four_stage)
@@ -1344,13 +1346,13 @@ def test_gemm_gemm_four_stage():
 
     # Prologue
     # Verify prologue stores to shared memory
-    # CHECK: %[[STORE_IDX:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %thread_id_y]
+    # CHECK: %[[STORE_IDX:.*]] = affine.apply #[[MAP_STORE:.*]]()[%thread_id_x, %thread_id_y]
     # CHECK: vector.store %{{.*}}, %[[VIEW1]][%[[STORE_IDX]], %{{.*}}] : memref<128x36xf16
     # CHECK: vector.store %{{.*}}, %[[VIEW0]][%[[STORE_IDX]], %{{.*}}] : memref<128x36xf16
 
     # Verify prologue loads from shared memory
-    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %thread_id_y]
-    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #map[0-9]+()[%thread_id_x]
+    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%thread_id_x, %thread_id_y]
+    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
     # CHECK: vector.load %[[VIEW0]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]] : memref<128x36xf16
 
     # Main Loop:
@@ -1361,11 +1363,11 @@ def test_gemm_gemm_four_stage():
     # CHECK: amdgpu.mfma %{{.*}} * %{{.*}} + %{{.*}}
 
     # Verify that affine maps using iter_arg %[[ARG3]] are used for pipelined indexing
-    # CHECK: %[[PIPE_IDX1:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %[[ARG3]], %thread_id_y]
+    # CHECK: %[[PIPE_IDX1:.*]] = affine.apply #[[MAP_PIPE1:.*]]()[%thread_id_x, %[[ARG3]], %thread_id_y]
     # CHECK: vector.load %[[VIEW0]][%[[PIPE_IDX1]], %{{.*}}] : memref<128x36xf16
 
     # Verify that stores use iter arg for indexing as well
-    # CHECK: %[[STORE_PIPE_IDX:.*]] = affine.apply #map[0-9]+()[%thread_id_x, %thread_id_y, %[[ARG3]]]
+    # CHECK: %[[STORE_PIPE_IDX:.*]] = affine.apply #[[MAP_STORE_PIPE:.*]]()[%thread_id_x, %thread_id_y, %[[ARG3]]]
     # CHECK: vector.store %{{.*}}, %[[VIEW1]][%[[STORE_PIPE_IDX]], %{{.*}}] : memref<128x36xf16
 
 
