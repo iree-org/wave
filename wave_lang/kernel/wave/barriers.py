@@ -127,10 +127,8 @@ def add_shared_memory_barriers(
         custom = get_custom(node)
         if mem := is_shared_memory_op(custom):
             state = info[mem]
-            if state.last_node and need_barrier(custom, state.last_node):
-                if barrier := is_barrier_between(
-                    state.last_node.fx_node, custom.fx_node
-                ):
+            if state.last_node and need_barrier(custom, get_custom(state.last_node)):
+                if barrier := is_barrier_between(state.last_node, node):
                     barrier = get_custom(barrier)
                     # Add async deps to the barrier.
                     if state.async_deps:
@@ -147,7 +145,7 @@ def add_shared_memory_barriers(
 
                 state.async_deps = []
 
-            state.last_node = custom
+            state.last_node = node
             if isinstance(custom, GatherToLDS):
                 state.async_deps.append(node)
 
@@ -188,6 +186,7 @@ def add_shared_memory_barriers(
         info_copy = defaultdict(SharedMemoryBarrierInfo)
         for node, inf in info.items():
             inf_copy = info_copy[node]
+            inf_copy.last_node = inf.last_node
             for i, async_dep in enumerate(inf.async_deps):
                 out_idx = len(return_vals)
                 return_vals.append(async_dep)
