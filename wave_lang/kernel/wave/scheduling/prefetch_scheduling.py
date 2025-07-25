@@ -8,10 +8,9 @@ from enum import Enum
 
 import torch.fx as fx
 
-from ...ops.wave_ops import get_custom
-from ..utils.general_utils import ceildiv
 from .graph_utils import Edge, sort_graph_by_edge_weight
-from .resources import Operation, get_custom_operation_type
+from .resources import Operation
+from .scheduler_utils import get_scheduling_stage, BaseScheduler
 
 import logging
 
@@ -55,16 +54,7 @@ _operation_stage_table = {
 }
 
 
-def get_scheduling_stage(op: fx.Node) -> Operation:
-    op_ty = get_custom_operation_type(get_custom(op))
-    assert op_ty is not None, f"get_custom_operation_type returned None for {op}"
-    if op_ty not in _operation_stage_table:
-        raise NotImplementedError(f"Cannot find {op_ty} in _operation_stage_table")
-
-    return _operation_stage_table[op_ty]
-
-
-class PrefetchScheduler:
+class PrefetchScheduler(BaseScheduler):
     """
     Prefetch Scheduler
 
@@ -92,17 +82,6 @@ class PrefetchScheduler:
         COMPUTE b_N
     """
 
-    def __init__(
-        self,
-        graph: fx.Graph,
-        edges: list[Edge],
-        resources: list[int],
-    ) -> None:
-        self.graph = graph
-        self.edges = edges
-        self.resources = resources
-        self.seed = 2024
-
     def prefetch_scheduling(self, graph: fx.Graph, edges: list[Edge]):
         """
         Classify node to different stages. Based on it's stage,
@@ -111,9 +90,9 @@ class PrefetchScheduler:
         """
         sorted_nodes = sort_graph_by_edge_weight(graph.nodes, edges)
         schedule = {}
-        current_stage = get_scheduling_stage(sorted_nodes[0])
+        current_stage = get_scheduling_stage(sorted_nodes[0], _operation_stage_table)
         for node in sorted_nodes:
-            node_stage = get_scheduling_stage(node)
+            node_stage = get_scheduling_stage(node, _operation_stage_table)
             logger.info(f"Node {node} is in stage {node_stage}")
             if node_stage == current_stage:
                 schedule[node] = node_stage.value
@@ -148,18 +127,3 @@ class PrefetchScheduler:
             )
             return {}, False
         return self.schedule, success
-
-    @property
-    def initiation_interval(self) -> int:
-        """
-        Returns the initiation interval of the schedule.
-        """
-        return self._initiation_interval
-
-    @property
-    def num_stages(self) -> int:
-        """
-        Returns the number of stages in the kernel of the pipelined loop.
-        """
-        max_cycle = max(t + 1 for t in self.schedule.values())
-        return ceildiv(max_cycle, self.initiation_interval)

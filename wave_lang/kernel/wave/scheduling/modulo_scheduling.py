@@ -4,13 +4,13 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import math
 from typing import Callable
 
 import numpy as np
 import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
+from .scheduler_utils import BaseScheduler
 
 from .graph_utils import (
     Edge,
@@ -25,7 +25,7 @@ from .graph_utils import (
 logger = get_logger("wave.modulo_scheduling")
 
 
-class ModuloScheduler:
+class ModuloScheduler(BaseScheduler):
     """
     Vanilla Modulo Scheduler.
     References:
@@ -38,10 +38,8 @@ class ModuloScheduler:
         edges: list[Edge],
         resources: list[int],
     ) -> None:
-        self.graph = graph
-        self.edges = edges
-        self.resources = resources
-        self.seed = 2024
+        super().__init__(graph, edges, resources)
+
         self.cached_edges_to = {}
         self.cached_edges_from = {}
 
@@ -268,23 +266,8 @@ class ModuloScheduler:
         return filtered
 
     @property
-    def initiation_interval(self) -> int:
-        """
-        Returns the initiation interval of the schedule.
-        """
-        return self._initiation_interval
-
-    @property
     def resource_reservations(self) -> np.array:
         """
         Returns the resource reservations of the schedule.
         """
         return self.RT
-
-    @property
-    def num_stages(self) -> int:
-        """
-        Returns the number of stages in the kernel of the pipelined loop.
-        """
-        max_cycle = max(t for t in self.schedule.values())
-        return math.ceil(max_cycle / self.initiation_interval)

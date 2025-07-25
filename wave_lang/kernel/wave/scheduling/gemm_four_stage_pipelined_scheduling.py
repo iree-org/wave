@@ -1,9 +1,8 @@
 import torch.fx as fx
-from ...ops.wave_ops import get_custom
 from .graph_utils import Edge, sort_graph_by_edge_weight
-from .resources import Operation, get_custom_operation_type
+from .resources import Operation
 from enum import Enum
-import math
+from .scheduler_utils import get_scheduling_stage, BaseScheduler
 
 
 class GemmFourStageStage(Enum):
@@ -36,14 +35,7 @@ operation_stage_table = {
 }
 
 
-def get_scheduling_stage(op: fx.Node) -> GemmFourStageStage:
-    op_ty = get_custom_operation_type(get_custom(op))
-    if op_ty not in operation_stage_table:
-        raise NotImplementedError(f"Cannot find {op_ty} in operation_stage_table")
-    return operation_stage_table[op_ty]
-
-
-class GemmFourStageScheduler:
+class GemmFourStageScheduler(BaseScheduler):
     """
     GEMM Four Stage Pipelined Scheduler
 
@@ -71,7 +63,8 @@ class GemmFourStageScheduler:
             COMPUTE b_i
             b_{i+1} = READ_SHARED SM[i+1 %2]
             WRITE_SHARED a_{i+2} SM[i%2]
-            a_{i+3} = READ_GLOBAL k+3
+            a_{i+3} = READ_GLOBAL i+3
+            barrier
 
 
         COMPUTE b_{n-2}
@@ -85,18 +78,6 @@ class GemmFourStageScheduler:
 
     """
 
-    def __init__(
-        self,
-        graph: fx.Graph,
-        edges: list[Edge],
-        resources: list[int],
-    ) -> None:
-        # assert False
-        self.graph = graph
-        self.edges = edges
-        self.resources = resources
-        self.seed = 2024
-
     def mega_pipelined_scheduling(self, graph: fx.Graph, edges: list[Edge]):
         """
         Classify node to different stages. Based on it's stage,
@@ -108,7 +89,7 @@ class GemmFourStageScheduler:
         current_stage = GemmFourStageStage.GLOBAL_LOAD
 
         for node in sorted_nodes:
-            node_stage = get_scheduling_stage(node)
+            node_stage = get_scheduling_stage(node, operation_stage_table)
             next_stage = current_stage.next()
             if node_stage in [current_stage, GemmFourStageStage.SCHEDULING_NOOP]:
                 schedule[node] = current_stage.value
@@ -129,20 +110,3 @@ class GemmFourStageScheduler:
         self.schedule, success = self.mega_pipelined_scheduling(self.graph, self.edges)
         self._initiation_interval = 1
         return self.schedule, success
-
-    @property
-    def initiation_interval(self) -> int:
-        """
-        Returns the initiation interval of the schedule.
-        """
-        return self._initiation_interval
-
-    @property
-    def num_stages(self) -> int:
-        """
-        Returns the number of stages in the kernel of the pipelined loop.
-        """
-        max_cycle = max(
-            [t + 1 for t in self.schedule.values()]
-        )  # plus 1 because 0 indexing
-        return math.ceil(max_cycle / self.initiation_interval)
