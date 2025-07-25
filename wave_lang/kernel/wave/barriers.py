@@ -88,10 +88,16 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
 
 
 def get_first(seq: Iterable[Any]) -> Any:
+    """
+    Get the first element of the sequence or generator.
+    """
     return next(iter(seq))
 
 
 def get_last(seq: Iterable[Any]) -> Any:
+    """
+    Get the last element of the sequence or generator.
+    """
     *_, last = iter(seq)
     return last
 

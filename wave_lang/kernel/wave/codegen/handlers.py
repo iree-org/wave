@@ -1419,6 +1419,9 @@ class AsyncDepNode:
     write_count: int = 0
 
 
+_MAX_ASYNC_READ_WRITE_COUNT = 8
+
+
 def find_async_read_write_counts(
     barrier: fx.Node, async_dep: fx.Node
 ) -> tuple[int, int]:
@@ -1433,7 +1436,10 @@ def find_async_read_write_counts(
     )
 
     def get_edges(node: AsyncDepNode) -> list[AsyncDepNode]:
-        if node.read_count > 64 or node.write_count > 64:
+        if (
+            node.read_count > _MAX_ASYNC_READ_WRITE_COUNT
+            or node.write_count > _MAX_ASYNC_READ_WRITE_COUNT
+        ):
             return []
 
         custom = get_custom(node.node)
@@ -1493,8 +1499,8 @@ def find_async_read_write_counts(
 
     paths = find_all_paths(AsyncDepNode(barrier, async_dep), get_edges)
 
-    read_count = 64
-    write_count = 64
+    read_count = _MAX_ASYNC_READ_WRITE_COUNT
+    write_count = _MAX_ASYNC_READ_WRITE_COUNT
     for path in paths:
         last_node = path[-1]
         if isinstance(get_custom(last_node.node), NullAsyncDep):
@@ -1514,8 +1520,8 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Malformed arguments") from e
 
     if async_deps:
-        read_count = 64
-        write_count = 64
+        read_count = _MAX_ASYNC_READ_WRITE_COUNT
+        write_count = _MAX_ASYNC_READ_WRITE_COUNT
         for dep in async_deps:
             r, w = find_async_read_write_counts(node, dep)
             read_count = min(read_count, r)

@@ -482,6 +482,17 @@ def update_sort_keys(
 
 
 def find_all_paths(src: Any, get_edges: Callable[[Any], list[Any]]) -> list[Any]:
+    """
+    Find all paths in the graph starting from `src` and ending at the point
+    indicated by ` not get_edges()`.
+
+    `get_edges` is used to get the edges from the current node and termination
+    condition.
+
+    This function can have a very high complexity so it's advised to limit the
+    maximun number of nodes scanned by terminating the search early by returning
+    an empty list from `get_edges` function.
+    """
     all_paths = []
     queue = deque()
     queue.append([src])
