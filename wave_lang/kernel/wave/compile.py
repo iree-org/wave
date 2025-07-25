@@ -118,13 +118,19 @@ class WaveKernel:
             if usage == kernel_codegen.KernelBufferUsage.OUTPUT:
                 kernel_outputs.append(arg)
 
+        def get_dynamic_dimension_actual(sym):
+            arg_idx, dim = self.symbols_args_map[sym]
+            return args[arg_idx].shape[dim]
+
         debug_args = []
         debug_logs = kwargs.get("debug_logs", {})
         if self.debug_outputs:
             # Process backwards so that the debug_logs output is ordered.
             for info_dict in self.debug_outputs[::-1]:
                 shape = [
-                    self.options.subs[sdim] for sdim in info_dict["symbolic_shape"]
+                    self.options.subs.get(symdim, None)
+                    or get_dynamic_dimension_actual(symdim)
+                    for symdim in info_dict["symbolic_shape"]
                 ]
                 memory = torch.zeros(
                     shape, dtype=wave_dtype_to_torch(info_dict["dtype"]), device="cuda"
@@ -135,8 +141,7 @@ class WaveKernel:
 
         dynamic_symbols = []
         for sym in self.options.dynamic_symbols:
-            arg_idx, dim = self.symbols_args_map[sym]
-            dynamic_symbols.append(args[arg_idx].shape[dim])
+            dynamic_symbols.append(get_dynamic_dimension_actual(sym))
 
         if self.options.wave_runtime:
             invoke_with_wave_runtime(

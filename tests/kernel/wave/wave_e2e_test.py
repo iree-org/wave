@@ -2251,9 +2251,9 @@ def test_debug_log_write():
     options = WaveCompileOptions(
         subs={
             M: shape[0],
-            N: shape[1],
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
         },
+        dynamic_symbols=[N],
     )
     options = set_default_run_config(options)
 
