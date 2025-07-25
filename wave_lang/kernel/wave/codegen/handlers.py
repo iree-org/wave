@@ -1420,13 +1420,15 @@ def find_async_read_write_counts(
     barrier: fx.Node, async_dep: fx.Node
 ) -> tuple[int, int]:
     from wave_lang.kernel.ops.wave_ops import (
+        GatherToLDS,
+        GetResult,
         IterArg,
         Iterate,
+        NullAsyncDep,
         Output,
         Placeholder,
         Read,
         Write,
-        NullAsyncDep,
     )
 
     def get_edges(node: AsyncDepNode) -> list[AsyncDepNode]:
@@ -1480,6 +1482,27 @@ def find_async_read_write_counts(
                     ),
                 ]
 
+            elif isinstance(custom, GetResult):
+                idx = custom.res_idx
+                iterate = get_custom(custom.value)
+                graph = iterate.get_root_graph().subgraphs[iterate.subgraph_name]
+                assert isinstance(
+                    iterate, Iterate
+                ), f"Expected Iterate, but got {iterate}"
+                async_dep_iterate = iterate.init_args[idx]
+
+                output = get_custom(list(graph.nodes)[-1])
+                assert isinstance(output, Output), f"Expected Output, but got {output}"
+                async_dep_output = output.return_vals[0][idx]
+                return [
+                    AsyncDepNode(
+                        iterate.fx_node, async_dep_iterate, read_count, write_count
+                    ),
+                    AsyncDepNode(
+                        output.fx_node, async_dep_output, read_count, write_count
+                    ),
+                ]
+
             elif isinstance(custom, Placeholder):
                 if parent_op := getattr(node.node, "parent_op", None):
                     lifted = node.node.meta["lifted"]
@@ -1496,8 +1519,9 @@ def find_async_read_write_counts(
     read_count = _MAX_ASYNC_READ_WRITE_COUNT
     write_count = _MAX_ASYNC_READ_WRITE_COUNT
     for path in paths:
+
         last_node = path[-1]
-        if isinstance(get_custom(last_node.node), NullAsyncDep):
+        if not isinstance(get_custom(last_node.node), GatherToLDS):
             continue
 
         read_count = min(read_count, last_node.read_count)
