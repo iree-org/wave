@@ -33,16 +33,7 @@ def _get_max_tile_size(
     for constraint in constraints:
         if isinstance(constraint, DistributionConstraint) and constraint.dim == dim:
             ret = sympy.Max(ret, constraint.tile_size)
-
     return ret
-
-
-# For non-constrained, unalgined shapes we don't require padding as the vector shape will
-# be the tile size.
-def _get_unconstrained_tile_size(node):
-    return (
-        get_custom(node.memory).distributed_shape[-1] - get_custom(node.memory).padding
-    )
 
 
 def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
@@ -74,7 +65,7 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
             # size during shared mem access.
             bounds = {
                 k: (
-                    _get_unconstrained_tile_size(node)
+                    get_custom(node.memory).get_final_dim_unpadded_size
                     if k in unconstrained_dim
                     else safe_subs(
                         v, {k: _get_max_tile_size(k, constraints, vector_shapes)}
