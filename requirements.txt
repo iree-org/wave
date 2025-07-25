@@ -3,7 +3,6 @@ Jinja2==3.1.4
 cmake==3.31.6
 filecheck==1.0.0
 lit==18.1.7
-maturin==1.8.6
 ml_dtypes==0.5.0
 mypy==1.8.0
 nanobind==2.5.0
@@ -19,6 +18,3 @@ wheel
 
 # Used for managing pre-commit flows.
 pre-commit
-
-# For scheduling in wave
-./wave_lang/kernel/wave/scheduling/aplp
