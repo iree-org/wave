@@ -1405,24 +1405,6 @@ def handle_null_async_dep(emitter: WaveEmitter, node: fx.Node):
     emitter.bind_node_proxy(node, IRProxyValue(val))
 
 
-def waitcnt(vmcnt: int):
-    """
-    Create `s_waitcnt` with the specified vmcnt and all other counters set to max.
-    """
-
-    # Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-    vmCnt = min(63, vmcnt)
-
-    # Extract low and high bits and combine while setting all other bits to 1
-    lowBits = vmCnt & 0xF
-    highBits = (vmCnt >> 4) << 14
-    otherCnts = ~0xC00F  # C00F has bits 15:14 and 3:0 set
-    waitValue = lowBits | highBits | otherCnts
-    waitValue &= 0xFFFF
-
-    rocdl_d.s_waitcnt(waitValue)
-
-
 @dataclass
 class AsyncDepNode:
     node: fx.Node
@@ -1504,11 +1486,6 @@ def find_async_read_write_counts(
         return [AsyncDepNode(node.node.prev, node.dep_node, read_count, write_count)]
 
     paths = find_all_paths(AsyncDepNode(barrier, async_dep), get_edges)
-    # print()
-    # for path in paths:
-    #     print("Path:")
-    #     for n in path:
-    #         print("    ", n)
 
     read_count = 64
     write_count = 64
@@ -1520,7 +1497,6 @@ def find_async_read_write_counts(
         read_count = min(read_count, last_node.read_count)
         write_count = min(write_count, last_node.write_count)
 
-    # print(f"Read count: {read_count}, Write count: {write_count}")
     return read_count, write_count
 
 
@@ -1539,7 +1515,7 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
             read_count = min(read_count, r)
             write_count = min(write_count, w)
 
-        waitcnt(read_count + write_count)
+        amdgpu_d.memory_counter_wait(load=read_count, store=write_count)
 
     amdgpu_d.lds_barrier()
 
