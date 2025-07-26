@@ -105,6 +105,12 @@ function run_in_docker() {
     export CMAKE_CXX_COMPILER_LAUNCHER=ccache
   fi
 
+  # Install Rust if not available
+  if ! command -v rustc &> /dev/null; then
+    echo "Installing Rust..."
+    install_rust
+  fi
+
   # Build phase.
   echo "******************** BUILDING PACKAGE ********************"
   for python_version in ${PYTHON_VERSIONS}; do
@@ -148,6 +154,19 @@ function install_ccache() {
     ninja
     cp ccache /usr/bin/
   fi
+}
+
+function install_rust() {
+  echo "Installing Rust using rustup..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  source ~/.cargo/env
+  export PATH="$HOME/.cargo/bin:$PATH"
+  rustc --version
+  cargo --version
+
+  # Make Rust available globally
+  ln -sf ~/.cargo/bin/rustc /usr/local/bin/rustc
+  ln -sf ~/.cargo/bin/cargo /usr/local/bin/cargo
 }
 
 function build_wave() {
