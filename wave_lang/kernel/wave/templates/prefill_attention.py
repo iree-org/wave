@@ -139,6 +139,8 @@ def get_prefill_attention_kernel(
         c_reg = tkl.Register[H, D_KV, N_Q, tkl.f32](0.0)
         init_sum = tkl.Register[H, N_Q, tkl.f32](0.0)
         init_max = tkl.Register[H, N_Q, tkl.f32](-1e6)
+        zero = tkl.Register[H, N_Q, N_KV, tkl.f32](0.0)
+        neg_infinity = tkl.Register[H, N_Q, N_KV, tkl.f32](-1e6)
 
         start = tkw.read(offsets, elements_per_thread=1)
         tkw.set_symbol(OFFSET, start)
@@ -167,6 +169,12 @@ def get_prefill_attention_kernel(
             )
             inner_acc = tkw.mma(k_reg, q_reg, imm_reg, mfma_variant[0])
             x_j = tkw.permute(inner_acc, target_shape=[H, N_Q, N_KV])
+            n_kv_index = tkw.self_index(N_KV, tkl.i32)
+            mask = tkw.apply_expr(n_kv_index, lambda x: x < N_KV)
+            mask = tkw.broadcast(mask, target_shape=[H, N_Q, N_KV])
+            mask = tkw.cast(mask, tkw.i1)
+            bias = tkw.select(mask, zero, neg_infinity)
+            x_j = x_j + bias
             m_j = tkw.max(x_j, partial_max, dim=N_KV)
             e_delta_max = tkw.exp2(partial_max - m_j)
             e_delta = tkw.exp2(x_j - m_j)

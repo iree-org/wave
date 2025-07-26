@@ -1209,6 +1209,10 @@ class Allocate(CustomOp):
     def type(self) -> "Memory":
         return Memory[(*self.shape, self.address_space, self.dtype)]
 
+    @property
+    def get_final_dim_unpadded_size(self):
+        return self.distributed_shape[-1] - self.padding
+
 
 @define_op("self_index")
 @dataclass

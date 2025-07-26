@@ -20,6 +20,10 @@ from .utils.symbol_utils import IndexExpr, IndexSymbol, safe_subs, subs_idxc
 from .wave import CapturedTrace
 
 
+# A bound expression for this case is `min(global_bound, vector_size)`.
+# Replace global bound with `max(tile_size, vector_size)` so the entire
+# expression `min(max(tile_size, vector_size), vector_size)` can be
+# simplified to just vector size.
 def _get_max_tile_size(
     dim: IndexSymbol,
     constraints: list[Constraint],
@@ -29,7 +33,6 @@ def _get_max_tile_size(
     for constraint in constraints:
         if isinstance(constraint, DistributionConstraint) and constraint.dim == dim:
             ret = sympy.Max(ret, constraint.tile_size)
-
     return ret
 
 
@@ -52,7 +55,7 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
 
         vector_shapes = node.vector_shapes or hardware_constraint.vector_shapes
         is_shared_mem = is_shared_mem_access(node)
-        bounds = find_index_bounds(
+        bounds, unconstrained_dim = find_index_bounds(
             constraints, node.index, vector_shapes, node.type.symbolic_shape
         )
         if is_shared_mem and bounds:
@@ -60,12 +63,14 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
             # Masking against global bounds was already handled when reading from
             # global mem, but we still need to handle masking against vector
             # size during shared mem access.
-            # A bound expression for this case is `min(global_bound, vector_size)`.
-            # Replace global bound with `max(tile_size, vector_size)` so the entire
-            # expression `min(max(tile_size, vector_size), vector_size)` can be
-            # simplified to just vector size.
             bounds = {
-                k: safe_subs(v, {k: _get_max_tile_size(k, constraints, vector_shapes)})
+                k: (
+                    get_custom(node.memory).get_final_dim_unpadded_size
+                    if k in unconstrained_dim
+                    else safe_subs(
+                        v, {k: _get_max_tile_size(k, constraints, vector_shapes)}
+                    )
+                )
                 for k, v in bounds.items()
             }
             # Shared mem accesses always access the full vector_shape tile,
