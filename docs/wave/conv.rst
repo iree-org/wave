@@ -29,14 +29,14 @@ The following table defines the variables used in the convolution shapes:
 
 Variables:
 
-| Variable | Description |
-|----------|-------------|
-| N | Batch size (number of input images) |
-| H, W | Input image height and width |
-| C | Number of input channels (e.g., 3 for RGB) |
-| HF, WF | Filter (kernel) height and width |
-| NF | Number of filters (also the number of output channels) |
-| H_out, W_out | Output spatial height and width after convolution |
+Variables:
+
+* ``N`` - Batch size (number of input images)
+* ``H, W`` - Input image height and width  
+* ``C`` - Number of input channels (e.g., 3 for RGB)
+* ``HF, WF`` - Filter (kernel) height and width
+* ``NF`` - Number of filters (also the number of output channels)
+* ``H_out, W_out`` - Output spatial height and width after convolution
 
 For an input tensor of shape:
 
