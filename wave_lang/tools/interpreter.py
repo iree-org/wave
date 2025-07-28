@@ -7,7 +7,7 @@ import torch
 
 from wave_lang.support.logging import get_logger
 
-logger = get_logger("turbine.wave.interpreter")
+logger = get_logger("wave.interpreter")
 
 
 from wave_lang.support.ir_imports import (

@@ -19,7 +19,7 @@ class DefaultFormatter(logging.Formatter):
 
 
 def _setup_logger():
-    root_logger = logging.getLogger("turbine")
+    root_logger = logging.getLogger("wave")
     root_logger.setLevel(flags.log_level)
     default_handler = logging.StreamHandler(sys.stderr)
     default_handler.flush = sys.stderr.flush
@@ -41,5 +41,5 @@ def get_logger(name: str):
     return logger
 
 
-aot_logger = get_logger("turbine.aot")
-runtime_logger = get_logger("turbine.runtime")
+aot_logger = get_logger("wave.aot")
+runtime_logger = get_logger("wave.runtime")

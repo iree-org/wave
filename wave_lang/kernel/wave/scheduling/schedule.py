@@ -41,7 +41,7 @@ from .resources import (
 )
 from .schedule_enums import SchedulingType
 
-logger = get_logger("turbine.wave.scheduling.schedule")
+logger = get_logger("wave.scheduling.schedule")
 
 
 def is_solver_based(scheduling_type: SchedulingType):

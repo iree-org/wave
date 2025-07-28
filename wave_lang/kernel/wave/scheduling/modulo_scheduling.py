@@ -22,7 +22,7 @@ from .graph_utils import (
     topological_sort_nodes,
 )
 
-logger = get_logger("turbine.wave.modulo_scheduling")
+logger = get_logger("wave.modulo_scheduling")
 
 
 class ModuloScheduler:

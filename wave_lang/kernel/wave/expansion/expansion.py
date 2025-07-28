@@ -55,7 +55,7 @@ from .expansion_utils import (
     remove_unused_registers,
 )
 
-logger = get_logger("turbine.wave.expansion")
+logger = get_logger("wave.expansion")
 
 
 @dataclass(frozen=True)

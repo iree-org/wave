@@ -27,20 +27,20 @@ __all__ = [
 
 # We use the native logging vs our .logging setup because our logging depends
 # on this module. It will spew to stderr with issues.
-logger = logging.getLogger("turbine.bootstrap")
+logger = logging.getLogger("wave.bootstrap")
 
-# The TURBINE_DEBUG environment variable is a comma separated list of settings
+# The WAVE_DEBUG environment variable is a comma separated list of settings
 # of the form "(-)?name[=value]".
 # Available settings:
 #   log_level: A log level name to enable.
 #   asserts: Whether to enable all assertions (defaults to enabled).
-FLAGS_ENV_NAME = "TURBINE_DEBUG"
+FLAGS_ENV_NAME = "WAVE_DEBUG"
 SETTING_PART_PATTERN = re.compile(r"""^([\\+\\-])?([^=]+)(=(.*))?$""")
 
 # Some settings can also be set in dedicated environment variables. Those are
 # mapped here.
 ENV_SETTINGS_MAP = {
-    "TURBINE_LOG_LEVEL": "log_level",
+    "WAVE_LOG_LEVEL": "log_level",
 }
 
 # Whether debug/prolific assertions are disabled.

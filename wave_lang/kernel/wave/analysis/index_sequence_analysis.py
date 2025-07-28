@@ -68,7 +68,7 @@ from ..utils.print_utils import (
     try_apply_pass,
 )
 
-logger = get_logger("turbine.wave.index_sequence_analysis")
+logger = get_logger("wave.index_sequence_analysis")
 
 
 def combine_derived_index(
