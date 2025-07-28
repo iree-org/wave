@@ -118,13 +118,19 @@ class WaveKernel:
             if usage == kernel_codegen.KernelBufferUsage.OUTPUT:
                 kernel_outputs.append(arg)
 
+        def get_dynamic_dimension_actual(sym):
+            arg_idx, dim = self.symbols_args_map[sym]
+            return args[arg_idx].shape[dim]
+
         debug_args = []
         debug_logs = kwargs.get("debug_logs", {})
         if self.debug_outputs:
             # Process backwards so that the debug_logs output is ordered.
             for info_dict in self.debug_outputs[::-1]:
                 shape = [
-                    self.options.subs[sdim] for sdim in info_dict["symbolic_shape"]
+                    self.options.subs.get(symdim, None)
+                    or get_dynamic_dimension_actual(symdim)
+                    for symdim in info_dict["symbolic_shape"]
                 ]
                 memory = torch.zeros(
                     shape, dtype=wave_dtype_to_torch(info_dict["dtype"]), device="cuda"
@@ -135,8 +141,7 @@ class WaveKernel:
 
         dynamic_symbols = []
         for sym in self.options.dynamic_symbols:
-            arg_idx, dim = self.symbols_args_map[sym]
-            dynamic_symbols.append(args[arg_idx].shape[dim])
+            dynamic_symbols.append(get_dynamic_dimension_actual(sym))
 
         if self.options.wave_runtime:
             invoke_with_wave_runtime(
@@ -215,6 +220,20 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     cache_manager = None
     binary_path = None
 
+    # Create an indexing context and populate substitutions.
+    push(IndexingContext, IndexingContext())
+    idxc = IndexingContext.current()
+
+    # Make a copy of the substitutions to avoid mutating the original
+    # options.subs.
+    idxc.subs = copy(options.subs)
+
+    # Since constraints are used to lookup the compiled kernel in the cache,
+    # we initialize/update the constraints _before_ the cache lookup.
+    kernel.initialize_wave_constraints()
+    kernel.initialize_symbolic_constraints()
+    kernel.initialize_workgroup_constraints()
+
     def get_binary_path():
         if is_cache_enabled():
             return (
@@ -252,14 +271,6 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 symbols_args_map,
                 None,  # TODO - this means that the cache is broken for kernels with debug logging.  But I want to focus on getting the feature at all before figuring out how to add extra info to the cache.
             )
-
-    # Create an indexing context and populate substitutions.
-    push(IndexingContext, IndexingContext())
-    idxc = IndexingContext.current()
-
-    # Make a copy of the substitutions to avoid mutating the original
-    # options.subs.
-    idxc.subs = copy(options.subs)
 
     # For the wave runtime, we need the hsaco binary. So we turn on
     # dumping of binaries and store in wave runtime directory. If we

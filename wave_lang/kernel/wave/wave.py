@@ -313,7 +313,7 @@ class LaunchableWave(Launchable):
                 if tiling_constraint.dim == custom.axis:
                     tiling_constraint.induction_var = self.induction_vars[custom]
 
-    def initialize_wave_constraints(self, trace: CapturedTrace) -> None:
+    def initialize_wave_constraints(self) -> None:
         """
         For each wave constraint, determines the appropriate wave id by looking
         for workgroup constraints along the same dimension and using information
@@ -376,7 +376,7 @@ class LaunchableWave(Launchable):
             if constraint.dim in aliased_dims:
                 constraint.wg_dim = workgroup_dims[constraint.workgroup_dim].wg_dim
 
-    def initialize_workgroup_constraints(self, trace: CapturedTrace) -> None:
+    def initialize_workgroup_constraints(self) -> None:
         """
         For kernels that distribute more than three dimensions among workgroups,
         we need to update the workgroup constraints for dimensions >= 2
@@ -397,7 +397,7 @@ class LaunchableWave(Launchable):
             ]
         self.update_aliased_workgroup_constraints(workgroup_dims)
 
-    def initialize_symbolic_constraints(self, trace: CapturedTrace) -> None:
+    def initialize_symbolic_constraints(self) -> None:
         """
         For each symbolic constraint, create new constraints for the
         related symbolic values with appropriate substitutions.
@@ -525,10 +525,7 @@ class LaunchableWave(Launchable):
             partial(debug_log_hoist, trace),
             partial(initialize_iter_args, trace),
             partial(self.create_induction_vars, trace),
-            partial(self.initialize_wave_constraints, trace),
             partial(self.initialize_reductions, trace),
-            partial(self.initialize_symbolic_constraints, trace),
-            partial(self.initialize_workgroup_constraints, trace),
             finalize_indices,
             substitute_vector_shapes,
             partial(add_get_results, trace),

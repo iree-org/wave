@@ -610,7 +610,7 @@ def test_unaligned_scaled_gemm_mxfp4():
     # CHECK:          %[[SCALED_LOGITS_MASK:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_LOGITS_BOUND]] : vector<16xindex>
     # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1], offset: ?>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
     # CHECK:          %[[SCALED_SCALES_MASK_VAL:.+]] = arith.cmpi slt, %{{.*}}, %[[SCALED_SCALES_BOUND]] : index
-    # CHECK:          %[[SCALED_SCALES_MASK:.+]] = vector.splat %[[SCALED_SCALES_MASK_VAL]] : vector<1xi1>
+    # CHECK:          %[[SCALED_SCALES_MASK:.+]] = vector.broadcast %[[SCALED_SCALES_MASK_VAL]] : i1 to vector<1xi1>
     # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1], offset: ?>>, vector<1xi1>, vector<1xi8> into vector<1xi8>
     # CHECK:          vector.maskedload {{.*}}, %[[SCALED_LOGITS_MASK]], %[[CST_0]] : memref<1024x96xi8, strided<[96, 1], offset: ?>>, vector<16xi1>, vector<16xi8> into vector<16xi8>
     # CHECK:          vector.maskedload {{.*}}, %[[SCALED_SCALES_MASK]], %[[CST]] : memref<1024x6xi8, strided<[6, 1], offset: ?>>, vector<1xi1>, vector<1xi8> into vector<1xi8>

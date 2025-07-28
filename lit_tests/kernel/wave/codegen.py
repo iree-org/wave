@@ -285,7 +285,7 @@ def test_read_write_diagonal():
     # CHECK:            %[[THREAD_ID_X:.*]] = gpu.thread_id  x
     # CHECK:            %[[D0:.*]] = affine.apply #[[map]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[D1:.*]] = arith.index_cast %[[D0]] : index to i64
-    # CHECK:            %[[D4:.*]] = vector.splat %[[D1]] : vector<16xi64>
+    # CHECK:            %[[D4:.*]] = vector.broadcast %[[D1]] : i64 to vector<16xi64>
     # CHECK:            %[[D5:.*]] = arith.cmpi sge, %[[D4]], %[[CST]] : vector<16xi64>
     # CHECK:            %[[D6:.*]] = arith.select %[[D5]], %[[CST_1]], %[[CST_0]] : vector<16xi1>, vector<16xf16>
     # CHECK:            %[[D7:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<16x16xf16, strided<[16, 1], offset: ?>>
@@ -336,7 +336,7 @@ def test_read_write_masked():
     # CHECK:            %[[D0:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<1x3xf16, strided<[3, 1], offset: ?>>
     # CHECK:            %[[D1:.*]] = affine.apply #[[map]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[D2:.*]] = arith.cmpi slt, %[[D1]], %[[C1]] : index
-    # CHECK:            %[[D3:.*]] = vector.splat %[[D2]] : vector<4xi1>
+    # CHECK:            %[[D3:.*]] = vector.broadcast %[[D2]] : i1 to vector<4xi1>
     # CHECK:            %[[D4:.*]] = arith.andi %[[D3]], %[[CST_0]] : vector<4xi1>
     # CHECK:            %[[D5:.*]] = vector.maskedload %[[D0]][%[[D1]], %[[C0]]], %[[D4]], %[[CST]] : memref<1x3xf16, strided<[3, 1], offset: ?>>, vector<4xi1>, vector<4xf16> into vector<4xf16>
     # CHECK:            %[[D6:.*]] = stream.binding.subspan %[[ARG1]][%[[C0]]] : !stream.binding -> memref<1x3xf16, strided<[3, 1], offset: ?>>
@@ -473,7 +473,7 @@ def test_read_write_dynamic_mapping():
     # CHECK:            %[[D3:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<16x16xf16, strided<[16, 1], offset: ?>>
     # CHECK:            %[[D4:.*]] = arith.index_cast %[[D2]] : vector<16xi32> to vector<16xindex>
     # CHECK:            %[[D5:.*]] = affine.apply #[[map1]]()[%[[THREAD_ID_X]]]
-    # CHECK:            %[[D6:.*]] = vector.splat %[[D5]] : vector<16xindex>
+    # CHECK:            %[[D6:.*]] = vector.broadcast %[[D5]] : index to vector<16xindex>
     # CHECK:            %[[D7:.*]] = arith.addi %[[D6]], %[[D4]] overflow<nsw, nuw> : vector<16xindex>
     # CHECK-COUNT-16:   memref.load
     # CHECK-NOT:        vector.extract
@@ -820,12 +820,12 @@ def test_dynamic_copy():
     # CHECK:            %[[D0:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<?x?xf16, strided<[?, 1], offset: ?>>{%[[ARG1]], %[[ARG2]]}
     # CHECK:            %[[D1:.*]] = affine.apply #[[map1]]()[%[[THREAD_ID_X]], %[[WORKGROUP_ID_0]]]
     # CHECK:            %[[D2:.*]] = affine.apply #[[map2]]()[%[[WORKGROUP_ID_1]]]
-    # CHECK:            %[[D3:.*]] = vector.splat %[[D2]] : vector<16xindex>
+    # CHECK:            %[[D3:.*]] = vector.broadcast %[[D2]] : index to vector<16xindex>
     # CHECK:            %[[D4:.*]] = arith.addi %[[D3]], %[[CST_0]] overflow<nsw, nuw> : vector<16xindex>
-    # CHECK:            %[[D5:.*]] = vector.splat %[[ARG2]] : vector<16xindex>
+    # CHECK:            %[[D5:.*]] = vector.broadcast %[[ARG2]] : index to vector<16xindex>
     # CHECK:            %[[D6:.*]] = arith.cmpi slt, %[[D4]], %[[D5]] : vector<16xindex>
     # CHECK:            %[[D7:.*]] = arith.cmpi slt, %[[D1]], %[[ARG1]] : index
-    # CHECK:            %[[D8:.*]] = vector.splat %[[D7]] : vector<16xi1>
+    # CHECK:            %[[D8:.*]] = vector.broadcast %[[D7]] : i1 to vector<16xi1>
     # CHECK:            %[[D9:.*]] = arith.andi %[[D6]], %[[D8]] : vector<16xi1>
     # CHECK:            %[[D10:.*]] = vector.maskedload %[[D0]][%[[D1]], %[[D2]]], %[[D9]], %[[CST]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
     # CHECK:            vector.maskedstore %[[D0]][%[[D1]], %[[D2]]], %[[D9]], %[[D10]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16>
@@ -1488,7 +1488,7 @@ def test_tiled_reduce_min_unaligned():
     # Tiled Reduction Loop
     # CHECK:         scf.for %[[ITER:.*]] = %[[C0]] to %[[C5]] step %[[C1]]
     # CHECK:           %[[D6:.*]] = affine.apply #[[map1]]()[%[[ITER]], %[[THREAD_ID_X]]]
-    # CHECK:           %[[D7:.*]] = vector.splat %[[D6]] : vector<2xindex>
+    # CHECK:           %[[D7:.*]] = vector.broadcast %[[D6]] : index to vector<2xindex>
     # CHECK:           %[[D8:.*]] = arith.addi %[[D7]], %[[cst_1]] overflow<nsw, nuw> : vector<2xindex>
     # CHECK:           %[[D9:.*]] = arith.cmpi slt, %[[D8]], %[[cst_0]] : vector<2xindex>
     # CHECK-COUNT-2:   vector.maskedload %{{.*}}[%{{.*}}, %[[D6]]], %[[D9]]
@@ -1665,7 +1665,7 @@ def test_reduce_propagate_broadcast():
     # CHECK-COUNT-7: arith.maximumf
     # CHECK: %[[ACC_MAX:.+]] = arith.maximumf
     # CHECK: %[[EXTRACT:.+]] = vector.extract %[[ACC_MAX]][0] : f32 from vector<1xf32>
-    # CHECK: %[[BROADCAST:.+]] = vector.splat %[[EXTRACT]] : vector<2xf32>
+    # CHECK: %[[BROADCAST:.+]] = vector.broadcast %[[EXTRACT]] : f32 to vector<2xf32>
     # CHECK: %[[SUBF:.+]] = arith.subf %{{.+}}, %[[BROADCAST]] : vector<2xf32>
     # CHECK: %[[EXP2:.+]] = math.exp2 %[[SUBF]] : vector<2xf32>
     # CHECK: %[[EXP2_SLICE_0:.+]] = vector.extract %[[EXP2]][0] : f32 from vector<2xf32>
@@ -1826,10 +1826,10 @@ def test_explicit_broadcast():
     # CHECK: %[[RHS_1:.+]] = memref.load %[[RHS]][%[[X_SLICE_1]]] : memref<256xf16, strided<[1], offset: ?>>
 
     # 1st Broadcast RHS
-    # CHECK: %[[BCAST_RHS_0:.+]] = vector.splat %[[RHS_0]] : vector<2xf16>
+    # CHECK: %[[BCAST_RHS_0:.+]] = vector.broadcast %[[RHS_0]] : f16 to vector<2xf16>
 
     # 2nd Broadcast RHS
-    # CHECK: %[[BCAST_RHS_1:.+]] = vector.splat %[[RHS_1]] : vector<2xf16>
+    # CHECK: %[[BCAST_RHS_1:.+]] = vector.broadcast %[[RHS_1]] : f16 to vector<2xf16>
 
     # Broadcast-ADD RHS
     # CHECK: arith.addf %[[LHS_0]], %[[BCAST_RHS_0]] : vector<2xf16>
@@ -1900,10 +1900,10 @@ def test_broadcast_add():
     # CHECK: %[[RHS_1:.+]] = memref.load %[[RHS]][%[[X_SLICE_1]]] : memref<256xf16, strided<[1], offset: ?>>
 
     # 1st Broadcast RHS
-    # CHECK: %[[BCAST_RHS_0:.+]] = vector.splat %[[RHS_0]] : vector<2xf16>
+    # CHECK: %[[BCAST_RHS_0:.+]] = vector.broadcast %[[RHS_0]] : f16 to vector<2xf16>
 
     # 2nd Broadcast RHS
-    # CHECK: %[[BCAST_RHS_1:.+]] = vector.splat %[[RHS_1]] : vector<2xf16>
+    # CHECK: %[[BCAST_RHS_1:.+]] = vector.broadcast %[[RHS_1]] : f16 to vector<2xf16>
 
     # Broadcast-ADD RHS
     # CHECK: arith.addf %[[LHS_0]], %[[BCAST_RHS_0]] : vector<2xf16>
@@ -2165,7 +2165,7 @@ def test_register_codegen_i32():
     # Setting up THREAD_0 as a register
     # CHECK:  %[[tid:.+]] = gpu.thread_id  x
     # CHECK:  %[[cast:.+]] = arith.index_cast %[[tid]] : index to i32
-    # CHECK:  %[[vector_tid:.+]] = vector.splat %[[cast]] : vector<1xi32>
+    # CHECK:  %[[vector_tid:.+]] = vector.broadcast %[[cast]] : i32 to vector<1xi32>
 
     # Check for addition operation of two registers
     # CHECK: arith.addi %[[vector_tid]], %[[CST]] : vector<1xi32>
@@ -2217,8 +2217,8 @@ def test_scalar_codegen_f32():
     # CHECK-SAME: %arg2: f32, %arg3: f32)
 
     # Broadcast and add
-    # CHECK: vector.splat %arg2 : vector<1xf32>
-    # CHECK: vector.splat %arg3 : vector<1xf32>
+    # CHECK: vector.broadcast %arg2 : f32 to vector<1xf32>
+    # CHECK: vector.broadcast %arg3 : f32 to vector<1xf32>
     # CHECK: arith.addf
 
     # Final dispatch args dtype
@@ -2275,8 +2275,8 @@ def test_scalar_codegen_i32():
     # CHECK-SAME: %arg2: i32, %arg3: i32)
 
     # Broadcast and add
-    # CHECK: vector.splat %arg2 : vector<1xi32>
-    # CHECK: vector.splat %arg3 : vector<1xi32>
+    # CHECK: vector.broadcast %arg2 : i32 to vector<1xi32>
+    # CHECK: vector.broadcast %arg3 : i32 to vector<1xi32>
     # CHECK: arith.addi
 
     # Final dispatch args dtype
@@ -2357,7 +2357,7 @@ def test_scalar_cond_copy():
     # CHECK: %[[tidx_i32:.+]] = arith.index_cast %[[tidx]] : index to i32
     # CHECK: %[[cond:.+]] = arith.cmpi slt, %[[tidx_i32]], %c12
     # CHECK: %[[mask:.+]] = arith.select %[[cond]], %cst, %cst_0 : f16
-    # CHECK: %[[splat_mask:.+]] = vector.splat %[[mask]] : vector<1xf16>
+    # CHECK: %[[splat_mask:.+]] = vector.broadcast %[[mask]] : f16 to vector<1xf16>
 
     # Apply mask
     # CHECK: arith.mulf {{.*}}, %[[splat_mask]]
@@ -2413,7 +2413,7 @@ def test_scanop_cumsum():
 
     # Conditional mask: comparison with offset
     # CHECK: arith.cmpi sge
-    # CHECK: vector.splat {{.*}} : vector<1xi1>
+    # CHECK: vector.broadcast {{.*}} : i1 to vector<1xi1>
     # CHECK: arith.select {{.*}} : vector<1xi1>, vector<1xf16>
 
     # Accumulation

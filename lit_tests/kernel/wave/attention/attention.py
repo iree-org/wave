@@ -294,7 +294,7 @@ def test_dynamic_attention_32x32x8():
 
     # Check for mask generation and masked stor:
     # CHECK:                %[[INDICES:.+]] = arith.addi %{{.*}}, %[[IOTA]] overflow<nsw, nuw> : vector<4xindex>
-    # CHECK:                %[[BOUNDS:.+]] = vector.splat %{{.*}} : vector<4xindex>
+    # CHECK:                %[[BOUNDS:.+]] = vector.broadcast %{{.*}} : index to vector<4xindex>
     # CHECK:                %[[SLT:.+]] = arith.cmpi slt, %[[INDICES]], %[[BOUNDS]] : vector<4xindex>
     # CHECK:                %[[MASK:.+]] = arith.andi %{{.*}}, %[[SLT]] : vector<4xi1>
     # CHECK:                vector.maskedstore %{{.*}}[{{.*}}], %[[MASK]], %{{.*}} : memref<?x?x?xf32, strided<[?, ?, 1], offset: ?>>, vector<4xi1>, vector<4xf32>

@@ -301,7 +301,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             if isinstance(arg.type, VectorType):
                 arg = vector_d.extract(arg, static_position=[0], dynamic_position=[])
 
-            res_args[i] = vector_d.splat(res_type, arg)
+            res_args[i] = vector_d.broadcast(res_type, arg)
 
         assert all(arg.type == res_type for arg in res_args)
 

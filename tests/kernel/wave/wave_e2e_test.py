@@ -2206,7 +2206,8 @@ def test_scatter_add(shape, elems_per_thread, request):
 
 
 @require_e2e
-def test_debug_log_write():
+@param_bool("dynamic_dims", "dyn")
+def test_debug_log_write(dynamic_dims: bool):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -2248,12 +2249,18 @@ def test_debug_log_write():
     c = device_zeros(shape, dtype=torch.float16)
     ref = a + b
 
+    subs = {
+        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+    }
+    dynamic_symbols = []
+    if dynamic_dims:
+        dynamic_symbols = [M, N]
+    else:
+        subs[M] = shape[0]
+        subs[N] = shape[1]
     options = WaveCompileOptions(
-        subs={
-            M: shape[0],
-            N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-        },
+        subs=subs,
+        dynamic_symbols=dynamic_symbols,
     )
     options = set_default_run_config(options)
 
