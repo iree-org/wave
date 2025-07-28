@@ -903,6 +903,7 @@ def test_unary_lowerings():
         res = tkw.softsign(res, logit_cap=30.0, apply_scaling=True, head_dim=128)
         res = tkw.roundeven(res)
         res = tkw.sin(res)
+        res = tkw.sinh(res)
         res = tkw.cos(res)
         res = tkw.cbrt(res)
         res = tkw.bitcast(res, tkl.bf16)
@@ -962,8 +963,10 @@ def test_unary_lowerings():
 
     # Tests sin
     # CHECK: %[[SIN:.+]] = math.sin %[[ROUNDEVEN]]
+    # Tests sinh
+    # CHECK: %[[SINH:.+]] = math.sinh %[[SIN]]
     # Tests cos
-    # CHECK: %[[COS:.+]] = math.cos %[[SIN]]
+    # CHECK: %[[COS:.+]] = math.cos %[[SINH]]
     # Tests cbrt
     # CHECK: %[[CBRT:.+]] = math.cbrt %[[COS]]
 
