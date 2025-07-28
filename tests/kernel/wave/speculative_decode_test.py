@@ -19,38 +19,9 @@ from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
 from wave_lang.kernel.wave.templates.speculative_decoding import (
-    get_speculative_decoding_kernel,
     get_speculative_sampling_kernel,
 )
 import torch.nn.functional as F
-
-
-def get_wave_speculative_decoding_kernel(
-    batch_size,
-    num_draft_tokens,
-    vocab_size,
-    seq_len,
-):
-    speculative_decoding, symbols, _ = get_speculative_decoding_kernel(
-        batch_size,
-        num_draft_tokens,
-        vocab_size,
-        seq_len,
-    )
-    symbols.update(get_default_scheduling_params())
-
-    options = WaveCompileOptions(
-        subs=symbols,
-        canonicalize=True,
-        run_bench=False,
-        waves_per_eu=2,
-        denorm_fp_math_f32="preserve-sign",
-        schedule=False,
-        wave_runtime=True,
-    )
-    options = set_default_run_config(options)
-    speculative_decoding = wave_compile(options, speculative_decoding)
-    return speculative_decoding
 
 
 def get_wave_speculative_sampling_kernel(
@@ -88,6 +59,7 @@ def get_wave_speculative_sampling_kernel(
 
 def reference_sampling_kernel(
     uniform_samples,
+    uniform_samples_for_final_sampling,
     target_probs,
     draft_probs,
     candidates,
@@ -151,6 +123,7 @@ def reference_sampling_kernel(
         accept_token_num[bx] = num_accepted_tokens
         cur_prob_offset_vec[bx] = cur_prob_offset
         last_accepted_retrive_idx_vec[bx] = last_accepted_retrive_idx
+        coin = uniform_samples_for_final_sampling[bx, 0]
 
         # second kernel
         last_offset = cur_prob_offset
@@ -188,6 +161,7 @@ def tree_speculative_sampling_target_only(
     retrive_next_token,  # [batch_size, num_draft_tokens]
     retrive_next_sibling,  # [batch_size, num_draft_tokens]
     uniform_samples,  # [batch_size, num_draft_tokens]
+    uniform_samples_for_final_sampling,  # [batch_size]
     target_probs,  # [batch_size, num_draft_tokens, vocab_size]
     draft_probs,  # [batch_size, num_draft_tokens, vocab_size]
     batch_size,
@@ -206,11 +180,7 @@ def tree_speculative_sampling_target_only(
     last_accepted_retrive_idx_vec = torch.empty(
         [batch_size], dtype=torch.int32, device=draft_probs.device
     )
-    updated_coins_vec = torch.empty(
-        [batch_size], dtype=torch.float32, device=draft_probs.device
-    )
 
-    # TODO: Combine into one kernel.
     sampling_kernel = get_wave_speculative_sampling_kernel(
         batch_size,
         num_speculative_tokens,
@@ -222,35 +192,19 @@ def tree_speculative_sampling_target_only(
     )
     sampling_kernel(
         uniform_samples,
+        uniform_samples_for_final_sampling,
         target_probs,
         draft_probs,
         candidates,
         retrive_index,
         retrive_next_token,
         retrive_next_sibling,
+        num_speculative_tokens,
         predicts,
         accept_token_num,
         accept_index,
         cur_prob_offset_vec,
         last_accepted_retrive_idx_vec,
-        updated_coins_vec,
-    )
-
-    wave_kernel = get_wave_speculative_decoding_kernel(
-        batch_size,
-        num_draft_tokens,
-        vocab_size,
-        seq_len,
-    )
-    wave_kernel(
-        target_probs,
-        draft_probs,
-        cur_prob_offset_vec,
-        updated_coins_vec,
-        last_accepted_retrive_idx_vec,
-        accept_token_num,
-        num_speculative_tokens,
-        predicts,
     )
 
 
@@ -349,6 +303,10 @@ def testReferenceSpeculativeDecoding(
     draft_probs = torch.full_like(target_probs, 0, dtype=torch.float32, device=device)
     coins = torch.rand(bs, num_draft_tokens, device=device, dtype=torch.float32)
 
+    # based on updated speculative decode kernel from sglang
+    # https://github.com/harsh-nod/sglang/commit/cfceb83
+    coins_for_final_sampling = torch.rand((bs,), dtype=torch.float32, device=device)
+
     vocab_size = target_probs.shape[2]
 
     tree_speculative_sampling_target_only(
@@ -360,6 +318,7 @@ def testReferenceSpeculativeDecoding(
         retrive_next_token=retrive_next_token,
         retrive_next_sibling=retrive_next_sibling,
         uniform_samples=coins,
+        uniform_samples_for_final_sampling=coins_for_final_sampling,
         target_probs=target_probs,
         draft_probs=draft_probs,
         batch_size=bs,

@@ -184,7 +184,7 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
     "enable_scheduling",
     [
         SchedulingType.NONE,
-        _xfail(SchedulingType.PREFETCH),
+        SchedulingType.PREFETCH,
         _xfail(SchedulingType.MODULO),
         _xfail(SchedulingType.MODULO_MULTI_BUFFERED),
     ],

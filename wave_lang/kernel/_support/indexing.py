@@ -464,3 +464,6 @@ class IndexSequence:
 
     def __repr__(self) -> str:
         return f"{self.start} : {self.size} : {self.stride}"
+
+    def __hash__(self):
+        return hash((self.start, self.size, self.stride))

@@ -66,7 +66,10 @@ class Memory(metaclass=KernelBufferMeta):
     def __class_getitem__(
         cls, shape_and_dtype: tuple[IndexExpr | DataType, ...]
     ) -> Type["Memory"]:
-        """Syntax: `Memory[shape1, ...., shapeN, addressSpace, dtype, Optional[usage]]"""
+        """
+        Syntax: `Memory[shape1, ...., shapeN, addressSpace, dtype, Optional[usage]]`
+        or `Memory[(shape1, ..., shapeN), addressSpace, dtype, Optional[usage]]`
+        """
         if len(shape_and_dtype) < 3:
             raise TypeError(f"Expected at least 3 arguments, got: {shape_and_dtype}")
 
@@ -80,6 +83,9 @@ class Memory(metaclass=KernelBufferMeta):
         dtype = shape_and_dtype.pop()
         addressSpace = shape_and_dtype.pop()
         shape = tuple(shape_and_dtype)
+        # allow shape to be provided as a tuple instead of as individual elements, to work around lack of unpacking in subscripts for Python 3.10
+        if len(shape) == 1 and isinstance(shape[0], tuple):
+            shape = shape[0]
 
         # Allow constant int expressions in shape
         shape = tuple(IndexExpr(s) if isinstance(s, int) else s for s in shape)

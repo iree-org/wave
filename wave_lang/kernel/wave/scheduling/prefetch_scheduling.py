@@ -4,33 +4,46 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import math
-from enum import Enum
+from enum import Enum, auto
 
 import torch.fx as fx
 
 from ...ops.wave_ops import get_custom
+from ..utils.general_utils import ceildiv
 from .graph_utils import Edge, sort_graph_by_edge_weight
 from .resources import Operation, get_custom_operation_type
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class PrefetchStage(Enum):
-    GLOBAL_LOAD = 0
-    LOCAL_STORE = 1
-    LOCAL_LOAD = 2
-    COMPUTE = 3
+    GLOBAL_LOAD = auto()
+    LOCAL_STORE = auto()
+    LOCAL_LOAD = auto()
+    COMPUTE = auto()
 
-    def next(self):
-        # Helper function to get next stage from the current.
-        # If at stage 3 returns itself to prevent crash
-        # since it is final stage.
-        if self.value == 3:
-            return PrefetchStage(3)
-        v = self.value + 1
-        return PrefetchStage(v)
+    @staticmethod
+    def is_valid_transition(
+        from_stage: "PrefetchStage", to_stage: "PrefetchStage"
+    ) -> bool:
+        if from_stage == to_stage:
+            return True
+
+        return (from_stage, to_stage) in _prefetch_stage_transition_table
 
 
-operation_stage_table = {
+_prefetch_stage_transition_table = {
+    (PrefetchStage.GLOBAL_LOAD, PrefetchStage.LOCAL_STORE),
+    (PrefetchStage.LOCAL_STORE, PrefetchStage.LOCAL_LOAD),
+    # GLOBAL_TO_SHARED combines both GLOBAL_LOAD and LOCAL_STORE
+    (PrefetchStage.GLOBAL_LOAD, PrefetchStage.LOCAL_LOAD),
+    (PrefetchStage.LOCAL_LOAD, PrefetchStage.COMPUTE),
+    (PrefetchStage.COMPUTE, PrefetchStage.GLOBAL_LOAD),
+}
+
+_operation_stage_table = {
     Operation.READ_SHARED: PrefetchStage.LOCAL_LOAD,
     Operation.WRITE_SHARED: PrefetchStage.LOCAL_STORE,
     Operation.READ_GLOBAL: PrefetchStage.GLOBAL_LOAD,
@@ -45,9 +58,10 @@ operation_stage_table = {
 def get_scheduling_stage(op: fx.Node) -> Operation:
     op_ty = get_custom_operation_type(get_custom(op))
     assert op_ty is not None, f"get_custom_operation_type returned None for {op}"
-    if op_ty not in operation_stage_table:
-        raise NotImplementedError(f"Cannot find {op_ty} in operation_stage_table")
-    return operation_stage_table[op_ty]
+    if op_ty not in _operation_stage_table:
+        raise NotImplementedError(f"Cannot find {op_ty} in _operation_stage_table")
+
+    return _operation_stage_table[op_ty]
 
 
 class PrefetchScheduler:
@@ -97,17 +111,22 @@ class PrefetchScheduler:
         """
         sorted_nodes = sort_graph_by_edge_weight(graph.nodes, edges)
         schedule = {}
-        current_stage = PrefetchStage.GLOBAL_LOAD
+        current_stage = get_scheduling_stage(sorted_nodes[0])
+        current_stage_idx = 0
         for node in sorted_nodes:
             node_stage = get_scheduling_stage(node)
-            next_stage = current_stage.next()
+            logger.info(f"Node {node} is in stage {node_stage}")
             if node_stage == current_stage:
-                schedule[node] = current_stage.value
-            elif node_stage == next_stage:
-                schedule[node] = next_stage.value
-                current_stage = next_stage
+                schedule[node] = current_stage_idx
+            elif PrefetchStage.is_valid_transition(current_stage, node_stage):
+                current_stage_idx += 1
+                schedule[node] = current_stage_idx
+                current_stage = node_stage
             else:
                 # Node do not move contigously through stages.
+                logger.warning(
+                    f"No valid transition from {current_stage} to {node_stage} for node {node}"
+                )
                 return {}, False
         return schedule, True
 
@@ -119,11 +138,16 @@ class PrefetchScheduler:
         """
         self.schedule, success = self.prefetch_scheduling(self.graph, self.edges)
         if not success:
+            logger.warning("Prefetch scheduling failed")
             return {}, False
 
+        logger.info(f"Schedule: {self.schedule}")
         assert self.schedule, "Schedule is empty"
         self._initiation_interval = 2
         if self.num_stages != self._initiation_interval:
+            logger.warning(
+                f"Initiation interval {self._initiation_interval} does not match number of stages {self.num_stages}"
+            )
             return {}, False
         return self.schedule, success
 
@@ -139,5 +163,5 @@ class PrefetchScheduler:
         """
         Returns the number of stages in the kernel of the pipelined loop.
         """
-        max_cycle = max(t for t in self.schedule.values())
-        return math.ceil(max_cycle / self.initiation_interval)
+        max_cycle = max(t + 1 for t in self.schedule.values())
+        return ceildiv(max_cycle, self.initiation_interval)

@@ -9,4 +9,4 @@ crate-type = ["cdylib"] # Compile to a C-compatible dynamic library
 
 [dependencies]
 rayon = "1.5" # For parallelism
-pyo3 = { version = "0.21", features = ["extension-module"] }
+pyo3 = { version = "0.25", features = ["extension-module"] }

@@ -4,10 +4,16 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import tempfile
+import json
+from pathlib import Path
+import linecache
 import os
 import subprocess
 import sys
+import math
 from typing import Any, Sequence
+import importlib
 
 from wave_lang.support.ir_imports import (
     Attribute,
@@ -38,7 +44,7 @@ def _find_single_nested(name: str, parent: Operation) -> Operation:
         raise ValueError("Expected a single-block operation.")
     captured = None
     for op in parent.regions[0].blocks[0].operations:
-        # Dynamic typing is hard: must to op.operaiton.name in case some specific class has .name that has a different meaning.
+        # Dynamic typing is hard: must to op.operation.name in case some specific class has .name that has a different meaning.
         if op.operation.name == name:
             if captured:
                 raise RuntimeError(f"More than one '{name}' operation found.")
@@ -167,7 +173,12 @@ def _deiree(module: Module) -> str:
     return local_module.get_asm(binary=False, print_generic_op_form=True)
 
 
-def water_leak_in_bounds_check(module: Module):
+def is_water_available() -> bool:
+    """Returns True of the water_mlir package is available."""
+    return importlib.util.find_spec("water_mlir") is not None
+
+
+def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
     try:
         from water_mlir import binaries as water_bin
     except ImportError as err:
@@ -175,7 +186,7 @@ def water_leak_in_bounds_check(module: Module):
             "optional water_mlir module not installed but its use is requested"
         ) from err
     binary = water_bin.find_binary("water-opt")
-    generic_mlir = _deiree(module)
+    generic_mlir = _deiree(module) if override_ir == "" else override_ir
     pipeline = [
         (
             "water-assert-in-bounds",
@@ -187,6 +198,7 @@ def water_leak_in_bounds_check(module: Module):
         "loop-invariant-code-motion",
         "int-range-optimizations",
         "canonicalize",
+        "water-check-static-assertions",
     ]
 
     def make_linear_pass_pipeline(
@@ -209,22 +221,136 @@ def water_leak_in_bounds_check(module: Module):
             + ")"
         )
 
-    result = subprocess.run(
-        [binary, "--allow-unregistered-dialect", make_linear_pass_pipeline(pipeline)],
-        input=generic_mlir,
-        capture_output=True,
-        text=True,
-    )
+    def get_code_context(
+        filename: str, start_line: int, end_line, context: int = 2
+    ) -> str:
+        """
+        Retrieves a line and a few lines of context around it.
+
+        Args:
+            filename (str): The path to the file.
+            line_number (int): The central line number to retrieve.
+            context (int): The number of lines to show before and after.
+
+        Returns:
+            A string with the code + context.
+        """
+        start = max(1, start_line - context)
+        end = end_line + context + 1
+
+        num_characters = int(math.ceil(math.log10(end)))
+        format_string = "{0:" + str(num_characters) + "d}"
+
+        lines = []
+        for i in range(start, end + 1):
+            line = linecache.getline(filename, i)
+            if not line:
+                break
+            lines.append(
+                format_string.format(i)
+                + f"{'*' if start_line <= i <= end_line else ' '}| {line.rstrip()}"
+            )
+
+        return "\n".join(lines)
+
+    def diagnostic_from_json(
+        json_obj: dict[str, Any], *, include_context: bool = False
+    ) -> str:
+        if "unknown" in json_obj:
+            return "<unknown location>"
+        if "name" in json_obj:
+            child = diagnostic_from_json(
+                json_obj["loc"], include_context=include_context
+            )
+            return '"' + json_obj["name"] + '" at' + child
+        if "fused" in json_obj:
+            result = "fused<["
+            for d in json_obj["fused"]:
+                result += "\n  " + diagnostic_from_json(
+                    d, include_context=include_context
+                )
+            result += "]>"
+            return result
+        if "start_line" in json_obj:
+            start_line, end_line, start_col, end_col = tuple(
+                int(json_obj[key])
+                for key in ("start_line", "end_line", "start_column", "end_column")
+            )
+            result = json_obj["file"] + ":" + str(start_line)
+            zero_column = start_col == 0
+            if not zero_column:
+                result += ":" + str(start_col)
+            same_line = start_line == end_line
+            same_column = start_col == end_col
+            if not same_line or (not same_column and not zero_column):
+                result += " to "
+                if not same_line:
+                    result += str(end_line)
+                if not same_column and not zero_column:
+                    result += ":" + str(end_col)
+            if include_context:
+                result += "\n" + get_code_context(
+                    json_obj["file"], start_line, end_line
+                )
+            return result
+        if "callstack" in json_obj:
+            # TODO: consider capturing Python stack frame objects in a
+            # dictionary with unique names, using those names in named locations
+            # in MLIR and then reconstructing the traceback programmatically.
+            return "\ncalled from ".join(
+                diagnostic_from_json(d, include_context=(i == 0 and include_context))
+                for i, d in enumerate(json_obj["callstack"])
+            )
+        raise ValueError(f"Unhandled diagnostic: {json_obj}")
+
+    exceptions = []
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        diagnosticsFile = Path(temp_dir) / "diagnostics.txt"
+        result = subprocess.run(
+            [
+                binary,
+                "--diagnostics-file",
+                diagnosticsFile,
+                "--allow-unregistered-dialect",
+                make_linear_pass_pipeline(pipeline),
+            ],
+            input=generic_mlir,
+            capture_output=True,
+            text=True,
+        )
+        if diagnosticsFile.is_file():
+            with open(diagnosticsFile, "r") as file:
+                for line in file:
+                    diag = json.loads(line.rstrip())
+                    msg = (
+                        diag["severity"]
+                        + ": "
+                        + diag["message"]
+                        + "\nAt "
+                        + diagnostic_from_json(diag, include_context=True)
+                    )
+                    exception = RuntimeError(f"{msg}")
+                    exceptions.append(exception)
+
     if len(result.stderr) != 0:
-        raise RuntimeError("Water MLIR error: " + result.stderr)
+        exceptions.append(RuntimeError("Water MLIR error (stderr): " + result.stderr))
 
     if int(os.environ.get("WAVE_WATER_DUMP_MLIR_AFTER", "0")) != 0:
         print(result.stdout, file=sys.stderr)
 
-    if "cf.assert %false" in result.stdout:
-        raise RuntimeError(
-            "The kernel contains out-of-bounds accesses! Check that constraints divide sizes, among other things."
-        )
+    if len(exceptions) > 0:
+        # Exception groups are only available for Python >= 3.11
+        assert sys.version_info.major == 3, "Unexpected Python version"
+        if sys.version_info.minor >= 11:
+            raise ExceptionGroup("Water errors: ", exceptions)
+
+        if len(exceptions) == 1:
+            raise exceptions[0]
+        e = exceptions[0]
+        e.add_note(f"{len(exceptions) - 1} other exceptions were generated")
+        raise e
+
     if "cf.assert" in result.stdout:
         print(
             "[warning] Couldn't statically determine the absence of out-of-bounds accesses."

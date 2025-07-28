@@ -128,6 +128,14 @@ def write(
 ): ...
 
 
+def debug_log_write(
+    register_: "Register",
+    elements_per_thread: Optional[IndexExpr | int] = None,
+    mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+): ...
+
+
 def apply_expr(
     value: "Register" | Sequence["Register"], expr: Callable
 ) -> "Register": ...
@@ -273,6 +281,16 @@ def reshape(
 
 def select(
     cond: "Register", if_true: "Register", if_false: "Register"
+) -> "Register": ...
+
+
+def scatter_add(
+    register_src: "Register",
+    register_idx: "Register",
+    dim: IndexExpr,
+    memory: "Memory",
+    mapping: IndexMapping,
+    elements_per_thread: Optional[int] = 1,
 ) -> "Register": ...
 
 
@@ -2001,6 +2019,47 @@ class Write(CustomOp):
         )
 
 
+@define_op("debug_log_write")
+@dataclass
+class DebugLogWrite(CustomOp):
+    """
+    An op for debugging.
+    Represents a write to an implicit global memory location.
+    The kernel will implicitly have an extra memory input added that will be injected by the Python kernel launcher.
+    The memory can be accessed by passing an an extra keyword to kernel invokation "debug_logs" with an empty dictionary.
+    The dictionary will be mutated to contain the logs.
+
+    This is intended as a primitive for building more convenient debug logging tools.
+
+    The API and semantics of this operation are not yet stable, but since it is just a debugging tool, you want to take any debug logging out of your kernel before shipping it anyway.
+    """
+
+    register_: fx.Proxy
+    log_name: Optional[str] = None
+
+    @property
+    def memory(self) -> Optional[fx.Proxy]:
+        return self.fx_node.memory
+
+    @memory.setter
+    def memory(self, value):
+        self.fx_node.memory = value
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+    def infer_type(self):
+
+        regtype = get_custom(self.register_).type
+        mem = get_custom(self.memory)
+        type_expr = Memory[regtype.symbolic_shape, GLOBAL_ADDRESS_SPACE, regtype.dtype]
+        mem.type = type_expr
+
+        self.type = type_expr
+        self.fx_node.type = type_expr
+
+
 @define_op("apply_expr")
 @dataclass
 class ApplyExpr(CustomOp):
@@ -2518,10 +2577,60 @@ class GatherToLDS(CustomOp):
 
     src: Memory
     dst: Memory
-    src_idx: dict[IndexSymbol, IndexSequence]
-    dst_idx: dict[IndexSymbol, IndexSequence]
+    src_index: dict[IndexSymbol, IndexSequence]
+    dst_index: dict[IndexSymbol, IndexSequence]
     dtype: DataType
     elements_per_thread: Optional[IndexExpr | int]
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
     src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
+
+
+@define_op("scatter_add")
+@dataclass
+class ScatterAdd(CustomOp):
+    """
+    ScatterAdd performs element-wise accumulation from a source register into shared memory (LDS),
+    at locations determined by the index register along a specified dimension.
+
+    Limitations:
+    - Only intra-workgroup scattering is supported (i.e., within shared memory / LDS), assuming a single wave.
+    - Multi-wave execution is not guaranteed to be safe: synchronization issues may occur when threads write to the same index. Further investigation is needed.
+    - The operation supports multiple elements per thread, assuming the non-scatter dimension is large enough (i.e., > elements_per_thread).
+    """
+
+    register_src: fx.Node
+    register_idx: fx.Node
+    dim: IndexExpr
+    memory: fx.Node
+    mapping: IndexMapping
+    elements_per_thread: Optional[int] = 1
+    bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        if self.mapping is not None:
+            return list(self.mapping.input_shape)
+        return list(self.memory_type.symbolic_shape)
+
+    def infer_type(self):
+        address_space = self.memory_type.address_space
+        dtype = self.memory_type.dtype
+        self.type = Memory[(*self.indexing_dims, address_space, dtype)]
+
+    @property
+    def memory_type(self) -> "Memory":
+        return get_custom(self.memory).type
+
+    @property
+    def register_type(self) -> "Register":
+        return get_custom(self.register_src).type
+
+    @property
+    def register_index(self) -> dict[IndexSymbol, IndexSequence]:
+        custom = get_custom(self.register_src)
+        return custom.index
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True

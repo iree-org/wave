@@ -32,21 +32,52 @@ def test_speculative_decoding():
     kernel = wave_compile(options, kernel)
     print(kernel.asm)
 
+    # CHECK: builtin.module {
+    # CHECK-LABEL: func.func @speculative_sampling(
+
+    # Check the function args
+    # CHECK-SAME: %arg0: !stream.binding
+    # CHECK-SAME: %arg3: !stream.binding
+    # CHECK-SAME: %arg13: i32
+
+    # CHECK: arith.constant dense<63> : vector<1xi32>
+
+    # --- Typical operations (representative):
+    # CHECK: gpu.block_id  y upper_bound 10
+    # CHECK: gpu.thread_id  x upper_bound 64
+
+    # CHECK: vector.load
+    # CHECK: vector.store
     # CHECK: scf.while
+    # CHECK: vector.extractelement
     # CHECK: scf.condition
     # CHECK: scf.while
-    # CHECK: scf.condition
+    # CHECK: ^bb0
     # CHECK: arith.divf
     # CHECK: arith.cmpf
+    # CHECK: arith.ori
     # CHECK: arith.xori
-    # CHECK: arith.select
+    # CHECK: vector.extract
     # CHECK: scf.if
-    # CHECK: vector.store
     # CHECK: scf.if
     # CHECK: vector.load
     # CHECK: vector.store
-    # CHECK: arith.select
-    # CHECK: arith.select
     # CHECK: scf.yield
     # CHECK: scf.yield
+
+    # --- Reduction and arithmetic patterns:
+    # CHECK: gpu.shuffle  up
+    # CHECK: arith.addf
+    # CHECK: arith.select
+    # CHECK: arith.minsi
+    # CHECK: gpu.shuffle  xor
+    # CHECK: vector.store
+    # CHECK: return
+
+    # CHECK-LABEL: func.func @isolated_benchmark$async(
+    # CHECK: hal.tensor.import wait(
+    # CHECK: flow.dispatch @speculative_sampling::@speculative_sampling(
+    # CHECK-SAME: %0, %1, %2, %3
+    # CHECK: hal.tensor.barrier join
+    # CHECK: hal.tensor.export
     # CHECK: return

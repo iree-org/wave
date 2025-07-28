@@ -25,6 +25,7 @@ wheelhouse
 *.egg-info
 *.whl
 *.venv
+*.so
 
 # Local-only config options
 version_local.json

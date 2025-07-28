@@ -27,7 +27,7 @@ env:
   LLVM_CACHE_NUMBER: 1  # Increase to reset cache
 
   # Git ref from https://github.com/ftynse/water to checkout
-  WATER_REF: 1a84aa14ee74d5015ceb41bed438de4389f59b83
+  WATER_REF: a04ed201cbad8927d86749f386e03a1cc847c867
 
 jobs:
   # Water uses its own LLVM version independent of the one used by IREE and

@@ -124,11 +124,11 @@ def get_evoformer_kernel(
             partial_max: tkl.Register[B, BN, H, M, tkl.f32],
             partial_sum: tkl.Register[B, BN, H, M, tkl.f32],
             acc: tkl.Register[B, BN, H, N, M, tkl.f32],
-        ) -> (
+        ) -> tuple[
             tkl.Register[B, BN, H, M, tkl.f32],
             tkl.Register[B, BN, H, M, tkl.f32],
             tkl.Register[B, BN, H, N, M, tkl.f32],
-        ):
+        ]:
             imm_reg = tkl.Register[B, BN, H, K2, M, tkl.f32](0.0)
             q_reg = tkw.read(
                 q, mapping=q_mapping, elements_per_thread=LOAD_ELEMS_PER_THREAD

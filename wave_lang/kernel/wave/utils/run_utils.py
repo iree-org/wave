@@ -64,6 +64,9 @@ def invoke_with_wave_runtime(
     ) + tuple(dynamic_symbols)
     # Update the grid size as this may vary depending
     # on the dynamic symbols.
+    import math
+
+    options.kernel_launch_info.grid.__globals__.setdefault("math", math)
     grid = compute_grid(dynamic_dims, options.kernel_launch_info.grid)
 
     stream = torch.cuda.current_stream().cuda_stream
@@ -122,6 +125,9 @@ dump_generated_mlir_file = os.environ.get("WAVE_DUMP_MLIR_FILE", None)
 
 # Whether to use scheduling group barriers (needs LLVM fix).
 enable_scheduling_barriers = os.environ.get("WAVE_USE_SCHED_BARRIERS", None)
+
+# Whether to verify each individual kernels when there are multiple ones.
+check_individual_kernels = os.environ.get("WAVE_CHECK_INDIV_KERNS", None)
 
 
 def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:

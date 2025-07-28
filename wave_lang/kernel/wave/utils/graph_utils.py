@@ -200,7 +200,7 @@ def get_users(
     return users, reduction
 
 
-def propagate_placeholders(n):
+def propagate_placeholders(n: fx.Node) -> fx.Node:
     """
     Returns the captured node of a placeholder if it exists.
     """
@@ -374,7 +374,7 @@ def get_outer_node(outer_node: fx.Node) -> fx.Node:
     return outer_node
 
 
-def is_barrier_between_same_graph(src: fx.Node, dst: fx.Node) -> bool:
+def is_barrier_between_same_graph(src: fx.Node, dst: fx.Node) -> Optional[fx.Node]:
     """
     Checks if there is a barrier between the source and destination nodes,
     assuming that they are in the same graph.
@@ -382,12 +382,13 @@ def is_barrier_between_same_graph(src: fx.Node, dst: fx.Node) -> bool:
     next_node = src.next
     while next_node != dst and next_node.next.op != "root":
         if isinstance(get_custom(next_node), SharedMemoryBarrier):
-            return True
+            return next_node
         next_node = next_node.next
-    return False
+
+    return None
 
 
-def is_barrier_between(src: fx.Node, dst: fx.Node) -> bool:
+def is_barrier_between(src: fx.Node, dst: fx.Node) -> Optional[fx.Node]:
     """
     Checks if there is a barrier between the source and destination nodes.
     """
@@ -403,8 +404,8 @@ def is_barrier_between(src: fx.Node, dst: fx.Node) -> bool:
         # Case 2:
         if dst < src:
             # Check between src and end of loop.
-            if is_barrier_between_same_graph(src, list(src.graph.nodes)[-1]):
-                return True
+            if node := is_barrier_between_same_graph(src, list(src.graph.nodes)[-1]):
+                return node
             # If cannot find between src to end of loop,
             # then, we check beginning of loop to dst.
             return is_barrier_between_same_graph(list(dst.graph.nodes)[0], dst)

@@ -56,6 +56,11 @@ from .constraints import (
     WorkgroupConstraint,
     get_grid_shape,
 )
+from .debug_log_hoist import (
+    debug_log_hoist,
+    debug_log_write_replace,
+    DebugArgInfo,
+)
 from .decompose_dot_mma import decompose_dot_mma
 from .decompose_reduce_ops import decompose_reduce_ops
 from .decompose_scan_ops import decompose_scan_ops
@@ -504,6 +509,7 @@ class LaunchableWave(Launchable):
         self,
         trace: CapturedTrace,
         options: WaveCompileOptions,
+        debug_arg_info: list[DebugArgInfo],
         print_ir_before: Sequence[str] = [],
         print_ir_after: Sequence[str] = [],
     ):
@@ -516,6 +522,7 @@ class LaunchableWave(Launchable):
             self.hardware_constraints[0].subs_vector_shapes(idxc.subs)
 
         return [
+            partial(debug_log_hoist, trace),
             partial(initialize_iter_args, trace),
             partial(self.create_induction_vars, trace),
             partial(self.initialize_wave_constraints, trace),
@@ -526,6 +533,7 @@ class LaunchableWave(Launchable):
             substitute_vector_shapes,
             partial(add_get_results, trace),
             partial(infer_types, trace),
+            partial(debug_log_write_replace, trace, debug_arg_info),
             partial(
                 promote_placeholders,
                 trace,
@@ -557,6 +565,7 @@ class LaunchableWave(Launchable):
         kernel_codegen.KernelSignature,
         str,
         WaveCompileOptions,
+        Sequence[DebugArgInfo],
     ]:
         # Issue a warning if IREE ver is too low.
         # Warning will only be issued if we are compiling the kernel and won't
@@ -577,6 +586,8 @@ class LaunchableWave(Launchable):
         if options.print_trace_begin:
             print(f"\n***Tracing kernel {self._name}***")
 
+        debug_arg_info = []
+
         trace = self._trace(location_capture_config=options.location_capture_config)
         if (
             "all" in print_ir_after
@@ -589,7 +600,7 @@ class LaunchableWave(Launchable):
 
         # Initial passes, pre-optimization.
         graph_passes = self.build_initial_pass_pipeline(
-            trace, options, print_ir_before, print_ir_after
+            trace, options, debug_arg_info, print_ir_before, print_ir_after
         )
 
         graph_passes += [
@@ -708,6 +719,7 @@ class LaunchableWave(Launchable):
         return (
             *self.compile_to_mlir(trace, context, module_op, options=options),
             options,
+            debug_arg_info,
         )
 
     def aot_execute(self, args, kwargs):

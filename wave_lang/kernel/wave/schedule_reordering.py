@@ -300,7 +300,7 @@ def slice_mma(mma_nodes, lhs_nodes, rhs_nodes, num_slice):
 
     # Checking that MMAs is valid.
     reduction_expand_size = len(reduction_dim_ids)
-    assert reduction_expand_size > num_slice and reduction_expand_size % num_slice == 0
+    assert reduction_expand_size >= num_slice and reduction_expand_size % num_slice == 0
     assert all(x in reduction_dim_ids for x in range(reduction_expand_size))
 
     size_of_slice = reduction_expand_size // num_slice
@@ -506,7 +506,7 @@ def transform_two_PP_clusters(
         insert_op_after(SetWavePrio(0).add_to_graph(tmp_graph), sliced_mma_nodes[0])
     )
     clusters.append(
-        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), clusters[-1].op)
+        insert_op_after(SharedMemoryBarrier().add_to_graph(tmp_graph), clusters[-1].op)
     )
     clusters.append(
         insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)

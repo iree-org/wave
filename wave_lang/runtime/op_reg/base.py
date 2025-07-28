@@ -77,10 +77,10 @@ def default_dispatch_keys() -> list[str]:
     return keys
 
 
-# All such custom kernels are registered in the 'turbine' library/namespace.
+# All such custom kernels are registered in the 'wave' library/namespace.
 # We also allow extending existing libraries outside of this, but that is
 # the non default case.
-TURBINE_LIBRARY = def_library("turbine")
+WAVE_LIBRARY = def_library("wave_lang")
 
 # Set of all programmatically registered op names in libraries we manage.
 # This is used to detect name collisions eagerly and providing name uniqueing.
@@ -92,13 +92,13 @@ UNIQUE_OP_NAME_COUNTER: dict[tuple[str, str], int] = {}
 
 
 class CustomOp(ABC):
-    """Users subclass this in order to register a turbine custom op."""
+    """Users subclass this in order to register a wave custom op."""
 
     @staticmethod
     def register(
         op_class: Optional[Type["CustomOp"]] = None,
         *,
-        library: torch.library.Library = TURBINE_LIBRARY,
+        library: torch.library.Library = WAVE_LIBRARY,
         dispatch_key: Union[str, Sequence[str], None] = None,
         register_meta: bool = True,
         register_impl: bool = True,
@@ -1007,7 +1007,7 @@ def _define_signature_in_library(lib: torch.library.Library, signature: str) -> 
         schema = f"{name}{call_args}"
         if key in DEFINED_OP_NAMES:
             raise RuntimeError(
-                f"Duplicate turbine custom op registration: library={lib.ns}, "
+                f"Duplicate wave custom op registration: library={lib.ns}, "
                 f"name={name}"
             )
         lib.define(schema)

@@ -27,6 +27,9 @@ from wave_lang.support.ir_imports import (
     memref_d,
     vector_d,
 )
+from wave_lang.aot.support.ir_utils import (
+    _is_float_type,
+)
 
 from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, IndexSymbol
 from ...compiler.base import ValidationError
@@ -46,6 +49,7 @@ from ...ops.wave_ops import (
     get_custom,
     read,
     write,
+    scatter_add,
 )
 from ..utils.general_utils import get_fastest_index, infer_dim
 from ..utils.mapping_utils import transform_index_on_mapping
@@ -443,24 +447,23 @@ def _cast_buffer_and_encode_stride(
     )  # max bytes that are in range to be addressed from a buffer
     valid_bytes_constant = get_constant_attr(valid_bytes, uint32)
     valid_bytes_constant = arith_d.constant(uint32, valid_bytes_constant)
-    stride_larger_than_8192 = False
+    stride_rank = len(strides)
+    stride = None
 
-    if emitter.options.use_stride_cache_swizzle:
-        assert len(strides) >= 1
-        stride = strides[0]
-        stride_int = stride.owner.attributes["value"].value
-        if stride_int > 8192:
-            stride_larger_than_8192 = True
-            stride = None
-        else:
-            stride = arith_d.index_cast(uint14, stride)
+    if stride_rank >= 2 and emitter.options.use_stride_cache_swizzle:
+        # fastest_dim_bound == second to last stride.
+        stride_candidate = strides[-2]
+        stride_int = stride_candidate.owner.attributes["value"].value
+        # Swizzle is only useful upto swizzle stride <= 8192.
+        if stride_int <= 8192:
+            stride = arith_d.index_cast(uint14, stride_candidate)
 
-    if not stride_larger_than_8192 and emitter.options.use_stride_cache_swizzle:
+    if stride and emitter.options.use_stride_cache_swizzle:
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
             cache_swizzle_stride=stride,
             bounds_check=True,
-            reset_offset=False,
+            reset_offset=True,
             valid_bytes=valid_bytes_constant,
         )
 
@@ -468,7 +471,7 @@ def _cast_buffer_and_encode_stride(
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
             bounds_check=True,
-            reset_offset=False,
+            reset_offset=True,
             valid_bytes=valid_bytes_constant,
         )
 
@@ -513,11 +516,9 @@ def _create_vec_read_write(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
     )
     has_int_strides = all(isinstance(s, int) for s in strides)
+    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
 
-    if has_int_strides:
-        strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
-
-    buffer_ops_enabled = buffer_ops_enabled and use_buffer_ops and has_int_strides
+    buffer_ops_enabled = buffer_ops_enabled and use_buffer_ops
     no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)
@@ -527,6 +528,7 @@ def _create_vec_read_write(
         vector_type = value.type
 
     element_type = vector_type.element_type
+    # Case 1: Generate load/stores with no mask and no offset
     if mask is None and offsets_vec is None:
         offset_th = None
         if buffer_ops_enabled:
@@ -553,6 +555,7 @@ def _create_vec_read_write(
         )
         mask = _constant_mask(mask_vec_type)
 
+    # Case 2: Generate load/stores with no offset
     if offsets_vec is None:
         # make offsets 0, 1, 2 ...
         offsets_vec_type = VectorType.get(vector_type.shape, IndexType.get())
@@ -640,6 +643,11 @@ def _create_vec_read_write(
                 vector_d.maskedstore(mem, indices, mask, value)
                 return
 
+    # Case 3: Generate efficient "unrolled" gather and scatter using vector.load/store if strides are constants.
+    #
+    # Per vector.gather/vector.scatter ABI, case 3 and 4 takes N-d indices as base offset,
+    # and offset_vec which is vector of linearized indices as additional offsets.
+    # TODO: Drop case 3 and case 4, by adding support for non-trivial mapping and readOps on partition_strided_operator.
     if has_int_strides:
         vec1 = VectorType.get([1], element_type)
         vec1_mask = VectorType.get([1], IntegerType.get_signless(1))
@@ -708,6 +716,7 @@ def _create_vec_read_write(
 
             return
 
+    # Case 4: Default gather scatter case (slowest path).
     if is_read:
         passthru = vector_d.splat(vector_type, zero)
         return vector_d.gather(
@@ -973,3 +982,97 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         dst_indices=dst_index,
         transfer_type=store_type,
     )
+
+
+def _handle_scatter_op(
+    emitter: WaveEmitter,
+    node: fx.Node,
+    rmw_kind: arith_d.AtomicRMWKind,
+):
+    try:
+        (
+            register_src,
+            register_idx,
+            dim,
+            memory,
+            mapping,
+            elements_per_thread,
+            bounds,
+        ) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    output_shape = _get_symbolic_shape(memory)
+    elements_per_thread = int(cast_py_literal(emitter, elements_per_thread))
+    cast_vector(emitter, register_idx, element_type=IndexType.get())
+
+    index_mapping = mapping.map_output_indices(output_shape)
+
+    idxc = IndexingContext.current()
+    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
+    iters = mapping.iters
+    index = node.index
+    subs = [
+        (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
+    ] + list(idxc.subs.items())
+
+    result_index = {key: m.subs(subs) for key, m in zip(output_shape, index_mapping)}
+
+    mask = _build_mask(emitter, index, elements_per_thread, bounds)
+    if mask is None:
+        mask_vec_type = VectorType.get(
+            [elements_per_thread], IntegerType.get_signless(1)
+        )
+        mask = _constant_mask(mask_vec_type)
+
+    start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+        emitter, result_index
+    )
+
+    register_idx = cast_py_value(emitter, register_idx).ir_value
+    register_src = cast_py_value(emitter, register_src).ir_value
+    memory = cast_py_value(emitter, memory).ir_value
+
+    results = []
+    for i in range(elements_per_thread):
+        index_elem = vector_d.extract(
+            register_idx, static_position=[i], dynamic_position=[]
+        )
+        index_elem = arith_d.index_cast(IndexType.get(), index_elem)
+        reg_elem = vector_d.extract(
+            register_src, static_position=[i], dynamic_position=[]
+        )
+        indices = list(start_indices)
+        if dim >= len(indices):
+            raise ValueError(
+                f"Invalid scatter dim {dim} for rank-{len(indices)} memory"
+            )
+
+        indices[dim] = index_elem
+
+        # In case 4 elements per thread are used, makes sure values are stored at the right non-scatter dimension
+        if elements_per_thread > 1:
+            other_dims = [d for d in range(len(indices)) if d != dim]
+            if other_dims:
+                # Heuristic: offset the innermost (fastest varying) dimension
+                # TODO: Ideally emit a vectorized atomic op instead of 4 scalar atomics that store to consecutive locations
+                fast_dim = other_dims[-1]
+                indices[fast_dim] = arith_d.addi(
+                    indices[fast_dim], arith_d.constant(IndexType.get(), i)
+                )
+        result = memref_d.atomic_rmw(rmw_kind, reg_elem, memory, indices)
+        results.append(result)
+
+    result_type = VectorType.get([elements_per_thread], register_src.type.element_type)
+    result_vector = vector_d.from_elements(result_type, results)
+
+
+@handle_op(scatter_add)
+def handle_scatter_add(emitter: WaveEmitter, node: fx.Node):
+    register_src = cast_py_value(emitter, node.args[0])
+    src_data_type = get_type_or_element_type(register_src.ir_value.type)
+    if _is_float_type(src_data_type):
+        rmw_kind = arith_d.AtomicRMWKind.addf
+    else:
+        rmw_kind = arith_d.AtomicRMWKind.addi
+    _handle_scatter_op(emitter, node, rmw_kind)
