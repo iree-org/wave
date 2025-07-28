@@ -158,5 +158,6 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     for alloc, offset in allocs_to_offsets.items():
         get_custom(alloc).update_arg("parent", parent)
         get_custom(alloc).update_arg("offset", offset)
+        get_custom(alloc).update_arg("tail_padding", 0)
 
     return
