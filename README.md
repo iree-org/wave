@@ -85,7 +85,6 @@ Before installing Wave, ensure you have the following prerequisites:
 
    To get started, try the [examples/jupyter/wave_gemm_example.ipynb](examples/jupyter/wave_gemm_example.ipynb) notebook.
 
-
 ### For Developers
 
 1. **Clone the Repository**
@@ -121,7 +120,6 @@ Before installing Wave, ensure you have the following prerequisites:
    > ```
    >
    > Currently, you can only run lit tests in this mode.
-
 
 3. **Run Tests**
 
