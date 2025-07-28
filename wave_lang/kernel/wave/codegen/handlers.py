@@ -197,7 +197,7 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Malformed arguments") from e
 
     assert (
-        padding == 0
+        tail_padding == 0
     ), "Tail padding must be handled by the minimize_shared_allocs pass"
 
     memref_shape = cast_py_literal(emitter, distributed_shape)
