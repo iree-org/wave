@@ -46,9 +46,9 @@ def compute_live_intervals(allocs: list[fx.Node]):
 
 def get_shared_memory_allocation_size(alloc: fx.Node, dtype: DataType) -> int:
     custom = get_custom(alloc)
-    return math.prod([subs_idxc(x) for x in custom.distributed_shape]) * (
-        dtype.bitwidth() // 8
-    )
+    return (
+        math.prod(subs_idxc(x) for x in custom.distributed_shape) + custom.tail_padding
+    ) * (dtype.bitwidth() // 8)
 
 
 def get_use(
