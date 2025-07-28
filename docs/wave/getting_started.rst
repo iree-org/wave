@@ -37,7 +37,6 @@ For Users
 
       pip install wave-lang
 
-
 For Developers
 ~~~~~~~~~
 
