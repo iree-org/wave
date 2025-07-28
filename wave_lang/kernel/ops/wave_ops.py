@@ -289,7 +289,17 @@ def scatter_add(
     register_idx: "Register",
     dim: IndexExpr,
     memory: "Memory",
-    mapping: IndexMapping,
+    mapping: Optional[IndexMapping] = None,
+    elements_per_thread: Optional[int] = 1,
+) -> "Register": ...
+
+
+def scatter_max(
+    register_src: "Register",
+    register_idx: "Register",
+    dim: IndexExpr,
+    memory: "Memory",
+    mapping: Optional[IndexMapping] = None,
     elements_per_thread: Optional[int] = 1,
 ) -> "Register": ...
 
@@ -2603,7 +2613,7 @@ class ScatterAdd(CustomOp):
     register_idx: fx.Node
     dim: IndexExpr
     memory: fx.Node
-    mapping: IndexMapping
+    mapping: Optional[IndexMapping] = None
     elements_per_thread: Optional[int] = 1
     bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
 
@@ -2634,3 +2644,77 @@ class ScatterAdd(CustomOp):
     @property
     def has_side_effects(self) -> bool:
         return True
+
+    def has_identity_mapping(self) -> bool:
+        """Check if mapping between input memory and output register is identity."""
+        mapping = self.mapping
+        if mapping is None:
+            return True
+
+        mem_shape = get_custom(self.memory).type.symbolic_shape
+        if mapping.is_identity() and mapping.input_shape == mem_shape:
+            return True
+
+        return False
+
+
+@define_op("scatter_max")
+@dataclass
+class ScatterMax(CustomOp):
+    """
+    Scatter_max operation performs element-wise maximum reduction from a source register into shared memory (LDS)
+    at a location determined by the index register along a specified dimension.
+
+    Limitations:
+    - Only intra-workgroup scattering is supported (i.e., within shared memory / LDS), assuming a single wave.
+    - Multi-wave execution is not guaranteed to be safe: synchronization issues may occur when threads write to the same index. Further investigation is needed.
+    - The operation supports multiple elements per thread, assuming the non-scatter dimension is large enough (i.e., > elements_per_thread).
+    """
+
+    register_src: fx.Node
+    register_idx: fx.Node
+    dim: IndexExpr
+    memory: fx.Node
+    mapping: Optional[IndexMapping] = None
+    elements_per_thread: Optional[int] = 1
+    bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        if self.mapping is not None:
+            return list(self.mapping.input_shape)
+        return list(self.memory_type.symbolic_shape)
+
+    def infer_type(self):
+        address_space = self.memory_type.address_space
+        dtype = self.memory_type.dtype
+        self.type = Memory[(*self.indexing_dims, address_space, dtype)]
+
+    @property
+    def memory_type(self) -> "Memory":
+        return get_custom(self.memory).type
+
+    @property
+    def register_type(self) -> "Register":
+        return get_custom(self.register_src).type
+
+    @property
+    def register_index(self) -> dict[IndexSymbol, IndexSequence]:
+        custom = get_custom(self.register_src)
+        return custom.index
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+    def has_identity_mapping(self) -> bool:
+        """Check if mapping between input memory and output register is identity."""
+        mapping = self.mapping
+        if mapping is None:
+            return True
+
+        mem_shape = get_custom(self.memory).type.symbolic_shape
+        if mapping.is_identity() and mapping.input_shape == mem_shape:
+            return True
+
+        return False
