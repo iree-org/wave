@@ -234,6 +234,11 @@ class Interpreter:
                     else:
                         fill_value = input
                     value = torch.full(shape, fill_value, dtype=self.get_dtype(dtype))
+                case vector_d.BroadcastOp:
+                    mtype = op.vector.type
+                    shape = mtype.shape
+                    input = self.symbol_table[op.source]
+                    value = torch.broadcast_to(input, shape)
                 case stream_d.DispatchWorkgroupIDOp:
                     index = int(op.attributes["dimension"])
                     value = self.workgroup_ids[index]

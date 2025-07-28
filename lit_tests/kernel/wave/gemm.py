@@ -1438,7 +1438,7 @@ def test_gemm_two_cluter_pingpong():
     # CHECK:         %[[FLAT_WAVE_ID_I32:.+]] = arith.index_cast %[[FLAT_WAVE_ID]] : index to i32
     # CHECK:         %[[WARP_HI:.+]] = arith.cmpi sge, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
     # CHECK:         %[[WARP_LO:.+]] = arith.cmpi slt, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
-    # CHECK:         %[[WARP_HI_SPLAT:.+]] = vector.splat %[[WARP_HI]]
+    # CHECK:         %[[WARP_HI_SPLAT:.+]] = vector.broadcast %[[WARP_HI]]
     # CHECK:         %[[IS_WARP_HI:.+]] = vector.extractelement %[[WARP_HI_SPLAT]]
 
     # cond_barrier on warp hi to brings assymetry between 2 wave in same SIMD and Block.
@@ -1496,7 +1496,7 @@ def test_gemm_two_cluter_pingpong():
     # Prologue
 
     # cond_barrier on warp low to even out assymetry between 2 wave in same SIMD and Block.
-    # CHECK:          %[[WARP_LO_SPLAT:.+]] = vector.splat %[[WARP_LO]] : vector<i1>
+    # CHECK:          %[[WARP_LO_SPLAT:.+]] = vector.broadcast %[[WARP_LO]] : i1 to vector<i1>
     # CHECK:          %[[IS_WARP_LO:.+]] = vector.extractelement %[[WARP_LO_SPLAT]]
     # CHECK:          scf.if %[[IS_WARP_LO]] {
     # CHECK-NEXT:       rocdl.s.barrier
@@ -1667,7 +1667,7 @@ def test_gemm_and_reduce():
     #         CHECK: scf.yield %[[MAX]], %[[MMA]] : vector<1xf16>, vector<4xf32>
     # CHECK: %[[LOOP_VAL:.+]] = vector.extract %[[LOOP]]#0[0] : f16 from vector<1xf16>
     # CHECK: %[[MAX_EXT:.+]] = arith.extf %[[LOOP_VAL]] : f16 to f32
-    # CHECK: %[[BROADCAST:.+]] = vector.splat %[[MAX_EXT]] : vector<4xf32>
+    # CHECK: %[[BROADCAST:.+]] = vector.broadcast %[[MAX_EXT]] : f32 to vector<4xf32>
     # CHECK: arith.divf %[[LOOP]]#1, %[[BROADCAST]] : vector<4xf32>
 
 

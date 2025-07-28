@@ -148,7 +148,7 @@ def handle_register(emitter: WaveEmitter, node: fx.Node):
         if value.type != vector_type.element_type:
             conversion_op = get_conversion_op(value.type, vector_type.element_type)
             value = conversion_op(vector_type.element_type, value)
-        register = vector_d.splat(vector_type, value)
+        register = vector_d.broadcast(vector_type, value)
     else:
         register = arith_d.ConstantOp(
             vector_type,
@@ -270,7 +270,7 @@ def handle_self_index(emitter: WaveEmitter, node: fx.Node):
     element_type = IrType.parse(dtype.ir_type_asm())
     if not isinstance(value.type, VectorType):
         vector_type = VectorType.get([size], value.type)
-        value = vector_d.splat(vector_type, value)
+        value = vector_d.broadcast(vector_type, value)
 
     if value.type.element_type != element_type:
         vector_type = VectorType.get([size], element_type)
@@ -1483,7 +1483,7 @@ def handle_extract(emitter: WaveEmitter, node: fx.Node):
     element = vector_d.extract(
         extract_vector, static_position=offset, dynamic_position=[]
     )
-    element = vector_d.splat(result_type, element)
+    element = vector_d.broadcast(result_type, element)
 
     emitter.bind_node_proxy(node, IRProxyValue(element))
 
@@ -1544,7 +1544,7 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
     if vector_type.rank == 0:
         result_type = VectorType.get([target_thread_size], vector_type.element_type)
         element = vector_d.extract(vector_src, static_position=[], dynamic_position=[])
-        splat = vector_d.splat(result_type, element)
+        splat = vector_d.broadcast(result_type, element)
         emitter.bind_node_proxy(node, IRProxyValue(splat))
         return
 
@@ -1570,7 +1570,7 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
 
     result_type = VectorType.get([target_thread_size], vector_type.element_type)
     element = vector_d.extract(vector_src, static_position=[0], dynamic_position=[])
-    splat = vector_d.splat(result_type, element)
+    splat = vector_d.broadcast(result_type, element)
     emitter.bind_node_proxy(node, IRProxyValue(splat))
 
 
