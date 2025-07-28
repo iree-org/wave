@@ -12,7 +12,7 @@ on:
     # Runs at 05:00 AM UTC, which is 9:00 PM PST (UTC-8) / 10:00 PM PDT (UTC-7)
     # This lines up with https://github.com/iree-org/iree/blob/main/.github/workflows/schedule_candidate_release.yml
     # Downstream projects using nightly releases should expect IREE and
-    # iree-turbine packages to all be available around the same time. This
+    # wave packages to all be available around the same time. This
     # build is much faster than the IREE build though.
     - cron: '0 5 * * *'
 
@@ -57,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r ./build_tools/requirements-packaging.txt
 
-      - name: Build iree-turbine release candidate
+      - name: Build wave release candidate
         run: |
           ./build_tools/compute_local_version.py -rc --write-json
           ./build_tools/build_release.py --no-download
