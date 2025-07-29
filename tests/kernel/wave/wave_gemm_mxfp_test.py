@@ -439,7 +439,7 @@ def testScaledGemmMXFP8(
     ],
 )
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.PREFETCH])
-def testScaledGemmPrefetechMXFP4(
+def testScaledGemmPrefetchMXFP4(
     shape: tuple[int],
     mfma_variant: ScaledMMAType,
     enable_scheduling: SchedulingType,
@@ -504,6 +504,12 @@ def testScaledGemmPrefetechMXFP4(
         subs=hyperparams,
         canonicalize=True,
         schedule=enable_scheduling,
+        use_global_to_shared=True,
+        multi_buffer_count=2,
+        use_stride_cache_swizzle=True,
+        # print_mlir=True,
+        # print_mlir_file="testMXFP4.mlir",
+        iree_launch_async=False,
     )
     options = set_default_run_config(options)
     prefetch_gemm = wave_compile(options, prefetch_gemm)
