@@ -7,7 +7,7 @@ import functools
 import glob
 import os
 from collections import deque
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional
 import warnings
 
 import sympy
@@ -181,7 +181,7 @@ def find_index_bounds(
     index: dict[IndexExpr, IndexExpr],
     vector_shapes: Optional[dict[IndexSymbol, int]],
     symbolic_type: Optional[list[IndexExpr]],
-) -> Tuple[Optional[dict[IndexExpr, IndexExpr]], list[IndexSymbol]]:
+) -> Optional[dict[IndexExpr, IndexExpr]]:
     """
     Find bounds for index variables where partial access/masking is needed,
     for example non-aligned shapes.
@@ -199,13 +199,11 @@ def find_index_bounds(
         dim = constraint.dim
         if dim not in index:
             continue
-
         bound = constraint.get_index_bound(vector_shapes.get(dim, None))
         if bound is not None:
             bounds[dim] = get_min_expr(bounds.get(dim, None), bound)
 
     # Find bounds for index dimensions present in vector shapes.
-    unconstrained_dim = []
     for dim, vector_shape in vector_shapes.items():
         if dim not in index:
             continue
@@ -220,10 +218,9 @@ def find_index_bounds(
         # (e.g K1=9 in paged decode attention), we use vector shape as the bounds.
         if subs_idxc(dim) % subs_idxc(vector_shape) != 0:
             bounds[dim] = dim
-            unconstrained_dim.append(dim)
 
     if not bounds:
-        return None, None
+        return None
 
     # Build map for all scaled dims to it's scaled expression.
     scaled_dim_map = {
@@ -235,7 +232,7 @@ def find_index_bounds(
         for dim, bound in bounds.items()
     }
 
-    return bounds, unconstrained_dim
+    return bounds
 
 
 def get_induction_variable(

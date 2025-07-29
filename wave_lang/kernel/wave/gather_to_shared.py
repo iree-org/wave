@@ -396,7 +396,7 @@ def gather_to_shared(
             bounds = read.bounds
         else:
             vector_shapes = read.vector_shapes or hardware_constraint.vector_shapes
-            bounds, unconstrained_dim = find_index_bounds(
+            bounds = find_index_bounds(
                 constraints, read.index, vector_shapes, symbolic_shape
             )
 

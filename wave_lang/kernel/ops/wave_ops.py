@@ -1226,8 +1226,14 @@ class Allocate(CustomOp):
         ) // 8
 
     @property
-    def get_final_dim_unpadded_size(self):
-        return self.distributed_shape[-1] - self.padding
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        unpadded_dim = {}
+        unpadded_dim[self.type.symbolic_shape[-1]] = (
+            self.distributed_shape[-1] - self.padding
+        )
+        for idx, d in enumerate(self.type.symbolic_shape[:-1]):
+            unpadded_dim[d] = self.distributed_shape[idx]
+        return unpadded_dim
 
 
 @define_op("self_index")
