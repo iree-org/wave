@@ -2207,7 +2207,7 @@ def test_scatter_add(shape, elems_per_thread, request):
 
 @require_e2e
 @param_bool("dynamic_dims", "dyn")
-def test_debug_log_write(dynamic_dims: bool):
+def test_debug_log(dynamic_dims: bool):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -2238,10 +2238,10 @@ def test_debug_log_write(dynamic_dims: bool):
     ):
         lhs = tkw.read(a)
         rhs = tkw.read(b)
-        tkw.debug_log_write(lhs)
-        tkw.debug_log_write(rhs, log_name="rhslog")
+        tkw.debug_log(lhs)
+        tkw.debug_log(rhs, label="rhslog")
         res = lhs + rhs
-        tkw.debug_log_write(res)
+        tkw.debug_log(res)
         tkw.write(res, c)
 
     a = device_randn(shape, dtype=torch.float16)

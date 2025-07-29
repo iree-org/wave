@@ -128,9 +128,9 @@ def write(
 ): ...
 
 
-def debug_log_write(
+def debug_log(
     register_: "Register",
-    log_name: Optional[str],
+    label: Optional[str],
 ): ...
 
 
@@ -2017,9 +2017,9 @@ class Write(CustomOp):
         )
 
 
-@define_op("debug_log_write")
+@define_op("debug_log")
 @dataclass
-class DebugLogWrite(CustomOp):
+class DebugLog(CustomOp):
     """
     An op for debugging.
     Represents a write to an implicit global memory location.
@@ -2033,7 +2033,7 @@ class DebugLogWrite(CustomOp):
     """
 
     register_: fx.Proxy
-    log_name: Optional[str] = None
+    label: Optional[str] = None
 
     @property
     def memory(self) -> Optional[fx.Proxy]:
