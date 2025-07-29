@@ -239,6 +239,13 @@ class AsyncDepNode:
 _MAX_ASYNC_READ_WRITE_COUNT = 8
 
 
+def calculate_counter_value(elements_per_thread: int, dtype: "DataType") -> int:
+    """
+    Counter is incremented by 1 for each DWORD read/write.
+    """
+    return ceildiv(elements_per_thread * dtype.bitwidth(), 32)
+
+
 def find_async_read_write_counts(
     barrier: fx.Node, async_dep: fx.Node
 ) -> tuple[int, int]:
@@ -259,21 +266,21 @@ def find_async_read_write_counts(
             isinstance(custom, Read)
             and custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
         ):
-            read_count += ceildiv(
-                custom.elements_per_thread * custom.type.dtype.bitwidth(), 32
+            read_count += calculate_counter_value(
+                custom.elements_per_thread, custom.type.dtype
             )
 
         elif (
             isinstance(custom, Write)
             and custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
         ):
-            write_count += ceildiv(
-                custom.elements_per_thread * custom.type.dtype.bitwidth(), 32
+            write_count += calculate_counter_value(
+                custom.elements_per_thread, custom.type.dtype
             )
 
         elif isinstance(custom, GatherToLDS) and node.node != node.dep_node:
-            read_count += ceildiv(
-                custom.elements_per_thread * custom.dtype.bitwidth(), 32
+            read_count += calculate_counter_value(
+                custom.elements_per_thread, custom.dtype
             )
 
         if node.node == node.dep_node:
@@ -320,11 +327,11 @@ def find_async_read_write_counts(
                 ]
 
             elif isinstance(custom, Placeholder):
-                if parent_op := getattr(node.node, "parent_op", None):
+                if parent_op := getattr(node.node.graph, "parent_op", None):
                     lifted = node.node.meta["lifted"]
                     return [AsyncDepNode(parent_op, lifted, read_count, write_count)]
                 else:
-                    return []
+                    raise ValueError(f"Reached function argument: {custom}")
             else:
                 return []
 
