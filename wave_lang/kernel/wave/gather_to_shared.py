@@ -138,28 +138,42 @@ def get_gather_to_shared_config(
     logger.info(f"elements_per_thread={elements_per_thread}")
 
     vector_width = elements_per_thread * bitwidth
+    logger.info(f"vector_width={vector_width}")
+    total_vector_width = total_number_of_elements * bitwidth
+    logger.info(f"total_vector_width={total_vector_width}")
     if fastest_dim_bound is not None:
         fastest_dim_bound = fastest_dim_bound * bitwidth
 
-    # `vector_width` is the the vector size each thread loads.
+    # `total_vector_width` is the total vector width all threads load.
     # `fastest_dim_bound` is the bound against which we are checking our loads,
     # it is larger than `vector_width` but it must be aligned with chosen load width.
-    load_width = get_load_width(supported_load_widths, vector_width, fastest_dim_bound)
+    load_width = get_load_width(
+        supported_load_widths,
+        total_vector_width,
+        total_number_of_threads,
+        fastest_dim_bound,
+    )
     if load_width is None:
         logger.info(
-            f"No supported load width found for width={vector_width}, "
+            f"No supported load width found for width={total_vector_width}, "
             f"fastest_dim_bound={subs_idxc(fastest_dim_bound)}"
         )
         return None
 
     logger.info(f"load_width={load_width}")
 
-    # Get supported load width for the given bitwidth and if they are not
-    # equal then we need to adjust the number of loads and elements per thread.
-    ratio = vector_width // load_width
-    logger.info(f"ratio={ratio}")
-    expected_number_of_loads *= ratio
-    elements_per_thread //= ratio
+    # We need to adjust the number of loads and elements per thread if the
+    # deduced GatherToLDS width is not equal to the original vector width.
+    if vector_width > load_width:
+        ratio = vector_width // load_width
+        logger.info(f"ratio={ratio}")
+        expected_number_of_loads *= ratio
+        elements_per_thread //= ratio
+    else:
+        ratio = load_width // vector_width
+        logger.info(f"ratio={1/ratio}")
+        expected_number_of_loads = ceildiv(expected_number_of_loads, ratio)
+        elements_per_thread *= ratio
 
     if materialized_shape[-1] % elements_per_thread != 0:
         logger.info(
@@ -203,6 +217,8 @@ def emit_global_to_lds(
     # GatherToLDS writes `elements_per_wave` elements contiguously to LDS, so we
     # cannot have any padding if it crosses a array row boundary.
     drop_padding = materialized_shape[-1] % elements_per_wave != 0
+    tail_padding = elements_per_wave - prod(materialized_shape) % elements_per_wave
+    logger.info(f"tail_padding={tail_padding}")
 
     global_index = remove_thread_indexing(read.index)
     logger.info(f"global_index={global_index}")
@@ -245,17 +261,21 @@ def emit_global_to_lds(
                 bounds,
             ).add_to_graph(write.graph)
 
-            new_writes[write.memory].append(new_write)
-            if drop_padding:
-                custom_memory = get_custom(write.memory)
-                padding = custom_memory.padding
-                if padding != 0:
-                    custom_memory.update_arg("padding", 0)
-                    new_distributed_shape = list(custom_memory.distributed_shape)
-                    new_distributed_shape[-1] -= padding
-                    custom_memory.update_arg(
-                        "distributed_shape", tuple(new_distributed_shape)
-                    )
+        new_writes[write.memory].append(new_write)
+        if drop_padding:
+            custom_memory = get_custom(write.memory)
+            padding = custom_memory.padding
+            if padding != 0:
+                custom_memory.update_arg("padding", 0)
+                new_distributed_shape = list(custom_memory.distributed_shape)
+                new_distributed_shape[-1] -= padding
+                custom_memory.update_arg(
+                    "distributed_shape", tuple(new_distributed_shape)
+                )
+
+        if tail_padding != 0:
+            custom_memory = get_custom(write.memory)
+            custom_memory.update_arg("tail_padding", tail_padding)
 
     return new_writes
 
@@ -263,24 +283,37 @@ def emit_global_to_lds(
 def get_load_width(
     supported_load_widths: list[int],
     target_width: int,
+    total_number_of_threads: int,
     fastest_dim_bound: Optional[IndexExpr],
 ) -> Optional[int]:
     """
     Get the largest suitable load width for the given bitwidth.
     """
+    remainder = None
+    load_width = None
     for width in supported_load_widths[::-1]:
-        if target_width % width != 0:
-            continue
-
+        # Fastest dim must be divisible by load width as we cannot mask it to
+        # do a partial load.
         if fastest_dim_bound is not None:
             # `subs_idxc` can return symbolic values which will also be != 0,
             # so we need to check `not (subs_idxc(...) == 0)`.
             if not (subs_idxc(fastest_dim_bound % width) == 0):
                 continue
 
-        return width
+        load_width = width * total_number_of_threads
+        rem = target_width % load_width
+        if rem == 0:
+            return width
 
-    return None
+        # Possible padding to be added to the end of the shared memory buffer.
+        rem = load_width - rem
+
+        # Choose the size which minimizes the shared memory waste.
+        if remainder is None or rem < remainder:
+            remainder = rem
+            load_width = width
+
+    return load_width
 
 
 def gather_to_shared(
