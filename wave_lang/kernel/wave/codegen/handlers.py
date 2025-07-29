@@ -191,9 +191,14 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
             padding,
             parent,
             offset,
+            tail_padding,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
+
+    assert (
+        tail_padding == 0
+    ), "Tail padding must be handled by the minimize_shared_allocs pass"
 
     memref_shape = cast_py_literal(emitter, distributed_shape)
     element_type = IrType.parse(dtype.ir_type_asm())
