@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -12,7 +11,7 @@ import torch.fx as fx
 
 from wave_lang.kernel._support.tracing import CapturedTrace
 
-from ..._support.dtype import DataType, i8
+from ..._support.dtype import i8
 from ...lang.global_symbols import *
 from ...ops.wave_ops import Allocate, SharedMemoryBarrier, get_custom
 from ..utils.graph_utils import get_users, is_barrier_between, update_sort_keys
@@ -44,11 +43,8 @@ def compute_live_intervals(allocs: list[fx.Node]):
     return live_intervals
 
 
-def get_shared_memory_allocation_size(alloc: fx.Node, dtype: DataType) -> int:
-    custom = get_custom(alloc)
-    return math.prod([subs_idxc(x) for x in custom.distributed_shape]) * (
-        dtype.bitwidth() // 8
-    )
+def get_shared_memory_allocation_size(alloc: fx.Node) -> int:
+    return subs_idxc(get_custom(alloc).allocation_size)
 
 
 def get_use(
@@ -111,7 +107,7 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
 
     alloc_info = [
         (
-            get_shared_memory_allocation_size(x, get_custom(x).dtype),
+            get_shared_memory_allocation_size(x),
             live_intervals[x].start,
             live_intervals[x].end,
         )
@@ -126,9 +122,7 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     time_sorted_allocs = sorted(allocs, key=lambda x: live_intervals[x].start)
     last_use = None
     for alloc in time_sorted_allocs:
-        shared_memory_size = get_shared_memory_allocation_size(
-            alloc, get_custom(alloc).dtype
-        )
+        shared_memory_size = get_shared_memory_allocation_size(alloc)
         offset = allocs_to_offsets[alloc]
         if np.any(shared_memory[offset : offset + shared_memory_size]):
             first_use = get_first_use(alloc, live_intervals[alloc])
@@ -158,5 +152,6 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     for alloc, offset in allocs_to_offsets.items():
         get_custom(alloc).update_arg("parent", parent)
         get_custom(alloc).update_arg("offset", offset)
+        get_custom(alloc).update_arg("tail_padding", 0)
 
     return

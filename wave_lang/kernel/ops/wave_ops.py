@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import copy
 import operator
 import sys
@@ -1198,6 +1199,7 @@ class Allocate(CustomOp):
     padding: int = 0
     parent: Optional[fx.Node] = None
     offset: Optional[IndexExpr] = None
+    tail_padding: int = 0  # Padding after the array end
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1206,6 +1208,16 @@ class Allocate(CustomOp):
     @property
     def type(self) -> "Memory":
         return Memory[(*self.shape, self.address_space, self.dtype)]
+
+    @property
+    def allocation_size(self) -> IndexExpr:
+        """
+        Returns the full size of the allocation in bytes including all padding.
+        """
+        return (
+            (math.prod(self.distributed_shape) + self.tail_padding)
+            * self.dtype.bitwidth()
+        ) // 8
 
 
 @define_op("self_index")
