@@ -39,7 +39,7 @@ from ..utils.symbol_utils import (
     subs_idxc,
 )
 
-logger = get_logger("turbine.wave.partition_strided_operators")
+logger = get_logger("wave.partition_strided_operators")
 
 
 def get_vector_shape(

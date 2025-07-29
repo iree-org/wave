@@ -91,7 +91,7 @@ def insert_barrier_if_needed(alloc: fx.Node, first_use: fx.Node, last_use: fx.No
 def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     """
     Minimize the number of shared allocs by reusing them.
-    See: iree/turbine/docs/kernel/memory_analysis.md for more details.
+    See: docs/wave/shared_memory.rst for more details.
     """
     if not minimize_shared_allocs:
         return

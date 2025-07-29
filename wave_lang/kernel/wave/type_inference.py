@@ -11,7 +11,7 @@ from wave_lang.support.logging import get_logger
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import *
 
-logger = get_logger("turbine.wave.type_inference")
+logger = get_logger("wave.type_inference")
 
 
 def infer_types(trace: CapturedTrace, subgraph: Optional[fx.Graph] = None):

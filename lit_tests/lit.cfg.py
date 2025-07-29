@@ -8,7 +8,7 @@ import lit.util
 
 from wave_lang.support.logging import get_logger
 
-logger = get_logger("turbine.lit_tests")
+logger = get_logger("wave.lit_tests")
 
 # Configuration file for the 'lit' test runner.
 lit.llvm.initialize(lit_config, config)
@@ -17,7 +17,7 @@ from lit.llvm import llvm_config
 llvm_config.with_system_environment("PYTHONPATH")
 
 # name: The name of this test suite.
-config.name = "IREE_TURBINE"
+config.name = "WAVE"
 
 config.test_format = lit.formats.ShTest()
 

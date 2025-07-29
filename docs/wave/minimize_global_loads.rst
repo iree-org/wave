@@ -274,7 +274,7 @@ After Optimization:
       return
     }
 
-For more details on the implementation, see the source code in `iree/turbine/kernel/wave/minimize_global_loads.py`.
+For more details on the implementation, see the source code in `wave_lang/kernel/wave/minimize_global_loads.py`.
 
 Related Optimizations
 ---------------------

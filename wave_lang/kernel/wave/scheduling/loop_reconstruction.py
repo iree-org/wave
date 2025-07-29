@@ -33,7 +33,7 @@ from .loop_reconstruction_utils import (
 )
 from .resources import get_custom_operation_type
 
-logger = get_logger("turbine.wave.scheduling.loop_reconstruction")
+logger = get_logger("wave.scheduling.loop_reconstruction")
 
 
 class PipelineStage(Enum):

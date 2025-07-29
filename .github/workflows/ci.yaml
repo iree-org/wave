@@ -40,7 +40,7 @@ jobs:
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 60
     env:
-      VENV_DIR: ${{ github.workspace }}/.turbine-venv
+      VENV_DIR: ${{ github.workspace }}/.wave-venv
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
