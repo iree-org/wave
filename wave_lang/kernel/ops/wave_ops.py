@@ -1274,6 +1274,8 @@ class SharedMemoryBarrier(CustomOp):
     """
 
     async_deps: list[fx.Node] = field(default_factory=list)
+    read_counter: Optional[int] = None
+    write_counter: Optional[int] = None
 
     @property
     def has_side_effects(self) -> bool:
