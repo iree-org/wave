@@ -162,8 +162,8 @@ def get_gather_to_shared_config(
 
     logger.info(f"load_width={load_width}")
 
-    # Get supported load width for the given bitwidth and if they are not
-    # equal then we need to adjust the number of loads and elements per thread.
+    # We need to adjust the number of loads and elements per thread if the
+    # deduced GatherToLDS width is not equal to the original vector width.
     if vector_width > load_width:
         ratio = vector_width // load_width
         logger.info(f"ratio={ratio}")
