@@ -125,8 +125,7 @@ class WaveKernel:
         debug_args = []
         debug_logs = kwargs.get("debug_logs", {})
         if self.debug_outputs:
-            # Process backwards so that the debug_logs output is ordered.
-            for info_dict in self.debug_outputs[::-1]:
+            for info_dict in self.debug_outputs:
                 shape = [
                     self.options.subs.get(symdim, None)
                     or get_dynamic_dimension_actual(symdim)

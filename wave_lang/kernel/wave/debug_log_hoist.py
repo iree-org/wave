@@ -93,4 +93,5 @@ def debug_log_write_replace(trace: CapturedTrace, debug_arg_info: list[DebugArgI
         custom = get_custom(debug_placeholder_op)
         debug_placeholder_op.meta["dtype"] = custom.type.dtype
         debug_placeholder_op.meta["symbolic_shape"] = custom.type.symbolic_shape
-        debug_arg_info.append(debug_placeholder_op.meta)
+        # Insert in front since the placeholders are in reverse order compared to the log ops in source code.
+        debug_arg_info.insert(0, debug_placeholder_op.meta)
