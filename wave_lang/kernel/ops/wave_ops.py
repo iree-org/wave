@@ -1201,7 +1201,7 @@ class Allocate(CustomOp):
     padding: int = 0
     parent: Optional[fx.Node] = None
     offset: Optional[IndexExpr] = None
-    tail_padding: int = 0
+    tail_padding: int = 0  # Padding after the array end
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
