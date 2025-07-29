@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-name: Build packages
+name: Build and release packages
 
 on:
   workflow_dispatch:
@@ -67,6 +67,21 @@ jobs:
         with:
           if-no-files-found: error
           name: snapshot-${{ matrix.package }}-${{ matrix.platform }}-${{ matrix.python-version }}
+          path: dist
+
+  release_packages:
+    needs: build_packages
+    if: ${{ success() && (github.repository_owner == 'iree-org' || github.event_name != 'schedule') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Create/update a release
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: snapshot-*
+          # Merge all artifacts into a single directory
+          merge-multiple: true
           path: dist
 
       - name: Release python wheels
