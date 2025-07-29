@@ -45,6 +45,17 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}{os.sep}",
             f"-DCMAKE_BUILD_TYPE={'Debug' if self.debug else 'Release'}",
         ]
+
+        # Clang is required on Windows, since Wave runtime uses variable-length
+        # arrays (VLAs) which not supported by MSVC
+        if os.name == "nt":
+            cmake_args += [
+                "-G",
+                "Ninja",
+                "-DCMAKE_C_COMPILER=clang",
+                "-DCMAKE_CXX_COMPILER=clang++",
+            ]
+
         subprocess.check_call(["cmake", ext.sourcedir, *cmake_args], cwd=build_dir)
 
         # Build CMake project

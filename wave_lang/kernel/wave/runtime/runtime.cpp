@@ -1,11 +1,21 @@
+#include <array>
 #include <cstring>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/string.h>
 #include <sstream>
+#include <vector>
+#include <system_error>
 
-#ifdef __linux__
-#include <dlfcn.h> // dlopen
+#if defined(__linux__)
+#include <dlfcn.h> // dlopen, dlsym, dlerror
+using module_handle_t = void*;
+#elif defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // LoadLibrary, GetProcAddress, GetLastError
+using module_handle_t = HMODULE;
+#else
+#error "Unsupported platform"
 #endif
 
 // Just hardcode necessary constants and types here, we don't expect them to
@@ -39,24 +49,42 @@ static hipModuleUnload_t hipModuleUnload = nullptr;
 static hipModuleLoad_t hipModuleLoad = nullptr;
 static hipModuleGetFunction_t hipModuleGetFunction = nullptr;
 
+static void* get_symbol_address(module_handle_t module, const char* symbol_name) {
+#if defined(__linux__)
+    return dlsym(module, symbol_name);
+#elif defined(_WIN32)
+    return reinterpret_cast<void*>(GetProcAddress(module, symbol_name));
+#endif
+}
+
+#define GET_FUNC(module, name) \
+do { \
+    name = reinterpret_cast<decltype(name)>(get_symbol_address(module, #name)); \
+    if (!name) { \
+        throw std::runtime_error("Failed to load symbol: " + std::string(#name)); \
+    } \
+} while (0)
+
 static void load_hip_functions()
 {
     if (hipModuleLaunchKernel && hipGetErrorName && hipGetErrorString &&
         hipModuleUnload && hipModuleLoad && hipModuleGetFunction)
         return;
 
-#ifdef __linux__
-#define GET_FUNC(module, name) do { \
-    name = reinterpret_cast<decltype(name)>(dlsym(module, #name)); \
-    if (!name) { \
-        throw std::runtime_error("Failed to load symbol: " + std::string(#name)); \
-    } \
-} while (0)
-    // We expect this module to be loaded permanently in the process so we don't
-    // care about unloading it.
-    auto module = dlopen("libamdhip64.so", RTLD_NOW);
-    if (!module)
+    module_handle_t module = nullptr;
+
+#if defined(__linux__)
+    module = dlopen("libamdhip64.so", RTLD_NOW);
+    if (!module) {
         throw std::runtime_error("Failed to load libamdhip64.so: " + std::string(dlerror()));
+    }
+#elif defined(_WIN32)
+    module = LoadLibrary("amdhip64.dll");
+    if (!module) {
+        DWORD error_code = GetLastError();
+        throw std::runtime_error("Failed to load amdhip64.dll: " + std::system_category().message(error_code));
+    }
+#endif
 
     GET_FUNC(module, hipModuleLaunchKernel);
     GET_FUNC(module, hipGetErrorName);
@@ -66,9 +94,6 @@ static void load_hip_functions()
     GET_FUNC(module, hipModuleGetFunction);
 
 #undef GET_FUNC
-#else
-    #error "Unsupported platform"
-#endif
 }
 
 namespace nb = nanobind;
@@ -115,6 +140,7 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
     // lo = trunc(i64) and hi = trunc(i64 >> 32).
     size_t kernArgSize = tensors.size() * sizeof(uint64_t) + 2 * dynamicDims.size() * sizeof(uint32_t) + scalarArgs.size() * scalarSize;
 
+    // TODO(paulzzy): We should set a maximum size to avoid stack corruption
     uint8_t kernelArguments[kernArgSize];
     uint64_t *ptr = (uint64_t *)kernelArguments;
     for (auto val : tensors) *ptr++ = val;
@@ -125,7 +151,7 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
         if (nb::isinstance<nb::int_>(arg)){
             *ptr2++ = static_cast<uint32_t>(nb::cast<uint32_t>(arg));
         }
-        else if (nb::isinstance<nb::float_>(scalarArgs[0])){
+        else if (nb::isinstance<nb::float_>(arg)){
             float val = nb::cast<float>(arg);
             std::memcpy(ptr2++, &val, sizeof(float));
         }
