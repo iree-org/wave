@@ -130,9 +130,7 @@ def write(
 
 def debug_log_write(
     register_: "Register",
-    elements_per_thread: Optional[IndexExpr | int] = None,
-    mapping: Optional[IndexMapping] = None,
-    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    log_name: Optional[str],
 ): ...
 
 
