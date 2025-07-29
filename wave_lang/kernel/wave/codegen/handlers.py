@@ -312,7 +312,7 @@ def _to_scalar(val: Value) -> Value:
         if src_type.rank == 1:
             val = vector_d.extract(val, static_position=[0], dynamic_position=[])
         else:
-            val = vector_d.extractelement(val)
+            val = vector_d.extract(val, static_position=[], dynamic_position=[])
 
     return val
 
@@ -876,8 +876,7 @@ def handle_invert(source: Value, options: WaveCompileOptions) -> OpResult:
     if _is_integer_like_type(element_type):
         if isinstance(source.type, VectorType):
             assert len(source.type.shape) == 1
-            zero = arith_d.ConstantOp(IndexType.get(), 0)
-            source = vector_d.extractelement(source, position=zero)
+            source = vector_d.extract(source, static_position=[0], dynamic_position=[])
         true = arith_d.ConstantOp(source.type, True)
         result = arith_d.xori(source, true)
     else:
@@ -1288,12 +1287,13 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
 def add_iter_arg_subs(
     current_values: list[Value], subs: dict[IndexExpr, Value]
 ) -> dict[IndexExpr, Value]:
-    zero = arith_d.ConstantOp(IndexType.get(), 0)
     for i in range(len(current_values) - 1):
         value = current_values[i]
         if isinstance(value.type, VectorType):
             assert value.type.rank == 1, f"Expected vector of rank 1, got {value.type}"
-            value = vector_d.extractelement(current_values[i], position=zero)
+            value = vector_d.extract(
+                current_values[i], static_position=[0], dynamic_position=[]
+            )
         if isinstance(value.type, IntegerType):
             value = arith_d.index_cast(IndexType.get(), value)
         subs[GET_ITER_ARG(i)] = value
@@ -1312,8 +1312,9 @@ def handle_iterate_while(emitter: WaveEmitter, node: fx.Node):
     # Initialize while loop
     init_value = cast_py_value(emitter, start).ir_value
     if isinstance(init_value.type, VectorType):
-        zero = arith_d.ConstantOp(IndexType.get(), 0)
-        init_value = vector_d.extractelement(init_value, position=zero)
+        init_value = vector_d.extract(
+            init_value, static_position=[0], dynamic_position=[]
+        )
     if isinstance(init_value.type, IntegerType):
         init_value = arith_d.index_cast(IndexType.get(), init_value)
 
