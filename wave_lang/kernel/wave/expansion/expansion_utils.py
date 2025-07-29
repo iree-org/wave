@@ -103,16 +103,6 @@ def get_dim_scaling(
                     "Tile size, wave count and vector size must be statically known"
                 )
 
-            if (
-                tile_size % wave_count != 0
-                or (tile_size / wave_count) % vector_size != 0
-            ):
-                logger.info(
-                    f"Tile size is not divisible by wave count and vector size, got: "
-                    f"dim={constraint.dim}, "
-                    f"tile_size={tile_size}, wave_count={wave_count}, vector_size={vector_size}"
-                )
-
             dim_scaling[constraint.dim] = ceildiv(tile_size, wave_count * vector_size)
 
     if isinstance(node.type, DataType):
