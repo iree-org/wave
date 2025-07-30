@@ -5,7 +5,7 @@ from enum import Enum, auto
 from .scheduler_utils import get_scheduling_stage, BaseScheduler
 
 
-class GemmFourStageStage(Enum):
+class FourStageStage(Enum):
     GLOBAL_LOAD = auto()
     LOCAL_STORE = auto()
     LOCAL_LOAD = auto()
@@ -17,37 +17,39 @@ class GemmFourStageStage(Enum):
     # since it is final stage.
     @staticmethod
     def is_valid_transition(
-        from_stage: "GemmFourStageStage", to_stage: "GemmFourStageStage"
+        from_stage: "FourStageStage", to_stage: "FourStageStage"
     ) -> bool:
         if from_stage == to_stage:
             return True
-        return (from_stage, to_stage) in _gemm_four_stage_stage_transition_table
+        return (from_stage, to_stage) in _four_stage_stage_transition_table
 
 
-_gemm_four_stage_stage_transition_table = {
-    (GemmFourStageStage.GLOBAL_LOAD, GemmFourStageStage.LOCAL_STORE),
-    (GemmFourStageStage.LOCAL_STORE, GemmFourStageStage.LOCAL_LOAD),
+_four_stage_stage_transition_table = {
+    (FourStageStage.GLOBAL_LOAD, FourStageStage.LOCAL_STORE),
+    (FourStageStage.LOCAL_STORE, FourStageStage.LOCAL_LOAD),
     # GLOBAL_TO_SHARED combines both GLOBAL_LOAD and LOCAL_STORE
-    (GemmFourStageStage.GLOBAL_LOAD, GemmFourStageStage.LOCAL_LOAD),
-    (GemmFourStageStage.LOCAL_LOAD, GemmFourStageStage.COMPUTE),
-    (GemmFourStageStage.COMPUTE, GemmFourStageStage.GLOBAL_LOAD),
+    (FourStageStage.GLOBAL_LOAD, FourStageStage.LOCAL_LOAD),
+    (FourStageStage.LOCAL_LOAD, FourStageStage.COMPUTE),
+    (FourStageStage.COMPUTE, FourStageStage.GLOBAL_LOAD),
 }
 _operation_stage_table = {
-    Operation.READ_SHARED: GemmFourStageStage.LOCAL_LOAD,
-    Operation.WRITE_SHARED: GemmFourStageStage.LOCAL_STORE,
-    Operation.READ_GLOBAL: GemmFourStageStage.GLOBAL_LOAD,
-    Operation.GLOBAL_TO_SHARED: GemmFourStageStage.GLOBAL_LOAD,
-    Operation.MMA: GemmFourStageStage.COMPUTE,
-    Operation.NOOP: GemmFourStageStage.SCHEDULING_NOOP,
-    Operation.VALU: GemmFourStageStage.COMPUTE,
-    Operation.SHUFFLE: GemmFourStageStage.COMPUTE,
-    Operation.WRITE_GLOBAL: GemmFourStageStage.COMPUTE,
+    Operation.READ_SHARED: FourStageStage.LOCAL_LOAD,
+    Operation.WRITE_SHARED: FourStageStage.LOCAL_STORE,
+    Operation.READ_GLOBAL: FourStageStage.GLOBAL_LOAD,
+    Operation.GLOBAL_TO_SHARED: FourStageStage.GLOBAL_LOAD,
+    Operation.MMA: FourStageStage.COMPUTE,
+    Operation.NOOP: FourStageStage.SCHEDULING_NOOP,
+    Operation.VALU: FourStageStage.COMPUTE,
+    Operation.SHUFFLE: FourStageStage.COMPUTE,
+    Operation.WRITE_GLOBAL: FourStageStage.COMPUTE,
 }
 
 
-class GemmFourStageScheduler(BaseScheduler):
+class FourStageScheduler(BaseScheduler):
     """
-    GEMM Four Stage Pipelined Scheduler
+    Four Stage Pipelined Scheduler
+
+    Precondition: Only a single MMA instruction group is allowed for this scheduling approach
 
     Convert vanilla schedule of:
         for i = 0 to N:
@@ -88,7 +90,7 @@ class GemmFourStageScheduler(BaseScheduler):
 
     """
 
-    def gemm_four_stage_scheduling(
+    def four_stage_scheduling(
         self, graph: fx.Graph, edges: list[Edge]
     ) -> tuple[dict[fx.Node, int], bool]:
         """
@@ -104,9 +106,9 @@ class GemmFourStageScheduler(BaseScheduler):
         current_stage_idx = 0
         for node in sorted_nodes:
             node_stage = get_scheduling_stage(node, _operation_stage_table)
-            if node_stage in [current_stage, GemmFourStageStage.SCHEDULING_NOOP]:
+            if node_stage in [current_stage, FourStageStage.SCHEDULING_NOOP]:
                 schedule[node] = current_stage_idx
-            elif GemmFourStageStage.is_valid_transition(current_stage, node_stage):
+            elif FourStageStage.is_valid_transition(current_stage, node_stage):
                 current_stage_idx += 1
                 schedule[node] = current_stage_idx
                 current_stage = node_stage
@@ -121,6 +123,6 @@ class GemmFourStageScheduler(BaseScheduler):
         2. Set nodes to clock (0,1,2,3) based on phase.
         3. Set initiation interval to 1.
         """
-        self.schedule, success = self.gemm_four_stage_scheduling(self.graph, self.edges)
+        self.schedule, success = self.four_stage_scheduling(self.graph, self.edges)
         self._initiation_interval = 1
         return self.schedule, success

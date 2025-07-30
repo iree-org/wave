@@ -60,6 +60,9 @@ def heuristically_multi_buffer_shared_memory(
         # mapping have to match the shape of memory location the
 
         # operation reads from / writes to, which we change below.
+        new_node.index = get_dict_with_updated_key(
+            new_node.index, dim, dim * multi_buffer_count
+        )
         if isinstance(new_node.mapping, IndexMapping):
             input_mapping = new_node.mapping.input_mapping
             output_mapping = new_node.mapping.output_mapping

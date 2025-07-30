@@ -116,7 +116,7 @@ def testGemmBench(tmp_path):
     [
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
-        SchedulingType.GEMM_FOUR_STAGE,
+        SchedulingType.FOUR_STAGE,
         SchedulingType.MODULO,
     ],
 )
@@ -153,7 +153,7 @@ def testPureGemm(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.GEMM_FOUR_STAGE, SchedulingType.MODULO],
+        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
         multi_buffer_count=2,
     )
     options = set_default_run_config(options)
@@ -188,7 +188,7 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
     [
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
-        _xfail(SchedulingType.GEMM_FOUR_STAGE),
+        _xfail(SchedulingType.FOUR_STAGE),
         _xfail(SchedulingType.MODULO),
     ],
 )
@@ -232,7 +232,7 @@ def testGemmGatherToLDS(
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
+        in [SchedulingType.MODULO, SchedulingType.FOUR_STAGE],
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -387,7 +387,7 @@ def testGemmSmallTiles(
     [
         SchedulingType.NONE,
         _xfail(SchedulingType.PREFETCH),
-        SchedulingType.GEMM_FOUR_STAGE,
+        SchedulingType.FOUR_STAGE,
         SchedulingType.MODULO,
     ],
 )
@@ -487,7 +487,7 @@ def testNonTransposeGemm(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.GEMM_FOUR_STAGE, SchedulingType.MODULO],
+        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -815,7 +815,7 @@ def testGemmDot(
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
+    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.FOUR_STAGE],
 )
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
@@ -918,7 +918,7 @@ def testVMFMAGemm(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
+        in [SchedulingType.MODULO, SchedulingType.FOUR_STAGE],
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -941,7 +941,7 @@ def testVMFMAGemm(
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
+    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.FOUR_STAGE],
 )
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
@@ -1044,7 +1044,7 @@ def testCDNA2IntGemm(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.GEMM_FOUR_STAGE, SchedulingType.MODULO],
+        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1071,7 +1071,7 @@ def testCDNA2IntGemm(
     [
         SchedulingType.NONE,
         SchedulingType.MODULO,
-        SchedulingType.GEMM_FOUR_STAGE,
+        SchedulingType.FOUR_STAGE,
     ],
 )
 @pytest.mark.parametrize(
@@ -1151,7 +1151,7 @@ def testCDNA3IntGemm(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.GEMM_FOUR_STAGE, SchedulingType.MODULO],
+        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1175,7 +1175,7 @@ def testCDNA3IntGemm(
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.GEMM_FOUR_STAGE],
+    [SchedulingType.NONE, SchedulingType.MODULO, SchedulingType.FOUR_STAGE],
 )
 @pytest.mark.parametrize(
     "mfma_variant",
@@ -1253,7 +1253,7 @@ def testF8Gemm(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.GEMM_FOUR_STAGE, SchedulingType.MODULO],
+        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1527,7 +1527,7 @@ def testPackedNonTransposeGemm(
     [
         SchedulingType.NONE,
         SchedulingType.MODULO,
-        SchedulingType.GEMM_FOUR_STAGE,
+        SchedulingType.FOUR_STAGE,
     ],
 )
 def testBatchedGemm(
@@ -1601,7 +1601,7 @@ def testBatchedGemm(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_multi_buffering=enable_scheduling
-        in [SchedulingType.GEMM_FOUR_STAGE, SchedulingType.MODULO],
+        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
     )
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)

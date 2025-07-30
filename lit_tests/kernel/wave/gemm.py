@@ -1274,7 +1274,7 @@ def test_gemm_prefetch():
 
 
 @run_test
-def test_gemm_gemm_four_stage():
+def test_gemm_four_stage():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
@@ -1329,7 +1329,7 @@ def test_gemm_gemm_four_stage():
             SHUFFLE_UNITS: 8,
         },
         canonicalize=True,
-        schedule=SchedulingType.GEMM_FOUR_STAGE,
+        schedule=SchedulingType.FOUR_STAGE,
         use_scheduling_barriers=True,
         compile_to_mlir=True,
         use_multi_buffering=True,

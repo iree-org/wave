@@ -21,4 +21,4 @@ class SchedulingType(Enum):
     NONE = 0x00
     MODULO = 0x10
     PREFETCH = 0x20
-    GEMM_FOUR_STAGE = 0x21
+    FOUR_STAGE = 0x21

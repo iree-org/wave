@@ -34,7 +34,7 @@ from .loop_reconstruction import construct_pipelined_loop
 from .modulo_scheduling import ModuloScheduler
 from .multi_buffering import multi_buffer
 from .prefetch_scheduling import PrefetchScheduler
-from .gemm_four_stage_pipelined_scheduling import GemmFourStageScheduler
+from .four_stage_pipelined_scheduling import FourStageScheduler
 from .resources import (
     annotate_resource_usage,
     get_available_resources,
@@ -108,8 +108,8 @@ def schedule_reduction(
             scheduler = ModuloScheduler(graph, edges, get_available_resources())
         elif scheduling_type == SchedulingType.PREFETCH:
             scheduler = PrefetchScheduler(graph, edges, get_available_resources())
-        elif scheduling_type == SchedulingType.GEMM_FOUR_STAGE:
-            scheduler = GemmFourStageScheduler(graph, edges, get_available_resources())
+        elif scheduling_type == SchedulingType.FOUR_STAGE:
+            scheduler = FourStageScheduler(graph, edges, get_available_resources())
         else:
             raise ValueError("Unknown scheduling type")
 
