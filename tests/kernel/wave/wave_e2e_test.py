@@ -2210,6 +2210,17 @@ def test_debug_log(dynamic_dims: bool):
     constraints += [tkw.WaveConstraint(M, BLOCK_M)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N)]
 
+    printer_args = None
+    handler_arg = None
+
+    def printer(*args):
+        nonlocal printer_args
+        printer_args = args
+
+    def handler(arg):
+        nonlocal handler_arg
+        handler_arg = arg
+
     @tkw.wave(constraints)
     def test(
         a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
@@ -2218,12 +2229,12 @@ def test_debug_log(dynamic_dims: bool):
     ):
         lhs = tkw.read(a)
         rhs = tkw.read(b)
-        tkw.debug_log(lhs)
+        tkw.debug_log(lhs, printer=printer)
         tkw.debug_log(rhs, label="rhslog")
         lhs_mapped = tkw.read(a, mapping=read_mapping)
         tkw.debug_log(lhs_mapped, label="lhs_mapped", mapping=write_mapping)
         res = lhs + rhs
-        tkw.debug_log(res, label="res")
+        tkw.debug_log(res, label="res", handler=handler)
         tkw.write(res, c)
 
     a = device_randn(shape, dtype=torch.float16)
@@ -2250,10 +2261,14 @@ def test_debug_log(dynamic_dims: bool):
 
     debug_logs = {}
     test(a, b, c, debug_logs=debug_logs)
-    assert_close(a, debug_logs["debug_log_output_0"])
-    assert_close(b, debug_logs["rhslog"])
-    assert_close(c, debug_logs["res"])
-    # with the input mapping the rows of the first half are duplicated, with the output mapping the duplicate rows are written back only to the first half
+    assert_close(a, debug_logs["debug_log_output_0"]["value"])
+    assert printer_args[0] == "debug_log_output_0"
+    assert printer_args[1] is debug_logs["debug_log_output_0"]["value"]
+    assert_close(b, debug_logs["rhslog"]["value"])
+    assert_close(c, debug_logs["res"]["value"])
+    # with the input mapping the rows of the first half are duplicated, with the
+    # output mapping the duplicate rows are written back only to the first half.
     assert_close(
-        a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"][0 : shape[0] // 2, :]
+        a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"]["value"][0 : shape[0] // 2, :]
     )
+    assert handler_arg == debug_logs
