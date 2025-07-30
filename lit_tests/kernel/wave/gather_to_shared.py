@@ -266,7 +266,7 @@ def test_gather_to_shared_scaled_dims():
     # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
     # CHECK-NOT:          vector.load
     # CHECK-NOT:          vector.store
-    # CHECK:              rocdl.s.waitcnt
+    # CHECK:              amdgpu.memory_counter_wait load(0) store(0)
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-8:      vector.load
     # CHECK-COUNT-2:      amdgpu.scaled_mfma
@@ -341,29 +341,22 @@ def test_gather_to_shared_prefetch_scheduled():
     # CHECK-COUNT-1:    memref.alloc()
 
     # Before loop
-    # CHECK:            amdgpu.gather_to_lds {{.*}} vector<16xi8>
-    # CHECK:            vector.load {{.*}} vector<1xi8>
-    # CHECK:            amdgpu.gather_to_lds {{.*}} vector<16xi8>
-    # CHECK:            vector.load {{.*}} vector<1xi8>
-    # CHECK-COUNT-2:    vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-4:    amdgpu.gather_to_lds
 
     # In loop
     # CHECK:            scf.for {{.*}} {
-    # CHECK:              amdgpu.memory_counter_wait load(1) store(0)
+    # Not much opportunities for parallelism yet, so all counters are 0
+    # CHECK:              amdgpu.memory_counter_wait load(0) store(0)
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-8:      vector.load {{.*}}
 
     # CHECK:              amdgpu.lds_barrier
-    # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
-    # CHECK:              vector.load {{.*}} vector<1xi8>
-    # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
-    # CHECK:              vector.load {{.*}} vector<1xi8>
+    # CHECK-COUNT-4:      amdgpu.gather_to_lds
 
     # CHECK-COUNT-2:      amdgpu.scaled_mfma
-    # CHECK-COUNT-2:      vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # After loop
-    # CHECK:            amdgpu.memory_counter_wait load(1) store(0)
+    # CHECK:            amdgpu.memory_counter_wait load(0) store(0)
     # CHECK:            amdgpu.lds_barrier
     # CHECK-COUNT-8:    vector.load {{.*}}
     # CHECK-COUNT-2:    amdgpu.scaled_mfma
