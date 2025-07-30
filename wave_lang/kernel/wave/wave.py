@@ -268,6 +268,56 @@ class LaunchableWave(Launchable):
             if isinstance(constraint, SymbolicAlias)
         ]
 
+    def _validate_constraints(self):
+        wave_map = {
+            constraint.dim: subs_idxc(constraint.tile_size)
+            for constraint in self.wave_constraints
+        }
+
+        workgroup_map = {
+            constraint.dim: subs_idxc(constraint.tile_size)
+            for constraint in self.workgroup_constraints
+        }
+
+        for dim in set(wave_map.keys()) | set(workgroup_map.keys()):
+            wave_size = wave_map[dim] if dim in wave_map else None
+            workgroup_size = workgroup_map[dim] if dim in workgroup_map else None
+
+            assert (
+                workgroup_size is not None
+            ), f"expected non-empty tile size in `WorkgroupConstraint` for dimension {dim}"
+
+            if wave_size is None:
+                continue
+
+            assert (
+                wave_size > 0
+            ), f"expected non-zero tile in `WaveConstraint` for dimension {dim}"
+
+            assert (
+                workgroup_size > 0
+            ), f"expected non-zero tile in `WorkgroupConstraint` for dimension {dim}"
+
+            assert (
+                workgroup_size >= wave_size
+            ), f"expected workgroup tile size to be the same or larger than wavefront tile size for dimension {dim}"
+
+            assert (
+                workgroup_size % wave_size == 0
+            ), f"expected workgroup tile size to be an integral multiple of wavefront tile size for dimension {dim}"
+
+        workgroup_dims = set(
+            [cons.workgroup_dim for cons in self.workgroup_constraints]
+        )
+
+        min_dim = min(workgroup_dims)
+        max_dim = max(workgroup_dims)
+        assert max_dim - min_dim + 1 == len(
+            workgroup_dims
+        ), "expected contiguous indices for `workgroup_dim` field in workgroup constraints"
+
+        return
+
     def _trace(
         self, *, location_capture_config: Optional[LocationCaptureConfig] = None
     ) -> CapturedTrace:
@@ -322,6 +372,7 @@ class LaunchableWave(Launchable):
 
         """
 
+        self._validate_constraints()
         hardware_constraint = self.hardware_constraints[0]
         for wave_constraint in self.wave_constraints:
             for workgroup_constraint in self.workgroup_constraints:
