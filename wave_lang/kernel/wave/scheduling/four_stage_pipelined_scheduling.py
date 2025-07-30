@@ -2,7 +2,15 @@ import torch.fx as fx
 from .graph_utils import Edge, sort_graph_by_edge_weight
 from .resources import Operation
 from enum import Enum, auto
-from .scheduler_utils import get_scheduling_stage, BaseScheduler
+from .scheduler_utils import (
+    get_scheduling_stage,
+    BaseScheduler,
+    is_single_mma_source,
+    is_mma_node,
+)
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class FourStageStage(Enum):
@@ -10,7 +18,7 @@ class FourStageStage(Enum):
     LOCAL_STORE = auto()
     LOCAL_LOAD = auto()
     COMPUTE = auto()
-    SCHEDULING_NOOP = auto()
+    SCHEDULING_NOOP = -1
 
     # Helper function to get next stage from the current.
     # If at stage 3 returns itself to prevent crash
@@ -103,8 +111,12 @@ class FourStageScheduler(BaseScheduler):
         schedule = {}
         current_stage = get_scheduling_stage(sorted_nodes[0], _operation_stage_table)
 
+        all_mma_nodes = list()
         current_stage_idx = 0
         for node in sorted_nodes:
+            if is_mma_node(node):
+                all_mma_nodes.append(node)
+
             node_stage = get_scheduling_stage(node, _operation_stage_table)
             if node_stage in [current_stage, FourStageStage.SCHEDULING_NOOP]:
                 schedule[node] = current_stage_idx
@@ -113,8 +125,17 @@ class FourStageScheduler(BaseScheduler):
                 schedule[node] = current_stage_idx
                 current_stage = node_stage
             else:
+                logger.warning(
+                    f"No valid transition from {current_stage} to {node_stage} for node {node}"
+                )
                 # Node does not move contigously through stages.
                 return {}, False
+        if not is_single_mma_source(all_mma_nodes):
+            logger.warning(
+                "Structure of kernel is different than expected, only one MMA is present"
+            )
+            return {}, False
+
         return schedule, True
 
     def schedule_graph(self) -> tuple[dict[fx.Node, int], bool]:

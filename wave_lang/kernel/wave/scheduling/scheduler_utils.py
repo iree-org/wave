@@ -7,6 +7,7 @@ import math
 from typing import TypeVar
 from enum import Enum
 from .resources import Operation
+from typing import List
 
 ScheduleStage = TypeVar("ScheduleStage", bound=Enum)
 
@@ -19,6 +20,18 @@ def get_scheduling_stage(
     if op_ty not in operation_stage_table:
         raise NotImplementedError(f"Cannot find {op_ty} in operation_stage_table")
     return operation_stage_table[op_ty]
+
+
+def is_single_mma_source(all_mma_nodes: List[fx.Node]):
+    pre_expansion_ids = set(
+        [get_custom(node).pre_expansion_id for node in all_mma_nodes]
+    )
+    return len(pre_expansion_ids) == 1
+
+
+def is_mma_node(possible_mma_node: fx.Node):
+    op_ty = get_custom_operation_type(get_custom(possible_mma_node))
+    return op_ty == Operation.MMA
 
 
 class BaseScheduler:
