@@ -261,15 +261,9 @@ def test_gather_to_shared_scaled_dims():
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
-    # Use gather_to_lds for lhs, and vector.load + vector.store for lhs scale.
-    # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
-    # CHECK:              vector.load {{.*}} vector<1xi8>
-    # CHECK:              vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
-
-    # Use gather_to_lds for rhs, and vector.load + vector.store for rhs scale.
-    # CHECK:              amdgpu.gather_to_lds {{.*}} vector<16xi8>
-    # CHECK:              vector.load {{.*}} vector<1xi8>
-    # CHECK:              vector.store {{.*}} memref<32x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
+    # CHECK-NOT:          vector.load
+    # CHECK-NOT:          vector.store
     # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-8:      vector.load
