@@ -108,7 +108,9 @@ def test_gemm_pipelined():
         hoist_loop_invariant_ops(trace, constraints)
         minimize_global_loads(trace, constraints)
         apply_shared_memory_indexing_corrections(trace, constraints)
-        schedule_graph(trace, constraints, True, SchedulingType.MODULO)
+        schedule_graph(
+            trace, constraints, True, SchedulingType.MODULO, multi_buffer_count=2
+        )
 
         print_subgraph(trace, "pipelined_iterate", False)
         # CHECK: %acc_m_0_n_0_k_0
@@ -177,15 +179,61 @@ def test_gemm_pipelined():
         # CHECK-NEXT: %read_2_shared_M:1_N:0_K:1
         # CHECK-NEXT: %read_4_shared_M:0_N:0_K:1
         # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
+        # CHECK-NEXT: %read_4_shared_M:0_N:0_K:0
+        # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0
+        # CHECK-NEXT: %read_21
+        # CHECK-NEXT: %read_22
+        # CHECK-NEXT: %read_4_shared_M:0_N:1_K:0
+        # CHECK-NEXT: %read_4_shared_M:0_N:1_K:1
+
+        # CHECK-NEXT: %mma_M:0_N:0_K:0
+        # CHECK-SAME: (%read_2_shared_M:0_N:0_K:0, %read_4_shared_M:0_N:0_K:0, %register_M:0_N:0_K:0, None)
+        # CHECK-NEXT: %mma_M:1_N:0_K:0
+        # CHECK-SAME: (%read_2_shared_M:1_N:0_K:0, %read_4_shared_M:0_N:0_K:0, %register_M:1_N:0_K:0, None)
+        # CHECK-NEXT: %mma_M:0_N:0_K:1
+        # CHECK-SAME: (%read_2_shared_M:0_N:0_K:1, %read_4_shared_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
+        # CHECK-NEXT: %mma_M:1_N:0_K:1
+        # CHECK-SAME: (%read_2_shared_M:1_N:0_K:1, %read_4_shared_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None)
+
+        # CHECK-NEXT: %write_10
+        # CHECK-NEXT: %write_11
+
+        # CHECK-NEXT: %mma_M:0_N:1_K:0
+        # CHECK-SAME: (%read_2_shared_M:0_N:0_K:0, %read_4_shared_M:0_N:1_K:0, %register_M:0_N:1_K:0, None)
+        # CHECK-NEXT: %mma_M:1_N:1_K:0
+        # CHECK-SAME: (%read_2_shared_M:1_N:0_K:0, %read_4_shared_M:0_N:1_K:0, %register_M:1_N:1_K:0, None)
+
+        # CHECK-NEXT: %read_2_shared_M:1_N:0_K:0
+        # CHECK-NEXT: %read_2_shared_M:1_N:0_K:1
+
+        # CHECK-NEXT: %mma_M:0_N:1_K:1
+        # CHECK-SAME: (%read_2_shared_M:0_N:0_K:1, %read_4_shared_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
+        # CHECK-NEXT: %mma_M:1_N:1_K:1
+        # CHECK-SAME: (%read_2_shared_M:1_N:0_K:1, %read_4_shared_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
+
+        # CHECK-NEXT: %read_4_shared_M:0_N:0_K:1
+        # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
+
         # CHECK-NEXT: %iterate_1
+        # CHECK-SAME: (K, [%mma_M:0_N:0_K:1, %mma_M:0_N:1_K:1, %mma_M:1_N:0_K:1, %mma_M:1_N:1_K:1, %read_4_shared_M:0_N:0_K:1, %read_2_shared_M:0_N:0_K:1, %read_2_shared_M:1_N:0_K:0, %read_2_shared_M:1_N:0_K:1], pipelined_iterate, [%a, %b], 1, None, None)
+
         # CHECK-NEXT: %get_result_M:0_N:0_K:0
+        # CHECK-SAME: (%iterate_1, 0)
         # CHECK-NEXT: %get_result_M:0_N:1_K:0
+        # CHECK-SAME: (%iterate_1, 1)
         # CHECK-NEXT: %get_result_M:1_N:0_K:0
+        # CHECK-SAME: (%iterate_1, 2)
         # CHECK-NEXT: %get_result_M:1_N:1_K:0
+        # CHECK-SAME: (%iterate_1, 3)
         # CHECK-NEXT: %get_result_9
+        # CHECK-SAME: (%iterate_1, 4)
         # CHECK-NEXT: %get_result_10
+        # CHECK-SAME: (%iterate_1, 5)
         # CHECK-NEXT: %get_result_11
+        # CHECK-SAME: (%iterate_1, 6)
         # CHECK-NEXT: %get_result_12
+        # CHECK-SAME: (%iterate_1, 7)
+
         # CHECK-NEXT: %read_4_shared_M:0_N:0_K:0
         # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0
         # CHECK-NEXT: %read_4_shared_M:0_N:1_K:0
@@ -207,10 +255,16 @@ def test_gemm_pipelined():
         # CHECK-SAME: (%get_result_10, %read_4_shared_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
         # CHECK-NEXT: %mma_M:1_N:1_K:1
         # CHECK-SAME: (%get_result_12, %read_4_shared_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
+
         # CHECK-NEXT: %write_M:0_N:0_K:0
+        # CHECK-SAME: (%mma_M:0_N:0_K:1, %c, 4, None, (), None)
         # CHECK-NEXT: %write_M:0_N:1_K:0
+        # CHECK-SAME: (%mma_M:0_N:1_K:1, %c, 4, None, (), None)
         # CHECK-NEXT: %write_M:1_N:0_K:0
+        # CHECK-SAME: (%mma_M:1_N:0_K:1, %c, 4, None, (), None)
         # CHECK-NEXT: %write_M:1_N:1_K:0
+        # CHECK-SAME: (%mma_M:1_N:1_K:1, %c, 4, None, (), None)
+
         # CHECK-NEXT: return None
 
 
