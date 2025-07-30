@@ -70,6 +70,8 @@ def debug_log_write_replace(trace: CapturedTrace, debug_arg_info: list[DebugArgI
             new_write = Write(
                 doc.register_,
                 doc.memory,
+                mapping=doc.mapping,
+                mapping_dynamic_vals=doc.mapping_dynamic_vals,
             ).add_to_graph(graph)
             get_custom(new_write).infer_type()
         doc.erase()

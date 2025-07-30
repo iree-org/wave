@@ -132,6 +132,8 @@ def write(
 def debug_log(
     register_: "Register",
     label: Optional[str],
+    mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ): ...
 
 
@@ -2046,6 +2048,8 @@ class DebugLog(CustomOp):
 
     register_: fx.Proxy
     label: Optional[str] = None
+    mapping: Optional[IndexMapping] = None
+    mapping_dynamic_vals: tuple[fx.Node, ...] = ()
 
     @property
     def memory(self) -> Optional[fx.Proxy]:

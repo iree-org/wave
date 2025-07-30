@@ -2218,6 +2218,20 @@ def test_debug_log(dynamic_dims: bool):
     BLOCK_M = 1
     BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
 
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+
+    read_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i // 2, N: j},
+        outputs={M: i, N: j},
+    )
+    write_mapping = tkw.IndexMapping(
+        num_iterators=read_mapping.num_iterators,
+        inputs=read_mapping.output_mapping,
+        outputs=read_mapping.input_mapping,
+    )
+
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
             threads_per_wave=wave_size,
@@ -2240,8 +2254,10 @@ def test_debug_log(dynamic_dims: bool):
         rhs = tkw.read(b)
         tkw.debug_log(lhs)
         tkw.debug_log(rhs, label="rhslog")
+        lhs_mapped = tkw.read(a, mapping=read_mapping)
+        tkw.debug_log(lhs_mapped, label="lhs_mapped", mapping=write_mapping)
         res = lhs + rhs
-        tkw.debug_log(res)
+        tkw.debug_log(res, label="res")
         tkw.write(res, c)
 
     a = device_randn(shape, dtype=torch.float16)
@@ -2270,4 +2286,8 @@ def test_debug_log(dynamic_dims: bool):
     test(a, b, c, debug_logs=debug_logs)
     assert_close(a, debug_logs["debug_log_output_0"])
     assert_close(b, debug_logs["rhslog"])
-    assert_close(c, debug_logs["debug_log_output_2"])
+    assert_close(c, debug_logs["res"])
+    # with the input mapping the rows of the first half are duplicated, with the output mapping the duplicate rows are written back only to the first half
+    assert_close(
+        a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"][0 : shape[0] // 2, :]
+    )
