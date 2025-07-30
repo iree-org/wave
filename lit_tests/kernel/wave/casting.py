@@ -83,4 +83,9 @@ def test_cast():
     # CHECK:  %[[D4:.*]] = arith.extsi %[[D3]] : vector<16xi16> to vector<16xi32>
     # CHECK:  %[[D5:.*]] = arith.sitofp %[[D4]] : vector<16xi32> to vector<16xf32>
     # CHECK:  %[[D6:.*]] = arith.truncf %[[D5]] : vector<16xf32> to vector<16xf16>
-    # CHECK: arith.select %{{.*}}, %{{.*}}, %{{.*}} : vector<16xi1>, vector<16xf16>
+    # CHECK:  %[[MASK:.*]] = arith.constant dense<true> : vector<16xi1>
+    # CHECK:  %[[ONE:.*]] = arith.constant 1.000000e+00 : f16
+    # CHECK:  %[[ZERO:.*]] = arith.constant 0.000000e+00 : f16
+    # CHECK:  %[[VONE:.*]] = vector.broadcast %[[ONE]] : f16 to vector<16xf16>
+    # CHECK:  %[[VZERO:.*]] = vector.broadcast %[[ZERO]] : f16 to vector<16xf16>
+    # CHECK:  %[[D7:.*]] = arith.select %[[MASK]], %[[VONE]], %[[VZERO]] : vector<16xi1>, vector<16xf16>
