@@ -50,6 +50,7 @@ from wave_lang.support.ir_imports import (
     InsertionPoint,
     IntegerAttr,
     IntegerType,
+    VectorType,
     IrType,
     Location,
     MLIRError,
@@ -63,6 +64,7 @@ from wave_lang.support.ir_imports import (
     arith_d,
     func_d,
     tensor_d,
+    vector_d,
 )
 from wave_lang.support.logging import aot_logger as logger
 
@@ -540,6 +542,39 @@ def get_conversion_op(src_elem_type, dst_elem_type, fastmath=None):
     ):
         conversion_op = arith_d.index_cast
         return conversion_op
+    # Special case of casting bool (IntergerType(i1) to float) so that when value is true is casted to 1 and when value is false to cast to 0
+    if (
+        isinstance(src_elem_type, IntegerType)
+        and src_elem_type.width == 1
+        and is_dst_float
+    ):
+
+        def bool_to_float_select(dst_type, vector_src):
+
+            # scalar constants
+            one_const = arith_d.constant(
+                dst_elem_type, FloatAttr.get(dst_elem_type, 1.0)
+            )
+            zero_const = arith_d.constant(
+                dst_elem_type, FloatAttr.get(dst_elem_type, 0.0)
+            )
+
+            # Broadcast to vector if the destination is a vector
+            if VectorType.isinstance(dst_type):
+                one = vector_d.broadcast(dst_type, one_const)
+                zero = vector_d.broadcast(dst_type, zero_const)
+            elif RankedTensorType.isinstance(dst_type):
+                raise NotImplementedError(
+                    "RankedTensorType broadcasting is not implemented for casting bool to float."
+                )
+            else:
+                one = one_const
+                zero = zero_const
+
+            return arith_d.select(vector_src, one, zero)
+
+        # return caller function for get_conversion op
+        return bool_to_float_select
 
     conversion_ops = {
         (True, False): arith_d.fptosi,
