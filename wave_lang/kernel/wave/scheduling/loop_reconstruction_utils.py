@@ -16,7 +16,7 @@ from ...ops.wave_ops import (
     get_custom,
 )
 
-logger = get_logger("turbine.wave.scheduling.loop_reconstruction_utils")
+logger = get_logger("wave.scheduling.loop_reconstruction_utils")
 
 
 class ArgumentContext:

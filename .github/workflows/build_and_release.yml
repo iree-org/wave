@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-name: Build packages
+name: Build and release packages
 
 on:
   workflow_dispatch:
@@ -12,14 +12,14 @@ on:
     # Runs at 05:00 AM UTC, which is 9:00 PM PST (UTC-8) / 10:00 PM PDT (UTC-7)
     # This lines up with https://github.com/iree-org/iree/blob/main/.github/workflows/schedule_candidate_release.yml
     # Downstream projects using nightly releases should expect IREE and
-    # iree-turbine packages to all be available around the same time. This
+    # wave packages to all be available around the same time. This
     # build is much faster than the IREE build though.
     - cron: '0 5 * * *'
 
 jobs:
   build_packages:
     if: ${{ github.repository_owner == 'iree-org' || github.event_name != 'schedule' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
@@ -28,59 +28,66 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Ubuntu packages.
+          # Linux packages
           - runs-on: ubuntu-24.04
             platform: linux-x86_64
             package: wave-lang
-            python-version: cp310-cp310
+            python-version: "3.10"
           - runs-on: ubuntu-24.04
             platform: linux-x86_64
             package: wave-lang
-            python-version: cp311-cp311
+            python-version: "3.11"
           - runs-on: ubuntu-24.04
             platform: linux-x86_64
             package: wave-lang
-            python-version: cp312-cp312
+            python-version: "3.12"
           - runs-on: ubuntu-24.04
             platform: linux-x86_64
             package: wave-lang
-            python-version: cp313-cp313
+            python-version: "3.13"
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: "Setting up Python"
+      - name: Install uv
+        uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          version: "0.8.3"
+
+      - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: 3.11
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
-        run: pip install -r ./build_tools/requirements-packaging.txt
-
-      - name: Build iree-turbine release candidate
-        run: |
-          ./build_tools/compute_local_version.py -rc --write-json
-          ./build_tools/build_release.py --no-download
-
-      - name: Build C++ dependencies (Linux x86_64, ${{ matrix.python-version }})
-        if: "matrix.platform == 'linux-x86_64'"
-        env:
-          OVERRIDE_PYTHON_VERSIONS: "${{ matrix.python-version }}"
-        run: |
-          [ -e ./bindist/* ] && rm ./bindist/*
-          ./build_tools/build_linux_package.sh
+      - name: Build
+        run: uv build --wheel
 
       - name: Upload python wheels
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           if-no-files-found: error
           name: snapshot-${{ matrix.package }}-${{ matrix.platform }}-${{ matrix.python-version }}
-          path: bindist
+          path: dist
+
+  release_packages:
+    needs: build_packages
+    if: ${{ success() && (github.repository_owner == 'iree-org' || github.event_name != 'schedule') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Create/update a release
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: snapshot-*
+          # Merge all artifacts into a single directory
+          merge-multiple: true
+          path: dist
 
       - name: Release python wheels
         uses: ncipollo/release-action@bcfe5470707e8832e12347755757cec0eb3c22af # v1.18.0
         with:
-          artifacts: bindist/*.whl
+          artifacts: dist/*.whl
           tag: "dev-wheels"
           name: "dev-wheels"
           body: "Automatic snapshot release of wave-lang python wheels."

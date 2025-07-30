@@ -26,7 +26,7 @@ For Users
    Before installing Wave, ensure you have the appropriate ROCm-enabled PyTorch dependencies:
 
    .. code-block:: bash
-
+   
       pip install -r pytorch-rocm-requirements.txt
 
 2. **Install Wave**

@@ -216,7 +216,10 @@ def test_scaled_gemm_mxfp8():
     # CHECK:              vector.load
     # CHECK:              vector.store
     # CHECK:              amdgpu.lds_barrier
-    # CHECK-COUNT-6:      vector.load
+    # CHECK:              memref.load
+    # CHECK-COUNT-2:      vector.load
+    # CHECK:              memref.load
+    # CHECK-COUNT-2:      vector.load
     # CHECK:              amdgpu.scaled_mfma
     # CHECK-COUNT-4:    vector.store
 

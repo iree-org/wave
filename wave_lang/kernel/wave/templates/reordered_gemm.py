@@ -9,7 +9,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
 
 
 # This function provides a GEMM kernel where the workgroups executing the kernel are re-arranged
-# to provide potential L2 Cache Optimizations. More details can be found in iree-turbine/docs/wave/workgroup_reordering.rst
+# to provide potential L2 Cache Optimizations. More details can be found in docs/wave/workgroup_reordering.rst
 def get_reordered_matmul(
     m_size: int,
     n_size: int,

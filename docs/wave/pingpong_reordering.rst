@@ -2,7 +2,7 @@ Schedule Reordering Module
 ==========================
 
 This module implements a ping-pong scheduling algorithm for optimizing wave-level parallelism in GPU kernels. The algorithm enables two waves within the same SIMD group to run in parallel by carefully orchestrating their execution phases and synchronization.
-Most of the module and algorithm described below can be found in ``iree-turbine/iree/turbine/kernel/wave/schedule_reordering.py``
+Most of the module and algorithm described below can be found in ``wave_lang/kernel/wave/schedule_reordering.py``
 
 Overview
 --------

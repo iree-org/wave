@@ -355,7 +355,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     ]
     options.kernel_usages = kernel_usages
 
-    if is_cache_enabled():
+    if is_cache_enabled() and not debug_arg_info:
         cache_manager.store_kernel(
             compiled_wave_vmfb,
             asm,

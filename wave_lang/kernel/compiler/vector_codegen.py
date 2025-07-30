@@ -871,8 +871,7 @@ def cast_scalar(emitter: ThreadEmitter, value):
     # After scalar promotion, promote to vector.
     if VectorType.isinstance(value.type):
         # Vector -> scalar.
-        zero = arith_d.ConstantOp(IndexType.get(), 0)
-        return vector_d.extractelement(value, position=zero)
+        return vector_d.extract(value, static_position=[0], dynamic_position=[])
     else:
         # Already a scalar. Coerce or return.
         # No target element_type.

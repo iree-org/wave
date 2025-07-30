@@ -15,7 +15,7 @@ from ..ops.wave_ops import *
 from .constraints import Constraint
 from .utils.general_utils import get_induction_variable
 
-logger = get_logger("turbine.wave.hoisting")
+logger = get_logger("wave.hoisting")
 
 
 def has_set_symbol_dependent_mapping(custom_node: CustomOp) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import copy
 import operator
 import sys
@@ -128,11 +129,9 @@ def write(
 ): ...
 
 
-def debug_log_write(
+def debug_log(
     register_: "Register",
-    elements_per_thread: Optional[IndexExpr | int] = None,
-    mapping: Optional[IndexMapping] = None,
-    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    label: Optional[str],
 ): ...
 
 
@@ -1200,6 +1199,7 @@ class Allocate(CustomOp):
     padding: int = 0
     parent: Optional[fx.Node] = None
     offset: Optional[IndexExpr] = None
+    tail_padding: int = 0  # Padding after the array end
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1208,6 +1208,16 @@ class Allocate(CustomOp):
     @property
     def type(self) -> "Memory":
         return Memory[(*self.shape, self.address_space, self.dtype)]
+
+    @property
+    def allocation_size(self) -> IndexExpr:
+        """
+        Returns the full size of the allocation in bytes including all padding.
+        """
+        return (
+            (math.prod(self.distributed_shape) + self.tail_padding)
+            * self.dtype.bitwidth()
+        ) // 8
 
 
 @define_op("self_index")
@@ -2019,9 +2029,9 @@ class Write(CustomOp):
         )
 
 
-@define_op("debug_log_write")
+@define_op("debug_log")
 @dataclass
-class DebugLogWrite(CustomOp):
+class DebugLog(CustomOp):
     """
     An op for debugging.
     Represents a write to an implicit global memory location.
@@ -2035,7 +2045,7 @@ class DebugLogWrite(CustomOp):
     """
 
     register_: fx.Proxy
-    log_name: Optional[str] = None
+    label: Optional[str] = None
 
     @property
     def memory(self) -> Optional[fx.Proxy]:

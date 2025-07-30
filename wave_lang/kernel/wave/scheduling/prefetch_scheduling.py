@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from enum import Enum, auto
+from enum import Enum
 
 import torch.fx as fx
 
@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 class PrefetchStage(Enum):
-    GLOBAL_LOAD = auto()
-    LOCAL_STORE = auto()
-    LOCAL_LOAD = auto()
-    COMPUTE = auto()
+    GLOBAL_LOAD = 0
+    LOCAL_STORE = 1
+    LOCAL_LOAD = 2
+    COMPUTE = 3
 
     @staticmethod
     def is_valid_transition(
@@ -112,15 +112,13 @@ class PrefetchScheduler:
         sorted_nodes = sort_graph_by_edge_weight(graph.nodes, edges)
         schedule = {}
         current_stage = get_scheduling_stage(sorted_nodes[0])
-        current_stage_idx = 0
         for node in sorted_nodes:
             node_stage = get_scheduling_stage(node)
             logger.info(f"Node {node} is in stage {node_stage}")
             if node_stage == current_stage:
-                schedule[node] = current_stage_idx
+                schedule[node] = node_stage.value
             elif PrefetchStage.is_valid_transition(current_stage, node_stage):
-                current_stage_idx += 1
-                schedule[node] = current_stage_idx
+                schedule[node] = node_stage.value
                 current_stage = node_stage
             else:
                 # Node do not move contigously through stages.
