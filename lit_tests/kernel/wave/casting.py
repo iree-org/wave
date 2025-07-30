@@ -68,6 +68,8 @@ def test_cast():
         a_reg = tkw.cast(a_reg, tkl.i32)
         a_reg = tkw.cast(a_reg, tkl.f32)
         a_reg = tkw.cast(a_reg, tkl.f16)
+        a_reg = tkw.Register[M, N, tkw.i1](1)
+        a_reg = tkw.cast(a_reg, tkl.f16)
         tkw.write(a_reg, b, elements_per_thread=16)
 
     options = get_wave_compile_options(canonicalize=False)
@@ -81,3 +83,4 @@ def test_cast():
     # CHECK:  %[[D4:.*]] = arith.extsi %[[D3]] : vector<16xi16> to vector<16xi32>
     # CHECK:  %[[D5:.*]] = arith.sitofp %[[D4]] : vector<16xi32> to vector<16xf32>
     # CHECK:  %[[D6:.*]] = arith.truncf %[[D5]] : vector<16xf32> to vector<16xf16>
+    # CHECK: arith.select %{{.*}}, %{{.*}}, %{{.*}} : vector<16xi1>, vector<16xf16>
