@@ -1163,6 +1163,15 @@ class Placeholder(CustomOp):
 
         get_custom(var).index = value
 
+    # This method is created for parity with `Allocate` op and is used
+    # when calculating bound expressions.
+    @property
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        unpadded_dim = {}
+        for sym_type in self.type.symbolic_shape:
+            unpadded_dim[sym_type] = sym_type
+        return unpadded_dim
+
 
 @dataclass
 class IterArg(Placeholder):
@@ -1226,6 +1235,23 @@ class Allocate(CustomOp):
             (math.prod(self.distributed_shape) + self.tail_padding)
             * self.dtype.bitwidth()
         ) // 8
+
+    @property
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        from ..wave.utils.general_utils import is_scaled_dim, infer_dim
+
+        unpadded_dim = {}
+        last_sym_type = self.type.symbolic_shape[-1]
+        last_sym_type = (
+            infer_dim(self.type.symbolic_shape[-1])
+            if is_scaled_dim(last_sym_type)
+            else last_sym_type
+        )
+        unpadded_dim[last_sym_type] = self.distributed_shape[-1] - self.padding
+        for idx, sym_type in enumerate(self.type.symbolic_shape[:-1]):
+            sym_type = infer_dim(sym_type) if is_scaled_dim(sym_type) else sym_type
+            unpadded_dim[sym_type] = self.distributed_shape[idx]
+        return unpadded_dim
 
 
 @define_op("self_index")

@@ -23,13 +23,12 @@ from .wave import CapturedTrace
 def _get_max_tile_size(
     dim: IndexSymbol,
     constraints: list[Constraint],
-    vector_shapes: dict[IndexSymbol, int],
+    unpadded_dims: dict[IndexSymbol, IndexExpr],
 ) -> IndexExpr:
-    ret = sympy.sympify(vector_shapes[dim])
+    ret = sympy.sympify(unpadded_dims[dim])
     for constraint in constraints:
         if isinstance(constraint, DistributionConstraint) and constraint.dim == dim:
             ret = sympy.Max(ret, constraint.tile_size)
-
     return ret
 
 
@@ -60,12 +59,11 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
             # Masking against global bounds was already handled when reading from
             # global mem, but we still need to handle masking against vector
             # size during shared mem access.
-            # A bound expression for this case is `min(global_bound, vector_size)`.
-            # Replace global bound with `max(tile_size, vector_size)` so the entire
-            # expression `min(max(tile_size, vector_size), vector_size)` can be
-            # simplified to just vector size.
+            unpadded_dims = get_custom(node.memory).get_unpadded_dims
             bounds = {
-                k: safe_subs(v, {k: _get_max_tile_size(k, constraints, vector_shapes)})
+                k: (
+                    safe_subs(v, {k: _get_max_tile_size(k, constraints, unpadded_dims)})
+                )
                 for k, v in bounds.items()
             }
             # Shared mem accesses always access the full vector_shape tile,
