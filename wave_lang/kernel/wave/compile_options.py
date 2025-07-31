@@ -84,6 +84,7 @@ class WaveCompileOptions:
     # === Print options ===
     print_ir_after: list[str] = field(default_factory=list)
     print_ir_before: list[str] = field(default_factory=list)
+    profile_pass: list[str] = field(default_factory=list)
     print_trace_begin: bool = False
     print_grid: bool = False
     print_signature: bool = False

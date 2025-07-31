@@ -765,6 +765,7 @@ def try_apply_pass(
     trace: CapturedTrace,
     print_ir_before: Sequence[str] = [],
     print_ir_after: Sequence[str] = [],
+    profile_pass: Sequence[str] = [],
     pass_times: Optional[dict[str, float]] = None,
 ):
     pass_name = p.__name__
@@ -773,7 +774,14 @@ def try_apply_pass(
         print_trace(trace)
     try:
         start = timeit.default_timer()
-        p()
+        if "all" in profile_pass or pass_name in profile_pass:
+            import cProfile
+
+            with cProfile.Profile() as pr:
+                p()
+            pr.print_stats(sort="cumulative")
+        else:
+            p()
         end = timeit.default_timer()
         if pass_times is not None:
             print_name = pass_name

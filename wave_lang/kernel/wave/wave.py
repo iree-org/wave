@@ -580,6 +580,7 @@ class LaunchableWave(Launchable):
 
         print_ir_after = options.print_ir_after
         print_ir_before = options.print_ir_before
+        profile_pass = options.profile_pass
         if options.print_trace_begin:
             print(f"\n***Tracing kernel {self._name}***")
 
@@ -667,7 +668,9 @@ class LaunchableWave(Launchable):
 
         pass_times = {}
         for p in graph_passes:
-            try_apply_pass(p, trace, print_ir_before, print_ir_after, pass_times)
+            try_apply_pass(
+                p, trace, print_ir_before, print_ir_after, profile_pass, pass_times
+            )
 
         if options.print_pass_times:
             pass_times_list = sorted(
