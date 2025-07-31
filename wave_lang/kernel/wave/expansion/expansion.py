@@ -113,6 +113,9 @@ class ExpansionContext:
     def __setitem__(self, key: ExpansionInfo, value: CustomOp):
         self.expansion_context[key] = value
 
+    def get(self, key: ExpansionInfo):
+        return self.expansion_context.get(key, None)
+
 
 def get_dim_combinations(
     node: CustomOp,
@@ -335,8 +338,7 @@ def update_users(
                 continue
             dim_query = metadata.source_dim_query
         key = ExpansionInfo(user, get_indexed_dims(dim_query, user))
-        if key in expansion_context:
-            new_user = expansion_context[key]
+        if new_user := expansion_context.get(key):
             if not new_user.node_args:
                 continue
             indices = user.get_node_arg_index(node)
