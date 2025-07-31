@@ -1,3 +1,4 @@
+import copy
 from abc import ABC
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional, Type, TypeAlias, TypeVar, Union
@@ -76,6 +77,29 @@ Dims = list[Union[None, IndexSymbol, int]]
 ###############################################################################
 
 
+def safe_subs(
+    input: IndexExpr | int,
+    subs: dict[IndexSymbol, int | IndexSymbol],
+    simultaneous: bool = False,
+) -> IndexSymbol | int:
+    """
+    Substitute input using provided `subs` list if input is sympy object.
+    Otherwise return input unchanged.
+    """
+    if isinstance(input, (sympy.Basic, IndexSequence)):
+        return input.subs(subs, simultaneous=simultaneous)  # type: ignore
+
+    return input
+
+
+def subs_idxc(input: Any) -> IndexSymbol | int:
+    """
+    Substitute input using IndexingContext if input is sympy object.
+    Otherwise return input unchanged.
+    """
+    return IndexingContext.current().subs_expr(input)
+
+
 @dataclass(slots=True)
 class _ShapedBinding:
     # The instance of shaped_type. Can be anything. We resolve dimension values
@@ -106,6 +130,7 @@ class IndexingContext:
         "dyn_dims",
         "frozen_subs",
         "unbacked_symbols",
+        "cached_subs",
     ]
 
     __tk_context_idname__ = "IndexingContext"
@@ -118,6 +143,7 @@ class IndexingContext:
         self.dyn_dims: list[IndexSymbol] = []
         self.frozen_subs: list[tuple[IndexSymbol, int]] = []
         self.unbacked_symbols: list[IndexSymbol] = []
+        self.cached_subs: dict[IndexSymbol, int | IndexSymbol] = {}
 
     def __str__(self):
         return (
@@ -130,6 +156,17 @@ class IndexingContext:
             f"unbacked_symbols: {self.unbacked_symbols}\n"
             ")"
         )
+
+    def set_subs(self, subs: dict[IndexSymbol, int | IndexSymbol]):
+        self.subs = copy.deepcopy(subs)
+        self.cached_subs = {}
+
+    def subs_expr(self, expr: IndexExpr) -> IndexExpr:
+        if val := self.cached_subs.get(expr, None):
+            return val
+        val = safe_subs(expr, self.subs)
+        self.cached_subs[expr] = val
+        return val
 
     def next_dyn_dim(self) -> IndexSymbol:
         s = index_symbol(f"D{len(self.dyn_dims)}")
@@ -169,6 +206,7 @@ class IndexingContext:
         if existing is not None and existing != value:
             raise ValueError
         self.subs[symbol] = value
+        self.cached_subs = {}
 
     def finalize(self):
         assert len(self.frozen_subs) == 0, f"{self.frozen_subs=}"
