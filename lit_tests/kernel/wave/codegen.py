@@ -958,7 +958,7 @@ def test_unary_lowerings():
     # CHECK: %[[ADD:.+]] = arith.addf %[[ONE]], %[[ABS2]] : vector<4xf16>
     # CHECK: %[[RECIP_DENOM:.+]] = arith.divf %[[ONE]], %[[ADD]] : vector<4xf16>
     # CHECK: %[[SOFTSIGN:.+]] = arith.mulf %[[TANH_APPROX]], %[[RECIP_DENOM]] : vector<4xf16>
-
+    
     # Tests sigmoid 
     # Assuming input %[[SIGMOID_INPUT:.+]] = ...
     # CHECK: %[[NEG_ONE:.+]] = arith.constant dense<-1.000000e+00> : vector<4xf16>

@@ -1128,25 +1128,35 @@ def handle_sigmoid(source: Value, options: WaveCompileOptions) -> OpResult:
         # constant one
         one = arith_d.ConstantOp(
             source.type,
-            DenseElementsAttr.get_splat(source.type, get_constant_attr(1.0, element_type)),
+            DenseElementsAttr.get_splat(
+                source.type, get_constant_attr(1.0, element_type)
+            ),
         )
         # negative one
         neg_one = arith_d.ConstantOp(
-                source.type,
-                DenseElementsAttr.get_splat(
-                    source.type, get_constant_attr(-1.0, element_type)
-                ),
-            )
+            source.type,
+            DenseElementsAttr.get_splat(
+                source.type, get_constant_attr(-1.0, element_type)
+            ),
+        )
         # negative x
         neg_x = arith_d.mulf(source, neg_one, fastmath=get_fast_math_flags(options))
         # denominator = 1 + exp(-x)
-        denom = arith_d.addf(one, math_d.exp(neg_x), fastmath=get_fast_math_flags(options))
+        denom = arith_d.addf(
+            one, math_d.exp(neg_x), fastmath=get_fast_math_flags(options)
+        )
         # reciprocal_denom = 1 / denom
-        reciprocal_denom = arith_d.divf(one, denom, fastmath=get_fast_math_flags(options))
+        reciprocal_denom = arith_d.divf(
+            one, denom, fastmath=get_fast_math_flags(options)
+        )
         # result = 1 * (1 / denom)
-        result = arith_d.mulf(one, reciprocal_denom, fastmath=get_fast_math_flags(options))
+        result = arith_d.mulf(
+            one, reciprocal_denom, fastmath=get_fast_math_flags(options)
+        )
     else:
-        raise ValidationError(f"Found unhandled operand type for sigmoid: {element_type}")    
+        raise ValidationError(
+            f"Found unhandled operand type for sigmoid: {element_type}"
+        )    
     
     return result
 
