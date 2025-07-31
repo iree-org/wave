@@ -13,7 +13,7 @@ from typing import Optional
 import sympy
 import torch.fx as fx
 
-from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
+from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol, xor
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -224,6 +224,8 @@ def emit_global_to_lds(
     logger.info(f"global_index={global_index}")
 
     new_writes = defaultdict(list)
+
+    commmon_id = None
     for i in range(expected_number_of_loads):
         # As we adjusted our shape to be in `elements_per_thread` chunks, each
         # subsequent load will be `total_number_of_threads` elements apart.
@@ -260,6 +262,11 @@ def emit_global_to_lds(
                 write.mapping,
                 bounds,
             ).add_to_graph(write.graph)
+
+        if i == 0:
+            commmon_id = id(new_write)
+
+        new_write.pre_expansion_id = commmon_id
 
         new_writes[write.memory].append(new_write)
         if drop_padding:
@@ -438,3 +445,85 @@ def gather_to_shared(
         update_write_dependencies(new_writes, trace)
 
     DCE(trace)
+
+
+def gather_to_shared_swizzling(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+):
+    if "gfx95" not in options.target:
+        logger.info("gather_to_shared_swizzling not supported on this architecture")
+        return
+
+    logger.info("gather_to_shared_swizzling")
+
+    id_to_gather = defaultdict(list)
+    for gather in trace.walk(lambda x: isinstance(get_custom(x), GatherToLDS)):
+        gather = get_custom(gather)
+        key = gather.pre_expansion_id
+        id_to_gather[key].append(gather)
+
+    if not id_to_gather:
+        return
+
+    for gathers in id_to_gather.values():
+        mem = gathers[0].dst
+        reads = [
+            get_custom(read) for read in mem.users if isinstance(get_custom(read), Read)
+        ]
+        gather = gathers[0]
+        read = reads[0]
+        if (
+            gather.dtype != read.dtype
+            or gather.elements_per_thread != read.elements_per_thread
+        ):
+            logger.info(
+                "mismatched gather and read thread shapes: "
+                f"gather.dtype={gather.dtype}, read.dtype={read.dtype}, "
+                f"gather.elements_per_thread={gather.elements_per_thread}, "
+                f"read.elements_per_thread={read.elements_per_thread}"
+            )
+            continue
+
+        elements_per_thread = gather.elements_per_thread
+
+        shape = get_custom(mem).type.symbolic_shape
+        if len(shape) < 2:
+            logger.info(f"shape={shape} must be at least 2D")
+            continue
+
+        logger.info(f"gather={gather}")
+        logger.info(f"read={read}")
+
+        col_dim = infer_dim(shape[-1])
+        row_dim = infer_dim(shape[-2])
+
+        for read in reads:
+            index = dict(read.index)
+            col_seq = index[col_dim]
+            row_seq = index[row_dim]
+            col = col_seq.start // elements_per_thread
+            row = row_seq.start % 8
+            col = xor(row, col) * elements_per_thread
+            index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
+            read.index = index
+
+        for gather in gathers:
+            src_index = dict(gather.src_index)
+            dst_index = dict(gather.dst_index)
+            global_offset = src_index[col_dim].start - dst_index[col_dim].start
+            col_seq_dst = dst_index[col_dim]
+            col_seq_src = src_index[col_dim]
+            row_seq_dst = dst_index[row_dim]
+            col = col_seq_dst.start // elements_per_thread
+            row = row_seq_dst.start % 8
+            col = xor(row, col) * elements_per_thread
+            src_index[col_dim] = IndexSequence(
+                global_offset + col, col_seq_src.size, col_seq_src.stride
+            )
+            dst_index[col_dim] = IndexSequence(
+                col, col_seq_dst.size, col_seq_dst.stride
+            )
+            gather.src_index = src_index
+            gather.dst_index = dst_index

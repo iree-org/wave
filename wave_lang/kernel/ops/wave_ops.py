@@ -1634,6 +1634,10 @@ class Read(CustomOp):
         return get_custom(self.memory).type
 
     @property
+    def dtype(self) -> DataType:
+        return self.memory_type.dtype
+
+    @property
     def write_dependency(self) -> fx.Node:
         return self._write_dependency
 
