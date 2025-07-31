@@ -35,9 +35,13 @@ from ..common.utils import (
 from ..common.shapes import get_test_shapes
 from typing import List, Optional
 
+_xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
+
 # Reference paged attention implementation from vLLM and sglang.
 # (NUM_Q_HEADS, NUM_KV_HEADS, HEAD_SIZE, HEAD_SIZE_KV, SEQ_LENS)
-shapes = [(4, 1, 64, 64, (128, 256))]
+# TODO: xfailure case - wrong numerics with minimize_global_loads but produces
+# correct results without it.
+shapes = [_xfail((1, 1, 13, 13, (64, 64))), (4, 1, 64, 64, (128, 256))]
 
 
 # From: https://github.com/sgl-project/sglang/blob/main/test/srt/test_triton_attention_kernels.py
