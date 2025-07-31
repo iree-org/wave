@@ -164,8 +164,8 @@ Let's look at a GEMM kernel that will be optimized by the global load minimizati
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: Register[M, N, f32]) -> Register[M, N, f32]:
             # Direct global memory loads
-            a_reg = tkw.read(a, elements_per_thread=4)
-            b_reg = tkw.read(b, elements_per_thread=4)
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
 

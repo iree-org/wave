@@ -132,6 +132,8 @@ def write(
 def debug_log(
     register_: "Register",
     label: Optional[str],
+    mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ): ...
 
 
@@ -185,6 +187,9 @@ def roundeven(src: "Register") -> "Register": ...
 
 
 def sin(src: "Register") -> "Register": ...
+
+
+def sinh(src: "Register") -> "Register": ...
 
 
 def maximum(lhs: "Register", rhs: "Register") -> "Register": ...
@@ -934,6 +939,7 @@ class ComparisonPyOp(BinaryOpBase, ABC):
 @define_interface_op("reciprocal")
 @define_interface_op("roundeven")
 @define_interface_op("sin")
+@define_interface_op("sinh")
 @define_interface_op("tanh")
 @define_interface_op("tanh_approx")
 @define_interface_op("cos")
@@ -1155,6 +1161,15 @@ class Placeholder(CustomOp):
 
         get_custom(var).index = value
 
+    # This method is created for parity with `Allocate` op and is used
+    # when calculating bound expressions.
+    @property
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        unpadded_dim = {}
+        for sym_type in self.type.symbolic_shape:
+            unpadded_dim[sym_type] = sym_type
+        return unpadded_dim
+
 
 @dataclass
 class IterArg(Placeholder):
@@ -1218,6 +1233,23 @@ class Allocate(CustomOp):
             (math.prod(self.distributed_shape) + self.tail_padding)
             * self.dtype.bitwidth()
         ) // 8
+
+    @property
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        from ..wave.utils.general_utils import is_scaled_dim, infer_dim
+
+        unpadded_dim = {}
+        last_sym_type = self.type.symbolic_shape[-1]
+        last_sym_type = (
+            infer_dim(self.type.symbolic_shape[-1])
+            if is_scaled_dim(last_sym_type)
+            else last_sym_type
+        )
+        unpadded_dim[last_sym_type] = self.distributed_shape[-1] - self.padding
+        for idx, sym_type in enumerate(self.type.symbolic_shape[:-1]):
+            sym_type = infer_dim(sym_type) if is_scaled_dim(sym_type) else sym_type
+            unpadded_dim[sym_type] = self.distributed_shape[idx]
+        return unpadded_dim
 
 
 @define_op("self_index")
@@ -2046,6 +2078,8 @@ class DebugLog(CustomOp):
 
     register_: fx.Proxy
     label: Optional[str] = None
+    mapping: Optional[IndexMapping] = None
+    mapping_dynamic_vals: tuple[fx.Node, ...] = ()
 
     @property
     def memory(self) -> Optional[fx.Proxy]:

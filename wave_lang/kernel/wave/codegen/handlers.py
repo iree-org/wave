@@ -104,6 +104,7 @@ from ...ops.wave_ops import (
     shared_memory_barrier,
     shuffle,
     sin,
+    sinh,
     softsign,
     sqrt,
     tanh,
@@ -1147,6 +1148,16 @@ def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
     else:
         raise ValidationError(f"Found unhandled operand type for sine: {element_type}")
     return sine_of_source
+
+
+@handle_unary_op(sinh)
+def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(source.type)
+    if _is_float_type(element_type):
+        sinh_of_source = math_d.sinh(source)
+    else:
+        raise ValidationError(f"Found unhandled operand type for sinh: {element_type}")
+    return sinh_of_source
 
 
 @handle_unary_op(cos)
