@@ -2163,15 +2163,14 @@ def test_register_codegen_i32():
     # CHECK-LABEL: @register_codegen_i32
 
     # Setting up constant register
-    # CHECK:  %[[CST:.+]] = arith.constant dense<3> : vector<1xi32>
+    # CHECK:  %[[CST:.+]] = arith.constant 3 : i32
 
     # Setting up THREAD_0 as a register
     # CHECK:  %[[tid:.+]] = gpu.thread_id  x
     # CHECK:  %[[cast:.+]] = arith.index_cast %[[tid]] : index to i32
-    # CHECK:  %[[broadcast:.+]] = vector.broadcast %[[cast]] : i32 to vector<1xi32>
 
     # Check for addition operation of two registers
-    # CHECK: arith.addi %[[broadcast]], %[[CST]] : vector<1xi32>
+    # CHECK: arith.addi %[[cast]], %[[CST]] : i32
 
 
 @run_test
