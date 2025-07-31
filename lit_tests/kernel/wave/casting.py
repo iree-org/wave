@@ -60,7 +60,7 @@ def test_cast():
         a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
         b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
     ):
-        a_reg = tkw.read(a, elements_per_thread=16)
+        a_reg = tkw.read(a)
         a_reg = tkw.cast(a_reg, tkl.f32)
         a_reg = tkw.cast(a_reg, tkl.i8)
         a_reg = tkw.cast(a_reg, tkl.f16)
@@ -68,7 +68,7 @@ def test_cast():
         a_reg = tkw.cast(a_reg, tkl.i32)
         a_reg = tkw.cast(a_reg, tkl.f32)
         a_reg = tkw.cast(a_reg, tkl.f16)
-        tkw.write(a_reg, b, elements_per_thread=16)
+        tkw.write(a_reg, b)
 
     options = get_wave_compile_options(canonicalize=False)
     test = wave_compile(options, test)
