@@ -1161,6 +1161,15 @@ class Placeholder(CustomOp):
 
         get_custom(var).index = value
 
+    # This method is created for parity with `Allocate` op and is used
+    # when calculating bound expressions.
+    @property
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        unpadded_dim = {}
+        for sym_type in self.type.symbolic_shape:
+            unpadded_dim[sym_type] = sym_type
+        return unpadded_dim
+
 
 @dataclass
 class IterArg(Placeholder):
