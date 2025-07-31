@@ -12,30 +12,81 @@ Before installing Wave, ensure you have the following prerequisites:
 2. PyTorch
 3. ROCm (for AMD GPU support)
 4. A compatible AMD GPU with ROCm support (MI250, MI300, etc.)
-5. Rust 1.70 or later
 
-Installation
--------------
+Quickstart
+--------------
 
-1. Install PyTorch with ROCm support:
+Wave supports both end users (who want to use Wave kernels in their ML workflows) and developers (who want to contribute to or extend Wave). Follow the relevant guide below to get started quickly.
+
+For Users
+~~~~~~~~~
+
+1. **Install ROCm PyTorch Dependencies**
+
+   Before installing Wave, ensure you have the appropriate ROCm-enabled PyTorch dependencies:
 
    .. code-block:: bash
 
       pip install -r pytorch-rocm-requirements.txt
 
-2. Install Rust:
+2. **Install Wave**
+
+   You can then install Wave and its dependencies using pip:
+
+   .. code-block:: bash
+
+      pip install wave-lang
+
+For Developers
+~~~~~~~~~
+
+1. **Clone the Repository**
+
+   .. code-block:: bash
+
+      git clone https://github.com/iree-org/wave.git
+      cd wave
+
+2. **Install Development Dependencies**
+
+   If you don't have Rust already installed on your system, install Rust using the following command:
 
    .. code-block:: bash
 
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-3. Install Wave and its dependencies:
+   Next, install the python dependencies. It is recommended to use a virtual environment.
 
    .. code-block:: bash
 
-      pip install -r requirements.txt
-      pip install -r requirements-wave-runtime.txt
+      python -m venv .venv
+      source .venv/bin/activate
+      pip install --upgrade pip
+      pip install -r requirements-iree-pinned.txt
+      pip install -r pytorch-rocm-requirements.txt
+      pip install -r requirements.txt -e .
 
+   *Note:*
+
+      If you do not have access to Instinct GPUs, you can still install Wave as above but with the CPU version of PyTorch:
+
+      .. code-block:: bash
+
+        pip install -r pytorch-cpu-requirements.txt
+
+      Currently, you can only run lit tests in this mode.
+
+3. **Run Tests**
+
+   To verify your setup:
+
+   .. code-block:: bash
+
+      # Python tests
+      pytest -s tests/
+      # To run end to end tests, add --run-e2e flag
+      # Lit tests
+      lit lit_tests/ -v
 
 Next Steps
 -----------
