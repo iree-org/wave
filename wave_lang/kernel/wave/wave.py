@@ -56,6 +56,7 @@ from .constraints import (
     WorkgroupConstraint,
     get_grid_shape,
 )
+from .construct_index_mapping import construct_index_mapping
 from .debug_log_hoist import (
     debug_log_hoist,
     debug_log_write_replace,
@@ -530,6 +531,7 @@ class LaunchableWave(Launchable):
             substitute_vector_shapes,
             partial(add_get_results, trace),
             partial(infer_types, trace),
+            partial(construct_index_mapping, trace, self.constraints),
             partial(debug_log_write_replace, trace, debug_arg_info),
             partial(
                 promote_placeholders,

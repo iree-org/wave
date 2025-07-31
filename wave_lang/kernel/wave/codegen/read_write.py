@@ -736,7 +736,7 @@ def _create_vec_read_write(
 def handle_read(emitter: WaveEmitter, node: fx.Node):
     # This is similar to tkl.store with fixed start indices for now.
     try:
-        memory, elements_per_thread, mapping, dyn_vals, bounds, _ = node.args
+        memory, elements_per_thread, mapping, dyn_vals, bounds, *rest = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -815,7 +815,9 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
 @handle_op(write)
 def handle_write(emitter: WaveEmitter, node: fx.Node):
     try:
-        register, memory, elements_per_thread, mapping, dyn_vals, bounds = node.args
+        register, memory, elements_per_thread, mapping, dyn_vals, bounds, *rest = (
+            node.args
+        )
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 

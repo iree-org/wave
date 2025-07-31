@@ -38,44 +38,6 @@ def get_igemm_conv2d(
     sym = tkl.sym
     N, C, H, W = sym.N, sym.C, sym.H, sym.W
     NF, HF, WF = sym.NF, sym.HF, sym.WF
-
-    H_OUT = (H + 2 * padding - HF) // stride + 1
-    W_OUT = (W + 2 * padding - WF) // stride + 1
-    SZ_OUT = H_OUT * W_OUT
-
-    K = HF * WF * C
-    M = SZ_OUT * N
-
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
-
-    # Align C dim reading pattern to be contiguous for nhwc_hwcf pattern.
-    x_mapping = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={
-            N: i // SZ_OUT,
-            C: j % C,
-            H: (i % SZ_OUT) % W_OUT * stride + (j // C) % WF,
-            W: (i % SZ_OUT) // W_OUT * stride + (j // C) // WF,
-        },
-        outputs={M: i, K: j},
-    )
-    w_mapping = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={NF: i % NF, C: j % C, HF: (j // C) % WF, WF: (j // C) // WF},
-        outputs={NF: i, K: j},
-    )
-    out_mapping = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={M: i, NF: j},
-        outputs={
-            N: i // SZ_OUT,
-            NF: j,
-            H_OUT: (i % SZ_OUT) % W_OUT,
-            W_OUT: (i % SZ_OUT) // W_OUT,
-        },
-    )
-
     # Workgroup tile sizes
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
@@ -85,16 +47,12 @@ def get_igemm_conv2d(
     # Other hyperparameters
     ELEMS_PER_THREAD = tkl.sym.ELEMS_PER_THREAD
 
-    if layout == "nchw_fchw":
-        x_type = tkl.Memory[N, C, H, W, ADDRESS_SPACE, input_dtype]
-        we_type = tkl.Memory[NF, C, HF, WF, ADDRESS_SPACE, input_dtype]
-        out_type = tkl.Memory[N, NF, H_OUT, W_OUT, GLOBAL_ADDRESS_SPACE, output_dtype]
-    elif layout == "nhwc_hwcf":
-        x_type = tkl.Memory[N, H, W, C, ADDRESS_SPACE, input_dtype]
-        we_type = tkl.Memory[HF, WF, C, NF, ADDRESS_SPACE, input_dtype]
-        out_type = tkl.Memory[N, H_OUT, W_OUT, NF, GLOBAL_ADDRESS_SPACE, output_dtype]
-    else:
-        raise ValueError(f"Unsupported layout: {layout}")
+    H_OUT = (H + 2 * padding - HF) // stride + 1
+    W_OUT = (W + 2 * padding - WF) // stride + 1
+    SZ_OUT = H_OUT * W_OUT
+
+    K = HF * WF * C
+    M = SZ_OUT * N
 
     if block_m is None:
         block_m = 64
@@ -111,49 +69,6 @@ def get_igemm_conv2d(
     if ratio_n is None:
         ratio_n = 2
 
-    # Expose user-constraints
-    constraints: list[tkw.Constraint] = []
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
-    constraints += [tkw.WorkgroupConstraint(NF, BLOCK_N, 0)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / ratio_m)]
-    constraints += [tkw.WaveConstraint(NF, BLOCK_N / ratio_n)]
-    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-
-    constraints += [
-        tkw.HardwareConstraint(
-            threads_per_wave=64,
-        )
-    ]
-
-    @tkw.wave(constraints)
-    def conv(
-        x: x_type,
-        we: we_type,
-        out: out_type,
-    ):
-        c_reg = tkl.Register[M, NF, output_dtype](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(
-            acc: tkl.Register[M, NF, output_dtype],
-        ) -> tkl.Register[M, NF, output_dtype]:
-            a_reg = tkw.read(
-                x,
-                mapping=x_mapping,
-                elements_per_thread=ELEMS_PER_THREAD,
-            )
-            b_reg = tkw.read(
-                we,
-                mapping=w_mapping,
-                elements_per_thread=ELEMS_PER_THREAD,
-            )
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(
-            repeat, out, mapping=out_mapping, elements_per_thread=ELEMS_PER_THREAD
-        )
-
     symbols = {
         N: n,
         C: c,
@@ -168,5 +83,88 @@ def get_igemm_conv2d(
         ELEMS_PER_THREAD: 4,
         ADDRESS_SPACE: mem_space,
     }
+
+    # Create iterator symbols
+    m = tkl.sym.m
+    k = tkl.sym.k
+    nf = tkl.sym.nf
+
+    # Define input, weight, and output dimension expressions
+    wnf = nf % NF
+    hf = (k // C) % WF
+    wf = (k // C) // WF
+
+    n = m // SZ_OUT
+    c = k % C
+    h = (m % SZ_OUT) % W_OUT * stride + hf
+    w = (m % SZ_OUT) // W_OUT * stride + wf
+
+    n_out = m // SZ_OUT
+    h_out = (m % SZ_OUT) % W_OUT
+    w_out = (m % SZ_OUT) // W_OUT
+
+    if layout == "nchw_fchw":
+        x_type = tkl.Memory[N, C, H, W, ADDRESS_SPACE, input_dtype]
+        we_type = tkl.Memory[NF, C, HF, WF, ADDRESS_SPACE, input_dtype]
+        out_type = tkl.Memory[N, NF, H_OUT, W_OUT, GLOBAL_ADDRESS_SPACE, output_dtype]
+        x_indices = (n, c, h, w)
+        we_indices = (wnf, c, hf, wf)
+        out_indices = (n_out, nf, h_out, w_out)
+    elif layout == "nhwc_hwcf":
+        x_type = tkl.Memory[N, H, W, C, ADDRESS_SPACE, input_dtype]
+        we_type = tkl.Memory[HF, WF, C, NF, ADDRESS_SPACE, input_dtype]
+        out_type = tkl.Memory[N, H_OUT, W_OUT, NF, GLOBAL_ADDRESS_SPACE, output_dtype]
+        x_indices = (n, h, w, c)
+        we_indices = (hf, wf, c, wnf)
+        out_indices = (n_out, h_out, w_out, nf)
+    else:
+        raise ValueError(f"Unsupported layout: {layout}")
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = []
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(NF, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / ratio_m)]
+    constraints += [tkw.WaveConstraint(NF, BLOCK_N / ratio_n)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+        )
+    ]
+    # Bind iterators to dimensions
+    constraints += [tkw.IteratorBindings({m: M, k: K, nf: NF})]
+
+    @tkw.wave(constraints)
+    def conv(x: x_type, we: we_type, out: out_type):
+        c_reg = tkl.Register[M, NF, output_dtype](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(
+            acc: tkl.Register[M, NF, output_dtype],
+        ) -> tkl.Register[M, NF, output_dtype]:
+            a_reg = tkw.read(
+                x,
+                source=x_indices,
+                target=(m, k),
+                elements_per_thread=ELEMS_PER_THREAD,
+            )
+            b_reg = tkw.read(
+                we,
+                source=we_indices,
+                target=(nf, k),
+                elements_per_thread=ELEMS_PER_THREAD,
+            )
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(
+            repeat,
+            out,
+            source=(m, nf),
+            target=out_indices,
+            elements_per_thread=ELEMS_PER_THREAD,
+        )
 
     return conv, symbols
