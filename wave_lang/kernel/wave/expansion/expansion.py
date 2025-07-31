@@ -8,7 +8,7 @@ import itertools
 import math
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Sequence, Callable
 
 from torch import fx
 
@@ -117,13 +117,14 @@ class ExpansionContext:
 def get_dim_combinations(
     node: CustomOp,
     constraints: Sequence[Constraint],
+    get_scaling: Callable[[CustomOp], dict[IndexSymbol, int]],
 ):
     """
     Returns all combinations of sizes for the selected dimensions.
     Other dimensions are clamped to 0. A dictionary is return where
     the keys are the dimensions and the values are the combination.
     """
-    dim_scaling = get_dim_scaling(constraints, node)
+    dim_scaling = get_scaling(node)
     adjusted_dimension_sizes = [
         list(range(dim_scaling[dim])) if dim in node.indexing_dims else [0]
         for dim in dim_scaling
@@ -612,6 +613,7 @@ def dfs(
     dim_query: dict[IndexSymbol, int],
     constraints: Sequence[Constraint],
     expansion_context: ExpansionContext,
+    get_scaling: Callable[[CustomOp], dict[IndexSymbol, int]],
 ):
     """
     Perform a depth-first search on the graph starting at the given node
@@ -625,7 +627,7 @@ def dfs(
         if (node, metadata) in visited:
             continue
         visited.add((node, metadata))
-        dim_scaling = get_dim_scaling(constraints, node)
+        dim_scaling = get_scaling(node)
         nodes_to_expand = expand_node(
             node, dim_scaling, nodes_to_expand, metadata, expansion_context
         )
@@ -775,14 +777,27 @@ def expand_graph(
         logger.warning(
             f"No leaf operations found in kernel. Using final operation {final_op}"
         )
+
+    # get_dim_scaling is expensive, so we cache the results.
+    scaling_cache = {}
+
+    def get_scaling(node: CustomOp):
+        if val := scaling_cache.get(node, None):
+            return val
+
+        scaling = get_dim_scaling(constraints, node)
+        scaling_cache[node] = scaling
+        return scaling
+
     expansion_context = ExpansionContext()
     for custom in leaf_ops:
-        for dim_combination in get_dim_combinations(custom, constraints):
+        for dim_combination in get_dim_combinations(custom, constraints, get_scaling):
             dfs(
                 custom,
                 dim_combination,
                 constraints,
                 expansion_context,
+                get_scaling,
             )
 
     # Fixup all reduction nodes.
