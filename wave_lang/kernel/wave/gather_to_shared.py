@@ -38,10 +38,11 @@ from .minimize_global_loads import (
 from .utils.general_utils import (
     ceildiv,
     delinearize_index,
+    find_index_bounds,
     get_hardware_constraint,
     infer_dim,
     remove_thread_indexing,
-    find_index_bounds,
+    remove_global_indexing,
 )
 from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
@@ -487,43 +488,37 @@ def gather_to_shared_swizzling(
             continue
 
         elements_per_thread = gather.elements_per_thread
+        logger.info(f"elements_per_thread={elements_per_thread}")
 
         shape = get_custom(mem).type.symbolic_shape
         if len(shape) < 2:
             logger.info(f"shape={shape} must be at least 2D")
             continue
 
-        logger.info(f"gather={gather}")
-        logger.info(f"read={read}")
-
         col_dim = infer_dim(shape[-1])
         row_dim = infer_dim(shape[-2])
 
         for read in reads:
-            index = dict(read.index)
+            index = remove_global_indexing(read.index, constraints)
             col_seq = index[col_dim]
             row_seq = index[row_dim]
             col = col_seq.start // elements_per_thread
             row = row_seq.start % 8
             col = xor(row, col) * elements_per_thread
             index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
+            logger.info(f"read.index={read.index} -> {index}")
             read.index = index
 
         for gather in gathers:
-            src_index = dict(gather.src_index)
-            dst_index = dict(gather.dst_index)
-            global_offset = src_index[col_dim].start - dst_index[col_dim].start
-            col_seq_dst = dst_index[col_dim]
-            col_seq_src = src_index[col_dim]
-            row_seq_dst = dst_index[row_dim]
-            col = col_seq_dst.start // elements_per_thread
-            row = row_seq_dst.start % 8
+            index = dict(gather.src_index)
+            global_index = remove_thread_indexing(index)
+            local_index = remove_global_indexing(index, constraints)
+            col_seq = local_index[col_dim]
+            row_seq = local_index[row_dim]
+            col = col_seq.start // elements_per_thread
+            row = row_seq.start % 8
             col = xor(row, col) * elements_per_thread
-            src_index[col_dim] = IndexSequence(
-                global_offset + col, col_seq_src.size, col_seq_src.stride
-            )
-            dst_index[col_dim] = IndexSequence(
-                col, col_seq_dst.size, col_seq_dst.stride
-            )
-            gather.src_index = src_index
-            gather.dst_index = dst_index
+            col = global_index[col_dim].start + col
+            index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
+            logger.info(f"gather.src_index={gather.src_index} -> {index}")
+            gather.src_index = index
