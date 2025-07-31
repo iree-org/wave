@@ -903,6 +903,7 @@ def test_unary_lowerings():
         res = tkw.softsign(res, logit_cap=30.0, apply_scaling=True, head_dim=128)
         res = tkw.roundeven(res)
         res = tkw.sin(res)
+        res = tkw.sigmoid(res)
         res = tkw.sinh(res)
         res = tkw.cos(res)
         res = tkw.cbrt(res)
@@ -957,6 +958,15 @@ def test_unary_lowerings():
     # CHECK: %[[ADD:.+]] = arith.addf %[[ONE]], %[[ABS2]] : vector<4xf16>
     # CHECK: %[[RECIP_DENOM:.+]] = arith.divf %[[ONE]], %[[ADD]] : vector<4xf16>
     # CHECK: %[[SOFTSIGN:.+]] = arith.mulf %[[TANH_APPROX]], %[[RECIP_DENOM]] : vector<4xf16>
+
+    # Tests sigmoid 
+    # Assuming input %[[SIGMOID_INPUT:.+]] = ...
+    # CHECK: %[[NEG_ONE:.+]] = arith.constant dense<-1.000000e+00> : vector<4xf16>
+    # CHECK: %[[ONE:.+]] = arith.constant dense<1.000000e+00> : vector<4xf16>
+    # CHECK: %[[NEG_X:.+]] = arith.mulf %[[SIGMOID_INPUT]], %[[NEG_ONE]] : vector<4xf16>
+    # CHECK: %[[EXP_NEG_X:.+]] = math.exp %[[NEG_X]] : vector<4xf16>
+    # CHECK: %[[ONE_PLUS_EXP:.+]] = arith.addf %[[ONE]], %[[EXP_NEG_X]] : vector<4xf16>
+    # CHECK: %[[SIGMOID_RESULT:.+]] = arith.divf %[[ONE]], %[[ONE_PLUS_EXP]] : vector<4xf16>
 
     # Tests roundeven
     # CHECK: %[[ROUNDEVEN:.+]] = math.roundeven %[[SOFTSIGN]]
