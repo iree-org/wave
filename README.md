@@ -55,6 +55,14 @@ For more information, visit the documentation here: https://wave-lang.readthedoc
 
 Wave supports both end users (who want to use Wave kernels in their ML workflows) and developers (who want to contribute to or extend Wave). Follow the relevant guide below to get started quickly.
 
+### Prequisites
+Before installing Wave, ensure you have the following prerequisites:
+
+* Python 3.10 or later
+* PyTorch
+* ROCm (for AMD GPU support)
+* A compatible AMD GPU with ROCm support (MI250, MI300, etc.) or CPU
+
 ### For Users
 
 1. **Install ROCm PyTorch Dependencies**
@@ -77,7 +85,6 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
 
    To get started, try the [examples/jupyter/wave_gemm_example.ipynb](examples/jupyter/wave_gemm_example.ipynb) notebook.
 
-
 ### For Developers
 
 1. **Clone the Repository**
@@ -89,7 +96,13 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
 
 2. **Install Development Dependencies**
 
-   It's recommended to use a virtual environment:
+   If you don't have Rust already installed on your system, install Rust using the following command:
+
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+   Next, install the python dependencies. It is recommended to use a virtual environment.
 
    ```bash
    python -m venv .venv
@@ -107,7 +120,6 @@ Wave supports both end users (who want to use Wave kernels in their ML workflows
    > ```
    >
    > Currently, you can only run lit tests in this mode.
-
 
 3. **Run Tests**
 
