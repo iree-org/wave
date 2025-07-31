@@ -1,5 +1,4 @@
 import glob
-from copy import copy
 from itertools import chain
 from typing import Any, Optional, Callable, Sequence
 
@@ -223,9 +222,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     push(IndexingContext, IndexingContext())
     idxc = IndexingContext.current()
 
-    # Make a copy of the substitutions to avoid mutating the original
-    # options.subs.
-    idxc.subs = copy(options.subs)
+    idxc.set_subs(options.subs)
 
     # Since constraints are used to lookup the compiled kernel in the cache,
     # we initialize/update the constraints _before_ the cache lookup.
