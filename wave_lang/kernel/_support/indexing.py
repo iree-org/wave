@@ -162,7 +162,8 @@ class IndexingContext:
         self.cached_subs = {}
 
     def subs_expr(self, expr: IndexExpr) -> IndexExpr:
-        if val := self.cached_subs.get(expr, None):
+        val = self.cached_subs.get(expr, None)
+        if val is not None:
             return val
         val = safe_subs(expr, self.subs)
         self.cached_subs[expr] = val
