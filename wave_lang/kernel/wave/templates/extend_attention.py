@@ -130,72 +130,20 @@ def get_extend_attention_kernel(
         )
     ]
 
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
-    k = tkw.IndexMapping.iterator(2)
-    d0 = tkw.IndexMapping.dynamic_val(0)
+    # Define iterator symbols and bind them to the corresponding dimensions.
+    h_kv = tkl.sym.h_kv
+    d_kv = tkl.sym.d_kv
+    n_kv = tkl.sym.n_kv
+    h = tkl.sym.h
+    n_q = tkl.sym.n_q
+    d_q = tkl.sym.d_q
+    s = tkl.sym.s
 
-    mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={H: i, D_KV: j, N_Q: k},
-        outputs={H: i, N_Q: k + EXT_IDX, D_KV: j},
-    )
-
-    q_mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={H: i, N_Q: j + EXT_IDX, D_Q: k},
-        outputs={H: i, N_Q: j, D_Q: k},
-    )
+    bindings = {h_kv: H_KV, d_kv: D_KV, n_kv: N_KV}
+    bindings.update({h: H, n_q: N_Q, d_q: D_Q, s: S})
+    constraints += [tkw.IteratorBindings(bindings)]
 
     head_ratio = shape.num_query_heads // shape.num_kv_heads
-    k_mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={H_KV: i // head_ratio, N_KV: j + EXT_IDX, D_Q: k},
-        outputs={H_KV: i, N_KV: j, D_Q: k},
-    )
-    k_cache_mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={H_KV: i // head_ratio, N_KV: d0, D_Q: k},
-        outputs={H_KV: i, N_KV: j, D_Q: k},
-        dynamic_val_mappings={N_KV: j},
-    )
-
-    v_mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={H_KV: i // head_ratio, D_KV: j, N_KV: k + EXT_IDX},
-        outputs={H_KV: i, D_KV: j, N_KV: k},
-    )
-
-    v_cache_mapping = tkw.IndexMapping(
-        num_iterators=3,
-        inputs={H_KV: i // head_ratio, D_KV: j, N_KV: d0},
-        outputs={H_KV: i, D_KV: j, N_KV: k},
-        dynamic_val_mappings={N_KV: k},
-    )
-
-    kv_indices_mapping = tkw.IndexMapping(
-        num_iterators=1,
-        inputs={N_KV: i + KV_START_IDX},
-        outputs={N_KV: i},
-    )
-
-    ind_ptr_mapping = tkw.IndexMapping(
-        num_iterators=1,
-        inputs={S: i + 1},
-        outputs={S: i},
-    )
-
-    custom_mask_mapping_loop1 = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={MASK_LEN: i * SEQ_LEN + MASK_START_IDX + j},
-        outputs={N_Q: i, N_KV: j},
-    )
-
-    custom_mask_mapping_loop2 = tkw.IndexMapping(
-        num_iterators=2,
-        inputs={MASK_LEN: i * SEQ_LEN + MASK_START_IDX + j + PREFIX_LEN},
-        outputs={N_Q: i, N_KV: j},
-    )
 
     # Set the dynamic shapes for the kernel. Here we set it to N_Q
     # which is the first argument of the query and output.
@@ -234,14 +182,14 @@ def get_extend_attention_kernel(
         seq_extend_start_idx = tkw.read(qo_indptr, elements_per_thread=1)
         tkw.set_symbol(EXT_IDX, seq_extend_start_idx)
         seq_len_extend = (
-            tkw.read(qo_indptr, elements_per_thread=1, mapping=ind_ptr_mapping)
+            tkw.read(qo_indptr, elements_per_thread=1, source=(s + 1,), target=(s,))
             - seq_extend_start_idx
         )
         tkw.set_symbol(N_Q, seq_len_extend)
         seq_kv_start_idx = tkw.read(kv_indptr, elements_per_thread=1)
         tkw.set_symbol(KV_START_IDX, seq_kv_start_idx)
         seq_len_prefix = (
-            tkw.read(kv_indptr, elements_per_thread=1, mapping=ind_ptr_mapping)
+            tkw.read(kv_indptr, elements_per_thread=1, source=(s + 1,), target=(s,))
             - seq_kv_start_idx
         )
         tkw.set_symbol(N_KV, seq_len_prefix)
@@ -260,23 +208,26 @@ def get_extend_attention_kernel(
             q_reg = tkw.read(
                 q,
                 elements_per_thread=LOAD_ELEMS_PER_THREAD_QK,
-                mapping=q_mapping,
+                source=(n_q + EXT_IDX, h, d_q),
+                target=(h, n_q, d_q),
             )
             block_indices_v = tkw.read(
                 kv_indices,
                 elements_per_thread=LOAD_ELEMS_PER_THREAD_PV,
-                mapping=kv_indices_mapping,
+                source=(n_kv + KV_START_IDX,),
+                target=(n_kv,),
             )
             block_indices_k = tkw.read(
                 kv_indices,
                 elements_per_thread=1,
-                mapping=kv_indices_mapping,
+                source=(n_kv + KV_START_IDX,),
+                target=(n_kv,),
             )
             k_reg = tkw.read(
                 k_cache,
                 elements_per_thread=LOAD_ELEMS_PER_THREAD_QK,
-                mapping=k_cache_mapping,
-                mapping_dynamic_vals=(block_indices_k,),
+                source=(block_indices_k, h_kv // head_ratio, d_q),
+                target=(h_kv, n_kv, d_q),
             )
             imm_reg = tkl.Register[H, N_KV, N_Q, tkl.f32](0.0)
             inner_acc = tkw.mma(k_reg, q_reg, imm_reg, mfma_variant[0])
@@ -300,7 +251,8 @@ def get_extend_attention_kernel(
                 c_mask = tkw.read(
                     custom_mask,
                     elements_per_thread=STORE_ELEMS_PER_THREAD,
-                    mapping=custom_mask_mapping_loop1,
+                    source=(n_q * SEQ_LEN + MASK_START_IDX + n_kv,),
+                    target=(n_q, n_kv),
                 )
                 c_mask = tkw.cast(c_mask, tkw.i1)
                 mask &= c_mask
@@ -315,8 +267,8 @@ def get_extend_attention_kernel(
             v_reg = tkw.read(
                 v_cache,
                 elements_per_thread=LOAD_ELEMS_PER_THREAD_PV,
-                mapping=v_cache_mapping,
-                mapping_dynamic_vals=(block_indices_v,),
+                source=(block_indices_v, h_kv // head_ratio, d_kv),
+                target=(h_kv, d_kv, n_kv),
             )
             new_acc = acc * e_delta_max
             acc = tkw.mma(v_reg, imm_f16, new_acc)
@@ -342,12 +294,14 @@ def get_extend_attention_kernel(
             q_reg = tkw.read(
                 q,
                 elements_per_thread=LOAD_ELEMS_PER_THREAD_QK,
-                mapping=q_mapping,
+                source=(n_q + EXT_IDX, h, d_q),
+                target=(h, n_q, d_q),
             )
             k_reg = tkw.read(
                 k,
                 elements_per_thread=LOAD_ELEMS_PER_THREAD_QK,
-                mapping=k_mapping,
+                source=(n_kv + EXT_IDX, h_kv // head_ratio, d_q),
+                target=(h_kv, n_kv, d_q),
             )
             inner_acc = tkw.mma(k_reg, q_reg, imm_reg, mfma_variant[0])
             x_j = tkw.permute(inner_acc, target_shape=[H, N_Q, N_KV])
@@ -374,7 +328,8 @@ def get_extend_attention_kernel(
                 c_mask = tkw.read(
                     custom_mask,
                     elements_per_thread=STORE_ELEMS_PER_THREAD,
-                    mapping=custom_mask_mapping_loop2,
+                    source=(n_q * SEQ_LEN + MASK_START_IDX + n_kv + PREFIX_LEN,),
+                    target=(n_q, n_kv),
                 )
                 c_mask = tkw.cast(c_mask, tkw.i1)
                 mask &= c_mask
@@ -389,7 +344,8 @@ def get_extend_attention_kernel(
             v_reg = tkw.read(
                 v,
                 elements_per_thread=LOAD_ELEMS_PER_THREAD_PV,
-                mapping=v_mapping,
+                source=(n_kv + EXT_IDX, h_kv // head_ratio, d_kv),
+                target=(h_kv, d_kv, n_kv),
             )
             new_acc = acc * e_delta_max
             acc = tkw.mma(v_reg, imm_f16, new_acc)
@@ -401,7 +357,13 @@ def get_extend_attention_kernel(
         res = res_mm * reciprocal_sum
         if wave_output_dtype != tkl.f32:
             res = tkw.cast(res, wave_output_dtype)
-        tkw.write(res, c, mapping=mapping, elements_per_thread=STORE_ELEMS_PER_THREAD)
+        tkw.write(
+            res,
+            c,
+            source=(h, d_kv, n_q),
+            target=(n_q + EXT_IDX, h, d_kv),
+            elements_per_thread=STORE_ELEMS_PER_THREAD,
+        )
 
     @tkw.wave(constraints)
     def extend_attention(

@@ -7,14 +7,18 @@
 import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
-
+from .constraints import Constraint
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import *
 
 logger = get_logger("wave.type_inference")
 
 
-def infer_types(trace: CapturedTrace, subgraph: Optional[fx.Graph] = None):
+def infer_types(
+    trace: CapturedTrace,
+    constraints: Optional[list[Constraint]] = None,
+    subgraph: Optional[fx.Graph] = None,
+):
     if subgraph:
         all_nodes = subgraph.nodes
     else:
@@ -23,8 +27,10 @@ def infer_types(trace: CapturedTrace, subgraph: Optional[fx.Graph] = None):
     for node in all_nodes:
         custom = get_custom(node)
         if isinstance(custom, NestedRegionOp):
-            infer_types(trace, trace.region_graph.subgraphs[custom.subgraph_name])
-        custom.infer_type()
+            infer_types(
+                trace, constraints, trace.region_graph.subgraphs[custom.subgraph_name]
+            )
+        custom.infer_type(constraints)
         # For implicit captures, get type from variables in root graph.
         if "lifted" in custom.fx_node.meta:
             custom.type = custom.fx_node.meta["lifted"].type
