@@ -54,8 +54,8 @@ from ..utils.symbol_utils import subs_idxc
 
 
 def _get_upper_bound(expr: Any) -> Optional[Attribute]:
-    res = subs_idxc(sympy.sympify(expr))
-    if res.is_number:
+    res = subs_idxc(expr)
+    if isinstance(res, int) or res.is_number:
         return IntegerAttr.get(IndexType.get(), int(res))
     else:
         return None

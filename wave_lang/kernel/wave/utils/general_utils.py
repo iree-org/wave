@@ -310,7 +310,7 @@ def evaluate_with_assumptions(constraints: list[Constraint], expr: IndexExpr) ->
     # Solve returns a false if the inequalities are not consistent.
     if isinstance(result, sympy.logic.boolalg.BooleanAtom):
         return False
-    return True if any([result.equals(x) for x in facts]) else None
+    return True if any(result.equals(x) for x in facts) else None
 
 
 def _get_start_index(i: IndexSequence | IndexExpr) -> IndexExpr:
