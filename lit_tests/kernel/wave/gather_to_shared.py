@@ -259,6 +259,8 @@ def test_gather_to_shared_scaled_dims():
     # CHECK-LABEL:    test_gather_to_shared_scaled_dims
     # CHECK:          func.func @scaled_gemm
     # CHECK-COUNT-1:    memref.alloc()
+    # Check some swizzling was done
+    # CHECK-COUNT-3:    arith.xori
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
