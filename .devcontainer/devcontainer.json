@@ -5,7 +5,7 @@
 	"build": {
         "dockerfile": "Dockerfile"
     },
-	
+
 	"runArgs": [ "--device=/dev/kfd", "--device=/dev/dri", "--group-add=video", "--network=host", "--ipc=host" ],
 	"capAdd": ["SYS_PTRACE"],
 	"securityOpt": ["seccomp=unconfined"],
