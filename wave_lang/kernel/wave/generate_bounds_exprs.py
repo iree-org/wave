@@ -4,10 +4,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import sympy
 import torch.fx as fx
 
 from ..ops.wave_ops import Read, Write
-from .constraints import Constraint
+from .constraints import Constraint, DistributionConstraint
 from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
@@ -15,8 +16,21 @@ from .utils.general_utils import (
     remove_global_indexing,
 )
 from .utils.graph_utils import get_custom
-from .utils.symbol_utils import safe_subs, subs_idxc
+from .utils.symbol_utils import IndexExpr, IndexSymbol, safe_subs, subs_idxc
 from .wave import CapturedTrace
+
+
+def _get_max_tile_size(
+    dim: IndexSymbol,
+    constraints: list[Constraint],
+    vector_shapes: dict[IndexSymbol, int],
+) -> IndexExpr:
+    ret = sympy.sympify(vector_shapes[dim])
+    for constraint in constraints:
+        if isinstance(constraint, DistributionConstraint) and constraint.dim == dim:
+            ret = sympy.Max(ret, constraint.tile_size)
+
+    return ret
 
 
 def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
@@ -46,9 +60,13 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
             # Masking against global bounds was already handled when reading from
             # global mem, but we still need to handle masking against vector
             # size during shared mem access.
-            unpadded_dims = get_custom(node.memory).get_unpadded_dims
+            # A bound expression for this case is `min(global_bound, vector_size)`.
+            # Replace global bound with `max(tile_size, vector_size)` so the entire
+            # expression `min(max(tile_size, vector_size), vector_size)` can be
+            # simplified to just vector size.
             bounds = {
-                k: (safe_subs(v, {k: unpadded_dims[k]})) for k, v in bounds.items()
+                k: safe_subs(v, {k: _get_max_tile_size(k, constraints, vector_shapes)})
+                for k, v in bounds.items()
             }
             # Shared mem accesses always access the full vector_shape tile,
             # so we can remove bounds that are divisible by vector size.
