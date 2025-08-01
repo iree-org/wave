@@ -197,10 +197,6 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    assert (
-        tail_padding == 0
-    ), "Tail padding must be handled by the minimize_shared_allocs pass"
-
     memref_shape = cast_py_literal(emitter, distributed_shape)
     element_type = IrType.parse(dtype.ir_type_asm())
     address_space = Attribute.parse("#gpu.address_space<workgroup>")
@@ -208,6 +204,17 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
 
     if parent is not None:
         parent = cast_py_value(emitter, parent).ir_value
+    elif tail_padding != 0:
+        # Tail padded memref cannot be represented as a normal alloc, allocate
+        # a flat i8 array and then view it as the original type.
+        alloc_size = get_custom(node).allocation_size
+        alloc_size = int(subs_idxc(alloc_size))
+        i8_type = IntegerType.get_signless(8)
+        alloc_type = MemRefType.get([alloc_size], i8_type, None, address_space)
+        parent = memref_d.alloc(alloc_type, [], [])
+        offset = 0
+
+    if parent is not None:
         offset = arith_d.constant(IndexType.get(), int(offset))
         alloc = memref_d.view(
             memref_type,
