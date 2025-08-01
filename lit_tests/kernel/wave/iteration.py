@@ -1,8 +1,8 @@
 # RUN: python %s | FileCheck %s
 
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel._support.context import push
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.lang.global_symbols import (
@@ -366,127 +366,128 @@ def test_partial_unroll_iteration():
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K, ARGK)]
 
-    with tk.gen.TestLaunchContext(
-        {
-            M: 64,
-            N: 128,
-            K: 128,
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 16,
-            LOAD_ELEMS_PER_THREAD: 4,
-            STORE_ELEMS_PER_THREAD: 4,
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-            READ_SHARED_DELAY: 1,
-            WRITE_SHARED_DELAY: 1,
-            READ_GLOBAL_DELAY: 2,
-            WRITE_GLOBAL_DELAY: 2,
-            MMA_DELAY: 1,
-            SHARED_MEMORY_UNITS: 2,
-            GLOBAL_MEMORY_UNITS: 2,
-            MMA_UNITS: 2,
-            VALU_DELAY: 1,
-            VALU_UNITS: 2,
-            SHUFFLE_DELAY: 1,
-            SHUFFLE_UNITS: 2,
-        },
-    ):
-        trace: CapturedTrace = iterated_gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        add_get_results(trace)
-        infer_types(trace)
-        promote_placeholders(trace, constraints)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
-        set_post_expansion_indices(trace, constraints)
-        hoist_loop_invariant_ops(trace, constraints)
-        minimize_global_loads(trace, constraints)
-        apply_shared_memory_indexing_corrections(trace, constraints)
+    subs = {
+        M: 64,
+        N: 128,
+        K: 128,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 16,
+        LOAD_ELEMS_PER_THREAD: 4,
+        STORE_ELEMS_PER_THREAD: 4,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        READ_SHARED_DELAY: 1,
+        WRITE_SHARED_DELAY: 1,
+        READ_GLOBAL_DELAY: 2,
+        WRITE_GLOBAL_DELAY: 2,
+        MMA_DELAY: 1,
+        SHARED_MEMORY_UNITS: 2,
+        GLOBAL_MEMORY_UNITS: 2,
+        MMA_UNITS: 2,
+        VALU_DELAY: 1,
+        VALU_UNITS: 2,
+        SHUFFLE_DELAY: 1,
+        SHUFFLE_UNITS: 2,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    trace: CapturedTrace = iterated_gemm()
+    IndexingContext.current().finalize()
+    initialize_iter_args(trace)
+    add_get_results(trace)
+    infer_types(trace)
+    promote_placeholders(trace, constraints)
+    set_node_indices(trace, constraints)
+    expand_graph(trace, constraints)
+    set_post_expansion_indices(trace, constraints)
+    hoist_loop_invariant_ops(trace, constraints)
+    minimize_global_loads(trace, constraints)
+    apply_shared_memory_indexing_corrections(trace, constraints)
 
-        # Check the graph before unrolling
-        # Find iterate and unroll
-        iterate = get_custom(
-            trace.walk(lambda node: isinstance(get_custom(node), Iterate))[0]
-        )
-        assert isinstance(iterate, Iterate)
-        print_graph(trace.get_subgraph(iterate.subgraph_name))
+    # Check the graph before unrolling
+    # Find iterate and unroll
+    iterate = get_custom(
+        trace.walk(lambda node: isinstance(get_custom(node), Iterate))[0]
+    )
+    assert isinstance(iterate, Iterate)
+    print_graph(trace.get_subgraph(iterate.subgraph_name))
 
-        # CHECK: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [mma]
-        # CHECK-NEXT: return
+    # CHECK: placeholder
+    # CHECK-NEXT: placeholder
+    # CHECK-NEXT: placeholder
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [mma]
+    # CHECK-NEXT: return
 
-        # Partially Unroll the iterate
-        unroll(iterate, 2, trace, constraints)
-        print_graph(trace.get_subgraph(iterate.subgraph_name))
-        assert iterate.count == 4
-        assert iterate.step == 2
+    # Partially Unroll the iterate
+    unroll(iterate, 2, trace, constraints)
+    print_graph(trace.get_subgraph(iterate.subgraph_name))
+    assert iterate.count == 4
+    assert iterate.step == 2
 
-        # TODO: Check that the bounds are correct, and steps
+    # TODO: Check that the bounds are correct, and steps
 
-        # CHECK: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [mma]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [mma]
-        # CHECK-NEXT: return
+    # CHECK: placeholder
+    # CHECK-NEXT: placeholder
+    # CHECK-NEXT: placeholder
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [mma]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [mma]
+    # CHECK-NEXT: return
 
-        # Unroll the unrolled iterate again
-        unroll(iterate, 2, trace, constraints)
-        print_graph(trace.get_subgraph(iterate.subgraph_name))
-        assert iterate.count == 2
-        assert iterate.step == 4
+    # Unroll the unrolled iterate again
+    unroll(iterate, 2, trace, constraints)
+    print_graph(trace.get_subgraph(iterate.subgraph_name))
+    assert iterate.count == 2
+    assert iterate.step == 4
 
-        # CHECK: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: placeholder
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [mma]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [mma]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [mma]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [write]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [read]
-        # CHECK-NEXT: [mma]
-        # CHECK-NEXT: return
+    # CHECK: placeholder
+    # CHECK-NEXT: placeholder
+    # CHECK-NEXT: placeholder
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [mma]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [mma]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [mma]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [write]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [read]
+    # CHECK-NEXT: [mma]
+    # CHECK-NEXT: return

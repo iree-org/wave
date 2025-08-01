@@ -2,7 +2,6 @@
 
 import logging
 
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -27,6 +26,7 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.wave.utils.print_utils import (
     print_trace,
 )
+from wave_lang.kernel._support.context import push
 
 
 def get_read_nodes(graph: fx.Graph) -> list[CustomOp]:
@@ -83,66 +83,67 @@ def test_read_write_equal_sizes():
         )
     ]
 
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
-        }
-    ):
-        trace: CapturedTrace = read_write_same_size()
-        graph: fx.Graph = trace.get_root_graph()
-        read_node = get_read_nodes(graph)[0]
-        IndexingContext.current().finalize()
-        add_get_results(trace)
-        infer_types(trace)
-        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
-        set_post_expansion_indices(trace, constraints)
-        tweak_index(graph)
-        add_shared_memory_barriers(trace)
-        print_trace(trace, False)
-        # CHECK: %allocate
-        # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-        # CHECK-NEXT: %a
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %read_M:0_N:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:0_N:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %write_1_shared_M:0_N:0
-        # CHECK-SAME: (%read_M:0_N:0, %allocate, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_1_shared_M:0_N:1
-        # CHECK-SAME: (%read_M:0_N:1, %allocate, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_1_shared_M:1_N:0
-        # CHECK-SAME: (%read_M:1_N:0, %allocate, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_1_shared_M:1_N:1
-        # CHECK-SAME: (%read_M:1_N:1, %allocate, 4, None, (), None, None, None)
-        # CHECK-NEXT: %shared_memory_barrier
-        # CHECK-NEXT: %read_1_shared_M:0_N:0
-        # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:0_N:0]
-        # CHECK-NEXT: %read_1_shared_M:0_N:1
-        # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:0_N:1]
-        # CHECK-NEXT: %read_1_shared_M:1_N:0
-        # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:1_N:0]
-        # CHECK-NEXT: %read_1_shared_M:1_N:1
-        # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:1_N:1]
-        # CHECK-NEXT: %write_M:0_N:0
-        # CHECK-SAME: (%read_1_shared_M:0_N:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:0_N:1
-        # CHECK-SAME: (%read_1_shared_M:0_N:1, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0
-        # CHECK-SAME: (%read_1_shared_M:1_N:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:1
-        # CHECK-SAME: (%read_1_shared_M:1_N:1, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return None
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    trace: CapturedTrace = read_write_same_size()
+    graph: fx.Graph = trace.get_root_graph()
+    read_node = get_read_nodes(graph)[0]
+    IndexingContext.current().finalize()
+    add_get_results(trace)
+    infer_types(trace)
+    promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+    set_node_indices(trace, constraints)
+    expand_graph(trace, constraints)
+    set_post_expansion_indices(trace, constraints)
+    tweak_index(graph)
+    add_shared_memory_barriers(trace)
+    print_trace(trace, False)
+    # CHECK: %allocate
+    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %read_M:0_N:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:0_N:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %write_1_shared_M:0_N:0
+    # CHECK-SAME: (%read_M:0_N:0, %allocate, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_1_shared_M:0_N:1
+    # CHECK-SAME: (%read_M:0_N:1, %allocate, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_1_shared_M:1_N:0
+    # CHECK-SAME: (%read_M:1_N:0, %allocate, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_1_shared_M:1_N:1
+    # CHECK-SAME: (%read_M:1_N:1, %allocate, 4, None, (), None, None, None)
+    # CHECK-NEXT: %shared_memory_barrier
+    # CHECK-NEXT: %read_1_shared_M:0_N:0
+    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:0_N:0]
+    # CHECK-NEXT: %read_1_shared_M:0_N:1
+    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:0_N:1]
+    # CHECK-NEXT: %read_1_shared_M:1_N:0
+    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:1_N:0]
+    # CHECK-NEXT: %read_1_shared_M:1_N:1
+    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:1_N:1]
+    # CHECK-NEXT: %write_M:0_N:0
+    # CHECK-SAME: (%read_1_shared_M:0_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:0_N:1
+    # CHECK-SAME: (%read_1_shared_M:0_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0
+    # CHECK-SAME: (%read_1_shared_M:1_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:1
+    # CHECK-SAME: (%read_1_shared_M:1_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return None
 
-        # CHECK: -----
+    # CHECK: -----
 
 
 @tkw.wave_trace_only()
@@ -171,104 +172,105 @@ def test_gemm():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(1, 1, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        trace: CapturedTrace = gemm()
-        graph: fx.Graph = trace.get_subgraph("region_0")
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        add_get_results(trace)
-        infer_types(trace)
-        read_nodes = get_read_nodes(graph)
-        for read_node in read_nodes:
-            promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
-        set_post_expansion_indices(trace, constraints)
-        tweak_index(graph)
-        hoist_loop_invariant_ops(trace, constraints)
-        add_shared_memory_barriers(trace)
-        print_trace(trace, False)
-        # Root graph:
-        # CHECK: %a
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %register_M:0_N:0_K:0
-        # CHECK-NEXT: %register_M:0_N:1_K:0
-        # CHECK-NEXT: %register_M:1_N:0_K:0
-        # CHECK-NEXT: %register_M:1_N:1_K:0
-        # CHECK-NEXT: %allocate_1
-        # CHECK-SAME: ((N, K), (BLOCK_N, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-        # CHECK-NEXT: %allocate
-        # CHECK-SAME: ((M, K), (BLOCK_M, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-        # CHECK-NEXT: iterate
-        # CHECK-SAME: (K, [%register_M:0_N:0_K:0, %register_M:0_N:1_K:0, %register_M:1_N:0_K:0, %register_M:1_N:1_K:0]
-        # CHECK-NEXT: %get_result_M:0_N:0_K:0
-        # CHECK-SAME: (%iterate, 0)
-        # CHECK-NEXT: %get_result_M:0_N:1_K:0
-        # CHECK-SAME: (%iterate, 1)
-        # CHECK-NEXT: %get_result_M:1_N:0_K:0
-        # CHECK-SAME: (%iterate, 2)
-        # CHECK-NEXT: %get_result_M:1_N:1_K:0
-        # CHECK-SAME: (%iterate, 3)
-        # CHECK-NEXT: %write_M:0_N:0_K:0
-        # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:0_N:1_K:0
-        # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0
-        # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:1_K:0
-        # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return None
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+    }
+    idxc.subs = subs
+    trace: CapturedTrace = gemm()
+    graph: fx.Graph = trace.get_subgraph("region_0")
+    IndexingContext.current().finalize()
+    initialize_iter_args(trace)
+    add_get_results(trace)
+    infer_types(trace)
+    read_nodes = get_read_nodes(graph)
+    for read_node in read_nodes:
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+    set_node_indices(trace, constraints)
+    expand_graph(trace, constraints)
+    set_post_expansion_indices(trace, constraints)
+    tweak_index(graph)
+    hoist_loop_invariant_ops(trace, constraints)
+    add_shared_memory_barriers(trace)
+    print_trace(trace, False)
+    # Root graph:
+    # CHECK: %a
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %register_M:0_N:0_K:0
+    # CHECK-NEXT: %register_M:0_N:1_K:0
+    # CHECK-NEXT: %register_M:1_N:0_K:0
+    # CHECK-NEXT: %register_M:1_N:1_K:0
+    # CHECK-NEXT: %allocate_1
+    # CHECK-SAME: ((N, K), (BLOCK_N, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
+    # CHECK-NEXT: %allocate
+    # CHECK-SAME: ((M, K), (BLOCK_M, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
+    # CHECK-NEXT: iterate
+    # CHECK-SAME: (K, [%register_M:0_N:0_K:0, %register_M:0_N:1_K:0, %register_M:1_N:0_K:0, %register_M:1_N:1_K:0]
+    # CHECK-NEXT: %get_result_M:0_N:0_K:0
+    # CHECK-SAME: (%iterate, 0)
+    # CHECK-NEXT: %get_result_M:0_N:1_K:0
+    # CHECK-SAME: (%iterate, 1)
+    # CHECK-NEXT: %get_result_M:1_N:0_K:0
+    # CHECK-SAME: (%iterate, 2)
+    # CHECK-NEXT: %get_result_M:1_N:1_K:0
+    # CHECK-SAME: (%iterate, 3)
+    # CHECK-NEXT: %write_M:0_N:0_K:0
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:0_N:1_K:0
+    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0
+    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:1_K:0
+    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return None
 
-        # iterate subgraph:
-        # CHECK: %b
-        # CHECK: %a
-        # CHECK-NEXT: %acc_M:0_N:0_K:0
-        # CHECK-NEXT: %acc_M:0_N:1_K:0
-        # CHECK-NEXT: %acc_M:1_N:0_K:0
-        # CHECK-NEXT: %acc_M:1_N:1_K:0
-        # CHECK-NEXT: %read_M:0_N:0_K:0
-        # CHECK-NEXT: %read_M:0_N:0_K:1
-        # CHECK-NEXT: %read_M:1_N:0_K:0
-        # CHECK-NEXT: %read_M:1_N:0_K:1
-        # We don't actually need a berrier here as the reads from the prev iteration are to the different buffer
-        # CHECK-NEXT: %write_shared_M:0_N:0_K:0
-        # CHECK-NEXT: %write_shared_M:0_N:0_K:1
-        # CHECK-NEXT: %write_shared_M:1_N:0_K:0
-        # CHECK-NEXT: %write_shared_M:1_N:0_K:1
-        # CHECK-NEXT: %shared_memory_barrier
-        # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0
-        # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
-        # CHECK-NEXT: %read_2_shared_M:1_N:0_K:0
-        # CHECK-NEXT: %read_2_shared_M:1_N:0_K:1
-        # CHECK-NEXT: %read_1_M:0_N:0_K:0
-        # CHECK-NEXT: %read_1_M:0_N:0_K:1
-        # CHECK-NEXT: %read_1_M:0_N:1_K:0
-        # CHECK-NEXT: %read_1_M:0_N:1_K:1
-        # We don't actually need a berrier here as reads and writes to the different buffers
-        # CHECK-NEXT: %write_1_shared_M:0_N:0_K:0
-        # CHECK-NEXT: %write_1_shared_M:0_N:0_K:1
-        # CHECK-NEXT: %write_1_shared_M:0_N:1_K:0
-        # CHECK-NEXT: %write_1_shared_M:0_N:1_K:1
-        # CHECK-NEXT: %shared_memory_barrier
-        # CHECK-NEXT: %read_3_shared_M:0_N:0_K:0
-        # CHECK-NEXT: %read_3_shared_M:0_N:0_K:1
-        # CHECK-NEXT: %read_3_shared_M:0_N:1_K:0
-        # CHECK-NEXT: %read_3_shared_M:0_N:1_K:1
-        # CHECK-NEXT: %mma_M:0_N:0_K:0
-        # CHECK-NEXT: %mma_M:0_N:0_K:1
-        # CHECK-NEXT: %mma_M:0_N:1_K:0
-        # CHECK-NEXT: %mma_M:0_N:1_K:1
-        # CHECK-NEXT: %mma_M:1_N:0_K:0
-        # CHECK-NEXT: %mma_M:1_N:0_K:1
-        # CHECK-NEXT: %mma_M:1_N:1_K:0
-        # CHECK-NEXT: %mma_M:1_N:1_K:1
+    # iterate subgraph:
+    # CHECK: %b
+    # CHECK: %a
+    # CHECK-NEXT: %acc_M:0_N:0_K:0
+    # CHECK-NEXT: %acc_M:0_N:1_K:0
+    # CHECK-NEXT: %acc_M:1_N:0_K:0
+    # CHECK-NEXT: %acc_M:1_N:1_K:0
+    # CHECK-NEXT: %read_M:0_N:0_K:0
+    # CHECK-NEXT: %read_M:0_N:0_K:1
+    # CHECK-NEXT: %read_M:1_N:0_K:0
+    # CHECK-NEXT: %read_M:1_N:0_K:1
+    # We don't actually need a berrier here as the reads from the prev iteration are to the different buffer
+    # CHECK-NEXT: %write_shared_M:0_N:0_K:0
+    # CHECK-NEXT: %write_shared_M:0_N:0_K:1
+    # CHECK-NEXT: %write_shared_M:1_N:0_K:0
+    # CHECK-NEXT: %write_shared_M:1_N:0_K:1
+    # CHECK-NEXT: %shared_memory_barrier
+    # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0
+    # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
+    # CHECK-NEXT: %read_2_shared_M:1_N:0_K:0
+    # CHECK-NEXT: %read_2_shared_M:1_N:0_K:1
+    # CHECK-NEXT: %read_1_M:0_N:0_K:0
+    # CHECK-NEXT: %read_1_M:0_N:0_K:1
+    # CHECK-NEXT: %read_1_M:0_N:1_K:0
+    # CHECK-NEXT: %read_1_M:0_N:1_K:1
+    # We don't actually need a berrier here as reads and writes to the different buffers
+    # CHECK-NEXT: %write_1_shared_M:0_N:0_K:0
+    # CHECK-NEXT: %write_1_shared_M:0_N:0_K:1
+    # CHECK-NEXT: %write_1_shared_M:0_N:1_K:0
+    # CHECK-NEXT: %write_1_shared_M:0_N:1_K:1
+    # CHECK-NEXT: %shared_memory_barrier
+    # CHECK-NEXT: %read_3_shared_M:0_N:0_K:0
+    # CHECK-NEXT: %read_3_shared_M:0_N:0_K:1
+    # CHECK-NEXT: %read_3_shared_M:0_N:1_K:0
+    # CHECK-NEXT: %read_3_shared_M:0_N:1_K:1
+    # CHECK-NEXT: %mma_M:0_N:0_K:0
+    # CHECK-NEXT: %mma_M:0_N:0_K:1
+    # CHECK-NEXT: %mma_M:0_N:1_K:0
+    # CHECK-NEXT: %mma_M:0_N:1_K:1
+    # CHECK-NEXT: %mma_M:1_N:0_K:0
+    # CHECK-NEXT: %mma_M:1_N:0_K:1
+    # CHECK-NEXT: %mma_M:1_N:1_K:0
+    # CHECK-NEXT: %mma_M:1_N:1_K:1
 
 
 if __name__ == "__main__":

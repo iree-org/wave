@@ -24,6 +24,7 @@ from wave_lang.kernel.wave.analysis.index_sequence_analysis import (
     set_post_expansion_indices,
 )
 from wave_lang.kernel.wave.utils.graph_utils import initialize_iter_args
+from wave_lang.kernel._support.context import push
 
 
 def run(func: Callable[[], None]) -> Callable[[], None]:
@@ -86,23 +87,23 @@ def test_gemm():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        visualize_graph(graph.get_subgraph("region_0"), "gemm.png")
-        assert os.path.exists("gemm.png")
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+    }
+    graph = gemm()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    visualize_graph(graph.get_subgraph("region_0"), "gemm.png")
+    assert os.path.exists("gemm.png")
 
 
 if __name__ == "__main__":

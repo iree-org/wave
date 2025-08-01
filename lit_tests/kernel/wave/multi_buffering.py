@@ -4,9 +4,9 @@ import logging
 
 import torch.fx as fx
 
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel._support.context import push
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.lang.global_symbols import (
@@ -94,101 +94,102 @@ def test_gemm_multibuffering():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            M: 128,
-            N: 256,
-            K: 128,
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K: 32,
-            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
-            READ_SHARED_DELAY: 1,
-            WRITE_SHARED_DELAY: 1,
-            READ_GLOBAL_DELAY: 2,
-            WRITE_GLOBAL_DELAY: 2,
-            MMA_DELAY: 1,
-            SHARED_MEMORY_UNITS: 2,
-            GLOBAL_MEMORY_UNITS: 2,
-            MMA_UNITS: 2,
-            VALU_DELAY: 1,
-            VALU_UNITS: 2,
-            SHUFFLE_DELAY: 1,
-            SHUFFLE_UNITS: 2,
-        }
-    ):
-        trace: CapturedTrace = gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        add_get_results(trace)
-        infer_types(trace)
-        promote_placeholders(trace, constraints)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
-        set_post_expansion_indices(trace, constraints)
-        hoist_loop_invariant_ops(trace, constraints)
-        minimize_global_loads(trace, constraints)
-        apply_shared_memory_indexing_corrections(trace, constraints)
-        schedule_graph(
-            trace,
-            constraints,
-            True,
-            scheduling_type=SchedulingType.MODULO_MULTI_BUFFERED,
-        )
+    subs = {
+        M: 128,
+        N: 256,
+        K: 128,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
+        READ_SHARED_DELAY: 1,
+        WRITE_SHARED_DELAY: 1,
+        READ_GLOBAL_DELAY: 2,
+        WRITE_GLOBAL_DELAY: 2,
+        MMA_DELAY: 1,
+        SHARED_MEMORY_UNITS: 2,
+        GLOBAL_MEMORY_UNITS: 2,
+        MMA_UNITS: 2,
+        VALU_DELAY: 1,
+        VALU_UNITS: 2,
+        SHUFFLE_DELAY: 1,
+        SHUFFLE_UNITS: 2,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    trace: CapturedTrace = gemm()
+    IndexingContext.current().finalize()
+    initialize_iter_args(trace)
+    add_get_results(trace)
+    infer_types(trace)
+    promote_placeholders(trace, constraints)
+    set_node_indices(trace, constraints)
+    expand_graph(trace, constraints)
+    set_post_expansion_indices(trace, constraints)
+    hoist_loop_invariant_ops(trace, constraints)
+    minimize_global_loads(trace, constraints)
+    apply_shared_memory_indexing_corrections(trace, constraints)
+    schedule_graph(
+        trace,
+        constraints,
+        True,
+        scheduling_type=SchedulingType.MODULO_MULTI_BUFFERED,
+    )
 
-        def print_affected_node(node: fx.Node):
-            match custom := get_custom(node):
-                case Allocate():
+    def print_affected_node(node: fx.Node):
+        match custom := get_custom(node):
+            case Allocate():
+                print(custom)
+            case Read() | Write():
+                if custom.memory_type.address_space == SHARED_ADDRESS_SPACE:
                     print(custom)
-                case Read() | Write():
-                    if custom.memory_type.address_space == SHARED_ADDRESS_SPACE:
-                        print(custom)
-                case Iterate():
-                    print("reduction begin")
-                    for node in trace.get_subgraph(custom.subgraph_name).nodes:
-                        print_affected_node(node)
-                    print("reduction end")
-                case _:
-                    pass
+            case Iterate():
+                print("reduction begin")
+                for node in trace.get_subgraph(custom.subgraph_name).nodes:
+                    print_affected_node(node)
+                print("reduction end")
+            case _:
+                pass
 
-        for node in trace.get_root_graph().nodes:
-            print_affected_node(node)
+    for node in trace.get_root_graph().nodes:
+        print_affected_node(node)
 
-        # CHECK: allocate(shape=(2*N, K), distributed_shape=(2*BLOCK_N, BLOCK_K + 4)
-        # CHECK-NEXT: allocate(shape=(2*M, K), distributed_shape=(2*BLOCK_M, BLOCK_K + 4)
-        # CHECK-NEXT: write(register_=read_21,
-        # CHECK-NEXT: write(register_=read_22,
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK: reduction begin
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: {N: BLOCK_N*(Mod($ARGK, 2)) + BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={M: BLOCK_M*(Mod($ARGK, 2)) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: {N: BLOCK_N*(Mod($ARGK, 2)) + BLOCK_N/2 + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: {N: BLOCK_N*(Mod($ARGK, 2)) + BLOCK_N/2 + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
-        # CHECK-NEXT: write(register_=read_21,
-        # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod(32*$T1 + floor($T0/4), 64) : 1 : 1, K: 8*(Mod($T0, 4)) : 8 : 1}
-        # CHECK-NEXT: write(register_=read_22,
-        # CHECK-SAME: index={N: BLOCK_N/2 + xor(BLOCK_N*(Mod($ARGK, 2)), BLOCK_N) + Mod(32*$T1 + floor($T0/4), 64) : 1 : 1, K: 8*(Mod($T0, 4)) : 8 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: index={N: BLOCK_N/2 + xor(BLOCK_N*(Mod($ARGK, 2)), BLOCK_N) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
-        # CHECK-NEXT: reduction end
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK: allocate(shape=(2*N, K), distributed_shape=(2*BLOCK_N, BLOCK_K + 4)
+    # CHECK-NEXT: allocate(shape=(2*M, K), distributed_shape=(2*BLOCK_M, BLOCK_K + 4)
+    # CHECK-NEXT: write(register_=read_21,
+    # CHECK-NEXT: write(register_=read_22,
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK: reduction begin
+    # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK-SAME: {N: BLOCK_N*(Mod($ARGK, 2)) + BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK-SAME: index={M: BLOCK_M*(Mod($ARGK, 2)) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
+    # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK-SAME: {N: BLOCK_N*(Mod($ARGK, 2)) + BLOCK_N/2 + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
+    # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK-SAME: {N: BLOCK_N*(Mod($ARGK, 2)) + BLOCK_N/2 + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
+    # CHECK-NEXT: write(register_=read_21,
+    # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod(32*$T1 + floor($T0/4), 64) : 1 : 1, K: 8*(Mod($T0, 4)) : 8 : 1}
+    # CHECK-NEXT: write(register_=read_22,
+    # CHECK-SAME: index={N: BLOCK_N/2 + xor(BLOCK_N*(Mod($ARGK, 2)), BLOCK_N) + Mod(32*$T1 + floor($T0/4), 64) : 1 : 1, K: 8*(Mod($T0, 4)) : 8 : 1}
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
+    # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK-SAME: index={N: BLOCK_N/2 + xor(BLOCK_N*(Mod($ARGK, 2)), BLOCK_N) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK-SAME: index={M: xor(BLOCK_M*(Mod($ARGK, 2)), BLOCK_M) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
+    # CHECK-NEXT: reduction end
+    # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK-NEXT: read(memory=allocate,
+    # CHECK-NEXT: read(memory=allocate_1,
+    # CHECK-NEXT: read(memory=allocate_1,
 
 
 if __name__ == "__main__":

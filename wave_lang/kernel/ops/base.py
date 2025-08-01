@@ -16,7 +16,7 @@ class OpDispatcher:
       def handle_{idname}(self, operator, *args, **kwargs)
     """
 
-    __tk_context_idname__ = "OpDispatcher"
+    __wave_context_idname__ = "OpDispatcher"
 
     @classmethod
     def current(cls: Type[OpDispatcherT]) -> OpDispatcherT:
@@ -43,5 +43,5 @@ def define_op(f: T) -> T:
             )
         return handler(wrapped, *args, **kwargs)
 
-    wrapped.__tk_op_idname__ = idname
+    wrapped.__wave_op_idname__ = idname
     return wrapped

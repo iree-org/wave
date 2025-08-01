@@ -2,9 +2,9 @@
 
 import logging
 
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel._support.context import push
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.lang.global_symbols import *
@@ -61,35 +61,36 @@ def test_read_write_equal_sizes():
         )
     ]
 
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
-        }
-    ):
-        trace: CapturedTrace = read_write_same_size()
-        graph: fx.Graph = trace.get_root_graph()
-        read_node = get_read_nodes(graph)[0]
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        infer_types(trace)
-        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-        print_trace(trace, False)
-        # CHECK: %allocate
-        # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-        # CHECK-NEXT: %a
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %read
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %write_1
-        # CHECK-SAME: (%read, %allocate, 4, None, (), None, None, None)
-        # CHECK-NEXT: %read_1
-        # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1])
-        # CHECK-NEXT: %write
-        # CHECK-SAME: (%read_1, %c, 4, None, (), None, None, None)
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    trace: CapturedTrace = read_write_same_size()
+    graph: fx.Graph = trace.get_root_graph()
+    read_node = get_read_nodes(graph)[0]
+    IndexingContext.current().finalize()
+    initialize_iter_args(trace)
+    infer_types(trace)
+    promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+    print_trace(trace, False)
+    # CHECK: %allocate
+    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %read
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %write_1
+    # CHECK-SAME: (%read, %allocate, 4, None, (), None, None, None)
+    # CHECK-NEXT: %read_1
+    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1])
+    # CHECK-NEXT: %write
+    # CHECK-SAME: (%read_1, %c, 4, None, (), None, None, None)
 
-        # CHECK: -----
+    # CHECK: -----
 
 
 @tkw.wave_trace_only()
@@ -112,34 +113,35 @@ def test_read_write_equal_sizes_different_address_spaces():
         )
     ]
 
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_1: GLOBAL_ADDRESS_SPACE,
-        }
-    ):
-        trace: CapturedTrace = read_write_same_size_different_address_spaces()
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        infer_types(trace)
-        promote_placeholders(trace, constraints)
-        print_trace(trace, False)
-        # CHECK: %allocate
-        # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-        # CHECK-NEXT: %a
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %read
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %write_1
-        # CHECK-SAME: (%read, %allocate, 4, None, (), None, None, None)
-        # CHECK-NEXT: %read_1
-        # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1])
-        # CHECK-NEXT: %write
-        # CHECK-SAME: (%read_1, %c, 4, None, (), None, None, None)
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_1: GLOBAL_ADDRESS_SPACE,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    trace: CapturedTrace = read_write_same_size_different_address_spaces()
+    IndexingContext.current().finalize()
+    initialize_iter_args(trace)
+    infer_types(trace)
+    promote_placeholders(trace, constraints)
+    print_trace(trace, False)
+    # CHECK: %allocate
+    # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %read
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %write_1
+    # CHECK-SAME: (%read, %allocate, 4, None, (), None, None, None)
+    # CHECK-NEXT: %read_1
+    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1])
+    # CHECK-NEXT: %write
+    # CHECK-SAME: (%read_1, %c, 4, None, (), None, None, None)
 
-        # CHECK: -----
+    # CHECK: -----
 
 
 @tkw.wave_trace_only()
@@ -167,52 +169,53 @@ def test_gemm():
     constraints += [tkw.WorkgroupConstraint(K, BLOCK_K, 2)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K, ARGK)]
     constraints += [tkw.HardwareConstraint(threads_per_wave=64)]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        trace: CapturedTrace = gemm()
-        graph: fx.Graph = trace.get_subgraph("region_0")
-        read_nodes = get_read_nodes(graph)
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        infer_types(trace)
-        for read_node in read_nodes:
-            promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-        hoist_loop_invariant_ops(trace, constraints)
-        print_trace(trace, False)
-        # Root graph:
-        # CHECK: %a
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %register
-        # CHECK: %allocate_1
-        # CHECK-SAME: ((N, K), (BLOCK_N, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-        # CHECK-NEXT: %allocate
-        # CHECK-SAME: ((M, K), (BLOCK_M, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
-        # CHECK-NEXT: iterate
-        # CHECK-NEXT: %write
-        # CHECK-SAME: (%iterate, %c, 4, None, (), None, None, None)
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    trace: CapturedTrace = gemm()
+    graph: fx.Graph = trace.get_subgraph("region_0")
+    read_nodes = get_read_nodes(graph)
+    IndexingContext.current().finalize()
+    initialize_iter_args(trace)
+    infer_types(trace)
+    for read_node in read_nodes:
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+    hoist_loop_invariant_ops(trace, constraints)
+    print_trace(trace, False)
+    # Root graph:
+    # CHECK: %a
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %register
+    # CHECK: %allocate_1
+    # CHECK-SAME: ((N, K), (BLOCK_N, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
+    # CHECK-NEXT: %allocate
+    # CHECK-SAME: ((M, K), (BLOCK_M, BLOCK_K + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
+    # CHECK-NEXT: iterate
+    # CHECK-NEXT: %write
+    # CHECK-SAME: (%iterate, %c, 4, None, (), None, None, None)
 
-        # iterate subgraph:
-        # CHECK: %b
-        # CHECK-NEXT: %a
-        # CHECK-NEXT: %acc
-        # CHECK-NEXT: %read
-        # CHECK-NEXT: %write
-        # CHECK-SAME: (%read, %allocate, 4, None, (), None, None, None)
-        # CHECK-NEXT: %read_2
-        # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write])
-        # CHECK-NEXT: %read_1
-        # CHECK-NEXT: %write_1
-        # CHECK-SAME: (%read_1, %allocate_1, 4, None, (), None, None, None)
-        # CHECK-NEXT: %read_3
-        # CHECK-SAME: (%allocate_1, 4, None, (), None, None, None, [%write_1])
-        # CHECK-NEXT: %mma
-        # CHECK-SAME: (%read_2, %read_3, %acc, None)
+    # iterate subgraph:
+    # CHECK: %b
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %acc
+    # CHECK-NEXT: %read
+    # CHECK-NEXT: %write
+    # CHECK-SAME: (%read, %allocate, 4, None, (), None, None, None)
+    # CHECK-NEXT: %read_2
+    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write])
+    # CHECK-NEXT: %read_1
+    # CHECK-NEXT: %write_1
+    # CHECK-SAME: (%read_1, %allocate_1, 4, None, (), None, None, None)
+    # CHECK-NEXT: %read_3
+    # CHECK-SAME: (%allocate_1, 4, None, (), None, None, None, [%write_1])
+    # CHECK-NEXT: %mma
+    # CHECK-SAME: (%read_2, %read_3, %acc, None)
 
 
 if __name__ == "__main__":

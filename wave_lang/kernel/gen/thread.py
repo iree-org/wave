@@ -21,10 +21,8 @@ from wave_lang.support.ir_imports import (
 
 from .._support.indexing import IndexingContext
 from .._support.tracing import (
-    AOTLaunchContext,
     CapturedTrace,
     CompiledContext,
-    EagerContext,
     KernelRegionGraph,
     Launchable,
     LaunchContext,

@@ -4,7 +4,6 @@ import logging
 
 import sympy
 
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -25,6 +24,7 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.wave.utils.print_utils import (
     print_trace,
 )
+from wave_lang.kernel._support.context import push
 
 # Input sizes
 M = tkl.sym.M
@@ -71,62 +71,63 @@ def test_read_write_equal_sizes():
         )
     ]
 
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-        }
-    ):
-        graph = read_write_same_size()
-        IndexingContext.current().finalize()
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # CHECK: %a
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %read_M:0_N:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:0_N:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %write_M:0_N:0
-        # CHECK-SAME: (%read_M:0_N:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:0_N:1
-        # CHECK-SAME: (%read_M:0_N:1, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0
-        # CHECK-SAME: (%read_M:1_N:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:1
-        # CHECK-SAME: (%read_M:1_N:1, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = read_write_same_size()
+    IndexingContext.current().finalize()
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # CHECK: %a
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %read_M:0_N:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:0_N:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %write_M:0_N:0
+    # CHECK-SAME: (%read_M:0_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:0_N:1
+    # CHECK-SAME: (%read_M:0_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0
+    # CHECK-SAME: (%read_M:1_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:1
+    # CHECK-SAME: (%read_M:1_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: placeholder(_name=c
-        # CHECK-NEXT: read(memory=a
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: read(memory=a
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
-        # CHECK-NEXT: read(memory=a
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: read(memory=a
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:0_N:0
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:0_N:1
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:1_N:0
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:1_N:1
-        # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
-        # CHECK-NEXT: output
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=c
+    # CHECK-NEXT: read(memory=a
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: read(memory=a
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
+    # CHECK-NEXT: read(memory=a
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: read(memory=a
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:0_N:0
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:0_N:1
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:1_N:0
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:1_N:1
+    # CHECK-SAME: index={M: $WG0*BLOCK_M + BLOCK_M*floor($T0/64) + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N + 16 : 4 : 1}
+    # CHECK-NEXT: output
 
-        # CHECK: -----
+    # CHECK: -----
 
 
 @tkw.wave_trace_only()
@@ -153,55 +154,56 @@ def test_read_write():
             vector_shapes={M: 16, N: 16, K: 16},
         )
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = read_write_different_dims()
-        IndexingContext.current().finalize()
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # CHECK: %a
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %read_M:0_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %write_M:0_N:0_K:0
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:0_N:0_K:1
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0_K:0
-        # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0_K:1
-        # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return None
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = read_write_different_dims()
+    IndexingContext.current().finalize()
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # CHECK: %a
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %read_M:0_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %write_M:0_N:0_K:0
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:0_N:0_K:1
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0_K:0
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0_K:1
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return None
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: placeholder(_name=c
-        # CHECK-NEXT: read(memory=a
-        # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: read(memory=a
-        # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:0_N:0_K:0
-        # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:0_N:0_K:0
-        # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K + 16 : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:1_N:0_K:0
-        # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K : 4 : 1}
-        # CHECK-NEXT: write(register_=read_M:1_N:0_K:0
-        # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K + 16 : 4 : 1}
-        # CHECK-NEXT: output
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=c
+    # CHECK-NEXT: read(memory=a
+    # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: read(memory=a
+    # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:0_N:0_K:0
+    # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:0_N:0_K:0
+    # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K + 16 : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:1_N:0_K:0
+    # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K : 4 : 1}
+    # CHECK-NEXT: write(register_=read_M:1_N:0_K:0
+    # CHECK-SAME: index={M: $T0*BLOCK_M/64 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $T2*BLOCK_K + $WG2*BLOCK_K + 16 : 4 : 1}
+    # CHECK-NEXT: output
 
-        # CHECK: -----
+    # CHECK: -----
 
 
 @tkw.wave_trace_only()
@@ -236,52 +238,53 @@ def test_write_in_iterate():
             vector_shapes={M: 16, K: 16},
         )
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = write_in_iterate()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # Root graph:
-        # CHECK: graph()
-        # CHECK: %iterate :
-        # CHECK-SAME: args = (K,
-        # CHECK: %get_result_M:0_K:0 :
-        # CHECK-SAME: args = (%iterate, 0)
-        # CHECK: %write_M:0_K:0 :
-        # CHECK-SAME: (%get_result_M:0_K:0, %c, 4,
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = write_in_iterate()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # Root graph:
+    # CHECK: graph()
+    # CHECK: %iterate :
+    # CHECK-SAME: args = (K,
+    # CHECK: %get_result_M:0_K:0 :
+    # CHECK-SAME: args = (%iterate, 0)
+    # CHECK: %write_M:0_K:0 :
+    # CHECK-SAME: (%get_result_M:0_K:0, %c, 4,
 
-        # CHECK: Custom format:
-        # CHECK: iterate(axis=K,
-        # CHECK: get_result(value=iterate, res_idx=0
-        # CHECK: write(register_=get_result_M:0_K:0, memory=c, elements_per_thread=4,
+    # CHECK: Custom format:
+    # CHECK: iterate(axis=K,
+    # CHECK: get_result(value=iterate, res_idx=0
+    # CHECK: write(register_=get_result_M:0_K:0, memory=c, elements_per_thread=4,
 
-        # iterate subgraph:
-        # CHECK: graph():
-        # CHECK: %read_M:0_K:0 :
-        # CHECK-SAME: (args = (%a, 4,
-        # CHECK: %read_M:0_K:1 :
-        # CHECK-SAME: (args = (%a, 4,
-        # CHECK: %write_M:0_K:0 :
-        # CHECK-SAME: (%read_M:0_K:0, %b, 4,
-        # CHECK: %write_M:0_K:1 :
-        # CHECK-SAME: (%read_M:0_K:1, %b, 4,
+    # iterate subgraph:
+    # CHECK: graph():
+    # CHECK: %read_M:0_K:0 :
+    # CHECK-SAME: (args = (%a, 4,
+    # CHECK: %read_M:0_K:1 :
+    # CHECK-SAME: (args = (%a, 4,
+    # CHECK: %write_M:0_K:0 :
+    # CHECK-SAME: (%read_M:0_K:0, %b, 4,
+    # CHECK: %write_M:0_K:1 :
+    # CHECK-SAME: (%read_M:0_K:1, %b, 4,
 
-        # CHECK: Custom format:
-        # CHECK: read(memory=a, elements_per_thread=4,
-        # CHECK: read(memory=a, elements_per_thread=4,
-        # CHECK: write(register_=read_M:0_K:0, memory=b, elements_per_thread=4,
-        # CHECK: write(register_=read_M:0_K:1, memory=b, elements_per_thread=4,
-        # CHECK: -----
+    # CHECK: Custom format:
+    # CHECK: read(memory=a, elements_per_thread=4,
+    # CHECK: read(memory=a, elements_per_thread=4,
+    # CHECK: write(register_=read_M:0_K:0, memory=b, elements_per_thread=4,
+    # CHECK: write(register_=read_M:0_K:1, memory=b, elements_per_thread=4,
+    # CHECK: -----
 
 
 @tkw.wave_trace_only()
@@ -319,34 +322,35 @@ def test_no_writes():
             vector_shapes={M: 16, K: 16},
         )
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = no_writes()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = no_writes()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
 
-        # CHECK: graph():
-        # CHECK: %a :
-        # CHECK-SAME: [num_users=1] = placeholder[target=a]
-        # CHECK: %read :
-        # CHECK-SAME: (args = (%a, 16, None, (), None, None, None, None), kwargs = {})
-        # CHECK: return None
-        # CHECK: Custom format:
-        # CHECK: placeholder(_name=a, _type=Memory[M, K].of(f16))
-        # CHECK: read(memory=a, elements_per_thread=16
-        # CHECK: output(return_vals=(None,))
+    # CHECK: graph():
+    # CHECK: %a :
+    # CHECK-SAME: [num_users=1] = placeholder[target=a]
+    # CHECK: %read :
+    # CHECK-SAME: (args = (%a, 16, None, (), None, None, None, None), kwargs = {})
+    # CHECK: return None
+    # CHECK: Custom format:
+    # CHECK: placeholder(_name=a, _type=Memory[M, K].of(f16))
+    # CHECK: read(memory=a, elements_per_thread=16
+    # CHECK: output(return_vals=(None,))
 
-        # CHECK: -----
+    # CHECK: -----
 
 
 @run_test
@@ -359,159 +363,160 @@ def test_gemm():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # Root graph:
-        # CHECK: region_1 [root]:
-        # CHECK: graph():
-        # CHECK: %a
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %register_M:0_N:0_K:0
-        # CHECK-NEXT: %register_M:0_N:1_K:0
-        # CHECK-NEXT: %register_M:1_N:0_K:0
-        # CHECK-NEXT: %register_M:1_N:1_K:0
-        # CHECK-NEXT: %iterate
-        # CHECK-SAME: %register_M:0_N:0_K:0, %register_M:0_N:1_K:0, %register_M:1_N:0_K:0, %register_M:1_N:1_K:0
-        # CHECK-NEXT: %get_result_M:0_N:0_K:0
-        # CHECK-NEXT: %get_result_M:0_N:1_K:0
-        # CHECK-NEXT: %get_result_M:1_N:0_K:0
-        # CHECK-NEXT: %get_result_M:1_N:1_K:0
-        # CHECK-NEXT: %write_M:0_N:0_K:0
-        # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:0_N:1_K:0
-        # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0_K:0
-        # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:1_K:0
-        # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return None
+    subs = {
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = gemm()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # Root graph:
+    # CHECK: region_1 [root]:
+    # CHECK: graph():
+    # CHECK: %a
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %register_M:0_N:0_K:0
+    # CHECK-NEXT: %register_M:0_N:1_K:0
+    # CHECK-NEXT: %register_M:1_N:0_K:0
+    # CHECK-NEXT: %register_M:1_N:1_K:0
+    # CHECK-NEXT: %iterate
+    # CHECK-SAME: %register_M:0_N:0_K:0, %register_M:0_N:1_K:0, %register_M:1_N:0_K:0, %register_M:1_N:1_K:0
+    # CHECK-NEXT: %get_result_M:0_N:0_K:0
+    # CHECK-NEXT: %get_result_M:0_N:1_K:0
+    # CHECK-NEXT: %get_result_M:1_N:0_K:0
+    # CHECK-NEXT: %get_result_M:1_N:1_K:0
+    # CHECK-NEXT: %write_M:0_N:0_K:0
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:0_N:1_K:0
+    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0_K:0
+    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:1_K:0
+    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return None
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: placeholder(_name=b
-        # CHECK-NEXT: placeholder(_name=c
-        # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
-        # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
-        # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
-        # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
-        # CHECK-NEXT: iterate(axis=K, init_args=[register_M:0_N:0_K:0, register_M:0_N:1_K:0, register_M:1_N:0_K:0, register_M:1_N:1_K:0], subgraph_name=region_0, implicit_captures=[a, b], step=1)
-        # CHECK-NEXT: get_result(value=iterate, res_idx=0
-        # CHECK-NEXT: get_result(value=iterate, res_idx=1
-        # CHECK-NEXT: get_result(value=iterate, res_idx=2
-        # CHECK-NEXT: get_result(value=iterate, res_idx=3
-        # CHECK-NEXT: write(register_=get_result_M:0_N:0_K:0
-        # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
-        # CHECK-NEXT: write(register_=get_result_M:0_N:1_K:0
-        # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
-        # CHECK-NEXT: write(register_=get_result_M:1_N:0_K:0
-        # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
-        # CHECK-NEXT: write(register_=get_result_M:1_N:1_K:0
-        # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
-        # CHECK-NEXT: output
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=b
+    # CHECK-NEXT: placeholder(_name=c
+    # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
+    # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
+    # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
+    # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
+    # CHECK-NEXT: iterate(axis=K, init_args=[register_M:0_N:0_K:0, register_M:0_N:1_K:0, register_M:1_N:0_K:0, register_M:1_N:1_K:0], subgraph_name=region_0, implicit_captures=[a, b], step=1)
+    # CHECK-NEXT: get_result(value=iterate, res_idx=0
+    # CHECK-NEXT: get_result(value=iterate, res_idx=1
+    # CHECK-NEXT: get_result(value=iterate, res_idx=2
+    # CHECK-NEXT: get_result(value=iterate, res_idx=3
+    # CHECK-NEXT: write(register_=get_result_M:0_N:0_K:0
+    # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
+    # CHECK-NEXT: write(register_=get_result_M:0_N:1_K:0
+    # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
+    # CHECK-NEXT: write(register_=get_result_M:1_N:0_K:0
+    # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
+    # CHECK-NEXT: write(register_=get_result_M:1_N:1_K:0
+    # CHECK-SAME: index={M:  $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
+    # CHECK-NEXT: output
 
-        # iterate subgraph:
-        # CHECK: region_0:
-        # CHECK: graph():
-        # CHECK: %acc_M:0_N:0_K:0
-        # CHECK-NEXT: %acc_M:0_N:1_K:0
-        # CHECK-NEXT: %acc_M:1_N:0_K:0
-        # CHECK-NEXT: %acc_M:1_N:1_K:0
+    # iterate subgraph:
+    # CHECK: region_0:
+    # CHECK: graph():
+    # CHECK: %acc_M:0_N:0_K:0
+    # CHECK-NEXT: %acc_M:0_N:1_K:0
+    # CHECK-NEXT: %acc_M:1_N:0_K:0
+    # CHECK-NEXT: %acc_M:1_N:1_K:0
 
-        # CHECK-NEXT: %a
-        # CHECK-NEXT: %read_M:0_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:0_N:0_K:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0_K:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %read_M:0_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:0_N:0_K:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0_K:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
 
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %read_1_M:0_N:0_K:0
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_1_M:0_N:0_K:1
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_1_M:0_N:1_K:0
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_1_M:0_N:1_K:1
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %read_1_M:0_N:0_K:0
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_1_M:0_N:0_K:1
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_1_M:0_N:1_K:0
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_1_M:0_N:1_K:1
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
 
-        # CHECK-NEXT: %mma_M:0_N:0_K:0
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:0_N:0_K:1
-        # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:0_N:1_K:0
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, None)
-        # CHECK-NEXT: %mma_M:0_N:1_K:1
-        # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:0_K:0
-        # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:0_K:1
-        # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:1_K:0
-        # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:1_K:1
-        # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
-        # CHECK-NEXT: return [mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1]
+    # CHECK-NEXT: %mma_M:0_N:0_K:0
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:0_K:1
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:1_K:0
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:1_K:1
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:0_K:0
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:0_K:1
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:1_K:0
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:1_K:1
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
+    # CHECK-NEXT: return [mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1]
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
-        # CHECK-NEXT: placeholder(_name=acc_M:0_N:1_K:0
-        # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
-        # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: placeholder(_name=b
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:0_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:0_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:1_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:1_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: output(return_vals=([mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1],))
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
+    # CHECK-NEXT: placeholder(_name=acc_M:0_N:1_K:0
+    # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
+    # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: placeholder(_name=b
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:0_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:0_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:1_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:1_N:1_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: output(return_vals=([mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1],))
 
-        # CHECK-NEXT: -----
+    # CHECK-NEXT: -----
 
 
 @tkw.wave_trace_only()
@@ -550,157 +555,158 @@ def test_batched_gemm():
             mma_type=MMAType.F32_16x16x16_F16,
         )
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K: 32,
-            BLOCK_B: 1,
-        }
-    ):
-        graph = batched_gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # Root graph:
-        # CHECK: %a
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %register_M:0_N:0_K:0
-        # CHECK-NEXT: %register_M:0_N:1_K:0
-        # CHECK-NEXT: %register_M:1_N:0_K:0
-        # CHECK-NEXT: %register_M:1_N:1_K:0
-        # CHECK-NEXT: %iterate
-        # CHECK-SAME: %register_M:0_N:0_K:0, %register_M:0_N:1_K:0, %register_M:1_N:0_K:0, %register_M:1_N:1_K:0
-        # CHECK-NEXT: %get_result_M:0_N:0_K:0
-        # CHECK-NEXT: %get_result_M:0_N:1_K:0
-        # CHECK-NEXT: %get_result_M:1_N:0_K:0
-        # CHECK-NEXT: %get_result_M:1_N:1_K:0
-        # CHECK-NEXT: %write_M:0_N:0_K:0
-        # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:0_N:1_K:0
-        # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0_K:0
-        # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:1_K:0
-        # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return None
+    subs = {
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        BLOCK_B: 1,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = batched_gemm()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # Root graph:
+    # CHECK: %a
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %register_M:0_N:0_K:0
+    # CHECK-NEXT: %register_M:0_N:1_K:0
+    # CHECK-NEXT: %register_M:1_N:0_K:0
+    # CHECK-NEXT: %register_M:1_N:1_K:0
+    # CHECK-NEXT: %iterate
+    # CHECK-SAME: %register_M:0_N:0_K:0, %register_M:0_N:1_K:0, %register_M:1_N:0_K:0, %register_M:1_N:1_K:0
+    # CHECK-NEXT: %get_result_M:0_N:0_K:0
+    # CHECK-NEXT: %get_result_M:0_N:1_K:0
+    # CHECK-NEXT: %get_result_M:1_N:0_K:0
+    # CHECK-NEXT: %get_result_M:1_N:1_K:0
+    # CHECK-NEXT: %write_M:0_N:0_K:0
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:0_N:1_K:0
+    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0_K:0
+    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:1_K:0
+    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return None
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: placeholder(_name=b
-        # CHECK-NEXT: placeholder(_name=c
-        # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
-        # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
-        # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
-        # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
-        # CHECK-NEXT: iterate(axis=K, init_args=[register_M:0_N:0_K:0, register_M:0_N:1_K:0, register_M:1_N:0_K:0, register_M:1_N:1_K:0], subgraph_name=region_0, implicit_captures=[a, b], step=1)
-        # CHECK-NEXT: get_result(value=iterate, res_idx=0
-        # CHECK-NEXT: get_result(value=iterate, res_idx=1
-        # CHECK-NEXT: get_result(value=iterate, res_idx=2
-        # CHECK-NEXT: get_result(value=iterate, res_idx=3
-        # CHECK-NEXT: write(register_=get_result_M:0_N:0_K:0
-        # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
-        # CHECK-NEXT: write(register_=get_result_M:0_N:1_K:0
-        # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
-        # CHECK-NEXT: write(register_=get_result_M:1_N:0_K:0
-        # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
-        # CHECK-NEXT: write(register_=get_result_M:1_N:1_K:0
-        # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
-        # CHECK-NEXT: output
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=b
+    # CHECK-NEXT: placeholder(_name=c
+    # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
+    # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
+    # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
+    # CHECK-NEXT: register(shape=(B, M, N), dtype=f32, value=0.0, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1})
+    # CHECK-NEXT: iterate(axis=K, init_args=[register_M:0_N:0_K:0, register_M:0_N:1_K:0, register_M:1_N:0_K:0, register_M:1_N:1_K:0], subgraph_name=region_0, implicit_captures=[a, b], step=1)
+    # CHECK-NEXT: get_result(value=iterate, res_idx=0
+    # CHECK-NEXT: get_result(value=iterate, res_idx=1
+    # CHECK-NEXT: get_result(value=iterate, res_idx=2
+    # CHECK-NEXT: get_result(value=iterate, res_idx=3
+    # CHECK-NEXT: write(register_=get_result_M:0_N:0_K:0
+    # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
+    # CHECK-NEXT: write(register_=get_result_M:0_N:1_K:0
+    # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
+    # CHECK-NEXT: write(register_=get_result_M:1_N:0_K:0
+    # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}
+    # CHECK-NEXT: write(register_=get_result_M:1_N:1_K:0
+    # CHECK-SAME: index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}
+    # CHECK-NEXT: output
 
-        # iterate subgraph:
+    # iterate subgraph:
 
-        # CHECK: %acc_M:0_N:0_K:0
-        # CHECK-NEXT: %acc_M:0_N:1_K:0
-        # CHECK-NEXT: %acc_M:1_N:0_K:0
-        # CHECK-NEXT: %acc_M:1_N:1_K:0
+    # CHECK: %acc_M:0_N:0_K:0
+    # CHECK-NEXT: %acc_M:0_N:1_K:0
+    # CHECK-NEXT: %acc_M:1_N:0_K:0
+    # CHECK-NEXT: %acc_M:1_N:1_K:0
 
-        # CHECK-NEXT: %a
-        # CHECK-NEXT: %read_M:0_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:0_N:0_K:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0_K:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %read_M:0_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:0_N:0_K:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0_K:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
 
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %read_1_M:0_N:0_K:0
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_1_M:0_N:0_K:1
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_1_M:0_N:1_K:0
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_1_M:0_N:1_K:1
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %read_1_M:0_N:0_K:0
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_1_M:0_N:0_K:1
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_1_M:0_N:1_K:0
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_1_M:0_N:1_K:1
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
 
-        # CHECK-NEXT: %mma_M:0_N:0_K:0
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:0_N:0_K:1
-        # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:0_N:1_K:0
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, None)
-        # CHECK-NEXT: %mma_M:0_N:1_K:1
-        # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:0_K:0
-        # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:0_K:1
-        # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:1_K:0
-        # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, None)
-        # CHECK-NEXT: %mma_M:1_N:1_K:1
-        # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
-        # CHECK-NEXT: return [mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1]
+    # CHECK-NEXT: %mma_M:0_N:0_K:0
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:0_K:1
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:1_K:0
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:1_K:1
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:0_K:0
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:0_K:1
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:1_K:0
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, None)
+    # CHECK-NEXT: %mma_M:1_N:1_K:1
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
+    # CHECK-NEXT: return [mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1]
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
-        # CHECK-NEXT: placeholder(_name=acc_M:0_N:1_K:0
-        # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
-        # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: placeholder(_name=b
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:0_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:0_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:0_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:0_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:1_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:1_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:1_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:1_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:1_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
-        # CHECK-NEXT: output(return_vals=([mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1],))
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
+    # CHECK-NEXT: placeholder(_name=acc_M:0_N:1_K:0
+    # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
+    # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: placeholder(_name=b
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:0_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:0_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:0_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:0_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:1_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:1_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:1_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:1_N:0_K:1 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:1_K:1     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:1_N:1_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1}))
+    # CHECK-NEXT: output(return_vals=([mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1],))
 
-        # CHECK-NEXT: -----
+    # CHECK-NEXT: -----
 
 
 @tkw.wave_trace_only()
@@ -734,46 +740,47 @@ def test_gemm_non_direct_acc():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = gemm_non_direct_acc()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # CHECK: %add_M:0_N:0_K:0
-        # CHECK-SAME: [add](args = (%exp2_M:0_N:0_K:0, %acc_M:0_N:0_K:0), kwargs = {})
-        # CHECK: %add_M:0_N:1_K:0
-        # CHECK-SAME: [add](args = (%exp2_M:0_N:1_K:0, %acc_M:0_N:1_K:0), kwargs = {})
-        # CHECK: %add_M:1_N:0_K:0
-        # CHECK-SAME: [add](args = (%exp2_M:1_N:0_K:0, %acc_M:1_N:0_K:0), kwargs = {})
-        # CHECK: %add_M:1_N:1_K:0
-        # CHECK-SAME: [add](args = (%exp2_M:1_N:1_K:0, %acc_M:1_N:1_K:0), kwargs = {})
-        # CHECK: %mma_M:0_N:0_K:0
-        # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:0_N:0_K:0, None), kwargs = {})
-        # CHECK: %mma_M:0_N:0_K:1
-        # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None), kwargs = {})
-        # CHECK: %mma_M:0_N:1_K:0
-        # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:0_N:1_K:0, None), kwargs = {})
-        # CHECK: %mma_M:0_N:1_K:1
-        # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None), kwargs = {})
-        # CHECK: %mma_M:1_N:0_K:0
-        # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:1_N:0_K:0, None), kwargs = {})
-        # CHECK: %mma_M:1_N:0_K:1
-        # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None), kwargs = {})
-        # CHECK: %mma_M:1_N:1_K:0
-        # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:1_N:1_K:0, None), kwargs = {})
-        # CHECK: %mma_M:1_N:1_K:1
-        # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None), kwargs = {})
+    subs = {
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = gemm_non_direct_acc()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # CHECK: %add_M:0_N:0_K:0
+    # CHECK-SAME: [add](args = (%exp2_M:0_N:0_K:0, %acc_M:0_N:0_K:0), kwargs = {})
+    # CHECK: %add_M:0_N:1_K:0
+    # CHECK-SAME: [add](args = (%exp2_M:0_N:1_K:0, %acc_M:0_N:1_K:0), kwargs = {})
+    # CHECK: %add_M:1_N:0_K:0
+    # CHECK-SAME: [add](args = (%exp2_M:1_N:0_K:0, %acc_M:1_N:0_K:0), kwargs = {})
+    # CHECK: %add_M:1_N:1_K:0
+    # CHECK-SAME: [add](args = (%exp2_M:1_N:1_K:0, %acc_M:1_N:1_K:0), kwargs = {})
+    # CHECK: %mma_M:0_N:0_K:0
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:0_N:0_K:0, None), kwargs = {})
+    # CHECK: %mma_M:0_N:0_K:1
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None), kwargs = {})
+    # CHECK: %mma_M:0_N:1_K:0
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:0_N:1_K:0, None), kwargs = {})
+    # CHECK: %mma_M:0_N:1_K:1
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None), kwargs = {})
+    # CHECK: %mma_M:1_N:0_K:0
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:1_N:0_K:0, None), kwargs = {})
+    # CHECK: %mma_M:1_N:0_K:1
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None), kwargs = {})
+    # CHECK: %mma_M:1_N:1_K:0
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:1_N:1_K:0, None), kwargs = {})
+    # CHECK: %mma_M:1_N:1_K:1
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None), kwargs = {})
 
 
 @tkw.wave_trace_only()
@@ -804,25 +811,26 @@ def test_tiled_max():
             vector_shapes={M: 16, K: 64},
         )
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 64,
-            BLOCK_K: 256,
-        }
-    ):
-        graph = tiled_max()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # CHECK: max(arg=[read_M:0_K:0, read_M:0_K:1, read_M:0_K:2, read_M:0_K:3], init=acc_M:0_K:0
-        # CHECK: max(arg=[read_M:1_K:0, read_M:1_K:1, read_M:1_K:2, read_M:1_K:3], init=acc_M:1_K:0
-        # CHECK: output(return_vals=([max_1_M:0_K:0, max_1_M:1_K:0],))
-        # CHECK-NEXT: -----
+    subs = {
+        BLOCK_M: 64,
+        BLOCK_K: 256,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = tiled_max()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # CHECK: max(arg=[read_M:0_K:0, read_M:0_K:1, read_M:0_K:2, read_M:0_K:3], init=acc_M:0_K:0
+    # CHECK: max(arg=[read_M:1_K:0, read_M:1_K:1, read_M:1_K:2, read_M:1_K:3], init=acc_M:1_K:0
+    # CHECK: output(return_vals=([max_1_M:0_K:0, max_1_M:1_K:0],))
+    # CHECK-NEXT: -----
 
 
 @run_test
@@ -837,85 +845,86 @@ def test_gemm_iterate_expansion_only():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # Root graph:
-        # CHECK: %a
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %register_M:0_N:0_K:0
-        # CHECK-NEXT: %iterate
-        # CHECK-NEXT: %get_result_M:0_N:0_K:0
-        # CHECK-NEXT: %write_M:0_N:0_K:0
-        # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return None
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = gemm()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # Root graph:
+    # CHECK: %a
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %register_M:0_N:0_K:0
+    # CHECK-NEXT: %iterate
+    # CHECK-NEXT: %get_result_M:0_N:0_K:0
+    # CHECK-NEXT: %write_M:0_N:0_K:0
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return None
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: placeholder(_name=b
-        # CHECK-NEXT: placeholder(_name=c
-        # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
-        # CHECK-NEXT: iterate(axis=K, init_args=[register_M:0_N:0_K:0]
-        # CHECK-NEXT: get_result(value=iterate, res_idx=0
-        # CHECK-NEXT: write(register_=get_result_M:0_N:0_K:0
-        # CHECK-SAME: index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
-        # CHECK-NEXT: output(return_vals=(None,))
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=b
+    # CHECK-NEXT: placeholder(_name=c
+    # CHECK-NEXT: register(shape=(M, N), dtype=f32, value=0.0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
+    # CHECK-NEXT: iterate(axis=K, init_args=[register_M:0_N:0_K:0]
+    # CHECK-NEXT: get_result(value=iterate, res_idx=0
+    # CHECK-NEXT: write(register_=get_result_M:0_N:0_K:0
+    # CHECK-SAME: index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1})
+    # CHECK-NEXT: output(return_vals=(None,))
 
-        # iterate subgraph:
+    # iterate subgraph:
 
-        # CHECK: %acc_M:0_N:0_K:0
+    # CHECK: %acc_M:0_N:0_K:0
 
-        # CHECK-NEXT: %a
-        # CHECK-NEXT: %read_M:0_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:0_N:0_K:1
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %a
+    # CHECK-NEXT: %read_M:0_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:0_N:0_K:1
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
 
-        # CHECK-NEXT: %b
-        # CHECK-NEXT: %read_1_M:0_N:0_K:0
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_1_M:0_N:0_K:1
-        # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %b
+    # CHECK-NEXT: %read_1_M:0_N:0_K:0
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_1_M:0_N:0_K:1
+    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
 
-        # CHECK-NEXT: %mma_M:0_N:0_K:0
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
-        # CHECK-NEXT: %mma_M:0_N:0_K:1
-        # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:0_K:0
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
+    # CHECK-NEXT: %mma_M:0_N:0_K:1
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
 
-        # CHECK-NEXT: return [mma_M:0_N:0_K:1]
+    # CHECK-NEXT: return [mma_M:0_N:0_K:1]
 
-        # CHECK: Custom format:
+    # CHECK: Custom format:
 
-        # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: placeholder(_name=b
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-        # CHECK-SAME: acc=acc_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: rhs=read_1_M:0_N:0_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-        # CHECK-SAME: acc=mma_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
-        # CHECK-NEXT: output(return_vals=([mma_M:0_N:0_K:1],))
+    # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: placeholder(_name=b
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-SAME: acc=acc_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:1 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: rhs=read_1_M:0_N:0_K:1 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-SAME: acc=mma_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
+    # CHECK-NEXT: output(return_vals=([mma_M:0_N:0_K:1],))
 
-        # CHECK-NEXT: -----
+    # CHECK-NEXT: -----
 
 
 @tkw.wave_trace_only()
@@ -982,24 +991,25 @@ def test_attention():
         )
     ]
 
-    with tk.gen.TestLaunchContext(
-        {
-            K1: 64,
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_B: 1,
-            BLOCK_K2: 32,
-        }
-    ):
-        graph = attention()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
+    subs = {
+        K1: 64,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_B: 1,
+        BLOCK_K2: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = attention()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
 
     # Root graph:
     # CHECK: write(register_=truediv_M:0_N:0_K2:0,
@@ -1081,66 +1091,67 @@ def py_arithmetic_different_dims():
             vector_shapes={M: 16, N: 16, K: 16},
         )
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 32,
-        }
-    ):
-        graph = py_arithmetic_different_dims()
-        IndexingContext.current().finalize()
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
-        # CHECK: %a
-        # CHECK-NEXT: %c
-        # CHECK-NEXT: %read_M:0_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %read_M:1_N:0_K:0
-        # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
-        # CHECK-NEXT: %add_M:0_N:0_K:0
-        # CHECK-SAME: (%read_M:0_N:0_K:0, %read_M:0_N:0_K:0)
-        # CHECK-NEXT: %add_M:1_N:0_K:0
-        # CHECK-SAME: (%read_M:1_N:0_K:0, %read_M:1_N:0_K:0)
-        # CHECK-NEXT: %sub_M:0_N:0_K:0
-        # CHECK-SAME: (%add_M:0_N:0_K:0, %read_M:0_N:0_K:0)
-        # CHECK-NEXT: %sub_M:1_N:0_K:0
-        # CHECK-SAME: (%add_M:1_N:0_K:0, %read_M:1_N:0_K:0)
-        # CHECK-NEXT: %neg_M:0_N:0_K:0
-        # CHECK-SAME: (%sub_M:0_N:0_K:0,)
-        # CHECK-NEXT: %neg_M:1_N:0_K:0
-        # CHECK-SAME: (%sub_M:1_N:0_K:0,)
-        # CHECK-NEXT: %write_M:0_N:0_K:0
-        # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:0_N:0_K:1
-        # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0_K:0
-        # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: %write_M:1_N:0_K:1
-        # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
-        # CHECK-NEXT: return None
+    subs = {
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = py_arithmetic_different_dims()
+    IndexingContext.current().finalize()
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
+    # CHECK: %a
+    # CHECK-NEXT: %c
+    # CHECK-NEXT: %read_M:0_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %read_M:1_N:0_K:0
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-NEXT: %add_M:0_N:0_K:0
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_M:0_N:0_K:0)
+    # CHECK-NEXT: %add_M:1_N:0_K:0
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_M:1_N:0_K:0)
+    # CHECK-NEXT: %sub_M:0_N:0_K:0
+    # CHECK-SAME: (%add_M:0_N:0_K:0, %read_M:0_N:0_K:0)
+    # CHECK-NEXT: %sub_M:1_N:0_K:0
+    # CHECK-SAME: (%add_M:1_N:0_K:0, %read_M:1_N:0_K:0)
+    # CHECK-NEXT: %neg_M:0_N:0_K:0
+    # CHECK-SAME: (%sub_M:0_N:0_K:0,)
+    # CHECK-NEXT: %neg_M:1_N:0_K:0
+    # CHECK-SAME: (%sub_M:1_N:0_K:0,)
+    # CHECK-NEXT: %write_M:0_N:0_K:0
+    # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:0_N:0_K:1
+    # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0_K:0
+    # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: %write_M:1_N:0_K:1
+    # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-NEXT: return None
 
-        # CHECK: Custom format:
-        # CHECK-NEXT: placeholder(_name=a
-        # CHECK-NEXT: placeholder(_name=c
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: add(lhs=read_M:0_N:0_K:0, rhs=read_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: add(lhs=read_M:1_N:0_K:0, rhs=read_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: sub(lhs=add_M:0_N:0_K:0, rhs=read_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: sub(lhs=add_M:1_N:0_K:0, rhs=read_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: neg(arg=sub_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: neg(arg=sub_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-        # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
-        # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
-        # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
-        # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
+    # CHECK: Custom format:
+    # CHECK-NEXT: placeholder(_name=a
+    # CHECK-NEXT: placeholder(_name=c
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: add(lhs=read_M:0_N:0_K:0, rhs=read_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: add(lhs=read_M:1_N:0_K:0, rhs=read_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: sub(lhs=add_M:0_N:0_K:0, rhs=read_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: sub(lhs=add_M:1_N:0_K:0, rhs=read_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: neg(arg=sub_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: neg(arg=sub_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
 
-        # CHECK: -----
+    # CHECK: -----
 
 
 @tkw.wave_trace_only()
@@ -1186,83 +1197,84 @@ def test_chained_gemm_32x32x8():
         )
     ]
 
-    with tk.gen.TestLaunchContext(
-        {
-            BLOCK_B: 1,
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K2: 32,
-            K1: 32,
-        }
-    ):
-        graph = chained_gemm_32x32x8()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        print_trace(graph)
+    subs = {
+        BLOCK_B: 1,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K2: 32,
+        K1: 32,
+    }
+    idxc = IndexingContext()
+    push(IndexingContext, idxc)
+    idxc.subs = subs
+    graph = chained_gemm_32x32x8()
+    IndexingContext.current().finalize()
+    initialize_iter_args(graph)
+    add_get_results(graph)
+    infer_types(graph)
+    set_node_indices(graph, constraints)
+    expand_graph(graph, constraints)
+    set_post_expansion_indices(graph, constraints)
+    print_trace(graph)
 
-        # CHECK: %acc_M:0_N:0_K2:0
-        # CHECK: %register
-        # CHECK: %q
-        # CHECK: %read_M:0_K2:0_K1:0
-        # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
-        # CHECK: %read_M:0_K2:0_K1:1
-        # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
-        # CHECK: %read_M:0_K2:0_K1:2
-        # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
-        # CHECK: %read_M:0_K2:0_K1:3
-        # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
-        # CHECK: %k
-        # CHECK: %read_1_shared_M:0_K2:0_K1:0
-        # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
-        # CHECK: %read_1_shared_M:0_K2:0_K1:1
-        # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
-        # CHECK: %read_1_shared_M:0_K2:0_K1:2
-        # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
-        # CHECK: %read_1_shared_M:0_K2:0_K1:3
-        # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
-        # CHECK: %mma_M:0_K2:0_K1:0
-        # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:0, %read_M:0_K2:0_K1:0, %register_M:0_K2:0_K1:0, None)
-        # CHECK: %mma_M:0_K2:0_K1:1
-        # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:1, %read_M:0_K2:0_K1:1, %mma_M:0_K2:0_K1:0, None)
-        # CHECK: %mma_M:0_K2:0_K1:2
-        # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:2, %read_M:0_K2:0_K1:2, %mma_M:0_K2:0_K1:1, None)
-        # CHECK: %mma_M:0_K2:0_K1:3
-        # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:3, %read_M:0_K2:0_K1:3, %mma_M:0_K2:0_K1:2, None)
-        # CHECK: %permute_M:0_K2:0
-        # CHECK-SAME: (args = (%mma_M:0_K2:0_K1:3, [B, M, K2])
-        # CHECK: %cast_M:0_K2:0
-        # CHECK-SAME: (args = (%permute_M:0_K2:0, f16)
-        # CHECK: %v
-        # CHECK: %read_2_shared_M:0_N:0_K2:0
-        # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
-        # CHECK: %read_2_shared_M:0_N:0_K2:1
-        # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
-        # CHECK: %read_2_shared_M:0_N:0_K2:2
-        # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
-        # CHECK: %read_2_shared_M:0_N:0_K2:3
-        # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
-        # CHECK: %reshape_M:0_N:0_K2:0
-        # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
-        # CHECK: %reshape_M:0_N:0_K2:1
-        # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
-        # CHECK: %reshape_M:0_N:0_K2:2
-        # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
-        # CHECK: %reshape_M:0_N:0_K2:3
-        # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
-        # CHECK: %mma_1_M:0_N:0_K2:0
-        # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:0, %read_2_shared_M:0_N:0_K2:0, %acc_M:0_N:0_K2:0, None)
-        # CHECK: %mma_1_M:0_N:0_K2:1
-        # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:1, %read_2_shared_M:0_N:0_K2:1, %mma_1_M:0_N:0_K2:0, None)
-        # CHECK: %mma_1_M:0_N:0_K2:2
-        # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:2, %read_2_shared_M:0_N:0_K2:2, %mma_1_M:0_N:0_K2:1, None)
-        # CHECK: %mma_1_M:0_N:0_K2:3
-        # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:3, %read_2_shared_M:0_N:0_K2:3, %mma_1_M:0_N:0_K2:2, None)
-        # CHECK: return [mma_1_M:0_N:0_K2:3]
+    # CHECK: %acc_M:0_N:0_K2:0
+    # CHECK: %register
+    # CHECK: %q
+    # CHECK: %read_M:0_K2:0_K1:0
+    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK: %read_M:0_K2:0_K1:1
+    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK: %read_M:0_K2:0_K1:2
+    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK: %read_M:0_K2:0_K1:3
+    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK: %k
+    # CHECK: %read_1_shared_M:0_K2:0_K1:0
+    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK: %read_1_shared_M:0_K2:0_K1:1
+    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK: %read_1_shared_M:0_K2:0_K1:2
+    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK: %read_1_shared_M:0_K2:0_K1:3
+    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK: %mma_M:0_K2:0_K1:0
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:0, %read_M:0_K2:0_K1:0, %register_M:0_K2:0_K1:0, None)
+    # CHECK: %mma_M:0_K2:0_K1:1
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:1, %read_M:0_K2:0_K1:1, %mma_M:0_K2:0_K1:0, None)
+    # CHECK: %mma_M:0_K2:0_K1:2
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:2, %read_M:0_K2:0_K1:2, %mma_M:0_K2:0_K1:1, None)
+    # CHECK: %mma_M:0_K2:0_K1:3
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:3, %read_M:0_K2:0_K1:3, %mma_M:0_K2:0_K1:2, None)
+    # CHECK: %permute_M:0_K2:0
+    # CHECK-SAME: (args = (%mma_M:0_K2:0_K1:3, [B, M, K2])
+    # CHECK: %cast_M:0_K2:0
+    # CHECK-SAME: (args = (%permute_M:0_K2:0, f16)
+    # CHECK: %v
+    # CHECK: %read_2_shared_M:0_N:0_K2:0
+    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK: %read_2_shared_M:0_N:0_K2:1
+    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK: %read_2_shared_M:0_N:0_K2:2
+    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK: %read_2_shared_M:0_N:0_K2:3
+    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK: %reshape_M:0_N:0_K2:0
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK: %reshape_M:0_N:0_K2:1
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK: %reshape_M:0_N:0_K2:2
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK: %reshape_M:0_N:0_K2:3
+    # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
+    # CHECK: %mma_1_M:0_N:0_K2:0
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:0, %read_2_shared_M:0_N:0_K2:0, %acc_M:0_N:0_K2:0, None)
+    # CHECK: %mma_1_M:0_N:0_K2:1
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:1, %read_2_shared_M:0_N:0_K2:1, %mma_1_M:0_N:0_K2:0, None)
+    # CHECK: %mma_1_M:0_N:0_K2:2
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:2, %read_2_shared_M:0_N:0_K2:2, %mma_1_M:0_N:0_K2:1, None)
+    # CHECK: %mma_1_M:0_N:0_K2:3
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:3, %read_2_shared_M:0_N:0_K2:3, %mma_1_M:0_N:0_K2:2, None)
+    # CHECK: return [mma_1_M:0_N:0_K2:3]
 
 
 if __name__ == "__main__":

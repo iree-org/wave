@@ -9,11 +9,11 @@ T = TypeVar("T")
 def push(context_type: Type[T], instance: T) -> T:
     """Pushes an instance onto a thread-local context stack.
 
-    The context type must define an attribute __tk_context_idname__ which is
+    The context type must define an attribute __wave_context_idname__ which is
     a valid/unique identifier.
     """
     assert isinstance(instance, context_type)
-    key = context_type.__tk_context_idname__
+    key = context_type.__wave_context_idname__
     try:
         stack: list = getattr(_tls, key)
     except AttributeError:
@@ -28,7 +28,7 @@ def pop(context_type: Type[T], expected: Optional[T] = None):
 
     Raises IndexError if no current.
     """
-    stack: list = getattr(_tls, context_type.__tk_context_idname__)
+    stack: list = getattr(_tls, context_type.__wave_context_idname__)
     instance = stack.pop()
     assert (
         expected is None or expected is instance
@@ -41,7 +41,7 @@ def current(context_type: Type[T]) -> T:
     Raises IndexError on failure.
     """
     try:
-        stack: list = getattr(_tls, context_type.__tk_context_idname__)
+        stack: list = getattr(_tls, context_type.__wave_context_idname__)
     except AttributeError:
         raise IndexError(f"No current context for {context_type}")
     try:

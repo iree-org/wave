@@ -148,7 +148,7 @@ class IndexingContext:
         "cached_subs",
     ]
 
-    __tk_context_idname__ = "IndexingContext"
+    __wave_context_idname__ = "IndexingContext"
 
     def __init__(self):
         self.subs: dict[IndexSymbol, int | IndexSymbol] = {}
