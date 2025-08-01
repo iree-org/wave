@@ -9,7 +9,7 @@ name: "TK CI"
 on:
   workflow_dispatch:
   pull_request:
-      types: [opened, edited, synchronize, ready, ready_for_review, converted_to_draft]
+      types: [opened, synchronize, ready, ready_for_review, converted_to_draft]
   push:
     branches:
       - main
