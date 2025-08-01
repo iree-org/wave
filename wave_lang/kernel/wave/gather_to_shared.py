@@ -521,4 +521,4 @@ def gather_to_shared_swizzling(
             col = global_index[col_dim].start + col
             index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
             logger.info(f"gather.src_index={gather.src_index} -> {index}")
-            gather.src_index = index
+            gather.update_arg("src_index", index)
