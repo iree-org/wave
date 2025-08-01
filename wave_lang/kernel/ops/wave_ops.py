@@ -186,6 +186,9 @@ def cos(src: "Register") -> "Register": ...
 def roundeven(src: "Register") -> "Register": ...
 
 
+def sigmoid(src: "Register") -> "Register": ...
+
+
 def sin(src: "Register") -> "Register": ...
 
 
@@ -940,6 +943,7 @@ class ComparisonPyOp(BinaryOpBase, ABC):
 @define_interface_op("roundeven")
 @define_interface_op("sin")
 @define_interface_op("sinh")
+@define_interface_op("sigmoid")
 @define_interface_op("tanh")
 @define_interface_op("tanh_approx")
 @define_interface_op("cos")
