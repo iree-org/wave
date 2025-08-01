@@ -878,3 +878,6 @@ class IteratorBindings:
 
     def __init__(self, bindings: dict[IndexSymbol, IndexSymbol]):
         self.bindings = bindings
+
+    def __repr__(self):
+        return f"IteratorBindings({self.bindings})"

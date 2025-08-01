@@ -23,6 +23,7 @@ from ...ops.wave_ops import CustomOp, Iterate, Read, Write, get_custom
 from ..assumptions import Assumption
 from ..constraints import (
     Constraint,
+    IteratorBindings,
     DistributionConstraint,
     HardwareConstraint,
     TilingConstraint,
@@ -276,6 +277,17 @@ def get_workgroup_constraints(
     constraints: list[Constraint],
 ) -> list[WorkgroupConstraint]:
     return [x for x in constraints if isinstance(x, WorkgroupConstraint)]
+
+
+def get_iterator_bindings(
+    constraints: list[Constraint],
+) -> Optional[dict[IndexSymbol, IndexExpr]]:
+    bindings = []
+    for constraint in constraints:
+        if isinstance(constraint, IteratorBindings):
+            bindings.append(constraint)
+    assert len(bindings) <= 1, "Only one iterator binding is supported"
+    return bindings[0] if bindings else None
 
 
 def ceildiv(a: int, b: int) -> int:
