@@ -267,6 +267,8 @@ def emit_global_to_lds(
         if i == 0:
             commmon_id = id(new_write)
 
+        # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
+        # they are part of the same group later.
         new_write.pre_expansion_id = commmon_id
 
         new_writes[write.memory].append(new_write)
@@ -519,6 +521,8 @@ def gather_to_shared_swizzling(
             read.index = index
 
         for gather in gathers:
+            # Only apply swissling to the thread part of the index and keep the
+            # global part of the index unchanged.
             index = dict(gather.src_index)
             global_index = remove_thread_indexing(index)
             local_index = remove_global_indexing(index, constraints)
