@@ -265,7 +265,7 @@ def _construct_gather_scatter_indices(
         offset = _compute_offset(indices, strides) - start_indices_offset
         offset = subs_idxc(offset)
 
-        if offset.is_number:
+        if isinstance(offset, int) or offset.is_number:
             # If resulted offset sympy expr is convertible to int constant it
             # will be directly encoded into `arith.constant`.
             # For non-constant expressions, we will generate a real sequence of
