@@ -521,7 +521,7 @@ def gather_to_shared_swizzling(
             read.index = index
 
         for gather in gathers:
-            # Only apply swissling to the thread part of the index and keep the
+            # Only apply swizzling to the thread part of the index and keep the
             # global part of the index unchanged.
             index = dict(gather.src_index)
             global_index = remove_thread_indexing(index)
