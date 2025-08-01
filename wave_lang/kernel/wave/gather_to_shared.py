@@ -453,6 +453,15 @@ def gather_to_shared_swizzling(
     constraints: list[Constraint],
     options: WaveCompileOptions,
 ):
+    """
+    This pass is used to swizzle the gather to shared op global index and
+    corresponding LDS load index to reduce LDS bank conflicts.
+
+    The formula for swizzling is:
+    ```
+    new_col = xor(row % 8, col // elements_per_thread) * elements_per_thread
+    ```
+    """
     if "gfx95" not in options.target:
         logger.info("gather_to_shared_swizzling not supported on this architecture")
         return
