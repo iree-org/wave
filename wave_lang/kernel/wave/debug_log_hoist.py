@@ -13,7 +13,7 @@ from ..ops.wave_ops import (
 )
 from .._support.dtype import DataType
 from .._support.indexing import IndexSymbol
-from typing import TypedDict
+from typing import TypedDict, Any
 
 
 class DebugArgInfo(TypedDict):
@@ -21,13 +21,14 @@ class DebugArgInfo(TypedDict):
     debug_output_arg_id: int
     dtype: DataType
     symbolic_shape: tuple[IndexSymbol, ...]
+    printer: Any
 
 
 def is_debug_log_transformer(node):
     return isinstance(get_custom(node), DebugLog)
 
 
-def debug_log_hoist(trace: CapturedTrace):
+def debug_log_hoist(trace: CapturedTrace, debug_handlers: list[Any]):
     """
     Finds debug log ops and hoists kernel inputs for them.
     Must be run near the very beginning of the compilation pipeline.
@@ -41,12 +42,15 @@ def debug_log_hoist(trace: CapturedTrace):
         debug_log_ops = trace.walk(is_debug_log_transformer)
         for index, debug_op in enumerate(debug_log_ops):
             custom = get_custom(debug_op)
+            if custom.handler:
+                debug_handlers.append(custom.handler)
             placeholder_name = custom.label or f"debug_log_output_{index}"
             type_expr = None
             placeholder = Placeholder(placeholder_name, type_expr).add_to_graph(root)
             custom.fx_node.memory = placeholder
             placeholder.meta["debug_output_arg_id"] = index
             placeholder.meta["symbol_name"] = placeholder_name
+            placeholder.meta["printer"] = custom.printer
 
 
 def debug_log_write_replace(trace: CapturedTrace, debug_arg_info: list[DebugArgInfo]):
