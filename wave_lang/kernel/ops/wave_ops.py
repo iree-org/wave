@@ -1881,13 +1881,10 @@ class Iterate(NestedRegionOp):
     @property
     def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:
         expand_dims: list[IndexSymbol] = []
-        return_node = [
-            nested_node
-            for nested_node in self.get_root_graph().subgraphs[self.subgraph_name].nodes
-            if isinstance(get_custom(nested_node), Output)
-        ]
-        assert len(return_node) == 1
-        return_vals = get_custom(return_node[0]).return_vals[0]
+        subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
+        return_node = get_custom(subgraph.output_node())
+        assert isinstance(return_node, Output)
+        return_vals = return_node.return_vals[0]
         if not isinstance(return_vals, Sequence):
             return_vals = [return_vals]
         for return_val in return_vals:
