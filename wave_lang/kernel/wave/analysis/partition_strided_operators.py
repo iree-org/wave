@@ -242,14 +242,14 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
     strided_operators = trace.walk(has_gpr_offsets)
     for operator in strided_operators:
         custom = get_custom(operator)
+        index = custom.index
         simplified_index = {
-            dim: simplify_index(custom.index.get(dim, custom.index[dim]))
-            for dim in custom.index
+            dim: simplify_index(index.get(dim, idx)) for dim, idx in index.items()
         }
         if isinstance(custom, SelfIndex):
             # If specified use element_per_thread instead of IndexExpr size.
             elements_per_thread = subs_idxc(
-                custom.elements_per_thread or custom.index[custom.dim].size
+                custom.elements_per_thread or index[custom.dim].size
             )
         else:
             elements_per_thread = subs_idxc(custom.elements_per_thread)
@@ -287,9 +287,10 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
             for chunk_id in range(num_gpr_chunks):
                 cur_gpr_start_id = chunk_id * gpr_size
                 # Get updated index with VGPR offset.
-                output_mapping = list(custom.index)
                 if hasattr(custom, "mapping") and custom.mapping is not None:
                     output_mapping = list(custom.mapping.output_mapping.keys())
+                else:
+                    output_mapping = list(index)
                 # Modify stride to 1 S.T we can have vectorized read/write
                 # iff gpr_offset_dim is or will be (after mapping) fastest dim.
                 updated_index_with_gpr_offset = deepcopy(simplified_index)
@@ -375,7 +376,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
 
                 # Save the original index on the reshape op so later we can
                 # detect if op was part of `gpr_offset` partition.
-                reshape.index = custom.index
+                reshape.index = index
                 custom.replace_all_uses_with(reshape)
 
             custom.graph.erase_node(custom.fx_node)
