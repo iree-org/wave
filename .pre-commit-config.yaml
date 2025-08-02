@@ -21,3 +21,13 @@ repos:
     -   id: ruff
         args: [--select=F401,I001, --fix]
         name: ruff-unused-imports-and-sorting
+
+-   repo: https://github.com/pre-commit/mirrors-clang-format
+    # Loosely track the most recent versions in
+    #   * Runner images: https://github.com/actions/runner-images/
+    #   * Editor extensions: https://github.com/microsoft/vscode-cpptools
+    rev: v18.1.3
+    hooks:
+      - id: clang-format
+        name: Run clang-format on C/C++/etc. files
+        exclude_types: ["jupyter", "json"]
