@@ -21,14 +21,16 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
+import copy
 from ..utils.mapping_utils import get_dict_with_updated_key
+from typing import Optional
 
 
 def heuristically_multi_buffer_shared_memory(
     new_node: CustomOp,
     induction_variable: IndexSymbol,
     reduction: Iterate,
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     This function adjusts the offset to a shared memory buffer to multibuffer.
@@ -42,27 +44,39 @@ def heuristically_multi_buffer_shared_memory(
     Regardless of current node stage, because it will be remapped correctly later depending on if
     prologue, epilogue, or kernel stage
     """
-    assert multi_buffer_count != -1
-    original_buffer = get_custom(new_node.memory)
+    assert multi_buffer_count is not None
+    is_read_write = isinstance(new_node, Read | Write)
+    original_buffer = (
+        get_custom(new_node.memory) if is_read_write else get_custom(new_node.dst)
+    )
     reduction_axis = reduction.axis
     reduction_dim_indices = [
         i for i, dim in enumerate(original_buffer.shape) if dim == reduction_axis
     ]
     for i, dim in enumerate(original_buffer.shape):
-        if i in reduction_dim_indices or dim not in new_node.index:
+        new_node_idx = copy.deepcopy(
+            new_node.index if is_read_write else new_node.dst_index
+        )
+        if i in reduction_dim_indices or dim not in new_node_idx:
             continue
         block_size = original_buffer.distributed_shape[i]
         which_buffer = induction_variable % multi_buffer_count
         offset = block_size * which_buffer
-        new_node.index[dim].start += offset
+        new_node_idx[dim].start += offset
 
         # Update the mapping for the operation as the keys for the
         # mapping have to match the shape of memory location the
 
         # operation reads from / writes to, which we change below.
-        new_node.index = get_dict_with_updated_key(
-            new_node.index, dim, dim * multi_buffer_count
+        new_node_idx = get_dict_with_updated_key(
+            new_node_idx, dim, dim * multi_buffer_count
         )
+        if is_read_write:
+            new_node.index = new_node_idx
+        else:
+            new_node.dst_index = new_node_idx
+            continue
+
         if isinstance(new_node.mapping, IndexMapping):
             input_mapping = new_node.mapping.input_mapping
             output_mapping = new_node.mapping.output_mapping
@@ -76,7 +90,7 @@ def heuristically_multi_buffer_shared_memory(
                 )
 
 
-def multi_buffer(trace: CapturedTrace, multi_buffer_count=-1):
+def multi_buffer(trace: CapturedTrace, multi_buffer_count: Optional[int] = None):
     """Perform multi buffering for all supported shared memory locations"""
 
     # Find all reductions

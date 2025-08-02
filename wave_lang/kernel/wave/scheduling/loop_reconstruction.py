@@ -20,6 +20,7 @@ from ...ops.wave_ops import (
     CustomOp,
     Write,
     Read,
+    GatherToLDS,
 )
 from ...lang.global_symbols import SHARED_ADDRESS_SPACE
 from ..constraints import Constraint
@@ -36,6 +37,7 @@ from .loop_reconstruction_utils import (
 )
 from .multi_buffering import heuristically_multi_buffer_shared_memory
 from .resources import get_custom_operation_type
+from typing import Optional
 
 logger = get_logger("wave.scheduling.loop_reconstruction")
 
@@ -79,7 +81,7 @@ def add_nodes_by_schedule(
     rotating_registers: dict[fx.Node, list[fx.Node]],
     pipelining_stage: PipelineStage = PipelineStage.KERNEL,
     use_scheduling_barriers: bool = False,
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     Interleave the instructions in the partitioned graph by stage
@@ -130,12 +132,13 @@ def add_nodes_by_schedule(
             logger.debug(
                 f"Copying Node: {node}, Stage: {stage}, Iteration: {iteration} -> {new_node.fx_node}"
             )
-            multi_buffering_enabled = multi_buffer_count != -1
-            if (
-                multi_buffering_enabled
-                and isinstance(new_node, Write | Read)
+            multi_buffering_enabled = multi_buffer_count is not None
+            is_shmem_read_write = (
+                isinstance(new_node, Write | Read)
                 and new_node.memory_type.address_space == SHARED_ADDRESS_SPACE
-            ):
+            )
+            is_gather_to_lds = isinstance(new_node, GatherToLDS)
+            if multi_buffering_enabled and (is_shmem_read_write or is_gather_to_lds):
                 heuristically_multi_buffer_shared_memory(
                     new_node=new_node,
                     induction_variable=induction_variable,
@@ -265,7 +268,7 @@ def construct_prologue(
     induction_variable: IndexSymbol,
     new_induction_variables: list[int],
     stages: list[int],
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     Construct the prologue of the pipelined loop.
@@ -430,7 +433,7 @@ def construct_kernel(
     node_map: dict[fx.Node, fx.Node],
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = False,
 ) -> tuple[Iterate, fx.Graph]:
     """
     Construct the kernel of the pipelined loop.
@@ -538,7 +541,7 @@ def construct_epilogue(
     num_rotating_registers: dict[fx.Node, int],
     node_map: dict[fx.Node, fx.Node],
     visualize: bool = False,
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     Construct the epilogue of the pipelined loop.
@@ -659,7 +662,7 @@ def construct_pipelined_loop(
     max_induction_variable: int,
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = None,
 ) -> fx.Node:
     """
     Given a graph annotated with scheduling parameters, construct a pipelined loop

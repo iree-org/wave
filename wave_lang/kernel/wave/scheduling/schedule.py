@@ -41,6 +41,7 @@ from .resources import (
     get_resource_names,
 )
 from .schedule_enums import SchedulingType
+from typing import Optional
 
 logger = get_logger("wave.scheduling.schedule")
 
@@ -62,7 +63,7 @@ def schedule_reduction(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     override_schedule_file: str = None,
     dump_schedule_file: str = None,
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     Clones the reduction graph and does the following:
@@ -222,7 +223,7 @@ def schedule_reduction(
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (num_stages - 1)
 
-    if multi_buffer_count != -1:
+    if multi_buffer_count is not None:
         multi_buffer(trace, multi_buffer_count)
 
 
@@ -233,7 +234,7 @@ def schedule_graph(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     override_schedule: str = None,
     dump_schedule: str = None,
-    multi_buffer_count: int = -1,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     Given a graph, pipelines the reductions in the graph.

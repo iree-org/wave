@@ -152,9 +152,11 @@ def testPureGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
-        multi_buffer_count=2,
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -188,8 +190,8 @@ _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
     [
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
-        _xfail(SchedulingType.FOUR_STAGE),
-        _xfail(SchedulingType.MODULO),
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
     ],
 )
 @pytest.mark.parametrize(
@@ -231,8 +233,11 @@ def testGemmGatherToLDS(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.MODULO, SchedulingType.FOUR_STAGE],
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -486,8 +491,11 @@ def testNonTransposeGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -917,8 +925,11 @@ def testVMFMAGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.MODULO, SchedulingType.FOUR_STAGE],
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1043,8 +1054,11 @@ def testCDNA2IntGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1150,8 +1164,11 @@ def testCDNA3IntGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1252,8 +1269,11 @@ def testF8Gemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1600,8 +1620,11 @@ def testBatchedGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_multi_buffering=enable_scheduling
-        in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO],
+        multi_buffer_count=(
+            2
+            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
+            else None
+        ),
     )
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
