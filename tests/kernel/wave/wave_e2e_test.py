@@ -1507,7 +1507,6 @@ def test_igemm_conv(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        dump_intermediates="./inter",
         optimization_level=optimization_level,
     )
     options = set_default_run_config(options)
