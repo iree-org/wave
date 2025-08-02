@@ -11,11 +11,9 @@ from typing import Callable
 import torch
 
 import wave_lang.kernel.wave.nn as wave_nn
+from wave_lang.kernel.wave.perf.utils import analyze_rpd_trace
 
 try:
-    import sqlite3
-
-    import pandas as pd
     from rpdTracerControl import rpdTracerControl
 except ImportError:
     print("rpdTraceControl not found, skipping profiling")
@@ -87,22 +85,12 @@ def benchmark_sdpa(
     tracer.stop()
     tracer.flush()
 
-    # Calculate statistics
-    conn = sqlite3.connect(output_filename)
-    df_top = pd.read_sql_query("SELECT * from top", conn)
-    df_busy = pd.read_sql_query("SELECT * from busy", conn)
-    df_kernel_info = pd.read_sql_query(
-        "select s1.string, k.stream, k.gridX, k.gridY, k.gridZ, k.workgroupX, k.workgroupY, k.workgroupZ, s2.string from rocpd_kernelapi k left join rocpd_string s1 on k.api_ptr_id = s1.id left join rocpd_string s2 on k.kernelName_id = s2.id;",
-        conn,
-    ).drop_duplicates()
-    print(df_kernel_info)
-    print(df_top)
-    conn.close()
-    avg_time = df_top["Ave_us"][0] / 1e6
+    # Read profiling output and compute average time for speculative_sampling
+    avg_time_us, _, _ = analyze_rpd_trace(output_filename, kernel_name="base_attention")
 
-    throughput = (
-        4 * batch_size * num_heads * seq_len_q * seq_len_k * head_dim
-    ) / avg_time
+    throughput = (4 * batch_size * num_heads * seq_len_q * seq_len_k * head_dim) / (
+        avg_time_us / 1e6
+    )
 
     print(f"\nBenchmark Results for BHSD shapes:")
     print(f"Batch size: {batch_size}")
@@ -110,7 +98,7 @@ def benchmark_sdpa(
     print(f"Query sequence length: {seq_len_q}")
     print(f"Key sequence length: {seq_len_k}")
     print(f"Head dimension: {head_dim}")
-    print(f"Average time per iteration: {avg_time * 1000:.2f} ms")
+    print(f"Average time per iteration: {avg_time_us / 1000:.2f} ms")
     print(f"Throughput: {throughput / 1e12:.2f} TFLOPs")
 
 
@@ -144,7 +132,7 @@ def main():
         config = json.load(f)
 
     # Run benchmark for each configuration
-    for shape_config in config["shapes"]:
+    for shape_config in config["bhsd_shapes"]:
         benchmark_sdpa(
             shape_config["batch_size"],
             shape_config["num_heads"],

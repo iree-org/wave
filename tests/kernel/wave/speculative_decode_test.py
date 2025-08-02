@@ -174,12 +174,6 @@ def tree_speculative_sampling_target_only(
 ):
     threshold_acc = max(threshold_acc, 1e-9)
     seq_len = predicts.shape[0]
-    cur_prob_offset_vec = torch.empty(
-        [batch_size], dtype=torch.int32, device=draft_probs.device
-    )
-    last_accepted_retrive_idx_vec = torch.empty(
-        [batch_size], dtype=torch.int32, device=draft_probs.device
-    )
 
     sampling_kernel = get_wave_speculative_sampling_kernel(
         batch_size,
@@ -203,8 +197,6 @@ def tree_speculative_sampling_target_only(
         predicts,
         accept_token_num,
         accept_index,
-        cur_prob_offset_vec,
-        last_accepted_retrive_idx_vec,
     )
 
 

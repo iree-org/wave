@@ -38,7 +38,7 @@ def test_speculative_decoding():
     # Check the function args
     # CHECK-SAME: %arg0: !stream.binding
     # CHECK-SAME: %arg3: !stream.binding
-    # CHECK-SAME: %arg13: i32
+    # CHECK-SAME: %arg11: i32
 
     # CHECK: arith.constant dense<63> : vector<1xi32>
 
