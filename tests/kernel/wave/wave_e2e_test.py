@@ -2260,7 +2260,6 @@ def test_debug_log(dynamic_dims: bool):
     )
 
 
-
 _trans_conv_cases = [
     (1, 4, 4, 1, 2, 2, 1, 2, "nchw_fchw"),
     (3, 16, 16, 3, 3, 3, 1, 2, "nchw_fchw"),
