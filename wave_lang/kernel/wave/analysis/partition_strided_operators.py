@@ -81,6 +81,8 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
         """
         custom = get_custom(node)
         if isinstance(custom, Write):
+            # `custom.register_index` calls are expensive, try to minimize the number
+            # of calls.
             strides_and_sizes = [
                 (
                     val.stride,
