@@ -1918,21 +1918,22 @@ class Iterate(NestedRegionOp):
 
     @property
     def index(self) -> list[dict[IndexSymbol, IndexSequence]]:
-        for node in self.get_root_graph().subgraphs[self.subgraph_name].nodes:
-            if isinstance(output := get_custom(node), Output):
-                return_vals = output.return_vals[0]
-                return (
-                    [
-                        (
-                            get_custom(val).acc_index
-                            if isinstance(get_custom(val), (MMA, ScaledMMA))
-                            else val.index
-                        )
-                        for val in return_vals
-                    ]
-                    if isinstance(return_vals, (Sequence))
-                    else return_vals.index
+        subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
+        output = get_custom(subgraph.output_node())
+        assert isinstance(output, Output)
+        return_vals = output.return_vals[0]
+        return (
+            [
+                (
+                    get_custom(val).acc_index
+                    if isinstance(get_custom(val), (MMA, ScaledMMA))
+                    else val.index
                 )
+                for val in return_vals
+            ]
+            if isinstance(return_vals, (Sequence))
+            else return_vals.index
+        )
 
     @index.setter
     def index(self, value: Any):
