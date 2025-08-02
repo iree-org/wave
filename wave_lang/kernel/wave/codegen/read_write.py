@@ -53,7 +53,7 @@ from ...ops.wave_ops import (
 )
 from ..utils.general_utils import get_fastest_index, infer_dim
 from ..utils.mapping_utils import transform_index_on_mapping
-from ..utils.symbol_utils import safe_subs, subs_idxc
+from ..utils.symbol_utils import safe_subs, subs_idxc, is_literal
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -265,7 +265,7 @@ def _construct_gather_scatter_indices(
         offset = _compute_offset(indices, strides) - start_indices_offset
         offset = subs_idxc(offset)
 
-        if isinstance(offset, int) or offset.is_number:
+        if is_literal(offset):
             # If resulted offset sympy expr is convertible to int constant it
             # will be directly encoded into `arith.constant`.
             # For non-constant expressions, we will generate a real sequence of

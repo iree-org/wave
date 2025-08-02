@@ -78,7 +78,7 @@ Dims = list[Union[None, IndexSymbol, int]]
 
 
 def safe_subs(
-    input: IndexExpr | int,
+    input: IndexExpr | int | "IndexSequence",
     subs: dict[IndexSymbol, int | IndexSymbol],
     simultaneous: bool = False,
 ) -> IndexSymbol | int:
@@ -92,12 +92,26 @@ def safe_subs(
     return input
 
 
-def subs_idxc(input: Any) -> IndexSymbol | int:
+def subs_idxc(
+    input: IndexSymbol | int | "IndexSequence",
+) -> IndexSymbol | int | "IndexSequence":
     """
     Substitute input using IndexingContext if input is sympy object.
     Otherwise return input unchanged.
     """
     return IndexingContext.current().subs_expr(input)
+
+
+def is_literal(input: IndexSymbol | int) -> bool:
+    """
+    Check if input is a literal number value.
+    """
+    if isinstance(input, int):
+        return True
+    if isinstance(input, sympy.Basic):
+        return input.is_number
+
+    assert False, f"Unexpected type: {type(input)}"
 
 
 @dataclass(slots=True)

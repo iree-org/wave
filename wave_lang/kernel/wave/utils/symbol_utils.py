@@ -15,6 +15,7 @@ from ..._support.indexing import (
     IndexSymbol,  # noqa
     safe_subs,  # noqa
     subs_idxc,  # noqa
+    is_literal,  # noqa
 )
 
 
