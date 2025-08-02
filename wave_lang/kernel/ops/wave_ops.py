@@ -441,8 +441,6 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
 
 def get_custom(node: fx.Node) -> "CustomOp":
     """Get the corresponding CustomOp for a given fx.Node."""
-    if isinstance(node, CustomOp):
-        raise ValueError(f"fx.Node required but got custom op {node}")
     if not isinstance(node, fx.Node):
         raise ValueError(f"Expected an fx.Node but got {type(node)}")
 
