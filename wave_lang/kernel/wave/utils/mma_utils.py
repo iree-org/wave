@@ -11,8 +11,9 @@ from ..._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import *
 from ...ops.wave_ops import (
-    MMA,
     CustomOp,
+    MMA,
+    MMABase,
     Reshape,
     ScaledMMA,
     get_custom,
@@ -45,8 +46,8 @@ def get_mma_dimensional_mapping(
     trace: CapturedTrace,
     hardware_constraint: HardwareConstraint,
 ) -> tuple[
-    dict[MMA | ScaledMMA, dict[IndexSymbol, int]],
-    dict[MMA | ScaledMMA, dict[IndexSymbol, list[fx.Node]]],
+    dict[MMABase, dict[IndexSymbol, int]],
+    dict[MMABase, dict[IndexSymbol, list[fx.Node]]],
 ]:
     """
     Given a trace, determine the MMA dimensional mapping for all the
@@ -59,13 +60,13 @@ def get_mma_dimensional_mapping(
     """
 
     def is_mma(node):
-        return isinstance(get_custom(node), (MMA, ScaledMMA))
+        return isinstance(get_custom(node), MMABase)
 
     mapping: dict[MMA, dict[IndexSymbol, int]] = {}
 
     mma_nodes = trace.walk(is_mma)
     for node in mma_nodes:
-        custom: MMA | ScaledMMA = get_custom(node)
+        custom: MMABase = get_custom(node)
         m, n = custom.acc_type.symbolic_shape[-2:]
         lhs_shape = custom.lhs_type.symbolic_shape
         rhs_shape = custom.rhs_type.symbolic_shape
@@ -152,9 +153,7 @@ def get_mma_dimensional_mapping(
     # in the backward slice of the lhs and rhs upto a previous mma (if one exists).
     # So we check for the previous node of the first operator in the slice to see
     # if it is an MMA and if so check if a reshape is required.
-    def add_reshape_if_needed(
-        mma: MMA | ScaledMMA, prev_mma: MMA | ScaledMMA, arg_index: int
-    ):
+    def add_reshape_if_needed(mma: MMABase, prev_mma: MMABase, arg_index: int):
         with mma.graph.inserting_before(mma.fx_node):
             arg = mma.lhs if arg_index == 0 else mma.rhs
             arg = get_custom(arg)
@@ -166,7 +165,7 @@ def get_mma_dimensional_mapping(
                 custom_reshape.vector_shapes = mma.vector_shapes
                 mma.update_arg(arg_index, reshape)
 
-    def find_mma_in_slice(node: CustomOp) -> Optional[MMA | ScaledMMA]:
+    def find_mma_in_slice(node: CustomOp) -> Optional[MMABase]:
         """
         Find the closest mma by iterating through the backward slice of a node
         in reverse.

@@ -365,7 +365,7 @@ def get_scheduling_weight(node: fx.Node) -> EdgeWeight:
                 weight = EdgeWeight(0, delay_table[Operation.WRITE_SHARED])
         case GatherToLDS():
             weight = EdgeWeight(0, delay_table[Operation.GLOBAL_TO_SHARED])
-        case MMA() | ScaledMMA():
+        case MMABase():
             weight = EdgeWeight(0, delay_table[Operation.MMA])
         case IterArg():
             weight = EdgeWeight(1, 0)

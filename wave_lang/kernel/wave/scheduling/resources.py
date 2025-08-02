@@ -11,7 +11,6 @@ import torch.fx as fx
 
 from ...lang.global_symbols import *
 from ...ops.wave_ops import (
-    MMA,
     ApplyExpr,
     BinaryOpBase,
     BitcastOp,
@@ -21,11 +20,11 @@ from ...ops.wave_ops import (
     Extract,
     GatherToLDS,
     IterArg,
+    MMABase,
     Output,
     Permute,
     Read,
     Reshape,
-    ScaledMMA,
     SelectOp,
     SelfIndex,
     ShuffleOp,
@@ -128,7 +127,7 @@ def get_custom_operation_type(custom: CustomOp) -> Operation:
         )
     elif isinstance(custom, GatherToLDS):
         return Operation.GLOBAL_TO_SHARED
-    elif isinstance(custom, (MMA, ScaledMMA)):
+    elif isinstance(custom, MMABase):
         return Operation.MMA
     elif isinstance(custom, SCHEDULING_NOOPS + (Output,)):
         return Operation.NOOP
@@ -162,7 +161,7 @@ def annotate_resource_usage(
             )
         elif isinstance(custom, GatherToLDS):
             custom.rrt = resource_reservation_table[Operation.GLOBAL_TO_SHARED]
-        elif isinstance(custom, (MMA, ScaledMMA)):
+        elif isinstance(custom, MMABase):
             custom.rrt = resource_reservation_table[Operation.MMA]
         elif isinstance(custom, ShuffleOp):
             custom.rrt = resource_reservation_table[Operation.SHUFFLE]

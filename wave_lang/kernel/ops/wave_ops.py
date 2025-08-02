@@ -1369,9 +1369,13 @@ class NewScalar(CustomOp):
         self.type = self.dtype
 
 
+class MMABase(CustomOp):
+    pass
+
+
 @define_op("mma")
 @dataclass
-class MMA(CustomOp):
+class MMA(MMABase):
     lhs: fx.Node
     rhs: fx.Node
     acc: fx.Node
@@ -1452,7 +1456,7 @@ class MMA(CustomOp):
 
 @define_op("scaled_mma")
 @dataclass
-class ScaledMMA(CustomOp):
+class ScaledMMA(MMABase):
     lhs: fx.Node
     lhs_scale: fx.Node
     rhs: fx.Node

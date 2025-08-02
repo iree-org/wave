@@ -18,18 +18,18 @@ from ..._support.dtype import DataType
 from ..._support.indexing import IndexingContext, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
-    MMA,
-    ScatterAdd,
     Allocate,
     Conditional,
     CustomOp,
     GetResult,
     IterArg,
     Iterate,
+    MMA,
+    MMABase,
     Output,
     ReduceOp,
+    ScatterAdd,
     Reshape,
-    ScaledMMA,
     SetSymbol,
     Write,
     get_custom,
@@ -469,7 +469,7 @@ def populate_inputs(
 
     for arg in expandable_args:
         match arg:
-            case MMA() | ScaledMMA():
+            case MMABase():
                 reduction_count = get_mma_reduction_count(arg, dim_scaling)
                 for i in range(reduction_count):
                     mma_metadata = deepcopy(metadata)
@@ -504,7 +504,7 @@ def store_fixup_data(
     for the fixup phase.
     """
     match node:
-        case MMA() | ScaledMMA():
+        case MMABase():
             try:
                 if expanded_dims[node.reduction_dim] == 0:
                     return

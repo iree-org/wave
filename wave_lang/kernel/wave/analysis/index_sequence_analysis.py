@@ -19,7 +19,6 @@ from ..._support.indexing import IndexSequence, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import *
 from ...ops.wave_ops import (
-    MMA,
     Allocate,
     AtomicOp,
     BinaryPyOp,
@@ -28,6 +27,8 @@ from ...ops.wave_ops import (
     GetResult,
     IterArg,
     Iterate,
+    MMA,
+    MMABase,
     NestedRegionOp,
     Output,
     Placeholder,
@@ -699,7 +700,7 @@ def propagate_indices(
         source, source_index, source_vector_shapes = sources.pop(0)
         if source in visited:
             continue
-        if not isinstance(source, (NestedRegionOp, (MMA, ScaledMMA))):
+        if not isinstance(source, (NestedRegionOp, MMABase)):
             if not should_update_index(
                 source, source_index, source_vector_shapes, symbolic_constraints
             ):
@@ -725,14 +726,14 @@ def propagate_indices(
 
 def set_thread_dependent_index_from_mma(
     constraints: Sequence[Constraint],
-    mma_mapping: dict[MMA | ScaledMMA, dict[IndexSymbol, int]],
+    mma_mapping: dict[MMABase, dict[IndexSymbol, int]],
     trace: CapturedTrace,
 ):
     """
     Set the thread dependent index based on the hardware constraint.
     """
     hardware_constraint = get_hardware_constraint(constraints)
-    sources: list[MMA | ScaledMMA] = list(mma_mapping.keys())
+    sources: list[MMABase] = list(mma_mapping.keys())
     assert sources and len(sources) >= 1, "Unexpected empty MMA mapping."
     if not sources:
         sources = trace.walk(lambda node: isinstance(get_custom(node), (Read, Write)))
@@ -980,7 +981,7 @@ def resolve_thread_shapes(trace: CapturedTrace, constraints: list[Constraint]):
     def get_index(custom: CustomOp):
         if not custom.indexing_dims:
             return None
-        if isinstance(custom, (MMA, ScaledMMA)):
+        if isinstance(custom, MMABase):
             return custom.acc.index
         return custom.index
 

@@ -11,11 +11,10 @@ from ...ops.wave_ops import (
     GetResult,
     IterArg,
     Iterate,
-    MMA,
+    MMABase,
     NewRegister,
     Output,
     Placeholder,
-    ScaledMMA,
     SchedulingGroupBarrier,
     get_custom,
 )
@@ -225,7 +224,7 @@ def add_missing_registers(graph: fx.Graph):
     """
     for node in graph.nodes:
         custom = get_custom(node)
-        if isinstance(custom, (MMA, ScaledMMA)):
+        if isinstance(custom, MMABase):
             acc = get_custom(custom.acc)
             if acc.graph != custom.graph:
                 with custom.graph.inserting_before(node):
