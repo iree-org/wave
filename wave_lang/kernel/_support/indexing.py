@@ -82,7 +82,7 @@ def safe_subs(
     input: IndexExpr | int | IndexSequence,
     subs: dict[IndexSymbol, int | IndexSymbol],
     simultaneous: bool = False,
-) -> IndexSymbol | int:
+) -> IndexSymbol | int | IndexSequence:
     """
     Substitute input using provided `subs` list if input is sympy object.
     Otherwise return input unchanged.
