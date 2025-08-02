@@ -1,3 +1,4 @@
+from __future__ import annotations  # Needed to defer IndexSequence type evaluation
 import copy
 from abc import ABC
 from dataclasses import dataclass
@@ -78,7 +79,7 @@ Dims = list[Union[None, IndexSymbol, int]]
 
 
 def safe_subs(
-    input: IndexExpr | int | "IndexSequence",
+    input: IndexExpr | int | IndexSequence,
     subs: dict[IndexSymbol, int | IndexSymbol],
     simultaneous: bool = False,
 ) -> IndexSymbol | int:
@@ -93,8 +94,8 @@ def safe_subs(
 
 
 def subs_idxc(
-    input: IndexSymbol | int | "IndexSequence",
-) -> IndexSymbol | int | "IndexSequence":
+    input: IndexSymbol | int | IndexSequence,
+) -> IndexSymbol | int | IndexSequence:
     """
     Substitute input using IndexingContext if input is sympy object.
     Otherwise return input unchanged.
