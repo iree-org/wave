@@ -24,7 +24,6 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.wave.utils.print_utils import (
     print_trace,
 )
-from wave_lang.kernel._support.context import push
 
 # Input sizes
 M = tkl.sym.M
@@ -75,17 +74,16 @@ def test_read_write_equal_sizes():
         BLOCK_M: 32,
         BLOCK_N: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = read_write_same_size()
-    IndexingContext.current().finalize()
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = read_write_same_size()
+        idxc.finalize()
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # CHECK: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0
@@ -159,17 +157,16 @@ def test_read_write():
         BLOCK_N: 32,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = read_write_different_dims()
-    IndexingContext.current().finalize()
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = read_write_different_dims()
+        idxc.finalize()
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # CHECK: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0_K:0
@@ -242,18 +239,17 @@ def test_write_in_iterate():
         BLOCK_M: 32,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = write_in_iterate()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = write_in_iterate()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # Root graph:
     # CHECK: graph()
     # CHECK: %iterate :
@@ -326,18 +322,17 @@ def test_no_writes():
         BLOCK_M: 32,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = no_writes()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = no_writes()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
 
     # CHECK: graph():
     # CHECK: %a :
@@ -368,18 +363,17 @@ def test_gemm():
         BLOCK_N: 64,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = gemm()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = gemm()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # Root graph:
     # CHECK: region_1 [root]:
     # CHECK: graph():
@@ -561,18 +555,17 @@ def test_batched_gemm():
         BLOCK_K: 32,
         BLOCK_B: 1,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = batched_gemm()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = batched_gemm()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # Root graph:
     # CHECK: %a
     # CHECK-NEXT: %b
@@ -745,18 +738,17 @@ def test_gemm_non_direct_acc():
         BLOCK_N: 64,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = gemm_non_direct_acc()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = gemm_non_direct_acc()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # CHECK: %add_M:0_N:0_K:0
     # CHECK-SAME: [add](args = (%exp2_M:0_N:0_K:0, %acc_M:0_N:0_K:0), kwargs = {})
     # CHECK: %add_M:0_N:1_K:0
@@ -815,18 +807,17 @@ def test_tiled_max():
         BLOCK_M: 64,
         BLOCK_K: 256,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = tiled_max()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = tiled_max()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # CHECK: max(arg=[read_M:0_K:0, read_M:0_K:1, read_M:0_K:2, read_M:0_K:3], init=acc_M:0_K:0
     # CHECK: max(arg=[read_M:1_K:0, read_M:1_K:1, read_M:1_K:2, read_M:1_K:3], init=acc_M:1_K:0
     # CHECK: output(return_vals=([max_1_M:0_K:0, max_1_M:1_K:0],))
@@ -850,18 +841,17 @@ def test_gemm_iterate_expansion_only():
         BLOCK_N: 32,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = gemm()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = gemm()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # Root graph:
     # CHECK: %a
     # CHECK-NEXT: %b
@@ -998,18 +988,17 @@ def test_attention():
         BLOCK_B: 1,
         BLOCK_K2: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = attention()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = attention()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
 
     # Root graph:
     # CHECK: write(register_=truediv_M:0_N:0_K2:0,
@@ -1096,17 +1085,16 @@ def py_arithmetic_different_dims():
         BLOCK_N: 32,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = py_arithmetic_different_dims()
-    IndexingContext.current().finalize()
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = py_arithmetic_different_dims()
+        idxc.finalize()
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
     # CHECK: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0_K:0
@@ -1204,18 +1192,17 @@ def test_chained_gemm_32x32x8():
         BLOCK_K2: 32,
         K1: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    graph = chained_gemm_32x32x8()
-    IndexingContext.current().finalize()
-    initialize_iter_args(graph)
-    add_get_results(graph)
-    infer_types(graph)
-    set_node_indices(graph, constraints)
-    expand_graph(graph, constraints)
-    set_post_expansion_indices(graph, constraints)
-    print_trace(graph)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        graph = chained_gemm_32x32x8()
+        idxc.finalize()
+        initialize_iter_args(graph)
+        add_get_results(graph)
+        infer_types(graph)
+        set_node_indices(graph, constraints)
+        expand_graph(graph, constraints)
+        set_post_expansion_indices(graph, constraints)
+        print_trace(graph)
 
     # CHECK: %acc_M:0_N:0_K2:0
     # CHECK: %register

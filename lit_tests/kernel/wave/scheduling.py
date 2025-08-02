@@ -4,7 +4,6 @@ import logging
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel._support.context import push
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.lang.global_symbols import *
@@ -94,22 +93,21 @@ def test_gemm_pipelined():
         SHUFFLE_DELAY: 1,
         SHUFFLE_UNITS: 2,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    trace: CapturedTrace = gemm_pipelined()
-    IndexingContext.current().finalize()
-    initialize_iter_args(trace)
-    add_get_results(trace)
-    infer_types(trace)
-    promote_placeholders(trace, constraints)
-    set_node_indices(trace, constraints)
-    expand_graph(trace, constraints)
-    set_post_expansion_indices(trace, constraints)
-    hoist_loop_invariant_ops(trace, constraints)
-    minimize_global_loads(trace, constraints)
-    apply_shared_memory_indexing_corrections(trace, constraints)
-    schedule_graph(trace, constraints, True, SchedulingType.MODULO)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = gemm_pipelined()
+        idxc.finalize()
+        initialize_iter_args(trace)
+        add_get_results(trace)
+        infer_types(trace)
+        promote_placeholders(trace, constraints)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        hoist_loop_invariant_ops(trace, constraints)
+        minimize_global_loads(trace, constraints)
+        apply_shared_memory_indexing_corrections(trace, constraints)
+        schedule_graph(trace, constraints, True, SchedulingType.MODULO)
 
     print_subgraph(trace, "pipelined_iterate", False)
     # CHECK: %acc_m_0_n_0_k_0

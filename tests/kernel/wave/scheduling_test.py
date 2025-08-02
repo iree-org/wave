@@ -59,7 +59,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
 from wave_lang.kernel.ops.wave_ops import Read, Write, MMA, IterArg
-from wave_lang.kernel._support.context import push
+
 
 # Map node types from schedule file to custom operation classes
 NODE_TYPE_TO_CUSTOM_OP = {
@@ -327,21 +327,20 @@ class SchedulingTest(unittest.TestCase):
             SHUFFLE_DELAY: 1,
             SHUFFLE_UNITS: 2,
         }
-        idxc = IndexingContext()
-        push(IndexingContext, idxc)
-        idxc.subs = hyperparams
-        trace: CapturedTrace = gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        add_get_results(trace)
-        infer_types(trace)
-        promote_placeholders(trace, constraints)
-        hoist_loop_invariant_ops(trace, constraints)
-        set_node_indices(trace, constraints)
-        expand_graph(trace, constraints)
-        set_post_expansion_indices(trace, constraints)
-        minimize_global_loads(trace, constraints)
-        schedule_graph(trace, constraints)
+        with IndexingContext() as idxc:
+            idxc.subs = hyperparams
+            trace: CapturedTrace = gemm()
+            idxc.finalize()
+            initialize_iter_args(trace)
+            add_get_results(trace)
+            infer_types(trace)
+            promote_placeholders(trace, constraints)
+            hoist_loop_invariant_ops(trace, constraints)
+            set_node_indices(trace, constraints)
+            expand_graph(trace, constraints)
+            set_post_expansion_indices(trace, constraints)
+            minimize_global_loads(trace, constraints)
+            schedule_graph(trace, constraints)
         subgraph = trace.get_subgraph("region_0")
         initiation_interval = 5
         correct_schedule = {

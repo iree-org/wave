@@ -21,7 +21,6 @@ from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.type_inference import infer_types
 from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.wave.utils.graph_utils import initialize_iter_args
-from wave_lang.kernel._support.context import push
 
 
 class TypeInferenceTest(unittest.TestCase):
@@ -145,13 +144,12 @@ class TypeInferenceTest(unittest.TestCase):
             GLOBAL_MEMORY_UNITS: 4,
             MMA_UNITS: 4,
         }
-        idxc = IndexingContext()
-        push(IndexingContext, idxc)
-        idxc.subs = hyperparams
-        trace: CapturedTrace = base_attention()
-        IndexingContext.current().finalize()
-        initialize_iter_args(trace)
-        infer_types(trace)
+        with IndexingContext() as idxc:
+            idxc.subs = hyperparams
+            trace: CapturedTrace = base_attention()
+            idxc.finalize()
+            initialize_iter_args(trace)
+            infer_types(trace)
         expected_type = {
             "partial_sum": "Register[B, M].of(f32)",
             "partial_max": "Register[B, M].of(f32)",

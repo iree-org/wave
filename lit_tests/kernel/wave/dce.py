@@ -2,7 +2,6 @@
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel._support.context import push
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.lang.global_symbols import *
@@ -79,19 +78,18 @@ def test_dce():
         BLOCK_N: 64,
         BLOCK_K: 64,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    trace: CapturedTrace = gemm()
-    visualize = False
-    IndexingContext.current().finalize()
-    initialize_iter_args(trace)
-    add_get_results(trace)
-    infer_types(trace)
-    promote_placeholders(trace, constraints)
-    set_node_indices(trace, constraints)
-    DCE(trace)
-    print_trace(trace)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = gemm()
+        visualize = False
+        idxc.finalize()
+        initialize_iter_args(trace)
+        add_get_results(trace)
+        infer_types(trace)
+        promote_placeholders(trace, constraints)
+        set_node_indices(trace, constraints)
+        DCE(trace)
+        print_trace(trace)
 
     # Ensure that the conditional with the side-effecting op remains after DCE
     # CHECK: Custom format:

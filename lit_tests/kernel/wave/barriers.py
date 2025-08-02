@@ -26,7 +26,6 @@ from wave_lang.kernel.wave.utils.graph_utils import (
 from wave_lang.kernel.wave.utils.print_utils import (
     print_trace,
 )
-from wave_lang.kernel._support.context import push
 
 
 def get_read_nodes(graph: fx.Graph) -> list[CustomOp]:
@@ -88,22 +87,21 @@ def test_read_write_equal_sizes():
         BLOCK_N: 32,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    trace: CapturedTrace = read_write_same_size()
-    graph: fx.Graph = trace.get_root_graph()
-    read_node = get_read_nodes(graph)[0]
-    IndexingContext.current().finalize()
-    add_get_results(trace)
-    infer_types(trace)
-    promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-    set_node_indices(trace, constraints)
-    expand_graph(trace, constraints)
-    set_post_expansion_indices(trace, constraints)
-    tweak_index(graph)
-    add_shared_memory_barriers(trace)
-    print_trace(trace, False)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = read_write_same_size()
+        graph: fx.Graph = trace.get_root_graph()
+        read_node = get_read_nodes(graph)[0]
+        idxc.finalize()
+        add_get_results(trace)
+        infer_types(trace)
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        tweak_index(graph)
+        add_shared_memory_barriers(trace)
+        print_trace(trace, False)
     # CHECK: %allocate
     # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
     # CHECK-NEXT: %a
@@ -172,30 +170,29 @@ def test_gemm():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(1, 1, 1))
     ]
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
     subs = {
         BLOCK_M: 32,
         BLOCK_N: 32,
         BLOCK_K: 32,
     }
-    idxc.subs = subs
-    trace: CapturedTrace = gemm()
-    graph: fx.Graph = trace.get_subgraph("region_0")
-    IndexingContext.current().finalize()
-    initialize_iter_args(trace)
-    add_get_results(trace)
-    infer_types(trace)
-    read_nodes = get_read_nodes(graph)
-    for read_node in read_nodes:
-        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-    set_node_indices(trace, constraints)
-    expand_graph(trace, constraints)
-    set_post_expansion_indices(trace, constraints)
-    tweak_index(graph)
-    hoist_loop_invariant_ops(trace, constraints)
-    add_shared_memory_barriers(trace)
-    print_trace(trace, False)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = gemm()
+        graph: fx.Graph = trace.get_subgraph("region_0")
+        idxc.finalize()
+        initialize_iter_args(trace)
+        add_get_results(trace)
+        infer_types(trace)
+        read_nodes = get_read_nodes(graph)
+        for read_node in read_nodes:
+            promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        tweak_index(graph)
+        hoist_loop_invariant_ops(trace, constraints)
+        add_shared_memory_barriers(trace)
+        print_trace(trace, False)
     # Root graph:
     # CHECK: %a
     # CHECK-NEXT: %b

@@ -4,7 +4,6 @@ import logging
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel._support.context import push
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.lang.global_symbols import *
@@ -66,17 +65,16 @@ def test_read_write_equal_sizes():
         BLOCK_N: 32,
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    trace: CapturedTrace = read_write_same_size()
-    graph: fx.Graph = trace.get_root_graph()
-    read_node = get_read_nodes(graph)[0]
-    IndexingContext.current().finalize()
-    initialize_iter_args(trace)
-    infer_types(trace)
-    promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-    print_trace(trace, False)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = read_write_same_size()
+        graph: fx.Graph = trace.get_root_graph()
+        read_node = get_read_nodes(graph)[0]
+        idxc.finalize()
+        initialize_iter_args(trace)
+        infer_types(trace)
+        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        print_trace(trace, False)
     # CHECK: %allocate
     # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
     # CHECK-NEXT: %a
@@ -119,15 +117,14 @@ def test_read_write_equal_sizes_different_address_spaces():
         ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
         ADDRESS_SPACE_1: GLOBAL_ADDRESS_SPACE,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    trace: CapturedTrace = read_write_same_size_different_address_spaces()
-    IndexingContext.current().finalize()
-    initialize_iter_args(trace)
-    infer_types(trace)
-    promote_placeholders(trace, constraints)
-    print_trace(trace, False)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = read_write_same_size_different_address_spaces()
+        idxc.finalize()
+        initialize_iter_args(trace)
+        infer_types(trace)
+        promote_placeholders(trace, constraints)
+        print_trace(trace, False)
     # CHECK: %allocate
     # CHECK-SAME: ((M, N), (BLOCK_M, BLOCK_N + 4), f16, $SHARED_ADDRESS_SPACE, 4, None, None, 0)
     # CHECK-NEXT: %a
@@ -174,19 +171,18 @@ def test_gemm():
         BLOCK_N: 32,
         BLOCK_K: 32,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    trace: CapturedTrace = gemm()
-    graph: fx.Graph = trace.get_subgraph("region_0")
-    read_nodes = get_read_nodes(graph)
-    IndexingContext.current().finalize()
-    initialize_iter_args(trace)
-    infer_types(trace)
-    for read_node in read_nodes:
-        promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
-    hoist_loop_invariant_ops(trace, constraints)
-    print_trace(trace, False)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = gemm()
+        graph: fx.Graph = trace.get_subgraph("region_0")
+        read_nodes = get_read_nodes(graph)
+        idxc.finalize()
+        initialize_iter_args(trace)
+        infer_types(trace)
+        for read_node in read_nodes:
+            promote_node(read_node, None, SHARED_ADDRESS_SPACE, constraints)
+        hoist_loop_invariant_ops(trace, constraints)
+        print_trace(trace, False)
     # Root graph:
     # CHECK: %a
     # CHECK-NEXT: %b

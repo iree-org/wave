@@ -4,7 +4,6 @@ import logging
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel._support.context import push
 from wave_lang.kernel._support.indexing import IndexingContext
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.lang.global_symbols import *
@@ -89,28 +88,27 @@ def test_gemm():
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_0: SHARED_ADDRESS_SPACE,
     }
-    idxc = IndexingContext()
-    push(IndexingContext, idxc)
-    idxc.subs = subs
-    trace: CapturedTrace = gemm()
-    visualize = False
-    IndexingContext.current().finalize()
-    initialize_iter_args(trace)
-    add_get_results(trace)
-    infer_types(trace)
-    promote_placeholders(trace, constraints)
-    set_node_indices(trace, constraints)
-    expand_graph(trace, constraints)
-    set_post_expansion_indices(trace, constraints)
-    if visualize:
-        visualize_graph(trace.get_subgraph("region_0"), "before.png")
-    hoist_loop_invariant_ops(trace, constraints)
-    minimize_global_loads(trace, constraints)
-    apply_shared_memory_indexing_corrections(trace, constraints)
-    if visualize:
-        visualize_graph(trace.get_subgraph("region_0"), "after.png")
-    add_shared_memory_barriers(trace)
-    print_trace(trace)
+    with IndexingContext() as idxc:
+        idxc.subs = subs
+        trace: CapturedTrace = gemm()
+        visualize = False
+        idxc.finalize()
+        initialize_iter_args(trace)
+        add_get_results(trace)
+        infer_types(trace)
+        promote_placeholders(trace, constraints)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        if visualize:
+            visualize_graph(trace.get_subgraph("region_0"), "before.png")
+        hoist_loop_invariant_ops(trace, constraints)
+        minimize_global_loads(trace, constraints)
+        apply_shared_memory_indexing_corrections(trace, constraints)
+        if visualize:
+            visualize_graph(trace.get_subgraph("region_0"), "after.png")
+        add_shared_memory_barriers(trace)
+        print_trace(trace)
     # Root graph:
     # CHECK: %a
     # CHECK-NEXT: %b
