@@ -4,7 +4,6 @@ from typing import Any, Optional, Callable, Sequence
 
 import torch
 
-from wave_lang.kernel._support.context import pop, push
 from wave_lang.kernel.lang import IndexSymbol
 
 from .._support.indexing import IndexingContext
@@ -218,18 +217,6 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     cache_manager = None
     binary_path = None
 
-    # Create an indexing context and populate substitutions.
-    push(IndexingContext, IndexingContext())
-    idxc = IndexingContext.current()
-
-    idxc.set_subs(options.subs)
-
-    # Since constraints are used to lookup the compiled kernel in the cache,
-    # we initialize/update the constraints _before_ the cache lookup.
-    kernel.initialize_wave_constraints()
-    kernel.initialize_symbolic_constraints()
-    kernel.initialize_workgroup_constraints()
-
     def get_binary_path():
         if is_cache_enabled():
             return (
@@ -239,127 +226,135 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         else:
             return glob.glob(str(get_temp_binary_dir() / "*.hsaco"))[0]
 
-    bound_scalar_symbols = kernel.bound_scalar_symbols
-    symbols_args_map = kernel.symbols_args_map
-    if is_cache_enabled():
-        cache_manager = get_cache_manager()
-        options.kernel_hash = cache_manager.get_hash(
-            kernel.constraints,
-            kernel._f,
-            options,
-        )
-        cached_kernel = cache_manager.load_kernel(options.kernel_hash)
-        if cached_kernel:
-            options.kernel_usages = cached_kernel.kernel_sig
-            options.kernel_launch_info = cached_kernel.kernel_launch_info
-            if options.wave_runtime:
-                binary_path = get_binary_path()
+    # Create an indexing context and populate substitutions.
+    with IndexingContext() as idxc:
+        idxc.set_subs(options.subs)
 
-            if options.print_mlir:
-                print(cached_kernel.asm)
+        # Since constraints are used to lookup the compiled kernel in the cache,
+        # we initialize/update the constraints _before_ the cache lookup.
+        kernel.initialize_wave_constraints()
+        kernel.initialize_symbolic_constraints()
+        kernel.initialize_workgroup_constraints()
 
-            return cls(
+        bound_scalar_symbols = kernel.bound_scalar_symbols
+        symbols_args_map = kernel.symbols_args_map
+        if is_cache_enabled():
+            cache_manager = get_cache_manager()
+            options.kernel_hash = cache_manager.get_hash(
+                kernel.constraints,
+                kernel._f,
                 options,
-                cached_kernel.vmfb,
-                cached_kernel.asm,
-                binary_path,
-                bound_scalar_symbols,
-                symbols_args_map,
-                None,  # TODO - this means that the cache is broken for kernels with debug logging.  But I want to focus on getting the feature at all before figuring out how to add extra info to the cache.
+            )
+            cached_kernel = cache_manager.load_kernel(options.kernel_hash)
+            if cached_kernel:
+                options.kernel_usages = cached_kernel.kernel_sig
+                options.kernel_launch_info = cached_kernel.kernel_launch_info
+                if options.wave_runtime:
+                    binary_path = get_binary_path()
+
+                if options.print_mlir:
+                    print(cached_kernel.asm)
+
+                return cls(
+                    options,
+                    cached_kernel.vmfb,
+                    cached_kernel.asm,
+                    binary_path,
+                    bound_scalar_symbols,
+                    symbols_args_map,
+                    None,  # TODO - this means that the cache is broken for kernels with debug logging.  But I want to focus on getting the feature at all before figuring out how to add extra info to the cache.
+                )
+
+        # For the wave runtime, we need the hsaco binary. So we turn on
+        # dumping of binaries and store in wave runtime directory. If we
+        # are caching, this will be moved to the appropriate directory.
+        if options.wave_runtime:
+            options.dump_binaries = get_temp_binary_dir()
+
+        # Recompile kernel from scratch if not found in cache.
+        (
+            mb,
+            graph,
+            exe,
+            kernel_sig,
+            entrypoint_name,
+            options,
+            debug_arg_info,
+        ) = kernel._trace_and_get_kernel_signature(options)
+        options.kernel_sig = kernel_sig
+
+        # Get the trace from the kernel. Since the trace contains complex objects
+        # that are not easily serializable, we don't cache the trace. So this trace
+        # is not available for cached kernels. The primary use case for the trace is
+        # is for tuning where each kernel is different from the others and so we
+        # don't want to cache the kernel in that case.
+        trace = kernel._trace()
+
+        # Disable async dispatch for benchmarking.
+        is_async = options.iree_launch_async and not options.run_bench
+        host_codegen.isolated_test_call(
+            mb,
+            exe,
+            kernel_sig,
+            entrypoint_name,
+            options.func_name,
+            options.dynamic_symbols,
+            location_capture_config=options.location_capture_config,
+            async_dispatch=is_async,
+        )
+        asm = mb.module_op.get_asm(
+            enable_debug_info=options.location_capture_config.level
+            != LocationCaptureLevel.NONE,
+            use_local_scope=options.use_local_scope,
+        )
+
+        if options.print_mlir:
+            if options.print_mlir_file:
+                write_file(options.print_mlir_file, "w", asm)
+            else:
+                print(asm)
+
+        if options.use_water_leak_check:
+            water_leak_in_bounds_check(
+                mb.module_op,
+                (
+                    options.use_water_leak_check
+                    if isinstance(options.use_water_leak_check, str)
+                    else ""
+                ),
             )
 
-    # For the wave runtime, we need the hsaco binary. So we turn on
-    # dumping of binaries and store in wave runtime directory. If we
-    # are caching, this will be moved to the appropriate directory.
-    if options.wave_runtime:
-        options.dump_binaries = get_temp_binary_dir()
+        if options.override_mlir:
+            asm = options.override_mlir
 
-    # Recompile kernel from scratch if not found in cache.
-    (
-        mb,
-        graph,
-        exe,
-        kernel_sig,
-        entrypoint_name,
-        options,
-        debug_arg_info,
-    ) = kernel._trace_and_get_kernel_signature(options)
-    options.kernel_sig = kernel_sig
+        if options.compile_to_mlir:
+            return cls(
+                options,
+                None,
+                asm,
+                None,
+                bound_scalar_symbols,
+                symbols_args_map,
+                debug_arg_info,
+            )
 
-    # Get the trace from the kernel. Since the trace contains complex objects
-    # that are not easily serializable, we don't cache the trace. So this trace
-    # is not available for cached kernels. The primary use case for the trace is
-    # is for tuning where each kernel is different from the others and so we
-    # don't want to cache the kernel in that case.
-    trace = kernel._trace()
+        compiled_wave_vmfb = compile_to_vmfb(asm, options)
+        if options.create_vmfb_file:
+            write_file(options.create_vmfb_file, "wb", compiled_wave_vmfb)
 
-    # Disable async dispatch for benchmarking.
-    is_async = options.iree_launch_async and not options.run_bench
-    host_codegen.isolated_test_call(
-        mb,
-        exe,
-        kernel_sig,
-        entrypoint_name,
-        options.func_name,
-        options.dynamic_symbols,
-        location_capture_config=options.location_capture_config,
-        async_dispatch=is_async,
-    )
-    asm = mb.module_op.get_asm(
-        enable_debug_info=options.location_capture_config.level
-        != LocationCaptureLevel.NONE,
-        use_local_scope=options.use_local_scope,
-    )
+        kernel_usages = [
+            binding.kernel_buffer_type.usage
+            for binding in kernel_sig.kernel_buffer_bindings
+        ]
+        options.kernel_usages = kernel_usages
 
-    if options.print_mlir:
-        if options.print_mlir_file:
-            write_file(options.print_mlir_file, "w", asm)
-        else:
-            print(asm)
+        if is_cache_enabled() and not debug_arg_info:
+            cache_manager.store_kernel(
+                compiled_wave_vmfb,
+                asm,
+                options,
+            )
 
-    if options.use_water_leak_check:
-        water_leak_in_bounds_check(
-            mb.module_op,
-            (
-                options.use_water_leak_check
-                if isinstance(options.use_water_leak_check, str)
-                else ""
-            ),
-        )
-
-    if options.override_mlir:
-        asm = options.override_mlir
-
-    if options.compile_to_mlir:
-        return cls(
-            options,
-            None,
-            asm,
-            None,
-            bound_scalar_symbols,
-            symbols_args_map,
-            debug_arg_info,
-        )
-
-    compiled_wave_vmfb = compile_to_vmfb(asm, options)
-    if options.create_vmfb_file:
-        write_file(options.create_vmfb_file, "wb", compiled_wave_vmfb)
-
-    kernel_usages = [
-        binding.kernel_buffer_type.usage
-        for binding in kernel_sig.kernel_buffer_bindings
-    ]
-    options.kernel_usages = kernel_usages
-
-    if is_cache_enabled() and not debug_arg_info:
-        cache_manager.store_kernel(
-            compiled_wave_vmfb,
-            asm,
-            options,
-        )
-
-    # Remove the indexing context.
-    pop(IndexingContext)
     if options.wave_runtime:
         binary_path = get_binary_path()
 
