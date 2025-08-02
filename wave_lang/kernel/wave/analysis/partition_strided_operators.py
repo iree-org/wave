@@ -81,15 +81,14 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
         """
         custom = get_custom(node)
         if isinstance(custom, Write):
-            strides = [
-                simplify_index(custom.register_index[dim]).stride
-                for dim in custom.register_index
+            strides_and_sizes = [
+                (
+                    val.stride,
+                    val.size,
+                )
+                for val in map(simplify_index, custom.register_index.values())
             ]
-            elements_per_thread = [
-                simplify_index(custom.register_index[dim]).size
-                for dim in custom.register_index
-            ]
-            strides = [x for x, y in zip(strides, elements_per_thread) if y > 1]
+            strides = [x for x, y in strides_and_sizes if y > 1]
             num_strided_accesses = sum(1 for stride in strides if stride > 1)
             if num_strided_accesses > 1:
                 raise NotImplementedError(
@@ -101,9 +100,10 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
     strided_operators = trace.walk(has_strided_access)
     for operator in strided_operators:
         custom = get_custom(operator)
+        register_index = custom.register_index
         simplified_index = {
-            dim: simplify_index(custom.register_index.get(dim, custom.index[dim]))
-            for dim in custom.index
+            dim: simplify_index(register_index.get(dim, idx))
+            for dim, idx in custom.index.items()
         }
 
         symbolic_shape, vector_shapes = _get_symbolic_shape_and_vector_shapes(custom)
