@@ -529,7 +529,6 @@ class CustomOp(ABC):
             kwargs={},
             name=self.op_name,
         )
-        print(f"name is {self.fx_node.name}")
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
         self.fx_node.index = None
