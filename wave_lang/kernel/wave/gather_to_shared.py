@@ -461,7 +461,7 @@ def gather_to_shared_swizzling(
 
     The formula for swizzling is:
     ```
-    new_col = xor(row % 8, col // elements_per_thread) * elements_per_thread
+    new_col = xor(row % max_phase, col // elements_per_thread) * elements_per_thread
     ```
     """
     if "gfx95" not in options.target:
@@ -501,6 +501,12 @@ def gather_to_shared_swizzling(
         elements_per_thread = gather.elements_per_thread
         logger.info(f"elements_per_thread={elements_per_thread}")
 
+        if elements_per_thread * gather.dtype.bitwidth() != 128:
+            logger.info(
+                f"gather to shared swizzling only supported for 128-bit elements, got {elements_per_thread}x{gather.dtype}"
+            )
+            continue
+
         shape = get_custom(mem).type.symbolic_shape
         if len(shape) < 2:
             logger.info(f"shape={shape} must be at least 2D")
@@ -509,12 +515,14 @@ def gather_to_shared_swizzling(
         col_dim = infer_dim(shape[-1])
         row_dim = infer_dim(shape[-2])
 
+        max_phase = 8
+
         for read in reads:
             index = remove_global_indexing(read.index, constraints)
             col_seq = index[col_dim]
             row_seq = index[row_dim]
             col = col_seq.start // elements_per_thread
-            row = row_seq.start % 8
+            row = row_seq.start % max_phase
             col = xor(row, col) * elements_per_thread
             index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
             logger.info(f"read.index={read.index} -> {index}")
@@ -529,7 +537,7 @@ def gather_to_shared_swizzling(
             col_seq = local_index[col_dim]
             row_seq = local_index[row_dim]
             col = col_seq.start // elements_per_thread
-            row = row_seq.start % 8
+            row = row_seq.start % max_phase
             col = xor(row, col) * elements_per_thread
             col = global_index[col_dim].start + col
             index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
