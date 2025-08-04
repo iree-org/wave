@@ -20,9 +20,7 @@ class FourStageStage(Enum):
     COMPUTE = auto()
     SCHEDULING_NOOP = -1
 
-    # Helper function to get next stage from the current.
-    # If at stage 3 returns itself to prevent crash
-    # since it is final stage.
+    # Helper function to check next stage follows from current.
     @staticmethod
     def is_valid_transition(
         from_stage: "FourStageStage", to_stage: "FourStageStage"

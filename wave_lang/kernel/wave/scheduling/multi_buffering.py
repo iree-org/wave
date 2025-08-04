@@ -71,11 +71,10 @@ def heuristically_multi_buffer_shared_memory(
         new_node_idx = get_dict_with_updated_key(
             new_node_idx, dim, dim * multi_buffer_count
         )
-        if is_read_write:
-            new_node.index = new_node_idx
-        else:
+        if not is_read_write:
             new_node.dst_index = new_node_idx
-            continue
+            return
+        new_node.index = new_node_idx
 
         if isinstance(new_node.mapping, IndexMapping):
             input_mapping = new_node.mapping.input_mapping
@@ -88,6 +87,8 @@ def heuristically_multi_buffer_shared_memory(
                 new_node.mapping.output_mapping = get_dict_with_updated_key(
                     output_mapping, dim, dim * multi_buffer_count
                 )
+
+        return
 
 
 def multi_buffer(trace: CapturedTrace, multi_buffer_count: Optional[int] = None):
@@ -105,7 +106,7 @@ def multi_buffer(trace: CapturedTrace, multi_buffer_count: Optional[int] = None)
     reduction_axis = get_custom(reductions[0]).axis
 
     # Find reads and writes operating on shared memory
-    reads_and_writes = list()
+    reads_and_writes = []
     for node in trace.get_subgraph(get_custom(reductions[0]).subgraph_name).nodes:
         custom = get_custom(node)
         if (
@@ -134,14 +135,16 @@ def _increase_dimensions_for_multibuffering(
     ]
     new_shape = []
     new_distributed_shape = []
+    increased_multi_buffer_dim = False
 
     for i, dim in enumerate(original_buffer.shape):
-        if i in reduction_dim_indices:
+        if increased_multi_buffer_dim or i in reduction_dim_indices:
             # Keep reduction dimensions as is
             new_shape.append(dim)
             new_distributed_shape.append(original_buffer.distributed_shape[i])
         else:
-            # Increase non-reduction dimensions
+            # Increase only the multibuffered first non-reduction dimension
+            increased_multi_buffer_dim = True
             new_shape.append(dim * buffer_count)
             new_distributed_shape.append(
                 original_buffer.distributed_shape[i] * buffer_count
