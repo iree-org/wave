@@ -143,7 +143,12 @@ def promote_node(
             constrained_shape = memory_node.distributed_shape
         padding, padded_shape = apply_padding(constrained_shape, node.type.dtype)
         allocate_node = Allocate(
-            symbolic_shape, padded_shape, node.type.dtype, address_space, padding
+            symbolic_shape,
+            padded_shape,
+            node.type.dtype,
+            address_space,
+            padding,
+            parent=node,
         )
         allocate_node.add_to_graph(node.graph)
     last_write_to_shared = apply_promotion_pattern(

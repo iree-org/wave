@@ -230,6 +230,7 @@ def emit_interwave_reduction(
         (num_reduction_waves,),
         src.type.dtype,
         SHARED_ADDRESS_SPACE,
+        parent=src,
     ).add_to_graph(graph)
 
     # Write individual wave result into shared_memory[wave_id]

@@ -475,6 +475,10 @@ class CustomOp(ABC):
     def location(self) -> Optional[FileLineColInfo | StackTraceInfo]:
         return getattr(self.fx_node, "location", None)
 
+    @property
+    def op_name(self) -> str:
+        return self.tkw_op_name
+
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
         instance = cls(*node.args)
@@ -523,7 +527,9 @@ class CustomOp(ABC):
             target=self._tracing_function,
             args=arg_list,
             kwargs={},
+            name=self.op_name,
         )
+        print(f"name is {self.fx_node.name}")
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
         self.fx_node.index = None
@@ -1203,9 +1209,15 @@ class Allocate(CustomOp):
     dtype: DataType
     address_space: AddressSpace = SHARED_ADDRESS_SPACE
     padding: int = 0
-    parent: Optional[fx.Node] = None
+    parent: Optional[CustomOp] = None
     offset: Optional[IndexExpr] = None
     tail_padding: int = 0  # Padding after the array end
+
+    @property
+    def op_name(self) -> str:
+        if self.parent:
+            return self.tkw_op_name + "_" + self.parent.memory.name
+        return self.tkw_op_name
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1608,6 +1620,10 @@ class Read(CustomOp):
     _write_dependency: Optional[list[fx.Node]] = None
 
     @property
+    def op_name(self) -> str:
+        return self.tkw_op_name + "_" + get_custom(self.memory).name
+
+    @property
     def indexing_dims(self) -> list[IndexSymbol]:
         from ..wave.utils.general_utils import infer_dim
 
@@ -1933,6 +1949,10 @@ class Write(CustomOp):
     target: Optional[tuple[IndexExpr]] = None
 
     @property
+    def op_name(self) -> str:
+        return self.tkw_op_name + "_" + get_custom(self.memory).name
+
+    @property
     def indexing_dims(self) -> list[IndexSymbol]:
         from ..wave.utils.general_utils import infer_dim
 
@@ -2139,6 +2159,10 @@ class GetResult(CustomOp):
     value: fx.Node
     res_idx: int
 
+    @property
+    def op_name(self) -> str:
+        return self.tkw_op_name + "_" + get_custom(self.value).name
+
     def infer_type(self):
         op = get_custom(self.value)
         src_type = op.type
@@ -2202,6 +2226,10 @@ class Extract(CustomOp):
     register_: fx.Proxy
     offset: IndexExpr | int
 
+    @property
+    def op_name(self) -> str:
+        return self.tkw_op_name + "_" + get_custom(self.register_).name
+
     def infer_type(self):
         # Intuition here is we are trying to extract an element
         # from fastest dim => we reduce the fastest dim.
@@ -2232,6 +2260,10 @@ class ExtractSlice(CustomOp):
     offset: tuple[IndexExpr]
     size: tuple[IndexExpr]
     stride: tuple[IndexExpr]
+
+    @property
+    def op_name(self) -> str:
+        return self.tkw_op_name + "_" + get_custom(self.register_).name
 
     @property
     def type(self) -> "Register":
