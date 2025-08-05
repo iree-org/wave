@@ -102,8 +102,8 @@ jobs:
           artifacts: dist/*.whl
           tag: "dev-wheels"
           name: "dev-wheels"
-          body: "Automatic snapshot release of wave-lang python wheels."
-          removeArtifacts: false
+          body: "Automatic nightly release of wave-lang python wheels."
+          removeArtifacts: true
           allowUpdates: true
           replacesArtifacts: true
           makeLatest: false
