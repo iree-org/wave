@@ -3,12 +3,11 @@ from typing import Optional, Tuple, Union
 
 import torch
 import triton
+import triton.language as tl
 from torch import nn
 from vllm import _custom_ops as vllm_ops
 
 
-from torch.nn import functional as F
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
@@ -16,10 +15,61 @@ from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
 from wave_lang.kernel.wave.utils.torch_utils import (
-    device_randn,
     device_zeros,
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+
+
+@triton.jit
+def fused_rmsnorm_kernel(
+    output_ptr,
+    activ_ptr,
+    weight_ptr,
+    eps: tl.constexpr,
+    hidden_dim: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    input_start = pid * hidden_dim
+
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < hidden_dim
+
+    a_ = tl.load(activ_ptr + input_start + offsets, mask=mask, other=0.0)
+    a = a_.to(tl.float32)
+    rms = tl.sqrt(tl.sum(a * a, axis=0) / hidden_dim + eps)
+
+    w1_ = tl.load(weight_ptr + offsets, mask=mask, other=0.0)
+    w1 = w1_.to(tl.float32)
+
+    a_rms = a / rms * w1
+
+    tl.store(
+        output_ptr + input_start + offsets,
+        a_rms,  # implicitly casts to output dtype here
+        mask=mask,
+    )
+
+
+def fused_rmsnorm(x, weight, eps: float = 1e-6, autotune=False, inplace=False):
+    assert len(x.shape) == 2
+    if inplace:
+        output = x
+    else:
+        output = torch.empty_like(x)
+    bs, hidden_dim = x.shape
+    max_warps = 16
+    config = {
+        "BLOCK_SIZE": triton.next_power_of_2(hidden_dim),
+        "num_warps": max(
+            min(triton.next_power_of_2(triton.cdiv(hidden_dim, 256)), max_warps), 4
+        ),
+    }
+ 
+    fused_rmsnorm_kernel[(bs,)](
+        output, x, weight, eps=eps, hidden_dim=hidden_dim, **config
+    )
+    return output
 
 
 def get_rmsnorm_wave(shape):
@@ -77,6 +127,7 @@ def get_rmsnorm_wave(shape):
             ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
+        wave_runtime=False,
     )
     options = set_default_run_config(options)
     return wave_compile(options, rmsnorm)
@@ -182,28 +233,38 @@ def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
         x.clone(), weight, residual.clone() if residual is not None else None
     )
     output_wave = rmsnorm_wave(
-        wave_kernel, x.clone(), weight, residual.clone() if residual is not None else None
+        wave_kernel,
+        x.clone(),
+        weight,
+        # residual.clone() if residual is not None else None,
     )
     output_vllm = rmsnorm_vllm(
         x.clone(), weight, residual.clone() if residual is not None else None
+    )
+    output_triton = fused_rmsnorm(
+        x.clone(), weight
     )
 
     if use_residual:
         output_naive = output_naive[0]
         output_wave = output_wave[0]
         output_vllm = output_vllm[0]
+        output_triton = output_triton[0]
 
     print(f"Naive output={output_naive}")
     print(f"Wave output={output_wave}")
     print(f"VLLM output={output_vllm}")
+    print(f"Triton output={output_triton}")
 
-    if torch.allclose(output_naive, output_wave, atol=1e-2, rtol=1e-2) and torch.allclose(output_naive, output_vllm, atol=1e-2, rtol=1e-2):
+    if torch.allclose(
+        output_naive, output_wave, atol=1e-2, rtol=1e-2
+    ) and torch.allclose(output_naive, output_vllm, atol=1e-2, rtol=1e-2) and torch.allclose(output_naive, output_triton, atol=1e-2, rtol=1e-2):
         print("✅ All implementations match")
     else:
         print("❌ Implementations differ")
 
 
-batch_size_range = [1] #[2**i for i in range(0, 7, 2)]
+batch_size_range = [1]  # [2**i for i in range(0, 7, 2)]
 seq_length_range = [2**i for i in range(6, 11, 1)]
 head_num_range = [1, 32, 48]
 configs = list(itertools.product(head_num_range, batch_size_range, seq_length_range))
@@ -215,9 +276,9 @@ def get_benchmark(use_residual):
             x_names=["head_num", "batch_size", "seq_len"],
             x_vals=[list(_) for _ in configs],
             line_arg="provider",
-            line_vals=["huggingface", "wave", "vllm"],
-            line_names=["HuggingFace", "Wave", "vLLM"],
-            styles=[("blue", "-"), ("red", "-"), ("green", "-")],
+            line_vals=["huggingface", "wave", "vllm", "triton"],
+            line_names=["HuggingFace", "Wave", "vLLM", "Triton"],
+            styles=[("blue", "-"), ("red", "-"), ("green", "-"), ("orange", "-")],
             ylabel="us",
             plot_name=f"rmsnorm-performance-{'with' if use_residual else 'without'}-residual",
             args={},
@@ -251,6 +312,14 @@ def get_benchmark(use_residual):
                     x.clone(),
                     weight,
                     residual.clone() if residual is not None else None,
+                ),
+                quantiles=quantiles,
+            )
+        elif provider == "triton":
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: fused_rmsnorm(
+                    x.clone(),
+                    weight,
                 ),
                 quantiles=quantiles,
             )
