@@ -2312,6 +2312,7 @@ def test_debug_log(dynamic_dims: bool):
         a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"][0 : shape[0] // 2, :]
     )
 
+
 @require_e2e
 @require_cdna3
 @pytest.mark.parametrize(
