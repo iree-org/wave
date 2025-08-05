@@ -29,9 +29,9 @@ def get_dilated_conv2d(
     ratio_n: Optional[int] = None,
 ) -> tuple["LaunchableWave", dict[tkl.IndexSymbol, Any]]:
     """This Kernel computes dilated convolution with specified dilation rate.
-    
+
     Dilated convolution samples the input at dilated intervals, effectively increasing the receptive field without increasing the number of parameters.
-    
+
     Parameters:
         layout (str): Either "nchw_fchw" or "nhwc_hwcf" based on the ordering of the dims of the input tensors.
         n (int): Number of input (Batch size).
@@ -60,7 +60,7 @@ def get_dilated_conv2d(
     assert output_dtype == tkl.f32, f"Unsupported output dtype: {output_dtype}"
     if dilation < 1:
         raise ValueError(f"dilation must be >= 1, got {dilation}")
-    
+
     padding = 0  # only pad=0 is supported for now
 
     sym = tkl.sym
@@ -71,7 +71,7 @@ def get_dilated_conv2d(
     # Calculate effective kernel size with dilation
     effective_hf = (hf - 1) * dilation + 1
     effective_wf = (wf - 1) * dilation + 1
-    
+
     H_OUT = (H + 2 * padding - effective_hf) // stride + 1
     W_OUT = (W + 2 * padding - effective_wf) // stride + 1
     SZ_OUT = H_OUT * W_OUT
@@ -101,7 +101,7 @@ def get_dilated_conv2d(
         inputs={NF: i % NF, C: j % C, HF: (j // C) % WF, WF: (j // C) // WF},
         outputs={NF: i, K: j},
     )
-    
+
     # Output mapping remains the same
     out_mapping = tkw.IndexMapping(
         num_iterators=2,
@@ -148,7 +148,7 @@ def get_dilated_conv2d(
 
     if ratio_n is None:
         ratio_n = 2
-    
+
     # Expose user-constraints
     constraints: list[tkw.Constraint] = []
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
@@ -173,7 +173,7 @@ def get_dilated_conv2d(
     ):
         # Set dilation symbol with dilation_rate value
         tkw.set_symbol(DILATION, dilation_rate)
-        
+
         # Create reduction loop Register
         c_reg = tkl.Register[M, NF, output_dtype](0.0)
 
@@ -187,14 +187,14 @@ def get_dilated_conv2d(
                 mapping=x_mapping,
                 elements_per_thread=ELEMS_PER_THREAD,
             )
-            
+
             # Read filter (same as regular convolution)
             b_reg = tkw.read(
                 we,
                 mapping=w_mapping,
                 elements_per_thread=ELEMS_PER_THREAD,
             )
-            
+
             # Compute mma for MxK x KxNF
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
@@ -219,5 +219,5 @@ def get_dilated_conv2d(
         ELEMS_PER_THREAD: 4,
         ADDRESS_SPACE: mem_space,
     }
-    
+
     return dilated_conv, symbols

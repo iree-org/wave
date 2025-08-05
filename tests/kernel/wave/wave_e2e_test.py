@@ -2320,18 +2320,18 @@ def test_debug_log(dynamic_dims: bool):
 def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
     cf = c
     padding = 0  # TODO: only pad=0 is supported for now
-    
+
     torch.manual_seed(1)
     x = device_randn(n, c, h, w, dtype=torch.float16)
     we = device_randn(nf, cf, hf, wf, dtype=torch.float16)
-    
+
     # Reference implementation using PyTorch dilated convolution
     convRef = torch.nn.Conv2d(
         c, nf, hf, stride=stride, padding=padding, dilation=dilation, bias=False
     )
     convRef.weight = torch.nn.Parameter(we)
     out_ref = convRef(x).detach().to(torch.float32)
-    
+
     # Handle layout transformations
     if layout == "nchw_fchw":
         pass  # Nothing to do
@@ -2341,7 +2341,7 @@ def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
         out_ref = torch.permute(out_ref, (0, 2, 3, 1)).contiguous()
     else:
         raise ValueError(f"Invalid layout: {layout}")
-    
+
     # Get dilated convolution kernel
     dilated_conv, hyperparams = get_dilated_conv2d(
         layout=layout,
@@ -2357,17 +2357,16 @@ def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
         input_dtype=tkl.f16,
         output_dtype=tkl.f32,
     )
-    
+
     hyperparams.update(get_default_scheduling_params())
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
     )
     options = set_default_run_config(options)
-    
+
     out = torch.zeros_like(out_ref)
     dilated_conv = wave_compile(options, dilated_conv)
     dilated_conv(x, we, dilation, out)
-    
+
     assert_close(out, out_ref, rtol=1e-03, atol=1e-02)
-    
