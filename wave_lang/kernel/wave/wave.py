@@ -537,6 +537,7 @@ class LaunchableWave(Launchable):
                 trace,
                 self.constraints,
                 options.reorder_allocs,
+                not options.use_shared_memory_swizzle,
             ),
             partial(
                 set_node_indices,
@@ -611,9 +612,9 @@ class LaunchableWave(Launchable):
             graph_passes += [
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(gather_to_shared, trace, self.constraints, options),
-                partial(in_thread_transpose, trace, self.constraints),
-                partial(global_to_shared_gathers, trace, self.constraints),
-                partial(minimize_global_loads, trace, self.constraints),
+                # partial(in_thread_transpose, trace, self.constraints),
+                # partial(global_to_shared_gathers, trace, self.constraints),
+                # partial(minimize_global_loads, trace, self.constraints),
             ]
         graph_passes += [
             partial(apply_shared_memory_indexing_corrections, trace, self.constraints),
@@ -629,8 +630,12 @@ class LaunchableWave(Launchable):
         graph_passes += [
             partial(decompose_reduce_ops, trace, self.constraints),
             partial(decompose_scan_ops, trace, self.constraints),
-            partial(swizzle_shared_memory, trace, self.constraints),
         ]
+
+        if options.use_shared_memory_swizzle:
+            graph_passes += [
+                partial(swizzle_shared_memory, trace, self.constraints),
+            ]
 
         # Schedule the reduction ops.
         scheduling_type = options.schedule
