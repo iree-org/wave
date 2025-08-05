@@ -2370,3 +2370,4 @@ def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
     dilated_conv(x, we, dilation, out)
     
     assert_close(out, out_ref, rtol=1e-03, atol=1e-02)
+    
