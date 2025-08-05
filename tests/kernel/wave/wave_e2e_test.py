@@ -18,6 +18,7 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.templates.conv import get_igemm_conv2d
+from wave_lang.kernel.wave.templates.dilated_conv import get_dilated_conv2d
 from wave_lang.kernel.wave.utils.general_utils import (
     ceildiv,
     check_leaks,
@@ -55,6 +56,59 @@ default_test_shapes = [
     (256, 128),
     (256, 256),
     (256, 1024),
+]
+
+dilated_conv_cases = [
+    # Basic cases with dilation=2 (3x3 kernel needs 5x5+ input)
+    (1, 8, 8, 1, 3, 3, 1, 1, 2, "nchw_fchw"),
+    (3, 16, 16, 3, 3, 3, 1, 1, 2, "nchw_fchw"),
+    (10, 12, 12, 3, 3, 3, 1, 1, 2, "nchw_fchw"),
+    (4, 20, 20, 1, 5, 5, 1, 1, 2, "nchw_fchw"),  # 5x5 kernel needs 9x9+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 2, "nchw_fchw"),
+    # Cases with dilation=3 (3x3 kernel needs 7x7+ input)
+    (1, 10, 10, 1, 3, 3, 1, 1, 3, "nchw_fchw"),
+    (3, 18, 18, 3, 3, 3, 1, 1, 3, "nchw_fchw"),
+    (10, 15, 15, 3, 3, 3, 1, 1, 3, "nchw_fchw"),
+    (4, 25, 25, 1, 5, 5, 1, 1, 3, "nchw_fchw"),  # 5x5 kernel needs 13x13+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 3, "nchw_fchw"),
+    # Cases with dilation=4 (3x3 kernel needs 9x9+ input)
+    (1, 12, 12, 1, 3, 3, 1, 1, 4, "nchw_fchw"),
+    (3, 20, 20, 3, 3, 3, 1, 1, 4, "nchw_fchw"),
+    (10, 16, 16, 3, 3, 3, 1, 1, 4, "nchw_fchw"),
+    (4, 30, 30, 1, 5, 5, 1, 1, 4, "nchw_fchw"),  # 5x5 kernel needs 17x17+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 4, "nchw_fchw"),
+    # Cases with dilation=5 (3x3 kernel needs 11x11+ input)
+    (3, 22, 22, 3, 3, 3, 1, 1, 5, "nchw_fchw"),
+    (4, 35, 35, 1, 5, 5, 1, 1, 5, "nchw_fchw"),  # 5x5 kernel needs 21x21+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 5, "nchw_fchw"),
+    # Cases with dilation=6 (3x3 kernel needs 13x13+ input)
+    (1, 16, 16, 1, 3, 3, 1, 1, 6, "nchw_fchw"),
+    (2, 25, 25, 3, 3, 3, 1, 1, 6, "nchw_fchw"),
+    # Larger cases
+    (10, 25, 25, 3, 5, 5, 2, 1, 2, "nchw_fchw"),  # 5x5 kernel needs 9x9+ input
+    (4, 40, 40, 1, 7, 7, 1, 1, 3, "nchw_fchw"),  # 7x7 kernel needs 19x19+ input
+    (2, 30, 30, 3, 6, 6, 2, 1, 2, "nchw_fchw"),  # 6x6 kernel needs 11x11+ input
+    (12, 12, 12, 3, 3, 3, 2, 1, 2, "nchw_fchw"),
+    (8, 20, 20, 1, 7, 7, 1, 1, 2, "nchw_fchw"),  # 7x7 kernel needs 13x13+ input
+    (4, 64, 64, 1, 9, 9, 2, 1, 2, "nchw_fchw"),  # 9x9 kernel needs 17x17+ input
+    # Cases with stride=2
+    (1, 16, 16, 1, 3, 3, 1, 2, 2, "nchw_fchw"),
+    (3, 24, 24, 3, 3, 3, 1, 2, 2, "nchw_fchw"),
+    (4, 25, 25, 1, 5, 5, 1, 2, 3, "nchw_fchw"),  # 5x5 kernel needs 13x13+ input
+    (2, 32, 32, 3, 3, 3, 2, 2, 2, "nchw_fchw"),
+    # NHWC layout cases
+    (1, 8, 8, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
+    (3, 16, 16, 3, 3, 3, 1, 1, 2, "nhwc_hwcf"),
+    (1, 12, 12, 1, 3, 3, 1, 1, 3, "nhwc_hwcf"),
+    (1, 128, 128, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
+    (3, 18, 18, 3, 3, 3, 1, 1, 3, "nhwc_hwcf"),
+    (1, 15, 15, 1, 3, 3, 1, 1, 4, "nhwc_hwcf"),  # 3x3 kernel needs 9x9+ input
+    (1, 145, 145, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
+    (4, 12, 12, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
+    (1, 80, 80, 1, 7, 7, 1, 1, 2, "nhwc_hwcf"),  # 7x7 kernel needs 13x13+ input
+    # Edge cases with higher dilations
+    (1, 18, 18, 1, 3, 3, 1, 1, 8, "nhwc_hwcf"),  # 3x3 kernel needs 17x17+ input
+    (2, 20, 20, 3, 3, 3, 1, 1, 7, "nchw_fchw"),  # 3x3 kernel needs 15x15+ input
 ]
 
 user_specified_test_shapes = ""
@@ -2257,3 +2311,63 @@ def test_debug_log(dynamic_dims: bool):
     assert_close(
         a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"][0 : shape[0] // 2, :]
     )
+
+@require_e2e
+@require_cdna3
+@pytest.mark.parametrize(
+    "n, h, w, c, hf, wf, nf, stride, dilation, layout", dilated_conv_cases
+)
+def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
+    cf = c
+    padding = 0  # TODO: only pad=0 is supported for now
+    
+    torch.manual_seed(1)
+    x = device_randn(n, c, h, w, dtype=torch.float16)
+    we = device_randn(nf, cf, hf, wf, dtype=torch.float16)
+    
+    # Reference implementation using PyTorch dilated convolution
+    convRef = torch.nn.Conv2d(
+        c, nf, hf, stride=stride, padding=padding, dilation=dilation, bias=False
+    )
+    convRef.weight = torch.nn.Parameter(we)
+    out_ref = convRef(x).detach().to(torch.float32)
+    
+    # Handle layout transformations
+    if layout == "nchw_fchw":
+        pass  # Nothing to do
+    elif layout == "nhwc_hwcf":
+        x = torch.permute(x, (0, 2, 3, 1)).contiguous()
+        we = torch.permute(we, (2, 3, 1, 0)).contiguous()
+        out_ref = torch.permute(out_ref, (0, 2, 3, 1)).contiguous()
+    else:
+        raise ValueError(f"Invalid layout: {layout}")
+    
+    # Get dilated convolution kernel
+    dilated_conv, hyperparams = get_dilated_conv2d(
+        layout=layout,
+        n=n,
+        h=h,
+        w=w,
+        c=c,
+        hf=hf,
+        wf=wf,
+        nf=nf,
+        stride=stride,
+        dilation=dilation,
+        input_dtype=tkl.f16,
+        output_dtype=tkl.f32,
+    )
+    
+    hyperparams.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+    
+    out = torch.zeros_like(out_ref)
+    dilated_conv = wave_compile(options, dilated_conv)
+    dilated_conv(x, we, dilation, out)
+    
+    assert_close(out, out_ref, rtol=1e-03, atol=1e-02)
+
