@@ -5,6 +5,7 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import ScaledMMAType
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     run_test,
@@ -137,6 +138,209 @@ def test_mxfp4_scaled_mma_16x16x128():
     # CHECK-NEXT:   %[[AFFINE_APPLY_7:.+]] = affine.apply #[[MAP7]]()[%[[THREAD_ID_X]]]
     # CHECK-NEXT:   vector.store %[[EXTRACT_STRIDED_SLICE_3]], %[[SUBSPAN_4]][%[[AFFINE_APPLY_7]], %[[AFFINE_APPLY_3]]] : memref<32x32xf32, strided<[32, 1], offset: ?>>, vector<1xf32>
     # CHECK-NEXT:   return
+
+
+@run_test
+def test_mxfp4_scaled_mma_unaligned_16x16x128():
+    batch = 4
+    shape = (16384, 16384, 16384)
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+    enable_scheduling = SchedulingType.PREFETCH
+    # Input sizes
+    B = tkl.sym.B
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_B = tkl.sym.BLOCK_B
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=mfma_variant,
+            vector_shapes={B: 0},
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def batched_gemm(
+        a: tkl.Memory[B, M, K / 2, ADDRESS_SPACE, tkl.i8],
+        a_scale: tkl.Memory[B, M, K / 32, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i8],
+        b_scale: tkl.Memory[N, K / 32, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(
+            acc: tkl.Register[B, M, N, tkl.f32],
+        ) -> tkl.Register[B, M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            a_reg = tkw.bitcast(a_reg, tkl.f4e2m1fn)
+            a_scale_reg = tkw.read(a_scale)
+            a_scale_reg = tkw.bitcast(a_scale_reg, tkl.f8e8m0fnu)
+            b_reg = tkw.read(b)
+            b_reg = tkw.bitcast(b_reg, tkl.f4e2m1fn)
+            b_scale_reg = tkw.read(b_scale)
+            b_scale_reg = tkw.bitcast(b_scale_reg, tkl.f8e8m0fnu)
+            acc = tkw.scaled_mma(a_reg, a_scale_reg, b_reg, b_scale_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_B: 1,
+        BLOCK_M: 256,
+        BLOCK_N: 128,
+        BLOCK_K: 256,
+        B: batch,
+        M: shape[0],
+        N: shape[1],
+        K: shape[2],
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    dynamic_symbols = [B, M]
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=enable_scheduling,
+        use_buffer_load_ops=True,
+        use_buffer_store_ops=True,
+        use_stride_cache_swizzle=True,
+        dynamic_symbols=dynamic_symbols,
+    )
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="rocm",
+        target="gfx950",
+        compile_to_mlir=True,
+    )
+    batched_gemm = wave_compile(options, batched_gemm)
+    print(batched_gemm.asm)
+
+    # CHECK-LABEL:  test_mxfp4_scaled_mma_unaligned_16x16x128
+    # CHECK-DAG: #[[MAP:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 32 + s2 * 256 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8) floordiv 256) * 256)>
+    # CHECK-DAG: #[[MAP1:.*]] = affine_map<()[s0, s1] -> ((s1 * 32 + s0 floordiv 8) mod 256)>
+    # CHECK-DAG: #[[MAP2:.*]] = affine_map<()[s0] -> (s0 * 16 - (s0 floordiv 8) * 128)>
+    # CHECK-DAG: #[[MAP3:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 32 + s2 * 256 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 64) floordiv 256) * 256 + 64)>
+    # CHECK-DAG: #[[MAP4:.*]] = affine_map<()[s0, s1] -> (s1 * 32 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 64) floordiv 256) * 256 + 64)>
+    # CHECK-DAG: #[[MAP5:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 32 + s2 * 256 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 128) floordiv 256) * 256 + 128)>
+    # CHECK-DAG: #[[MAP6:.*]] = affine_map<()[s0, s1] -> (s1 * 32 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 128) floordiv 256) * 256 + 128)>
+    # CHECK-DAG: #[[MAP7:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 32 + s2 * 256 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 192) floordiv 256) * 256 + 192)>
+    # CHECK-DAG: #[[MAP8:.*]] = affine_map<()[s0, s1] -> (s1 * 32 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 192) floordiv 256) * 256 + 192)>
+    # CHECK-DAG: #[[MAP9:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 128 + s2 * 256 + s0 floordiv 2 - ((s1 * 128 + s0 floordiv 2) floordiv 256) * 256)>
+    # CHECK-DAG: #[[MAP10:.*]] = affine_map<()[s0, s1] -> ((s1 * 128 + s0 floordiv 2) mod 256)>
+    # CHECK-DAG: #[[MAP11:.*]] = affine_map<()[s0] -> (s0 * 4 - (s0 floordiv 2) * 8)>
+    # CHECK-DAG: #[[MAP12:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 32 + s2 * 128 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8) floordiv 128) * 128)>
+    # CHECK-DAG: #[[MAP13:.*]] = affine_map<()[s0, s1] -> ((s1 * 32 + s0 floordiv 8) mod 128)>
+    # CHECK-DAG: #[[MAP14:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 32 + s2 * 128 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 64) floordiv 128) * 128 + 64)>
+    # CHECK-DAG: #[[MAP15:.*]] = affine_map<()[s0, s1] -> (s1 * 32 + s0 floordiv 8 - ((s1 * 32 + s0 floordiv 8 + 64) floordiv 128) * 128 + 64)>
+    # CHECK-DAG: #[[MAP16:.*]] = affine_map<()[s0, s1, s2] -> (s1 * 64 + s2 * 128 + s0 floordiv 4 - ((s1 * 64 + s0 floordiv 4) floordiv 128) * 128)>
+    # CHECK-DAG: #[[MAP17:.*]] = affine_map<()[s0, s1] -> ((s1 * 64 + s0 floordiv 4) mod 128)>
+    # CHECK-DAG: #[[MAP18:.*]] = affine_map<()[s0] -> (s0 * 2 - (s0 floordiv 4) * 8)>
+    # CHECK-DAG: #[[MAP19:.*]] = affine_map<()[s0, s1] -> (s0 + s1 * 64 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG: #[[MAP20:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
+    # CHECK-DAG: #[[MAP25:.*]] = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
+    # CHECK-DAG: #[[MAP27:.*]] = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 64)>
+    # CHECK-DAG: #[[MAP31:.*]] = affine_map<()[s0, s1] -> (s0 * 128 + s1 * 16 - (s1 floordiv 8) * 128)>
+    # CHECK-DAG: #[[MAP32:.*]] = affine_map<()[s0, s1] -> (s0 * 8 + s1 * 4 - (s1 floordiv 2) * 8)>
+    # CHECK-DAG: #[[MAP33:.*]] = affine_map<()[s0, s1] -> (s0 * 8 + s1 * 2 - (s1 floordiv 4) * 8)>
+    # CHECK:     func.func @batched_gemm(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding) attributes {translation_info = #translation} {
+    # CHECK-DAG:    %[[CST_0:.*]] = arith.constant 0 : index
+    # CHECK-DAG:    %[[C64:.*]] = arith.constant 64 : index
+    # CHECK-DAG:    %[[C1:.*]] = arith.constant 1 : index
+    # CHECK-DAG:    %[[CST_52224:.*]] = arith.constant 52224 : index
+    # CHECK-DAG:    %[[CST_34816:.*]] = arith.constant 34816 : index
+    # CHECK-DAG:    %[[CST_56320:.*]] = arith.constant 56320 : index
+    # CHECK:        %[[CST:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    # CHECK-NEXT:   %[[BLOCK_ID_X:.*]] = gpu.block_id  x upper_bound 64
+    # CHECK-NEXT:   %[[BLOCK_ID_Y:.*]] = gpu.block_id  y upper_bound 128
+    # CHECK-NEXT:   %[[BLOCK_ID_Z:.*]] = gpu.block_id  z upper_bound 4
+    # CHECK-NEXT:   %[[THREAD_ID_X:.*]] = gpu.thread_id  x upper_bound 256
+    # CHECK-NEXT:   %[[THREAD_ID_Y:.*]] = gpu.thread_id  y upper_bound 2
+    # CHECK-NEXT:   %[[ALLOC:.*]] = memref.alloc() : memref<58368xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:    %[[VIEW:.*]] = memref.view %[[ALLOC]][%[[CST_56320]]][] : memref<58368xi8, #gpu.address_space<workgroup>> to memref<128x16xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:    %[[VIEW_0:.*]] = memref.view %[[ALLOC]][%[[CST_34816]]][] : memref<58368xi8, #gpu.address_space<workgroup>> to memref<128x136xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:    %[[VIEW_1:.*]] = memref.view %[[ALLOC]][%[[CST_52224]]][] : memref<58368xi8, #gpu.address_space<workgroup>> to memref<1x256x16xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:    %[[VIEW_2:.*]] = memref.view %[[ALLOC]][%[[CST_0]]][] : memref<58368xi8, #gpu.address_space<workgroup>> to memref<1x256x136xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:    %[[SUBSPAN:.*]] = stream.binding.subspan %arg3[%c0] : !stream.binding -> memref<16384x512xi8, strided<[512, 1], offset: ?>>
+    # CHECK-DAG:    %[[SUBSPAN1:.*]] = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<16384x8192xi8, strided<[8192, 1], offset: ?>>
+    # CHECK-DAG:    %[[SUBSPAN2:.*]] = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<4x16384x512xi8, strided<[8388608, 512, 1], offset: ?>>
+    # CHECK-DAG:    %[[SUBSPAN3:.*]] = stream.binding.subspan %arg0[%[[CST_0]]] : !stream.binding -> memref<4x16384x8192xi8, strided<[134217728, 8192, 1], offset: ?>>
+    # CHECK-DAG:    %[[AFFINE_APPLY:.*]] = affine.apply #[[MAP]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP1]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP3]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY4:.*]] = affine.apply #[[MAP4]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY5:.*]] = affine.apply #[[MAP5]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY6:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY7:.*]] = affine.apply #[[MAP7]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY8:.*]] = affine.apply #[[MAP8]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY9:.*]] = affine.apply #[[MAP9]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY10:.*]] = affine.apply #[[MAP10]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY11:.*]] = affine.apply #[[MAP11]]()[%[[THREAD_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY12:.*]] = affine.apply #[[MAP12]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY13:.*]] = affine.apply #[[MAP13]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY14:.*]] = affine.apply #[[MAP14]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY15:.*]] = affine.apply #[[MAP15]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY16:.*]] = affine.apply #[[MAP16]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY17:.*]] = affine.apply #[[MAP17]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY18:.*]] = affine.apply #[[MAP18]]()[%[[THREAD_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY19:.*]] = affine.apply #[[MAP19]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY20:.*]] = affine.apply #[[MAP20]]()[%[[THREAD_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY25:.*]] = affine.apply #[[MAP25]]()[%[[THREAD_ID_X]]]
+    # CHECK-DAG:    %[[AFFINE_APPLY27:.*]] = affine.apply #[[MAP27]]()[%[[THREAD_ID_X]]]
+    # CHECK:        scf.for %[[ITER_ARG:.*]] = %[[CST_0]] to %[[C64]] step %[[C1]] iter_args(%[[ITER_ARG1:.*]] = %[[CST]],
+    # CHECK-NEXT:       %[[AFFINE_APPLY31:.*]] = affine.apply #[[MAP31]]()[%[[ITER_ARG]], %[[THREAD_ID_X]]]
+    # CHECK-NEXT:       %[[LOAD:.*]] = vector.load %[[SUBSPAN3]][%[[BLOCK_ID_Z]], %[[AFFINE_APPLY]], %[[AFFINE_APPLY31]]] : memref<4x16384x8192xi8, strided<[134217728, 8192, 1], offset: ?>>, vector<16xi8>
+    # CHECK-NEXT:       amdgpu.lds_barrier
+    # CHECK-NEXT:       vector.store %[[LOAD]], %[[VIEW_2]][%[[CST_0]], %[[AFFINE_APPLY1]], %[[AFFINE_APPLY2]]] : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-NEXT:       %[[LOAD1:.*]] = vector.load %[[SUBSPAN3]][%[[BLOCK_ID_Z]], %[[AFFINE_APPLY3]], %[[AFFINE_APPLY31]]] : memref<4x16384x8192xi8, strided<[134217728, 8192, 1], offset: ?>>, vector<16xi8>
+    # CHECK-NEXT:       vector.store %[[LOAD1]], %[[VIEW_2]][%[[CST_0]], %[[AFFINE_APPLY4]], %[[AFFINE_APPLY2]]] : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-NEXT:       %[[LOAD2:.*]] = vector.load %[[SUBSPAN3]][%[[BLOCK_ID_Z]], %[[AFFINE_APPLY5]], %[[AFFINE_APPLY31]]] : memref<4x16384x8192xi8, strided<[134217728, 8192, 1], offset: ?>>, vector<16xi8>
+    # CHECK-NEXT:       vector.store %[[LOAD2]], %[[VIEW_2]][%[[CST_0]], %[[AFFINE_APPLY6]], %[[AFFINE_APPLY2]]] : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-NEXT:       %[[LOAD3:.*]]  = vector.load %[[SUBSPAN3]][%[[BLOCK_ID_Z]], %[[AFFINE_APPLY7]], %[[AFFINE_APPLY31]]] : memref<4x16384x8192xi8, strided<[134217728, 8192, 1], offset: ?>>, vector<16xi8>
+    # CHECK-NEXT:       vector.store %[[LOAD3]], %[[VIEW_2]][%[[CST_0]], %[[AFFINE_APPLY8]], %[[AFFINE_APPLY2]]] : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-NEXT:       %[[AFFINE_APPLY32:.*]] = affine.apply #[[MAP32]]()[%[[ITER_ARG]], %[[THREAD_ID_X]]]
+    # CHECK-NEXT:       %[[LOAD4:.*]]  = vector.load %[[SUBSPAN2]][%[[BLOCK_ID_Z]], %[[AFFINE_APPLY9]], %[[AFFINE_APPLY32]]] : memref<4x16384x512xi8, strided<[8388608, 512, 1], offset: ?>>, vector<4xi8>
+    # CHECK-NEXT:       vector.store %[[LOAD4]], %[[VIEW_1]][%[[CST_0]], %[[AFFINE_APPLY10]], %[[AFFINE_APPLY11]]] : memref<1x256x16xi8, #gpu.address_space<workgroup>>, vector<4xi8>
+    # CHECK-NEXT:       %[[LOAD5:.*]]  = vector.load %[[SUBSPAN1]][%[[AFFINE_APPLY12]], %[[AFFINE_APPLY31]]] : memref<16384x8192xi8, strided<[8192, 1], offset: ?>>, vector<16xi8>
+    # CHECK-NEXT:       vector.store %[[LOAD5]], %[[VIEW_0]][%[[AFFINE_APPLY13]], %[[AFFINE_APPLY2]]] : memref<128x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-NEXT:       %[[LOAD6:.*]]  = vector.load %[[SUBSPAN1]][%[[AFFINE_APPLY14]], %[[AFFINE_APPLY31]]] : memref<16384x8192xi8, strided<[8192, 1], offset: ?>>, vector<16xi8>
+    # CHECK-NEXT:       vector.store %[[LOAD6]], %[[VIEW_0]][%[[AFFINE_APPLY15]], %[[AFFINE_APPLY2]]] : memref<128x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-NEXT:       %[[AFFINE_APPLY33:.*]] = affine.apply #[[MAP33]]()[%[[ITER_ARG]], %[[THREAD_ID_X]]]
+    # CHECK-NEXT:       %[[LOAD7:.*]] = vector.load %[[SUBSPAN]][%[[AFFINE_APPLY16]], %[[AFFINE_APPLY33:.*]]] : memref<16384x512xi8, strided<[512, 1], offset: ?>>, vector<2xi8>
+    # CHECK-NEXT:       vector.store %[[LOAD7]], %[[VIEW]][%[[AFFINE_APPLY17]], %[[AFFINE_APPLY18]]] : memref<128x16xi8, #gpu.address_space<workgroup>>, vector<2xi8>
+    # CHECK-NEXT:       amdgpu.lds_barrier
+    # CHECK-DAG:        %[[LOAD8:.*]] = vector.load %[[VIEW]][%[[AFFINE_APPLY19]], %[[AFFINE_APPLY20]]] : memref<128x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-DAG:        %[[LOAD9:.*]] = vector.load %[[VIEW_1]][%[[CST_0]], %[[AFFINE_APPLY27]], %[[AFFINE_APPLY20]]] : memref<1x256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-DAG:        %[[LOAD10:.*]] = vector.load %[[VIEW_2]][%[[CST_0]], %[[AFFINE_APPLY27]], %[[AFFINE_APPLY25]]] : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-DAG:        %[[LOAD11:.*]] = vector.load %[[VIEW_0]][%[[AFFINE_APPLY19]], %[[AFFINE_APPLY25]]] : memref<128x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-DAG:        %[[CAST:.*]] = vector.bitcast %[[LOAD9]] : vector<1xi8> to vector<1xf8E8M0FNU>
+    # CHECK-DAG:        %[[CAST1:.*]] = vector.bitcast %[[LOAD8]] : vector<1xi8> to vector<1xf8E8M0FNU>
+    # CHECK-DAG:        %[[CAST2:.*]] = vector.bitcast %[[LOAD10]] : vector<16xi8> to vector<32xf4E2M1FN>
+    # CHECK-DAG:        %[[CAST3:.*]]  = vector.bitcast %[[LOAD11]] : vector<16xi8> to vector<32xf4E2M1FN>
+    # CHECK-DAG:        %[[EXTRACT:.*]] = vector.extract %[[CAST]][0] : f8E8M0FNU from vector<1xf8E8M0FNU>
+    # CHECK-DAG:        %[[EXTRACT1:.*]] = vector.extract %[[CAST1]][0] : f8E8M0FNU from vector<1xf8E8M0FNU>
+    # CHECK-DAG:        %[[SCALED_MFMA:.*]] = amdgpu.scaled_mfma
+    # CHECK         return
 
 
 @run_test
