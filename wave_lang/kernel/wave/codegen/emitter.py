@@ -50,12 +50,12 @@ from ...lang.wave_types import IndexSymbol
 from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint, HardwareConstraint, TilingConstraint
 from ..utils.general_utils import get_hardware_constraint
-from ..utils.symbol_utils import subs_idxc
+from ..utils.symbol_utils import subs_idxc, is_literal
 
 
 def _get_upper_bound(expr: Any) -> Optional[Attribute]:
-    res = subs_idxc(sympy.sympify(expr))
-    if res.is_number:
+    res = subs_idxc(expr)
+    if is_literal(res):
         return IntegerAttr.get(IndexType.get(), int(res))
     else:
         return None
@@ -301,7 +301,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             if isinstance(arg.type, VectorType):
                 arg = vector_d.extract(arg, static_position=[0], dynamic_position=[])
 
-            res_args[i] = vector_d.splat(res_type, arg)
+            res_args[i] = vector_d.broadcast(res_type, arg)
 
         assert all(arg.type == res_type for arg in res_args)
 

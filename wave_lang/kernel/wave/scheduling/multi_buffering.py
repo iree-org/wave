@@ -6,11 +6,9 @@
 
 from __future__ import annotations
 
-import wave_lang.kernel.lang as tkl
 
 from ..._support.indexing import (
     IndexSymbol,
-    xor,
 )
 from ..._support.tracing import CapturedTrace
 from ...compiler.base import CodegenError
@@ -23,10 +21,77 @@ from ...ops.wave_ops import (
     Write,
     get_custom,
 )
+import copy
 from ..utils.mapping_utils import get_dict_with_updated_key
+from typing import Optional
 
 
-def multi_buffer(trace: CapturedTrace):
+def heuristically_multi_buffer_shared_memory(
+    new_node: CustomOp,
+    induction_variable: IndexSymbol,
+    reduction: Iterate,
+    multi_buffer_count: Optional[int] = None,
+):
+    """
+    This function adjusts the offset to a shared memory buffer to multibuffer.
+    This enables the removal of LDS barriers and enables greater parallelism
+    during software pipelining and schedule reordering techniques
+
+    The induction variable used in this function is the induction variable before
+    it's remapped during schedule reordering. (See update_node_index in loop_reconstuction.py)
+
+    This enables index to be set to buffer_size * (original_induction_variable % multi_buffer_count)
+    Regardless of current node stage, because it will be remapped correctly later depending on if
+    prologue, epilogue, or kernel stage
+    """
+    assert multi_buffer_count is not None
+    is_read_write = isinstance(new_node, Read | Write)
+    original_buffer = (
+        get_custom(new_node.memory) if is_read_write else get_custom(new_node.dst)
+    )
+    reduction_axis = reduction.axis
+    reduction_dim_indices = [
+        i for i, dim in enumerate(original_buffer.shape) if dim == reduction_axis
+    ]
+    for i, dim in enumerate(original_buffer.shape):
+        new_node_idx = copy.deepcopy(
+            new_node.index if is_read_write else new_node.dst_index
+        )
+        if i in reduction_dim_indices or dim not in new_node_idx:
+            continue
+        block_size = original_buffer.distributed_shape[i]
+        which_buffer = induction_variable % multi_buffer_count
+        offset = block_size * which_buffer
+        new_node_idx[dim].start += offset
+
+        # Update the mapping for the operation as the keys for the
+        # mapping have to match the shape of memory location the
+
+        # operation reads from / writes to, which we change below.
+        new_node_idx = get_dict_with_updated_key(
+            new_node_idx, dim, dim * multi_buffer_count
+        )
+        if not is_read_write:
+            new_node.dst_index = new_node_idx
+            return
+        new_node.index = new_node_idx
+
+        if isinstance(new_node.mapping, IndexMapping):
+            input_mapping = new_node.mapping.input_mapping
+            output_mapping = new_node.mapping.output_mapping
+            if dim in input_mapping:
+                new_node.mapping.input_mapping = get_dict_with_updated_key(
+                    input_mapping, dim, dim * multi_buffer_count
+                )
+            if dim in output_mapping:
+                new_node.mapping.output_mapping = get_dict_with_updated_key(
+                    output_mapping, dim, dim * multi_buffer_count
+                )
+
+        return
+
+
+def multi_buffer(trace: CapturedTrace, multi_buffer_count: Optional[int] = None):
     """Perform multi buffering for all supported shared memory locations"""
 
     # Find all reductions
@@ -41,114 +106,45 @@ def multi_buffer(trace: CapturedTrace):
     reduction_axis = get_custom(reductions[0]).axis
 
     # Find reads and writes operating on shared memory
-    reads = []
-    writes = []
+    reads_and_writes = []
     for node in trace.get_subgraph(get_custom(reductions[0]).subgraph_name).nodes:
         custom = get_custom(node)
         if (
             isinstance(custom, Read | Write)
             and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
         ):
-            if isinstance(custom, Read):
-                reads.append(custom)
-            elif isinstance(custom, Write):
-                writes.append(custom)
+            reads_and_writes.append(custom)
 
     # Partition reads and writes by memory location
-    memory_to_reads = _partition_by_memory(reads)
-    memory_to_writes = _partition_by_memory(writes)
-
+    memory_to_shared_memory_op = _partition_by_memory(reads_and_writes)
     # Perform multi buffering for all collected memory locations
-    for memory_location in set(memory_to_reads.keys()) | set(memory_to_writes.keys()):
-        read_nodes = memory_to_reads.get(memory_location, [])
-        write_nodes = memory_to_writes.get(memory_location, [])
-
-        _multi_buffer_memory_location(
-            trace, memory_location, read_nodes, write_nodes, reduction_axis, 2
+    for memory_location in set(memory_to_shared_memory_op):
+        _increase_dimensions_for_multibuffering(
+            original_buffer=memory_location,
+            reduction_axis=reduction_axis,
+            buffer_count=multi_buffer_count,
         )
 
 
-def _multi_buffer_memory_location(
-    trace: CapturedTrace,
-    original_buffer: CustomOp,
-    read_nodes: list[Read],
-    write_nodes: list[Write],
-    reduction_axis: IndexSymbol,
-    buffer_count: int,
+def _increase_dimensions_for_multibuffering(
+    original_buffer: CustomOp, reduction_axis: IndexSymbol, buffer_count: int
 ):
-    """
-    Implements multi buffering for all reads and write of a shared memory buffer.
-    """
-    # For now we only support double buffering
-    if buffer_count != 2:
-        raise CodegenError(
-            "Current multi buffering implementation supports only buffer_count=2"
-        )
-
-    # Add the buffer offset to the index of each read/write operation
-    stage_mapping: dict[int, list[CustomOp]] = {}
-    for custom_op in read_nodes + write_nodes:
-        cycle = custom_op.fx_node.scheduling_parameters["cycle"]
-
-        # Group nodes by their cycle
-        if cycle not in stage_mapping:
-            stage_mapping[cycle] = []
-        stage_mapping[cycle].append(custom_op)
-
+    # Create new shape with increased non-reduction dimensions
     reduction_dim_indices = [
         i for i, dim in enumerate(original_buffer.shape) if dim == reduction_axis
     ]
-    induction_var = tkl.IndexSymbol(
-        f"$ARG{reduction_axis.name}",
-        integer=True,
-        nonnegative=True,
-    )
-    buffer_selector = induction_var % buffer_count  # 0 to buffer_count-1
-    for stage, ops_in_stage in stage_mapping.items():
-        offset = 0
-        for op in ops_in_stage:
-            # Determine buffer offset based on stage
-            use_alternate_buffer = stage >= 2 and stage <= 4
-
-            # Update each non-reduction dimension with appropriate offset
-            for i, dim in enumerate(original_buffer.shape):
-                if i not in reduction_dim_indices and dim in op.index:
-                    block_size = original_buffer.distributed_shape[i]
-
-                    # Calculate offset based on buffer selection
-                    if use_alternate_buffer:
-                        # XOR with block_size for ping-pong effect
-                        offset = xor(buffer_selector * block_size, block_size)
-                    else:
-                        offset = buffer_selector * block_size
-                    op.index[dim].start = op.index[dim].start + offset
-
-                    # Update the mapping for the operation as the keys for the
-                    # mapping have to match the shape of memory location the
-                    # operation reads from / writes to, which we change below.
-                    if isinstance(op.mapping, IndexMapping):
-                        input_mapping = op.mapping.input_mapping
-                        output_mapping = op.mapping.output_mapping
-                        if dim in input_mapping:
-                            op.mapping.input_mapping = get_dict_with_updated_key(
-                                input_mapping, dim, dim * buffer_count
-                            )
-                        if dim in output_mapping:
-                            op.mapping.output_mapping = get_dict_with_updated_key(
-                                output_mapping, dim, dim * buffer_count
-                            )
-
-    # Create new shape with increased non-reduction dimensions
     new_shape = []
     new_distributed_shape = []
+    increased_multi_buffer_dim = False
 
     for i, dim in enumerate(original_buffer.shape):
-        if i in reduction_dim_indices:
+        if increased_multi_buffer_dim or i in reduction_dim_indices:
             # Keep reduction dimensions as is
             new_shape.append(dim)
             new_distributed_shape.append(original_buffer.distributed_shape[i])
         else:
-            # Increase non-reduction dimensions
+            # Increase only the multibuffered first non-reduction dimension
+            increased_multi_buffer_dim = True
             new_shape.append(dim * buffer_count)
             new_distributed_shape.append(
                 original_buffer.distributed_shape[i] * buffer_count

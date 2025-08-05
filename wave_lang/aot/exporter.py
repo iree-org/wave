@@ -269,7 +269,7 @@ def export(
         warnings.warn(
             "When strict_export == False, Python interpreter is used and code will execute exactly as it would in eager mode. "
             "Therefore, graph optimizations and safety are not garaunteed to be at the same level as TorchDynamo. "
-            "This is an experimental feature in PyTorch that the IREE Turbine project is still evaluating. Please report issues or experiences.",
+            "This is an experimental feature in PyTorch that the Wave project is still evaluating. Please report issues or experiences.",
         )
 
     from .compiled_module import ExportTargetDef

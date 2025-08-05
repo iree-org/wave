@@ -6,8 +6,8 @@
 cmake_minimum_required(VERSION 3.19...3.27)
 project(wave_runtime)
 
-# Skip building on macOS and Windows
-if(APPLE OR WIN32)
+# Skip building on macOS
+if(APPLE)
   message(STATUS "Skipping wave_runtime build on ${CMAKE_SYSTEM_NAME}")
   return()
 endif()

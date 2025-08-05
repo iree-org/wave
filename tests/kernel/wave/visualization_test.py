@@ -86,22 +86,21 @@ def test_gemm():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
+    with IndexingContext() as idxc:
+        idxc.subs = {
             BLOCK_M: 32,
             BLOCK_N: 32,
             BLOCK_K: 32,
         }
-    ):
-        graph = gemm()
-        IndexingContext.current().finalize()
-        initialize_iter_args(graph)
-        add_get_results(graph)
-        infer_types(graph)
-        set_node_indices(graph, constraints)
-        expand_graph(graph, constraints)
-        set_post_expansion_indices(graph, constraints)
-        visualize_graph(graph.get_subgraph("region_0"), "gemm.png")
+        trace: CapturedTrace = gemm()
+        idxc.finalize()
+        initialize_iter_args(trace)
+        add_get_results(trace)
+        infer_types(trace)
+        set_node_indices(trace, constraints)
+        expand_graph(trace, constraints)
+        set_post_expansion_indices(trace, constraints)
+        visualize_graph(trace.get_subgraph("region_0"), "gemm.png")
         assert os.path.exists("gemm.png")
 
 

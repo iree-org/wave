@@ -1,6 +1,6 @@
-# Releasing iree-turbine packages
+# Releasing wave-lang packages
 
-This project hosts the <https://pypi.org/project/iree-turbine/> package, which
+This project hosts the <https://pypi.org/project/wave-lang/> package, which
 depends on the <https://pypi.org/project/iree-base-compiler/> and
 <https://pypi.org/project/iree-base-runtime/> packages. Releases can either be
 conducted independently, or they can be coordinated across projects by
@@ -97,7 +97,7 @@ twine upload wheelhouse/iree_base_compiler-* wheelhouse/iree_base_runtime-*
 Push built wheels:
 
 ```bash
-twine upload wheelhouse/iree_turbine-*
+twine upload wheelhouse/wave_lang-*
 ```
 
 ### Install from PyPI and Sanity Check

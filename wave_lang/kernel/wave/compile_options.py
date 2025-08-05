@@ -25,6 +25,8 @@ class WaveCompileOptions:
     # === Scheduling options ===
     schedule: bool = SchedulingType.NONE
     use_scheduling_barriers: bool = False
+    # None if no buffer count specified else 2 and up
+    multi_buffer_count: Optional[int] = None
 
     # === Runtime options ===
     kernel_launch_info: KernelLaunchInfo = field(default_factory=KernelLaunchInfo)
@@ -85,6 +87,7 @@ class WaveCompileOptions:
     # === Print options ===
     print_ir_after: list[str] = field(default_factory=list)
     print_ir_before: list[str] = field(default_factory=list)
+    profile_pass: list[str] = field(default_factory=list)
     print_trace_begin: bool = False
     print_grid: bool = False
     print_signature: bool = False

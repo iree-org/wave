@@ -104,6 +104,7 @@ from ...ops.wave_ops import (
     shared_memory_barrier,
     shuffle,
     sin,
+    sinh,
     softsign,
     sqrt,
     tanh,
@@ -148,7 +149,7 @@ def handle_register(emitter: WaveEmitter, node: fx.Node):
         if value.type != vector_type.element_type:
             conversion_op = get_conversion_op(value.type, vector_type.element_type)
             value = conversion_op(vector_type.element_type, value)
-        register = vector_d.splat(vector_type, value)
+        register = vector_d.broadcast(vector_type, value)
     else:
         register = arith_d.ConstantOp(
             vector_type,
@@ -191,6 +192,7 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
             padding,
             parent,
             offset,
+            tail_padding,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
@@ -202,6 +204,17 @@ def handle_allocate(emitter: WaveEmitter, node: fx.Node):
 
     if parent is not None:
         parent = cast_py_value(emitter, parent).ir_value
+    elif tail_padding != 0:
+        # Tail padded memref cannot be represented as a normal alloc, allocate
+        # a flat i8 array and then view it as the original type.
+        alloc_size = get_custom(node).allocation_size
+        alloc_size = int(subs_idxc(alloc_size))
+        i8_type = IntegerType.get_signless(8)
+        alloc_type = MemRefType.get([alloc_size], i8_type, None, address_space)
+        parent = memref_d.alloc(alloc_type, [], [])
+        offset = 0
+
+    if parent is not None:
         offset = arith_d.constant(IndexType.get(), int(offset))
         alloc = memref_d.view(
             memref_type,
@@ -270,7 +283,7 @@ def handle_self_index(emitter: WaveEmitter, node: fx.Node):
     element_type = IrType.parse(dtype.ir_type_asm())
     if not isinstance(value.type, VectorType):
         vector_type = VectorType.get([size], value.type)
-        value = vector_d.splat(vector_type, value)
+        value = vector_d.broadcast(vector_type, value)
 
     if value.type.element_type != element_type:
         vector_type = VectorType.get([size], element_type)
@@ -312,7 +325,7 @@ def _to_scalar(val: Value) -> Value:
         if src_type.rank == 1:
             val = vector_d.extract(val, static_position=[0], dynamic_position=[])
         else:
-            val = vector_d.extractelement(val)
+            val = vector_d.extract(val, static_position=[], dynamic_position=[])
 
     return val
 
@@ -876,8 +889,7 @@ def handle_invert(source: Value, options: WaveCompileOptions) -> OpResult:
     if _is_integer_like_type(element_type):
         if isinstance(source.type, VectorType):
             assert len(source.type.shape) == 1
-            zero = arith_d.ConstantOp(IndexType.get(), 0)
-            source = vector_d.extractelement(source, position=zero)
+            source = vector_d.extract(source, static_position=[0], dynamic_position=[])
         true = arith_d.ConstantOp(source.type, True)
         result = arith_d.xori(source, true)
     else:
@@ -1145,6 +1157,16 @@ def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
     return sine_of_source
 
 
+@handle_unary_op(sinh)
+def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(source.type)
+    if _is_float_type(element_type):
+        sinh_of_source = math_d.sinh(source)
+    else:
+        raise ValidationError(f"Found unhandled operand type for sinh: {element_type}")
+    return sinh_of_source
+
+
 @handle_unary_op(cos)
 def handle_cos(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
@@ -1288,12 +1310,13 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
 def add_iter_arg_subs(
     current_values: list[Value], subs: dict[IndexExpr, Value]
 ) -> dict[IndexExpr, Value]:
-    zero = arith_d.ConstantOp(IndexType.get(), 0)
     for i in range(len(current_values) - 1):
         value = current_values[i]
         if isinstance(value.type, VectorType):
             assert value.type.rank == 1, f"Expected vector of rank 1, got {value.type}"
-            value = vector_d.extractelement(current_values[i], position=zero)
+            value = vector_d.extract(
+                current_values[i], static_position=[0], dynamic_position=[]
+            )
         if isinstance(value.type, IntegerType):
             value = arith_d.index_cast(IndexType.get(), value)
         subs[GET_ITER_ARG(i)] = value
@@ -1312,8 +1335,9 @@ def handle_iterate_while(emitter: WaveEmitter, node: fx.Node):
     # Initialize while loop
     init_value = cast_py_value(emitter, start).ir_value
     if isinstance(init_value.type, VectorType):
-        zero = arith_d.ConstantOp(IndexType.get(), 0)
-        init_value = vector_d.extractelement(init_value, position=zero)
+        init_value = vector_d.extract(
+            init_value, static_position=[0], dynamic_position=[]
+        )
     if isinstance(init_value.type, IntegerType):
         init_value = arith_d.index_cast(IndexType.get(), init_value)
 
@@ -1483,7 +1507,7 @@ def handle_extract(emitter: WaveEmitter, node: fx.Node):
     element = vector_d.extract(
         extract_vector, static_position=offset, dynamic_position=[]
     )
-    element = vector_d.splat(result_type, element)
+    element = vector_d.broadcast(result_type, element)
 
     emitter.bind_node_proxy(node, IRProxyValue(element))
 
@@ -1544,7 +1568,7 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
     if vector_type.rank == 0:
         result_type = VectorType.get([target_thread_size], vector_type.element_type)
         element = vector_d.extract(vector_src, static_position=[], dynamic_position=[])
-        splat = vector_d.splat(result_type, element)
+        splat = vector_d.broadcast(result_type, element)
         emitter.bind_node_proxy(node, IRProxyValue(splat))
         return
 
@@ -1570,7 +1594,7 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
 
     result_type = VectorType.get([target_thread_size], vector_type.element_type)
     element = vector_d.extract(vector_src, static_position=[0], dynamic_position=[])
-    splat = vector_d.splat(result_type, element)
+    splat = vector_d.broadcast(result_type, element)
     emitter.bind_node_proxy(node, IRProxyValue(splat))
 
 

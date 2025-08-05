@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel", "cmake", "nanobind"]
+requires = ["setuptools", "wheel", "cmake", "nanobind", "setuptools-rust"]
 build-backend = "setuptools.build_meta"
 
 [pytest]

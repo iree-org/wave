@@ -1,6 +1,5 @@
 # RUN: python %s | FileCheck %s
 
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -366,34 +365,34 @@ def test_partial_unroll_iteration():
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K, ARGK)]
 
-    with tk.gen.TestLaunchContext(
-        {
-            M: 64,
-            N: 128,
-            K: 128,
-            BLOCK_M: 32,
-            BLOCK_N: 32,
-            BLOCK_K: 16,
-            LOAD_ELEMS_PER_THREAD: 4,
-            STORE_ELEMS_PER_THREAD: 4,
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-            READ_SHARED_DELAY: 1,
-            WRITE_SHARED_DELAY: 1,
-            READ_GLOBAL_DELAY: 2,
-            WRITE_GLOBAL_DELAY: 2,
-            MMA_DELAY: 1,
-            SHARED_MEMORY_UNITS: 2,
-            GLOBAL_MEMORY_UNITS: 2,
-            MMA_UNITS: 2,
-            VALU_DELAY: 1,
-            VALU_UNITS: 2,
-            SHUFFLE_DELAY: 1,
-            SHUFFLE_UNITS: 2,
-        },
-    ):
+    subs = {
+        M: 64,
+        N: 128,
+        K: 128,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 16,
+        LOAD_ELEMS_PER_THREAD: 4,
+        STORE_ELEMS_PER_THREAD: 4,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        READ_SHARED_DELAY: 1,
+        WRITE_SHARED_DELAY: 1,
+        READ_GLOBAL_DELAY: 2,
+        WRITE_GLOBAL_DELAY: 2,
+        MMA_DELAY: 1,
+        SHARED_MEMORY_UNITS: 2,
+        GLOBAL_MEMORY_UNITS: 2,
+        MMA_UNITS: 2,
+        VALU_DELAY: 1,
+        VALU_UNITS: 2,
+        SHUFFLE_DELAY: 1,
+        SHUFFLE_UNITS: 2,
+    }
+    with IndexingContext() as idxc:
+        idxc.subs = subs
         trace: CapturedTrace = iterated_gemm()
-        IndexingContext.current().finalize()
+        idxc.finalize()
         initialize_iter_args(trace)
         add_get_results(trace)
         infer_types(trace)

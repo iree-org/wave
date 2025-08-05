@@ -870,3 +870,11 @@ class ReorderingConstraint:
                 self.wg_dim = get_workgroup_symbol(self.workgroup_dim)
             case _:
                 raise ValueError("Invalid workgroup dimension. Expected 0, 1, 2")
+
+
+@dataclass
+class IteratorBindings:
+    """Manages binding of target dimensions to iterators"""
+
+    def __init__(self, bindings: dict[IndexSymbol, IndexSymbol]):
+        self.bindings = bindings

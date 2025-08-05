@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import copy
 import operator
 import sys
@@ -128,9 +129,9 @@ def write(
 ): ...
 
 
-def debug_log_write(
+def debug_log(
     register_: "Register",
-    elements_per_thread: Optional[IndexExpr | int] = None,
+    label: Optional[str],
     mapping: Optional[IndexMapping] = None,
     mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ): ...
@@ -186,6 +187,9 @@ def roundeven(src: "Register") -> "Register": ...
 
 
 def sin(src: "Register") -> "Register": ...
+
+
+def sinh(src: "Register") -> "Register": ...
 
 
 def maximum(lhs: "Register", rhs: "Register") -> "Register": ...
@@ -935,6 +939,7 @@ class ComparisonPyOp(BinaryOpBase, ABC):
 @define_interface_op("reciprocal")
 @define_interface_op("roundeven")
 @define_interface_op("sin")
+@define_interface_op("sinh")
 @define_interface_op("tanh")
 @define_interface_op("tanh_approx")
 @define_interface_op("cos")
@@ -1200,6 +1205,7 @@ class Allocate(CustomOp):
     padding: int = 0
     parent: Optional[fx.Node] = None
     offset: Optional[IndexExpr] = None
+    tail_padding: int = 0  # Padding after the array end
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1208,6 +1214,16 @@ class Allocate(CustomOp):
     @property
     def type(self) -> "Memory":
         return Memory[(*self.shape, self.address_space, self.dtype)]
+
+    @property
+    def allocation_size(self) -> IndexExpr:
+        """
+        Returns the full size of the allocation in bytes including all padding.
+        """
+        return (
+            (math.prod(self.distributed_shape) + self.tail_padding)
+            * self.dtype.bitwidth()
+        ) // 8
 
 
 @define_op("self_index")
@@ -1353,9 +1369,13 @@ class NewScalar(CustomOp):
         self.type = self.dtype
 
 
+class MMABase(CustomOp):
+    pass
+
+
 @define_op("mma")
 @dataclass
-class MMA(CustomOp):
+class MMA(MMABase):
     lhs: fx.Node
     rhs: fx.Node
     acc: fx.Node
@@ -1436,7 +1456,7 @@ class MMA(CustomOp):
 
 @define_op("scaled_mma")
 @dataclass
-class ScaledMMA(CustomOp):
+class ScaledMMA(MMABase):
     lhs: fx.Node
     lhs_scale: fx.Node
     rhs: fx.Node
@@ -1583,6 +1603,8 @@ class Read(CustomOp):
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
+    source: Optional[tuple[IndexExpr]] = None
+    target: Optional[tuple[IndexExpr]] = None
     _write_dependency: Optional[list[fx.Node]] = None
 
     @property
@@ -1610,6 +1632,10 @@ class Read(CustomOp):
     @property
     def memory_type(self) -> "Memory":
         return get_custom(self.memory).type
+
+    @property
+    def dtype(self) -> DataType:
+        return self.memory_type.dtype
 
     @property
     def write_dependency(self) -> fx.Node:
@@ -1907,6 +1933,8 @@ class Write(CustomOp):
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
+    source: Optional[tuple[IndexExpr]] = None
+    target: Optional[tuple[IndexExpr]] = None
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2019,9 +2047,9 @@ class Write(CustomOp):
         )
 
 
-@define_op("debug_log_write")
+@define_op("debug_log")
 @dataclass
-class DebugLogWrite(CustomOp):
+class DebugLog(CustomOp):
     """
     An op for debugging.
     Represents a write to an implicit global memory location.
@@ -2035,7 +2063,9 @@ class DebugLogWrite(CustomOp):
     """
 
     register_: fx.Proxy
-    log_name: Optional[str] = None
+    label: Optional[str] = None
+    mapping: Optional[IndexMapping] = None
+    mapping_dynamic_vals: tuple[fx.Node, ...] = ()
 
     @property
     def memory(self) -> Optional[fx.Proxy]:

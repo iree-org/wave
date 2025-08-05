@@ -8,7 +8,7 @@ import itertools
 import math
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Sequence, Callable
 
 from torch import fx
 
@@ -18,18 +18,18 @@ from ..._support.dtype import DataType
 from ..._support.indexing import IndexingContext, IndexSymbol
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
-    MMA,
-    ScatterAdd,
     Allocate,
     Conditional,
     CustomOp,
     GetResult,
     IterArg,
     Iterate,
+    MMA,
+    MMABase,
     Output,
     ReduceOp,
+    ScatterAdd,
     Reshape,
-    ScaledMMA,
     SetSymbol,
     Write,
     get_custom,
@@ -55,7 +55,7 @@ from .expansion_utils import (
     remove_unused_registers,
 )
 
-logger = get_logger("turbine.wave.expansion")
+logger = get_logger("wave.expansion")
 
 
 @dataclass(frozen=True)
@@ -113,17 +113,21 @@ class ExpansionContext:
     def __setitem__(self, key: ExpansionInfo, value: CustomOp):
         self.expansion_context[key] = value
 
+    def get(self, key: ExpansionInfo):
+        return self.expansion_context.get(key, None)
+
 
 def get_dim_combinations(
     node: CustomOp,
     constraints: Sequence[Constraint],
+    get_scaling: Callable[[CustomOp], dict[IndexSymbol, int]],
 ):
     """
     Returns all combinations of sizes for the selected dimensions.
     Other dimensions are clamped to 0. A dictionary is return where
     the keys are the dimensions and the values are the combination.
     """
-    dim_scaling = get_dim_scaling(constraints, node)
+    dim_scaling = get_scaling(node)
     adjusted_dimension_sizes = [
         list(range(dim_scaling[dim])) if dim in node.indexing_dims else [0]
         for dim in dim_scaling
@@ -334,8 +338,7 @@ def update_users(
                 continue
             dim_query = metadata.source_dim_query
         key = ExpansionInfo(user, get_indexed_dims(dim_query, user))
-        if key in expansion_context:
-            new_user = expansion_context[key]
+        if new_user := expansion_context.get(key):
             if not new_user.node_args:
                 continue
             indices = user.get_node_arg_index(node)
@@ -466,7 +469,7 @@ def populate_inputs(
 
     for arg in expandable_args:
         match arg:
-            case MMA() | ScaledMMA():
+            case MMABase():
                 reduction_count = get_mma_reduction_count(arg, dim_scaling)
                 for i in range(reduction_count):
                     mma_metadata = deepcopy(metadata)
@@ -501,7 +504,7 @@ def store_fixup_data(
     for the fixup phase.
     """
     match node:
-        case MMA() | ScaledMMA():
+        case MMABase():
             try:
                 if expanded_dims[node.reduction_dim] == 0:
                     return
@@ -612,6 +615,7 @@ def dfs(
     dim_query: dict[IndexSymbol, int],
     constraints: Sequence[Constraint],
     expansion_context: ExpansionContext,
+    get_scaling: Callable[[CustomOp], dict[IndexSymbol, int]],
 ):
     """
     Perform a depth-first search on the graph starting at the given node
@@ -625,7 +629,7 @@ def dfs(
         if (node, metadata) in visited:
             continue
         visited.add((node, metadata))
-        dim_scaling = get_dim_scaling(constraints, node)
+        dim_scaling = get_scaling(node)
         nodes_to_expand = expand_node(
             node, dim_scaling, nodes_to_expand, metadata, expansion_context
         )
@@ -775,14 +779,27 @@ def expand_graph(
         logger.warning(
             f"No leaf operations found in kernel. Using final operation {final_op}"
         )
+
+    # get_dim_scaling is expensive, so we cache the results.
+    scaling_cache = {}
+
+    def get_scaling(node: CustomOp):
+        if val := scaling_cache.get(node, None):
+            return val
+
+        scaling = get_dim_scaling(constraints, node)
+        scaling_cache[node] = scaling
+        return scaling
+
     expansion_context = ExpansionContext()
     for custom in leaf_ops:
-        for dim_combination in get_dim_combinations(custom, constraints):
+        for dim_combination in get_dim_combinations(custom, constraints, get_scaling):
             dfs(
                 custom,
                 dim_combination,
                 constraints,
                 expansion_context,
+                get_scaling,
             )
 
     # Fixup all reduction nodes.

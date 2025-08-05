@@ -14,6 +14,7 @@ from pathlib import Path
 
 from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
+from setuptools_rust import RustExtension
 
 THIS_DIR = os.path.realpath(os.path.dirname(__file__))
 REPO_ROOT = THIS_DIR
@@ -45,6 +46,17 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}{os.sep}",
             f"-DCMAKE_BUILD_TYPE={'Debug' if self.debug else 'Release'}",
         ]
+
+        # Clang is required on Windows, since Wave runtime uses variable-length
+        # arrays (VLAs) which not supported by MSVC
+        if os.name == "nt":
+            cmake_args += [
+                "-G",
+                "Ninja",
+                "-DCMAKE_C_COMPILER=clang",
+                "-DCMAKE_CXX_COMPILER=clang++",
+            ]
+
         subprocess.check_call(["cmake", ext.sourcedir, *cmake_args], cwd=build_dir)
 
         # Build CMake project
@@ -154,5 +166,8 @@ setup(
     },
     cmdclass={"build": BuildCommand, "build_ext": CMakeBuild},
     ext_modules=[CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime")],
+    rust_extensions=[
+        RustExtension("aplp_lib", "wave_lang/kernel/wave/scheduling/aplp/Cargo.toml")
+    ],
     zip_safe=False,
 )

@@ -53,7 +53,7 @@ from ...ops.wave_ops import (
 )
 from ..utils.general_utils import get_fastest_index, infer_dim
 from ..utils.mapping_utils import transform_index_on_mapping
-from ..utils.symbol_utils import safe_subs, subs_idxc
+from ..utils.symbol_utils import safe_subs, subs_idxc, is_literal
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -152,7 +152,7 @@ def _build_mask(
 
     mask_vec_type = VectorType.get([elements_per_thread], IntegerType.get_signless(1))
     if mask.type != mask_vec_type:
-        mask = vector_d.splat(mask_vec_type, mask)
+        mask = vector_d.broadcast(mask_vec_type, mask)
 
     return mask
 
@@ -277,7 +277,7 @@ def _construct_gather_scatter_indices(
         offset = _compute_offset(indices, strides) - start_indices_offset_subs
         offset = subs_idxc(offset)
 
-        if offset.is_number:
+        if is_literal(offset):
             # If resulted offset sympy expr is convertible to int constant it
             # will be directly encoded into `arith.constant`.
             # For non-constant expressions, we will generate a real sequence of
@@ -427,6 +427,11 @@ def _get_splat_input(src: Optional[Value]) -> Optional[Value]:
     op = src.owner.opview
     if isinstance(op, vector_d.SplatOp):
         return op.input
+
+    if isinstance(op, vector_d.BroadcastOp) and not VectorType.isinstance(
+        op.source.type
+    ):
+        return op.source
 
     return None
 
@@ -598,11 +603,11 @@ def _create_vec_read_write(
             oob_index_value = _get_out_of_bounds_index(element_type)
             oob_index = arith_d.constant(IndexType.get(), oob_index_value)
 
-            oob_index = vector_d.splat(
+            oob_index = vector_d.broadcast(
                 VectorType.get(vector_type.shape, IndexType.get()), oob_index
             )
 
-            offset_th = vector_d.splat(
+            offset_th = vector_d.broadcast(
                 VectorType.get(vector_type.shape, IndexType.get()), offset_th
             )
 
@@ -643,7 +648,7 @@ def _create_vec_read_write(
                     elems.append(elem)
                 else:
                     elem = extract(value, i)
-                    single_num_vector = vector_d.splat(singlenumvec_type, elem)
+                    single_num_vector = vector_d.broadcast(singlenumvec_type, elem)
                     vector_d.store(single_num_vector, mem, indices=[this_index])
 
             if is_read:
@@ -657,7 +662,7 @@ def _create_vec_read_write(
             # normal masked load/store
 
             if is_read:
-                passthru = vector_d.splat(vector_type, zero)
+                passthru = vector_d.broadcast(vector_type, zero)
                 return vector_d.maskedload(vector_type, mem, indices, mask, passthru)
             else:
                 vector_d.maskedstore(mem, indices, mask, value)
@@ -682,7 +687,7 @@ def _create_vec_read_write(
         # Vector canonicalizations will convert them into unmasked later if
         # mask is constant.
         if is_read:
-            passthru = vector_d.splat(vec1, zero)
+            passthru = vector_d.broadcast(vec1, zero)
             elements = []
 
             for i in range(elements_per_thread):
@@ -705,7 +710,7 @@ def _create_vec_read_write(
                     elem = vector_d.load(vec1, mem, indices)
 
                 else:
-                    mask_elem = vector_d.splat(vec1_mask, mask_elem)
+                    mask_elem = vector_d.broadcast(vec1_mask, mask_elem)
                     elem = vector_d.maskedload(
                         vec1, mem, [offset_th], mask_elem, passthru
                     )
@@ -720,7 +725,7 @@ def _create_vec_read_write(
                 offset_th = extract(offsets_vec, i)
 
                 elem = extract(value, i)
-                elem = vector_d.splat(vec1, elem)
+                elem = vector_d.broadcast(vec1, elem)
 
                 if no_masked_load_store_ops:
                     oob_index_value = _get_out_of_bounds_index(element_type)
@@ -730,7 +735,7 @@ def _create_vec_read_write(
                     vector_d.store(elem, mem, [selected_index])
 
                 else:
-                    mask_elem = vector_d.splat(vec1_mask, mask_elem)
+                    mask_elem = vector_d.broadcast(vec1_mask, mask_elem)
 
                     vector_d.maskedstore(mem, [offset_th], mask_elem, elem)
 
@@ -738,7 +743,7 @@ def _create_vec_read_write(
 
     # Case 4: Default gather scatter case (slowest path).
     if is_read:
-        passthru = vector_d.splat(vector_type, zero)
+        passthru = vector_d.broadcast(vector_type, zero)
         return vector_d.gather(
             vector_type, mem, start_indices, offsets_vec, mask, passthru
         )
@@ -751,7 +756,7 @@ def _create_vec_read_write(
 def handle_read(emitter: WaveEmitter, node: fx.Node):
     # This is similar to tkl.store with fixed start indices for now.
     try:
-        memory, elements_per_thread, mapping, dyn_vals, bounds, _ = node.args
+        memory, elements_per_thread, mapping, dyn_vals, bounds, *rest = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -830,7 +835,9 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
 @handle_op(write)
 def handle_write(emitter: WaveEmitter, node: fx.Node):
     try:
-        register, memory, elements_per_thread, mapping, dyn_vals, bounds = node.args
+        register, memory, elements_per_thread, mapping, dyn_vals, bounds, *rest = (
+            node.args
+        )
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 

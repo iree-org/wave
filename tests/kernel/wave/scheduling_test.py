@@ -60,6 +60,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
 )
 from wave_lang.kernel.ops.wave_ops import Read, Write, MMA, IterArg
 
+
 # Map node types from schedule file to custom operation classes
 NODE_TYPE_TO_CUSTOM_OP = {
     Operation.READ_SHARED.value: (Read, "read"),
@@ -326,9 +327,10 @@ class SchedulingTest(unittest.TestCase):
             SHUFFLE_DELAY: 1,
             SHUFFLE_UNITS: 2,
         }
-        with tk.gen.TestLaunchContext(hyperparams, canonicalize=True, schedule=True):
+        with IndexingContext() as idxc:
+            idxc.subs = hyperparams
             trace: CapturedTrace = gemm()
-            IndexingContext.current().finalize()
+            idxc.finalize()
             initialize_iter_args(trace)
             add_get_results(trace)
             infer_types(trace)
@@ -339,152 +341,152 @@ class SchedulingTest(unittest.TestCase):
             set_post_expansion_indices(trace, constraints)
             minimize_global_loads(trace, constraints)
             schedule_graph(trace, constraints)
-            subgraph = trace.get_subgraph("region_0")
-            initiation_interval = 5
-            correct_schedule = {
-                "acc_1_1_0": {
-                    "absolute_cycle": 10,
-                    "cycle": 0,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-                "acc_1_0_0": {
-                    "absolute_cycle": 10,
-                    "cycle": 0,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-                "acc_0_1_0": {
-                    "absolute_cycle": 9,
-                    "cycle": 4,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_4": {
-                    "absolute_cycle": 0,
-                    "cycle": 0,
-                    "stage": 0,
-                    "initiation_interval": initiation_interval,
-                },
-                "write_2": {
-                    "absolute_cycle": 5,
-                    "cycle": 0,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_0_0_0": {
-                    "absolute_cycle": 8,
-                    "cycle": 3,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_0_0_1": {
-                    "absolute_cycle": 7,
-                    "cycle": 2,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_1_0_0": {
-                    "absolute_cycle": 9,
-                    "cycle": 4,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_1_0_1": {
-                    "absolute_cycle": 9,
-                    "cycle": 4,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_5": {
-                    "absolute_cycle": 0,
-                    "cycle": 0,
-                    "stage": 0,
-                    "initiation_interval": initiation_interval,
-                },
-                "write_3": {
-                    "absolute_cycle": 5,
-                    "cycle": 0,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_0_0_0": {
-                    "absolute_cycle": 8,
-                    "cycle": 3,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_0_0_1": {
-                    "absolute_cycle": 7,
-                    "cycle": 2,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_0_1_0": {
-                    "absolute_cycle": 6,
-                    "cycle": 1,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "read_shared_0_1_1": {
-                    "absolute_cycle": 6,
-                    "cycle": 1,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_0_0_0": {
-                    "absolute_cycle": 9,
-                    "cycle": 4,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_0_0_1": {
-                    "absolute_cycle": 11,
-                    "cycle": 1,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_1_1_0": {
-                    "absolute_cycle": 10,
-                    "cycle": 0,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_1_1_1": {
-                    "absolute_cycle": 12,
-                    "cycle": 2,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_1_0_0": {
-                    "absolute_cycle": 10,
-                    "cycle": 0,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_1_0_1": {
-                    "absolute_cycle": 12,
-                    "cycle": 2,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_0_1_0": {
-                    "absolute_cycle": 9,
-                    "cycle": 4,
-                    "stage": 1,
-                    "initiation_interval": initiation_interval,
-                },
-                "mma_0_1_1": {
-                    "absolute_cycle": 11,
-                    "cycle": 1,
-                    "stage": 2,
-                    "initiation_interval": initiation_interval,
-                },
-            }
-            for node in subgraph.nodes:
-                custom = get_custom(node)
-                if custom.name in correct_schedule:
-                    assert custom.scheduling_parameters == correct_schedule[custom.name]
+        subgraph = trace.get_subgraph("region_0")
+        initiation_interval = 5
+        correct_schedule = {
+            "acc_1_1_0": {
+                "absolute_cycle": 10,
+                "cycle": 0,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+            "acc_1_0_0": {
+                "absolute_cycle": 10,
+                "cycle": 0,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+            "acc_0_1_0": {
+                "absolute_cycle": 9,
+                "cycle": 4,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_4": {
+                "absolute_cycle": 0,
+                "cycle": 0,
+                "stage": 0,
+                "initiation_interval": initiation_interval,
+            },
+            "write_2": {
+                "absolute_cycle": 5,
+                "cycle": 0,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_0_0_0": {
+                "absolute_cycle": 8,
+                "cycle": 3,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_0_0_1": {
+                "absolute_cycle": 7,
+                "cycle": 2,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_1_0_0": {
+                "absolute_cycle": 9,
+                "cycle": 4,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_1_0_1": {
+                "absolute_cycle": 9,
+                "cycle": 4,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_5": {
+                "absolute_cycle": 0,
+                "cycle": 0,
+                "stage": 0,
+                "initiation_interval": initiation_interval,
+            },
+            "write_3": {
+                "absolute_cycle": 5,
+                "cycle": 0,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_0_0_0": {
+                "absolute_cycle": 8,
+                "cycle": 3,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_0_0_1": {
+                "absolute_cycle": 7,
+                "cycle": 2,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_0_1_0": {
+                "absolute_cycle": 6,
+                "cycle": 1,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "read_shared_0_1_1": {
+                "absolute_cycle": 6,
+                "cycle": 1,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_0_0_0": {
+                "absolute_cycle": 9,
+                "cycle": 4,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_0_0_1": {
+                "absolute_cycle": 11,
+                "cycle": 1,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_1_1_0": {
+                "absolute_cycle": 10,
+                "cycle": 0,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_1_1_1": {
+                "absolute_cycle": 12,
+                "cycle": 2,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_1_0_0": {
+                "absolute_cycle": 10,
+                "cycle": 0,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_1_0_1": {
+                "absolute_cycle": 12,
+                "cycle": 2,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_0_1_0": {
+                "absolute_cycle": 9,
+                "cycle": 4,
+                "stage": 1,
+                "initiation_interval": initiation_interval,
+            },
+            "mma_0_1_1": {
+                "absolute_cycle": 11,
+                "cycle": 1,
+                "stage": 2,
+                "initiation_interval": initiation_interval,
+            },
+        }
+        for node in subgraph.nodes:
+            custom = get_custom(node)
+            if custom.name in correct_schedule:
+                assert custom.scheduling_parameters == correct_schedule[custom.name]
 
 
 class ScheduleRepairerTest(unittest.TestCase):

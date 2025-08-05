@@ -11,7 +11,6 @@ from wave_lang.kernel.lang import sym
 from wave_lang.kernel.wave.assumptions import Assumption
 from wave_lang.kernel.wave.utils.general_utils import evaluate_with_assumptions
 from wave_lang.kernel._support.indexing import IndexingContext
-from wave_lang.kernel._support.context import push
 
 M = sym.M
 N = sym.N
@@ -22,12 +21,12 @@ I = sym.I
 
 class AssumptionsTest(unittest.TestCase):
     def testAssumption(self):
-        push(IndexingContext, IndexingContext())
-        constraints: list[Assumption] = []
-        constraints.append(Assumption(M < 64))
-        assert evaluate_with_assumptions(constraints, M > 70) == False
-        assert evaluate_with_assumptions(constraints, M < 70) == True
-        assert evaluate_with_assumptions(constraints, M < 32) is None
+        with IndexingContext():
+            constraints: list[Assumption] = []
+            constraints.append(Assumption(M < 64))
+            assert evaluate_with_assumptions(constraints, M > 70) == False
+            assert evaluate_with_assumptions(constraints, M < 70) == True
+            assert evaluate_with_assumptions(constraints, M < 32) is None
 
 
 if __name__ == "__main__":

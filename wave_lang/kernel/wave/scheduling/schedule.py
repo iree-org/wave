@@ -34,14 +34,16 @@ from .loop_reconstruction import construct_pipelined_loop
 from .modulo_scheduling import ModuloScheduler
 from .multi_buffering import multi_buffer
 from .prefetch_scheduling import PrefetchScheduler
+from .four_stage_pipelined_scheduling import FourStageScheduler
 from .resources import (
     annotate_resource_usage,
     get_available_resources,
     get_resource_names,
 )
 from .schedule_enums import SchedulingType
+from typing import Optional
 
-logger = get_logger("turbine.wave.scheduling.schedule")
+logger = get_logger("wave.scheduling.schedule")
 
 
 def is_solver_based(scheduling_type: SchedulingType):
@@ -61,6 +63,7 @@ def schedule_reduction(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     override_schedule_file: str = None,
     dump_schedule_file: str = None,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     Clones the reduction graph and does the following:
@@ -106,6 +109,8 @@ def schedule_reduction(
             scheduler = ModuloScheduler(graph, edges, get_available_resources())
         elif scheduling_type == SchedulingType.PREFETCH:
             scheduler = PrefetchScheduler(graph, edges, get_available_resources())
+        elif scheduling_type == SchedulingType.FOUR_STAGE:
+            scheduler = FourStageScheduler(graph, edges, get_available_resources())
         else:
             raise ValueError("Unknown scheduling type")
 
@@ -212,12 +217,14 @@ def schedule_reduction(
         max_induction_variable,
         visualize,
         use_scheduling_barriers,
+        multi_buffer_count,
     )
 
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (num_stages - 1)
-    if scheduling_type == SchedulingType.MODULO_MULTI_BUFFERED:
-        multi_buffer(trace)
+
+    if multi_buffer_count is not None:
+        multi_buffer(trace, multi_buffer_count)
 
 
 def schedule_graph(
@@ -227,6 +234,7 @@ def schedule_graph(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     override_schedule: str = None,
     dump_schedule: str = None,
+    multi_buffer_count: Optional[int] = None,
 ):
     """
     Given a graph, pipelines the reductions in the graph.
@@ -254,4 +262,5 @@ def schedule_graph(
             scheduling_type,
             override_schedule,
             dump_schedule,
+            multi_buffer_count,
         )

@@ -49,7 +49,7 @@ def test_speculative_decoding():
     # CHECK: vector.load
     # CHECK: vector.store
     # CHECK: scf.while
-    # CHECK: vector.extractelement
+    # CHECK: vector.extract
     # CHECK: scf.condition
     # CHECK: scf.while
     # CHECK: ^bb0

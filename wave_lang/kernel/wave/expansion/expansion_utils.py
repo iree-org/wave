@@ -103,16 +103,6 @@ def get_dim_scaling(
                     "Tile size, wave count and vector size must be statically known"
                 )
 
-            if (
-                tile_size % wave_count != 0
-                or (tile_size / wave_count) % vector_size != 0
-            ):
-                logger.info(
-                    f"Tile size is not divisible by wave count and vector size, got: "
-                    f"dim={constraint.dim}, "
-                    f"tile_size={tile_size}, wave_count={wave_count}, vector_size={vector_size}"
-                )
-
             dim_scaling[constraint.dim] = ceildiv(tile_size, wave_count * vector_size)
 
     if isinstance(node.type, DataType):
@@ -275,16 +265,16 @@ def remove_original_nodes(leaf_nodes: list[CustomOp]):
     """
     Remove the original nodes from the graph.
     """
-    queue = leaf_nodes
+    queue = [node.fx_node for node in leaf_nodes]
     while queue:
-        custom = queue.pop(0)
-        if custom.fx_node._erased:
+        node = queue.pop(0)
+        if node._erased:
             continue
-        inputs, _ = get_inputs(custom.fx_node, None)
+        inputs, _ = get_inputs(node, None)
         for input in inputs:
-            queue.append(get_custom(input))
-        if not custom.users:
-            custom.erase()
+            queue.append(input)
+        if not node.users:
+            get_custom(node).erase()
 
 
 def remove_unused_registers(trace: CapturedTrace):

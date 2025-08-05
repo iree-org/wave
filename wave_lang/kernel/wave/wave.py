@@ -56,6 +56,7 @@ from .constraints import (
     WorkgroupConstraint,
     get_grid_shape,
 )
+from .construct_index_mapping import construct_index_mapping
 from .debug_log_hoist import (
     debug_log_hoist,
     debug_log_write_replace,
@@ -66,7 +67,7 @@ from .decompose_reduce_ops import decompose_reduce_ops
 from .decompose_scan_ops import decompose_scan_ops
 from .decompose_vmma_ops import decompose_vmma_ops
 from .expansion.expansion import add_get_results, expand_graph
-from .gather_to_shared import gather_to_shared
+from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
 from .hoisting import hoist_loop_invariant_ops
@@ -268,6 +269,56 @@ class LaunchableWave(Launchable):
             if isinstance(constraint, SymbolicAlias)
         ]
 
+    def _validate_constraints(self):
+        wave_map = {
+            constraint.dim: subs_idxc(constraint.tile_size)
+            for constraint in self.wave_constraints
+        }
+
+        workgroup_map = {
+            constraint.dim: subs_idxc(constraint.tile_size)
+            for constraint in self.workgroup_constraints
+        }
+
+        for dim in set(wave_map.keys()) | set(workgroup_map.keys()):
+            wave_size = wave_map[dim] if dim in wave_map else None
+            workgroup_size = workgroup_map[dim] if dim in workgroup_map else None
+
+            assert (
+                workgroup_size is not None
+            ), f"expected non-empty tile size in `WorkgroupConstraint` for dimension {dim}"
+
+            if wave_size is None:
+                continue
+
+            assert (
+                wave_size > 0
+            ), f"expected non-zero tile in `WaveConstraint` for dimension {dim}"
+
+            assert (
+                workgroup_size > 0
+            ), f"expected non-zero tile in `WorkgroupConstraint` for dimension {dim}"
+
+            assert (
+                workgroup_size >= wave_size
+            ), f"expected workgroup tile size to be the same or larger than wavefront tile size for dimension {dim}"
+
+            assert (
+                workgroup_size % wave_size == 0
+            ), f"expected workgroup tile size to be an integral multiple of wavefront tile size for dimension {dim}"
+
+        workgroup_dims = set(
+            [cons.workgroup_dim for cons in self.workgroup_constraints]
+        )
+
+        min_dim = min(workgroup_dims)
+        max_dim = max(workgroup_dims)
+        assert max_dim - min_dim + 1 == len(
+            workgroup_dims
+        ), "expected contiguous indices for `workgroup_dim` field in workgroup constraints"
+
+        return
+
     def _trace(
         self, *, location_capture_config: Optional[LocationCaptureConfig] = None
     ) -> CapturedTrace:
@@ -322,6 +373,7 @@ class LaunchableWave(Launchable):
 
         """
 
+        self._validate_constraints()
         hardware_constraint = self.hardware_constraints[0]
         for wave_constraint in self.wave_constraints:
             for workgroup_constraint in self.workgroup_constraints:
@@ -531,6 +583,7 @@ class LaunchableWave(Launchable):
             substitute_vector_shapes,
             partial(add_get_results, trace),
             partial(infer_types, trace),
+            partial(construct_index_mapping, trace, self.constraints),
             partial(debug_log_write_replace, trace, debug_arg_info),
             partial(
                 promote_placeholders,
@@ -582,6 +635,7 @@ class LaunchableWave(Launchable):
 
         print_ir_after = options.print_ir_after
         print_ir_before = options.print_ir_before
+        profile_pass = options.profile_pass
         if options.print_trace_begin:
             print(f"\n***Tracing kernel {self._name}***")
 
@@ -612,9 +666,10 @@ class LaunchableWave(Launchable):
             graph_passes += [
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(gather_to_shared, trace, self.constraints, options),
-                # partial(in_thread_transpose, trace, self.constraints),
-                # partial(global_to_shared_gathers, trace, self.constraints),
-                # partial(minimize_global_loads, trace, self.constraints),
+                partial(gather_to_shared_swizzling, trace, self.constraints, options),
+                partial(in_thread_transpose, trace, self.constraints),
+                partial(global_to_shared_gathers, trace, self.constraints),
+                partial(minimize_global_loads, trace, self.constraints),
             ]
         graph_passes += [
             partial(apply_shared_memory_indexing_corrections, trace, self.constraints),
@@ -640,6 +695,9 @@ class LaunchableWave(Launchable):
         # Schedule the reduction ops.
         scheduling_type = options.schedule
         use_scheduling_barriers = options.use_scheduling_barriers
+        multi_buffer_count = options.multi_buffer_count
+        if multi_buffer_count is not None:
+            multi_buffer_count = max(1, options.multi_buffer_count)
         graph_passes.append(
             partial(
                 schedule_graph,
@@ -649,6 +707,7 @@ class LaunchableWave(Launchable):
                 scheduling_type,
                 options.override_schedule,
                 options.dump_schedule,
+                multi_buffer_count,
             )
         )
 
@@ -674,7 +733,9 @@ class LaunchableWave(Launchable):
 
         pass_times = {}
         for p in graph_passes:
-            try_apply_pass(p, trace, print_ir_before, print_ir_after, pass_times)
+            try_apply_pass(
+                p, trace, print_ir_before, print_ir_after, profile_pass, pass_times
+            )
 
         if options.print_pass_times:
             pass_times_list = sorted(

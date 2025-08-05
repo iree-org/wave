@@ -1,0 +1,14 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+{
+	"name": "Wave",
+
+	"build": {
+        "dockerfile": "Dockerfile"
+    },
+
+	"runArgs": [ "--device=/dev/kfd", "--device=/dev/dri", "--group-add=video", "--network=host", "--ipc=host" ],
+	"capAdd": ["SYS_PTRACE"],
+	"securityOpt": ["seccomp=unconfined"],
+
+	"postCreateCommand": "pre-commit install && pre-commit install --hook-type commit-msg"
+}

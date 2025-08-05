@@ -9,7 +9,7 @@ from ..ops.wave_ops import (
     get_custom,
     Write,
     Placeholder,
-    DebugLogWrite,
+    DebugLog,
 )
 from .._support.dtype import DataType
 from .._support.indexing import IndexSymbol
@@ -24,7 +24,7 @@ class DebugArgInfo(TypedDict):
 
 
 def is_debug_log_transformer(node):
-    return isinstance(get_custom(node), DebugLogWrite)
+    return isinstance(get_custom(node), DebugLog)
 
 
 def debug_log_hoist(trace: CapturedTrace):
@@ -41,7 +41,7 @@ def debug_log_hoist(trace: CapturedTrace):
         debug_log_ops = trace.walk(is_debug_log_transformer)
         for index, debug_op in enumerate(debug_log_ops):
             custom = get_custom(debug_op)
-            placeholder_name = custom.log_name or f"debug_log_output_{index}"
+            placeholder_name = custom.label or f"debug_log_output_{index}"
             type_expr = None
             placeholder = Placeholder(placeholder_name, type_expr).add_to_graph(root)
             custom.fx_node.memory = placeholder
@@ -70,6 +70,8 @@ def debug_log_write_replace(trace: CapturedTrace, debug_arg_info: list[DebugArgI
             new_write = Write(
                 doc.register_,
                 doc.memory,
+                mapping=doc.mapping,
+                mapping_dynamic_vals=doc.mapping_dynamic_vals,
             ).add_to_graph(graph)
             get_custom(new_write).infer_type()
         doc.erase()
@@ -93,4 +95,5 @@ def debug_log_write_replace(trace: CapturedTrace, debug_arg_info: list[DebugArgI
         custom = get_custom(debug_placeholder_op)
         debug_placeholder_op.meta["dtype"] = custom.type.dtype
         debug_placeholder_op.meta["symbolic_shape"] = custom.type.symbolic_shape
-        debug_arg_info.append(debug_placeholder_op.meta)
+        # Insert in front since the placeholders are in reverse order compared to the log ops in source code.
+        debug_arg_info.insert(0, debug_placeholder_op.meta)

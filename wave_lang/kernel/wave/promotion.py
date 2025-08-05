@@ -16,7 +16,7 @@ from .utils.classes import KernelLaunchInfo
 from .utils.graph_utils import move_node_after
 from .utils.symbol_utils import subs_idxc
 
-logger = get_logger("turbine.wave.promotion")
+logger = get_logger("wave.promotion")
 
 
 def apply_padding(

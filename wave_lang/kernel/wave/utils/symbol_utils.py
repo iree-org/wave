@@ -3,35 +3,20 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Any, Optional
+from typing import Optional
 
 import sympy
 
-from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, IndexSymbol
-
-
-def safe_subs(
-    input: IndexExpr | int,
-    subs: dict[IndexSymbol, int | IndexSymbol],
-    simultaneous: bool = False,
-) -> IndexSymbol | int:
-    """
-    Substitute input using provided `subs` list if input is sympy object.
-    Otherwise return input unchanged.
-    """
-    if isinstance(input, (sympy.Basic, IndexSequence)):
-        return input.subs(subs, simultaneous=simultaneous)  # type: ignore
-
-    return input
-
-
-def subs_idxc(input: Any) -> IndexSymbol | int:
-    """
-    Substitute input using IndexingContext if input is sympy object.
-    Otherwise return input unchanged.
-    """
-    idxc = IndexingContext.current()
-    return safe_subs(input, idxc.subs)
+# Reexport symbols from indexing.py
+from ..._support.indexing import (
+    IndexExpr,
+    IndexingContext,  # noqa
+    IndexSequence,  # noqa
+    IndexSymbol,  # noqa
+    safe_subs,  # noqa
+    subs_idxc,  # noqa
+    is_literal,  # noqa
+)
 
 
 def get_min_expr(

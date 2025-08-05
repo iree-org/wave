@@ -1,6 +1,5 @@
 # RUN: python %s | FileCheck %s
 
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.indexing import IndexingContext
@@ -71,19 +70,19 @@ def test_dce():
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=64, waves_per_block=(2, 2, 1))
     ]
-    with tk.gen.TestLaunchContext(
-        {
-            M: 128,
-            N: 256,
-            K: 64,
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K: 64,
-        }
-    ):
+    subs = {
+        M: 128,
+        N: 256,
+        K: 64,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 64,
+    }
+    with IndexingContext() as idxc:
+        idxc.subs = subs
         trace: CapturedTrace = gemm()
         visualize = False
-        IndexingContext.current().finalize()
+        idxc.finalize()
         initialize_iter_args(trace)
         add_get_results(trace)
         infer_types(trace)
@@ -92,9 +91,9 @@ def test_dce():
         DCE(trace)
         print_trace(trace)
 
-        # Ensure that the conditional with the side-effecting op remains after DCE
-        # CHECK: Custom format:
-        # CHECK: conditional(condition=eq, subgraph_name=[[REGION:[a-z_0-9]*]],{{.*}})
-        # CHECK: [[REGION]]:
-        # CHECK: Custom format:
-        # CHECK-NEXT: set_wave_prio
+    # Ensure that the conditional with the side-effecting op remains after DCE
+    # CHECK: Custom format:
+    # CHECK: conditional(condition=eq, subgraph_name=[[REGION:[a-z_0-9]*]],{{.*}})
+    # CHECK: [[REGION]]:
+    # CHECK: Custom format:
+    # CHECK-NEXT: set_wave_prio

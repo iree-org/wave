@@ -144,55 +144,49 @@ class TypeInferenceTest(unittest.TestCase):
             GLOBAL_MEMORY_UNITS: 4,
             MMA_UNITS: 4,
         }
-        with tk.gen.TestLaunchContext(
-            hyperparams,
-            canonicalize=True,
-            run=False,
-            run_bench=False,
-            schedule=False,
-            use_scheduling_barriers=False,
-        ):
+        with IndexingContext() as idxc:
+            idxc.subs = hyperparams
             trace: CapturedTrace = base_attention()
-            IndexingContext.current().finalize()
+            idxc.finalize()
             initialize_iter_args(trace)
             infer_types(trace)
-            expected_type = {
-                "partial_sum": "Register[B, M].of(f32)",
-                "partial_max": "Register[B, M].of(f32)",
-                "acc": "Register[B, N, M].of(f32)",
-                "q": "Memory[B, M, K1].of(f16)",
-                "read": "Register[B, M, K1].of(f16)",
-                "k": "Memory[B, K2, K1].of(f16)",
-                "read_1": "Register[B, K2, K1].of(f16)",
-                "mma": "Register[B, K2, M].of(f32)",
-                "permute": "Register[B, M, K2].of(f32)",
-                "max_1": "Register[B, M].of(f32)",
-                "sub": "Register[B, M].of(f32)",
-                "exp2": "Register[B, M].of(f32)",
-                "sub_1": "Register[B, M, K2].of(f32)",
-                "exp2_1": "Register[B, M, K2].of(f32)",
-                "mul": "Register[B, M].of(f32)",
-                "sum_1": "Register[B, M].of(f32)",
-                "cast": "Register[B, M, K2].of(f16)",
-                "v": "Memory[B, N, K2].of(f16)",
-                "read_2": "Register[B, N, K2].of(f16)",
-                "mul_1": "Register[B, N, M].of(f32)",
-                "mma_1": "Register[B, N, M].of(f32)",
-                "c": "Memory[B, M, N].of(f32)",
-                "register_1": "Register[B, M].of(f32)",
-                "register_2": "Register[B, M].of(f32)",
-                "reduction": "[Register[B, M].of(f32), Register[B, M].of(f32), Register[B, N, M].of(f32)]",
-                "getitem": "Register[B, M].of(f32)",
-                "getitem_1": "Register[B, M].of(f32)",
-                "getitem_2": "Register[B, N, M].of(f32)",
-                "truediv": "Register[B, N, M].of(f32)",
-                "write": "Memory[B, N, M].of(f32)",
-            }
-            for subgraph in trace.region_graph.subgraphs.values():
-                for node in subgraph.nodes:
-                    custom = get_custom(node)
-                    if custom.fx_node.name in expected_type:
-                        assert str(custom.type) == expected_type[custom.fx_node.name]
+        expected_type = {
+            "partial_sum": "Register[B, M].of(f32)",
+            "partial_max": "Register[B, M].of(f32)",
+            "acc": "Register[B, N, M].of(f32)",
+            "q": "Memory[B, M, K1].of(f16)",
+            "read": "Register[B, M, K1].of(f16)",
+            "k": "Memory[B, K2, K1].of(f16)",
+            "read_1": "Register[B, K2, K1].of(f16)",
+            "mma": "Register[B, K2, M].of(f32)",
+            "permute": "Register[B, M, K2].of(f32)",
+            "max_1": "Register[B, M].of(f32)",
+            "sub": "Register[B, M].of(f32)",
+            "exp2": "Register[B, M].of(f32)",
+            "sub_1": "Register[B, M, K2].of(f32)",
+            "exp2_1": "Register[B, M, K2].of(f32)",
+            "mul": "Register[B, M].of(f32)",
+            "sum_1": "Register[B, M].of(f32)",
+            "cast": "Register[B, M, K2].of(f16)",
+            "v": "Memory[B, N, K2].of(f16)",
+            "read_2": "Register[B, N, K2].of(f16)",
+            "mul_1": "Register[B, N, M].of(f32)",
+            "mma_1": "Register[B, N, M].of(f32)",
+            "c": "Memory[B, M, N].of(f32)",
+            "register_1": "Register[B, M].of(f32)",
+            "register_2": "Register[B, M].of(f32)",
+            "reduction": "[Register[B, M].of(f32), Register[B, M].of(f32), Register[B, N, M].of(f32)]",
+            "getitem": "Register[B, M].of(f32)",
+            "getitem_1": "Register[B, M].of(f32)",
+            "getitem_2": "Register[B, N, M].of(f32)",
+            "truediv": "Register[B, N, M].of(f32)",
+            "write": "Memory[B, N, M].of(f32)",
+        }
+        for subgraph in trace.region_graph.subgraphs.values():
+            for node in subgraph.nodes:
+                custom = get_custom(node)
+                if custom.fx_node.name in expected_type:
+                    assert str(custom.type) == expected_type[custom.fx_node.name]
 
 
 if __name__ == "__main__":
