@@ -30,8 +30,7 @@ def get_dilated_conv2d(
 ) -> tuple["LaunchableWave", dict[tkl.IndexSymbol, Any]]:
     """This Kernel computes dilated convolution with specified dilation rate.
     
-    Dilated convolution samples the input at dilated intervals, effectively 
-    increasing the receptive field without increasing the number of parameters.
+    Dilated convolution samples the input at dilated intervals, effectively increasing the receptive field without increasing the number of parameters.
     
     Parameters:
         layout (str): Either "nchw_fchw" or "nhwc_hwcf" based on the ordering of the dims of the input tensors.
@@ -56,7 +55,7 @@ def get_dilated_conv2d(
     Returns:
         output (tuple["LaunchableWave", dict[tkl.IndexSymbol, Any]]): Wave kernel to be compiled and hyperparameters.
     """
-     # Input Checks
+    # Input Checks
     assert input_dtype == tkl.f16, f"Unsupported input dtype: {input_dtype}"
     assert output_dtype == tkl.f32, f"Unsupported output dtype: {output_dtype}"
     if dilation < 1:
@@ -99,12 +98,7 @@ def get_dilated_conv2d(
     # Weight mapping remains the same as regular convolution
     w_mapping = tkw.IndexMapping(
         num_iterators=2,
-        inputs={
-            NF: i % NF, 
-            C: j % C, 
-            HF: (j // C) % WF, 
-            WF: (j // C) // WF
-        },
+        inputs={NF: i % NF, C: j % C, HF: (j // C) % WF, WF: (j // C) // WF},
         outputs={NF: i, K: j},
     )
     
@@ -225,5 +219,5 @@ def get_dilated_conv2d(
         ELEMS_PER_THREAD: 4,
         ADDRESS_SPACE: mem_space,
     }
-
+    
     return dilated_conv, symbols
