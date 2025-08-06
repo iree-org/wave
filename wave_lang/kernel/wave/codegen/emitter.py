@@ -235,10 +235,16 @@ def add_emitter_subs(
     induction_vars, induction_var_syms = emitter.get_induction_vars_and_syms()
 
     # TODO: factor this out
-    all_symbols = emitter.thread_ids + emitter.workgroup_ids + induction_vars
+    # Add device dimension constants (always zero for now)
+    device_zeros = [
+        arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_0
+        arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_1  
+        arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_2
+    ]
+    all_symbols = emitter.thread_ids + emitter.workgroup_ids + device_zeros + induction_vars
     dynamics = dict(
         zip(
-            [THREAD_0, THREAD_1, THREAD_2, WORKGROUP_0, WORKGROUP_1, WORKGROUP_2]
+            [THREAD_0, THREAD_1, THREAD_2, WORKGROUP_0, WORKGROUP_1, WORKGROUP_2, DEVICE_DIM_0, DEVICE_DIM_1, DEVICE_DIM_2]
             + induction_var_syms,
             all_symbols,
         )
