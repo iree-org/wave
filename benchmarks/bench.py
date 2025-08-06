@@ -137,7 +137,6 @@ def rmsnorm_wave(
     kernel,
     x: torch.Tensor,
     weight: torch.Tensor,
-    residual: Optional[torch.Tensor] = None,
     eps: float = 1e-6,
 ):
     c = device_zeros(x.shape, dtype=torch.bfloat16)
@@ -265,8 +264,8 @@ def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
 
 
 batch_size_range = [1]  # [2**i for i in range(0, 7, 2)]
-seq_length_range = [2**i for i in range(6, 11, 1)]
-head_num_range = [1, 32, 48]
+seq_length_range = [2**i for i in range(6, 11, 1)] + [5120]
+head_num_range = [1, 32, 48, 128]
 configs = list(itertools.product(head_num_range, batch_size_range, seq_length_range))
 
 
@@ -310,8 +309,7 @@ def get_benchmark(use_residual):
                 lambda: rmsnorm_wave(
                     wave_kernel,
                     x.clone(),
-                    weight,
-                    residual.clone() if residual is not None else None,
+                    weight
                 ),
                 quantiles=quantiles,
             )
