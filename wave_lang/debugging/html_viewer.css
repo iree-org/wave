@@ -90,3 +90,58 @@ h1 {
     color: #666;
     font-style: italic;
 }
+
+/* Dark theme */
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #1a1a1a;
+        color: #e0e0e0;
+    }
+    .container {
+        background: #2d2d2d;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    }
+    h1 {
+        color: #e0e0e0;
+        border-bottom: 2px solid #4a9eff;
+    }
+    .tensor-viewer {
+        background: #333333;
+        border: 1px solid #555;
+    }
+    .tensor-label {
+        color: #e0e0e0;
+    }
+    .view-input {
+        background: #404040;
+        border: 1px solid #666;
+        color: #e0e0e0;
+    }
+    .update-button {
+        background: #4a9eff;
+    }
+    .update-button:hover {
+        background: #2980e6;
+    }
+    .view-mode-select {
+        background: #404040;
+        border: 1px solid #666;
+        color: #e0e0e0;
+    }
+    .tensor-display {
+        background: #1f1f1f;
+        border: 1px solid #555;
+        color: #e0e0e0;
+    }
+    .error {
+        color: #ff6b6b;
+        background: #3d1a1a;
+        border-left: 4px solid #ff6b6b;
+    }
+    .tensor-shape-info {
+        color: #b0b0b0;
+    }
+    .loading {
+        color: #b0b0b0;
+    }
+}
