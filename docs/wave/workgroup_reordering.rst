@@ -47,44 +47,72 @@ Although conceptually visualized as a 2D grid, workgroups are stored linearly or
 In other words, flattened workgroup ids follow the launch grid in column-major order.
 Going back to our MXN C matrix, if the number of workgroups along both the 0th and 1st dimension of the launch grid are 8, the launch grid and its workgroup ids would map to the data as so:
 
-.. image:: ./default_workgroup_reordering.png
+.. image:: ./default_wg_ordering.png
    :alt: Flattened workgroup mapping
    :align: center
 
 Hardware Architecture and Cache Implications
 ============================================
 
-On AMD GPUs, a *Compute Unit* (CU) handles a single workgroup. For instance, MI300X GPUs have:
+On AMD GPUs, a *Compute Unit* (CU) handles a single workgroup. The MI300X GPU has:
 
-- 40 CUs (38 active CUs) per *XCD* (Accelerator Complex Die)
-- 4 MB Shared L2 cache among those CUs within an XCD
+- 40 CUs (38 active) per *XCD* (Accelerator Complex Die)
+- 4 MB of shared L2 cache among the CUs within each XCD
 
-Example:
-- XCD 1 → CUs 0–37 → Workgroups 0–37
-- XCD 2 → CUs 0–37 → Workgroups 38–75
+The XCD of the CU which a workgroup is assigned to is determined in round-robin fashion. That is:
 
-This implies that spatial locality of data within an XCD matters. The idea is that if CUs within the same XCD process neighboring data, L2 cache hit rates will improve. This is the motivator for reordering workgroups.
+- Workgroup 0 → first CU in XCD 0
+- Workgroup 1 → first CU in XCD 1
+- Workgroup 2 → first CU in XCD 2
+- ...
+- Workgroup 7 → first CU in XCD 7
+- Workgroup 8 → second CU in XCD 0
+- Workgroup 9 → second CU in XCD 1
+- and so on...
 
-Default vs Reordered Launch Grids
-=================================
+The following diagram illustrates how workgroups from the 8x8 launch grid above are distributed across the 8 XCDs:
 
-Let's look at the column-major workgroup ordering for the same 8x8 output matrix from before.
+.. image:: ./default_wg_ordering_XCDmapping.png
+   :alt: Flattened workgroup mapping
+   :align: center
+
+Each color represents a different XCD. For example, workgroups 0, 8, 16, 24, 32, 40, 48, and 56 all map to XCD 0 (gray).
+
+This mapping means spatial locality within an XCD matters. If neighboring data is processed by CUs within the same XCD, L2 cache hit rates improve, which motivates the use of workgroup reordering.
+
+Default vs. Reordered Launch Grids
+==================================
+
+Let's focus on the workgroups assigned to XCD 0 when computing an 8×8 output matrix:
 
 .. image:: ./default_wg_reads.png
    :alt: Data reads with default workgroups
    :align: center
 
-We can see to calculate 8 output blocks for C, we have to read all 64 blocks of data from A and 8 blocks of data from B for a total of 72 blocks.
+In the default column-major launch order, computing 8 output blocks of matrix `C` requires reading:
 
-Instead of this default column-major workgroup order, we can apply a custom workgroup reordering strategy:
+- 8 blocks from matrix `A` (rows)
+- 64 blocks from matrix `B` (columns)
+- **72 total input blocks**
+
+Now consider a reordered launch pattern:
 
 .. image:: ./reordered_wg_reads.png
    :alt: Data reads with reordered workgroups
    :align: center
 
-Here, we group 4 workgroups along the N dimension of the data (across 4 columns) before moving along the M dimension of the data (moving down a row) and assigning the next set of workgroups.
-4 in this case can be considered the grouping factor, and after we have fully assigned all 4 columns to workgroups, we can start assigning workgroups to the next 4 columns in the same manner.
-With this reordering, to compute 8 output blocks, we only need to read 48 total input blocks as opposed to 72 from before — reducing redundant memory reads and improving cache utilization.
+In this scheme, we assign workgroups in *grouped rows*. We use a grouping factor of 2 in the example above, so:
+
+- Assign 2 workgroups to 2 consecutive rows (along `M`) in the first column.
+- Then move to the next column along `N` and assign the next two workgroups across the same two rows.
+- After the 2 rows are completely assigned to workgroups, move to the next 2 consecutive rows and repeat.
+
+In this case, computing 8 output blocks of matrix `C` now requires reading:
+
+- 16 blocks from matrix `A` (rows)
+- 32 blocks from matrix `B` (columns)
+- **48 total input blocks**
+Thus, this reordering reduces the amount of new reads and promotes cache reuse.
 
 Reordering Logic: Code Example
 ==============================
@@ -95,89 +123,83 @@ We can implement this reordering scheme as follows:
 
     wg0, wg1 = WORKGROUP_0, WORKGROUP_1
     num_wg_0 = ceiling(M / BLOCK_M)
+    num_wg_1 = ceiling(N / BLOCK_N)
+    num_wgs_total = num_wg_0 * num_wg_1
+    num_xcds = 8
 
-    # Flatten the workgroup index
+    # Flatten 2D workgroup indices (column-major)
     flat_wg_index = wg1 * num_wg_0 + wg0
 
-    # Define group size
-    num_wg_group = GROUP_SIZE_N * num_wg_0
-    group_id = flat_wg_index // num_wg_group
-    first_wg_id_1 = group_id * GROUP_SIZE_N
+    # Compute logical index for XCD-based reordering
+    extra_wgs = num_wgs_total % num_xcds
+    xcd_wg_index = (
+        (flat_wg_index % num_xcds) * (num_wgs_total // num_xcds)
+        + Min(flat_wg_index % num_xcds, extra_wgs)
+        + (flat_wg_index // num_xcds)
+    )
 
-    # Compute new reordered coordinates
-    new_wg0 = (flat_wg_index % num_wg_group) // GROUP_SIZE_N
-    new_wg1 = first_wg_id_1 + (flat_wg_index % num_wg_group) % GROUP_SIZE_N
+    # Determine grouping along M dimension
+    num_wg_group = GROUP_SIZE_M * num_wg_1
+    group_id = xcd_wg_index // num_wg_group
+    first_wg_id_0 = group_id * GROUP_SIZE_M
+    group_size_m = Min(num_wg_0 - first_wg_id_0, GROUP_SIZE_M)
 
-    # Apply constraints
+    # Compute new coordinates
+    new_wg0 = first_wg_id_0 + ((xcd_wg_index % num_wg_group) % group_size_m)
+    new_wg1 = (xcd_wg_index % num_wg_group) // group_size_m
+
+    # Add reordering constraints
     constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
     constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
 
 Explanation
 ===========
 
-Here, `wg0` and `wg1` represent the original workgroup coordinates. We:
+Here's a breakdown of what this code does:
 
-1. Flatten the 2D index into a 1D linear index (`flat_wg_index`)
-2. Define how many workgroups make up one "group"
-3. Compute a new pair `(new_wg0, new_wg1)` representing the reordered coordinates
+1. **`wg0`, `wg1`**: Retrieve the symbolic expressions for the original 2D workgroup indices.
+2. **Flattening**: Convert 2D coordinates (wg0, wg1) into 1D index `flat_wg_index`
+3. **XCD-aware indexing**: Convert `flat_wg_index` into `xcd_wg_index` that indexes each workgroup with respect to its XCD. In our 8x8 case,
+   XCD 0 contains `xcd_wg_index` 0 to 7, XCD 1 contains `xcd_wg_index` 8 to 15, and so on.
+4. **Grouping**: Groups are defined across `GROUP_SIZE_M` rows of workgroups.
+5. **Reordered coordinates**: `new_wg0` and `new_wg1` reflect the spatially-local launch order.
 
-The `GROUP_SIZE_N` parameter is our grouping factor, and it controls how many columns of workgroups we pack together before moving to the next row of groups.
+The parameter `GROUP_SIZE_M` controls how many consecutive workgroup rows are grouped together before moving horizontally across columns on `N`.
 
-These new coordinates are then fed into `tkw.ReorderingConstraint`, which updates the launch grid accordingly, behind the scenes.
+Finally, `tkw.ReorderingConstraint` updates the kernel's launch grid to reflect the new order.
 
 Results
 =======
 
-This section compares performance between normal and reordered workgroup scheduling across matrix shapes. Two key metrics are analyzed:
+This section compares kernel performance with and without workgroup reordering across various matrix shapes by measuring TFLOPs.
 
-1. **L2 Cache Hit Rate**
-2. **Kernel Execution Time**
+Test configuration:
 
-The testing parameters used were:
-1. BLOCK_M = 128
-2. BLOCK_N = 128
-3. BLOCK_K = 64
-4. GROUP_SIZE_N = 4
-5. waves_per_block = (2, 2, 1)
-6. mfma_variant = MMAType.F32_16x16x16_F16
-7. enable_scheduling = SchedulingType.PREFETCH
+1. `BLOCK_M = 128`
+2. `BLOCK_N = 256`
+3. `BLOCK_K = 64`
+4. `GROUP_SIZE_M = 8`
+5. `tkw.WaveConstraint(M, BLOCK_M // 4)` and `tkw.WaveConstraint(N, BLOCK_N // 2)`
+   (enables Ping Pong)
+6. `mfma_variant = MMAType.F32_16x16x16_F16`
+7. `enable_scheduling = SchedulingType.PREFETCH`
 
-L2 Cache Hit Rate (%)
-------------------
-
-+-------------------------+----------------+------------------+
-| Shape (M, N, K)         | Normal Wave    | Reordered Wave   |
-+=========================+================+==================+
-| 1024x1024x1024          | 45.52%         | 60.33%           |
-+-------------------------+----------------+------------------+
-| 2048x2048x2048          | 69.33%         | 77.87%           |
-+-------------------------+----------------+------------------+
-| 4096x4096x4096          | 78.60%         | 57.82%           |
-+-------------------------+----------------+------------------+
-| 4864x4096x4160          | 63.64%         | 71.01%           |
-+-------------------------+----------------+------------------+
-| 4864x8192x4160          | 63.64%         | 71.01%           |
-+-------------------------+----------------+------------------+
-
-
-Kernel Execution Time (ns)
+Kernel TFLOPs
 ---------------------------
 
 +-------------------------+----------------+------------------+
 | Shape (M, N, K)         | Normal Wave    | Reordered Wave   |
 +=========================+================+==================+
-| 1024x1024x1024          | 46385          | 41855            |
+| 2048 × 2048 × 2048      | 275            | 300              |
 +-------------------------+----------------+------------------+
-| 2048x2048x2048          | 95537          | 81024            |
+| 4096 × 4096 × 4096      | 620            | 656              |
 +-------------------------+----------------+------------------+
-| 4096x4096x4096          | 528360         | 526796           |
+| 4864 × 4096 × 4160      | 904            | 921              |
 +-------------------------+----------------+------------------+
-| 4864x4096x4160          | 529120         | 522786           |
+| 4864 × 8192 × 4160      | 880            | 894              |
 +-------------------------+----------------+------------------+
-| 4864x8192x4160          | 1065217        | 1045613          |
+| 16384 × 4096 × 8192     | 610            | 679              |
 +-------------------------+----------------+------------------+
-
-We can see that for 4 out of the 5 shapes, both cache hit rate increased and speed increased - which is a positive performance boost. Even for shape (4096, 4096, 4096) where the cache hit rate decreased, we still saw a slight speed boost.
 
 Conclusion
 ==========
