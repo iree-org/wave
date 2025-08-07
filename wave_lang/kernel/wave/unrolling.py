@@ -9,11 +9,10 @@ from torch import fx
 
 from wave_lang.kernel._support.tracing import CapturedTrace
 
-from ..lang import IndexSymbol
 from ..ops.wave_ops import Iterate, Output, Placeholder, get_custom
 from .constraints import Constraint
 from .utils.general_utils import get_tiling_constraint
-from .utils.symbol_utils import subs_idxc
+from .utils.symbol_utils import subs_idxc, get_induction_symbol
 
 
 def remap_iter_args(
@@ -90,11 +89,7 @@ def unroll(
     # 3. The final output from the last unrolled copy becomes the new output
     #    of the entire unrolled loop body
     reduction_axis = iterate.axis
-    induction_var = IndexSymbol(
-        f"$ARG{reduction_axis.name}",
-        integer=True,
-        nonnegative=True,
-    )
+    induction_var = get_induction_symbol(reduction_axis)
     original_body_nodes = list(graph.nodes)
     for unroll_idx in range(0, unroll_factor - 1):
         for node in original_body_nodes:

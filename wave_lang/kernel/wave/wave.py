@@ -17,7 +17,6 @@ import sympy
 import torch.fx as fx
 from sympy.utilities.lambdify import lambdastr
 
-import wave_lang.kernel.lang as tkl
 from wave_lang.support.ir_imports import Context, Module, Operation
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
@@ -95,7 +94,7 @@ from .utils.graph_utils import (
 from .utils.print_utils import print_trace, try_apply_pass
 
 # Utils
-from .utils.symbol_utils import safe_subs, subs_idxc
+from .utils.symbol_utils import safe_subs, subs_idxc, get_induction_symbol
 from .workgroup_reordering import reorder_workgroups
 
 logger = logging.getLogger(__name__)
@@ -357,9 +356,7 @@ class LaunchableWave(Launchable):
         reduction_nodes = trace.walk(is_reduction)
         for node in reduction_nodes:
             custom = get_custom(node)
-            self.induction_vars[custom] = tkl.IndexSymbol(
-                "$ARG" + str(custom.axis), integer=True, nonnegative=True
-            )
+            self.induction_vars[custom] = get_induction_symbol(custom.axis)
             for tiling_constraint in self.tiling_constraints:
                 if tiling_constraint.dim == custom.axis:
                     tiling_constraint.induction_var = self.induction_vars[custom]
@@ -584,7 +581,13 @@ class LaunchableWave(Launchable):
             partial(add_get_results, trace),
             partial(infer_types, trace),
             partial(construct_index_mapping, trace, self.constraints),
-            partial(debug_log_write_replace, trace, debug_arg_info),
+            partial(
+                debug_log_write_replace,
+                trace,
+                self.constraints,
+                options,
+                debug_arg_info,
+            ),
             partial(
                 promote_placeholders,
                 trace,
