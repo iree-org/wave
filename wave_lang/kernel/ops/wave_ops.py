@@ -134,6 +134,8 @@ def debug_log(
     label: Optional[str],
     mapping: Optional[IndexMapping] = None,
     mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    printer: Optional[Callable[[str, Any], Any]] = None,
+    handler: Optional[Callable[[dict[str, Any]], Any]] = None,
 ): ...
 
 
@@ -2055,9 +2057,19 @@ class DebugLog(CustomOp):
     Represents a write to an implicit global memory location.
     The kernel will implicitly have an extra memory input added that will be injected by the Python kernel launcher.
     The memory can be accessed by passing an an extra keyword to kernel invokation "debug_logs" with an empty dictionary.
-    The dictionary will be mutated to contain the logs.
+    The dictionary will be mutated, adding the `label`s as keys that map to nested dictionaries.
+    The nested dictionaries have a `value` field with the log tensor, and other keys (eg. `symbolic_shape`).
 
-    This is intended as a primitive for building more convenient debug logging tools.
+    IE the debug_logs dictionary will look like:
+    `{LABEL: {"value": LOG_TENSOR, (other metadata keys) ...}}``
+
+    Note that the logs collected in the `debug_logs` field, or handled by `printer` or `handler` represent a global view of the log after all writes, not limited to any one wave or loop iteration.
+
+    The optional `printer` argument should be a function that accepts a string (the log's `label`) and the value of the log itself (a Torch tensor).
+    A handy value for this is `print`, though note that it will probably print an abbreviated view of the global tensor.
+
+    The optional `handler` argument should be a function that accepts the whole `debug_logs` object (IE all logs, not just one).
+    The handler function gives a way to specify something like a viewer for all logs, but specify it inline among print functions rather than separately.
 
     The API and semantics of this operation are not yet stable, but since it is just a debugging tool, you want to take any debug logging out of your kernel before shipping it anyway.
     """
@@ -2066,6 +2078,8 @@ class DebugLog(CustomOp):
     label: Optional[str] = None
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+    printer: Optional[Callable[[str, Any], Any]] = None
+    handler: Optional[Callable[[dict[str, Any]], Any]] = None
 
     @property
     def memory(self) -> Optional[fx.Proxy]:

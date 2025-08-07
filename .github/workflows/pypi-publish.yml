@@ -1,0 +1,30 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+        build_run_id:
+            description: Run ID to retrieve Python wheels from
+            required: true
+
+jobs:
+  pypi-publish:
+    name: Publish run ${{ github.event.inputs.build_run_id }}'s wheels to PyPI
+    runs-on: ubuntu-24.04
+    environment:
+        name: pypi-publish
+        url: https://pypi.org/project/wave-lang/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          run-id: ${{ github.event.inputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: snapshot-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v.1.12.4

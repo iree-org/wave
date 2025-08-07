@@ -562,6 +562,7 @@ class LaunchableWave(Launchable):
         trace: CapturedTrace,
         options: WaveCompileOptions,
         debug_arg_info: list[DebugArgInfo],
+        debug_handlers: list[Any],
         print_ir_before: Sequence[str] = [],
         print_ir_after: Sequence[str] = [],
     ):
@@ -574,7 +575,7 @@ class LaunchableWave(Launchable):
             self.hardware_constraints[0].subs_vector_shapes(idxc.subs)
 
         return [
-            partial(debug_log_hoist, trace),
+            partial(debug_log_hoist, trace, debug_handlers),
             partial(initialize_iter_args, trace),
             partial(self.create_induction_vars, trace),
             partial(self.initialize_reductions, trace),
@@ -638,6 +639,7 @@ class LaunchableWave(Launchable):
             print(f"\n***Tracing kernel {self._name}***")
 
         debug_arg_info = []
+        debug_handlers = []
 
         trace = self._trace(location_capture_config=options.location_capture_config)
         if (
@@ -651,7 +653,12 @@ class LaunchableWave(Launchable):
 
         # Initial passes, pre-optimization.
         graph_passes = self.build_initial_pass_pipeline(
-            trace, options, debug_arg_info, print_ir_before, print_ir_after
+            trace,
+            options,
+            debug_arg_info,
+            debug_handlers,
+            print_ir_before,
+            print_ir_after,
         )
 
         graph_passes += [
@@ -778,6 +785,7 @@ class LaunchableWave(Launchable):
             *self.compile_to_mlir(trace, context, module_op, options=options),
             options,
             debug_arg_info,
+            debug_handlers,
         )
 
     def aot_execute(self, args, kwargs):

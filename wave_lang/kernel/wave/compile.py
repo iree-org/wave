@@ -46,6 +46,7 @@ class WaveKernel:
         symbols_args_map: dict[IndexSymbol, tuple[int, int]],
         trace: Optional["CapturedTrace"] = None,
         debug_outputs: Optional[Sequence[DebugArgInfo]] = None,
+        debug_handlers: Optional[Sequence[Any]] = None,
     ):
         self.options = options
         self.executable = executable
@@ -65,6 +66,7 @@ class WaveKernel:
         self.bound_scalar_symbols = bound_scalar_symbols
         self.symbols_args_map = symbols_args_map
         self.debug_outputs = debug_outputs
+        self.debug_handlers = debug_handlers
 
         if not options.wave_runtime:
             # Disable async dispatch for benchmarking.
@@ -132,8 +134,12 @@ class WaveKernel:
                 memory = torch.zeros(
                     shape, dtype=wave_dtype_to_torch(info_dict["dtype"]), device="cuda"
                 )
+                log_info = {
+                    "value": memory,
+                    "symbolic_shape": info_dict["symbolic_shape"],
+                }
                 debug_args.append(memory)
-                debug_logs[info_dict["symbol_name"]] = memory
+                debug_logs[info_dict["symbol_name"]] = log_info
         kernel_outputs = kernel_outputs + debug_args
 
         dynamic_symbols = []
@@ -168,6 +174,15 @@ class WaveKernel:
                 print_bench_result(
                     benchmark_results, self.options.benchmark_results_file
                 )
+
+        if self.debug_outputs:
+            for info_dict, (label, debug_log) in zip(
+                self.debug_outputs, debug_logs.items()
+            ):
+                if printer := info_dict.get("printer", None):
+                    printer(label, debug_log["value"])
+            for handler in self.debug_handlers or []:
+                handler(debug_logs)
 
         return self.asm
 
@@ -262,7 +277,8 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                     binary_path,
                     bound_scalar_symbols,
                     symbols_args_map,
-                    None,  # TODO - this means that the cache is broken for kernels with debug logging.  But I want to focus on getting the feature at all before figuring out how to add extra info to the cache.
+                    None,
+                    None,
                 )
 
         # For the wave runtime, we need the hsaco binary. So we turn on
@@ -280,6 +296,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             entrypoint_name,
             options,
             debug_arg_info,
+            debug_handlers,
         ) = kernel._trace_and_get_kernel_signature(options)
         options.kernel_sig = kernel_sig
 
@@ -336,6 +353,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 bound_scalar_symbols,
                 symbols_args_map,
                 debug_arg_info,
+                debug_handlers,
             )
 
         compiled_wave_vmfb = compile_to_vmfb(asm, options)
@@ -367,6 +385,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         symbols_args_map,
         trace,
         debug_arg_info,
+        debug_handlers,
     )
 
 
