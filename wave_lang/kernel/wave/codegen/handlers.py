@@ -108,6 +108,7 @@ from ...ops.wave_ops import (
     sinh,
     softsign,
     sqrt,
+    subgroup_reduce,
     tanh,
     tanh_approx,
     workgroup_barrier,
@@ -115,7 +116,7 @@ from ...ops.wave_ops import (
 from ..compile_options import WaveCompileOptions
 from ..constraints import GenericDot, HardwareConstraint
 from ..scheduling.resources import get_scheduling_mask
-from ..utils.classes import ShuffleMode
+from ..utils.classes import ShuffleMode, SubgroupReduceMode
 from ..utils.general_utils import get_fastest_index
 from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.symbol_utils import subs_idxc
@@ -440,6 +441,40 @@ def handle_scaled_mma(emitter: WaveEmitter, node: fx.Node):
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
     result = emit_mfma_scaled(m, n, k, acc, values, scales)
+    emitter.bind_node_proxy(node, IRProxyValue(result))
+
+
+@handle_op(subgroup_reduce)
+def handle_subgroup_reduce(emitter: WaveEmitter, node: fx.Node):
+    try:
+        src, size, stride, op = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    src = cast_py_value(emitter, src).ir_value
+    size = get_constant_attr(size, IntegerType.get_signless(32))
+    stride = get_constant_attr(stride, IntegerType.get_signless(32))
+
+    REDUCE_OP_MAP = {
+        SubgroupReduceMode.ADD: gpu_d.AllReduceOperation.ADD,
+        SubgroupReduceMode.MUL: gpu_d.AllReduceOperation.MUL,
+        SubgroupReduceMode.MINUI: gpu_d.AllReduceOperation.MINUI,
+        SubgroupReduceMode.MINSI: gpu_d.AllReduceOperation.MINSI,
+        SubgroupReduceMode.MAXUI: gpu_d.AllReduceOperation.MAXUI,
+        SubgroupReduceMode.MAXSI: gpu_d.AllReduceOperation.MAXSI,
+        SubgroupReduceMode.AND: gpu_d.AllReduceOperation.AND,
+        SubgroupReduceMode.OR: gpu_d.AllReduceOperation.OR,
+        SubgroupReduceMode.XOR: gpu_d.AllReduceOperation.XOR,
+        SubgroupReduceMode.MINNUMF: gpu_d.AllReduceOperation.MINNUMF,
+        SubgroupReduceMode.MAXNUMF: gpu_d.AllReduceOperation.MAXNUMF,
+        SubgroupReduceMode.MINIMUMF: gpu_d.AllReduceOperation.MINIMUMF,
+        SubgroupReduceMode.MAXIMUMF: gpu_d.AllReduceOperation.MAXIMUMF,
+    }
+
+    result = gpu_d.subgroup_reduce(
+        src, REDUCE_OP_MAP[op], cluster_size=size, cluster_stride=stride
+    )
+
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
 

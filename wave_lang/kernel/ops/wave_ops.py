@@ -253,6 +253,9 @@ def min(
 ) -> "Register": ...
 
 
+def subgroup_reduce(src: "Register", size: int, stride: int) -> "Register": ...
+
+
 def shuffle(src: "Register", offset: int, width: int) -> "Register": ...
 
 
@@ -2476,6 +2479,22 @@ class ReduceOp(CustomOp, ABC):
     @property
     def reduction_dim(self) -> IndexSymbol:
         return self.dim
+
+
+@define_op("subgroup_reduce")
+@dataclass
+class SubgroupReduceOp(CustomOp):
+    arg: fx.Node
+    cluster_size: int
+    cluster_stride: int
+    op: "SubgroupReduceMode"
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        return get_custom(self.arg).indexing_dims
+
+    def infer_type(self):
+        self.type = get_custom(self.arg).type
 
 
 # TODO: Add support for more shuffle types.

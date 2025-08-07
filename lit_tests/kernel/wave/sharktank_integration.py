@@ -297,7 +297,7 @@ def test_aot_wave_integration_to_sharktank():
     # CHECK-COUNT-2:            {{.*}} = arith.andi {{.*}} : vector<16xi1>
     # CHECK-COUNT-2:            {{.*}} = arith.select %{{.*}}, %[[ZERO_3]], %[[NEG_INF]] : vector<16xi1>, vector<16xf32>
     # CHECK-COUNT-2:            {{.*}} = arith.addf %{{.*}}, %{{.*}} : vector<16xf32>
-    # CHECK-COUNT-2:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce add {{.*}}
     # CHECK-COUNT-16:            {{.*}} = amdgpu.mfma
 
     # CHECK-LABEL:       func.func private @wave_flash_attention_4_32_128_128_f16_f32

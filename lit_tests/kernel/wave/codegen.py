@@ -1081,29 +1081,12 @@ def test_reduce_sum():
     print(test.asm)
 
     # CHECK-LABEL: test_reduce_sum
-    # CHECK-DAG: %[[C1:.+]] = arith.constant 1 : i32
-    # CHECK-DAG: %[[C2:.+]] = arith.constant 2 : i32
-    # CHECK-DAG: %[[C4:.+]] = arith.constant 4 : i32
-    # CHECK-DAG: %[[C8:.+]] = arith.constant 8 : i32
-    # CHECK-DAG: %[[C16:.+]] = arith.constant 16 : i32
-    # CHECK-DAG: %[[C32:.+]] = arith.constant 32 : i32
     # Elementwise
     # CHECK: arith.mulf {{.*}} : vector<2xf16>
     # Local Reduction
     # CHECK: arith.addf {{.*}} : f16
     # Global Reduction
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C1]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.addf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C2]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.addf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C4]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.addf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C8]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.addf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C16]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.addf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C32]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.addf {{.*}} : vector<1xf16>
+    # CHECK: gpu.subgroup_reduce add {{.*}} cluster(size = 64) : (vector<1xf16>) -> vector<1xf16>
 
 
 # Tests for multiple local reduction, and we to emit and iteratively slice and reduce over multiple variables correctly.
@@ -1165,7 +1148,7 @@ def test_mutliple_local_reduce_sum():
     # CHECK: %[[LOCAL_REDUC1:.+]] = vector.extract %[[SRC_REDUC]][1] : f16 from vector<2xf16>
     # CHECK: %[[REDUC_0:.+]] = arith.addf %[[LOCAL_REDUC0]], %[[LOCAL_REDUC1]] : f16
     # Expanded Global Max Reduction
-    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce add
 
 
 # This test is to ensure that the propagation of indexing_dims between reduction and operations
@@ -1238,14 +1221,14 @@ def test_reduction_and_elemwise():
     # 1st Expanded Local Reduction
     # CHECK: arith.maximumf {{.*}} : f16
     # 1st Expanded Global Reduction
-    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce maximumf
     # 1st Expanded Accumulator Reduction
     # CHECK: %[[ACC_REDUCE_0:.+]] = arith.maximumf %[[ACC0]], %{{.*}}
 
     # 2nd Expanded Local Reduction
     # CHECK: arith.maximumf {{.*}} : f16
     # 2nd Expanded Global Reduction
-    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce maximumf
     # 2nd Expanded Accumulator Reduction
     # CHECK: %[[ACC_REDUCE_1:.+]] = arith.maximumf %[[ACC1]], %{{.*}}
 
@@ -1315,12 +1298,6 @@ def test_tiled_reduce_max():
     print(test.asm)
 
     # CHECK-LABEL: test_tiled_reduce_max
-    # CHECK-DAG: %[[C1:.+]] = arith.constant 1 : i32
-    # CHECK-DAG: %[[C2:.+]] = arith.constant 2 : i32
-    # CHECK-DAG: %[[C4:.+]] = arith.constant 4 : i32
-    # CHECK-DAG: %[[C8:.+]] = arith.constant 8 : i32
-    # CHECK-DAG: %[[C16:.+]] = arith.constant 16 : i32
-    # CHECK-DAG: %[[C32:.+]] = arith.constant 32 : i32
     # CHECK-DAG: %[[C0_IDX:.+]] = arith.constant 0 : index
     # CHECK-DAG: %[[C4_IDX:.+]] = arith.constant 4 : index
     # CHECK-DAG: %[[C1_IDX:.+]] = arith.constant 1 : index
@@ -1333,20 +1310,9 @@ def test_tiled_reduce_max():
     # Local Reduction
     # CHECK: arith.maximumf {{.*}} : f16
     # Global Reduction
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C1]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.maximumf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C2]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.maximumf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C4]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.maximumf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C8]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.maximumf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C16]], %{{.+}} : vector<1xf16>
-    # CHECK: arith.maximumf {{.*}} : vector<1xf16>
-    # CHECK: gpu.shuffle  xor %{{.+}}, %[[C32]], %{{.+}} : vector<1xf16>
-    # CHECK: %[[GLOBAL_REDUCE:.+]] = arith.maximumf {{.*}} : vector<1xf16>
+    # CHECK: gpu.subgroup_reduce maximumf %{{.+}}
     # Accumulator Reduction
-    # CHECK: %[[ACC_REDUCE:.+]] = arith.maximumf %[[ACC]], %[[GLOBAL_REDUCE]]
+    # CHECK: %[[ACC_REDUCE:.+]] = arith.maximumf %[[ACC]], %{{.+}} : vector<1xf16>
     # CHECK: scf.yield %[[ACC_REDUCE]] : vector<1xf16>
 
 
@@ -1589,28 +1555,28 @@ def test_multiple_reduction_iv():
     # 1st Expanded Local Max Reduction
     # CHECK: arith.maximumf {{.*}} : f16
     # 1st Expanded Global Max Reduction
-    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce maximumf
     # 1st Expanded Accumulator Max Reduction
     # CHECK: %[[ACC_MAX_0:.+]] = arith.maximumf %[[ACC0]], %{{.*}}
 
     # 2nd Expanded Local Max Reduction
     # CHECK: arith.maximumf {{.*}} : f16
     # 2nd Expanded Global Max Reduction
-    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce maximumf
     # 2nd Expanded Accumulator Max Reduction
     # CHECK: %[[ACC_MAX_1:.+]] = arith.maximumf %[[ACC1]], %{{.*}}
 
     # 1st Expanded Local Sum Reduction
     # CHECK: arith.addf {{.*}} : f16
     # 1st Expanded Global Sum Reduction
-    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce add
     # 1st Expanded Accumulator Sum Reduction
     # CHECK: %[[ACC_SUM_0:.+]] = arith.addf %[[ACC2]], %{{.*}}
 
     # 2nd Expanded Local Sum Reduction
     # CHECK: arith.addf {{.*}} : f16
     # 2nd Expanded Global Sum Reduction
-    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce add
     # 2nd Expanded Accumulator Sum Reduction
     # CHECK: %[[ACC_SUM_1:.+]] = arith.addf %[[ACC3]], %{{.*}}
 
@@ -1680,7 +1646,7 @@ def test_reduce_propagate_broadcast():
     # CHECK-DAG: %[[C0:.+]] = arith.constant 0 : index
     # CHECK: %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<1xf32>
     # CHECK: scf.for %{{.*}} = %[[C0]] to %[[C8]] step %[[C1]]
-    # CHECK-COUNT-7: arith.maximumf
+    # CHECK-COUNT-1: arith.maximumf
     # CHECK: %[[ACC_MAX:.+]] = arith.maximumf
     # CHECK: %[[EXTRACT:.+]] = vector.extract %[[ACC_MAX]][0] : f32 from vector<1xf32>
     # CHECK: %[[BROADCAST:.+]] = vector.broadcast %[[EXTRACT]] : f32 to vector<2xf32>
@@ -1689,7 +1655,7 @@ def test_reduce_propagate_broadcast():
     # CHECK: %[[EXP2_SLICE_0:.+]] = vector.extract %[[EXP2]][0] : f32 from vector<2xf32>
     # CHECK: %[[EXP2_SLICE_1:.+]] = vector.extract %[[EXP2]][1] : f32 from vector<2xf32>
     # CHECK: arith.addf %[[EXP2_SLICE_0]], %[[EXP2_SLICE_1]]
-    # CHECK-COUNT-6: gpu.shuffle xor
+    # CHECK-COUNT-1: gpu.subgroup_reduce add
 
 
 @run_test
@@ -1757,8 +1723,7 @@ def test_block_reduce_sum():
     # CHECK-NEXT: arith.addf
 
     # Global Reduce
-    # CHECK-COUNT-6: gpu.shuffle  xor
-    # CHECK-NEXT: %[[global_reduce:.+]] = arith.addf
+    # CHECK-COUNT-1: %[[global_reduce:.+]] = gpu.subgroup_reduce add
 
     # Write partial wave result into shared memory to be accessible by other waves.
     # CHECK: %[[view:.+]] = memref.view %[[alloc]][%[[c0]]][] : memref<8xi8, #gpu.address_space<workgroup>> to memref<4xf16, #gpu.address_space<workgroup>>

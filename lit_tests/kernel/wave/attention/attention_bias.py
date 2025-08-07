@@ -150,5 +150,5 @@ def test_attention_bias():
     # CHECK-COUNT-16:           {{.*}} = amdgpu.mfma
     # CHECK-COUNT-4:            {{.*}} = vector.load
     # CHECK-COUNT-4:            {{.*}} = arith.addf
-    # CHECK-COUNT-8:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma

@@ -158,12 +158,10 @@ def test_attention_32x32x8():
     # Test for reduction decomposition related to softmax.
     # CHECK-NOT:                arith.maximumf {{.*}}, {{.*}} : vector<16xf32>
     # CHECK-COUNT-30:           arith.maximumf {{.*}}, {{.*}} : f32
-    # CHECK:                    {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-2:            arith.maximumf {{.*}}, {{.*}} : vector<1xf32>
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
     # CHECK:                    arith.addf {{.*}}, {{.*}} : vector<16xf32>
     # CHECK-COUNT-14:           arith.addf {{.*}}, {{.*}} : f32
-    # CHECK:                    {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-2:            arith.addf {{.*}}, {{.*}} : vector<1xf32>
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce add {{.*}}
 
     # CHECK:                    {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [0], sizes = [4], strides = [1]}
     # CHECK:                    {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [4], sizes = [4], strides = [1]}
@@ -284,7 +282,7 @@ def test_dynamic_attention_32x32x8():
     # CHECK-DAG:            %[[IOTA:.+]] = arith.constant dense<[0, 1, 2, 3]> : vector<4xindex>
     # CHECK:                {{.*}} = scf.for
     # CHECK-COUNT-16:           {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-2:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
     # CHECK:                    {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [0], sizes = [4], strides = [1]}
     # CHECK:                    {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [4], sizes = [4], strides = [1]}
     # CHECK:                    {{.*}} = vector.extract_strided_slice {{.*}} {offsets = [8], sizes = [4], strides = [1]}
@@ -334,7 +332,7 @@ def test_attention():
     # CHECK-COUNT-4:            {{.*}} = arith.cmpi slt
     # CHECK-COUNT-4:            {{.*}} = arith.select
     # CHECK-COUNT-8:            {{.*}} = arith.addf
-    # CHECK-COUNT-8:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
 
     # CHECK-LABEL:      func.func @test_vanilla_attention
@@ -376,7 +374,7 @@ def test_attention_causal():
     # CHECK-COUNT-8:            {{.*}} = arith.andi {{.*}} : vector<4xi1>
     # CHECK-COUNT-8:            {{.*}} = arith.select %{{.*}}, %[[ZERO]], %[[NEG_INF]] : vector<4xi1>, vector<4xf32>
     # CHECK-COUNT-8:            {{.*}} = arith.addf %{{.*}}, %{{.*}} : vector<4xf32>
-    # CHECK-COUNT-8:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
 
 
@@ -420,7 +418,7 @@ def test_attention_bshd():
     # CHECK-COUNT-8:                {{.*}} = arith.ori {{.*}} : vector<4xi1>
     # CHECK-COUNT-8:                {{.*}} = arith.select %{{.*}}, %[[ZEROF:.+]], %[[NEG_INF:.+]] : vector<4xi1>, vector<4xf32>
     # CHECK-COUNT-8:                {{.*}} = arith.addf %{{.*}}, %{{.*}} : vector<4xf32>
-    # CHECK-COUNT-8:                {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:                {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:                {{.*}} = amdgpu.mfma
 
 
@@ -466,5 +464,5 @@ def test_attention_sliding_window():
     # CHECK-COUNT-8:            {{.*}} = arith.andi {{.*}} : vector<4xi1>
     # CHECK-COUNT-8:            {{.*}} = arith.select %{{.*}}, %[[ZERO]], %[[NEG_INF]] : vector<4xi1>, vector<4xf32>
     # CHECK-COUNT-8:            {{.*}} = arith.addf %{{.*}}, %{{.*}} : vector<4xf32>
-    # CHECK-COUNT-8:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-32:           {{.*}} = amdgpu.mfma

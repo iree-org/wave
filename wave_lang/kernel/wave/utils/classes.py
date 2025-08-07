@@ -27,3 +27,19 @@ class ShuffleMode(Enum):
     DOWN = 1
     UP = 2
     IDX = 3
+
+
+class SubgroupReduceMode(Enum):
+    ADD = 0
+    MUL = 1
+    MINUI = 2
+    MINSI = 3
+    MAXUI = 4
+    MAXSI = 5
+    AND = 6
+    OR = 7
+    XOR = 8
+    MINNUMF = 9
+    MAXNUMF = 10
+    MINIMUMF = 11
+    MAXIMUMF = 12

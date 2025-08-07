@@ -28,6 +28,7 @@ from ..ops.wave_ops import (
     Read,
     ReduceOp,
     ShuffleOp,
+    SubgroupReduceOp,
     Write,
     get_custom,
 )
@@ -38,7 +39,7 @@ from ..wave.constraints import (
     WaveConstraint,
     WorkgroupConstraint,
 )
-from .utils.classes import ShuffleMode
+from .utils.classes import ShuffleMode, SubgroupReduceMode
 from .utils.general_utils import all_equal, delinearize_index
 from .utils.graph_utils import DCE, get_outer_node
 from .utils.symbol_utils import safe_subs, subs_idxc
@@ -183,6 +184,19 @@ def emit_global_reduction(
     """
     Reduce data across threads in a warp by doing butterfly shuffle.
     """
+
+    if binary_fn == Maximum:
+        reduce = SubgroupReduceOp(
+            src, cluster_size, cluster_stride, SubgroupReduceMode.MAXIMUMF
+        )
+        return get_graph_node(reduce, graph)
+
+    if binary_fn == Add:
+        reduce = SubgroupReduceOp(
+            src, cluster_size, cluster_stride, SubgroupReduceMode.ADD
+        )
+        return get_graph_node(reduce, graph)
+
     init = src
     num_steps = int(math.log2(float(cluster_size)))
     for _ in range(num_steps):

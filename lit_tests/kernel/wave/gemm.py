@@ -418,7 +418,7 @@ def test_gemm_dot():
     # CHECK:              vector.store
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-4:      vector.load
-    # CHECK-COUNT-16:     gpu.shuffle
+    # CHECK-COUNT-1:     gpu.subgroup_reduce add
     # CHECK-COUNT-16:   vector.store
 
 
@@ -1754,7 +1754,7 @@ def test_gemm_and_reduce():
     # CHECK-SAME: iter_args(%[[ACC0:.+]] = %{{.*}}, %[[ACC1:.+]] = {{.*}})
     # CHECK-COUNT: vector.load{{.*}} memref<32x20xf16, strided<[20, 1]>, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT: vector.load{{.*}} memref<32x20xf16, strided<[20, 1], offset: 640>, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-2: gpu.shuffle  xor
+    # CHECK-COUNT: gpu.subgroup_reduce maximumf
     #         CHECK: %[[MAX:.+]] = arith.maximumf %[[ACC0]], %{{.*}}
     #         CHECK: %[[MMA:.+]] = amdgpu.mfma %{{.*}} * %{{.*}} + %[[ACC1]]
     #         CHECK: scf.yield %[[MAX]], %[[MMA]] : vector<1xf16>, vector<4xf32>
