@@ -31,7 +31,10 @@ from .builder import (
 )
 from .dispatch_codegen import StreamExecutable
 from .kernel_codegen import BindingDesc, KernelSignature
+from ..wave.constraints import DeviceConstraint
 
+from ..lang import Grid
+from copy import deepcopy
 
 def memref_to_tensor(memrefs: list[IrType], use_views: bool = False):
     if use_views:
@@ -74,6 +77,36 @@ def to_index(v: Value) -> Value:
 
     assert False, f"Expected IndexType or IntegerType, got {t}"
 
+def update_kernel_buffer_to_host_buffer(kernel_buffer_bindings, device_constraints):
+    """
+    Convert per-device kernel buffer bindings to host buffer bindings.
+    """
+    
+    # Create a mapping from tile dimensions to their full dimensions
+    tile_to_full_dim = {}
+    for constraint in device_constraints:
+        # constraint.dim is the full dimension (M, N)
+        # constraint.tile_size is the tile dimension (BLOCK_M, BLOCK_N)
+        tile_to_full_dim[constraint.tile_size] = constraint.dim
+    
+    def substitute_dimensions_in_shape(symbolic_shape):
+        if isinstance(symbolic_shape, (list, tuple)):
+            return [substitute_dimensions_in_shape(dim) for dim in symbolic_shape]
+        elif symbolic_shape in tile_to_full_dim:
+            return tile_to_full_dim[symbolic_shape]
+        else:
+            return symbolic_shape
+    
+    for binding in kernel_buffer_bindings:
+        # Deep copy the binding to avoid modifying the original
+        host_binding = deepcopy(binding)
+        
+        # Update the kernel buffer type's symbolic shape
+        if hasattr(binding.kernel_buffer_type, 'symbolic_shape'):
+            original_shape = binding.kernel_buffer_type.symbolic_shape
+            new_shape = substitute_dimensions_in_shape(original_shape)
+            binding.kernel_buffer_type.symbolic_shape = new_shape
+        
 
 def isolated_test_call(
     mb: ModuleBuilder,
@@ -85,8 +118,18 @@ def isolated_test_call(
     *,
     location_capture_config: Optional[LocationCaptureConfig] = None,
     async_dispatch: bool = False,
+    device_layout: Optional[Grid] = None,
+    device_constraints: Optional[list[DeviceConstraint]] = None,
 ):
     with InsertionPoint(mb.body_block), Location.unknown():
+
+        # Create host buffer bindings for multi-device scenarios
+        update_kernel_buffer_to_host_buffer(
+            sig.kernel_buffer_bindings,
+            device_constraints
+        )
+        print(f"Device buffer bindings: {sig.kernel_buffer_bindings}")
+
         input_types = [b.as_mlir_type() for b in sig.kernel_buffer_bindings] + [
             b.as_mlir_type() for b in sig.scalar_bindings
         ]
