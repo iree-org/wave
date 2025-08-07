@@ -1,7 +1,7 @@
 import inspect
 import warnings
 from abc import ABC, abstractmethod
-from types import FunctionType, BuiltinFunctionType
+from types import FunctionType
 from typing import (
     Callable,
     Dict,
@@ -156,8 +156,6 @@ class KernelTracer(SubgraphTracer):
         if isinstance(a, GenericDot):
             return a
         if isinstance(a, FunctionType):
-            return a
-        if isinstance(a, BuiltinFunctionType):
             return a
         return super().create_arg(a)
 
