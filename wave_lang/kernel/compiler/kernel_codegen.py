@@ -160,8 +160,15 @@ class BindingDesc:
 
 
 class KernelSignature:
-    def __init__(self):
+    def __init__(self, device_constraints=None):
         self.bindings: list[BindingDesc] = []
+        self.device_constraints = device_constraints
+        if self.device_constraints is not None:
+            self.constraint_map = {
+                c.dim: (c.tile_size, c.device_dim) for c in self.device_constraints
+            }
+        else:
+            self.constraint_map = {}
 
     @property
     def grid_bindings(self) -> list[BindingDesc]:
@@ -224,6 +231,48 @@ class KernelSignature:
                 )
             )
 
+    def _update_node_shapes(self, node_type_map: dict[fx.Node, Type[Any]]):
+        """
+        Update the symbolic shapes of the nodes based on the device constraints.
+        This modifies the node_type_map in place.
+
+        Example:
+        Given a DeviceConstraint that distributes dimension 'M' with tile size DEVICE_M to
+        each device, and a node with symbolic shape (M, N), the new symbolic shape
+        will be updated to (DEVICE_M, N).
+
+        {a: Memory[M, K].of(f16), b: Memory[N, K].of(f16), c: Memory[M, N].of(f32)} will become
+        {a: MemoryTiled[DEVICE_M, K].of(f16), b: Memory[N, K].of(f16), c: MemoryTiled[DEVICE_M, N].of(f32)}
+
+        It is done at this stage to ensure that the kernel signature reflects the
+        correct shapes, and that iree-compile can correctly infer the input/output tensor types.
+        """
+
+        if not self.constraint_map:
+            return
+
+        for node, t in node_type_map.items():
+
+            symbolic_shape = getattr(t, "symbolic_shape", None)
+            if not symbolic_shape:
+                continue
+
+            new_shape = []
+            for dim in symbolic_shape:
+                # if the original dimension is distributed, replace it with the tile size
+                if dim in self.constraint_map:
+                    tile_size, device_dim = self.constraint_map[dim]
+                    new_shape.append(tile_size)
+                else:
+                    new_shape.append(dim)
+
+            if new_shape != list(symbolic_shape):
+                node_type_map[node] = type(
+                    f"{t.__name__}Tiled",
+                    (t,),
+                    {"symbolic_shape": tuple(new_shape)},
+                )
+
     def add_from_graph_placeholders(self, graph: fx.Graph):
         # Extract all placeholder nodes.
         placeholder_nodes = filter_fx_graph(graph, is_placeholder)
@@ -232,8 +281,12 @@ class KernelSignature:
         # This is set when graph was first traced.
         placeholder_nodes.sort(key=lambda x: x.meta["arg_id"])
         # Create bindings for placeholder nodes.
+
+        node_type_map = {node: node.type for node in placeholder_nodes}
+        self._update_node_shapes(node_type_map)
+
         for node in placeholder_nodes:
-            t = node.type
+            t = node_type_map[node]
             if is_kernel_buffer_meta_derived(t):
                 self.bindings.append(
                     BindingDesc(

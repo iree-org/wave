@@ -67,7 +67,6 @@ from .decompose_dot_mma import decompose_dot_mma
 from .decompose_reduce_ops import decompose_reduce_ops
 from .decompose_scan_ops import decompose_scan_ops
 from .decompose_vmma_ops import decompose_vmma_ops
-from .device_reshape import reshape_per_device
 from .expansion.expansion import add_get_results, expand_graph
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
@@ -533,7 +532,10 @@ class LaunchableWave(Launchable):
     ):
         entrypoint_name = self._name
         root_graph = trace.get_root_graph()
-        kernel_sig = kernel_codegen.KernelSignature()
+
+        # pass device constraint to kernel signature
+        # so that we can set the dimensions of the tensors per device
+        kernel_sig = kernel_codegen.KernelSignature(self.device_constraints)
         kernel_sig.add_from_graph_placeholders(root_graph)
         kernel_sig.add_from_dynamic_symbols(options.dynamic_symbols)
         kernel_sig.add_grid(self.grid_type)
@@ -602,7 +604,6 @@ class LaunchableWave(Launchable):
             self.hardware_constraints[0].subs_vector_shapes(idxc.subs)
 
         return [
-            partial(reshape_per_device, trace, self.constraints),
             partial(debug_log_hoist, trace, debug_handlers),
             partial(initialize_iter_args, trace),
             partial(self.create_induction_vars, trace),
