@@ -70,7 +70,7 @@ class WaveCompileOptions:
     denorm_fp_math_f32: str = None
     waves_per_eu: int = None
     wave_runtime: bool = False
-    iree_launch_async: bool = True
+    iree_launch_async: bool = False
     use_buffer_load_ops: bool = False
     use_buffer_store_ops: bool = False
     use_stride_cache_swizzle: bool = False

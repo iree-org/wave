@@ -204,8 +204,8 @@ def get_extend_attention_kernel(
     k_layout = tkl.MemoryLayout(shape=set_dynamic_dim(k_shape))
     v_layout = tkl.MemoryLayout(shape=set_dynamic_dim(v_shape))
     o_layout = tkl.MemoryLayout(shape=set_dynamic_dim(o_shape))
-    k_cache_layout = tkl.MemoryLayout(shape=k_cache_shape)
-    v_cache_layout = tkl.MemoryLayout(shape=v_cache_shape)
+    k_cache_layout = tkl.MemoryLayout(shape=set_dynamic_dim(k_cache_shape))
+    v_cache_layout = tkl.MemoryLayout(shape=set_dynamic_dim(v_cache_shape))
     num_seqs_layout = tkl.MemoryLayout(shape=[None])
     kv_indices_layout = tkl.MemoryLayout(shape=[None])
 
@@ -323,6 +323,10 @@ def get_extend_attention_kernel(
             return m_j, d_j, acc
 
         res_max, res_sum, res_mm = first_loop
+        
+        res_max = tkl.Register[H, N_Q, tkl.f32](0.0)
+        res_sum = tkl.Register[H, N_Q, tkl.f32](0.0)
+        res_mm = tkl.Register[H, D_KV, N_Q, tkl.f32](0.0)
 
         if is_causal:
             seq_len_extend = tkw.apply_expr(
