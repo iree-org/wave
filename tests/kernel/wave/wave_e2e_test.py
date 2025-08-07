@@ -62,8 +62,8 @@ user_specified_test_shapes = ""
 test_params_path = os.environ.get("TEST_PARAMS_PATH", None)
 
 
-def mark_shapes_skip(src_shapes, skip_shapes):
-    mark = lambda *a: pytest.param(*a, marks=pytest.mark.skip)
+def mark_shapes_skip(src_shapes, skip_shapes, reason=None):
+    mark = lambda *a: pytest.param(*a, marks=pytest.mark.skip(reason=reason))
     return [(mark(s) if s in skip_shapes else s) for s in src_shapes]
 
 
@@ -867,7 +867,8 @@ def test_offset_write(shape, use_buffer_ops, run_bench):
 
 @require_e2e
 @pytest.mark.parametrize(
-    "shape", mark_shapes_skip(get_test_shapes("test_copy"), [(111, 813)])
+    "shape",
+    mark_shapes_skip(get_test_shapes("test_copy"), [(111, 813)], "TODO: OOB scatter"),
 )
 @param_bool("use_buffer_ops", "buf_ops")
 def test_offset_write_one(shape, use_buffer_ops, run_bench):
