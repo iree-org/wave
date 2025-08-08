@@ -14,6 +14,7 @@ from wave_lang.support.ir_imports import (
     Attribute,
     DenseElementsAttr,
     IndexType,
+    InsertionPoint,
     IntegerAttr,
     IntegerType,
     IrType,
@@ -24,8 +25,10 @@ from wave_lang.support.ir_imports import (
     VectorType,
     amdgpu_d,
     arith_d,
+    llvm_d,
     memref_d,
     vector_d,
+    func_d,
 )
 from wave_lang.aot.support.ir_utils import (
     _is_float_type,
@@ -961,7 +964,21 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     store_type = VectorType.get((elements_per_thread,), element_type)
 
     src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
-    dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+
+    ip = InsertionPoint.current
+    while not isinstance(ip.block.owner, func_d.FuncOp):
+        ip = InsertionPoint(ip.block.owner)
+
+    with ip:
+        dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+
+        i32 = IntegerType.get_signless(32)
+        index_type = IndexType.get()
+        for i, idx in enumerate(dst_index):
+            idx = arith_d.index_cast(i32, idx)
+            res = llvm_d.call_intrinsic(i32, "llvm.amdgcn.readfirstlane", [idx], [], [])
+            res = arith_d.index_cast(index_type, res)
+            dst_index[i] = res
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
