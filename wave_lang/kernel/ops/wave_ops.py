@@ -810,7 +810,7 @@ class CustomOp(ABC):
     def pre_expansion_id(self, value: int):
         self.fx_node.pre_expansion_id = value
 
-    def infer_type(self):
+    def infer_type(self, *args):
         """
         Infer the type of this operator using the types
         of its arguments.
@@ -900,7 +900,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_interface_op("powf")
 @dataclass
 class BinaryPyOp(BinaryOpBase, ABC):
-    def infer_type(self):
+    def infer_type(self, *args):
         if not self.infer_shape():
             # In scalar codegen, we do not have
             # the concept of a shape (yet).
@@ -923,7 +923,7 @@ class BinaryPyOp(BinaryOpBase, ABC):
 @define_interface_op("ne")
 @dataclass
 class ComparisonPyOp(BinaryOpBase, ABC):
-    def infer_type(self):
+    def infer_type(self, *args):
         # If lhs & rhs is scalar then shape is empty, then type is i1.
         # Else, output i1 with shape of lhs/rhs.
         shape = self.infer_shape()
@@ -962,7 +962,7 @@ class UnaryPyOp(CustomOp, ABC):
     def py_operator(self) -> str:
         return self.tkw_op_name
 
-    def infer_type(self):
+    def infer_type(self, *args):
         src_type = get_custom(self.arg).type
         self.type = src_type
 
@@ -979,7 +979,7 @@ class SoftsignOp(CustomOp, ABC):
     def indexing_dims(self) -> list[IndexSymbol]:
         return get_custom(self.arg).indexing_dims
 
-    def infer_type(self):
+    def infer_type(self, *args):
         src_type = get_custom(self.arg).type
         self.type = src_type
 
@@ -999,7 +999,7 @@ class SelectOp(CustomOp):
         combined_dims += get_custom(self.if_false).indexing_dims
         return list(dict.fromkeys(combined_dims))
 
-    def infer_type(self):
+    def infer_type(self, *args):
         cond_type = get_custom(self.cond).type
         if_true_type = get_custom(self.if_true).type
         if_false_type = get_custom(self.if_false).type
@@ -1138,7 +1138,7 @@ class Placeholder(CustomOp):
     def get_captured_fx_node(self) -> Optional[fx.Node]:
         return self.fx_node.meta.get("lifted", None)
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.fx_node.type = self._type
 
     @property
@@ -1191,7 +1191,7 @@ class IterArg(Placeholder):
     def iter_idx(self, value):
         self.fx_node.iter_idx = value
 
-    def infer_type(self):
+    def infer_type(self, *args):
         parent_op = self.parent_op()
         init_args = parent_op.init_args
         self.type = init_args[self.iter_idx].type
@@ -1329,7 +1329,7 @@ class AtomicOp(BinaryOpBase, ABC):
             return list(self.mapping.output_shape)
         return list(self.memory_type.symbolic_shape)
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.type = get_custom(self.lhs).type
 
     @property
@@ -1377,7 +1377,7 @@ class NewRegister(CustomOp):
     def indexing_dims(self) -> list[IndexSymbol]:
         return list(self.shape)
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.type = Register[(*self.shape, self.dtype)]
 
 
@@ -1391,7 +1391,7 @@ class NewScalar(CustomOp):
     def indexing_dims(self) -> list[IndexSymbol]:
         return list()
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.type = self.dtype
 
 
@@ -1429,7 +1429,7 @@ class MMA(MMABase):
     def acc_type(self) -> Memory:
         return get_custom(self.acc).type
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.type = self.acc_type
 
     def operand_index(
@@ -1522,7 +1522,7 @@ class ScaledMMA(MMABase):
     def acc_type(self) -> Memory:
         return get_custom(self.acc).type
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.type = self.acc_type
 
     def operand_index(
@@ -1621,6 +1621,19 @@ class ScaledMMA(MMABase):
         self.fx_node.reduction_dim = value
 
 
+def get_shape_from_bindings(
+    constraints: list["Constraint"], target: tuple[IndexExpr]
+) -> list[IndexExpr]:
+    from ..wave.utils.general_utils import get_iterator_bindings
+
+    bindings = get_iterator_bindings(constraints)
+    assert bindings is not None, "No iterator bindings found"
+    bindings = bindings.bindings
+    if any(dim not in bindings.keys() for dim in target):
+        raise ValueError(f"Target dims {target} not found in bindings {bindings}")
+    return [bindings[dim] for dim in target]
+
+
 @define_op("read")
 @dataclass
 class Read(CustomOp):
@@ -1644,7 +1657,7 @@ class Read(CustomOp):
         dims = [infer_dim(expr) for expr in shape]
         return dims
 
-    def infer_type(self):
+    def infer_type(self, *args):
         from ..wave.utils.general_utils import infer_dim
 
         dtype = self.memory_type.dtype
@@ -1653,6 +1666,9 @@ class Read(CustomOp):
         # Sub in dim's value from memory's type into indexing dim who contains the
         # correct order/mapping/tensor dims for dst type.
         shape = [dim_to_shape.get(dim, dim) for dim in self.indexing_dims]
+        # Override when using new index mapping API.
+        if self.target:
+            shape = get_shape_from_bindings(args[0], self.target)
         self.type = Register[(*shape, dtype)]
 
     @property
@@ -1903,7 +1919,7 @@ class Iterate(NestedRegionOp):
         iter_args = sorted(iter_args, key=lambda x: get_custom(x).iter_idx)
         return iter_args
 
-    def infer_type(self):
+    def infer_type(self, *args):
         res_types = [get_custom(x).type for x in self.init_args]
         if len(res_types) == 1:
             res_types = res_types[0]
@@ -1971,7 +1987,7 @@ class Write(CustomOp):
         dims = [infer_dim(expr) for expr in shape]
         return dims
 
-    def infer_type(self):
+    def infer_type(self, *args):
         from ..wave.utils.general_utils import infer_dim
 
         address_space = self.memory_type.address_space
@@ -1981,6 +1997,9 @@ class Write(CustomOp):
         # Sub in dim's value from memory's type into indexing dim who contains the
         # correct order/mapping/tensor dims for dst type.
         shape = [dim_to_shape.get(dim, dim) for dim in self.indexing_dims]
+        # Override when using new index mapping API.
+        if self.source:
+            shape = get_shape_from_bindings(args[0], self.source)
         self.type = Memory[(*shape, address_space, dtype)]
 
     @property
@@ -2115,7 +2134,7 @@ class DebugLog(CustomOp):
     def has_side_effects(self) -> bool:
         return True
 
-    def infer_type(self):
+    def infer_type(self, *args):
 
         regtype = get_custom(self.register_).type
         mem = get_custom(self.memory)
@@ -2179,7 +2198,7 @@ class GetResult(CustomOp):
     value: fx.Node
     res_idx: int
 
-    def infer_type(self):
+    def infer_type(self, *args):
         op = get_custom(self.value)
         src_type = op.type
         if isinstance(src_type, list):
@@ -2244,7 +2263,7 @@ class Extract(CustomOp):
     register_: fx.Proxy
     offset: IndexExpr | int
 
-    def infer_type(self):
+    def infer_type(self, *args):
         # Intuition here is we are trying to extract an element
         # from fastest dim => we reduce the fastest dim.
         src_type = get_custom(self.register_).type
@@ -2326,7 +2345,7 @@ class Broadcast(CustomOp, ABC):
     def indexing_dims(self) -> list[IndexSymbol]:
         return self.target_shape
 
-    def infer_type(self):
+    def infer_type(self, *args):
         src_dtype = get_custom(self.arg).type.dtype
         self.type = Register[(*self.target_shape, src_dtype)]
 
@@ -2362,7 +2381,7 @@ class ScanOp(CustomOp, ABC):
 
         return [dim for dim in indexing if dim != self.dim]
 
-    def infer_type(self):
+    def infer_type(self, *args):
         if isinstance(self.arg, Sequence):
             src_types = [get_custom(arg).type for arg in self.arg]
             ref_shape = src_types[0].symbolic_shape
@@ -2430,7 +2449,7 @@ class ReduceOp(CustomOp, ABC):
         dst_indexing = [dim for dim in src_indexing if dim != self.dim]
         return dst_indexing
 
-    def infer_type(self):
+    def infer_type(self, *args):
         if isinstance(self.arg, Sequence):
             src_types = [get_custom(arg).type for arg in self.arg]
             ref_shape = src_types[0].symbolic_shape
@@ -2495,7 +2514,7 @@ class ShuffleOp(CustomOp):
     def indexing_dims(self) -> list[IndexSymbol]:
         return get_custom(self.arg).indexing_dims
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.type = get_custom(self.arg).type
 
 
@@ -2513,7 +2532,7 @@ class CastOp(CustomOp, ABC):
     def indexing_dims(self) -> list[IndexSymbol]:
         return get_custom(self.arg).indexing_dims
 
-    def infer_type(self):
+    def infer_type(self, *args):
         src_shape = get_custom(self.arg).type.symbolic_shape
         self.type = Register[(*src_shape, self.dtype)]
 
@@ -2542,7 +2561,7 @@ class BitcastOp(CustomOp, ABC):
     def indexing_dims(self) -> list[IndexSymbol]:
         return get_custom(self.arg).indexing_dims
 
-    def infer_type(self):
+    def infer_type(self, *args):
         src_shape = get_custom(self.arg).type.symbolic_shape
         dst_shape = list(src_shape)
         dst_shape[-1] *= self.scale_factor
@@ -2564,7 +2583,7 @@ class Permute(CustomOp, ABC):
     def indexing_dims(self) -> list[IndexExpr]:
         return self.target_shape
 
-    def infer_type(self):
+    def infer_type(self, *args):
         src_type = get_custom(self.arg).type
         assert set(src_type.symbolic_shape) == set(
             self.target_shape
@@ -2630,7 +2649,7 @@ class Reshape(CustomOp, ABC):
     def indexing_dims(self) -> list[IndexExpr]:
         return get_custom(_to_sequence(self.args)[0]).indexing_dims
 
-    def infer_type(self):
+    def infer_type(self, *args):
         self.type = get_custom(_to_sequence(self.args)[0]).type
 
 
@@ -2681,7 +2700,7 @@ class ScatterAdd(CustomOp):
             return list(self.mapping.input_shape)
         return list(self.memory_type.symbolic_shape)
 
-    def infer_type(self):
+    def infer_type(self, *args):
         address_space = self.memory_type.address_space
         dtype = self.memory_type.dtype
         self.type = Memory[(*self.indexing_dims, address_space, dtype)]

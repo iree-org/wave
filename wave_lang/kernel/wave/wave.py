@@ -582,7 +582,7 @@ class LaunchableWave(Launchable):
             finalize_indices,
             substitute_vector_shapes,
             partial(add_get_results, trace),
-            partial(infer_types, trace),
+            partial(infer_types, trace, self.constraints),
             partial(construct_index_mapping, trace, self.constraints),
             partial(debug_log_write_replace, trace, debug_arg_info),
             partial(
