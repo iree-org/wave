@@ -906,6 +906,17 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         )
 
 
+def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
+    original_type = value.type
+    idx = arith_d.index_cast(element_type, value)
+    # TODO: use a proper ROCDL intrinsic for this after IREE is updated.
+    res = llvm_d.call_intrinsic(
+        element_type, "llvm.amdgcn.readfirstlane", [idx], [], []
+    )
+    res = arith_d.index_cast(original_type, res)
+    return res
+
+
 @handle_op(gather_to_lds)
 def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -965,20 +976,16 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
 
+    # Hoist to the function level.
     ip = InsertionPoint.current
     while not isinstance(ip.block.owner, func_d.FuncOp):
         ip = InsertionPoint(ip.block.owner)
 
     with ip:
         dst_index, _, _ = _build_start_indices(emitter, dst_idx)
-
+        # We are indexing shared mem so i32 is enough.
         i32 = IntegerType.get_signless(32)
-        index_type = IndexType.get()
-        for i, idx in enumerate(dst_index):
-            idx = arith_d.index_cast(i32, idx)
-            res = llvm_d.call_intrinsic(i32, "llvm.amdgcn.readfirstlane", [idx], [], [])
-            res = arith_d.index_cast(index_type, res)
-            dst_index[i] = res
+        dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
