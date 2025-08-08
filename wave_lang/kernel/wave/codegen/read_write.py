@@ -14,6 +14,7 @@ from wave_lang.support.ir_imports import (
     Attribute,
     DenseElementsAttr,
     IndexType,
+    InsertionPoint,
     IntegerAttr,
     IntegerType,
     IrType,
@@ -24,8 +25,10 @@ from wave_lang.support.ir_imports import (
     VectorType,
     amdgpu_d,
     arith_d,
+    llvm_d,
     memref_d,
     vector_d,
+    func_d,
 )
 from wave_lang.aot.support.ir_utils import (
     _is_float_type,
@@ -903,6 +906,17 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         )
 
 
+def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
+    original_type = value.type
+    idx = arith_d.index_cast(element_type, value)
+    # TODO: use a proper ROCDL intrinsic for this after IREE is updated.
+    res = llvm_d.call_intrinsic(
+        element_type, "llvm.amdgcn.readfirstlane", [idx], [], []
+    )
+    res = arith_d.index_cast(original_type, res)
+    return res
+
+
 @handle_op(gather_to_lds)
 def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -961,7 +975,24 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     store_type = VectorType.get((elements_per_thread,), element_type)
 
     src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
-    dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+
+    ip = InsertionPoint.current
+
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+
+    # Hoist to the function level, if not using induction variables.
+    if not any(
+        induction_vars.intersection(set(index.start.free_symbols))
+        for index in dst_idx.values()
+    ):
+        while not isinstance(ip.block.owner, func_d.FuncOp):
+            ip = InsertionPoint(ip.block.owner)
+
+    with ip:
+        dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+        # We are indexing shared mem so i32 is enough.
+        i32 = IntegerType.get_signless(32)
+        dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
