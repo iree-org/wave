@@ -82,7 +82,9 @@ def construct_min_global_access_pattern(
 
 
 def materialize_shape(
-    constraint_tile_size: dict[IndexSymbol, int], symbolic_shape: list[IndexSymbol]
+    constraint_tile_size: dict[IndexSymbol, int],
+    symbolic_shape: list[IndexSymbol],
+    vector_shapes,
 ) -> list[int]:
     materialized_shape = []
     for dim_expr in symbolic_shape:
@@ -92,7 +94,10 @@ def materialize_shape(
                 subs_idxc(dim_expr.subs(dim, constraint_tile_size[dim]))
             )
         else:
-            materialized_shape.append(subs_idxc(dim))
+            materialized_shape.append(
+                subs_idxc(sympy.ceiling(dim / vector_shapes[dim]) * vector_shapes[dim])
+            )
+
     return materialized_shape
 
 
@@ -141,7 +146,9 @@ def identify_optimizable_loads(
         symbolic_shape = custom.type.symbolic_shape
         if use_memory_type:
             symbolic_shape = custom.memory_type.symbolic_shape
-        materialized_shape = materialize_shape(constraint_tile_size, symbolic_shape)
+        materialized_shape = materialize_shape(
+            constraint_tile_size, symbolic_shape, custom.vector_shapes
+        )
         # Ensure that the innermost dimension of the shape is a multiple of the elements being loaded.
         if materialized_shape[-1] % max_elements_per_load == 0:
             continue
@@ -193,7 +200,6 @@ def identify_optimizable_loads(
             else:
                 # Optimization do not handle other cases than above, so skip.
                 continue
-
         optimizable_loads[custom.memory] = (
             expected_number_of_loads,
             [custom],
@@ -234,7 +240,9 @@ def add_optimized_nodes(
                     + i * max_elements_per_load
                 )
                 materialized_shape = materialize_shape(
-                    constraint_tile_size, custom.type.symbolic_shape
+                    constraint_tile_size,
+                    custom.type.symbolic_shape,
+                    custom.vector_shapes,
                 )
                 read.index = construct_min_global_access_pattern(
                     access_pattern,

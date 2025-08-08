@@ -41,7 +41,7 @@ _xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
 # (NUM_Q_HEADS, NUM_KV_HEADS, HEAD_SIZE, HEAD_SIZE_KV, SEQ_LENS)
 # TODO: xfailure case - wrong numerics with minimize_global_loads but produces
 # correct results without it.
-shapes = [_xfail((1, 1, 13, 13, (64, 64))), (4, 1, 64, 64, (128, 256))]
+shapes = [(1, 1, 13, 13, (64, 64)), (4, 1, 64, 64, (128, 256))]
 
 
 # From: https://github.com/sgl-project/sglang/blob/main/test/srt/test_triton_attention_kernels.py
