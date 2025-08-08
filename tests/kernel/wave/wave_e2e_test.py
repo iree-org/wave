@@ -1733,18 +1733,7 @@ def test_scalar_cond_copy(shape, run_bench):
 
 
 @require_e2e
-@pytest.mark.parametrize(
-    "shape",
-    [
-        (1, 27),
-        (1, 64),
-        (51, 64),
-        (128, 64),
-        (1, 256),
-        (1, 512),
-        (64, 500),
-    ],
-)
+@pytest.mark.parametrize("shape", get_test_shapes("test_scanop_cumsum"))
 def test_scanop_cumsum(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
@@ -1774,7 +1763,6 @@ def test_scanop_cumsum(shape, run_bench):
         res = tkw.cumsum(lhs, dim=N)
         tkw.write(res, c)
 
-    torch.manual_seed(1)
     input = device_randint(low=1, high=5, size=shape, dtype=torch.int32)
     output = device_zeros(shape, dtype=torch.int32)
     torch_ref = torch.cumsum((input), dim=-1, dtype=torch.int32)
@@ -1791,6 +1779,65 @@ def test_scanop_cumsum(shape, run_bench):
     test = wave_compile(options, test)
 
     test(input, output)
+    assert_close(torch_ref, output, atol=1e-03, rtol=1e-05)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", [(256, 256)])
+def test_block_scanop_cumsum(shape, run_bench):
+    round_to_divisible = lambda src, denom: sympy.ceiling(src / denom) * denom
+    M = tkl.sym.M
+    N = tkl.sym.N
+    wave_size = 64
+    num_waves = 4
+    BLOCK_M = 1
+
+    # Distribute N dim across num_waves, and pad to disivible by wave_size.
+    ELEMS_PER_WAVE = round_to_divisible(sympy.ceiling(N / num_waves), wave_size)
+    # Minimum number of elems per wave should be size of wave.
+    ELEMS_PER_WAVE = sympy.Max(ELEMS_PER_WAVE, wave_size)
+    BLOCK_N = ELEMS_PER_WAVE * num_waves
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: 1, N: ELEMS_PER_WAVE},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, ELEMS_PER_WAVE)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.i32],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+    ):
+        lhs = tkw.read(a)
+        res = tkw.cumsum(lhs, dim=N, block=True)
+        tkw.write(res, c)
+
+    # input = device_randint(low=1, high=5, size=shape, dtype=torch.int32)
+    input = device_ones(shape, dtype=torch.int32)
+    output = device_zeros(shape, dtype=torch.int32)
+    torch_ref = torch.cumsum((input), dim=-1, dtype=torch.int32)
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        wave_runtime=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(input, output)
+    breakpoint()
     assert_close(torch_ref, output, atol=1e-03, rtol=1e-05)
 
 
