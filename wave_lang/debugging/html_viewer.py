@@ -20,6 +20,9 @@ def html_viewer(debug_logs: Dict[str, Any]) -> None:
             serializable["symbolic_shape"] = [
                 str(symbol) for symbol in serializable["symbolic_shape"]
             ]
+            serializable["iteration_dimensions"] = [
+                str(symbol) for symbol in serializable["iteration_dimensions"]
+            ]
             return serializable
 
         jsonable = {label: jsonify_debug_log(log) for label, log in debug_logs.items()}

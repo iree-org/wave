@@ -31,3 +31,7 @@ def get_min_expr(
         return expr1
 
     return sympy.Min(expr1, expr2)
+
+
+def get_induction_symbol(axis: IndexSymbol):
+    return IndexSymbol("$ARG" + str(axis), integer=True, nonnegative=True)

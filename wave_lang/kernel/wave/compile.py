@@ -118,12 +118,26 @@ class WaveKernel:
             if usage == kernel_codegen.KernelBufferUsage.OUTPUT:
                 kernel_outputs.append(arg)
 
+        debug_args = []
+        debug_logs = kwargs.get("debug_logs", {})
+        debug_extra_dimensions = {}
+
         def get_dynamic_dimension_actual(sym):
+            if sym in debug_extra_dimensions:
+                return debug_extra_dimensions[sym]
             arg_idx, dim = self.symbols_args_map[sym]
             return args[arg_idx].shape[dim]
 
-        debug_args = []
-        debug_logs = kwargs.get("debug_logs", {})
+        # If there are debug_log uses with extra iteration dimensions, we need
+        # to collect their sizes so that we can allocate the appropriate Torch
+        # tensors.
+        if self.debug_outputs:
+            for info_dict in self.debug_outputs:
+                extra_iter_dims = info_dict.get("extra_iteration_dimensions", None)
+                if extra_iter_dims:
+                    for dim_symbol, _, size in extra_iter_dims:
+                        debug_extra_dimensions[dim_symbol] = size
+
         if self.debug_outputs:
             for info_dict in self.debug_outputs:
                 shape = [
@@ -137,6 +151,9 @@ class WaveKernel:
                 log_info = {
                     "value": memory,
                     "symbolic_shape": info_dict["symbolic_shape"],
+                    "iteration_dimensions": [
+                        dim for dim, _, _ in info_dict["extra_iteration_dimensions"]
+                    ],
                 }
                 debug_args.append(memory)
                 debug_logs[info_dict["symbol_name"]] = log_info
