@@ -50,6 +50,7 @@ GLOBAL_MEMORY_UNITS = index_symbol("$GLOBAL_MEMORY_UNITS")
 MMA_UNITS = index_symbol("$MMA_UNITS")
 VALU_UNITS = index_symbol("$VALU_UNITS")
 SHUFFLE_UNITS = index_symbol("$SHUFFLE_UNITS")
+ELEMENT_INDEX = index_symbol("$ELEMENT_INDEX")
 
 
 # Iteration symbols.

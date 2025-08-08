@@ -78,6 +78,7 @@ from .promotion import compute_shared_memory_usage, promote_placeholders
 from .schedule_reordering import schedule_reordering
 from .scheduling.schedule import schedule_graph
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
+from .shared_memory_swizzle import swizzle_shared_memory
 from .symbolic_constraints import SymbolicAlias
 from .type_inference import infer_types
 from .utils.compile_utils import canonicalize_module
@@ -590,6 +591,7 @@ class LaunchableWave(Launchable):
                 trace,
                 self.constraints,
                 options.reorder_allocs,
+                not options.use_shared_memory_swizzle,
             ),
             partial(
                 set_node_indices,
@@ -691,6 +693,11 @@ class LaunchableWave(Launchable):
             partial(decompose_reduce_ops, trace, self.constraints),
             partial(decompose_scan_ops, trace, self.constraints),
         ]
+
+        if options.use_shared_memory_swizzle:
+            graph_passes += [
+                partial(swizzle_shared_memory, trace, self.constraints),
+            ]
 
         # Schedule the reduction ops.
         scheduling_type = options.schedule
