@@ -66,68 +66,64 @@ def fused_rmsnorm(x, weight, eps: float = 1e-6, autotune=False, inplace=False):
         ),
     }
  
-    fused_rmsnorm_kernel[(bs,)](
+    compiled_kernel = fused_rmsnorm_kernel[(bs,)](
         output, x, weight, eps=eps, hidden_dim=hidden_dim, **config
     )
+    # print(compiled_kernel.asm['amdgcn'])
     return output
 
 
-def get_rmsnorm_wave(shape):
+def get_rmsnorm_wave(shape, eps: float = 1e-6):
     M = tkl.sym.M
     N = tkl.sym.N
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
-    ELEMS_PER_THREAD = tkl.sym.ELEMS_PER_THREAD
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-    EMB_SIZE = tkl.sym.EMB_SIZE
-    TOKENS_PER_WK = tkl.sym.TOKENS_PER_WK
-
-    num_waves = 4
-    wave_size = 64
-    BLOCK_N = N
-    BLOCK_M = TOKENS_PER_WK
-
+    
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
             threads_per_wave=64,
-            vector_shapes={M: 1, N: ELEMS_PER_THREAD * wave_size},
+            vector_shapes={M: 1, N: BLOCK_N },
         )
     ]
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / num_waves)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
 
     @tkw.wave(constraints)
     def rmsnorm(
-        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
-        gamma: tkl.Memory[N, ADDRESS_SPACE, tkl.bf16],
-        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        weight: tkl.Memory[N, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
     ):
-        length_embedding = tkl.Register[M, tkl.bf16](EMB_SIZE)
-        lhs = tkw.read(a, elements_per_thread=ELEMS_PER_THREAD)
-        lhs_pow = lhs * lhs
-        red = tkw.sum(lhs_pow, dim=N, block=True)
-        result = red / length_embedding
-        rms = tkw.sqrt(result)
+        length_embedding = tkl.Register[M, tkl.f32](N)
+        eps_reg = tkl.Register[M, tkl.f32](eps)
+        a_reg = tkw.read(a)
+        a_reg = tkw.cast(a_reg, tkl.f32)
+        mean = tkw.sum(a_reg * a_reg, dim=N, block=False) / length_embedding + eps_reg
+        rms = tkw.rsqrt(mean)
         rms_broad = tkw.broadcast(rms, [M, N])
-        a_scaled = lhs / rms_broad
-        gamma_reg = tkw.read(gamma, elements_per_thread=ELEMS_PER_THREAD)
-        gamma_broad = tkw.broadcast(gamma_reg, [M, N])
-        output = a_scaled * gamma_broad
-        tkw.write(output, c, elements_per_thread=ELEMS_PER_THREAD)
+        a_scaled = a_reg * rms_broad
+        w_reg = tkw.read(weight)
+        w_reg = tkw.cast(w_reg, tkl.f32)
+        w_broad = tkw.broadcast(w_reg, [M, N])
+        output = a_scaled * w_broad
+        output = tkw.cast(output, tkl.f16)
+        tkw.write(output, c)
 
     options = WaveCompileOptions(
         subs={
             M: shape[0],
             N: shape[1],
-            TOKENS_PER_WK: 1,
-            EMB_SIZE: shape[1],
-            ELEMS_PER_THREAD: 4,
+            BLOCK_M: 1,
+            BLOCK_N: shape[1],
             ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
-        wave_runtime=False,
+        use_buffer_load_ops=True,
+        use_buffer_store_ops=True,
+        wave_runtime=True,
     )
     options = set_default_run_config(options)
     return wave_compile(options, rmsnorm)
@@ -139,7 +135,7 @@ def rmsnorm_wave(
     weight: torch.Tensor,
     eps: float = 1e-6,
 ):
-    c = device_zeros(x.shape, dtype=torch.bfloat16)
+    c = torch.empty_like(x)
     kernel(x, weight, c)
 
     return c
@@ -222,7 +218,7 @@ def rmsnorm_vllm(
 
 
 def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
-    dtype = torch.bfloat16
+    dtype = torch.float16
     x = torch.randn(seq_len, hidden_size, dtype=dtype, device="cuda")
     weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
     residual = torch.randn_like(x) if use_residual else None
@@ -264,15 +260,15 @@ def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
 
 
 batch_size_range = [1]  # [2**i for i in range(0, 7, 2)]
-seq_length_range = [2**i for i in range(6, 11, 1)] + [5120]
-head_num_range = [1, 32, 48, 128]
-configs = list(itertools.product(head_num_range, batch_size_range, seq_length_range))
+seq_length_range = [1, 16] + [2**i for i in range(6, 11, 1)]
+hidden_size_range = [i * 128 for i in [1, 32, 48]] + [5120]
+configs = list(itertools.product(batch_size_range, seq_length_range, hidden_size_range))
 
 
 def get_benchmark(use_residual):
     @triton.testing.perf_report(
         triton.testing.Benchmark(
-            x_names=["head_num", "batch_size", "seq_len"],
+            x_names=["batch_size", "seq_len", "hidden_size",],
             x_vals=[list(_) for _ in configs],
             line_arg="provider",
             line_vals=["huggingface", "wave", "vllm", "triton"],
@@ -283,17 +279,14 @@ def get_benchmark(use_residual):
             args={},
         )
     )
-    def benchmark(head_num, batch_size, seq_len, provider):
-        dtype = torch.bfloat16
-        hidden_size = head_num * 128  # assuming head_dim = 128
+    def benchmark(batch_size, seq_len, hidden_size, provider):
+        dtype = torch.float16
 
         x = torch.randn(seq_len, hidden_size, dtype=dtype, device="cuda")
         weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
         residual = torch.randn_like(x) if use_residual else None
 
         quantiles = [0.5, 0.2, 0.8]
-
-        wave_kernel = get_rmsnorm_wave(x.shape)
 
         if provider == "huggingface":
             ms, min_ms, max_ms = triton.testing.do_bench(
@@ -305,6 +298,7 @@ def get_benchmark(use_residual):
                 quantiles=quantiles,
             )
         elif provider == "wave":
+            wave_kernel = get_rmsnorm_wave(x.shape)
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: rmsnorm_wave(
                     wave_kernel,
@@ -353,7 +347,7 @@ if __name__ == "__main__":
 
     # Run correctness test
     calculate_diff(
-        batch_size=4, seq_len=128, hidden_size=4096, use_residual=args.use_residual
+        batch_size=1, seq_len=128, hidden_size=1024, use_residual=args.use_residual
     )
 
     # Get the benchmark function with proper use_residual setting
