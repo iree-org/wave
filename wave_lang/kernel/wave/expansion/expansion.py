@@ -37,6 +37,9 @@ from ...ops.wave_ops import (
 from ..constraints import (
     Constraint,
 )
+from ..utils.general_utils import (
+    ceildiv,
+)
 from ..utils.graph_utils import (
     get_inputs,
     get_users,
@@ -398,7 +401,9 @@ def get_mma_reduction_count(arg: MMA, dim_scaling: dict[IndexSymbol, int]) -> in
         idxc = IndexingContext.current()
         tile_size = idxc.get_static_value(arg.reduction_dim)
         assert tile_size, f"Dimension not known : {arg.reduction_dim}"
-        reduction_count = max(tile_size // arg.vector_shapes[arg.reduction_dim], 1)
+        reduction_count = max(
+            ceildiv(tile_size, arg.vector_shapes[arg.reduction_dim]), 1
+        )
     return reduction_count
 
 

@@ -13,7 +13,7 @@ from typing import Optional
 import sympy
 import torch.fx as fx
 
-from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
+from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol, xor
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -38,10 +38,11 @@ from .minimize_global_loads import (
 from .utils.general_utils import (
     ceildiv,
     delinearize_index,
+    find_index_bounds,
     get_hardware_constraint,
     infer_dim,
     remove_thread_indexing,
-    find_index_bounds,
+    remove_global_indexing,
 )
 from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
@@ -224,6 +225,8 @@ def emit_global_to_lds(
     logger.info(f"global_index={global_index}")
 
     new_writes = defaultdict(list)
+
+    commmon_id = None
     for i in range(expected_number_of_loads):
         # As we adjusted our shape to be in `elements_per_thread` chunks, each
         # subsequent load will be `total_number_of_threads` elements apart.
@@ -260,6 +263,13 @@ def emit_global_to_lds(
                 write.mapping,
                 bounds,
             ).add_to_graph(write.graph)
+
+        if i == 0:
+            commmon_id = id(new_write)
+
+        # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
+        # they are part of the same group later.
+        new_write.pre_expansion_id = commmon_id
 
         new_writes[write.memory].append(new_write)
         if drop_padding:
@@ -438,3 +448,98 @@ def gather_to_shared(
         update_write_dependencies(new_writes, trace)
 
     DCE(trace)
+
+
+def gather_to_shared_swizzling(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+):
+    """
+    This pass is used to swizzle the gather to shared op global index and
+    corresponding LDS load index to reduce LDS bank conflicts.
+
+    The formula for swizzling is:
+    ```
+    new_col = xor(row % max_phase, col // elements_per_thread) * elements_per_thread
+    ```
+    """
+    if "gfx95" not in options.target:
+        logger.info("gather_to_shared_swizzling not supported on this architecture")
+        return
+
+    logger.info("gather_to_shared_swizzling")
+
+    id_to_gather = defaultdict(list)
+    for gather in trace.walk(lambda x: isinstance(get_custom(x), GatherToLDS)):
+        gather = get_custom(gather)
+        key = gather.pre_expansion_id
+        id_to_gather[key].append(gather)
+
+    if not id_to_gather:
+        return
+
+    for gathers in id_to_gather.values():
+        mem = gathers[0].dst
+        reads = [
+            get_custom(read) for read in mem.users if isinstance(get_custom(read), Read)
+        ]
+        gather = gathers[0]
+        read = reads[0]
+        if (
+            gather.dtype != read.dtype
+            or gather.elements_per_thread != read.elements_per_thread
+        ):
+            logger.info(
+                "mismatched gather and read thread shapes: "
+                f"gather.dtype={gather.dtype}, read.dtype={read.dtype}, "
+                f"gather.elements_per_thread={gather.elements_per_thread}, "
+                f"read.elements_per_thread={read.elements_per_thread}"
+            )
+            continue
+
+        elements_per_thread = gather.elements_per_thread
+        logger.info(f"elements_per_thread={elements_per_thread}")
+
+        if elements_per_thread * gather.dtype.bitwidth() != 128:
+            logger.info(
+                f"gather to shared swizzling only supported for 128-bit elements, got {elements_per_thread}x{gather.dtype}"
+            )
+            continue
+
+        shape = get_custom(mem).type.symbolic_shape
+        if len(shape) < 2:
+            logger.info(f"shape={shape} must be at least 2D")
+            continue
+
+        col_dim = infer_dim(shape[-1])
+        row_dim = infer_dim(shape[-2])
+
+        max_phase = 8
+
+        for read in reads:
+            index = remove_global_indexing(read.index, constraints)
+            col_seq = index[col_dim]
+            row_seq = index[row_dim]
+            col = col_seq.start // elements_per_thread
+            row = row_seq.start % max_phase
+            col = xor(row, col) * elements_per_thread
+            index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
+            logger.info(f"read.index={read.index} -> {index}")
+            read.index = index
+
+        for gather in gathers:
+            # Only apply swizzling to the thread part of the index and keep the
+            # global part of the index unchanged.
+            index = dict(gather.src_index)
+            global_index = remove_thread_indexing(index)
+            local_index = remove_global_indexing(index, constraints)
+            col_seq = local_index[col_dim]
+            row_seq = local_index[row_dim]
+            col = col_seq.start // elements_per_thread
+            row = row_seq.start % max_phase
+            col = xor(row, col) * elements_per_thread
+            col = global_index[col_dim].start + col
+            index[col_dim] = IndexSequence(col, col_seq.size, col_seq.stride)
+            logger.info(f"gather.src_index={gather.src_index} -> {index}")
+            gather.update_arg("src_index", index)

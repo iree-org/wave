@@ -134,6 +134,8 @@ def debug_log(
     label: Optional[str],
     mapping: Optional[IndexMapping] = None,
     mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    printer: Optional[Callable[[str, Any], Any]] = None,
+    handler: Optional[Callable[[dict[str, Any]], Any]] = None,
 ): ...
 
 
@@ -439,8 +441,6 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
 
 def get_custom(node: fx.Node) -> "CustomOp":
     """Get the corresponding CustomOp for a given fx.Node."""
-    if isinstance(node, CustomOp):
-        raise ValueError(f"fx.Node required but got custom op {node}")
     if not isinstance(node, fx.Node):
         raise ValueError(f"Expected an fx.Node but got {type(node)}")
 
@@ -1161,6 +1161,15 @@ class Placeholder(CustomOp):
 
         get_custom(var).index = value
 
+    # This method is created for parity with `Allocate` op and is used
+    # when calculating bound expressions.
+    @property
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        unpadded_dim = {}
+        for sym_type in self.type.symbolic_shape:
+            unpadded_dim[sym_type] = sym_type
+        return unpadded_dim
+
 
 @dataclass
 class IterArg(Placeholder):
@@ -1224,6 +1233,23 @@ class Allocate(CustomOp):
             (math.prod(self.distributed_shape) + self.tail_padding)
             * self.dtype.bitwidth()
         ) // 8
+
+    @property
+    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+        from ..wave.utils.general_utils import is_scaled_dim, infer_dim
+
+        unpadded_dim = {}
+        last_sym_type = self.type.symbolic_shape[-1]
+        last_sym_type = (
+            infer_dim(self.type.symbolic_shape[-1])
+            if is_scaled_dim(last_sym_type)
+            else last_sym_type
+        )
+        unpadded_dim[last_sym_type] = self.distributed_shape[-1] - self.padding
+        for idx, sym_type in enumerate(self.type.symbolic_shape[:-1]):
+            sym_type = infer_dim(sym_type) if is_scaled_dim(sym_type) else sym_type
+            unpadded_dim[sym_type] = self.distributed_shape[idx]
+        return unpadded_dim
 
 
 @define_op("self_index")
@@ -1634,6 +1660,10 @@ class Read(CustomOp):
         return get_custom(self.memory).type
 
     @property
+    def dtype(self) -> DataType:
+        return self.memory_type.dtype
+
+    @property
     def write_dependency(self) -> fx.Node:
         return self._write_dependency
 
@@ -1849,13 +1879,10 @@ class Iterate(NestedRegionOp):
     @property
     def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:
         expand_dims: list[IndexSymbol] = []
-        return_node = [
-            nested_node
-            for nested_node in self.get_root_graph().subgraphs[self.subgraph_name].nodes
-            if isinstance(get_custom(nested_node), Output)
-        ]
-        assert len(return_node) == 1
-        return_vals = get_custom(return_node[0]).return_vals[0]
+        subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
+        return_node = get_custom(subgraph.output_node())
+        assert isinstance(return_node, Output)
+        return_vals = return_node.return_vals[0]
         if not isinstance(return_vals, Sequence):
             return_vals = [return_vals]
         for return_val in return_vals:
@@ -1889,21 +1916,22 @@ class Iterate(NestedRegionOp):
 
     @property
     def index(self) -> list[dict[IndexSymbol, IndexSequence]]:
-        for node in self.get_root_graph().subgraphs[self.subgraph_name].nodes:
-            if isinstance(output := get_custom(node), Output):
-                return_vals = output.return_vals[0]
-                return (
-                    [
-                        (
-                            get_custom(val).acc_index
-                            if isinstance(get_custom(val), (MMA, ScaledMMA))
-                            else val.index
-                        )
-                        for val in return_vals
-                    ]
-                    if isinstance(return_vals, (Sequence))
-                    else return_vals.index
+        subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
+        output = get_custom(subgraph.output_node())
+        assert isinstance(output, Output)
+        return_vals = output.return_vals[0]
+        return (
+            [
+                (
+                    get_custom(val).acc_index
+                    if isinstance(get_custom(val), (MMA, ScaledMMA))
+                    else val.index
                 )
+                for val in return_vals
+            ]
+            if isinstance(return_vals, (Sequence))
+            else return_vals.index
+        )
 
     @index.setter
     def index(self, value: Any):
@@ -2051,9 +2079,19 @@ class DebugLog(CustomOp):
     Represents a write to an implicit global memory location.
     The kernel will implicitly have an extra memory input added that will be injected by the Python kernel launcher.
     The memory can be accessed by passing an an extra keyword to kernel invokation "debug_logs" with an empty dictionary.
-    The dictionary will be mutated to contain the logs.
+    The dictionary will be mutated, adding the `label`s as keys that map to nested dictionaries.
+    The nested dictionaries have a `value` field with the log tensor, and other keys (eg. `symbolic_shape`).
 
-    This is intended as a primitive for building more convenient debug logging tools.
+    IE the debug_logs dictionary will look like:
+    `{LABEL: {"value": LOG_TENSOR, (other metadata keys) ...}}``
+
+    Note that the logs collected in the `debug_logs` field, or handled by `printer` or `handler` represent a global view of the log after all writes, not limited to any one wave or loop iteration.
+
+    The optional `printer` argument should be a function that accepts a string (the log's `label`) and the value of the log itself (a Torch tensor).
+    A handy value for this is `print`, though note that it will probably print an abbreviated view of the global tensor.
+
+    The optional `handler` argument should be a function that accepts the whole `debug_logs` object (IE all logs, not just one).
+    The handler function gives a way to specify something like a viewer for all logs, but specify it inline among print functions rather than separately.
 
     The API and semantics of this operation are not yet stable, but since it is just a debugging tool, you want to take any debug logging out of your kernel before shipping it anyway.
     """
@@ -2062,6 +2100,8 @@ class DebugLog(CustomOp):
     label: Optional[str] = None
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+    printer: Optional[Callable[[str, Any], Any]] = None
+    handler: Optional[Callable[[dict[str, Any]], Any]] = None
 
     @property
     def memory(self) -> Optional[fx.Proxy]:
@@ -2175,9 +2215,11 @@ class GetResult(CustomOp):
             return custom_index
         if not isinstance(custom_index, Sequence):
             return custom_index
-        assert self.res_idx < len(
-            custom.indexing_dims
-        ), f"Invalid {custom_index=} with {self.res_idx=} and {custom.indexing_dims=}\n{custom}"
+
+        # `indexing_dims` is way too expensive to use it in assert.
+        # assert self.res_idx < len(
+        #     custom.indexing_dims
+        # ), f"Invalid {custom_index=} with {self.res_idx=} and {custom.indexing_dims=}\n{custom}"
         return custom_index[self.res_idx]
 
     @index.setter

@@ -67,7 +67,7 @@ from .decompose_reduce_ops import decompose_reduce_ops
 from .decompose_scan_ops import decompose_scan_ops
 from .decompose_vmma_ops import decompose_vmma_ops
 from .expansion.expansion import add_get_results, expand_graph
-from .gather_to_shared import gather_to_shared
+from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
 from .hoisting import hoist_loop_invariant_ops
@@ -562,6 +562,7 @@ class LaunchableWave(Launchable):
         trace: CapturedTrace,
         options: WaveCompileOptions,
         debug_arg_info: list[DebugArgInfo],
+        debug_handlers: list[Any],
         print_ir_before: Sequence[str] = [],
         print_ir_after: Sequence[str] = [],
     ):
@@ -574,7 +575,7 @@ class LaunchableWave(Launchable):
             self.hardware_constraints[0].subs_vector_shapes(idxc.subs)
 
         return [
-            partial(debug_log_hoist, trace),
+            partial(debug_log_hoist, trace, debug_handlers),
             partial(initialize_iter_args, trace),
             partial(self.create_induction_vars, trace),
             partial(self.initialize_reductions, trace),
@@ -638,6 +639,7 @@ class LaunchableWave(Launchable):
             print(f"\n***Tracing kernel {self._name}***")
 
         debug_arg_info = []
+        debug_handlers = []
 
         trace = self._trace(location_capture_config=options.location_capture_config)
         if (
@@ -651,7 +653,12 @@ class LaunchableWave(Launchable):
 
         # Initial passes, pre-optimization.
         graph_passes = self.build_initial_pass_pipeline(
-            trace, options, debug_arg_info, print_ir_before, print_ir_after
+            trace,
+            options,
+            debug_arg_info,
+            debug_handlers,
+            print_ir_before,
+            print_ir_after,
         )
 
         graph_passes += [
@@ -664,6 +671,7 @@ class LaunchableWave(Launchable):
             graph_passes += [
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(gather_to_shared, trace, self.constraints, options),
+                partial(gather_to_shared_swizzling, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
@@ -777,6 +785,7 @@ class LaunchableWave(Launchable):
             *self.compile_to_mlir(trace, context, module_op, options=options),
             options,
             debug_arg_info,
+            debug_handlers,
         )
 
     def aot_execute(self, args, kwargs):

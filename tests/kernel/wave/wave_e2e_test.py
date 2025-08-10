@@ -116,9 +116,9 @@ user_specified_test_shapes = ""
 test_params_path = os.environ.get("TEST_PARAMS_PATH", None)
 
 
-def mark_shapes_xfail(src_shapes, xfail_shapes):
-    mark = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
-    return [(mark(s) if s in xfail_shapes else s) for s in src_shapes]
+def mark_shapes_skip(src_shapes, skip_shapes, reason=None):
+    mark = lambda *a: pytest.param(*a, marks=pytest.mark.skip(reason=reason))
+    return [(mark(s) if s in skip_shapes else s) for s in src_shapes]
 
 
 if test_params_path:
@@ -921,7 +921,8 @@ def test_offset_write(shape, use_buffer_ops, run_bench):
 
 @require_e2e
 @pytest.mark.parametrize(
-    "shape", mark_shapes_xfail(get_test_shapes("test_copy"), [(111, 813)])
+    "shape",
+    mark_shapes_skip(get_test_shapes("test_copy"), [(111, 813)], "TODO: OOB scatter"),
 )
 @param_bool("use_buffer_ops", "buf_ops")
 def test_offset_write_one(shape, use_buffer_ops, run_bench):
@@ -2264,6 +2265,17 @@ def test_debug_log(dynamic_dims: bool):
     constraints += [tkw.WaveConstraint(M, BLOCK_M)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N)]
 
+    printer_args = None
+    handler_arg = None
+
+    def printer(*args):
+        nonlocal printer_args
+        printer_args = args
+
+    def handler(arg):
+        nonlocal handler_arg
+        handler_arg = arg
+
     @tkw.wave(constraints)
     def test(
         a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
@@ -2272,12 +2284,12 @@ def test_debug_log(dynamic_dims: bool):
     ):
         lhs = tkw.read(a)
         rhs = tkw.read(b)
-        tkw.debug_log(lhs)
+        tkw.debug_log(lhs, printer=printer)
         tkw.debug_log(rhs, label="rhslog")
         lhs_mapped = tkw.read(a, mapping=read_mapping)
         tkw.debug_log(lhs_mapped, label="lhs_mapped", mapping=write_mapping)
         res = lhs + rhs
-        tkw.debug_log(res, label="res")
+        tkw.debug_log(res, label="res", handler=handler)
         tkw.write(res, c)
 
     a = device_randn(shape, dtype=torch.float16)
@@ -2304,12 +2316,15 @@ def test_debug_log(dynamic_dims: bool):
 
     debug_logs = {}
     test(a, b, c, debug_logs=debug_logs)
-    assert_close(a, debug_logs["debug_log_output_0"])
-    assert_close(b, debug_logs["rhslog"])
-    assert_close(c, debug_logs["res"])
-    # with the input mapping the rows of the first half are duplicated, with the output mapping the duplicate rows are written back only to the first half
+    assert_close(a, debug_logs["debug_log_output_0"]["value"])
+    assert printer_args[0] == "debug_log_output_0"
+    assert printer_args[1] is debug_logs["debug_log_output_0"]["value"]
+    assert_close(b, debug_logs["rhslog"]["value"])
+    assert_close(c, debug_logs["res"]["value"])
+    # with the input mapping the rows of the first half are duplicated, with the
+    # output mapping the duplicate rows are written back only to the first half.
     assert_close(
-        a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"][0 : shape[0] // 2, :]
+        a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"]["value"][0 : shape[0] // 2, :]
     )
 
 
@@ -2371,3 +2386,4 @@ def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
     dilated_conv(x, we, dilation, out)
 
     assert_close(out, out_ref, rtol=1e-03, atol=1e-02)
+    assert handler_arg == debug_logs

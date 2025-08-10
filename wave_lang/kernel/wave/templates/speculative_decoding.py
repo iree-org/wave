@@ -237,16 +237,6 @@ def get_speculative_sampling_kernel(
             GLOBAL_ADDRESS_SPACE_0,
             tkl.i32,
         ],
-        cur_prob_offset_vec: tkl.Memory[
-            BATCH_SIZE,
-            GLOBAL_ADDRESS_SPACE_0,
-            tkl.i32,
-        ],
-        last_accepted_retrieve_idx_vec: tkl.Memory[
-            BATCH_SIZE,
-            GLOBAL_ADDRESS_SPACE_0,
-            tkl.i32,
-        ],
     ):
         one = tkw.Register[BATCH_SIZE, tkl.i32](1)
         zero = tkw.Register[BATCH_SIZE, tkl.i32](0)

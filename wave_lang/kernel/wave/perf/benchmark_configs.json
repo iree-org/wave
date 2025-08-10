@@ -1,7 +1,8 @@
 {
-    "shapes": [
+    "attention_bhsd_shapes": [
         {
-            "name": "Sample1",
+            "name": "test-case-1",
+            "description": "Long context with equal query/key lengths",
             "batch_size": 1,
             "num_heads": 40,
             "seq_len_q": 25600,
@@ -9,12 +10,24 @@
             "head_dim": 128
         },
         {
-            "name": "Sample2",
+            "name": "test-case-2",
+            "description": "Long query with short key",
             "batch_size": 1,
             "num_heads": 40,
             "seq_len_q": 25600,
             "seq_len_k": 512,
             "head_dim": 128
+        }
+    ],
+    "spec_sampling_shapes": [
+        {
+            "name": "test-case-1",
+            "description": "Speculative sampling predictions and accept decisions",
+            "threshold_single": 1,
+            "threshold_acc": 1,
+            "expected_predicts": [3, -1, -1, 4, 5, 18, 11, -1, -1, -1, 12, 18],
+            "expected_accept_index": [[0, 3, 4, 5], [6, 10, 11, -1]],
+            "expected_accept_token_num": [3, 2]
         }
     ]
 }
