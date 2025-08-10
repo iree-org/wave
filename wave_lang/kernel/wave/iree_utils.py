@@ -237,7 +237,6 @@ def generate_iree_ref(
             options,
             kernel_inputs,
             [],  # kernel_outputs,
-            [],  # dynamic_symbols,
             vmfb,
             func_name,
             **benchmark_flags,
