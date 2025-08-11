@@ -910,6 +910,7 @@ def test_unary_lowerings():
         res = tkw.exp(res)
         res = tkw.bitcast(res, tkl.f16)
         res = tkw.sqrt(res)
+        res = tkw.rsqrt(res)
         res = tkw.log10(res)
 
         tkw.write(res, a, elements_per_thread=4)
@@ -981,6 +982,9 @@ def test_unary_lowerings():
 
     # Test sqrt
     # CHECK: %[[SQRT:.+]] = math.sqrt %[[EXP]]
+
+    # Test rsqrt
+    # CHECK: %[[SQRT:.+]] = math.rsqrt %[[EXP]]
 
     # Tests log10
     # CHECK: %[[LOG10:.+]] = math.log10 %[[SQRT]] : vector<4xf16>
