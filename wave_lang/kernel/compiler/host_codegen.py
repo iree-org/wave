@@ -94,6 +94,7 @@ def isolated_test_call(
         input_tensors = memref_to_tensor(input_types, use_views=async_dispatch)
         argument_dims = get_dynamic_dims(sig.kernel_buffer_bindings, dynamic_symbols)
 
+        # Map dynamic symbols to buffer argument indices and dimensions.
         arg_dim_mapping: dict[IndexSymbol, tuple[int, int]] = {}
         for arg_idx, b in enumerate(sig.kernel_buffer_bindings):
             shape = b.kernel_buffer_type.symbolic_shape
@@ -165,6 +166,7 @@ def isolated_test_call(
                 if b.symbol_type is not None
             ]
 
+            # Get the dynamic symbols values from the buffer dimensions.
             dynamic_argument_map: dict[IndexSymbol, Value] = {}
             for symbol in dynamic_symbols:
                 arg_idx, dim_idx = arg_dim_mapping[symbol]
