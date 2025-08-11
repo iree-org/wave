@@ -93,6 +93,7 @@ from ...ops.wave_ops import (
     register,
     reshape,
     roundeven,
+    rsqrt,
     scalar,
     scaled_mma,
     scheduling_barrier,
@@ -922,6 +923,14 @@ def handle_sqrt(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
     if _is_float_type(element_type):
         return math_d.sqrt(source)
+    raise ValidationError(f"Found unhandled operand type for sqrt: {element_type}")
+
+
+@handle_unary_op(rsqrt)
+def handle_rsqrt(source: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(source.type)
+    if _is_float_type(element_type):
+        return math_d.rsqrt(source)
     raise ValidationError(f"Found unhandled operand type for sqrt: {element_type}")
 
 

@@ -156,6 +156,9 @@ def exp2(src: "Register") -> "Register": ...
 def sqrt(src: "Register") -> "Register": ...
 
 
+def rsqrt(src: "Register") -> "Register": ...
+
+
 def log2(src: "Register") -> "Register": ...
 
 
@@ -934,6 +937,7 @@ class ComparisonPyOp(BinaryOpBase, ABC):
 @define_interface_op("exp")
 @define_interface_op("exp2")
 @define_interface_op("sqrt")
+@define_interface_op("rsqrt")
 @define_interface_op("log2")
 @define_interface_op("log10")
 @define_interface_op("reciprocal")
