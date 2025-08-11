@@ -46,12 +46,6 @@ def compile_to_vmfb(
     if options.backend == "rocm":
         flags.append(f"--iree-hip-target={options.target}")
 
-    if options.gpu_native_math_precision:
-        # Polynomial approximation passes in MLIR/IREE often generate
-        # suboptimal code with redundant clamps and fptosi. This flag
-        # allows us to skip unnecessary approx for GPU.
-        flags.append("--iree-codegen-gpu-native-math-precision=true")
-
     if options.print_ir_after_all:
         flags.append("--mlir-print-ir-after-all")
 

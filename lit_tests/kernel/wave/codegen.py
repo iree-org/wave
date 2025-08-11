@@ -829,6 +829,15 @@ def test_dynamic_copy():
     # CHECK:            %[[D9:.*]] = arith.andi %[[D6]], %[[D8]] : vector<16xi1>
     # CHECK:            %[[D10:.*]] = vector.maskedload %[[D0]][%[[D1]], %[[D2]]], %[[D9]], %[[CST]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
     # CHECK:            vector.maskedstore %[[D0]][%[[D1]], %[[D2]]], %[[D9]], %[[D10]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16>
+    # CHECK:          func.func @isolated_benchmark$async(%[[ARG:.*]]: !hal.buffer_view, %[[FENCE:.*]]: !hal.fence, %{{.*}}: !hal.fence)
+    # CHECK:            %[[D0:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[0] : index
+    # CHECK:            %[[D1:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[1] : index
+    # CHECK:            %[[D2:.*]] = hal.tensor.import wait(%[[FENCE]]) => %[[ARG]] : !hal.buffer_view -> tensor<?x?xf16>{%[[D0]], %[[D1]]}
+    # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
+    # CHECK:            %[[DIM:.*]] = tensor.dim %[[D2]], %[[C0]] : tensor<?x?xf16>
+    # CHECK-DAG:        %[[C1:.*]] = arith.constant 1 : index
+    # CHECK:            %[[DIM_0:.*]] = tensor.dim %[[D2]], %[[C1]] : tensor<?x?xf16>
+    # CHECK:            %[[D3:.*]] = flow.dispatch @dynamic_copy::@dynamic_copy[%[[DIM]], %[[DIM_0]]](%[[D2]], %[[DIM]], %[[DIM_0]]) : (tensor<?x?xf16>{%[[DIM]], %[[DIM_0]]}, index, index) -> %[[D2]]{%[[DIM]], %[[DIM_0]]}
 
 
 @run_test
@@ -849,9 +858,10 @@ def test_add_float():
     add = wave_compile(get_wave_compile_options(), add)
     print(add.asm)
 
-    # CHECK-LABEL: func @add
-    # CHECK: %[[SLICE:.+]] = vector.load
-    # CHECK: arith.addf %[[SLICE]], %[[SLICE]] : vector<16xf16>
+    # CHECK-LABEL: test_add_float
+    # CHECK:       func.func @add
+    # CHECK:       %[[SLICE:.+]] = vector.load
+    # CHECK:       arith.addf %[[SLICE]], %[[SLICE]] : vector<16xf16>
 
 
 @run_test
@@ -871,9 +881,10 @@ def test_add_integer():
 
     test = wave_compile(get_wave_compile_options(), test)
     print(test.asm)
-    # CHECK-LABEL: func @test
-    # CHECK: %[[SLICE:.+]] = vector.load
-    # CHECK: arith.addi %[[SLICE]], %[[SLICE]] : vector<16xi32>
+    # CHECK-LABEL: test_add_integer
+    # CHECK:       func.func @test
+    # CHECK:       %[[SLICE:.+]] = vector.load
+    # CHECK:       arith.addi %[[SLICE]], %[[SLICE]] : vector<16xi32>
 
 
 @run_test
@@ -910,6 +921,7 @@ def test_unary_lowerings():
         res = tkw.exp(res)
         res = tkw.bitcast(res, tkl.f16)
         res = tkw.sqrt(res)
+        res = tkw.rsqrt(res)
         res = tkw.log10(res)
 
         tkw.write(res, a, elements_per_thread=4)
@@ -982,8 +994,11 @@ def test_unary_lowerings():
     # Test sqrt
     # CHECK: %[[SQRT:.+]] = math.sqrt %[[EXP]]
 
+    # Test rsqrt
+    # CHECK: %[[RSQRT:.+]] = math.rsqrt %[[SQRT]]
+
     # Tests log10
-    # CHECK: %[[LOG10:.+]] = math.log10 %[[SQRT]] : vector<4xf16>
+    # CHECK: %[[LOG10:.+]] = math.log10 %[[RSQRT]] : vector<4xf16>
 
 
 # Important to check lowering of scheduling/barrier ops.

@@ -35,7 +35,6 @@ class WaveCompileOptions:
     # === Backend options ===
     backend: str = "rocm"
     target: str = "gfx942"
-    gpu_native_math_precision: bool = False
     iree_preprocessing_pass_pipeline: str = None
 
     # === Benchmark options ===

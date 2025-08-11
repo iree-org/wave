@@ -952,6 +952,7 @@ def _convert_to_mlir_op(op_name: str) -> str:
         "shuffle": "wave.shuffle",
         "sin": "wave.sin",
         "sqrt": "wave.sqrt",
+        "rsqrt": "wave.rsqrt",
         "sub": "wave.sub",
         "sum": "wave.sum",
         "sync": "wave.sync",
