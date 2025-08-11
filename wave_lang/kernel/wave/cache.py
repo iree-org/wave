@@ -195,7 +195,6 @@ class WaveCacheManager(object):
             options.multi_buffer_count,
             options.backend,
             options.target,
-            options.gpu_native_math_precision,
             options.iree_preprocessing_pass_pipeline,
             options.override_mlir,
             options.optimization_level,

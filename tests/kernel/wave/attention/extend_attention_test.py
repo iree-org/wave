@@ -399,7 +399,6 @@ def testExtendAttention(
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        gpu_native_math_precision=True,
         wave_runtime=(True if use_wave_runtime else False),
     )
     options = set_default_run_config(options)
