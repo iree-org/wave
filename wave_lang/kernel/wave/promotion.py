@@ -121,6 +121,7 @@ def promote_node(
     address_space: IndexSymbol,
     constraints: list[Constraint],
     reorder_allocs: bool = True,
+    use_padding: bool = True,
 ):
     """Promotes the given operand in the provided graph
     to the specified address space.
@@ -141,11 +142,18 @@ def promote_node(
         memory_node = get_custom(node.memory)
         if isinstance(memory_node, Allocate) and memory_node.distributed_shape:
             constrained_shape = memory_node.distributed_shape
-        padding, padded_shape = apply_padding(constrained_shape, node.type.dtype)
-        allocate_node = Allocate(
-            symbolic_shape, padded_shape, node.type.dtype, address_space, padding
-        )
+
+        if use_padding:
+            padding, padded_shape = apply_padding(constrained_shape, node.type.dtype)
+            allocate_node = Allocate(
+                symbolic_shape, padded_shape, node.type.dtype, address_space, padding
+            )
+        else:
+            allocate_node = Allocate(
+                symbolic_shape, constrained_shape, node.type.dtype, address_space, 0
+            )
         allocate_node.add_to_graph(node.graph)
+
     last_write_to_shared = apply_promotion_pattern(
         node, allocate_node, last_write_to_shared, reorder_allocs
     )
@@ -156,6 +164,7 @@ def promote_placeholders(
     graph: CapturedTrace,
     constraints: list[Constraint],
     reorder_allocs: bool = True,
+    use_padding: bool = True,
 ):
     read_or_write_nodes = graph.walk(
         lambda node: isinstance(get_custom(node), Read)
@@ -174,6 +183,7 @@ def promote_placeholders(
                 address_space,
                 constraints,
                 reorder_allocs,
+                use_padding,
             )
 
 
