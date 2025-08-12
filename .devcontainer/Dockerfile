@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM rocm/dev-ubuntu-24.04:6.4 AS base
+FROM rocm/7.0-preview:rocm7.0_preview_ubuntu_22.04_vllm_0.9.1_mi35X_prealpha2 AS base
 
 FROM base AS devcontainer
 
@@ -13,9 +13,9 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
-RUN apt-get update \
-    && apt-get install -y git python3-dev python-is-python3 python3-venv \
-    && pip install --break-system-packages pre-commit black ruff
+# RUN apt-get update \
+#     && apt-get install -y git python3-dev python-is-python3 python3-venv \
+#     && pip install --break-system-packages pre-commit black ruff
 
 USER $USERNAME
 
