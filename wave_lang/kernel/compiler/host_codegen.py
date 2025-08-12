@@ -30,10 +30,11 @@ from .builder import (
     ModuleBuilder,
 )
 from .dispatch_codegen import StreamExecutable
-from .kernel_codegen import BindingDesc, KernelSignature
+from .kernel_codegen import BindingDesc, KernelSignature, BindingType
 from ..wave.constraints import DeviceConstraint
 
 from ..lang import Grid
+from ..lang.kernel_buffer import KernelBufferUsage
 import inspect
 
 from iree.compiler._mlir_libs._mlir.ir import Attribute
@@ -92,58 +93,104 @@ def substitute_dimensions_in_shape(symbolic_shape, symbol_map):
         return symbolic_shape
 
 
-def update_kernel_buffer_to_host_buffer(kernel_buffer_bindings, device_constraints):
+class HostSignature:
     """
-    Convert per-device kernel buffer bindings to host buffer bindings.
+    A signature for a host function that can be used to generate code.
+    This is used to create a host function that can be called from the kernel.
     """
 
-    # Create a mapping from tile dimensions to their full dimensions
-    tile_to_full_dim = {}
-    for constraint in device_constraints:
-        # constraint.dim is the full dimension (M, N)
-        # constraint.tile_size is the tile dimension (BLOCK_M, BLOCK_N)
-        tile_to_full_dim[constraint.tile_size] = constraint.dim
+    def __init__(
+        self,
+        kernel_sig: KernelSignature,
+        device_constraints: list[DeviceConstraint] = None,
+    ):
+        self.bindings: list[BindingDesc] = []
+        if device_constraints is None:
+            self.bindings = kernel_sig.bindings
+        else:
+            self.get_host_buffer(kernel_sig.bindings, device_constraints)
 
-    host_buffer_bindings = []
+    @property
+    def buffer_bindings(self) -> list[BindingDesc]:
+        """Gets all buffer bindings."""
+        return [b for b in self.bindings if b.binding_type == BindingType.KERNEL_BUFFER]
 
-    for binding in kernel_buffer_bindings:
-        # Update the kernel buffer type's symbolic shape, if it's part of
-        # of the device constraints
-        original_type = binding.kernel_buffer_type
-        new_kernel_buffer_type = original_type
-        if hasattr(original_type, "symbolic_shape"):
-            original_shape = original_type.symbolic_shape
-            new_shape = substitute_dimensions_in_shape(original_shape, tile_to_full_dim)
+    @property
+    def input_buffer_bindings(self) -> list[BindingDesc]:
+        """Gets all buffer bindings with input usage."""
+        return [
+            b
+            for b in self.bindings
+            if b.binding_type == BindingType.KERNEL_BUFFER
+            and b.kernel_buffer_type.usage == KernelBufferUsage.INPUT
+        ]
 
-            # if the new shape is the same as the original shape, no change is needed
-            if new_shape != original_shape:
-                sig = inspect.signature(original_type.new_subtype)
-                kwargs = {"symbolic_shape": new_shape}
+    @property
+    def output_buffer_bindings(self) -> list[BindingDesc]:
+        """Gets all buffer bindings with input usage."""
+        return [
+            b
+            for b in self.bindings
+            if b.binding_type == BindingType.KERNEL_BUFFER
+            and b.kernel_buffer_type.usage == KernelBufferUsage.OUTPUT
+        ]
 
-                for param in sig.parameters:
-                    if param == "cls" or param == "symbolic_shape":
-                        continue
+    @property
+    def scalar_buffer_bindings(self) -> list[BindingDesc]:
+        """Gets all scalar bindings."""
+        return [b for b in self.bindings if b.binding_type == BindingType.SCALAR_VALUE]
 
-                    # keep the rest of the parameters as they are
-                    kwargs[param] = getattr(original_type, param, None)
+    def get_host_buffer(self, kernel_buffer_bindings, device_constraints):
+        """
+        Convert per-device kernel buffer bindings to host buffer bindings.
+        """
 
-                # create a new kernel buffer type with the updated symbolic shape
-                # and other parameters
-                new_kernel_buffer_type = original_type.new_subtype(**kwargs)
+        # Create a mapping from tile dimensions to their full dimensions
+        tile_to_full_dim = {}
+        for constraint in device_constraints:
+            # constraint.dim is the full dimension (M, N)
+            # constraint.tile_size is the tile dimension (BLOCK_M, BLOCK_N)
+            tile_to_full_dim[constraint.tile_size] = constraint.dim
 
-        # create a host binding descriptor
-        host_binding = BindingDesc(
-            reference=binding.reference,
-            binding_type=binding.binding_type,
-            name=binding.name,
-            kernel_buffer_type=new_kernel_buffer_type,
-            symbol_type=binding.symbol_type,
-            scalar_type=binding.scalar_type,
-        )
+        for binding in kernel_buffer_bindings:
+            # Update the kernel buffer type's symbolic shape, if it's part of
+            # of the device constraints
+            original_type = binding.kernel_buffer_type
+            new_kernel_buffer_type = original_type
+            if hasattr(original_type, "symbolic_shape"):
+                original_shape = original_type.symbolic_shape
+                new_shape = substitute_dimensions_in_shape(
+                    original_shape, tile_to_full_dim
+                )
 
-        host_buffer_bindings.append(host_binding)
+                # if the new shape is the same as the original shape, no change is needed
+                if new_shape != original_shape:
+                    sig = inspect.signature(original_type.new_subtype)
+                    kwargs = {"symbolic_shape": new_shape}
 
-    return host_buffer_bindings
+                    for param in sig.parameters:
+                        if param == "cls" or param == "symbolic_shape":
+                            continue
+
+                        # keep the rest of the parameters as they are
+                        kwargs[param] = getattr(original_type, param, None)
+
+                    # create a new kernel buffer type with the updated symbolic shape
+                    # and other parameters
+                    new_kernel_buffer_type = original_type.new_subtype(**kwargs)
+
+            # create a host binding descriptor
+            host_binding = BindingDesc(
+                reference=binding.reference,
+                binding_type=binding.binding_type,
+                name=binding.name,
+                kernel_buffer_type=new_kernel_buffer_type,
+                symbol_type=binding.symbol_type,
+                scalar_type=binding.scalar_type,
+            )
+
+            self.bindings.append(host_binding)
+        return
 
 
 def create_device_tensor_slices(
@@ -362,33 +409,18 @@ def isolated_test_call(
     device_constraints: Optional[list[DeviceConstraint]] = None,
 ):
     with InsertionPoint(mb.body_block), Location.unknown():
-        # Create host buffer bindings for multi-device scenarios
-        host_buffer_bindings = update_kernel_buffer_to_host_buffer(
-            sig.kernel_buffer_bindings, device_constraints
-        )
+        host_sig = HostSignature(sig, device_constraints)
 
-        host_scalar_bindings = update_kernel_buffer_to_host_buffer(
-            sig.scalar_bindings, device_constraints
-        )
-
-        host_buffer_output_bindings = update_kernel_buffer_to_host_buffer(
-            sig.kernel_buffer_output_bindings, device_constraints
-        )
-
-        host_buffer_input_bindings = update_kernel_buffer_to_host_buffer(
-            sig.kernel_buffer_input_bindings, device_constraints
-        )
-
-        input_types = [b.as_mlir_type() for b in host_buffer_bindings] + [
-            b.as_mlir_type() for b in host_scalar_bindings
+        input_types = [b.as_mlir_type() for b in host_sig.buffer_bindings] + [
+            b.as_mlir_type() for b in host_sig.scalar_buffer_bindings
         ]
 
         input_tensors = memref_to_tensor(input_types, use_views=async_dispatch)
-        argument_dims = get_dynamic_dims(host_buffer_bindings, dynamic_symbols)
+        argument_dims = get_dynamic_dims(host_sig.buffer_bindings, dynamic_symbols)
 
         # Map dynamic symbols to buffer argument indices and dimensions.
         arg_dim_mapping: dict[IndexSymbol, tuple[int, int]] = {}
-        for arg_idx, b in enumerate(host_buffer_bindings):
+        for arg_idx, b in enumerate(host_sig.buffer_bindings):
             shape = b.kernel_buffer_type.symbolic_shape
             for dim_idx, dim_symbol in enumerate(shape):
                 if dim_symbol in arg_dim_mapping:
@@ -401,9 +433,9 @@ def isolated_test_call(
             input_tensors += [fence_type] * 2
             func_name = func_name + "$async"
 
-        output_types = [b.as_mlir_type() for b in host_buffer_output_bindings]
+        output_types = [b.as_mlir_type() for b in host_sig.output_buffer_bindings]
         output_tensors = memref_to_tensor(output_types, use_views=async_dispatch)
-        result_dims = get_dynamic_dims(host_buffer_output_bindings, dynamic_symbols)
+        result_dims = get_dynamic_dims(host_sig.output_buffer_bindings, dynamic_symbols)
 
         ftype = FunctionType.get(input_tensors, output_tensors)
         func_op = func_d.FuncOp(func_name, ftype)
@@ -419,7 +451,7 @@ def isolated_test_call(
             arg_locs += [Location.unknown()] * 2
 
         entry_block = func_op.add_entry_block(arg_locs)
-        scalars_offset = len(host_buffer_bindings)
+        scalars_offset = len(host_sig.buffer_bindings)
         scalars_count = len(scalar_bindings)
         dynamic_offset = scalars_offset + scalars_count
 
@@ -430,7 +462,7 @@ def isolated_test_call(
                 out_fence = arguments[-1]
                 arguments = list(arguments[:-2])
 
-                for i, b in enumerate(host_buffer_bindings):
+                for i, b in enumerate(host_sig.buffer_bindings):
                     shape = b.kernel_buffer_type.symbolic_shape
 
                     arg = arguments[i]
@@ -467,7 +499,9 @@ def isolated_test_call(
             device_tensor_maps = {}  # Store all device maps
             constant_map = {}
             for i, (host_tensor, binding) in enumerate(
-                zip(arguments[: len(host_buffer_bindings)], host_buffer_bindings)
+                zip(
+                    arguments[: len(host_sig.buffer_bindings)], host_sig.buffer_bindings
+                )
             ):
                 if device_constraints and device_layout:
                     slices, device_tensor_maps, constant_map = (
@@ -491,16 +525,14 @@ def isolated_test_call(
             dispatch = SymbolRefAttr.get([exe.sym_name.value, entrypoint])
             entrypoints = ArrayAttr.get([dispatch])
 
-            buffer_binding_count = len(host_buffer_bindings)
-            input_binding_count = len(host_buffer_input_bindings)
+            buffer_binding_count = len(host_sig.buffer_bindings)
+            input_binding_count = len(host_sig.input_buffer_bindings)
             tied_operands = ArrayAttr.get(
                 [
                     IntegerAttr.get(IndexType.get(), out_idx)
                     for out_idx in range(input_binding_count, buffer_binding_count)
                 ]
             )
-
-            breakpoint()
 
             output_list = []
             for i in range(0, len(device_tensor_maps.keys())):
@@ -509,7 +541,7 @@ def isolated_test_call(
                 for arg in device_tensor_maps[i]:
                     block_argument_list.append(arg["slice"])
                     if arg["binding_name"] in [
-                        b.name for b in host_buffer_output_bindings
+                        b.name for b in host_sig.output_buffer_bindings
                     ]:
                         # Get the slice shape from the device mapping
                         slice_shape = arg["result_shape"]
@@ -540,10 +572,10 @@ def isolated_test_call(
             if len(output_list) > 1:
                 # getting the orignial output tensor
                 result_tensor = arguments[
-                    len(host_buffer_bindings) - len(host_buffer_output_bindings)
+                    len(host_sig.buffer_bindings) - len(host_sig.output_buffer_bindings)
                 ]
-                output_idx = len(host_buffer_bindings) - len(
-                    host_buffer_output_bindings
+                output_idx = len(host_sig.buffer_bindings) - len(
+                    host_sig.output_buffer_bindings
                 )
 
                 for i, dispatch_result in enumerate(output_list):
@@ -561,8 +593,6 @@ def isolated_test_call(
                                 IntegerAttr.get(IndexType.get(), start_offset),
                             )
                         offsets.append(constant_map[start_offset])
-
-                    breakpoint()
 
                     # Update the result tensor with this device's output
                     # flow_d.TensorUpdateOp signature: (target, target_dims, start_indices, update, update_dims)
