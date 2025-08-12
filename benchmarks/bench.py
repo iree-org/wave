@@ -14,9 +14,6 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
-from wave_lang.kernel.wave.utils.torch_utils import (
-    device_zeros,
-)
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 
 
@@ -73,11 +70,11 @@ def fused_rmsnorm(x, weight, eps: float = 1e-6, autotune=False, inplace=False):
     return output
 
 
-def get_rmsnorm_wave(shape, eps: float = 1e-6):
+def get_rmsnorm_wave_rsqrt(shape, eps: float = 1e-6):
     M = tkl.sym.M
     N = tkl.sym.N
     BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_N = sympy.Min(sympy.Max(64 * 4, N / 16), N)
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
     
     constraints: list[tkw.Constraint] = [
@@ -93,15 +90,15 @@ def get_rmsnorm_wave(shape, eps: float = 1e-6):
 
     @tkw.wave(constraints)
     def rmsnorm(
-        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
-        weight: tkl.Memory[N, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+        weight: tkl.Memory[N, ADDRESS_SPACE, tkl.bf16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
     ):
         length_embedding = tkl.Register[M, tkl.f32](N)
         eps_reg = tkl.Register[M, tkl.f32](eps)
         a_reg = tkw.read(a)
         a_reg = tkw.cast(a_reg, tkl.f32)
-        mean = tkw.sum(a_reg * a_reg, dim=N, block=False) / length_embedding + eps_reg
+        mean = tkw.sum(a_reg * a_reg, dim=N, block=True) / length_embedding + eps_reg
         rms = tkw.rsqrt(mean)
         rms_broad = tkw.broadcast(rms, [M, N])
         a_scaled = a_reg * rms_broad
@@ -109,7 +106,7 @@ def get_rmsnorm_wave(shape, eps: float = 1e-6):
         w_reg = tkw.cast(w_reg, tkl.f32)
         w_broad = tkw.broadcast(w_reg, [M, N])
         output = a_scaled * w_broad
-        output = tkw.cast(output, tkl.f16)
+        output = tkw.cast(output, tkl.bf16)
         tkw.write(output, c)
 
     options = WaveCompileOptions(
@@ -117,7 +114,169 @@ def get_rmsnorm_wave(shape, eps: float = 1e-6):
             M: shape[0],
             N: shape[1],
             BLOCK_M: 1,
-            BLOCK_N: shape[1],
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        use_buffer_load_ops=False,
+        use_buffer_store_ops=False,
+        wave_runtime=True,
+    )
+    options = set_default_run_config(options)
+    return wave_compile(options, rmsnorm)
+
+def get_rmsnorm_wave_sqrt(shape, eps: float = 1e-6):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = sympy.Min(sympy.Max(64 * 4, N / 16), N)
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 1, N: BLOCK_N },
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def rmsnorm(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+        weight: tkl.Memory[N, ADDRESS_SPACE, tkl.bf16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+    ):
+        length_embedding = tkl.Register[M, tkl.f32](N)
+        eps_reg = tkl.Register[M, tkl.f32](eps)
+        a_reg = tkw.read(a)
+        a_reg = tkw.cast(a_reg, tkl.f32)
+        mean = tkw.sum(a_reg * a_reg, dim=N, block=True) / length_embedding + eps_reg
+        rms = tkw.sqrt(mean)
+        rms_broad = tkw.broadcast(rms, [M, N])
+        a_scaled = a_reg / rms_broad
+        w_reg = tkw.read(weight)
+        w_reg = tkw.cast(w_reg, tkl.f32)
+        w_broad = tkw.broadcast(w_reg, [M, N])
+        output = a_scaled * w_broad
+        output = tkw.cast(output, tkl.bf16)
+        tkw.write(output, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            BLOCK_M: 1,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        # waves_per_eu=1,
+        use_buffer_load_ops=False,
+        use_buffer_store_ops=False,
+        wave_runtime=True,
+    )
+    options = set_default_run_config(options)
+    return wave_compile(options, rmsnorm)
+
+def get_rmsnorm_wave_block(shape, eps: float = 1e-6):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = sympy.Min(sympy.Max(64 * 4, N / 16), N)
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 1, N: BLOCK_N },
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def rmsnorm(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+        weight: tkl.Memory[N, ADDRESS_SPACE, tkl.bf16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+    ):
+        length_embedding = tkl.Register[M, tkl.f32](N)
+        eps_reg = tkl.Register[M, tkl.f32](eps)
+        a_reg = tkw.read(a)
+        a_reg = tkw.cast(a_reg, tkl.f32)
+        mean = tkw.sum(a_reg * a_reg, dim=N, block=True) / length_embedding + eps_reg
+        rms = tkw.rsqrt(mean)
+        rms_broad = tkw.broadcast(rms, [M, N])
+        a_scaled = a_reg * rms_broad
+        w_reg = tkw.read(weight)
+        w_reg = tkw.cast(w_reg, tkl.f32)
+        w_broad = tkw.broadcast(w_reg, [M, N])
+        output = a_scaled * w_broad
+        output = tkw.cast(output, tkl.bf16)
+        tkw.write(output, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            BLOCK_M: 1,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        use_buffer_load_ops=False,
+        use_buffer_store_ops=False,
+        wave_runtime=True,
+    )
+    options = set_default_run_config(options)
+    return wave_compile(options, rmsnorm)
+
+def get_rmsnorm_wave_buffer(shape, eps: float = 1e-6):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = sympy.Min(sympy.Max(64 * 4, N / 16), N)
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 1, N: BLOCK_N },
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def rmsnorm(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+        weight: tkl.Memory[N, ADDRESS_SPACE, tkl.bf16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE, tkl.bf16],
+    ):
+        length_embedding = tkl.Register[M, tkl.f32](N)
+        eps_reg = tkl.Register[M, tkl.f32](eps)
+        a_reg = tkw.read(a)
+        a_reg = tkw.cast(a_reg, tkl.f32)
+        mean = tkw.sum(a_reg * a_reg, dim=N, block=True) / length_embedding + eps_reg
+        rms = tkw.rsqrt(mean)
+        rms_broad = tkw.broadcast(rms, [M, N])
+        a_scaled = a_reg * rms_broad
+        w_reg = tkw.read(weight)
+        w_reg = tkw.cast(w_reg, tkl.f32)
+        w_broad = tkw.broadcast(w_reg, [M, N])
+        output = a_scaled * w_broad
+        output = tkw.cast(output, tkl.bf16)
+        tkw.write(output, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            BLOCK_M: 1,
             ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
@@ -127,7 +286,6 @@ def get_rmsnorm_wave(shape, eps: float = 1e-6):
     )
     options = set_default_run_config(options)
     return wave_compile(options, rmsnorm)
-
 
 def rmsnorm_wave(
     kernel,
@@ -217,12 +375,12 @@ def rmsnorm_vllm(
     return output
 
 
-def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
-    dtype = torch.float16
+def calculate_diff(seq_len, hidden_size, use_residual=True):
+    dtype = torch.bfloat16
     x = torch.randn(seq_len, hidden_size, dtype=dtype, device="cuda")
     weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
     residual = torch.randn_like(x) if use_residual else None
-    wave_kernel = get_rmsnorm_wave(x.shape)
+    wave_kernel = get_rmsnorm_wave_rsqrt(x.shape)
 
     output_naive = rmsnorm_naive(
         x.clone(), weight, residual.clone() if residual is not None else None
@@ -259,28 +417,27 @@ def calculate_diff(batch_size, seq_len, hidden_size, use_residual=True):
         print("❌ Implementations differ")
 
 
-batch_size_range = [1]  # [2**i for i in range(0, 7, 2)]
 seq_length_range = [1, 16] + [2**i for i in range(6, 11, 1)]
 hidden_size_range = [i * 128 for i in [1, 32, 48]] + [5120]
-configs = list(itertools.product(batch_size_range, seq_length_range, hidden_size_range))
+configs = list(itertools.product(seq_length_range, hidden_size_range))
 
 
 def get_benchmark(use_residual):
     @triton.testing.perf_report(
         triton.testing.Benchmark(
-            x_names=["batch_size", "seq_len", "hidden_size",],
+            x_names=["seq_len", "hidden_size",],
             x_vals=[list(_) for _ in configs],
             line_arg="provider",
-            line_vals=["huggingface", "wave", "vllm", "triton"],
-            line_names=["HuggingFace", "Wave", "vLLM", "Triton"],
-            styles=[("blue", "-"), ("red", "-"), ("green", "-"), ("orange", "-")],
+            line_vals=["wave_rqrt", "wave_sqrt", "wave_buffer", "wave_block", "vllm", "triton"],
+            line_names=["Wave rsqrt", "Wave sqrt", "Wave buffer", "Wave block",  "vLLM", "Triton"],
+            styles=[("blue", "-"), ("red", "-"), ("purple", "-"), ("yellow", "-"), ("teal", "-"), ("green", "-"), ("orange", "-")],
             ylabel="us",
             plot_name=f"rmsnorm-performance-{'with' if use_residual else 'without'}-residual",
             args={},
         )
     )
-    def benchmark(batch_size, seq_len, hidden_size, provider):
-        dtype = torch.float16
+    def benchmark(seq_len, hidden_size, provider):
+        dtype = torch.bfloat16
 
         x = torch.randn(seq_len, hidden_size, dtype=dtype, device="cuda")
         weight = torch.ones(hidden_size, dtype=dtype, device="cuda")
@@ -297,8 +454,38 @@ def get_benchmark(use_residual):
                 ),
                 quantiles=quantiles,
             )
-        elif provider == "wave":
-            wave_kernel = get_rmsnorm_wave(x.shape)
+        elif provider == "wave_rsqrt":
+            wave_kernel = get_rmsnorm_wave_rsqrt(x.shape)
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: rmsnorm_wave(
+                    wave_kernel,
+                    x.clone(),
+                    weight
+                ),
+                quantiles=quantiles,
+            )
+        elif provider == "wave_sqrt":
+            wave_kernel = get_rmsnorm_wave_sqrt(x.shape)
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: rmsnorm_wave(
+                    wave_kernel,
+                    x.clone(),
+                    weight
+                ),
+                quantiles=quantiles,
+            )
+        elif provider == "wave_buffer":
+            wave_kernel = get_rmsnorm_wave_buffer(x.shape)
+            ms, min_ms, max_ms = triton.testing.do_bench(
+                lambda: rmsnorm_wave(
+                    wave_kernel,
+                    x.clone(),
+                    weight
+                ),
+                quantiles=quantiles,
+            )
+        elif provider == "wave_block":
+            wave_kernel = get_rmsnorm_wave_block(x.shape)
             ms, min_ms, max_ms = triton.testing.do_bench(
                 lambda: rmsnorm_wave(
                     wave_kernel,
@@ -347,7 +534,7 @@ if __name__ == "__main__":
 
     # Run correctness test
     calculate_diff(
-        batch_size=1, seq_len=128, hidden_size=1024, use_residual=args.use_residual
+        seq_len=16, hidden_size=256, use_residual=args.use_residual
     )
 
     # Get the benchmark function with proper use_residual setting
