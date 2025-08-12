@@ -2,13 +2,14 @@
 
 const {useState, useEffect, useCallback} = React;
 
-// Parse dimension view string like "M, N" or "A=0, B=1, C, D"
+// Parse dimension view string like "M, N" or "A=0, B=1, C, D" or "M=0-3, N"
+// Returns a single ordered list of dimension objects:
+// - {name: "M", slice: null} for free dimensions
+// - {name: "N", slice: {start: 0, end: 3}} for sliced dimensions
+// - {name: "K", slice: 5} for fixed dimensions
 function parseDimensionView(viewStr, symbolicShape) {
   const parts = viewStr.split(",").map((s) => s.trim()).filter((s) => s);
-  const result = {
-    fixed : {},
-    viewDims : [],
-  };
+  const dimensions = [];
 
   for (const part of parts) {
     if (part.includes("=")) {
@@ -20,27 +21,61 @@ function parseDimensionView(viewStr, symbolicShape) {
       if (value === "" || value === undefined) {
         throw new Error(
             `Missing value after '=' in "${part}". Expected format: ${
-                dim}=<number>`,
-        );
-      }
-      const numValue = parseInt(value);
-      if (isNaN(numValue)) {
-        throw new Error(
-            `Invalid number "${value}" in "${part}". Expected format: ${
-                dim}=<number>`,
+                dim}=<number> or ${dim}=<start>-<end>`,
         );
       }
 
-      result.fixed[dim] = numValue;
+      // Check if it's a slice notation (e.g., "0-3")
+      if (value.includes("-")) {
+        const [startStr, endStr] = value.split("-").map((s) => s.trim());
+        const startValue = parseInt(startStr);
+        const endValue = parseInt(endStr);
+
+        if (isNaN(startValue) || isNaN(endValue)) {
+          throw new Error(
+              `Invalid slice range "${value}" in "${part}". Expected format: ${
+                  dim}=<start>-<end>`,
+          );
+        }
+
+        if (startValue >= endValue) {
+          throw new Error(
+              `Invalid slice range "${value}" in "${
+                  part}". Start must be less than end.`,
+          );
+        }
+
+        dimensions.push(
+            {name : dim, slice : {start : startValue, end : endValue}});
+      } else {
+        // Fixed dimension
+        const numValue = parseInt(value);
+        if (isNaN(numValue)) {
+          throw new Error(
+              `Invalid number "${value}" in "${part}". Expected format: ${
+                  dim}=<number> or ${dim}=<start>-<end>`,
+          );
+        }
+        dimensions.push({name : dim, slice : numValue});
+      }
     } else {
       if (!part) {
         throw new Error("Empty dimension name found");
       }
-      result.viewDims.push(part);
+      dimensions.push({name : part, slice : null});
     }
   }
 
-  return result;
+  return dimensions;
+}
+
+// Predicates for dimensions returned by parseDimensionView
+function isFixedDimension(dimension) {
+  return typeof dimension.slice === 'number';
+}
+function isFreeDimension(dimension) { return dimension.slice === null; }
+function isSlicedDimension(dimension) {
+  return dimension.slice !== null && typeof dimension.slice === 'object';
 }
 
 function getDefaultViewString(symbolicShape) {
@@ -81,43 +116,34 @@ function applyDimensionView(tensorData, symbolicShape, viewStr) {
   }
 
   try {
-    const parsedDimensionView = parseDimensionView(viewStr, symbolicShape);
+    const parsedDimensions = parseDimensionView(viewStr, symbolicShape);
 
-    if (parsedDimensionView.viewDims.length > 2) {
+    const nonFixedDimensions =
+        parsedDimensions.filter(dim => !isFixedDimension(dim));
+    if (nonFixedDimensions.length > 2) {
       return {
         data : null,
-        error : "Cannot view more than 2 dimensions at once",
+        error : "Cannot view more than 2 non-fixed dimensions at once",
       };
     }
 
     const dimensionNameToIndex = {};
     symbolicShape.forEach((dim, idx) => { dimensionNameToIndex[dim] = idx; });
 
-    for (const dim of parsedDimensionView.viewDims) {
-      if (!(dim in dimensionNameToIndex)) {
+    for (const dim of parsedDimensions) {
+      if (!(dim.name in dimensionNameToIndex)) {
         return {
           data : null,
-          error : `Unknown dimension '${dim}'. Available: ${
+          error : `Unknown dimension '${dim.name}'. Available: ${
               symbolicShape.join(", ")}`,
         };
       }
     }
 
-    for (const dim of Object.keys(parsedDimensionView.fixed)) {
-      if (!(dim in dimensionNameToIndex)) {
-        return {
-          data : null,
-          error : `Unknown dimension '${dim}' in fixed value. Available: ${
-              symbolicShape.join(", ")}`,
-        };
-      }
-    }
-
-    // Transform the tensor data
     const transformedData = transformTensorData(
         tensorData,
         symbolicShape,
-        parsedDimensionView,
+        parsedDimensions,
         dimensionNameToIndex,
     );
 
@@ -130,43 +156,41 @@ function applyDimensionView(tensorData, symbolicShape, viewStr) {
   }
 }
 
-// Transform tensor data based on fixed dimensions and view dimensions
+// Transform tensor data based on user-supplied dimension specifications
 function transformTensorData(
     tensor,
     symbolicShape,
-    parsedDimensionView,
+    parsedDimensions,
     dimensionNameToIndex,
 ) {
-  // Apply fixed dimensions first - slice the tensor at fixed indices for fixed
-  // dimensions
   let slicedTensor = tensor;
 
-  // Sort fixed dimensions by their original dimension index to apply them in
-  // the right order
-  const sortedFixed = Object.entries(parsedDimensionView.fixed)
-                          .map(([ dimName, fixedValue ]) => ({
-                                 dimName,
-                                 fixedValue,
-                                 dimIndex : dimensionNameToIndex[dimName],
-                               }))
-                          .sort();
+  const slicingOps = parsedDimensions.filter(dim => !isFreeDimension(dim))
+                         .map(dim => ({
+                                dimName : dim.name,
+                                sliceSpec : dim.slice,
+                                dimIndex : dimensionNameToIndex[dim.name],
+                              }))
+                         .sort((a, b) => a.dimIndex - b.dimIndex);
 
-  // Apply fixed dimensions from outermost to innermost dimension
-  for (const {dimName, fixedValue, dimIndex} of sortedFixed) {
-    // Calculate the adjusted dimension index after previous fixed dimensions
+  // Apply all slicing operations from outermost to innermost dimension
+  for (const {dimName, sliceSpec, dimIndex} of slicingOps) {
+    // Calculate the adjusted dimension index after previous slicing operations
     const adjustedDimIndex =
-        dimIndex - sortedFixed.filter((c) => c.dimIndex < dimIndex).length;
-    slicedTensor = sliceAtDimension(slicedTensor, adjustedDimIndex, fixedValue);
+        dimIndex - slicingOps.filter((op) => op.dimIndex < dimIndex).length;
+    slicedTensor = sliceAtDimension(slicedTensor, adjustedDimIndex, sliceSpec);
   }
 
-  if (parsedDimensionView.viewDims.length === 0 ||
-      parsedDimensionView.viewDims.length === 1) {
+  const nonFixedDimensions =
+      parsedDimensions.filter(dim => !isFixedDimension(dim));
+
+  if (nonFixedDimensions.length === 0 || nonFixedDimensions.length === 1) {
     return slicedTensor;
-  } else if (parsedDimensionView.viewDims.length === 2) {
+  } else if (nonFixedDimensions.length === 2) {
     // Two dimension view - need to check for transposition
     return finalize2DView(
         slicedTensor,
-        parsedDimensionView,
+        parsedDimensions,
         dimensionNameToIndex,
         symbolicShape,
     );
@@ -175,31 +199,47 @@ function transformTensorData(
   return slicedTensor;
 }
 
-// Slice tensor at a specific dimension and index
-function sliceAtDimension(tensor, dimIndex, sliceIndex) {
+// Slice tensor at a specific dimension with either a fixed index or a range
+// sliceSpec can be:
+//   - number: slice at that index (e.g. 5 -> tensor[5])
+//   - {start, end}: slice range (e.g. {start: 0, end: 3} -> tensor.slice(0, 3))
+function sliceAtDimension(tensor, dimIndex, sliceSpec) {
   if (dimIndex === 0) {
-    if (Array.isArray(tensor) && tensor.length > sliceIndex) {
-      return tensor[sliceIndex];
+    if (!Array.isArray(tensor)) {
+      throw new Error("Cannot slice non-array tensor");
+    }
+
+    if (typeof sliceSpec === 'number') {
+      if (tensor.length > sliceSpec && sliceSpec >= 0) {
+        return tensor[sliceSpec];
+      } else {
+        throw new Error("Bad fixed value for dimension");
+      }
     } else {
-      throw new Error("Bad fixed value for dimension");
+      const {start, end} = sliceSpec;
+      if (tensor.length >= end && start >= 0) {
+        return tensor.slice(start, end);
+      } else {
+        throw new Error("Bad slice range for dimension");
+      }
     }
   }
 
   if (!Array.isArray(tensor)) {
     throw new Error(
-        "Error slicing for fixed dimensions, but this shouldn't happen...",
+        "Error slicing for dimensions, but this shouldn't happen...",
     );
   }
 
   return tensor.map(
-      (subArray) => sliceAtDimension(subArray, dimIndex - 1, sliceIndex),
+      (subArray) => sliceAtDimension(subArray, dimIndex - 1, sliceSpec),
   );
 }
 
 // Ensure data is formatted as 2D view with proper row/column mapping
 function finalize2DView(
     tensor,
-    parsedDimensionView,
+    parsedDimensions,
     dimensionNameToIndex,
     symbolicShape,
 ) {
@@ -208,15 +248,21 @@ function finalize2DView(
     throw new Error("finalize2DView should only be getting 2d data");
   }
 
-  const rowDimName = parsedDimensionView.viewDims[0];
-  const colDimName = parsedDimensionView.viewDims[1];
+  // Get the non-fixed dimensions in order
+  const nonFixedDimensions =
+      parsedDimensions.filter(dim => !isFixedDimension(dim));
+  const rowDimName = nonFixedDimensions[0].name;
+  const colDimName = nonFixedDimensions[1].name;
 
   // Find the original dimension order to determine whether to transpose.
   const originalRowIndex = dimensionNameToIndex[rowDimName];
   const originalColIndex = dimensionNameToIndex[colDimName];
-  const fixedDimIndices = Object.keys(parsedDimensionView.fixed)
-                              .map((dimName) => dimensionNameToIndex[dimName])
+
+  // Get indices of fixed dimensions
+  const fixedDimIndices = parsedDimensions.filter(dim => isFixedDimension(dim))
+                              .map(dim => dimensionNameToIndex[dim.name])
                               .sort();
+
   const remainingDimIndices =
       symbolicShape.map((_, idx) => idx)
           .filter((idx) => !fixedDimIndices.includes(idx));
@@ -403,7 +449,7 @@ function TensorViewer({label, tensorInfo}) {
                 updateDisplay();
               }
             },
-            placeholder : "e.g., M, N or A=0, B=1, C, D",
+            placeholder : "e.g., M, N or A=0, B=1, C, D or M=0-3, N",
           }),
           React.createElement(
               "button",
