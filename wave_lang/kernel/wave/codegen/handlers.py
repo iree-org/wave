@@ -962,7 +962,7 @@ def handle_sqrt(source: Value, options: WaveCompileOptions) -> OpResult:
 
 
 @handle_unary_op(rsqrt)
-def handle_sqrt(source: Value, options: WaveCompileOptions) -> OpResult:
+def handle_rsqrt(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
     if _is_float_type(element_type):
         return math_d.rsqrt(source)
