@@ -2326,6 +2326,7 @@ def test_debug_log(dynamic_dims: bool):
     assert_close(
         a[0 : shape[0] // 2, :], debug_logs["lhs_mapped"]["value"][0 : shape[0] // 2, :]
     )
+    assert handler_arg == debug_logs
 
 
 @require_e2e
@@ -2386,4 +2387,3 @@ def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
     dilated_conv(x, we, dilation, out)
 
     assert_close(out, out_ref, rtol=1e-03, atol=1e-02)
-    assert handler_arg == debug_logs
