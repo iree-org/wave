@@ -26,6 +26,7 @@ from .utils.run_utils import (
 )
 from .water import water_leak_in_bounds_check
 from wave_lang.runtime.launch import Launchable
+from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
 from .profiling import benchmark_module
 from .debug_log_hoist import DebugArgInfo
 import iree.runtime as rt
@@ -77,14 +78,24 @@ class WaveKernel:
             # 'launchable' decides if function is async or not based on name.
             self.func_name = options.func_name + ("$async" if is_async else "")
 
-            def loader(device):
-                vm_instance = device.vm_instance
-                return rt.VmModule.copy_buffer(vm_instance, self.executable)
+            if self.options.num_devices > 1:
+                device_list = [f"hip://{d}" for d in range(options.num_devices)]
+                self.launchable = MultiDeviceLaunchable.from_vmfb(
+                    self.executable,
+                    devices=device_list,
+                    function_name=self.func_name,
+                    runtime_flags=["--hip_use_streams=true"],
+                )
+            else:
 
-            self.launchable = Launchable.from_vm_module(
-                loader,
-                entry_point=self.func_name,
-            )
+                def loader(device):
+                    vm_instance = device.vm_instance
+                    return rt.VmModule.copy_buffer(vm_instance, self.executable)
+
+                self.launchable = Launchable.from_vm_module(
+                    loader,
+                    entry_point=self.func_name,
+                )
 
     def get_trace(self) -> Optional["CapturedTrace"]:
         """Returns the trace used to generate this kernel.
@@ -183,7 +194,7 @@ class WaveKernel:
             )
         else:
             tensors = [t.data for t in chain(kernel_inputs, kernel_outputs)]
-            self.launchable(*tensors, *scalar_args)
+            self.launchable(*tensors, *scalar_args, self.options.num_devices)
 
             if self.options.run_bench:
                 benchmark_flags = get_benchmark_flags(self.options)
@@ -344,7 +355,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             location_capture_config=options.location_capture_config,
             async_dispatch=is_async,
             device_layout=device_layout,
-            device_constraints=kernel.device_constraints
+            device_constraints=kernel.device_constraints,
         )
         asm = mb.module_op.get_asm(
             enable_debug_info=options.location_capture_config.level
