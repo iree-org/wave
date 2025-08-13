@@ -8,6 +8,7 @@ The ``debug_log`` op's first argument is a register value that you want to see. 
 Suppose we have this basic GEMM kernel:
 
 .. code-block:: python
+
     @tkw.wave(constraints)
     def gemm(
         a: Memory[M, K, ADDRESS_SPACE, f16],
@@ -30,6 +31,7 @@ Suppose we have this basic GEMM kernel:
 We can sprinkle in some debug_logs to get a picture of what is going on inside.
 
 .. code-block:: python
+
     a_reg = tkw.read(a)
     tkw.debug_log(a_reg, label="a_reg", printer=print)
 
@@ -41,6 +43,7 @@ Since ``a_reg`` is just read from the ``a`` memory, with an identity mapping, th
 Let's print something more interesting, let's print the ``acc`` register:
 
 .. code-block:: python
+
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: Register[M, N, f32]) -> Register[M, N, f32]:
             a_reg = tkw.read(a)
@@ -55,7 +58,13 @@ In the end the ``acc`` log will have the same value as the final output ``c``.
 To see intermediate values, we can use the ``extra_iteration_dimensions`` argument.
 
 .. code-block:: python
-    tkw.debug_log(acc, label="acc", extra_iteration_dimensions=[(tkl.sym.iter, K, 4)], printer=print)
+
+    tkw.debug_log(
+        acc,
+        label="acc",
+        extra_iteration_dimensions=[(tkl.sym.iter, K, 4)],
+        printer=print
+        )
 
 This new ``acc`` log will be a ``4xMxN`` tensor, where the outer size-4 dimension is named ``iter``.
 Each iteration along the ``K`` dimension by the ``iterate`` form will write to the next slot in that outer dimension, with a max of 4.
@@ -67,6 +76,7 @@ Instead of using the ``printer`` argument, you can use a ``handler`` argument th
 In particular, you can use this with the ``html_viewer`` function to generate a web page with an interactive view of the debug log tensors.
 
 .. code-block:: python
+
     from wave_lang.debugging.html_viewer import html_viewer
     tkw.debug_log(a_reg, handler=html_viewer)
     tkw.debug_log(acc, label="acc", extra_iteration_dimensions=[(tkl.sym.iter, K, 4)])
