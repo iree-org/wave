@@ -2,7 +2,6 @@ import math
 from operator import ge
 from typing import Callable
 
-import sympy
 import torch.fx as fx
 
 from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE
@@ -17,6 +16,7 @@ from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     Add,
     Allocate,
+    Broadcast,
     Conditional,
     Cumsum,
     CustomOp,
@@ -32,6 +32,10 @@ from ..ops.wave_ops import (
     ShuffleOp,
     Write,
     get_custom,
+    Mul,
+    Sub,
+    Min,
+    Ge,
 )
 from .constraints import HardwareConstraint, WaveConstraint, WorkgroupConstraint
 from .utils.classes import ShuffleMode
@@ -220,6 +224,31 @@ def emit_global_scan(
     return final_scanop_result
 
 
+def emit_add_with_wave_offset(
+    binary_fn,
+    src,
+    my_excl,
+    graph: fx.Graph,
+    scan_wave_id,
+):
+    """ """
+
+    my_off_scl = get_graph_node(Extract(my_excl, [scan_wave_id]), graph)
+    m_dim = subs_idxc(src.type.symbolic_shape[0])
+
+    values = [get_graph_node(Extract(src, [i]), graph) for i in range(m_dim)]
+
+    breakpoint()
+    for i in range(m_dim):
+        out = get_graph_node(binary_fn(values[i], my_off_scl), graph)
+
+    src_custom = get_custom(src)
+    out.index = src_custom.index
+    out.expanded_dims = src_custom.expanded_dims
+    out.vector_shapes = src_custom.vector_shapes
+    return out
+
+
 def emit_interwave_scan(
     binary_fn,
     src,
@@ -229,125 +258,130 @@ def emit_interwave_scan(
     num_scan_waves,
     wg_constraint_map,
     hardware_constraint,
-    local_scan_size,
 ):
     """
-    Computes prefix sum across waves within a block:
-    1. Each wave writes its final scanned value to shared memory.
-    2. Wave 0 computes prefix scan of those values.
-    3. Each wave reads its prefix offset and adds it to its scanned values.
+    Steps:
+      1) Last active lane of each wave writes its per-wave total to shared.
+      2) Wave 0 inclusive-scans these totals, then converts to exclusive offsets.
+      3) Each wave reads its exclusive offset and adds it to its scalar.
     """
-    # Possible lane_id: Mod($T0, 64) == 0 -> 63
+
     lane_id = (
         hardware_constraint.linearized_thread_id % hardware_constraint.threads_per_wave
     )
-    # Possible wave_id: [Mod(floor($T0/64), 4), 0, 0]
-    # [[0,3], 0, 0]
     wave_id = delinearize_index(
         hardware_constraint.linearized_thread_id
         // hardware_constraint.threads_per_wave,
         hardware_constraint.waves_per_block,
     )
     scan_wg_dim = wg_constraint_map[scan_dim].workgroup_dim
-    # [0, 1, 2, 3]
-    scan_wave_id = wave_id[scan_wg_dim]
+    scan_wave_id = wave_id[scan_wg_dim]  # 0...3
 
-    # Allocate shared memory for per-wave totals
-    allocate_node = Allocate(
-        (scan_dim,),
-        (num_scan_waves,),
-        src.type.dtype,
-        SHARED_ADDRESS_SPACE,
+    src_custom = get_custom(src)
+
+    total_len = subs_idxc(scan_dim)  # 256
+
+    W = hardware_constraint.threads_per_wave
+
+    ### for partial last wave
+    wave_start_s = get_graph_node(NewScalar(scan_wave_id * W, tkl.i32), graph)
+    total_len_s = get_graph_node(NewScalar(total_len, tkl.i32), graph)
+    W_s = get_graph_node(NewScalar(W, tkl.i32), graph)
+
+    rem_after_start = get_graph_node(Sub(total_len_s, wave_start_s), graph)
+    this_wave_len = get_graph_node(Min(rem_after_start, W_s), graph)
+
+    lane_id_s = get_graph_node(NewScalar(lane_id, tkl.i32), graph)
+    last_lane_idx = get_graph_node(
+        Sub(this_wave_len, get_graph_node(NewScalar(1, tkl.i32), graph)), graph
+    )
+    gt_zero = get_graph_node(
+        Ge(this_wave_len, get_graph_node(NewScalar(1, tkl.i32), graph)), graph
+    )  # i1
+    eq_last = get_graph_node(Eq(lane_id_s, last_lane_idx), graph)
+
+    # logical AND via multiply
+    is_last_lane = get_graph_node(Mul(gt_zero, eq_last), graph)
+
+    sums_buf = Allocate(
+        (scan_dim,), (num_scan_waves,), src_custom.type.dtype, SHARED_ADDRESS_SPACE
     ).add_to_graph(graph)
 
-    # Step 1: Each wave's last lane stores its final scan result
-    execute_on_lane63_graph = fx.Graph()
-    subgraph_name = f"store_wave_sum_{src.name}"
+    exec_on_last = fx.Graph()
+    sub_store = f"store_wave_sum_{src.name}"
 
-    placeholder_src = get_graph_node(
-        Placeholder.from_fx_node(src), execute_on_lane63_graph
+    ph_src = get_graph_node(Placeholder.from_fx_node(src), exec_on_last)
+    ph_src.type = src_custom.type
+    ph_sums = get_graph_node(
+        Placeholder.from_fx_node(get_custom(sums_buf)), exec_on_last
     )
-    placeholder_src.type = src.type
+    ph_sums.type = get_custom(sums_buf).type
+    ph_sums.meta["lifted"] = sums_buf
 
-    placeholder_alloc = get_graph_node(
-        Placeholder.from_fx_node(get_custom(allocate_node)), execute_on_lane63_graph
-    )
-    placeholder_alloc.type = get_custom(allocate_node).type
-    placeholder_alloc.meta["lifted"] = allocate_node
+    write_sum = Write(ph_src, ph_sums, 1).add_to_graph(exec_on_last)
+    write_sum.index = {scan_dim: IndexSequence(scan_wave_id, 1, 1)}
 
-    write = Write(placeholder_src, placeholder_alloc, 1).add_to_graph(
-        execute_on_lane63_graph
-    )
-    write.index = {scan_dim: IndexSequence(scan_wave_id, 1, 1)}
-
-    lane_id_reg = get_graph_node(NewScalar(lane_id, tkl.i32), graph)
-    max_lane_id = get_graph_node(
-        NewScalar(hardware_constraint.threads_per_wave - 1, tkl.i32), graph
-    )
-    is_last_lane = get_graph_node(Eq(lane_id_reg, max_lane_id), graph)
-
-    implicit_src = get_outer_node(src)
-
-    conditional_write = get_graph_node(
+    cond_store = get_graph_node(
         Conditional(
             is_last_lane,
-            subgraph_name=subgraph_name,
-            implicit_captures=[implicit_src, allocate_node],
+            subgraph_name=sub_store,
+            implicit_captures=[get_outer_node(src), sums_buf],
         ),
         graph,
     )
-    execute_on_lane63_graph.parent_op = conditional_write
-    trace.add_subgraph(subgraph_name, execute_on_lane63_graph)
-    trace.get_root_graph().subgraphs[subgraph_name] = execute_on_lane63_graph
+    exec_on_last.parent_op = cond_store
+    trace.add_subgraph(sub_store, exec_on_last)
+    trace.get_root_graph().subgraphs[sub_store] = exec_on_last
 
     read_totals = Read(
-        allocate_node,
+        sums_buf,
         elements_per_thread=num_scan_waves,
-        _write_dependency=[conditional_write, write],
+        _write_dependency=[cond_store, write_sum],
     ).add_to_graph(graph)
     read_totals.index = {scan_dim: IndexSequence(0, 1, 1)}
 
-    scanned_totals_nested = emit_local_inclusive_scan(
+    incl_nested = emit_local_inclusive_scan(
         binary_fn, [read_totals], graph, num_scan_waves
     )
-    scanned_totals = scanned_totals_nested[0]  # flatten: list of num_scan_waves scalars
+    incl = incl_nested[0]  # list length == num_scan_waves
 
-    packed_totals = Reshape(
-        args=scanned_totals,
-        target_vector_shape={scan_dim: num_scan_waves},
+    incl_vec = Reshape(
+        args=incl, target_vector_shape={scan_dim: num_scan_waves}
     ).add_to_graph(graph)
+    prev_idx = get_graph_node(NewScalar(scan_wave_id - 1, tkl.i32), graph)
+    my_incl_prev = get_graph_node(Extract(incl_vec, [prev_idx]), graph)
 
-    prev_idx = sympy.Max(scan_wave_id - 1, 0)
-    wave_offset = Read(packed_totals, elements_per_thread=1).add_to_graph(graph)
-    wave_offset.index = {scan_dim: IndexSequence(prev_idx, 1, 1)}
+    scan_wave_id_s = get_graph_node(NewScalar(scan_wave_id, tkl.i32), graph)
+    is_first_wave = get_graph_node(
+        Eq(scan_wave_id_s, get_graph_node(NewScalar(0, tkl.i32), graph)), graph
+    )
+    is_first_wave_b = get_graph_node(
+        Broadcast(is_first_wave, target_shape=my_incl_prev.type.symbolic_shape), graph
+    )
+    zero_dtype = get_graph_node(NewScalar(0, src_custom.type.dtype), graph)
+    zero_dtype_b = get_graph_node(
+        Broadcast(zero_dtype, target_shape=my_incl_prev.type.symbolic_shape), graph
+    )
 
-    scan_wave_id_node = get_graph_node(NewScalar(scan_wave_id, tkl.i32), graph)
-    zero_scalar = get_graph_node(NewScalar(0, tkl.i32), graph)
-    is_wave0 = get_graph_node(Eq(scan_wave_id_node, zero_scalar), graph)
-    cond_vec = get_graph_node(
-        NewRegister(get_custom(wave_offset).type.symbolic_shape, i1, is_wave0),
+    my_excl = get_graph_node(
+        SelectOp(cond=is_first_wave_b, if_true=zero_dtype_b, if_false=my_incl_prev),
         graph,
     )
-    zero_vec = get_graph_node(
-        NewRegister(get_custom(wave_offset).type.symbolic_shape, src.type.dtype, 0),
-        graph,
+
+    final_scalar = emit_add_with_wave_offset(
+        binary_fn=binary_fn,
+        src=src,
+        my_excl=my_excl,
+        graph=graph,
+        scan_wave_id=scan_wave_id,
     )
-    final_offset = get_graph_node(SelectOp(cond_vec, zero_vec, wave_offset), graph)
+    breakpoint()
 
-    updated_scalars = [
-        get_graph_node(binary_fn(elem, final_offset), graph) for elem in scanned_totals
-    ]
-    final_scan_result = Reshape(
-        args=updated_scalars,
-        target_vector_shape={scan_dim: local_scan_size},
-    ).add_to_graph(graph)
+    final_scalar.index = src_custom.index
+    final_scalar.expanded_dims = src_custom.expanded_dims
+    final_scalar.vector_shapes = src_custom.vector_shapes
 
-    custom = get_custom(src)
-    final_scan_result.index = custom.index
-    final_scan_result.expanded_dims = custom.expanded_dims
-    final_scan_result.vector_shapes = custom.vector_shapes
-
-    return [final_scan_result]
+    return [final_scalar]
 
 
 def decompose_scan_ops(
@@ -480,9 +514,8 @@ def decompose_scan_ops(
                     num_scan_waves,
                     workgroup_constraint_map,
                     hardware_constraint,
-                    local_scan_sizes[0],
                 )
-            breakpoint()
+
             # Update the users based on the global scan `reshape` results.
             for user in custom.users:
                 user.update_arg(
