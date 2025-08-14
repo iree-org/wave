@@ -185,18 +185,6 @@ def emit_global_reduction(
     Reduce data across threads in a warp by doing butterfly shuffle.
     """
 
-    if binary_fn == Maximum:
-        reduce = SubgroupReduceOp(
-            src, cluster_size, cluster_stride, SubgroupReduceMode.MAXIMUMF
-        )
-        return get_graph_node(reduce, graph)
-
-    if binary_fn == Add:
-        reduce = SubgroupReduceOp(
-            src, cluster_size, cluster_stride, SubgroupReduceMode.ADD
-        )
-        return get_graph_node(reduce, graph)
-
     init = src
     num_steps = int(math.log2(float(cluster_size)))
     for _ in range(num_steps):
@@ -206,6 +194,51 @@ def emit_global_reduction(
         cluster_stride <<= 1
     return init
 
+
+def emit_global_reduction_dpp(
+    binary_fn: Callable,
+    src: fx.Node,
+    graph: fx.Graph,
+    subgroup_size: int,
+    cluster_size: int,
+    cluster_stride: int,
+) -> fx.Node:
+    """
+    Reduce data across threads in a warp by doing butterfly shuffle.
+    """
+
+    assert subgroup_size == 64
+
+    init = src
+    allRows = 0xf
+    allBanks = 0xf
+    boundCtrl = True
+
+    if cluster_size >= 2:
+        # amdgpu::DPPPerm::quad_perm, rewriter.getI32ArrayAttr({1, 0, 3, 2})
+        init = get_graph_node(binary_fn(init, shuffle_node), graph)
+
+    if cluster_size >= 4:
+        # amdgpu::DPPPerm::quad_perm, rewriter.getI32ArrayAttr({2, 3, 0, 1})
+        init = get_graph_node(binary_fn(init, shuffle_node), graph)
+
+    if cluster_size >= 8:
+        # amdgpu::DPPPerm::row_half_mirror, rewriter.getUnitAttr()
+        init = get_graph_node(binary_fn(init, shuffle_node), graph)
+
+    if cluster_size >= 16:
+        # amdgpu::DPPPerm::row_mirror, rewriter.getUnitAttr()
+        init = get_graph_node(binary_fn(init, shuffle_node), graph)
+
+    if cluster_size >= 32:
+        # amdgpu::DPPPerm::row_bcast_15, rewriter.getUnitAttr(), 0xa, allBanks, /*bound_ctrl*/ false
+        init = get_graph_node(binary_fn(init, shuffle_node), graph)
+
+    if cluster_size >= 64:
+        # amdgpu::DPPPerm::row_bcast_31, rewriter.getUnitAttr(), 0xc, allBanks, /*bound_ctrl*/ false);
+        init = get_graph_node(binary_fn(init, shuffle_node), graph)
+    
+    return init
 
 def emit_interwave_reduction(
     binary_fn,
