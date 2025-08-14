@@ -541,7 +541,7 @@ class LaunchableWave(Launchable):
         )
 
         emitter = WaveEmitter(
-            dispatch_entrypoint, trace, self.constraints, options, self.grid_type
+            dispatch_entrypoint, trace, self.constraints, options, self.grid_type, mb
         )
         try:
             emitter.emit(trace.get_root_graph())

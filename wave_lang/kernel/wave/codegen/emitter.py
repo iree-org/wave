@@ -14,6 +14,7 @@ import sympy
 import torch.fx as fx
 
 from wave_lang.aot.support.ir_utils import (
+    ModuleBuilder,
     _is_float_type,
     _is_integer_like_type,
 )
@@ -70,6 +71,7 @@ class WaveEmitter:
     constraints: list[Constraint]
     options: WaveCompileOptions
     grid_type: Type["Grid"]
+    mb: ModuleBuilder
     ip: InsertionPoint = None
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
     _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}

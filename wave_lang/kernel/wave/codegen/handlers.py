@@ -24,6 +24,7 @@ from wave_lang.kernel._support.shaped_type import ShapedType
 # TK infrastructure imports.
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.support.ir_imports import (
+    Module,
     Attribute,
     DenseElementsAttr,
     F16Type,
@@ -45,6 +46,7 @@ from wave_lang.support.ir_imports import (
     rocdl_d,
     scf_d,
     vector_d,
+    func_d,
 )
 
 # Indexing imports.
@@ -109,6 +111,7 @@ from ...ops.wave_ops import (
     softsign,
     sqrt,
     subgroupreduce,
+    inline_mlir,
     tanh,
     tanh_approx,
     workgroup_barrier,
@@ -1813,3 +1816,51 @@ def handle_reshape(emitter: WaveEmitter, node: fx.Node):
         [1],
     )
     emitter.bind_node_proxy(node, IRProxyValue(slice))
+
+@handle_op(inline_mlir)
+def handle_inline_mlir(emitter: WaveEmitter, node: fx.Node):
+    try:
+        inputs, shape, dtype, ir = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+    # ops = [get_custom(node) for node in inputs]
+    op = get_custom(inputs)
+    ops = [op]
+
+    get_thread_shape = lambda index: max(subs_idxc(x.size) for x in index.values())
+    
+    in_shape = [get_thread_shape(get_custom(inputs).index)]
+    vector_shape = cast_py_literal(emitter, in_shape)
+    element_type = IrType.parse(op.type.dtype.ir_type_asm())
+    vector_type = VectorType.get(vector_shape, element_type)
+
+    in_types = [vector_type]
+
+
+    target_thread_size = [get_thread_shape(node.index) if node.index else None]
+    vector_shape = cast_py_literal(emitter, target_thread_size)
+    element_type = IrType.parse(dtype.ir_type_asm())
+    vector_type = VectorType.get(vector_shape, element_type)
+    out_type = vector_type
+
+
+    args = ", ".join([f"%arg{i}: {in_types[i]}" for i in range(len(in_types))])
+    func_str = f"""
+    func.func @inline_mlir({args}) -> {out_type} {"{"}
+        {ir}
+        return %res : {out_type}
+    {"}"}
+    """
+
+    print(func_str)
+
+    with emitter.mb.context as context:
+        module = Module.parse(func_str, context)
+        func_op = module.body.operations[0]
+        func_op.detach_from_parent()
+        emitter.mb.module_op.body.append(func_op)
+
+    lhs = cast_py_value(emitter, op).ir_value
+    call_op = func_d.call(func_op, [lhs])
+
+    emitter.bind_node_proxy(node, IRProxyValue(call_op))
