@@ -403,13 +403,9 @@ def push_rotating_registers(
             custom.scheduling_parameters is not None
         ), f"Rotating register {node} has no scheduling parameters."
         stage = custom.scheduling_parameters["stage"]
-        print(f"Rotating register {node} is in stage {stage}, registers: {registers}.")
         iteration = arg_context.get_kernel_iteration(stage)
         if node not in arg_context.iter_args:
             arg_context[iteration, stage, node] = registers[-1]
-            print(
-                f"Mapped orig1: {node_map[node]} / mapped: {registers[-1]} to stage {stage} at iteration {iteration}."
-            )
         for i, register in enumerate(registers):
             if create_new_nodes:
                 mapped_stage = stage + len(registers) - i
@@ -429,12 +425,8 @@ def push_rotating_registers(
             logger.debug(
                 f"Mapped orig: {node_map[node]} / mapped: {mapped_value} to stage {mapped_stage} at iteration {mapped_iteration}."
             )
-            print(
-                f"Mapped orig2: {node_map[node]} / mapped: {mapped_value} to stage {mapped_stage} at iteration {mapped_iteration}."
-            )
             count += 1
         if new_registers:
-            print(f"Rotating register {node} has {new_registers} registers.")
             new_rotating_registers[node] = new_registers
     return new_rotating_registers
 
@@ -519,8 +511,6 @@ def construct_kernel(
             node_map,
             create_new_nodes=True,
         )
-
-        # print(f"Argument map: {arg_context.argument_map}")
 
         counter = len(init_args) - len(outer_init_args)
         outer_results = []
