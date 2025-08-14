@@ -46,7 +46,7 @@ def compile_to_vmfb(
     if options.backend == "rocm":
         flags.append(f"--iree-hip-target={options.target}")
 
-    if options.print_ir_after_all:
+    if options.mlir_print_ir_after_all:
         flags.append("--mlir-print-ir-after-all")
 
     if options.iree_preprocessing_pass_pipeline:
