@@ -538,7 +538,8 @@ def construct_kernel(
                 counter += 1
                 new_iter_args.append(iter_arg)
 
-            outer_results += rotate_list(new_iter_args, 1)
+            new_iter_args = rotate_list(new_iter_args, 1)
+            outer_results += new_iter_args
 
             for iteration in range(num_stages):
                 for stage in range(num_stages):
