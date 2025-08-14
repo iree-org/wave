@@ -320,6 +320,12 @@ def gather_to_lds(
     dst_mapping: Optional[IndexMapping] = None,
 ): ...
 
+def inline_mlir(
+        inputs: list[Register, Memory],
+        shape: tuple[IndexExpr, ...],
+        dtype: DataType,
+        ir: str,
+): ...
 
 def define_op(op_name: str) -> Callable[[T], T]:
     def decorator(cls: T) -> T:
@@ -2537,6 +2543,23 @@ class SubgroupReduceOp(CustomOp):
 
     def infer_type(self):
         self.type = get_custom(self.arg).type
+
+@define_op("inline_mlir")
+@dataclass
+class InlineMLIROp(CustomOp):
+    arg: fx.Node | list[fx.Node]
+    shape: tuple[IndexExpr, ...]
+    dtype: DataType
+    ir: str
+
+    
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        return get_custom(self.arg).indexing_dims
+
+    def infer_type(self):
+        self.type = get_custom(self.arg).type
+
 
 
 # TODO: Add support for more shuffle types.
