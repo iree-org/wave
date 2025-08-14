@@ -259,6 +259,9 @@ def subgroupreduce(src: "Register", size: int, stride: int) -> "Register": ...
 def shuffle(src: "Register", offset: int, width: int) -> "Register": ...
 
 
+def dpp_update(src: "Register", kind : DPPPerm, permArgument : int | list[int], row_mask : int, bank_mask : int, bound_ctrl : bool) -> "Register": ...
+
+
 def gt(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
@@ -2518,7 +2521,7 @@ class InlineMLIROp(CustomOp):
     def infer_type(self):
         self.type = get_custom(self.arg).type
 
-
+    
 
 # TODO: Add support for more shuffle types.
 @define_op("shuffle")
@@ -2536,6 +2539,25 @@ class ShuffleOp(CustomOp):
     offset: int
     width: int
     mode: "ShuffleMode"
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        return get_custom(self.arg).indexing_dims
+
+    def infer_type(self):
+        self.type = get_custom(self.arg).type
+
+
+# TODO: Add support for more shuffle types.
+@define_op("dpp_update")
+@dataclass
+class DPPUpdate(CustomOp):
+    arg: fx.Node
+    kind: "DPPMode"
+    permArgument: int | list[int]
+    row_mask: int
+    bank_mask: int
+    bound_ctrl: bool
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:

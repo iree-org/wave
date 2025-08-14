@@ -106,6 +106,7 @@ from ...ops.wave_ops import (
     set_wave_prio,
     shared_memory_barrier,
     shuffle,
+    dpp_update,
     sin,
     sinh,
     softsign,
@@ -119,7 +120,7 @@ from ...ops.wave_ops import (
 from ..compile_options import WaveCompileOptions
 from ..constraints import GenericDot, HardwareConstraint
 from ..scheduling.resources import get_scheduling_mask
-from ..utils.classes import ShuffleMode, SubgroupReduceMode
+from ..utils.classes import DPPMode, ShuffleMode, SubgroupReduceMode
 from ..utils.general_utils import get_fastest_index
 from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.symbol_utils import subs_idxc
@@ -519,6 +520,41 @@ def handle_shuffle(emitter: WaveEmitter, node: fx.Node):
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
+@handle_op(dpp)
+def handle_dpp(emitter: WaveEmitter, node: fx.Node):
+    try:
+        src, kind, permArgument, row_mask, bank_mask, bound_ctrl = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+    if not isinstance(offset, int) or not isinstance(width, int):
+        raise NotImplementedError(
+            "Non-const width or offset is not yet implemented for shuffleOp."
+        )
+    src = cast_py_value(emitter, src).ir_value
+    
+    permArgument = cast_py_value(emitter, permArgument, IntegerType.get_signless(32)).ir_value
+    row_mask = cast_py_value(emitter, row_mask, IntegerType.get_signless(32)).ir_value
+    bank_mask = cast_py_value(emitter, bank_mask, IntegerType.get_signless(32)).ir_value
+    bound_ctrl = cast_py_value(emitter, bound_ctrl, IntegerType.get_unsigned(1)).ir_value
+
+    # Shuffle data between other threads in a warp.
+    DPP_MODE_MAP = {
+        DPPMode.QUAD_PERM: amdgpu_d.DPPPerm.quad_perm,
+        DPPMode.WAVE_SHL: amdgpu_d.DPPPerm.wave_shl,
+        DPPMode.WAVE_SHR: amdgpu_d.DPPPerm.wave_shr,
+        DPPMode.WAVE_ROR: amdgpu_d.DPPPerm.wave_ror,
+        DPPMode.WAVE_ROL: amdgpu_d.DPPPerm.wave_rol,
+        DPPMode.ROW_SHL: amdgpu_d.DPPPerm.row_shl,
+        DPPMode.ROW_SHR: amdgpu_d.DPPPerm.row_shr,
+        DPPMode.ROW_ROR: amdgpu_d.DPPPerm.row_ror,
+        DPPMode.ROW_MIRROR: amdgpu_d.DPPPerm.row_mirror,
+        DPPMode.ROW_HALF_MIRROR: amdgpu_d.DPPPerm.row_half_mirror,
+        DPPMode.ROW_BCAST_15: amdgpu_d.DPPPerm.row_bcast_15,
+        DPPMode.ROW_BCAST_31: amdgpu_d.DPPPerm.row_bcast_31,
+    }
+    result = amdgpu_d.dpp(src, src, DPP_MODE_MAP[kind], perm_argument=permArgument, row_mask=row_mask, bank_mask=bank_mask, bound_ctrl=bound_ctrl)
+
+    emitter.bind_node_proxy(node, IRProxyValue(result))
 
 def handle_atomic_op(op):
     def decorator(binary_fn: Callable[[Value, Value], OpResult]):
