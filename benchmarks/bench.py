@@ -1,6 +1,7 @@
 import itertools
 from typing import Optional, Tuple, Union
 
+from sympy import Integer, log, ceiling, Max, Min
 import torch
 import triton
 import triton.language as tl
@@ -16,6 +17,11 @@ from wave_lang.kernel.wave.utils.run_utils import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 
+def next_power_of_2(expr):
+    expr = Integer(expr) if isinstance(expr, int) else expr
+    expr = Max(Integer(1), expr)
+    exponent = ceiling(log(expr, 2))    
+    return Integer(2)**exponent
 
 @triton.jit
 def fused_rmsnorm_kernel(
@@ -74,12 +80,15 @@ def get_rmsnorm_wave_rsqrt(shape, eps: float = 1e-6):
     M = tkl.sym.M
     N = tkl.sym.N
     BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = sympy.Min(sympy.Max(64 * 4, N / 16), N)
+    threads_per_wave = 64
+    min_num_waves = 4
+    max_num_waves = 16
+    BLOCK_N = Min(Max(threads_per_wave * min_num_waves, next_power_of_2(ceiling(N / max_num_waves))), N)
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
     
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             vector_shapes={M: 1, N: BLOCK_N },
         )
     ]
@@ -98,10 +107,12 @@ def get_rmsnorm_wave_rsqrt(shape, eps: float = 1e-6):
         eps_reg = tkl.Register[M, tkl.f32](eps)
         a_reg = tkw.read(a)
         a_reg = tkw.cast(a_reg, tkl.f32)
-        mean = tkw.sum(a_reg * a_reg, dim=N, block=True) / length_embedding + eps_reg
-        rms = tkw.rsqrt(mean)
+        # sq = a_reg * a_reg
+        sq = tkw.inline_mlir(a_reg, [1, 1], tkl.f32, "%res = arith.mulf %arg0, %arg0 : vector<4xf32>")            
+        mean = tkw.sum(sq, dim=N, block=True) / length_embedding + eps_reg
+        rms = tkw.sqrt(mean)
         rms_broad = tkw.broadcast(rms, [M, N])
-        a_scaled = a_reg * rms_broad
+        a_scaled = a_reg / rms_broad            
         w_reg = tkw.read(weight)
         w_reg = tkw.cast(w_reg, tkl.f32)
         w_broad = tkw.broadcast(w_reg, [M, N])
@@ -120,6 +131,11 @@ def get_rmsnorm_wave_rsqrt(shape, eps: float = 1e-6):
         use_buffer_load_ops=False,
         use_buffer_store_ops=False,
         wave_runtime=True,
+        dump_intermediates="/workspaces/wave/benchmarks/dump",
+        print_mlir=True,
+        print_mlir_file="/workspaces/wave/benchmarks/dump/foo.mlir",
+        print_grid=True,
+        use_fast_math=False
     )
     options = set_default_run_config(options)
     return wave_compile(options, rmsnorm)
@@ -208,9 +224,9 @@ def get_rmsnorm_wave_block(shape, eps: float = 1e-6):
         a_reg = tkw.read(a)
         a_reg = tkw.cast(a_reg, tkl.f32)
         mean = tkw.sum(a_reg * a_reg, dim=N, block=True) / length_embedding + eps_reg
-        rms = tkw.rsqrt(mean)
+        rms = tkw.sqrt(mean)
         rms_broad = tkw.broadcast(rms, [M, N])
-        a_scaled = a_reg * rms_broad
+        a_scaled = a_reg / rms_broad
         w_reg = tkw.read(weight)
         w_reg = tkw.cast(w_reg, tkl.f32)
         w_broad = tkw.broadcast(w_reg, [M, N])
@@ -534,10 +550,10 @@ if __name__ == "__main__":
 
     # Run correctness test
     calculate_diff(
-        seq_len=16, hidden_size=256, use_residual=args.use_residual
+        seq_len=128, hidden_size=1024, use_residual=args.use_residual
     )
 
     # Get the benchmark function with proper use_residual setting
-    benchmark = get_benchmark(args.use_residual)
+    # benchmark = get_benchmark(args.use_residual)
     # Run performance benchmark
-    benchmark.run(print_data=True, save_path=args.save_path)
+    # benchmark.run(print_data=True, save_path=args.save_path)
