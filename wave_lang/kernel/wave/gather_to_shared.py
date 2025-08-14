@@ -125,8 +125,10 @@ def get_gather_to_shared_config(
         f"store_elems_per_thread={store_elems_per_thread}, "
         f"max_elements_per_store={max_elements_per_store}"
     )
-
-    materialized_shape = materialize_shape(constraint_tile_size, symbolic_shape)
+    vector_shapes = read.vector_shapes
+    materialized_shape = materialize_shape(
+        constraint_tile_size, symbolic_shape, vector_shapes
+    )
     logger.info(f"materialized_shape={materialized_shape}")
 
     total_number_of_elements = prod(materialized_shape)

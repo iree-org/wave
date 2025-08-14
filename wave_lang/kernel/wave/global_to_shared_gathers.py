@@ -245,7 +245,9 @@ def add_optimized_nodes(
                     + i * max_elements_per_load
                 )
                 materialized_shape = materialize_shape(
-                    constraint_tile_size, custom.memory_type.symbolic_shape
+                    constraint_tile_size,
+                    custom.memory_type.symbolic_shape,
+                    custom.vector_shapes,
                 )
                 read.index = construct_min_global_access_pattern(
                     access_pattern,
