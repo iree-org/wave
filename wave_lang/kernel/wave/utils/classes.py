@@ -29,6 +29,21 @@ class ShuffleMode(Enum):
     IDX = 3
 
 
+class DPPMode(Enum):
+    QUAD_PERM = 0
+    WAVE_SHL = 1
+    WAVE_SHR = 2
+    WAVE_ROR = 3
+    WAVE_ROL = 4
+    ROW_SHL = 5
+    ROW_SHR = 6
+    ROW_ROR = 7
+    ROW_MIRROR = 8
+    ROW_HALF_MIRROR = 9
+    ROW_BCAST_15 = 10
+    ROW_BCAST_31 = 11
+
+
 class SubgroupReduceMode(Enum):
     ADD = 0
     MUL = 1
