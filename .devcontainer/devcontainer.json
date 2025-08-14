@@ -10,5 +10,17 @@
 	"capAdd": ["SYS_PTRACE"],
 	"securityOpt": ["seccomp=unconfined"],
 
-	"postCreateCommand": "pre-commit install && pre-commit install --hook-type commit-msg"
+	"postCreateCommand": "pre-commit install && pre-commit install --hook-type commit-msg",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"llvm-vs-code-extensions.vscode-mlir",
+				"ms-python.autopep8",
+				"ms-python.debugpy",
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-python.vscode-python-envs"
+			]
+		}
+	}
 }
