@@ -528,8 +528,7 @@ def construct_kernel(
                 counter += 1
                 new_iter_args.append(iter_arg)
 
-            new_iter_args = rotate_list(new_iter_args, 1)
-            outer_results += new_iter_args
+            outer_results += rotate_list(new_iter_args, 1)
 
             for iteration in range(num_stages):
                 for stage in range(num_stages):
@@ -688,7 +687,7 @@ def construct_epilogue(
                 counter += 1
                 new_results.append(result)
 
-            # outer_results += rotate_list(new_iter_args, 1)
+            new_results = rotate_list(new_results, 1)
 
             for iteration in range(num_stages):
                 for stage in range(num_stages):
