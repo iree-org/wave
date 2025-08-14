@@ -32,7 +32,6 @@ from ..visualization import visualize_edges, visualize_graph, visualize_schedule
 from .graph_utils import Edge, create_scheduling_edges
 from .loop_reconstruction import construct_pipelined_loop
 from .modulo_scheduling import ModuloScheduler
-from .multi_buffering import multi_buffer
 from .prefetch_scheduling import PrefetchScheduler
 from .four_stage_pipelined_scheduling import FourStageScheduler
 from .resources import (
@@ -223,8 +222,8 @@ def schedule_reduction(
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (num_stages - 1)
 
-    if multi_buffer_count is not None:
-        multi_buffer(trace, multi_buffer_count)
+    # if multi_buffer_count is not None:
+    #     multi_buffer(trace, multi_buffer_count)
 
 
 def schedule_graph(

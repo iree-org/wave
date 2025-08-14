@@ -8,6 +8,9 @@ from wave_lang.support.logging import get_logger
 from ..._support.indexing import IndexSymbol, IndexSequence
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
+    Allocate,
+    CustomOp,
+    GatherToLDS,
     GetResult,
     IterArg,
     Iterate,
@@ -15,17 +18,15 @@ from ...ops.wave_ops import (
     NewRegister,
     Output,
     Placeholder,
-    SchedulingGroupBarrier,
-    get_custom,
-    CustomOp,
-    Write,
     Read,
-    GatherToLDS,
+    SchedulingGroupBarrier,
+    Write,
+    get_custom,
 )
 from ...lang.global_symbols import SHARED_ADDRESS_SPACE
 from ..constraints import Constraint
 from ..utils.general_utils import get_induction_variable
-from ..utils.graph_utils import replace_uses_in
+from ..utils.graph_utils import propagate_placeholders, replace_uses_in
 from ..visualization import visualize_graph, visualize_mapped_graphs
 from .loop_reconstruction_utils import (
     ArgumentContext,
@@ -35,9 +36,8 @@ from .loop_reconstruction_utils import (
     liveness_analysis,
     partition_graph_by_stage,
 )
-from .multi_buffering import heuristically_multi_buffer_shared_memory
 from .resources import get_custom_operation_type
-from typing import Optional
+from typing import Optional, Sequence, Any
 
 logger = get_logger("wave.scheduling.loop_reconstruction")
 
@@ -132,19 +132,19 @@ def add_nodes_by_schedule(
             logger.debug(
                 f"Copying Node: {node}, Stage: {stage}, Iteration: {iteration} -> {new_node.fx_node}"
             )
-            multi_buffering_enabled = multi_buffer_count is not None
-            is_shmem_read_write = (
-                isinstance(new_node, Write | Read)
-                and new_node.memory_type.address_space == SHARED_ADDRESS_SPACE
-            )
-            is_gather_to_lds = isinstance(new_node, GatherToLDS)
-            if multi_buffering_enabled and (is_shmem_read_write or is_gather_to_lds):
-                heuristically_multi_buffer_shared_memory(
-                    new_node=new_node,
-                    induction_variable=induction_variable,
-                    reduction=reduction,
-                    multi_buffer_count=multi_buffer_count,
-                )
+            # multi_buffering_enabled = multi_buffer_count is not None
+            # is_shmem_read_write = (
+            #     isinstance(new_node, Write | Read)
+            #     and new_node.memory_type.address_space == SHARED_ADDRESS_SPACE
+            # )
+            # is_gather_to_lds = isinstance(new_node, GatherToLDS)
+            # if multi_buffering_enabled and (is_shmem_read_write or is_gather_to_lds):
+            #     heuristically_multi_buffer_shared_memory(
+            #         new_node=new_node,
+            #         induction_variable=induction_variable,
+            #         reduction=reduction,
+            #         multi_buffer_count=multi_buffer_count,
+            #     )
 
             # Set the index for the new node by substituting the induction variable
             # for the current iteration.
@@ -269,6 +269,7 @@ def construct_prologue(
     new_induction_variables: list[int],
     stages: list[int],
     multi_buffer_count: Optional[int] = None,
+    outer_vars: dict[fx.Node, list[fx.Node]] = {},
 ):
     """
     Construct the prologue of the pipelined loop.
@@ -294,6 +295,12 @@ def construct_prologue(
         reduction.iter_args(reduction_subgraph), reduction.init_args
     ):
         arg_context.map_arg_all(iter_arg, init_arg)
+
+    for orig_node, new_nodes in outer_vars.items():
+        count = len(new_nodes)
+        for iteration in range(num_stages):
+            for stage in range(num_stages):
+                arg_context[iteration, stage, orig_node] = new_nodes[iteration % count]
 
     push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
     with reduction.graph.inserting_before(reduction.fx_node):
@@ -392,10 +399,17 @@ def push_rotating_registers(
     for node, registers in rotating_registers.items():
         new_registers: deque[fx.Node] = deque()
         custom = get_custom(node)
+        assert (
+            custom.scheduling_parameters is not None
+        ), f"Rotating register {node} has no scheduling parameters."
         stage = custom.scheduling_parameters["stage"]
+        print(f"Rotating register {node} is in stage {stage}, registers: {registers}.")
         iteration = arg_context.get_kernel_iteration(stage)
         if node not in arg_context.iter_args:
-            arg_context[(iteration, stage, node)] = registers[-1]
+            arg_context[iteration, stage, node] = registers[-1]
+            print(
+                f"Mapped orig1: {node_map[node]} / mapped: {registers[-1]} to stage {stage} at iteration {iteration}."
+            )
         for i, register in enumerate(registers):
             if create_new_nodes:
                 mapped_stage = stage + len(registers) - i
@@ -411,14 +425,22 @@ def push_rotating_registers(
                 mapped_stage = stage + len(registers) - i - 1
                 mapped_iteration = arg_context.get_kernel_iteration(mapped_stage)
                 mapped_value = register
-            arg_context[(mapped_iteration, mapped_stage, node)] = mapped_value
+            arg_context[mapped_iteration, mapped_stage, node] = mapped_value
             logger.debug(
                 f"Mapped orig: {node_map[node]} / mapped: {mapped_value} to stage {mapped_stage} at iteration {mapped_iteration}."
             )
+            print(
+                f"Mapped orig2: {node_map[node]} / mapped: {mapped_value} to stage {mapped_stage} at iteration {mapped_iteration}."
+            )
             count += 1
         if new_registers:
+            print(f"Rotating register {node} has {new_registers} registers.")
             new_rotating_registers[node] = new_registers
     return new_rotating_registers
+
+
+def rotate_list(src: Sequence[Any], k: int) -> list[Any]:
+    return src[k:] + src[:k]
 
 
 def construct_kernel(
@@ -434,6 +456,7 @@ def construct_kernel(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = False,
+    outer_vars: dict[fx.Node, list[fx.Node]] = {},
 ) -> tuple[Iterate, fx.Graph]:
     """
     Construct the kernel of the pipelined loop.
@@ -448,9 +471,15 @@ def construct_kernel(
     logger.debug("=====================================")
 
     with reduction.graph.inserting_before(reduction.fx_node):
+        outer_init_args = flatten_dict_values(outer_vars)
+        init_args = (
+            reduction.init_args
+            + flatten_dict_values(rotating_registers)
+            + outer_init_args
+        )
         pipelined_reduction = Iterate(
             reduction.axis,
-            init_args=reduction.init_args + flatten_dict_values(rotating_registers),
+            init_args=init_args,
             step=reduction.step,
             subgraph_name="pipelined_iterate",
             implicit_captures=reduction.implicit_captures,
@@ -467,6 +496,10 @@ def construct_kernel(
             num_stages,
         )
         push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
+
+        # for orig_node, new_nodes in outer_vars.items():
+        #     for i, new_node in enumerate(new_nodes):
+        #         arg_context.map_arg_all_iterations(i, orig_node, new_node)
 
         # For the original iter args, we just map the old ones to the new ones.
         # Do this for all stages, since the original iter args are "dummy" nodes
@@ -487,6 +520,38 @@ def construct_kernel(
             create_new_nodes=True,
         )
 
+        # print(f"Argument map: {arg_context.argument_map}")
+
+        counter = len(init_args) - len(outer_init_args)
+        outer_results = []
+        for orig_node, new_nodes in outer_vars.items():
+            count = len(new_nodes)
+            new_iter_args = []
+            for node in new_nodes:
+                custom = get_custom(node)
+                iter_arg = IterArg(f"outer_rotating_reg_{count}").add_to_graph(
+                    pipelined_reduction_graph
+                )
+                iter_arg.type = custom.type
+                iter_arg.index = custom.index
+                iter_arg.iter_idx = counter
+                counter += 1
+                new_iter_args.append(iter_arg)
+
+            outer_results += rotate_list(new_iter_args, 1)
+
+            for iteration in range(num_stages):
+                for stage in range(num_stages):
+                    arg_context[iteration, stage, orig_node] = new_iter_args[
+                        iteration % count
+                    ]
+
+        # for orig_node, new_nodes in outer_vars.items():
+        #     count = len(new_nodes)
+        #     for i in range(count):
+        #         new_node = new_rotating_registers[orig_node][(i + 1) % count]
+        #         arg_context.map_arg_all_iterations(i, orig_node, new_node)
+
         add_nodes_by_schedule(
             reduction,
             pipelined_reduction_graph,
@@ -506,6 +571,8 @@ def construct_kernel(
         return_vals: list[fx.Node] = arg_context.get_kernel_results()
         for registers in new_rotating_registers.values():
             return_vals.extend(registers)
+
+        return_vals.extend(outer_results)
 
         Output(return_vals).add_to_graph(pipelined_reduction_graph)
         reduction.replace_all_uses_with(pipelined_reduction)
@@ -542,6 +609,7 @@ def construct_epilogue(
     node_map: dict[fx.Node, fx.Node],
     visualize: bool = False,
     multi_buffer_count: Optional[int] = None,
+    outer_vars: dict[fx.Node, list[fx.Node]] = {},
 ):
     """
     Construct the epilogue of the pipelined loop.
@@ -615,6 +683,28 @@ def construct_epilogue(
         push_rotating_registers(arg_context, rotating_registers, None, node_map, False)
         push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
 
+        counter = offset + len(flattened_rotating_registers)
+        # outer_results = []
+        for orig_node, new_nodes in outer_vars.items():
+            count = len(new_nodes)
+            new_results = []
+            for node in new_nodes:
+                custom = get_custom(node)
+                result = GetResult(pipelined_reduction.fx_node, counter).add_to_graph(
+                    pipelined_reduction.graph,
+                    type=custom.type,
+                )
+                counter += 1
+                new_results.append(result)
+
+            # outer_results += rotate_list(new_iter_args, 1)
+
+            for iteration in range(num_stages):
+                for stage in range(num_stages):
+                    arg_context[iteration, stage, orig_node] = new_results[
+                        iteration % count
+                    ]
+
         for i in range(num_stages - 1):
             add_nodes_by_schedule(
                 pipelined_reduction,
@@ -651,6 +741,33 @@ def construct_epilogue(
             )
 
 
+def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
+    custom = get_custom(node)
+    if (
+        isinstance(custom, (Write, Read))
+        and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
+    ):
+        return custom.memory
+    if isinstance(custom, GatherToLDS):
+        return custom.dst
+
+    return None
+
+
+def collect_shared_memory_operands(graph: fx.Graph) -> list[fx.Node]:
+    shared_memory_operands = {}
+    for node in graph.nodes:
+        operand = get_shared_memory_operand(node)
+        if operand is not None:
+            operand = propagate_placeholders(operand)
+            assert isinstance(
+                get_custom(operand), Allocate
+            ), f"Expected Allocate, but got {get_custom(operand)}"
+            shared_memory_operands[operand] = node
+
+    return list(shared_memory_operands.keys())
+
+
 def construct_pipelined_loop(
     trace: CapturedTrace,
     reduction: Iterate,
@@ -670,9 +787,29 @@ def construct_pipelined_loop(
     """
     induction_variable = get_induction_variable(reduction, constraints)
     num_rotating_registers = liveness_analysis(graph, reduction)
+
+    outer_vars = defaultdict(list)
+    if multi_buffer_count is not None:
+        node_map = dict(node_map)
+        new_init_args = list(reduction.init_args)
+        allocs = collect_shared_memory_operands(graph)
+        for alloc in allocs:
+            node_map[alloc] = alloc
+            custom = get_custom(alloc)
+            custom.scheduling_parameters = {"stage": 0}
+            for i in range(multi_buffer_count):
+                new_alloc = custom.copy(new_name=f"{alloc.name}_multi_buffer_{i}")
+                outer_vars[alloc].append(new_alloc.fx_node)
+                new_init_args.append(new_alloc.fx_node)
+
+            # num_rotating_registers[alloc] = multi_buffer_count
+
+        # reduction.update_arg("init_args", new_init_args)
+
     rotating_registers: dict[fx.Node, deque[fx.Node]] = {
         k: deque([None for _ in range(v)]) for k, v in num_rotating_registers.items()
     }
+
     partitioned_graph = partition_graph_by_stage(graph, num_stages)
     # Construct prologue.
     construct_prologue(
@@ -686,7 +823,12 @@ def construct_pipelined_loop(
         list(range(num_stages)),
         create_fill_stage_schedule(num_stages),
         multi_buffer_count=multi_buffer_count,
+        outer_vars=outer_vars,
     )
+
+    # for orig_node, new_nodes in outer_vars.items():
+    #     rotating_registers[orig_node] = deque(list(new_nodes))
+
     # Construct kernel.
     pipelined_reduction, pipelined_reduction_graph = construct_kernel(
         graph,
@@ -701,8 +843,10 @@ def construct_pipelined_loop(
         visualize,
         use_scheduling_barriers,
         multi_buffer_count=multi_buffer_count,
+        outer_vars=outer_vars,
     )
-    pipelined_reduction_graph.parent_op = graph.parent_op
+
+    pipelined_reduction_graph.parent_op = pipelined_reduction
     trace.add_subgraph(
         get_custom(pipelined_reduction).subgraph_name, pipelined_reduction_graph
     )
@@ -722,6 +866,7 @@ def construct_pipelined_loop(
         node_map,
         visualize,
         multi_buffer_count=multi_buffer_count,
+        outer_vars=outer_vars,
     )
 
     # Remove the unpipelined reduction and the corresponding subgraph
