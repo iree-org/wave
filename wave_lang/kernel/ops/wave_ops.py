@@ -1168,15 +1168,6 @@ class Placeholder(CustomOp):
 
         get_custom(var).index = value
 
-    # This method is created for parity with `Allocate` op and is used
-    # when calculating bound expressions.
-    @property
-    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
-        unpadded_dim = {}
-        for sym_type in self.type.symbolic_shape:
-            unpadded_dim[sym_type] = sym_type
-        return unpadded_dim
-
 
 @dataclass
 class IterArg(Placeholder):
@@ -1916,8 +1907,10 @@ class Iterate(NestedRegionOp):
             expand_dims = expand_dims[0]
         return expand_dims
 
-    def iter_args(self, graph: fx.Graph) -> list[fx.Node]:
+    def iter_args(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
         iter_args = []
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
         for nested_node in graph.nodes:
             custom = get_custom(nested_node)
             if isinstance(custom, IterArg):
@@ -1932,10 +1925,13 @@ class Iterate(NestedRegionOp):
             res_types = res_types[0]
         self.type = res_types
 
-    def outputs(self, graph: fx.Graph) -> list[fx.Node]:
-        for node in graph.nodes:
-            if isinstance(get_custom(node), Output):
-                return get_custom(node).return_vals[0]
+    def outputs(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
+
+        output = get_custom(graph.output_node())
+        assert isinstance(output, Output), f"Expected Output, but got {output}"
+        return output.return_vals[0]
 
     @property
     def index(self) -> list[dict[IndexSymbol, IndexSequence]]:
