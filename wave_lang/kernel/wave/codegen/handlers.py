@@ -71,6 +71,7 @@ from ...ops.wave_ops import (
     cbrt,
     conditional,
     cos,
+    dpp,
     eq,
     exp,
     exp2,
@@ -526,16 +527,16 @@ def handle_dpp(emitter: WaveEmitter, node: fx.Node):
         src, kind, permArgument, row_mask, bank_mask, bound_ctrl = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
-    if not isinstance(offset, int) or not isinstance(width, int):
+    if not isinstance(row_mask, (int, list[int])) or not isinstance(bank_mask, int) or not isinstance(bound_ctrl, bool):
         raise NotImplementedError(
-            "Non-const width or offset is not yet implemented for shuffleOp."
+            "Non-const width or offset is not yet implemented for dpp."
         )
     src = cast_py_value(emitter, src).ir_value
-    
-    permArgument = cast_py_value(emitter, permArgument, IntegerType.get_signless(32)).ir_value
-    row_mask = cast_py_value(emitter, row_mask, IntegerType.get_signless(32)).ir_value
-    bank_mask = cast_py_value(emitter, bank_mask, IntegerType.get_signless(32)).ir_value
-    bound_ctrl = cast_py_value(emitter, bound_ctrl, IntegerType.get_unsigned(1)).ir_value
+    args = [get_constant_attr(arg, IntegerType.get_signless(32)) for arg in permArgument]
+    permArgument = DenseElementsAttr.get(args, IntegerType.get_signless(32))
+    row_mask = get_constant_attr(row_mask, IntegerType.get_signless(32))
+    bank_mask = get_constant_attr(bank_mask, IntegerType.get_signless(32))
+    bound_ctrl = get_constant_attr(bound_ctrl, IntegerType.get_signless(1))
 
     # Shuffle data between other threads in a warp.
     DPP_MODE_MAP = {

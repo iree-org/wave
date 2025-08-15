@@ -262,7 +262,7 @@ def subgroupreduce(src: "Register", size: int, stride: int) -> "Register": ...
 def shuffle(src: "Register", offset: int, width: int) -> "Register": ...
 
 
-def dpp_update(src: "Register", kind : DPPPerm, permArgument : int | list[int], row_mask : int, bank_mask : int, bound_ctrl : bool) -> "Register": ...
+def dpp(src: "Register", kind : "DPPMode", permArgument : int | list[int], row_mask : int, bank_mask : int, bound_ctrl : bool) -> "Register": ...
 
 
 def gt(lhs: "Register", rhs: "Register") -> "Register": ...
@@ -2593,7 +2593,7 @@ class ShuffleOp(CustomOp):
 # TODO: Add support for more shuffle types.
 @define_op("dpp_update")
 @dataclass
-class DPPUpdate(CustomOp):
+class DPPOp(CustomOp):
     arg: fx.Node
     kind: "DPPMode"
     permArgument: int | list[int]
