@@ -28,6 +28,7 @@ from ...ops.wave_ops import (
     SelectOp,
     SelfIndex,
     ShuffleOp,
+    SubgroupReduceOp,
     UnaryPyOp,
     Write,
     get_custom,
@@ -131,7 +132,9 @@ def get_custom_operation_type(custom: CustomOp) -> Operation:
         return Operation.MMA
     elif isinstance(custom, SCHEDULING_NOOPS + (Output,)):
         return Operation.NOOP
-    elif isinstance(custom, (ApplyExpr, UnaryPyOp, BinaryOpBase, SelectOp)):
+    elif isinstance(
+        custom, (ApplyExpr, UnaryPyOp, BinaryOpBase, SelectOp, SubgroupReduceOp)
+    ):
         return Operation.VALU
     elif isinstance(custom, ShuffleOp):
         return Operation.SHUFFLE
@@ -165,7 +168,9 @@ def annotate_resource_usage(
             custom.rrt = resource_reservation_table[Operation.MMA]
         elif isinstance(custom, ShuffleOp):
             custom.rrt = resource_reservation_table[Operation.SHUFFLE]
-        elif isinstance(custom, (ApplyExpr, UnaryPyOp, BinaryOpBase, SelectOp)):
+        elif isinstance(
+            custom, (ApplyExpr, UnaryPyOp, BinaryOpBase, SelectOp, SubgroupReduceOp)
+        ):
             custom.rrt = resource_reservation_table[Operation.VALU]
         elif isinstance(custom, SCHEDULING_NOOPS):
             if isinstance(custom, IterArg):

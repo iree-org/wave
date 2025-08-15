@@ -55,12 +55,12 @@ def test_fp8_pertensor_attention():
     # fused QK scaling + dequant scaling
     # CHECK-COUNT-8:            {{.*}} = arith.mulf %{{.*}}, %[[FUSED_SCALE]] : vector<4xf32>
 
-    # CHECK-COUNT-4:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce maximumf {{.*}}
 
     # FP8 Offset
     # CHECK-COUNT-8:            {{.*}} = arith.addf %{{.*}}, %[[F8_OFFSET]] : vector<4xf32>
 
-    # CHECK-COUNT-4:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce add {{.*}}
     # CHECK-COUNT-8:            {{.*}} = arith.minimumf %{{.*}}, %[[F8_MAX]] : vector<4xf32>
     # CHECK-COUNT-8:            {{.*}} = arith.truncf %{{.+}}: vector<4xf32> to vector<4xf8E4M3FNUZ>
     # CHECK-COUNT-16:           {{.*}} = amdgpu.mfma

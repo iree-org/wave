@@ -272,12 +272,12 @@ def test_flash_decoding():
     # CHECK-COUNT-1:           vector.store
     # CHECK-COUNT-4:           {{.*}} = vector.load
     # CHECK-COUNT-8:           {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-4:           {{.*}} = gpu.shuffle
+    # CHECK-COUNT-1:           {{.*}} = gpu.subgroup_reduce maximumf
     # CHECK-COUNT-2:           {{.*}} = arith.subf
     # CHECK-COUNT-2:           {{.*}} = math.exp2
     # CHECK-COUNT-2:           {{.*}} = arith.subf
     # CHECK-COUNT-2:           {{.*}} = math.exp2
-    # CHECK-COUNT-4:           {{.*}} = gpu.shuffle
+    # CHECK-COUNT-1:           {{.*}} = gpu.subgroup_reduce add
     # CHECK-COUNT-2:           {{.*}} = amdgpu.mfma
     # CHECK-COUNT-2:           {{.*}} = arith.divf
     # CHECK-COUNT-2:           {{.*}} = math.log2
