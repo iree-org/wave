@@ -118,7 +118,7 @@ def add_nodes_by_schedule(
                     )
                     continue
             new_node = custom_node.copy(
-                new_name=node.name,
+                new_name=f"{node.name}_mapped_{iteration}_{stage}",
                 new_graph=reduction_graph,
                 arg_transform=lambda x: (
                     arg_context.get_from_iteration(iteration, x, preferred_stage)
@@ -126,6 +126,10 @@ def add_nodes_by_schedule(
                     else x
                 ),
             )
+            if hasattr(new_node, "_write_dependency"):
+                # We cannot properly handle write dependencies for mapped nodes
+                # yet, so just drop it for now.
+                new_node.update_arg("_write_dependency", [])
             instructions[get_custom_operation_type(new_node)] += 1
             # Update the argument context.
             arg_context[(iteration, stage, node)] = new_node.fx_node
