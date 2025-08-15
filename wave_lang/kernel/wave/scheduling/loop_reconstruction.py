@@ -779,22 +779,15 @@ def construct_pipelined_loop(
     num_rotating_registers = liveness_analysis(graph, reduction)
 
     outer_vars = defaultdict(list)
+    shared_memory_allocs = None
     if multi_buffer_count is not None:
-        node_map = dict(node_map)
-        new_init_args = list(reduction.init_args)
-        allocs = collect_shared_memory_operands(graph)
-        for alloc in allocs:
-            node_map[alloc] = alloc
+        shared_memory_allocs = collect_shared_memory_operands(graph)
+        for alloc in shared_memory_allocs:
             custom = get_custom(alloc)
             custom.scheduling_parameters = {"stage": 0}
             for i in range(multi_buffer_count):
                 new_alloc = custom.copy(new_name=f"{alloc.name}_multi_buffer_{i}")
                 outer_vars[alloc].append(new_alloc.fx_node)
-                new_init_args.append(new_alloc.fx_node)
-
-            # num_rotating_registers[alloc] = multi_buffer_count
-
-        # reduction.update_arg("init_args", new_init_args)
 
     rotating_registers: dict[fx.Node, deque[fx.Node]] = {
         k: deque([None for _ in range(v)]) for k, v in num_rotating_registers.items()
@@ -860,8 +853,13 @@ def construct_pipelined_loop(
     )
 
     # Remove the unpipelined reduction and the corresponding subgraph
-    reduction.graph.erase_node(reduction.fx_node)
-    del trace.region_graph.subgraphs[reduction.subgraph_name]
+    reduction.erase()
+
+    # All allocs should be replaced by the multi-buffer allocs at this point.
+    if shared_memory_allocs:
+        for alloc in shared_memory_allocs:
+            if not alloc.users:
+                get_custom(alloc).erase()
 
     if visualize:
         visualize_graph(pipelined_reduction.graph, "pipelined.png")

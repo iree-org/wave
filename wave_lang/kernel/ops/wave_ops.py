@@ -1808,6 +1808,15 @@ class NestedRegionOp(CustomOp):
             cur_graph = cur_graph.parent_op.graph
         return cur_graph
 
+    def erase(self):
+        subgraphs = self.get_root_graph().subgraphs
+        subgraph = subgraphs[self.subgraph_name]
+        for node in list(subgraph.nodes)[::-1]:
+            get_custom(node).erase()
+
+        del subgraphs[self.subgraph_name]
+        super().erase()
+
 
 @define_op("conditional")
 @dataclass

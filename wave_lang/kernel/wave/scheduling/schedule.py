@@ -161,7 +161,7 @@ def schedule_reduction(
             iter_args.append(custom)
 
     for custom in iter_args:
-        cycle = min([x.scheduling_parameters["absolute_cycle"] for x in custom.users])
+        cycle = min(x.scheduling_parameters["absolute_cycle"] for x in custom.users)
         custom.scheduling_parameters = {
             "absolute_cycle": cycle,
             "cycle": cycle % initiation_interval,
