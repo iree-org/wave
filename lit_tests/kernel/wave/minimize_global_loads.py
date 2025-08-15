@@ -330,13 +330,17 @@ def test_materialized_shape_padding():
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
 
-    # CHECK-LABEL:    test_materialized_shape_padding
-    # CHECK-DAG:        #{{.*}} =  affine_map<()[s0] -> ((s0 floordiv 4) mod 16)>
-    # CHECK-DAG:        #{{.*}} =  affine_map<()[s0] -> (s0 * 8 - (s0 floordiv 4) * 32)>
-    # CHECK:            func.func @gemm
-    # CHECK:                %{{.*}} = arith.constant dense<17> : vector<8xindex>
-    # CHECK:                %{{.*}} = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7]> : vector<8xindex>
-    # CHECK:                %{{.*}} = vector.load %0[%1, %2] : memref<16x17xf16, strided<[17, 1], offset: ?>>, vector<8xf16>
+    # This tests that the maps (index) are padded in materialized_shape (minimize_global_loads) and thus aligned
+    # when the input has unaligned, non constrained dimension. As a side-effect, 8 elements are loaded instead of
+    # 5 which is also being checked.
+
+    # CHECK-LABEL:  test_materialized_shape_padding
+    # CHECK-DAG:      #{{.*}} =  affine_map<()[s0] -> ((s0 floordiv 4) mod 16)>
+    # CHECK-DAG:      #{{.*}} =  affine_map<()[s0] -> (s0 * 8 - (s0 floordiv 4) * 32)>
+    # CHECK:          func.func @gemm
+    # CHECK:            %{{.*}} = arith.constant dense<17> : vector<8xindex>
+    # CHECK:            %{{.*}} = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7]> : vector<8xindex>
+    # CHECK:            %{{.*}} = vector.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<16x17xf16, strided<[17, 1], offset: ?>>, vector<8xf16>
 
 
 if __name__ == "__main__":
