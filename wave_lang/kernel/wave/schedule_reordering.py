@@ -32,6 +32,7 @@ from ..ops.wave_ops import (
     SharedMemoryBarrier,
     WorkgroupBarrier,
     Write,
+    GatherToLDS,
     get_custom,
 )
 from .constraints import (
@@ -115,7 +116,7 @@ class InsertionPoint(object):
     ):
         # Initialize insertion mode.
         if not isinstance(mode, InsertionMode):
-            raise ValueError("Unexpected insetion mode.")
+            raise ValueError("Unexpected insertion mode.")
         self.mode = mode
 
         # Initialize source location.
@@ -447,6 +448,83 @@ def select_reorder_strategy(
         return SchedReorderStrategy.NONE
 
 
+def gatherToLDS_two_PP_clusters(
+    mma_nodes,
+    local_load_lhs,
+    local_load_rhs,
+    global_to_shared_lhs,
+    global_to_shared_rhs,
+):
+    num_slices = 2
+    sliced_mma_nodes, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
+        mma_nodes, local_load_lhs, local_load_rhs, num_slice=num_slices
+    )
+    # Check that we have valid slice size for local_loads and mmas.
+    assert len(sliced_mma_nodes) == len(sliced_local_load_rhs)
+    assert len(sliced_mma_nodes) == len(sliced_local_load_lhs)
+    assert len(sliced_mma_nodes) == num_slices
+
+    clusters = []
+    tmp_graph = fx.Graph()
+    # 1st cluster local_reads[0] + gatherToLDS
+    clusters.append(sliced_local_load_lhs[0])
+    clusters.append(sliced_local_load_rhs[0])
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph), sliced_local_load_rhs[0]
+        )
+    )
+    clusters.append(global_to_shared_lhs)
+    clusters.append(global_to_shared_rhs)
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph), global_to_shared_rhs
+        )
+    )
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), clusters[-1].op)
+    )
+    # 2nd cluster mma_slice[0]
+    clusters.append(
+        insert_op_before(SetWavePrio(1).add_to_graph(tmp_graph), sliced_mma_nodes[0])
+    )
+    clusters.append(sliced_mma_nodes[0])
+    clusters.append(
+        insert_op_after(SetWavePrio(0).add_to_graph(tmp_graph), sliced_mma_nodes[0])
+    )
+    clusters.append(
+        insert_op_after(SharedMemoryBarrier().add_to_graph(tmp_graph), clusters[-1].op)
+    )
+    clusters.append(
+        insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    # 3rd cluster local_reads[1]
+    clusters.append(sliced_local_load_lhs[1])
+    clusters.append(sliced_local_load_rhs[1])
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph), sliced_local_load_rhs[1]
+        )
+    )
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    # 4th cluster mma_slice[1].
+    clusters.append(
+        insert_op_before(SetWavePrio(1).add_to_graph(tmp_graph), sliced_mma_nodes[1])
+    )
+    clusters.append(sliced_mma_nodes[1])
+    clusters.append(
+        insert_op_after(SetWavePrio(0).add_to_graph(tmp_graph), sliced_mma_nodes[1])
+    )
+    clusters.append(
+        insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+    return clusters
+
+
 def transform_two_PP_clusters(
     mma_nodes,
     local_load_lhs,
@@ -532,6 +610,104 @@ def transform_two_PP_clusters(
     )
     clusters.append(
         insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    return clusters
+
+
+def gatherToLDS_MXFP4_PP_clusters(
+    mma_nodes,
+    local_load_lhs,
+    local_load_rhs,
+    global_to_shared_lhs,
+    global_to_shared_rhs,
+    local_load_lhs_scale,
+    local_load_rhs_scale,
+    global_to_shared_lhs_scale,
+    global_to_shared_rhs_scale,
+):
+    num_slices = 2
+    (
+        sliced_mma_nodes,
+        sliced_local_load_lhs,
+        sliced_local_load_rhs,
+        sliced_local_load_lhs_scale,
+        sliced_local_load_rhs_scale,
+    ) = slice_scale_mma(
+        mma_nodes,
+        local_load_lhs,
+        local_load_rhs,
+        local_load_lhs_scale,
+        local_load_rhs_scale,
+        num_slice=num_slices,
+    )
+
+    assert len(sliced_mma_nodes) == len(sliced_local_load_rhs)
+    assert len(sliced_mma_nodes) == len(sliced_local_load_lhs)
+    assert len(sliced_mma_nodes) == len(sliced_local_load_lhs_scale)
+    assert len(sliced_mma_nodes) == len(sliced_local_load_rhs_scale)
+    assert len(sliced_mma_nodes) == num_slices
+
+    clusters = []
+    tmp_graph = fx.Graph()
+
+    # 1st cluster
+    clusters.append(sliced_local_load_lhs_scale[0])
+    clusters.append(sliced_local_load_rhs_scale[0])
+    clusters.append(sliced_local_load_lhs[0])
+    clusters.append(sliced_local_load_rhs[0])
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph), sliced_local_load_rhs[0]
+        )
+    )
+
+    clusters.append(global_to_shared_lhs_scale)
+    clusters.append(global_to_shared_rhs_scale)
+    clusters.append(global_to_shared_lhs)
+    clusters.append(global_to_shared_rhs)
+    clusters.append(
+        insert_op_after(
+            WorkgroupBarrier().add_to_graph(tmp_graph), global_to_shared_rhs
+        )
+    )
+    clusters.append(
+        insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    # 2nd cluster
+    clusters.append(
+        insert_op_before(SetWavePrio(1).add_to_graph(tmp_graph), sliced_mma_nodes[0])
+    )
+    clusters.append(sliced_mma_nodes[0])
+    clusters.append(
+        insert_op_after(SetWavePrio(0).add_to_graph(tmp_graph), sliced_mma_nodes[0])
+    )
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    # 3rd cluster
+    clusters.append(sliced_local_load_lhs_scale[1])
+    clusters.append(sliced_local_load_rhs_scale[1])
+    clusters.append(sliced_local_load_lhs[1])
+    clusters.append(sliced_local_load_rhs[1])
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph), sliced_local_load_rhs[1]
+        )
+    )
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    # 4th cluster
+    clusters.append(
+        insert_op_before(SetWavePrio(1).add_to_graph(tmp_graph), sliced_mma_nodes[1])
+    )
+    clusters.append(sliced_mma_nodes[1])
+    clusters.append(
+        insert_op_after(SetWavePrio(0).add_to_graph(tmp_graph), sliced_mma_nodes[1])
     )
 
     return clusters
@@ -652,6 +828,19 @@ def get_scale_local_loads(mma_nodes):
     return local_load_lhs_scale, local_load_rhs_scale
 
 
+def get_lds_gathers(local_loads):
+    lds_gathers = set()
+    for local_load in local_loads:
+        custom = get_custom(local_load)
+        cur_gathers = [
+            g
+            for g in custom.memory.users
+            if isinstance(get_custom(g), GatherToLDS) and g.graph == custom.graph
+        ]
+        lds_gathers.update(cur_gathers)
+    return list(lds_gathers)
+
+
 def get_local_writes(local_loads):
     local_writes = set()
     for local_load in local_loads:
@@ -686,7 +875,10 @@ def schedule_reordering(
     """
 
     # Only handles if scheduling type is prefetch
-    if scheduling_type != SchedulingType.PREFETCH:
+    if (
+        scheduling_type != SchedulingType.PREFETCH
+        and scheduling_type != SchedulingType.FOUR_STAGE
+    ):
         return
     hardware_constraint = get_hardware_constraint(constraints)
     iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
@@ -715,6 +907,8 @@ def schedule_reordering(
         # Early exit if cannot find either local loads
         if not local_load_lhs or not local_load_rhs:
             continue
+        global_to_shared_lhs = get_lds_gathers(local_load_lhs)
+        global_to_shared_rhs = get_lds_gathers(local_load_rhs)
         local_write_lhs = get_local_writes(local_load_lhs)
         local_write_rhs = get_local_writes(local_load_rhs)
         global_load_lhs = get_global_loads(local_write_lhs)
@@ -726,10 +920,14 @@ def schedule_reordering(
         local_write_lhs_scale = None
         global_load_lhs_scale = None
         global_load_rhs_scale = None
+        global_to_shared_lhs_scale = None
+        global_to_shared_rhs_scale = None
         if mma_type == ScaledMMA:
             local_load_lhs_scale, local_load_rhs_scale = get_scale_local_loads(
                 mma_nodes
             )
+            global_to_shared_lhs_scale = get_lds_gathers(local_load_lhs_scale)
+            global_to_shared_rhs_scale = get_lds_gathers(local_load_rhs_scale)
             local_write_lhs_scale = get_local_writes(local_load_lhs_scale)
             local_write_rhs_scale = get_local_writes(local_load_rhs_scale)
             global_load_lhs_scale = get_global_loads(local_write_lhs_scale)
@@ -745,6 +943,18 @@ def schedule_reordering(
         # Cannot find a suitable transform, early exit.
         if reorder_strategy == SchedReorderStrategy.NONE:
             continue
+        elif (
+            reorder_strategy == SchedReorderStrategy.TWO_PP_CLUSTER
+            and len(global_to_shared_lhs) + len(global_to_shared_rhs) > 0
+        ):
+            clusters = gatherToLDS_two_PP_clusters(
+                mma_nodes,
+                local_load_lhs,
+                local_load_rhs,
+                global_to_shared_lhs,
+                global_to_shared_rhs,
+            )
+            insert_prefetch_loop_barriers(custom_iterate, graph, clusters)
         elif reorder_strategy == SchedReorderStrategy.TWO_PP_CLUSTER:
             clusters = transform_two_PP_clusters(
                 mma_nodes,
@@ -756,6 +966,23 @@ def schedule_reordering(
                 local_write_rhs,
             )
             insert_prefetch_loop_barriers(custom_iterate, graph, clusters)
+        elif (
+            reorder_strategy == SchedReorderStrategy.MXFP4_PP_CLUSTER
+            and len(global_to_shared_lhs_scale) + len(global_to_shared_rhs_scale) > 0
+        ):
+            clusters = gatherToLDS_MXFP4_PP_clusters(
+                mma_nodes,
+                local_load_lhs,
+                local_load_rhs,
+                global_to_shared_lhs,
+                global_to_shared_rhs,
+                local_load_lhs_scale,
+                local_load_rhs_scale,
+                global_to_shared_lhs_scale,
+                global_to_shared_rhs_scale,
+            )
+            clusters = flatten_list(clusters)
+            # breakpoint()
         elif reorder_strategy == SchedReorderStrategy.MXFP4_PP_CLUSTER:
             clusters = transform_MXFP4_PP_clusters(
                 mma_nodes,
