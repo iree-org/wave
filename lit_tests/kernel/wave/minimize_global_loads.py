@@ -13,6 +13,7 @@ from wave_lang.kernel.wave.analysis.index_sequence_analysis import (
     set_post_expansion_indices,
 )
 from wave_lang.kernel.wave.barriers import add_shared_memory_barriers
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.expansion.expansion import add_get_results, expand_graph
 from wave_lang.kernel.wave.hoisting import hoist_loop_invariant_ops
 from wave_lang.kernel.wave.minimize_global_loads import minimize_global_loads
@@ -269,6 +270,73 @@ def test_gemm():
     # CHECK-NEXT: read(memory=allocate, elements_per_thread=4, mapping_dynamic_vals=(), _write_dependency=[write_18, write_19], index={M: Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: read(memory=allocate, elements_per_thread=4, mapping_dynamic_vals=(), _write_dependency=[write_18, write_19], index={M: Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 32 : 4 : 1})
     # CHECK-NEXT: read(memory=allocate, elements_per_thread=4, mapping_dynamic_vals=(), _write_dependency=[write_18, write_19], index={M: Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 48 : 4 : 1})
+
+
+@run_test
+def test_materialized_shape_padding():
+
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    dtype = tkl.f16
+    shape = (16, 16, 17)
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, mma_type=tkw.MMAType.F32_16x16x16_F16
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, dtype],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, dtype],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        def mma_instruction(
+            acc: tkl.Register[M, N, tkl.f32],
+        ) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(mma_instruction(c_reg), c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        M: 16,
+        N: 16,
+        K: 17,
+    }
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+
+    # CHECK-LABEL:    test_materialized_shape_padding
+    # CHECK-DAG:        #{{.*}} =  affine_map<()[s0] -> ((s0 floordiv 4) mod 16)>
+    # CHECK-DAG:        #{{.*}} =  affine_map<()[s0] -> (s0 * 8 - (s0 floordiv 4) * 32)>
+    # CHECK:            func.func @gemm
+    # CHECK:                %{{.*}} = arith.constant dense<17> : vector<8xindex>
+    # CHECK:                %{{.*}} = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7]> : vector<8xindex>
+    # CHECK:                %{{.*}} = vector.load %0[%1, %2] : memref<16x17xf16, strided<[17, 1], offset: ?>>, vector<8xf16>
 
 
 if __name__ == "__main__":
