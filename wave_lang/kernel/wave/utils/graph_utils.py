@@ -24,6 +24,7 @@ from ...ops.wave_ops import (
     Output,
     Placeholder,
     SharedMemoryBarrier,
+    TopkOp,
     Write,
     get_custom,
 )
@@ -268,19 +269,25 @@ def get_inputs(node: fx.Node, iterate: fx.Node = None) -> tuple[list[fx.Node], f
     elif isinstance(custom, GetResult):
         assert custom.value is not None, f"GetResult node {custom} has no value"
         iterate = get_custom(custom.value)
-        assert isinstance(
-            iterate, Iterate
-        ), f"GetResult must be using an Iterate, but\n{custom}\nis using\n{iterate}"
-        # Map get result to output
-        iteration_subgraph = iterate.get_root_graph().subgraphs[iterate.subgraph_name]
-        if len(iterate.init_args) == 1:
-            outputs = iterate.outputs(iteration_subgraph)
-            if isinstance(outputs, Sequence):
-                inputs += outputs
-            else:
-                inputs.append(outputs)
+        if isinstance(iterate, TopkOp):
+            iterate = None
+            inputs += node.all_input_nodes
         else:
-            inputs.append(iterate.outputs(iteration_subgraph)[custom.res_idx])
+            assert isinstance(
+                iterate, Iterate
+            ), f"GetResult must be using an Iterate, but\n{custom}\nis using\n{iterate}"
+            # Map get result to output
+            iteration_subgraph = iterate.get_root_graph().subgraphs[
+                iterate.subgraph_name
+            ]
+            if len(iterate.init_args) == 1:
+                outputs = iterate.outputs(iteration_subgraph)
+                if isinstance(outputs, Sequence):
+                    inputs += outputs
+                else:
+                    inputs.append(outputs)
+            else:
+                inputs.append(iterate.outputs(iteration_subgraph)[custom.res_idx])
     elif isinstance(custom, Iterate):
         iteration_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
         inputs.append(custom.outputs(iteration_subgraph))

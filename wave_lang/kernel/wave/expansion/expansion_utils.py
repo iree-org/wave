@@ -21,6 +21,7 @@ from ...ops.wave_ops import (
     Placeholder,
     Read,
     ReduceOp,
+    TopkOp,
     Reshape,
     Write,
     get_custom,
@@ -70,7 +71,8 @@ def get_dim_scaling(
 
     idxc = IndexingContext.current()
     dim_to_shape = {
-        infer_dim(size_expr): size_expr for size_expr in node.type.symbolic_shape
+        infer_dim(size_expr): size_expr
+        for size_expr in getattr(node.type, "symbolic_shape", [])
     }
     for constraint in constraints:
         if isinstance(constraint, (WorkgroupConstraint, TilingConstraint)):
@@ -121,7 +123,7 @@ def get_dim_scaling(
             )
 
     # For reduce ops, also include the reduction dimension.
-    if isinstance(node, ReduceOp):
+    if isinstance(node, (ReduceOp, TopkOp)):
         reduction_dim = node.reduction_dim
         if not_computed(reduction_dim) and is_static_dim(reduction_dim):
             dim_scaling[reduction_dim] = ceildiv(

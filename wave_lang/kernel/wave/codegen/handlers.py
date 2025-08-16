@@ -1767,7 +1767,21 @@ def handle_select(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Malformed arguments") from e
 
     unwrap = lambda x: cast_py_value(emitter, x).ir_value
-    selected = arith_d.select(unwrap(cond), unwrap(if_true), unwrap(if_false))
+    cond = unwrap(cond)
+    if_true = unwrap(if_true)
+    if_false = unwrap(if_false)
+
+    # Handle special scalar/rank-0 cases where if_true/if_false may be
+    # Dtype, vector<Dtype>, or vector<1xDtype>.
+    true_false_ranks = [get_rank(arg.type) for arg in (if_true, if_false)]
+    t_rank = get_rank(if_true.type)
+    f_rank = get_rank(if_false.type)
+    if t_rank < f_rank:
+        if_true = vector_d.broadcast(if_false.type, if_true)
+    elif f_rank < t_rank:
+        if_false = vector_d.broadcast(if_true.type, if_false)
+
+    selected = arith_d.select(cond, if_true, if_false)
     emitter.bind_node_proxy(node, IRProxyValue(selected))
 
 

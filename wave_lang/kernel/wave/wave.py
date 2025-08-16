@@ -80,6 +80,7 @@ from .debug_log_hoist import (
 from .decompose_dot_mma import decompose_dot_mma
 from .decompose_reduce_ops import decompose_reduce_ops
 from .decompose_scan_ops import decompose_scan_ops
+from .decompose_topk_ops import decompose_topk_ops
 from .decompose_vmma_ops import decompose_vmma_ops
 from .expansion.expansion import add_get_results, expand_graph
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
@@ -870,6 +871,7 @@ class LaunchableWave(Launchable):
         graph_passes += [
             partial(decompose_reduce_ops, trace, self.constraints),
             partial(decompose_scan_ops, trace, self.constraints),
+            partial(decompose_topk_ops, trace, self.constraints),
         ]
 
         # Schedule the reduction ops.
