@@ -79,7 +79,7 @@ from .scheduling.schedule import schedule_graph
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
 from .symbolic_constraints import SymbolicAlias
 from .type_inference import infer_types
-from .utils.compile_utils import canonicalize_module
+from .utils.compile_utils import canonicalize_module, apply_transform
 from .utils.general_utils import (
     delinearize_index,
     get_hardware_constraint,
@@ -548,6 +548,9 @@ class LaunchableWave(Launchable):
             logger.info(asm)
             raise
         emitter.finish()
+
+        if options.postprocess:
+            apply_transform(mb.module_op, options.postprocess, options.subs)
 
         if options.canonicalize:
             canonicalize_module(mb.module_op)

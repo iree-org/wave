@@ -15,6 +15,7 @@ class WaveCompileOptions:
     """
 
     # === General options ===
+    postprocess: Optional[str] = None
     canonicalize: bool = True
     func_name: str = "isolated_benchmark"
 

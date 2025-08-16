@@ -3,7 +3,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+import re
 
 from iree.compiler import compile_str
 from iree.compiler.dialects import (
@@ -16,6 +17,8 @@ from iree.compiler.dialects.transform import (
     interpreter as transform_interpreter,
 )
 from iree.compiler.dialects.transform import vector as vt
+
+from wave_lang.kernel._support.indexing import is_literal, subs_idxc, IndexSymbol
 
 from wave_lang.support.ir_imports import (
     InsertionPoint,
@@ -70,6 +73,34 @@ def compile_to_vmfb(
 
     res = compile_str(asm, target_backends=[options.backend], extra_args=flags)
     return res
+
+
+def apply_transform(module: Operation, asm: str, symbols: dict[IndexSymbol, Any]):
+    symbols = {str(k): v for k, v in symbols.items()}
+    pattern = r"%%[A-Za-z0-9_]+%%"
+
+    def repl(match: re.Match) -> str:
+        name = match.group()[2:-2]  # drop %% and %%
+        res = subs_idxc(symbols.get(name, None))
+
+        if res is None:
+            raise ValueError(f"Symbol {name} not found")
+
+        if not is_literal(res):
+            raise ValueError(f"Symbol {name}: {res} is not a literal")
+
+        return str(int(res))
+
+    asm = re.sub(pattern, repl, asm)
+
+    with module.context, Location.unknown():
+        transform_module = Module.parse(asm)
+
+        transform_interpreter.apply_named_sequence(
+            module,
+            transform_module.body.operations[0],
+            transform_module,
+        )
 
 
 def canonicalize_module(module: Operation):

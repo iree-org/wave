@@ -186,6 +186,7 @@ class WaveCacheManager(object):
             # cache key is itself a member field of the type.  We list the
             # options here in the same order as they are defined in
             # compile_options.py.
+            options.postprocess,
             options.canonicalize,
             options.func_name,
             options.subs,
