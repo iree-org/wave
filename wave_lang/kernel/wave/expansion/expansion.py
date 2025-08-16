@@ -28,6 +28,7 @@ from ...ops.wave_ops import (
     MMABase,
     Output,
     ReduceOp,
+    TopkOp,
     ScatterAdd,
     Reshape,
     SetSymbol,
@@ -246,7 +247,7 @@ def handle_iterate_entry(
     expansion_context: ExpansionContext,
 ):
     iterate_context = expansion_context.iterate_context
-    if isinstance(new_node, GetResult):
+    if isinstance(new_node, GetResult) and iterate:
         assert len(inputs) == 1, f"Expected one input, got {inputs}"
         outputs = iterate.outputs(inputs[0].graph)
         if not isinstance(outputs, Sequence):
@@ -300,7 +301,7 @@ def concatenate_outputs(
     metadata: ExpansionMetadata,
 ):
     reshape_check = isinstance(new_user, Reshape)
-    reduce_check = isinstance(new_user, ReduceOp) and i == 0
+    reduce_check = isinstance(new_user, (ReduceOp, TopkOp)) and i == 0
     if reshape_check or reduce_check:
         if metadata.query_index == 0:
             new_node = [new_node.fx_node]
@@ -336,7 +337,7 @@ def update_users(
         user = get_custom(user)
         dim_query = metadata.dim_query
         # For reshapes and reduces, multiple users can share the same source.
-        if isinstance(user, (Reshape, ReduceOp)):
+        if isinstance(user, (Reshape, ReduceOp, TopkOp)):
             if not metadata.source_dim_query:
                 continue
             dim_query = metadata.source_dim_query
@@ -432,13 +433,13 @@ def populate_inputs(
     expandable_args = filter_expandable_args([get_custom(x) for x in inputs])
     new_nodes_to_expand = []
 
-    if isinstance(node, (Reshape, ReduceOp)):
+    if isinstance(node, (Reshape, ReduceOp, TopkOp)):
         match node:
             case Reshape():
                 dim_queries = get_reshape_dim_queries(
                     node, metadata, dim_scaling, new_nodes_to_expand
                 )
-            case ReduceOp():
+            case ReduceOp() | TopkOp():
                 try:
                     # Expand reduction to dim scaling amount. When output is scalar, op can only
                     # be expanded once/count=1, and dim_scaling is null.
