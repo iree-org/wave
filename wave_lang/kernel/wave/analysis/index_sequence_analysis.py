@@ -34,6 +34,7 @@ from ...ops.wave_ops import (
     Placeholder,
     Read,
     ReduceOp,
+    TopkOp,
     ScaledMMA,
     SelectOp,
     SetWavePrio,
@@ -647,6 +648,11 @@ def should_update_index(
     # Get symbolic shape without any aliased variables.
     aliased_dims = [x.source for x in symbolic_constraints]
 
+    if isinstance(source, TopkOp):
+        # TopkOp's type is a tuple, so it would not work with upcoming logic.
+        # But it does require updating indices.
+        return True
+
     source_dims = [infer_dim(dim) for dim in source.type.symbolic_shape]
     if source.type:
         symbolic_shape = set(source_dims).difference(aliased_dims)
@@ -796,7 +802,7 @@ def set_thread_dependent_index_from_read_write(
 
 def get_reduce_mapping(
     trace: CapturedTrace, constraints: list[Constraint]
-) -> dict[ReduceOp, dict[IndexSymbol, IndexSequence]]:
+) -> dict[ReduceOp | TopkOp, dict[IndexSymbol, IndexSequence]]:
     """
     Get the mapping of the reduce ops to the index sequence.
 
@@ -818,7 +824,7 @@ def get_reduce_mapping(
     ```
 
     """
-    sources = trace.walk(lambda node: isinstance(get_custom(node), ReduceOp))
+    sources = trace.walk(lambda node: isinstance(get_custom(node), (ReduceOp, TopkOp)))
     hardware_constraint = get_hardware_constraint(constraints)
     workgroup_constraints = get_workgroup_constraints(constraints)
 
@@ -899,13 +905,13 @@ def populate_reduce_source_indices(
 def set_thread_dependent_index_from_reduce(
     constraints: Sequence[Constraint],
     trace: CapturedTrace,
-    reduce_mapping: dict[ReduceOp, dict[IndexSymbol, IndexSequence]],
+    reduce_mapping: dict[ReduceOp | TopkOp, dict[IndexSymbol, IndexSequence]],
 ):
     """
     Set the thread dependent index, rooting on reduce ops.
     """
     hardware_constraint = get_hardware_constraint(constraints)
-    sources = trace.walk(lambda node: isinstance(get_custom(node), ReduceOp))
+    sources = trace.walk(lambda node: isinstance(get_custom(node), (ReduceOp, TopkOp)))
     sources = [get_custom(x) for x in sources]
     assert sources, "No reduce nodes found in the graph."
 
@@ -982,76 +988,84 @@ def create_broadcast(
         op.update_arg(to_broadcast_arg_name, custom.fx_node)
 
 
-def resolve_broadcasting_for_op(
+def resolve_broadcasting_for_op(op: CustomOp, operand_identifiers: list[str]):
+    """Resolve broadcasting for a single operation instance.
+    The operand_identifiers argument is a list of field names for the arguments that need broadcast support.
+    """
+    operands = []
+    for identifier in operand_identifiers:
+        operand_custom = get_custom(getattr(op, identifier))
+
+        index = get_index(operand_custom)
+        dim, size = get_largest_index_and_size(index, operand_custom)
+        operands.append(
+            {"custom": operand_custom, "dim": dim, "size": size, "id": identifier}
+        )
+
+    sizes = [operand["size"] for operand in operands]
+    if len(set(sizes)) <= 1 or all(size == 1 for size in sizes):
+        return
+
+    target = max(operands, key=lambda x: x["size"])
+
+    def generate_error_context():
+        context_lines = [f"\n{op.__class__.__name__.lower()}={op}"]
+        for op_info in operands:
+            context_lines.extend(
+                [
+                    f"\n{op_info['id']}: {op_info['custom']}",
+                    f"\n{op_info['id']}_index: {get_index(op_info['custom'])}",
+                    f"\n{op_info['id']}_dim: {op_info['dim']}",
+                    f"\n{op_info['id']}_size: {op_info['size']}",
+                    f"\n{op_info['id']}.type.symbolic_shape: {op_info['custom'].type.symbolic_shape}",
+                ]
+            )
+        return "".join(context_lines)
+
+    for operand in operands:
+        if operand["size"] < target["size"]:
+            if operand["size"] > 1 and target["size"] > 1:
+                raise NotImplementedError(
+                    f"Currently only support resolving discrepancies when one of the shapes is 1."
+                    f"{generate_error_context()}"
+                )
+
+            if operand["dim"] != target["dim"]:
+                missing_dims = set(target["custom"].type.symbolic_shape).difference(
+                    set(operand["custom"].type.symbolic_shape)
+                )
+                is_only_missing_dim = missing_dims == {target["dim"]}
+                is_innermost_dim = (
+                    target["dim"] == target["custom"].type.symbolic_shape[-1]
+                )
+
+                if not is_only_missing_dim and not is_innermost_dim:
+                    raise NotImplementedError(
+                        f"Currently only support resolving discrepancies when the broadcasting"
+                        f" dimension is the innermost dimension for {op.__class__.__name__}."
+                    )
+
+            create_broadcast(
+                op,
+                operand["id"],
+                target["dim"],
+                target["size"],
+                target["custom"],
+            )
+
+
+def resolve_broadcasting_for_op_type(
     trace: CapturedTrace, op_type: type, operand_identifiers: list[str]
 ):
-    """Generic broadcasting resolution for any multi-operand operation."""
+    """Generic broadcasting resolution for any multi-operand operation type.
+    The operand_identifiers argument is a list of field names for the arguments that need broadcast support.
+    """
 
     ops = trace.walk(lambda node: isinstance(get_custom(node), op_type))
 
     for op_node in ops:
         custom = get_custom(op_node)
-
-        operands = []
-        for identifier in operand_identifiers:
-            operand_custom = get_custom(getattr(custom, identifier))
-
-            index = get_index(operand_custom)
-            dim, size = get_largest_index_and_size(index, operand_custom)
-            operands.append(
-                {"custom": operand_custom, "dim": dim, "size": size, "id": identifier}
-            )
-
-        sizes = [operand["size"] for operand in operands]
-        if len(set(sizes)) <= 1 or all(size == 1 for size in sizes):
-            continue
-
-        target = max(operands, key=lambda x: x["size"])
-
-        def generate_error_context():
-            context_lines = [f"\n{op_type.__name__.lower()}={custom}"]
-            for op in operands:
-                context_lines.extend(
-                    [
-                        f"\n{op['id']}: {op['custom']}",
-                        f"\n{op['id']}_index: {get_index(op['custom'])}",
-                        f"\n{op['id']}_dim: {op['dim']}",
-                        f"\n{op['id']}_size: {op['size']}",
-                        f"\n{op['id']}.type.symbolic_shape: {op['custom'].type.symbolic_shape}",
-                    ]
-                )
-            return "".join(context_lines)
-
-        for operand in operands:
-            if operand["size"] < target["size"]:
-                if operand["size"] > 1 and target["size"] > 1:
-                    raise NotImplementedError(
-                        f"Currently only support resolving discrepancies when one of the shapes is 1."
-                        f"{generate_error_context()}"
-                    )
-
-                if operand["dim"] != target["dim"]:
-                    missing_dims = set(target["custom"].type.symbolic_shape).difference(
-                        set(operand["custom"].type.symbolic_shape)
-                    )
-                    is_only_missing_dim = missing_dims == {target["dim"]}
-                    is_innermost_dim = (
-                        target["dim"] == target["custom"].type.symbolic_shape[-1]
-                    )
-
-                    if not is_only_missing_dim and not is_innermost_dim:
-                        raise NotImplementedError(
-                            f"Currently only support resolving discrepancies when the broadcasting"
-                            f" dimension is the innermost dimension for {op_type.__name__}."
-                        )
-
-                create_broadcast(
-                    custom,
-                    operand["id"],
-                    target["dim"],
-                    target["size"],
-                    target["custom"],
-                )
+        resolve_broadcasting_for_op(custom, operand_identifiers)
 
 
 def resolve_thread_shapes(trace: CapturedTrace, constraints: list[Constraint]):
@@ -1072,5 +1086,5 @@ def resolve_thread_shapes(trace: CapturedTrace, constraints: list[Constraint]):
             _, size = get_largest_index_and_size(get_index(custom))
             custom.update_arg("elements_per_thread", size)
 
-    resolve_broadcasting_for_op(trace, BinaryPyOp, ["lhs", "rhs"])
-    resolve_broadcasting_for_op(trace, SelectOp, ["cond", "if_true", "if_false"])
+    resolve_broadcasting_for_op_type(trace, BinaryPyOp, ["lhs", "rhs"])
+    resolve_broadcasting_for_op_type(trace, SelectOp, ["cond", "if_true", "if_false"])

@@ -2374,3 +2374,64 @@ def test_debug_log_iteration_dims():
         assert torch.equal(debug_logs["acc"]["value"][-1], c)
         # Meanwhile the first element should be quite different.
         assert not torch.allclose(debug_logs["acc"]["value"][0], c)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape,k", [((32, 64), 2), ((64, 128), 4), ((128, 256), 8)])
+def test_topk(shape, k, run_bench):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 1, N: BLOCK_N, K: K},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        values: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        indices: tkl.Memory[M, K, ADDRESS_SPACE, tkl.i32],
+    ):
+        src = tkw.read(a)
+        topk_values, topk_indices = tkw.topk(src, K, N)
+        tkw.write(topk_values, values, elements_per_thread=K)
+        tkw.write(topk_indices, indices, elements_per_thread=K)
+
+    torch.manual_seed(1)
+    a = device_randn(shape, dtype=torch.float16)
+    values_out = device_zeros((shape[0], k), dtype=torch.float16)
+    indices_out = device_zeros((shape[0], k), dtype=torch.int32)
+
+    ref_values, ref_indices = torch.topk(a, k, dim=-1)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            K: k,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(a, values_out, indices_out)
+
+    assert values_out.shape == ref_values.shape
+    assert indices_out.shape == ref_indices.shape
+    # Explicitly don't assert that indices are equal, because in case of duplicate values within a row, either index is valid.  As long as the values are equal, it's correct.
+    assert_close(ref_values, values_out, atol=0.1, rtol=1e-05)
