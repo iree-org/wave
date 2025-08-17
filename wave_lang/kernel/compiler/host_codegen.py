@@ -201,7 +201,7 @@ def create_device_tensor_slices(
     dynamic_argument_map: dict = None,
     device_map: Optional[dict[int, list]] = None,
     constant_map: Optional[dict] = None,
-) -> tuple[list[Value], dict, dict]:
+) -> tuple[dict, dict]:
     """
     Create tensor slices for each device from the host tensor using static dimensions.
     Reuses slices when multiple devices need identical slices.
@@ -211,7 +211,6 @@ def create_device_tensor_slices(
     constraint_map = {c.dim: (c.tile_size, c.device_dim) for c in device_constraints}
 
     host_shape = host_buffer_binding.kernel_buffer_type.symbolic_shape
-    device_slices = []
 
     device_map = device_map if device_map is not None else {}
 
@@ -252,7 +251,7 @@ def create_device_tensor_slices(
         # Device 2: [0, 1], Device 3: [1, 1]
         device_coords = []
         temp_id = device_id
-        for dim_size in device_layout.dims:  # Go forward, not reversed!
+        for dim_size in device_layout.dims:
             device_coords.append(temp_id % dim_size)
             temp_id //= dim_size
 
@@ -352,24 +351,32 @@ def create_device_tensor_slices(
         slice_key = tuple(slice_signature)
 
         # check if we've already created this slice
-        if slice_key in slice_cache:
+        if 0:
             device_slice_result, cached_slice_info = slice_cache[slice_key]
             print(f"Reusing slice for device {device_id} with signature {slice_key}")
         else:
-            # Create a new slice
-            result_type = RankedTensorType.get(result_shape, element_type)
+            # check if the host_tensor and the slice dimensions match
+            if host_type.shape != result_shape:
+                # Create a new slice
+                result_type = RankedTensorType.get(result_shape, element_type)
+                device_slice = flow_d.TensorSliceOp(
+                    result_type,
+                    host_tensor,
+                    [],  # source_dims
+                    start_indices,
+                    lengths,
+                    [],  # result_dims
+                )
+                device_slice_result = device_slice.result
+            else:
+                device_slice_result = host_tensor
 
-            device_slice = flow_d.TensorSliceOp(
-                result_type,
-                host_tensor,
-                [],  # source_dims
-                start_indices,
-                lengths,
-                [],  # result_dims
+            transferred_slice = flow_d.TensorTransferOp(
+                device_slice_result,
+                [],
+                Attribute.parse(f"#hal.device.promise<@__device_{device_id}>"),
             )
-
-            device_slice_result = device_slice.result
-            device_slices.append(device_slice_result)
+            device_slice_result = transferred_slice.result
 
             # Cache the slice
             slice_cache[slice_key] = (device_slice_result, slice_info)
@@ -392,7 +399,7 @@ def create_device_tensor_slices(
             }
         )
 
-    return device_slices, device_map, constant_map
+    return device_map, constant_map
 
 
 def isolated_test_call(
@@ -409,6 +416,9 @@ def isolated_test_call(
     device_constraints: Optional[list[DeviceConstraint]] = None,
 ):
     with InsertionPoint(mb.body_block), Location.unknown():
+
+        # Given kernel signature, create a host signature.
+        # This will be the same if no device constraints are provided.
         host_sig = HostSignature(sig, device_constraints)
 
         input_types = [b.as_mlir_type() for b in host_sig.buffer_bindings] + [
@@ -504,21 +514,15 @@ def isolated_test_call(
                 )
             ):
                 if device_constraints and device_layout:
-                    slices, device_tensor_maps, constant_map = (
-                        create_device_tensor_slices(
-                            host_tensor,
-                            binding,
-                            device_layout,
-                            device_constraints,
-                            dynamic_argument_map,
-                            device_tensor_maps,
-                            constant_map,
-                        )
+                    device_tensor_maps, constant_map = create_device_tensor_slices(
+                        host_tensor,
+                        binding,
+                        device_layout,
+                        device_constraints,
+                        dynamic_argument_map,
+                        device_tensor_maps,
+                        constant_map,
                     )
-                    device_tensor_slices.extend(slices)
-                else:
-                    # No slicing needed
-                    device_tensor_slices.append(host_tensor)
 
             assert isinstance(entry_block, Block)
             # Create a flow.dispatch op to the kernel
@@ -534,80 +538,96 @@ def isolated_test_call(
                 ]
             )
 
-            output_list = []
-            for i in range(0, len(device_tensor_maps.keys())):
-                block_argument_list = []
-                output_slices = []
-                for arg in device_tensor_maps[i]:
-                    block_argument_list.append(arg["slice"])
-                    if arg["binding_name"] in [
-                        b.name for b in host_sig.output_buffer_bindings
-                    ]:
-                        # Get the slice shape from the device mapping
-                        slice_shape = arg["result_shape"]
-                        element_type = arg["slice"].type.element_type
-                        output_slices.append(
-                            RankedTensorType.get(slice_shape, element_type)
-                        )
+            out = None
+            if device_constraints and device_layout:
+                output_list = []
+                for i in range(0, len(device_tensor_maps.keys())):
+                    block_argument_list = []
+                    output_slices = []
+                    for arg in device_tensor_maps[i]:
+                        block_argument_list.append(arg["slice"])
+                        if arg["binding_name"] in [
+                            b.name for b in host_sig.output_buffer_bindings
+                        ]:
+                            # Get the slice shape from the device mapping
+                            slice_shape = arg["result_shape"]
+                            element_type = arg["slice"].type.element_type
+                            output_slices.append(
+                                RankedTensorType.get(slice_shape, element_type)
+                            )
 
-                # Create a device affinity attribute
-                device_name = f"__device_{i}"
-                affinity_attr_str = f"#hal.device.affinity<@{device_name}>"
-                affinity_attr = Attribute.parse(affinity_attr_str)
+                    out = flow_d.DispatchOp(
+                        output_slices,
+                        [dynamic_argument_map[dim] for dim in dynamic_symbols]
+                        + scalars_args,
+                        entrypoints,
+                        block_argument_list,
+                        [dynamic_argument_map[dim] for dim in argument_dims],
+                        [dynamic_argument_map[dim] for dim in result_dims],
+                        tied_operands=tied_operands,
+                    )
 
+                    # Create a device affinity attribute
+                    # device_name = f"__device_{i}"
+                    # affinity_attr_str = f"#hal.device.affinity<@{device_name}>"
+                    # affinity_attr = Attribute.parse(affinity_attr_str)
+                    # out.attributes["stream.affinity"] = affinity_attr
+                    output_list.append(out)
+
+                # Now collect all the results back into the original tensor shape
+                if len(output_list) > 1:
+                    # getting the orignial output tensor
+                    result_tensor = arguments[
+                        len(host_sig.buffer_bindings)
+                        - len(host_sig.output_buffer_bindings)
+                    ]
+                    output_idx = len(host_sig.buffer_bindings) - len(
+                        host_sig.output_buffer_bindings
+                    )
+
+                    for i, dispatch_result in enumerate(output_list):
+                        # Get the device coordinates for this result
+                        # TODO: Handle multiple outputs per device, currently assuming one output per device
+                        device_info = device_tensor_maps[i][output_idx]
+                        slice_shape = device_info["result_shape"]
+                        slice_info = device_info["slice_info"]
+                        offsets = []
+                        for dim_key in sorted(slice_info.keys()):  # dim_0, dim_1, etc.
+                            start_offset = slice_info[dim_key]["start_offset"]
+                            if start_offset not in constant_map:
+                                constant_map[start_offset] = arith_d.constant(
+                                    IndexType.get(),
+                                    IntegerAttr.get(IndexType.get(), start_offset),
+                                )
+                            offsets.append(constant_map[start_offset])
+
+                        # Update the result tensor with this device's output
+                        # flow_d.TensorUpdateOp signature: (target, target_dims, start_indices, update, update_dims)
+                        result_value = flow_d.TensorUpdateOp(
+                            result_tensor,  # target tensor
+                            [],  # target_dims (empty list for dynamic dims)
+                            offsets,  # start_indices (where to place it)
+                            dispatch_result.results[0],  # update (the slice to insert)
+                            [],  # update_dims (empty list for dynamic dims)
+                        ).result
+                        result_tensor = result_value
+
+                    out = [result_tensor]
+                else:
+                    out = output_list[0]
+            else:
+                # If no device constraints, just dispatch to the kernel directly
+                breakpoint()
                 out = flow_d.DispatchOp(
-                    output_slices,
+                    memref_to_tensor(output_types),
                     [dynamic_argument_map[dim] for dim in dynamic_symbols]
                     + scalars_args,
                     entrypoints,
-                    block_argument_list,
+                    arguments,
                     [dynamic_argument_map[dim] for dim in argument_dims],
                     [dynamic_argument_map[dim] for dim in result_dims],
                     tied_operands=tied_operands,
                 )
-                out.attributes["stream.affinity"] = affinity_attr
-                output_list.append(out)
-
-            # Now collect all the results back into the original tensor shape
-            if len(output_list) > 1:
-                # getting the orignial output tensor
-                result_tensor = arguments[
-                    len(host_sig.buffer_bindings) - len(host_sig.output_buffer_bindings)
-                ]
-                output_idx = len(host_sig.buffer_bindings) - len(
-                    host_sig.output_buffer_bindings
-                )
-
-                for i, dispatch_result in enumerate(output_list):
-                    # Get the device coordinates for this result
-                    # TODO: Handle multiple outputs per device, currently assuming one output per device
-                    device_info = device_tensor_maps[i][output_idx]
-                    slice_shape = device_info["result_shape"]
-                    slice_info = device_info["slice_info"]
-                    offsets = []
-                    for dim_key in sorted(slice_info.keys()):  # dim_0, dim_1, etc.
-                        start_offset = slice_info[dim_key]["start_offset"]
-                        if start_offset not in constant_map:
-                            constant_map[start_offset] = arith_d.constant(
-                                IndexType.get(),
-                                IntegerAttr.get(IndexType.get(), start_offset),
-                            )
-                        offsets.append(constant_map[start_offset])
-
-                    # Update the result tensor with this device's output
-                    # flow_d.TensorUpdateOp signature: (target, target_dims, start_indices, update, update_dims)
-                    result_value = flow_d.TensorUpdateOp(
-                        result_tensor,  # target tensor
-                        [],  # target_dims (empty list for dynamic dims)
-                        offsets,  # start_indices (where to place it)
-                        dispatch_result.results[0],  # update (the slice to insert)
-                        [],  # update_dims (empty list for dynamic dims)
-                    ).result
-                    result_tensor = result_value
-
-                out = [result_tensor]
-            else:
-                out = output_list[0].results[0]
 
             if async_dispatch:
                 out = list(out.results)
