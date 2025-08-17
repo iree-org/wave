@@ -75,7 +75,9 @@ def compile_to_vmfb(
     return res
 
 
-def apply_transform(module: Operation, asm: str, symbols: dict[IndexSymbol, Any]):
+def apply_transform(
+    module: Operation, transform_asm: str, symbols: dict[IndexSymbol, Any]
+):
     symbols = {str(k): v for k, v in symbols.items()}
     pattern = r"%%[A-Za-z0-9_]+%%"
 
@@ -92,16 +94,16 @@ def apply_transform(module: Operation, asm: str, symbols: dict[IndexSymbol, Any]
 
         return str(int(res))
 
-    asm = re.sub(pattern, repl, asm)
+    transform_asm = re.sub(pattern, repl, transform_asm)
 
     with module.context, Location.unknown():
-        transform_module = Module.parse(asm)
+        transform_module = Module.parse(transform_asm)
 
-        transform_interpreter.apply_named_sequence(
-            module,
-            transform_module.body.operations[0],
-            transform_module,
-        )
+    transform_interpreter.apply_named_sequence(
+        module,
+        transform_module.body.operations[0],
+        transform_module,
+    )
 
 
 def canonicalize_module(module: Operation):
