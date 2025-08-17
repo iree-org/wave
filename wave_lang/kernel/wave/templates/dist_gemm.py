@@ -47,9 +47,9 @@ def get_dist_gemm_kernel(
     constraints: list[tkw.Constraint] = []
     # Only support distribution along outer dimension
     constraints += [tkw.DeviceConstraint(M, DEVICE_M, 0)]
-    constraints += [tkw.DeviceConstraint(N, DEVICE_N, 1)]
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M / 2, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N / 2, 1)]
+    # constraints += [tkw.DeviceConstraint(N, DEVICE_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 4)]
