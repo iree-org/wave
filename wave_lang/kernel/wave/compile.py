@@ -194,7 +194,7 @@ class WaveKernel:
             )
         else:
             tensors = [t.data for t in chain(kernel_inputs, kernel_outputs)]
-            self.launchable(*tensors, *scalar_args, self.options.num_devices)
+            self.launchable(*tensors, *scalar_args)
 
             if self.options.run_bench:
                 benchmark_flags = get_benchmark_flags(self.options)
