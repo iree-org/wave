@@ -81,11 +81,12 @@ def apply_transform(module: Operation, asm: str, symbols: dict[IndexSymbol, Any]
 
     def repl(match: re.Match) -> str:
         name = match.group()[2:-2]  # drop %% and %%
-        res = subs_idxc(symbols.get(name, None))
+        res = symbols.get(name, None)
 
         if res is None:
             raise ValueError(f"Symbol {name} not found")
 
+        res = subs_idxc(res)
         if not is_literal(res):
             raise ValueError(f"Symbol {name}: {res} is not a literal")
 
