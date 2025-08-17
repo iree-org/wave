@@ -1375,57 +1375,79 @@ def test_im2col_mma(run_bench):
 
 
 _igemm_cases = [
-    (1, 5, 5, 10, 2, 2, 2, 2),
-    (2, 5, 5, 3, 2, 2, 1, 1),
-    (4, 5, 5, 10, 2, 2, 2, 1),
-    (2, 5, 5, 10, 2, 2, 1, 1),
-    (2, 5, 5, 10, 2, 2, 2, 1),
-    (1, 5, 5, 10, 2, 2, 16, 1),
-    (1, 5, 5, 10, 2, 2, 1, 2),
-    (1, 5, 5, 4, 2, 2, 2, 1),
-    (4, 5, 5, 10, 2, 2, 2, 3),
-    (4, 5, 5, 10, 2, 2, 1, 3),
-    (4, 5, 5, 10, 2, 2, 16, 2),
-    (1, 5, 5, 3, 2, 2, 2, 2),
-    (4, 5, 5, 10, 2, 2, 16, 1),
-    (4, 5, 5, 4, 2, 2, 16, 1),
-    (2, 5, 5, 4, 2, 2, 1, 3),
-    (2, 5, 5, 4, 2, 2, 2, 1),
-    (1, 5, 5, 10, 2, 2, 16, 3),
-    (4, 5, 5, 4, 2, 2, 16, 2),
-    (4, 5, 5, 10, 2, 2, 2, 1),
-    (4, 5, 5, 3, 2, 2, 1, 1),
-    (4, 5, 5, 4, 2, 2, 2, 1),
-    (4, 5, 5, 3, 2, 2, 2, 1),
-    (2, 5, 5, 1, 2, 2, 1, 3),
-    (2, 5, 5, 4, 2, 2, 2, 1),
-    (2, 5, 5, 10, 2, 2, 16, 1),
-    (1, 5, 5, 1, 3, 3, 1, 1),
+    (1, 5, 5, 10, 2, 2, 2, 2, 0),
+    (2, 5, 5, 3, 2, 2, 1, 1, 0),
+    (4, 5, 5, 10, 2, 2, 2, 1, 0),
+    (2, 5, 5, 10, 2, 2, 1, 1, 0),
+    (2, 5, 5, 10, 2, 2, 2, 1, 0),
+    (1, 5, 5, 10, 2, 2, 16, 1, 0),
+    (1, 5, 5, 10, 2, 2, 1, 2, 0),
+    (1, 5, 5, 4, 2, 2, 2, 1, 0),
+    (4, 5, 5, 10, 2, 2, 2, 3, 0),
+    (4, 5, 5, 10, 2, 2, 1, 3, 0),
+    (4, 5, 5, 10, 2, 2, 16, 2, 0),
+    (1, 5, 5, 3, 2, 2, 2, 2, 0),
+    (4, 5, 5, 10, 2, 2, 16, 1, 0),
+    (4, 5, 5, 4, 2, 2, 16, 1, 0),
+    (2, 5, 5, 4, 2, 2, 1, 3, 0),
+    (2, 5, 5, 4, 2, 2, 2, 1, 0),
+    (1, 5, 5, 10, 2, 2, 16, 3, 0),
+    (4, 5, 5, 4, 2, 2, 16, 2, 0),
+    (4, 5, 5, 10, 2, 2, 2, 1, 0),
+    (4, 5, 5, 3, 2, 2, 1, 1, 0),
+    (4, 5, 5, 4, 2, 2, 2, 1, 0),
+    (4, 5, 5, 3, 2, 2, 2, 1, 0),
+    (2, 5, 5, 1, 2, 2, 1, 3, 0),
+    (2, 5, 5, 4, 2, 2, 2, 1, 0),
+    (2, 5, 5, 10, 2, 2, 16, 1, 0),
+    (1, 5, 5, 1, 3, 3, 1, 1, 0),
+    # to evaluate padding
+    # Basic cases with padding=1
+    (1, 8, 8, 1, 3, 3, 1, 1, 1),
+    (1, 16, 16, 3, 3, 3, 16, 1, 1),
+    (2, 32, 32, 16, 3, 3, 32, 1, 1),
+    (4, 14, 14, 8, 5, 5, 16, 1, 1),
+    # Cases with padding=2
+    (1, 12, 12, 1, 3, 3, 1, 1, 2),
+    (2, 24, 24, 8, 5, 5, 16, 1, 2),
+    (1, 28, 28, 4, 7, 7, 8, 1, 2),
+    # Cases with stride=2 and padding
+    (1, 16, 16, 3, 3, 3, 16, 2, 1),
+    (2, 32, 32, 8, 5, 5, 16, 2, 2),
+    (1, 24, 24, 4, 7, 7, 8, 2, 3),
+    # Edge cases with different padding values
+    (1, 20, 20, 1, 3, 3, 1, 1, 3),
+    (1, 15, 15, 2, 5, 5, 4, 1, 4),
+    (2, 18, 18, 4, 3, 3, 8, 2, 0),  # padding=0 for backward compatibility
+    # Larger cases
+    (4, 56, 56, 16, 3, 3, 32, 1, 1),
+    (2, 64, 64, 8, 5, 5, 16, 2, 2),
+    (1, 112, 112, 3, 7, 7, 16, 1, 3),
 ]
 
 validation_test = lambda *a: pytest.param(*a, marks=pytest.mark.validate_only)
 
 _igemm_cases += [
-    perf_test(2, 128, 128, 16, 3, 3, 320, 1),
-    perf_test(2, 128, 128, 320, 1, 1, 640, 1),
-    perf_test(2, 128, 128, 320, 1, 1, 960, 1),
-    perf_test(2, 128, 128, 320, 3, 3, 16, 1),
-    perf_test(2, 128, 128, 320, 3, 3, 320, 1),
-    perf_test(2, 32, 32, 1280, 1, 1, 1920, 1),
-    perf_test(2, 32, 32, 1280, 1, 1, 2560, 1),
-    perf_test(2, 32, 32, 1280, 1, 1, 640, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 1280, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 1920, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 2560, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 640, 1),
-    perf_test(2, 32, 32, 640, 3, 3, 640, 1),
-    perf_test(2, 64, 64, 320, 3, 3, 320, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 1280, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 1920, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 320, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 960, 1),
-    perf_test(2, 64, 64, 640, 3, 3, 320, 1),
-    perf_test(2, 64, 64, 640, 3, 3, 640, 1),
+    perf_test(2, 128, 128, 16, 3, 3, 320, 1, 0),
+    perf_test(2, 128, 128, 320, 1, 1, 640, 1, 0),
+    perf_test(2, 128, 128, 320, 1, 1, 960, 1, 0),
+    perf_test(2, 128, 128, 320, 3, 3, 16, 1, 0),
+    perf_test(2, 128, 128, 320, 3, 3, 320, 1, 0),
+    perf_test(2, 32, 32, 1280, 1, 1, 1920, 1, 0),
+    perf_test(2, 32, 32, 1280, 1, 1, 2560, 1, 0),
+    perf_test(2, 32, 32, 1280, 1, 1, 640, 1, 0),
+    perf_test(2, 32, 32, 1280, 3, 3, 1280, 1, 0),
+    perf_test(2, 32, 32, 1280, 3, 3, 1920, 1, 0),
+    perf_test(2, 32, 32, 1280, 3, 3, 2560, 1, 0),
+    perf_test(2, 32, 32, 1280, 3, 3, 640, 1, 0),
+    perf_test(2, 32, 32, 640, 3, 3, 640, 1, 0),
+    perf_test(2, 64, 64, 320, 3, 3, 320, 1, 0),
+    perf_test(2, 64, 64, 640, 1, 1, 1280, 1, 0),
+    perf_test(2, 64, 64, 640, 1, 1, 1920, 1, 0),
+    perf_test(2, 64, 64, 640, 1, 1, 320, 1, 0),
+    perf_test(2, 64, 64, 640, 1, 1, 960, 1, 0),
+    perf_test(2, 64, 64, 640, 3, 3, 320, 1, 0),
+    perf_test(2, 64, 64, 640, 3, 3, 640, 1, 0),
 ]
 
 _mem_spaces = [
@@ -1441,7 +1463,7 @@ _layouts = [
 
 @require_e2e
 @require_cdna3
-@pytest.mark.parametrize("n, h, w, c, hf, wf, nf, stride", _igemm_cases)
+@pytest.mark.parametrize("n, h, w, c, hf, wf, nf, stride, padding", _igemm_cases)
 @pytest.mark.parametrize("mem_space", _mem_spaces)
 @pytest.mark.parametrize("layout", _layouts)
 @pytest.mark.parametrize("optimization_level", [False, True])
@@ -1455,6 +1477,7 @@ def test_igemm_conv(
     wf,
     nf,
     stride,
+    padding,
     mem_space,
     layout,
     optimization_level,
@@ -1464,7 +1487,6 @@ def test_igemm_conv(
     perf_filename_iree,
 ):
     cf = c
-    padding = 0  # TODO: only pad=0 is supported for now
 
     torch.manual_seed(1)
     x = device_randn(n, c, h, w, dtype=torch.float16)
@@ -1493,6 +1515,7 @@ def test_igemm_conv(
         wf=wf,
         nf=nf,
         stride=stride,
+        padding=padding,
         input_dtype=tkl.f16,
         output_dtype=tkl.f32,
         mem_space=mem_space,
@@ -1514,7 +1537,7 @@ def test_igemm_conv(
     conv = wave_compile(options, conv)
 
     out = torch.zeros_like(out_ref)
-    conv(x, we, out)
+    conv(x, we, padding, out)
     assert_close(out, out_ref, rtol=1e-03, atol=1e-03)
 
     if run_bench:
@@ -1523,7 +1546,7 @@ def test_igemm_conv(
         options.iree_preprocessing_pass_pipeline = "builtin.module(iree-preprocessing-transpose-convolution-pipeline, iree-preprocessing-pad-to-intrinsics)"
         iree_ref = torch.zeros_like(out_ref)
         generate_iree_ref(
-            "conv_2d_" + layout,
+            "conv_2d_with_padding_" + layout,
             [x, we],
             [iree_ref],
             options,

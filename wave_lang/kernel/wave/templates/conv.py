@@ -22,6 +22,7 @@ def get_igemm_conv2d(
     wf: int,
     nf: int,
     stride: int,
+    padding: int,
     input_dtype: DataType,
     output_dtype: DataType,
     mem_space: tkl.IndexSymbol = SHARED_ADDRESS_SPACE,
@@ -33,11 +34,12 @@ def get_igemm_conv2d(
 ) -> tuple["LaunchableWave", dict[tkl.IndexSymbol, Any]]:
     assert input_dtype == tkl.f16, f"Unsupported input dtype: {input_dtype}"
     assert output_dtype == tkl.f32, f"Unsupported input dtype: {output_dtype}"
-    padding = 0  # TODO: only pad=0 is supported for now
+    assert padding >= 0, f"Padding must be non-negative, got {padding}"
 
     sym = tkl.sym
     N, C, H, W = sym.N, sym.C, sym.H, sym.W
     NF, HF, WF = sym.NF, sym.HF, sym.WF
+    PADDING = sym.PADDING # Adding padding symbol
     # Workgroup tile sizes
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
@@ -96,8 +98,8 @@ def get_igemm_conv2d(
 
     n = m // SZ_OUT
     c = k % C
-    h = (m % SZ_OUT) % W_OUT * stride + hf
-    w = (m % SZ_OUT) // W_OUT * stride + wf
+    h = (m % SZ_OUT) % W_OUT * stride + hf - padding
+    w = (m % SZ_OUT) // W_OUT * stride + wf - padding
 
     n_out = m // SZ_OUT
     h_out = (m % SZ_OUT) % W_OUT
@@ -137,7 +139,7 @@ def get_igemm_conv2d(
     constraints += [tkw.IteratorBindings({m: M, k: K, nf: NF})]
 
     @tkw.wave(constraints)
-    def conv(x: x_type, we: we_type, out: out_type):
+    def conv(x: x_type, we: we_type, padding_size: tkl.i32, out: out_type):
         c_reg = tkl.Register[M, NF, output_dtype](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
@@ -150,6 +152,31 @@ def get_igemm_conv2d(
                 target=(m, k),
                 elements_per_thread=ELEMS_PER_THREAD,
             )
+            # bound checking if padding > 0
+            if padding > 0:
+                i_idx = tkw.self_index(M, tkl.i32)
+                j_idx = tkw.self_index(K, tkl.i32)
+
+                # Broadcast indices to M, K shape
+                i_idx = tkw.broadcast(i_idx, target_shape=[M, K])
+                j_idx = tkw.broadcast(j_idx, target_shape=[M, K])
+
+                # Actual H, W coordinates 
+                h_coord = (i_idx % SZ_OUT) % W_OUT * stride + (j_idx // C) % wf - padding
+                w_coord = (i_idx % SZ_OUT) // W_OUT * stride + (j_idx // C) // wf - padding
+
+                # Create mask for valid coordinates
+                h_valid = (h_coord >= 0) & (h_coord < h)
+                w_valid = (w_coord >= 0) & (w_coord < w)
+                valid_mask = h_valid & w_valid
+
+                # Broadcast mask and convert to input dtype
+                valid_mask = tkw.broadcast(valid_mask, target_shape=[M, K])
+                valid_mask = tkw.cast(valid_mask, input_dtype)
+
+                # Apply mask to input matrix (zero out padded regions)
+                a_reg = a_reg * valid_mask
+
             b_reg = tkw.read(
                 we,
                 source=we_indices,
