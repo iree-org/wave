@@ -59,7 +59,6 @@ def testPureGemm(
 
     options = WaveCompileOptions(
         subs=hyperparams,
-        iree_launch_async=False,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
