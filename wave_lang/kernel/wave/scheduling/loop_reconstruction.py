@@ -476,10 +476,6 @@ def construct_kernel(
         )
         push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
 
-        # for orig_node, new_nodes in outer_vars.items():
-        #     for i, new_node in enumerate(new_nodes):
-        #         arg_context.map_arg_all_iterations(i, orig_node, new_node)
-
         # For the original iter args, we just map the old ones to the new ones.
         # Do this for all stages, since the original iter args are "dummy" nodes
         # during scheduling.
