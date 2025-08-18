@@ -617,7 +617,6 @@ def isolated_test_call(
                     out = output_list[0]
             else:
                 # If no device constraints, just dispatch to the kernel directly
-                breakpoint()
                 out = flow_d.DispatchOp(
                     memref_to_tensor(output_types),
                     [dynamic_argument_map[dim] for dim in dynamic_symbols]
@@ -629,17 +628,19 @@ def isolated_test_call(
                     tied_operands=tied_operands,
                 )
 
+                if async_dispatch:
+                    out = list(out.results)
+
             if async_dispatch:
-                out = list(out.results)
                 out_types = memref_to_tensor(
-                    [b.as_mlir_type() for b in sig.kernel_buffer_output_bindings]
+                    [b.as_mlir_type() for b in host_sig.output_buffer_bindings]
                 )
                 barrier = hal_d.tensor_barrier(out_types, out, signal_fence=out_fence)
                 if len(out_types) == 1:
                     barrier = [barrier]
 
                 view_type = IrType.parse("!hal.buffer_view")
-                for i, b in enumerate(sig.kernel_buffer_output_bindings):
+                for i, b in enumerate(host_sig.output_buffer_bindings):
                     shape = b.kernel_buffer_type.symbolic_shape
 
                     out_type = out_types[i]
