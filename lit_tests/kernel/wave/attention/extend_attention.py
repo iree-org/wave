@@ -93,7 +93,7 @@ def test_extend_attention():
     # CHECK-COUNT-2:            arith.cmpi slt
     # CHECK-COUNT-2:            arith.select
     # CHECK-COUNT-2:            arith.addf
-    # CHECK-COUNT-4:            gpu.shuffle xor {{.*}}
+    # CHECK-COUNT:              gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            amdgpu.mfma
     # CHECK-COUNT-4:        vector.maskedload
     # CHECK:                amdgpu.lds_barrier
@@ -109,7 +109,7 @@ def test_extend_attention():
     # CHECK-COUNT-2:            arith.cmpi slt
     # CHECK-COUNT-2:            arith.select
     # CHECK-COUNT-2:            arith.addf
-    # CHECK-COUNT-4:            gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            amdgpu.mfma
     # CHECK-COUNT-4:       vector.maskedstore
 
@@ -208,7 +208,7 @@ def test_causal_extend_attention():
     # CHECK-COUNT-2:            arith.select
     # CHECK-COUNT-2:            arith.addf
 
-    # CHECK-COUNT-4:            gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            amdgpu.mfma
 
     # Expressions to compute loop bound based on causal mask
@@ -253,7 +253,7 @@ def test_causal_extend_attention():
     # CHECK-COUNT-2:            arith.select
     # CHECK-COUNT-2:            arith.addf
 
-    # CHECK-COUNT-4:            gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            amdgpu.mfma
     # CHECK-COUNT-4:       vector.maskedstore
 
@@ -352,7 +352,7 @@ def test_causal_extend_attention_32x32x8():
     # CHECK-COUNT-1:            arith.select
     # CHECK-COUNT-1:            arith.addf
 
-    # CHECK-COUNT-2:            gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            amdgpu.mfma
     # CHECK:                %[[ALLOC3:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<1x64x36xf16, #gpu.address_space<workgroup>>
     # CHECK:                %[[ALLOC4:.*]] = memref.view %[[ALLOC0]][%[[C4608]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
@@ -392,7 +392,7 @@ def test_causal_extend_attention_32x32x8():
     # CHECK-COUNT-1:            arith.select
     # CHECK-COUNT-1:            arith.addf
 
-    # CHECK-COUNT-2:            gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            gpu.subgroup_reduce maximumf {{.*}}
     # CHECK-COUNT-8:            amdgpu.mfma
     # CHECK-COUNT-2:       vector.maskedstore
 

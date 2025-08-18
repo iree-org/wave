@@ -379,7 +379,9 @@ def get_scheduling_weight(node: fx.Node) -> EdgeWeight:
             | SelfIndex()
         ):
             weight = EdgeWeight(0, delay_table[Operation.NOOP])
-        case ApplyExpr() | UnaryPyOp() | BinaryOpBase() | SelectOp():
+        case (
+            ApplyExpr() | UnaryPyOp() | BinaryOpBase() | SelectOp() | SubgroupReduceOp()
+        ):
             weight = EdgeWeight(0, delay_table[Operation.VALU])
         case ShuffleOp():
             weight = EdgeWeight(0, delay_table[Operation.SHUFFLE])

@@ -152,19 +152,18 @@ def test_dynamic_attention_pipelined():
     # CHECK:                {{.*}} = scf.for
     # CHECK-COUNT-2:            {{.*}} = vector.maskedload {{.*}}
     # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce  add {{.*}}
+    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
     # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce  add {{.*}}
     # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
+    # CHECK-COUNT-18:           {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-2:            {{.*}} = gpu.subgroup_reduce  maximumf {{.*}}
     # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-4:            {{.*}} = vector.load {{.*}}
-    # CHECK-COUNT-15:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-5:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
     # CHECK-COUNT-4:        vector.maskedstore {{.*}}
 
 
@@ -279,11 +278,10 @@ def test_attention_pipelined():
 
     # CHECK-LABEL:       func.func @base_attention_pipelined
     # CHECK:                {{.*}} = scf.for
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-5:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
     # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-15:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-5:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce  add
+    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.subgroup_reduce  add
+    # CHECK-COUNT-18:           {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-2:            {{.*}} = gpu.subgroup_reduce  maximumf
+    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
