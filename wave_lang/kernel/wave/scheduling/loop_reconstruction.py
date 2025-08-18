@@ -81,7 +81,6 @@ def add_nodes_by_schedule(
     rotating_registers: dict[fx.Node, list[fx.Node]],
     pipelining_stage: PipelineStage = PipelineStage.KERNEL,
     use_scheduling_barriers: bool = False,
-    multi_buffer_count: Optional[int] = None,
 ):
     """
     Interleave the instructions in the partitioned graph by stage
@@ -136,19 +135,6 @@ def add_nodes_by_schedule(
             logger.debug(
                 f"Copying Node: {node}, Stage: {stage}, Iteration: {iteration} -> {new_node.fx_node}"
             )
-            # multi_buffering_enabled = multi_buffer_count is not None
-            # is_shmem_read_write = (
-            #     isinstance(new_node, Write | Read)
-            #     and new_node.memory_type.address_space == SHARED_ADDRESS_SPACE
-            # )
-            # is_gather_to_lds = isinstance(new_node, GatherToLDS)
-            # if multi_buffering_enabled and (is_shmem_read_write or is_gather_to_lds):
-            #     heuristically_multi_buffer_shared_memory(
-            #         new_node=new_node,
-            #         induction_variable=induction_variable,
-            #         reduction=reduction,
-            #         multi_buffer_count=multi_buffer_count,
-            #     )
 
             # Set the index for the new node by substituting the induction variable
             # for the current iteration.
@@ -272,7 +258,6 @@ def construct_prologue(
     induction_variable: IndexSymbol,
     new_induction_variables: list[int],
     stages: list[int],
-    multi_buffer_count: Optional[int] = None,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
 ):
     """
@@ -320,7 +305,6 @@ def construct_prologue(
                 new_induction_variables,
                 rotating_registers,
                 PipelineStage.PROLOGUE,
-                multi_buffer_count=multi_buffer_count,
             )
 
     # During the prologue, we may have computed results that need to be passed as init args
@@ -451,7 +435,6 @@ def construct_kernel(
     node_map: dict[fx.Node, fx.Node],
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
-    multi_buffer_count: Optional[int] = False,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
 ) -> tuple[Iterate, fx.Graph]:
     """
@@ -540,12 +523,6 @@ def construct_kernel(
                         iteration % count
                     ]
 
-        # for orig_node, new_nodes in outer_vars.items():
-        #     count = len(new_nodes)
-        #     for i in range(count):
-        #         new_node = new_rotating_registers[orig_node][(i + 1) % count]
-        #         arg_context.map_arg_all_iterations(i, orig_node, new_node)
-
         add_nodes_by_schedule(
             reduction,
             pipelined_reduction_graph,
@@ -558,7 +535,6 @@ def construct_kernel(
             new_rotating_registers,
             PipelineStage.KERNEL,
             use_scheduling_barriers,
-            multi_buffer_count=multi_buffer_count,
         )
 
         # Create output node (last node in the graph).
@@ -602,7 +578,6 @@ def construct_epilogue(
     num_rotating_registers: dict[fx.Node, int],
     node_map: dict[fx.Node, fx.Node],
     visualize: bool = False,
-    multi_buffer_count: Optional[int] = None,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
 ):
     """
@@ -711,7 +686,6 @@ def construct_epilogue(
                 new_induction_variables,
                 rotating_registers,
                 PipelineStage.EPILOGUE,
-                multi_buffer_count=multi_buffer_count,
             )
 
         # Replace the existing uses with the new results.
@@ -809,12 +783,8 @@ def construct_pipelined_loop(
         induction_variable,
         list(range(num_stages)),
         create_fill_stage_schedule(num_stages),
-        multi_buffer_count=multi_buffer_count,
         outer_vars=outer_vars,
     )
-
-    # for orig_node, new_nodes in outer_vars.items():
-    #     rotating_registers[orig_node] = deque(list(new_nodes))
 
     # Construct kernel.
     pipelined_reduction, pipelined_reduction_graph = construct_kernel(
@@ -829,7 +799,6 @@ def construct_pipelined_loop(
         node_map,
         visualize,
         use_scheduling_barriers,
-        multi_buffer_count=multi_buffer_count,
         outer_vars=outer_vars,
     )
 
@@ -852,7 +821,6 @@ def construct_pipelined_loop(
         num_rotating_registers,
         node_map,
         visualize,
-        multi_buffer_count=multi_buffer_count,
         outer_vars=outer_vars,
     )
 

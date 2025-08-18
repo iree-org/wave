@@ -222,9 +222,6 @@ def schedule_reduction(
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (num_stages - 1)
 
-    # if multi_buffer_count is not None:
-    #     multi_buffer(trace, multi_buffer_count)
-
 
 def schedule_graph(
     trace: CapturedTrace,
