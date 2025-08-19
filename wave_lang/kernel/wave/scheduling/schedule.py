@@ -32,7 +32,7 @@ from ..visualization import visualize_edges, visualize_graph, visualize_schedule
 from .graph_utils import Edge, create_scheduling_edges
 from .loop_reconstruction import construct_pipelined_loop
 from .modulo_scheduling import ModuloScheduler
-from .prefetch_scheduling import PrefetchScheduler
+from .prefetch_scheduling import PrefetchScheduler, PrefetchAttentionScheduler
 from .four_stage_pipelined_scheduling import FourStageScheduler
 from .resources import (
     annotate_resource_usage,
@@ -108,6 +108,10 @@ def schedule_reduction(
             scheduler = ModuloScheduler(graph, edges, get_available_resources())
         elif scheduling_type == SchedulingType.PREFETCH:
             scheduler = PrefetchScheduler(graph, edges, get_available_resources())
+        elif scheduling_type == SchedulingType.PREFETCH_ATTENTION:
+            scheduler = PrefetchAttentionScheduler(
+                graph, edges, get_available_resources()
+            )
         elif scheduling_type == SchedulingType.FOUR_STAGE:
             scheduler = FourStageScheduler(graph, edges, get_available_resources())
         else:
