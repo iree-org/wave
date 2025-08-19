@@ -22,3 +22,4 @@ class SchedulingType(Enum):
     MODULO = 0x10
     PREFETCH = 0x20
     FOUR_STAGE = 0x21
+    PREFETCH_ATTENTION = 0x22
