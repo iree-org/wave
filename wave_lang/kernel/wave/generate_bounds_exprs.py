@@ -59,7 +59,7 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
             # Masking against global bounds was already handled when reading from
             # global mem, but we still need to handle masking against vector
             # size during shared mem access.
-            memory = propagate_loop_carried_vars(node.memory, 1)
+            memory = propagate_loop_carried_vars(node.memory)
             unpadded_dims = get_custom(memory).get_unpadded_dims
             bounds = {
                 k: (
