@@ -30,6 +30,7 @@ from ..common.utils import (
     param_bool,
     require_cdna3,
     require_e2e,
+    require_cdna4,
 )
 from ..common.shapes import get_test_shapes
 from wave_lang.kernel.wave.templates.vanilla_attention import (
@@ -1019,3 +1020,110 @@ def testAttentionF8(
 
     rmse = torch.sqrt(torch.mean(torch.square(output - torch_ref)))
     assert rmse <= 0.006
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize("shape", get_test_shapes("cdna4_bshd_attention"))
+@param_bool("dynamic_dims", "dyn", [False])
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [
+        (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+    ],
+)
+def testAttentionBSHD_Prefetch_MultiBuffer(
+    shape: tuple[int],
+    dynamic_dims: bool,
+    mfma_variant: tuple[MMAType],
+    run_bench,
+    perf_filename_tk,
+):
+    shape = AttentionShape(
+        num_query_heads=shape[0],
+        num_kv_heads=shape[0],
+        query_seq_len=shape[1],
+        head_size_kv=shape[2],
+        head_size=shape[3],
+        kv_seq_len=shape[4],
+    )
+
+    is_causal = False
+    is_custom_mask = False
+    custom_mask = None
+
+    assert not (
+        is_causal and is_custom_mask
+    ), "Causal and custom mask cannot be applied together."
+
+    (
+        base_attention_func,
+        hyperparams,
+        dynamic_symbols,
+    ) = get_bshd_attention_kernel(
+        shape,
+        mfma_variant,
+        dynamic_dims,
+        is_causal=is_causal,
+        is_custom_mask=is_custom_mask,
+    )
+    q_shape = (1, shape.num_query_heads, shape.query_seq_len, shape.head_size)
+    k_shape = (1, shape.num_kv_heads, shape.kv_seq_len, shape.head_size)
+    v_shape = (1, shape.num_kv_heads, shape.kv_seq_len, shape.head_size_kv)
+    hyperparams.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        schedule=SchedulingType.PREFETCH_ATTENTION,
+        dynamic_symbols=dynamic_symbols,
+        run_bench=run_bench,
+        waves_per_eu=2,
+        denorm_fp_math_f32="preserve-sign",
+        benchmark_batch_size=10,
+        benchmark_repetitions=3,
+        benchmark_results_file=perf_filename_tk,
+        multi_buffer_count=2,
+    )
+    options = set_default_run_config(options)
+    base_attention = wave_compile(options, base_attention_func)
+
+    torch.manual_seed(1)
+    q = device_randn(q_shape, dtype=torch.float16)
+    k = device_randn(k_shape, dtype=torch.float16)
+    v = device_randn(v_shape, dtype=torch.float16)
+
+    # This variant of wave kernel is BSHD
+    o_shape = (1, shape.query_seq_len, shape.num_query_heads, shape.head_size_kv)
+    output = device_zeros(o_shape, dtype=torch.float32)
+
+    if is_custom_mask:
+        custom_mask = device_randn([1, shape.query_seq_len], dtype=torch.float32)
+        custom_mask = (custom_mask > 0).int()
+
+        asm = base_attention(
+            q.transpose(1, 2).contiguous(),
+            k.transpose(1, 2).contiguous(),
+            v.transpose(1, 2).contiguous(),
+            custom_mask.to(torch.int8),
+            output,
+        )
+    else:
+        asm = base_attention(
+            q.transpose(1, 2).contiguous(),
+            k.transpose(1, 2).contiguous(),
+            v.transpose(1, 2).contiguous(),
+            output,
+        )
+
+    # Torch reference needs to be in BHSD format
+    torch_ref = scaled_dot_product_attention_bhsd(
+        q, k, v, is_causal=is_causal, custom_mask=custom_mask
+    )
+
+    assert_close(
+        output.transpose(1, 2),
+        torch_ref,
+        check_dtype=False,
+        atol=1e-3,
+        rtol=1e-3,
+    )
