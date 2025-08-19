@@ -25,7 +25,7 @@ from ...ops.wave_ops import (
 )
 from ...lang.global_symbols import SHARED_ADDRESS_SPACE
 from ..constraints import Constraint
-from ..utils.general_utils import get_induction_variable
+from ..utils.general_utils import get_induction_variable, rotate_list
 from ..utils.graph_utils import propagate_placeholders, replace_uses_in
 from ..visualization import visualize_graph, visualize_mapped_graphs
 from .loop_reconstruction_utils import (
@@ -37,7 +37,7 @@ from .loop_reconstruction_utils import (
     partition_graph_by_stage,
 )
 from .resources import get_custom_operation_type
-from typing import Optional, Sequence, Any
+from typing import Optional
 
 logger = get_logger("wave.scheduling.loop_reconstruction")
 
@@ -417,10 +417,6 @@ def push_rotating_registers(
         if new_registers:
             new_rotating_registers[node] = new_registers
     return new_rotating_registers
-
-
-def rotate_list(src: Sequence[Any], k: int) -> list[Any]:
-    return src[k:] + src[:k]
 
 
 def construct_kernel(

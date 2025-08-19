@@ -7,7 +7,7 @@ import functools
 import glob
 import os
 from collections import deque
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 import warnings
 
 import sympy
@@ -627,3 +627,7 @@ def topological_sort_with_dependencies(
             max([schedule_weight[dep] for dep in node_loop_deps]) + edge_weight
         )
     return sorted(nodes_to_reorder, key=lambda x: schedule_weight[x])
+
+
+def rotate_list(src: Sequence[Any], k: int) -> list[Any]:
+    return src[k:] + src[:k]
