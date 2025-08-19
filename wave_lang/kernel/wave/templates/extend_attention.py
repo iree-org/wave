@@ -323,10 +323,6 @@ def get_extend_attention_kernel(
             return m_j, d_j, acc
 
         res_max, res_sum, res_mm = first_loop
-        
-        res_max = tkl.Register[H, N_Q, tkl.f32](0.0)
-        res_sum = tkl.Register[H, N_Q, tkl.f32](0.0)
-        res_mm = tkl.Register[H, D_KV, N_Q, tkl.f32](0.0)
 
         if is_causal:
             seq_len_extend = tkw.apply_expr(
