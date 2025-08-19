@@ -29,6 +29,7 @@ from wave_lang.support.ir_imports import (
     memref_d,
     vector_d,
     func_d,
+    Operation,
 )
 from wave_lang.aot.support.ir_utils import (
     _is_float_type,
@@ -444,6 +445,19 @@ def _get_out_of_bounds_index(element_type: IrType) -> int:
     return oob_index_value
 
 
+def _get_constant_value(candidate_op: Any):
+    """
+    returns constantOp's value if candidate is arith.constantOp. Else, returns None.
+    """
+    if not isinstance(candidate_op, Operation):
+        return None
+    if not hasattr(candidate_op, "name"):
+        return None
+    if candidate_op.name != "arith.constant":
+        return None
+    return candidate_op.attributes["value"].value
+
+
 def _cast_buffer_and_encode_stride(
     ptr: Value, strides: tuple[Value], elem_type: IrType, emitter: WaveEmitter
 ) -> Value:
@@ -461,9 +475,9 @@ def _cast_buffer_and_encode_stride(
     if stride_rank >= 2:
         # fastest_dim_bound == second to last stride.
         stride_candidate = strides[-2]
-        stride_int = stride_candidate.owner.attributes["value"].value
-        # Swizzle is only useful upto swizzle stride <= 8192.
-        if stride_int <= 8192:
+        stride_int = _get_constant_value(stride_candidate.owner)
+        # Only swizzle if stride is static and <= 8192(the useful case).
+        if stride_int and stride_int <= 8192:
             swizzle_stride = arith_d.index_cast(uint14, stride_candidate)
 
     if swizzle_stride:
