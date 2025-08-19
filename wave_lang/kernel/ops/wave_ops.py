@@ -1693,7 +1693,7 @@ class Read(CustomOp):
 
     @write_dependency.setter
     def write_dependency(self, value: fx.Node):
-        self.update_arg(len(self.fx_node.args) - 1, value)
+        self.update_arg("_write_dependency", value)
 
     def transform_index_backwards(
         self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
