@@ -8,6 +8,10 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+    torch_dtype_to_wave,
+)
 from wave_lang.kernel._support.dtype import DataType
 import sympy
 
@@ -143,3 +147,73 @@ def get_silu_and_mul_kernel(
     }
 
     return silu_and_mul, hyperparams
+
+def get_fused_moe_gemm(m: int, n: int, k: int, e: int, topk: int, mfma_variant: MMAType, datatype: DataType,):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    E = tkl.sym.E
+    TOPK = tkl.sym.topk
+    EXPERT_ID = tkl.sym.EXPERT_ID
+
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # BLOCK_E = tkl.sym.BLOCK_E
+    dtype = torch_dtype_to_wave(datatype)
+
+    constraints: list[tkw.Constraint] = [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+    # constraints += [tkw.WorkgroupConstraint(E, BLOCK_E, 0)]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M/2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N/2)]
+
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={E: EXPERT_ID, N: i , K: j},
+        outputs={N: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    @tkw.wave(constraints)
+    def fused_moe_gemm(
+        input_tokens: tkl.Memory[M, K, SHARED_ADDRESS_SPACE, dtype],
+        expert_weights: tkl.Memory[E, N, K, SHARED_ADDRESS_SPACE, dtype],
+        topk_ids: tkl.Memory[M, SHARED_ADDRESS_SPACE, dtype],
+        output: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, dtype],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            expert_id = tkw.read(topk_ids)
+            # tkw.set_symbol(EXPERT_ID, expert_id)
+            a_reg = tkw.read(input_tokens)
+            b_reg = tkw.read(expert_weights, mapping=mapping, mapping_dynamic_vals=(expert_id,))
+
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        # repeat represents the results of the loop
+        tkw.write(repeat, output)
+
+    hyperparams = {
+        BLOCK_M: 32, # TODO: revisit block sizes
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+        TOPK: topk,
+        M: m,
+        N: n,
+        K: k,
+        E: e,
+    }
+
+    hyperparams.update(get_default_scheduling_params())
+
+    return fused_moe_gemm, hyperparams
