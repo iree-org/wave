@@ -1858,18 +1858,21 @@ def handle_reshape(emitter: WaveEmitter, node: fx.Node):
 @handle_op(inline_mlir)
 def handle_inline_mlir(emitter: WaveEmitter, node: fx.Node):
     try:
-        inputs, shape, dtype, ir = node.args
+        args, shape, dtype, ir = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
-    # ops = [get_custom(node) for node in inputs]
-    op = get_custom(inputs)
-    ops = [op]
+    
+    if not isinstance(args, Sequence):
+        args = [args]
+
+    args = [get_custom(arg) for arg in args]
+
 
     get_thread_shape = lambda index: max(subs_idxc(x.size) for x in index.values())
     
-    in_shape = [get_thread_shape(get_custom(inputs).index)]
+    in_shape = [get_thread_shape(args[0].index)]
     vector_shape = cast_py_literal(emitter, in_shape)
-    element_type = IrType.parse(op.type.dtype.ir_type_asm())
+    element_type = IrType.parse(args[0].type.dtype.ir_type_asm())
     vector_type = VectorType.get(vector_shape, element_type)
 
     in_types = [vector_type]
@@ -1882,9 +1885,9 @@ def handle_inline_mlir(emitter: WaveEmitter, node: fx.Node):
     out_type = vector_type
 
 
-    args = ", ".join([f"%arg{i}: {in_types[i]}" for i in range(len(in_types))])
+    func_args = ", ".join([f"%arg{i}: {in_types[i]}" for i in range(len(in_types))])
     func_str = f"""
-    func.func @inline_mlir({args}) -> {out_type} {"{"}
+    func.func @inline_mlir({func_args}) -> {out_type} {"{"}
         {ir}
         return %res : {out_type}
     {"}"}
@@ -1898,7 +1901,7 @@ def handle_inline_mlir(emitter: WaveEmitter, node: fx.Node):
         func_op.detach_from_parent()
         emitter.mb.module_op.body.append(func_op)
 
-    lhs = cast_py_value(emitter, op).ir_value
+    lhs = cast_py_value(emitter, args[0]).ir_value
     call_op = func_d.call(func_op, [lhs])
 
     emitter.bind_node_proxy(node, IRProxyValue(call_op))
