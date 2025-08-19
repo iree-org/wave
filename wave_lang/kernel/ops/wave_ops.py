@@ -1652,6 +1652,7 @@ class Read(CustomOp):
     source: Optional[tuple[IndexExpr]] = None
     target: Optional[tuple[IndexExpr]] = None
     _write_dependency: Optional[list[fx.Node]] = None
+    transpose: bool = False
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:

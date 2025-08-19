@@ -2055,3 +2055,95 @@ def testBatchedGemmWithPermute(
         torch.bmm(a, b.permute(0, 2, 1).contiguous()).permute(1, 0, 2).contiguous()
     )
     assert_close(c.to(torch.float16), torch_ref, atol=1e-3, rtol=5e-3)
+
+
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (3, 8, 4),
+        (138, 327, 38),
+    ],
+)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [
+        MMAType.I32_16x16x32_I8,
+        MMAType.I32_32x32x16_I8,
+    ],
+)
+def testi8HwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64, waves_per_block=(1, 1, 1), mma_type=mfma_variant
+        )
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    b_mapping = tkw.IndexMapping(
+        num_iterators=2, inputs={N: i, K: j}, outputs={N: i, K: j}
+    )
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.i8],
+        b: tkl.Memory[K, N, ADDRESS_SPACE, tkl.i8],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.i32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.i32]) -> tkl.Register[M, N, tkl.i32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b, mapping=b_mapping)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_K: 16,
+        M: shape[0],
+        N: shape[1],
+        K: shape[2],
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(subs=hyperparams)
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm)
+
+    randint_hi = 30
+    a = device_randint(
+        randint_hi, (shape[0], shape[2]), device="cuda", dtype=torch.int8
+    )
+    b = device_randint(
+        randint_hi, (shape[2], shape[1]), device="cuda", dtype=torch.int8
+    )
+    c = device_zeros(shape[0], shape[1], dtype=torch.int32)
+    asm = gemm(a, b, c)
+
+    torch_ref = torch.matmul(a.cpu().to(torch.int32), b.cpu().to(torch.int32))
+    assert_close(c.to(torch.int32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False)
