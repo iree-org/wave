@@ -38,8 +38,7 @@ Implementation Details
 This optimization is implemented in `_cast_buffer_and_encode_stride`:
 
 - If the stride of the second-to-last dimension is less than or equal to ``8192`` bytes
-  and ``emitter.options.use_stride_cache_swizzle`` is enabled, a **cache swizzle stride**
-  is passed to mlir-op: `amdgpu.fat_raw_buffer_cast`.
+  then a **cache swizzle stride** is passed to mlir-op: `amdgpu.fat_raw_buffer_cast`.
 - Otherwise, a normal ``fat_raw_buffer_cast`` is used without swizzling.
 - In both cases, bounds checking is enabled, offsets are reset, and ``valid_bytes`` is set
   to the maximum byte range addressable from the buffer.

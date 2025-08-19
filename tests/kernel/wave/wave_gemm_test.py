@@ -377,8 +377,7 @@ def testGemmSmallTiles(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
+        use_buffer_ops=True,
         benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)

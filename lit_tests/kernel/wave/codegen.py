@@ -151,8 +151,7 @@ def test_read_mapped_buffer():
             BLOCK_K: 16,
             ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
+        use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
     )
@@ -194,9 +193,7 @@ def test_read_dynamic_3d_buffer():
             ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
         dynamic_symbols=dynamic_symbols,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
     )
@@ -2504,8 +2501,7 @@ def test_atomic_min():
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
         },
         canonicalize=True,
-        use_buffer_load_ops=False,
-        use_buffer_store_ops=False,
+        use_buffer_ops=False,
         compile_to_mlir=True,
         minimize_shared_allocs=False,
     )

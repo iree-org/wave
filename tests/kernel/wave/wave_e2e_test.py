@@ -177,8 +177,7 @@ def test_copy(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -233,8 +232,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -291,8 +289,7 @@ def test_transpose_read(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -348,8 +345,7 @@ def test_transpose_write(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -421,8 +417,7 @@ def test_offset_read(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -500,8 +495,7 @@ def test_offset_read_one(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -556,8 +550,7 @@ def test_read_write_same(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     double = wave_compile(options, double)
@@ -853,8 +846,7 @@ def test_offset_write(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -940,8 +932,7 @@ def test_offset_write_one(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -1503,8 +1494,7 @@ def test_igemm_conv(
         subs=hyperparams,
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
@@ -1851,8 +1841,7 @@ def test_vector_add(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
 
@@ -1911,8 +1900,7 @@ def test_fused_softmax(shape, use_buffer_ops):
         },
         canonicalize=True,
         run_bench=False,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -1992,8 +1980,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
         minimize_shared_allocs=False,
     )
     options = set_default_run_config(options)

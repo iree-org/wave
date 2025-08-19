@@ -71,9 +71,7 @@ class WaveCompileOptions:
     waves_per_eu: int = None
     wave_runtime: bool = False
     iree_launch_async: bool = True
-    use_buffer_load_ops: bool = False
-    use_buffer_store_ops: bool = False
-    use_stride_cache_swizzle: bool = False
+    use_buffer_ops: bool = False
     use_fast_math: bool = False
     use_global_to_shared: bool = False
 

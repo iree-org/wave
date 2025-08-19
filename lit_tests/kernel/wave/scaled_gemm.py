@@ -448,9 +448,7 @@ def batched_prefetch_mxfp4_test():
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         compile_to_mlir=True,
     )
     batched_gemm_mxfp4_prefetch = wave_compile(options, batched_gemm_mxfp4_prefetch)
@@ -700,9 +698,7 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
         canonicalize=True,
         compile_to_mlir=True,
         schedule=enable_scheduling,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         dynamic_symbols=dynamic_symbols,
     )
     from wave_lang.kernel.wave.utils.run_utils import (
