@@ -603,20 +603,23 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
-    result = _create_vec_read_write(
-        emitter,
-        input_shape,
-        kb_src,
-        None,
-        vector_type,
-        start_indices,
-        start_indices_wg,
-        start_indices_th,
-        elements_per_thread,
-        get_custom(memory),
-        mask,
-        node_index=index,
-    )
+    if get_custom(node).transpose == True:
+        result = amdgpu_d.transpose_load(vector_type, kb_src, start_indices)
+    else:
+        result = _create_vec_read_write(
+            emitter,
+            input_shape,
+            kb_src,
+            None,
+            vector_type,
+            start_indices,
+            start_indices_wg,
+            start_indices_th,
+            elements_per_thread,
+            get_custom(memory),
+            mask,
+            node_index=index,
+        )
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
