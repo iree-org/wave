@@ -23,6 +23,8 @@ def get_chain_mmt_asm(
     B, N, M, output_dtype = output_type.split("x")
     intermediate_output_type = f"{B}x{K2}x{M}x{output_dtype}"
     intermediate_cast_type = f"{B}x{K2}x{M}x{input_dtype}"
+    transposed_query_type = f"{B}x{K1}x{M}x{input_dtype}"
+    transposed_value_type = f"{B}x{K2}x{N}x{input_dtype}"
     transposed_cast_type = f"{B}x{M}x{K2}x{input_dtype}"
     transposed_output_type = f"{B}x{M}x{N}x{output_dtype}"
     return (
@@ -31,14 +33,18 @@ def get_chain_mmt_asm(
       %c0 = arith.constant 0.0 : f32
       %init = tensor.empty() : tensor<{intermediate_output_type}>
       %inital_result = linalg.fill ins(%c0 : f32) outs(%init : tensor<{intermediate_output_type}>) -> tensor<{intermediate_output_type}>
-      %result = linalg.batch_matmul_transpose_b ins(%key, %query : tensor<{key_type}>, tensor<{query_type}>)
+      %init_transpose_query = tensor.empty() : tensor<{transposed_query_type}>
+      %transpose_query = linalg.transpose ins(%query: tensor<{query_type}>) outs(%init_transpose_query: tensor<{transposed_query_type}>) permutation=[0, 2, 1]
+      %result = linalg.batch_matmul ins(%key, %transpose_query : tensor<{key_type}>, tensor<{transposed_query_type}>)
                 outs(%inital_result : tensor<{intermediate_output_type}>) -> tensor<{intermediate_output_type}>
       %trunc = arith.truncf %result : tensor<{intermediate_output_type}> to tensor<{intermediate_cast_type}>
       %init2 = tensor.empty() : tensor<{transposed_cast_type}>
       %transpose = linalg.transpose ins(%trunc: tensor<{intermediate_cast_type}>) outs(%init2: tensor<{transposed_cast_type}>) permutation=[0, 2, 1]
       %init3 = tensor.empty() : tensor<{transposed_output_type}>
       %inital_result3 = linalg.fill ins(%c0 : f32) outs(%init3 : tensor<{transposed_output_type}>) -> tensor<{transposed_output_type}>
-      %result2 = linalg.batch_matmul_transpose_b ins(%transpose, %value: tensor<{transposed_cast_type}>, tensor<{value_type}>)
+      %init_transpose_value = tensor.empty() : tensor<{transposed_value_type}>
+      %transpose_value = linalg.transpose ins(%value: tensor<{value_type}>) outs(%init_transpose_value: tensor<{transposed_value_type}>) permutation=[0, 2, 1]
+      %result2 = linalg.batch_matmul ins(%transpose, %transpose_value: tensor<{transposed_cast_type}>, tensor<{transposed_value_type}>)
                 outs(%inital_result3 : tensor<{transposed_output_type}>) -> tensor<{transposed_output_type}>
       %init4 = tensor.empty() : tensor<{output_type}>
       %transpose2 = linalg.transpose ins(%result2: tensor<{transposed_output_type}>) outs(%init4: tensor<{output_type}>) permutation=[0, 2, 1]
@@ -58,6 +64,8 @@ def get_chain_mmt_f8_asm(
     f8_dtype = "f8E4M3FNUZ"
     intermediate_output_type = f"{B}x{K2}x{M}x{output_dtype}"
     intermediate_cast_type = f"{B}x{K2}x{M}x{f8_dtype}"
+    transposed_query_type = f"{B}x{K1}x{M}x{f8_dtype}"
+    transposed_value_type = f"{B}x{K2}x{N}x{f8_dtype}"
     transposed_cast_type = f"{B}x{M}x{K2}x{f8_dtype}"
     transposed_output_type = f"{B}x{M}x{N}x{output_dtype}"
     query_f8_type = "x".join([B, M, K1, f8_dtype])
@@ -71,7 +79,9 @@ def get_chain_mmt_f8_asm(
       %query_f8 = arith.truncf %query : tensor<{query_type}> to tensor<{query_f8_type}>
       %key_f8 = arith.truncf %key : tensor<{key_type}> to tensor<{key_f8_type}>
       %inital_result = linalg.fill ins(%c0 : f32) outs(%init : tensor<{intermediate_output_type}>) -> tensor<{intermediate_output_type}>
-      %result = linalg.batch_matmul_transpose_b ins(%key_f8, %query_f8 : tensor<{key_f8_type}>, tensor<{query_f8_type}>)
+      %init_transpose_query = tensor.empty() : tensor<{transposed_query_type}>
+      %transpose_query = linalg.transpose ins(%query_f8: tensor<{query_f8_type}>) outs(%init_transpose_query: tensor<{transposed_query_type}>) permutation=[0, 2, 1]
+      %result = linalg.batch_matmul ins(%key_f8, %transpose_query : tensor<{key_f8_type}>, tensor<{transposed_query_type}>)
                 outs(%inital_result : tensor<{intermediate_output_type}>) -> tensor<{intermediate_output_type}>
       %trunc = arith.truncf %result : tensor<{intermediate_output_type}> to tensor<{intermediate_cast_type}>
       %init2 = tensor.empty() : tensor<{transposed_cast_type}>
@@ -79,7 +89,9 @@ def get_chain_mmt_f8_asm(
       %init3 = tensor.empty() : tensor<{transposed_output_type}>
       %inital_result3 = linalg.fill ins(%c0 : f32) outs(%init3 : tensor<{transposed_output_type}>) -> tensor<{transposed_output_type}>
       %value_f8 = arith.truncf %value : tensor<{value_type}> to tensor<{value_f8_type}>
-      %result2 = linalg.batch_matmul_transpose_b ins(%transpose, %value_f8: tensor<{transposed_cast_type}>, tensor<{value_f8_type}>)
+      %init_transpose_value = tensor.empty() : tensor<{transposed_value_type}>
+      %transpose_value = linalg.transpose ins(%value_f8: tensor<{value_f8_type}>) outs(%init_transpose_value: tensor<{transposed_value_type}>) permutation=[0, 2, 1]
+      %result2 = linalg.batch_matmul ins(%transpose, %transpose_value: tensor<{transposed_cast_type}>, tensor<{transposed_value_type}>)
                 outs(%inital_result3 : tensor<{transposed_output_type}>) -> tensor<{transposed_output_type}>
       %init4 = tensor.empty() : tensor<{output_type}>
       %transpose2 = linalg.transpose ins(%result2: tensor<{transposed_output_type}>) outs(%init4: tensor<{output_type}>) permutation=[0, 2, 1]
