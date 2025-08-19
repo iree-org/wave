@@ -248,6 +248,21 @@ def add_missing_registers(graph: fx.Graph):
                     custom.update_arg("acc", register)
 
 
+def populate_prologue_outer_vars(
+    arg_context: ArgumentContext,
+    num_stages: int,
+    outer_vars: dict[fx.Node, list[fx.Node]],
+):
+    """
+    Populate the argument context for the outer vars in the prologue.
+    """
+    for orig_node, new_nodes in outer_vars.items():
+        count = len(new_nodes)
+        for iteration in range(num_stages):
+            for stage in range(num_stages):
+                arg_context[iteration, stage, orig_node] = new_nodes[iteration % count]
+
+
 def construct_prologue(
     reduction_subgraph: fx.Graph,
     reduction: Iterate,
@@ -285,11 +300,7 @@ def construct_prologue(
     ):
         arg_context.map_arg_all(iter_arg, init_arg)
 
-    for orig_node, new_nodes in outer_vars.items():
-        count = len(new_nodes)
-        for iteration in range(num_stages):
-            for stage in range(num_stages):
-                arg_context[iteration, stage, orig_node] = new_nodes[iteration % count]
+    populate_prologue_outer_vars(arg_context, num_stages, outer_vars)
 
     push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
     with reduction.graph.inserting_before(reduction.fx_node):
@@ -419,6 +430,43 @@ def push_rotating_registers(
     return new_rotating_registers
 
 
+def populate_kernel_outer_vars(
+    arg_context: ArgumentContext,
+    pipelined_reduction_graph: fx.Graph,
+    arg_offset: int,
+    num_stages: int,
+    outer_vars: dict[fx.Node, list[fx.Node]],
+) -> list[fx.Node]:
+    """
+    Generate the IterArg's for the outer vars and populate the argument context mapping for them.
+    """
+    counter = arg_offset
+    outer_results = []
+    for orig_node, new_nodes in outer_vars.items():
+        count = len(new_nodes)
+        new_iter_args = []
+        for node in new_nodes:
+            custom = get_custom(node)
+            iter_arg = IterArg(f"outer_rotating_reg_{count}").add_to_graph(
+                pipelined_reduction_graph
+            )
+            iter_arg.type = custom.type
+            iter_arg.index = custom.index
+            iter_arg.iter_idx = counter
+            counter += 1
+            new_iter_args.append(iter_arg)
+
+        outer_results += rotate_list(new_iter_args, 1)
+
+        for iteration in range(num_stages):
+            for stage in range(num_stages):
+                arg_context[iteration, stage, orig_node] = new_iter_args[
+                    iteration % count
+                ]
+
+    return outer_results
+
+
 def construct_kernel(
     reduction_subgraph: fx.Graph,
     reduction: Iterate,
@@ -492,28 +540,9 @@ def construct_kernel(
         )
 
         counter = len(init_args) - len(outer_init_args)
-        outer_results = []
-        for orig_node, new_nodes in outer_vars.items():
-            count = len(new_nodes)
-            new_iter_args = []
-            for node in new_nodes:
-                custom = get_custom(node)
-                iter_arg = IterArg(f"outer_rotating_reg_{count}").add_to_graph(
-                    pipelined_reduction_graph
-                )
-                iter_arg.type = custom.type
-                iter_arg.index = custom.index
-                iter_arg.iter_idx = counter
-                counter += 1
-                new_iter_args.append(iter_arg)
-
-            outer_results += rotate_list(new_iter_args, 1)
-
-            for iteration in range(num_stages):
-                for stage in range(num_stages):
-                    arg_context[iteration, stage, orig_node] = new_iter_args[
-                        iteration % count
-                    ]
+        outer_results = populate_kernel_outer_vars(
+            arg_context, pipelined_reduction_graph, counter, num_stages, outer_vars
+        )
 
         add_nodes_by_schedule(
             reduction,
@@ -554,6 +583,38 @@ def construct_kernel(
         add_missing_registers(pipelined_reduction_graph)
 
         return pipelined_reduction, pipelined_reduction_graph
+
+
+def populate_epilogue_outer_vars(
+    arg_context: ArgumentContext,
+    pipelined_reduction: Iterate,
+    arg_offset: int,
+    num_stages: int,
+    outer_vars: dict[fx.Node, list[fx.Node]],
+):
+    """
+    Generate the GetResult's for the outer vars and populate the argument context mapping for them.
+    """
+    counter = arg_offset
+    for orig_node, new_nodes in outer_vars.items():
+        count = len(new_nodes)
+        new_results = []
+        for node in new_nodes:
+            custom = get_custom(node)
+            result = GetResult(pipelined_reduction.fx_node, counter).add_to_graph(
+                pipelined_reduction.graph,
+                type=custom.type,
+            )
+            counter += 1
+            new_results.append(result)
+
+        new_results = rotate_list(new_results, 1)
+
+        for iteration in range(num_stages):
+            for stage in range(num_stages):
+                arg_context[iteration, stage, orig_node] = new_results[
+                    iteration % count
+                ]
 
 
 def construct_epilogue(
@@ -645,26 +706,9 @@ def construct_epilogue(
         push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
 
         counter = offset + len(flattened_rotating_registers)
-        # outer_results = []
-        for orig_node, new_nodes in outer_vars.items():
-            count = len(new_nodes)
-            new_results = []
-            for node in new_nodes:
-                custom = get_custom(node)
-                result = GetResult(pipelined_reduction.fx_node, counter).add_to_graph(
-                    pipelined_reduction.graph,
-                    type=custom.type,
-                )
-                counter += 1
-                new_results.append(result)
-
-            new_results = rotate_list(new_results, 1)
-
-            for iteration in range(num_stages):
-                for stage in range(num_stages):
-                    arg_context[iteration, stage, orig_node] = new_results[
-                        iteration % count
-                    ]
+        populate_epilogue_outer_vars(
+            arg_context, pipelined_reduction, counter, num_stages, outer_vars
+        )
 
         for i in range(num_stages - 1):
             add_nodes_by_schedule(
