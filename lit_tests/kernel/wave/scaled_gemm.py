@@ -698,6 +698,7 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
+        compile_to_mlir=True,
         schedule=enable_scheduling,
         use_buffer_load_ops=True,
         use_buffer_store_ops=True,
