@@ -65,7 +65,7 @@ jobs:
             platform: win_amd64
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Build wheels
         uses: pypa/cibuildwheel@352e01339f0a173aa2a3eb57f01492e341e83865 # v3.1.3
@@ -89,7 +89,7 @@ jobs:
       contents: write # Create/update a release
     steps:
       - name: Download wheels
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: snapshot-*
           # Merge all artifacts into a single directory

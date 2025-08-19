@@ -394,12 +394,10 @@ def testExtendAttention(
         run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        gpu_native_math_precision=True,
         wave_runtime=(True if use_wave_runtime else False),
     )
     options = set_default_run_config(options)

@@ -14,6 +14,7 @@ from wave_lang.support.ir_imports import (
     Attribute,
     DenseElementsAttr,
     IndexType,
+    InsertionPoint,
     IntegerAttr,
     IntegerType,
     IrType,
@@ -24,8 +25,11 @@ from wave_lang.support.ir_imports import (
     VectorType,
     amdgpu_d,
     arith_d,
+    llvm_d,
     memref_d,
     vector_d,
+    func_d,
+    Operation,
 )
 from wave_lang.aot.support.ir_utils import (
     _is_float_type,
@@ -441,6 +445,19 @@ def _get_out_of_bounds_index(element_type: IrType) -> int:
     return oob_index_value
 
 
+def _get_constant_value(candidate: Value):
+    """
+    returns constantOp's value if candidate is arith.constantOp. Else, returns None.
+    """
+    if not isinstance(candidate.owner, Operation):
+        return None
+    if not hasattr(candidate.owner, "name"):
+        return None
+    if candidate.owner.name != "arith.constant":
+        return None
+    return candidate.owner.attributes["value"].value
+
+
 def _cast_buffer_and_encode_stride(
     ptr: Value, strides: tuple[Value], elem_type: IrType, emitter: WaveEmitter
 ) -> Value:
@@ -453,25 +470,24 @@ def _cast_buffer_and_encode_stride(
     valid_bytes_constant = get_constant_attr(valid_bytes, uint32)
     valid_bytes_constant = arith_d.constant(uint32, valid_bytes_constant)
     stride_rank = len(strides)
-    stride = None
+    swizzle_stride = None
 
-    if stride_rank >= 2 and emitter.options.use_stride_cache_swizzle:
+    if stride_rank >= 2:
         # fastest_dim_bound == second to last stride.
         stride_candidate = strides[-2]
-        stride_int = stride_candidate.owner.attributes["value"].value
-        # Swizzle is only useful upto swizzle stride <= 8192.
-        if stride_int <= 8192:
-            stride = arith_d.index_cast(uint14, stride_candidate)
+        stride_int = _get_constant_value(stride_candidate)
+        # Only swizzle if stride is static and <= 8192(the useful case).
+        if stride_int and stride_int <= 8192:
+            swizzle_stride = arith_d.index_cast(uint14, stride_candidate)
 
-    if stride and emitter.options.use_stride_cache_swizzle:
+    if swizzle_stride:
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
-            cache_swizzle_stride=stride,
+            cache_swizzle_stride=swizzle_stride,
             bounds_check=True,
             reset_offset=True,
             valid_bytes=valid_bytes_constant,
         )
-
     else:
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
@@ -509,13 +525,8 @@ def _create_vec_read_write(
         symbolic_shape = memory.distributed_shape
 
     # only use buffer ops on global memory
-    use_buffer_ops = mem.type.memory_space is None
-
-    buffer_ops_enabled = (
-        emitter.options.use_buffer_load_ops
-        if is_read
-        else emitter.options.use_buffer_store_ops
-    )
+    is_global_mem = mem.type.memory_space is None
+    buffer_ops_enabled = emitter.options.use_buffer_ops and is_global_mem
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
@@ -523,7 +534,6 @@ def _create_vec_read_write(
     has_int_strides = all(isinstance(s, int) for s in strides)
     strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
 
-    buffer_ops_enabled = buffer_ops_enabled and use_buffer_ops
     no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)
@@ -903,6 +913,17 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         )
 
 
+def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
+    original_type = value.type
+    idx = arith_d.index_cast(element_type, value)
+    # TODO: use a proper ROCDL intrinsic for this after IREE is updated.
+    res = llvm_d.call_intrinsic(
+        element_type, "llvm.amdgcn.readfirstlane", [idx], [], []
+    )
+    res = arith_d.index_cast(original_type, res)
+    return res
+
+
 @handle_op(gather_to_lds)
 def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -961,7 +982,24 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     store_type = VectorType.get((elements_per_thread,), element_type)
 
     src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
-    dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+
+    ip = InsertionPoint.current
+
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+
+    # Hoist to the function level, if not using induction variables.
+    if not any(
+        induction_vars.intersection(set(index.start.free_symbols))
+        for index in dst_idx.values()
+    ):
+        while not isinstance(ip.block.owner, func_d.FuncOp):
+            ip = InsertionPoint(ip.block.owner)
+
+    with ip:
+        dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+        # We are indexing shared mem so i32 is enough.
+        i32 = IntegerType.get_signless(32)
+        dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True

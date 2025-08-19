@@ -186,6 +186,7 @@ class WaveCacheManager(object):
             # cache key is itself a member field of the type.  We list the
             # options here in the same order as they are defined in
             # compile_options.py.
+            options.postprocess,
             options.canonicalize,
             options.func_name,
             options.subs,
@@ -195,16 +196,13 @@ class WaveCacheManager(object):
             options.multi_buffer_count,
             options.backend,
             options.target,
-            options.gpu_native_math_precision,
             options.iree_preprocessing_pass_pipeline,
             options.override_mlir,
             options.optimization_level,
             options.denorm_fp_math_f32,
             options.waves_per_eu,
             options.iree_launch_async,
-            options.use_buffer_load_ops,
-            options.use_buffer_store_ops,
-            options.use_stride_cache_swizzle,
+            options.use_buffer_ops,
             options.use_fast_math,
             options.use_global_to_shared,
             options.minimize_shared_allocs,

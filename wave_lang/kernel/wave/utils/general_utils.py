@@ -23,6 +23,7 @@ from ...ops.wave_ops import CustomOp, Iterate, Read, Write, get_custom
 from ..assumptions import Assumption
 from ..constraints import (
     Constraint,
+    IteratorBindings,
     DistributionConstraint,
     HardwareConstraint,
     TilingConstraint,
@@ -183,12 +184,15 @@ def find_index_bounds(
     symbolic_type: Optional[list[IndexExpr]],
 ) -> Optional[dict[IndexExpr, IndexExpr]]:
     """
-    Find the bounds for the index variables is partial access/masking is needed.
+    Find bounds for index variables where partial access/masking is needed,
+    for example non-aligned shapes.
 
     Returns None if no partial access is needed.
     """
     vector_shapes = vector_shapes or {}
     bounds = {}
+
+    # Find bounds for index dimensions present in constraints.
     for constraint in constraints:
         if not isinstance(constraint, DistributionConstraint):
             continue
@@ -196,11 +200,11 @@ def find_index_bounds(
         dim = constraint.dim
         if dim not in index:
             continue
-
         bound = constraint.get_index_bound(vector_shapes.get(dim, None))
         if bound is not None:
             bounds[dim] = get_min_expr(bounds.get(dim, None), bound)
 
+    # Find bounds for index dimensions present in vector shapes.
     for dim, vector_shape in vector_shapes.items():
         if dim not in index:
             continue
@@ -208,13 +212,11 @@ def find_index_bounds(
         if vector_shape <= 1:
             continue
 
-        # We are trying to get the bounds from the constraints, but we can have
-        # a situation with nontrivial vector sizes which are not part of the
-        # constraints (e.g K1 in paged decode attention). Try to infer bounds
-        # directly from the vector shape in this case.
         if dim in bounds:
             continue
 
+        # When there is a dimension that's not constrained and has unaligned shapes
+        # (e.g K1=9 in paged decode attention), we use vector shape as the bounds.
         if subs_idxc(dim) % subs_idxc(vector_shape) != 0:
             bounds[dim] = dim
 
@@ -275,6 +277,17 @@ def get_workgroup_constraints(
     constraints: list[Constraint],
 ) -> list[WorkgroupConstraint]:
     return [x for x in constraints if isinstance(x, WorkgroupConstraint)]
+
+
+def get_iterator_bindings(
+    constraints: list[Constraint],
+) -> Optional[dict[IndexSymbol, IndexExpr]]:
+    bindings = []
+    for constraint in constraints:
+        if isinstance(constraint, IteratorBindings):
+            bindings.append(constraint)
+    assert len(bindings) <= 1, "Only one iterator binding is supported"
+    return bindings[0] if bindings else None
 
 
 def ceildiv(a: int, b: int) -> int:

@@ -317,9 +317,7 @@ def testScaledBatchedGemmMXFP4(
         subs=hyperparams,
         canonicalize=True,
         schedule=enable_scheduling,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         dynamic_symbols=dynamic_symbols,
     )
     options = set_default_run_config(options)

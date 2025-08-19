@@ -161,7 +161,6 @@ setup(
         "testing": [
             f"pytest{get_version_spec('pytest')}",
             f"pytest-xdist{get_version_spec('pytest-xdist')}",
-            f"parameterized{get_version_spec('parameterized')}",
         ],
     },
     cmdclass={"build": BuildCommand, "build_ext": CMakeBuild},
