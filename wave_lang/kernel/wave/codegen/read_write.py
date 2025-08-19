@@ -49,6 +49,7 @@ from ...ops.wave_ops import (
     read,
     write,
     scatter_add,
+    read_meets_hw_transpose_requirements,
 )
 from ..utils.general_utils import get_fastest_index, linearize_index
 from ..utils.mapping_utils import transform_index_on_mapping
@@ -603,20 +604,23 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
-    result = _create_vec_read_write(
-        emitter,
-        input_shape,
-        kb_src,
-        None,
-        vector_type,
-        start_indices,
-        start_indices_wg,
-        start_indices_th,
-        elements_per_thread,
-        get_custom(memory),
-        mask,
-        node_index=index,
-    )
+    if read_meets_hw_transpose_requirements(get_custom(node), emitter.constraints):
+        result = amdgpu_d.transpose_load(vector_type, kb_src, start_indices)
+    else:
+        result = _create_vec_read_write(
+            emitter,
+            input_shape,
+            kb_src,
+            None,
+            vector_type,
+            start_indices,
+            start_indices_wg,
+            start_indices_th,
+            elements_per_thread,
+            get_custom(memory),
+            mask,
+            node_index=index,
+        )
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
 

@@ -31,15 +31,57 @@ from ..lang.global_symbols import *
 from ..lang.kernel_buffer import AddressSpace
 from ..lang.wave_types import IndexMapping, Memory, Register
 from .base import OpDispatcher
+from ..wave.constraints import Constraint
 
 if TYPE_CHECKING:
-    from ..wave.constraints import Constraint
     from ..wave.scheduling.resources import Operation
 
 T = TypeVar("T", bound=Type[Any])
 AccT = TypeVar("AccT")
 CustomOpT = TypeVar("CustomOpT", bound="CustomOp")
 PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
+
+
+def read_meets_hw_transpose_requirements(
+    read: Read, constraints: list[Constraint]
+) -> bool:
+    from ..wave.minimize_global_loads import is_transposed_read
+    from ..wave.utils.general_utils import find_index_bounds
+
+    if read.bounds is not None:
+        return False
+
+    if len(read.type.symbolic_shape) <= 1:
+        return False
+
+    if not is_transposed_read(read):
+        return False
+
+    bounds = find_index_bounds(
+        constraints, read.index, read.vector_shapes, read.type.symbolic_shape
+    )
+
+    if bounds is not None:
+        return False
+
+    if read.has_identity_mapping():
+        return False
+
+    if len(list(read.index.keys())) != 2:
+        return False
+
+    bitwidth = read.type.dtype.bitwidth()
+    if bitwidth != 8 and bitwidth != 16:
+        return False
+
+    bits = read.elements_per_thread * bitwidth
+    if bits == 0 or bits % 64 != 0:
+        return False
+
+    if read.memory_type.address_space != SHARED_ADDRESS_SPACE:
+        return False
+
+    return not read.mapping_dynamic_vals
 
 
 # Stubs to enable type checking of the custom ops:
@@ -1814,10 +1856,13 @@ class Read(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self) -> bool:
+    def is_contiguous_vec(self, constraints) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
+        if read_meets_hw_transpose_requirements(self, constraints):
+            return True
+
         if self.has_identity_mapping():
             return True
 
@@ -2167,7 +2212,7 @@ class Write(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self) -> bool:
+    def is_contiguous_vec(self, constraints) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""

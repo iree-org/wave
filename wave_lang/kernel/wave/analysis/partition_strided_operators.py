@@ -413,7 +413,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
         """
         custom = get_custom(node)
         if isinstance(custom, (Read, Write)):
-            return not custom.is_contiguous_vec()
+            return not custom.is_contiguous_vec(constraints)
 
         return False
 
