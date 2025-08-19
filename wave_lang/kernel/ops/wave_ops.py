@@ -2540,18 +2540,34 @@ class SubgroupReduceOp(CustomOp):
 @define_op("inline_mlir")
 @dataclass
 class InlineMLIROp(CustomOp):
-    arg: fx.Node | list[fx.Node]
+    args: fx.Node | Sequence[fx.Node]
     shape: tuple[IndexExpr, ...]
     dtype: DataType
     ir: str
 
-    
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        return get_custom(self.arg).indexing_dims
+        if isinstance(self.args, fx.Node):
+            return get_custom(self.args).indexing_dims
+
+        combined_dims = []
+        for arg in self.args: 
+            if isinstance(arg, fx.Node):
+                combined_dims += get_custom(arg).indexing_dims
+
+        unique_dims = list(dict.fromkeys(combined_dims))
+        return unique_dims
 
     def infer_type(self):
-        self.type = get_custom(self.arg).type
+        if isinstance(self.args, fx.Node):
+            self.type = get_custom(self.args).type
+            return
+        
+        for arg in self.args:
+            arg_type = get_custom(arg).type
+            assert self.type == None or self.type == arg_type
+            self.type = arg_type
+
 
     
 
