@@ -445,17 +445,17 @@ def _get_out_of_bounds_index(element_type: IrType) -> int:
     return oob_index_value
 
 
-def _get_constant_value(candidate_op: Any):
+def _get_constant_value(candidate: Value):
     """
     returns constantOp's value if candidate is arith.constantOp. Else, returns None.
     """
-    if not isinstance(candidate_op, Operation):
+    if not isinstance(candidate.owner, Operation):
         return None
-    if not hasattr(candidate_op, "name"):
+    if not hasattr(candidate.owner, "name"):
         return None
-    if candidate_op.name != "arith.constant":
+    if candidate.owner.name != "arith.constant":
         return None
-    return candidate_op.attributes["value"].value
+    return candidate.owner.attributes["value"].value
 
 
 def _cast_buffer_and_encode_stride(
@@ -475,7 +475,7 @@ def _cast_buffer_and_encode_stride(
     if stride_rank >= 2:
         # fastest_dim_bound == second to last stride.
         stride_candidate = strides[-2]
-        stride_int = _get_constant_value(stride_candidate.owner)
+        stride_int = _get_constant_value(stride_candidate)
         # Only swizzle if stride is static and <= 8192(the useful case).
         if stride_int and stride_int <= 8192:
             swizzle_stride = arith_d.index_cast(uint14, stride_candidate)
