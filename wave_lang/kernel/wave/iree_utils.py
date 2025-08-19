@@ -132,7 +132,8 @@ def get_mmt_asm(
         f8_dtype = "f8E4M3FNUZ"
         lhs_type_f8 = lhs_type.replace(dtype, f8_dtype)
         dtype = rhs_type.split("x")[-1]
-        rhs_type_f8 = rhs_type_t.replace(dtype, f8_dtype)
+        rhs_type_f8 = rhs_type.replace(dtype, f8_dtype)
+        rhs_type_f8_t = rhs_type_t.replace(dtype, f8_dtype)
         matmul_function = f"""
         func.func @{func_name}(%lhs: tensor<{lhs_type}>, %rhs: tensor<{rhs_type}>) -> tensor<{acc_type}> {{
           %c0 = arith.constant 0.0 : {acc_dtype}
@@ -140,9 +141,9 @@ def get_mmt_asm(
           %inital_result = linalg.fill ins(%c0 : {acc_dtype}) outs(%init : tensor<{acc_type}>) -> tensor<{acc_type}>
           %lhs_f8 = arith.truncf %lhs : tensor<{lhs_type}> to tensor<{lhs_type_f8}>
           %rhs_f8 = arith.truncf %rhs : tensor<{rhs_type}> to tensor<{rhs_type_f8}>
-          %rhs_transpose_init = tensor.empty() : tensor<{rhs_type_f8}>
-          %rhs_transpose = linalg.transpose ins(%rhs: tensor<{rhs_type}>) outs(%rhs_transpose_init: tensor<{rhs_type_f8}>) permutation={perm}
-          %result = linalg.{operator} ins(%lhs_f8, %rhs_transpose: tensor<{lhs_type_f8}>, tensor<{rhs_type_f8}>)
+          %rhs_transpose_init = tensor.empty() : tensor<{rhs_type_f8_t}>
+          %rhs_transpose = linalg.transpose ins(%rhs_f8: tensor<{rhs_type_f8}>) outs(%rhs_transpose_init: tensor<{rhs_type_f8_t}>) permutation={perm}
+          %result = linalg.{operator} ins(%lhs_f8, %rhs_transpose: tensor<{lhs_type_f8}>, tensor<{rhs_type_f8_t}>)
                      outs(%inital_result: tensor<{acc_type}>) -> tensor<{acc_type}>
           return %result : tensor<{acc_type}>
         }}"""
