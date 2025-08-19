@@ -214,7 +214,12 @@ def propagate_placeholders(n: fx.Node) -> fx.Node:
 
 def propagate_loop_carried_vars(n: fx.Node, depth: int = 0) -> fx.Node:
     """
-    Returns the captured node of an iter arg if it exists.
+    Propagates node through placeholders and loop-carried vars.
+
+    `depth` is the number of iterations to propagate through.
+    For example, if `depth` is 1, then the function will propagate through the
+    loop-carried vars to the previous iteration.
+    If `depth` is 0, then the function will propagate to the loop init_args.
     """
     c = get_custom(n)
     if isinstance(c, IterArg):
