@@ -31,8 +31,6 @@ from ..constraints import (
 )
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
 
-# TODO: Monkey-patching f16 support, need to fix in iree.
-
 
 def run_test(func: Callable[[], None]) -> Callable[[], None]:
     """Run a function as part of the test suite."""
