@@ -68,7 +68,7 @@ _e2e_test_shapes["extend"] = [
         head_size=8,
         head_size_kv=8,
         block_size=32,
-    )
+    ),
 ]
 
 _e2e_test_shapes["gqa_bshd_attention"] = [
