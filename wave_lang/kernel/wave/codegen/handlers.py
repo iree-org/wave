@@ -1583,8 +1583,9 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
 
     # Handle broadcasting to unit dims as no-op.
     # Most useful for handling broadcast in symbolic shapes.
+    target_dims = set(get_custom(node).indexing_dims)
     src_dims = set(get_custom(register).indexing_dims)
-    bcast_dims = list(set(target_shape) - src_dims)
+    bcast_dims = list(target_dims - src_dims)
     bcast_sizes = [subs_idxc(node.index[x].size) for x in bcast_dims]
     lane_level_broadcast = target_thread_size != src_thread_size
     if math.prod(bcast_sizes) == 1 and not lane_level_broadcast:
