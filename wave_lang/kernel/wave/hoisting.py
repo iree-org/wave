@@ -87,22 +87,24 @@ def get_hoistable_ops(
                 continue
             hoistable_ops.append(custom_node)
         elif isinstance(custom_node, BinaryOpBase):
-            # If one of the operands is hoistable and the other is a placeholder,
-            # then the binary op is hoistable.
+            # If both operands meet either of the following conditions, then the binary op is hoistable:
+            # a) they are placeholders and not iter args,
+            # b) they are hoistable (as determined earlier)
             is_placeholder = lambda x: isinstance(x, Placeholder) and not isinstance(
                 x, IterArg
             )
-            is_hoistable = lambda x, y: (x in hoistable_ops and is_placeholder(y))
+            is_hoistable = lambda x: (x in hoistable_ops or is_placeholder(x))
             rhs = get_custom(custom_node.rhs)
             lhs = get_custom(custom_node.lhs)
-            if is_hoistable(lhs, rhs) or is_hoistable(rhs, lhs):
-                # Since this binary op is going to be hoisted, we replace the placeholder
-                # with the lifted value.
-                placeholder, operand = (
-                    (lhs, "lhs") if is_placeholder(lhs) else (rhs, "rhs")
-                )
-                assert "lifted" in placeholder.fx_node.meta
-                custom_node.update_arg(operand, placeholder.fx_node.meta["lifted"])
+            if is_hoistable(lhs) and is_hoistable(rhs):
+                # Since this binary op is going to be hoisted, we replace the placeholders
+                # with their corresponding lifted values.
+                for placeholder, operand in [(lhs, "lhs"), (rhs, "rhs")]:
+                    if is_placeholder(placeholder):
+                        assert "lifted" in placeholder.fx_node.meta
+                        custom_node.update_arg(
+                            operand, placeholder.fx_node.meta["lifted"]
+                        )
                 hoistable_ops.append(custom_node)
         else:
             continue
