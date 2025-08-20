@@ -1931,6 +1931,65 @@ def test_broadcast_add():
 
 
 @run_test
+def test_broadcast_scaled_add():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    shape = (256, 256)
+
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        )
+    ]
+
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def broadcast_scaled_add(
+        a: tkl.Memory[M, N / 2, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N / 2, ADDRESS_SPACE, tkl.f16],
+    ):
+        lhs = tkw.read(a)
+        rhs = tkw.read(b)
+        rhs = tkw.broadcast(rhs, [M, N / 2])
+        res = lhs + rhs
+        tkw.write(res, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        use_buffer_ops=True,
+        compile_to_mlir=True,
+    )
+    options = set_default_compile_config(options)
+    broadcast_scaled_add = wave_compile(options, broadcast_scaled_add)
+    print(broadcast_scaled_add.asm)
+
+    # This test checks that broadcast to scaled symbolic shapes works (`tkw.broadcast(rhs, [M, N / 2])`).
+    # The thing to look out for in this test is we are generating a vector.broadcast
+    # on the rhs before doing add.
+
+    # CHECK-LABEL: func @broadcast_scaled_add
+    # CHECK: %[[RHS:.+]] = memref.load {{.*}} : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK: %[[BROADCAST_RHS:.+]] = vector.broadcast %[[RHS]] : f16 to vector<2xf16>
+    # CHECK: arith.addf %{{.*}}, %[[BROADCAST_RHS]] : vector<2xf16>
+
+
+@run_test
 def test_binary_lowerings():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
