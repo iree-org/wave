@@ -78,8 +78,12 @@ def insert_barrier_if_needed(alloc: fx.Node, first_use: fx.Node, last_use: fx.No
     if is_barrier_between(last_use, first_use):
         return
 
-    if last_use.graph != first_use.graph and hasattr(first_use.graph, "parent_op"):
-        first_use = first_use.graph.parent_op
+    if last_use.graph != first_use.graph:
+        if hasattr(first_use.graph, "parent_op"):
+            first_use = first_use.graph.parent_op
+        elif hasattr(last_use.graph, "parent_op"):
+            first_use = last_use.graph.parent_op
+
     with first_use.graph.inserting_before(first_use):
         SharedMemoryBarrier().add_to_graph(first_use.graph)
 
