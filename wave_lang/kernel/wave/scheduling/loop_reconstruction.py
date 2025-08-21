@@ -310,6 +310,8 @@ def populate_epilogue_outer_vars(
             counter += 1
             new_results.append(result)
 
+        # TODO: Epilogue get rotated buffers in skewed order, comparing to
+        # kernel, investigate.
         new_results = rotate_list(new_results, 1)
 
         arg_context.map_arg_all(orig_node, new_results)
