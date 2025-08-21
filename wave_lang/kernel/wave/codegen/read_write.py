@@ -382,6 +382,9 @@ def _linearize_memref(
         layout=Attribute.parse("strided<[1], offset: ?>"),
         memory_space=memory_space,
     )
+    memref_metadata = memref_d.extract_strided_metadata(mem)
+    memref_base_offset = memref_metadata[1]
+    offset = arith_d.addi(offset, memref_base_offset, overflow_flags=overflow_flags)
     return (
         memref_d.reinterpret_cast(
             resut_type,

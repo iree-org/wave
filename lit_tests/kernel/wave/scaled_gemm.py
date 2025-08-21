@@ -734,7 +734,8 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK:            %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP3]]()[%arg6]
     # CHECK:            %[[MUL1:.*]] = arith.muli %[[BLOCK_ID_Z]], %[[AFFINE_APPLY2]] overflow<nsw> : index
-    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %[[SPAN0]] to offset: [%[[C0]]], sizes: [%[[C2147483646]]], strides: [1] : memref<?x?x8192xi8, strided<[?, 8192, 1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
+    # CHECK:            %{{.*}}, %[[OFFSET_TO_TENSOR:.+]], %{{.*}}, %{{.*}} = memref.extract_strided_metadata %[[SPAN0]] : memref<?x?x8192xi8, strided<[?, 8192, 1], offset: ?>> -> memref<i8>, index, index, index, index, index, index, index
+    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %[[SPAN0]] to offset: [%[[OFFSET_TO_TENSOR]]], sizes: [%[[C2147483646]]], strides: [1] : memref<?x?x8192xi8, strided<[?, 8192, 1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
     # CHECK:            %[[BUFF_CAST:.*]] = amdgpu.fat_raw_buffer_cast %[[REINTERPRET_CAST]] validBytes(%[[C2147483646_I32]]) cacheSwizzleStride(%[[C_NEG_8192_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:            %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
     # CHECK:            %[[CMP1:.*]] = arith.cmpi slt, %[[AFFINE_APPLY3]], %arg6 : index

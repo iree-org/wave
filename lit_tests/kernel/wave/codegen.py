@@ -202,7 +202,12 @@ def test_read_dynamic_3d_buffer():
 
     # CHECK-LABEL:    func.func @read_dynamic_buffer
     # CHECK:            %[[ARG0:.*]] = stream.binding.subspan {{.*}} : !stream.binding -> memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>>
-    # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] {{.*}} : memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
+
+    # Gets offset to tensor's base pointer, then set memref_offset = indexing_offset + base_tensor_offset.
+    # CHECK:            %{{.*}}, %[[BASE_TENSOR_OFFSET:.+]], %{{.*}}, %{{.*}} = memref.extract_strided_metadata %[[ARG0]] : memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> -> memref<f16>, index, index, index, index, index, index, index
+    # CHECK:            %[[MEMREF_OFFSET:.+]] = arith.addi %{{.*}}, %[[BASE_TENSOR_OFFSET]] overflow<nsw> : index
+
+    # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] to offset: [%[[MEMREF_OFFSET]]], {{.*}}: memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
     # CHECK:            %[[SWIZZLE_CAST:.*]] = arith.index_cast %c16{{.*}} : index to i14
     # CHECK:            %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast %[[MEMREF_CAST]] validBytes{{.*}} cacheSwizzleStride{{.*}} resetOffset : memref<?xf16, strided<[1], offset: ?>> to memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
 
