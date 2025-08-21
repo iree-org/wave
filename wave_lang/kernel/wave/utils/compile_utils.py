@@ -39,14 +39,13 @@ def compile_to_vmfb(
     options: WaveCompileOptions,
 ):
     flags = [
-        f"--iree-hal-target-backends={options.backend}",
         "--iree-vm-bytecode-module-strip-source-map=true",
         "--iree-opt-strip-assertions=true",
         "--iree-vm-target-truncate-unsupported-floats",
     ]
 
     # TODO: More targets/backends support.
-    if options.backend == "rocm":
+    if options.device == "hip":
         flags.append(f"--iree-hip-target={options.target}")
 
     if options.mlir_print_ir_after_all:
@@ -71,7 +70,15 @@ def compile_to_vmfb(
                 f"--iree-hal-benchmark-dispatch-repeat-count={options.benchmark_batch_size}"
             )
 
-    res = compile_str(asm, target_backends=[options.backend], extra_args=flags)
+    if options.num_devices > 1:
+        target_devices = [
+            f"--iree-hal-target-device={options.device}[{i}]"
+            for i in range(options.num_devices)
+        ]
+        flags += target_devices
+    else:
+        flags.append(f"--iree-hal-target-device={options.device}")
+    res = compile_str(asm, extra_args=flags)
     return res
 
 
@@ -137,7 +144,6 @@ def canonicalize_module(module: Operation):
 
 def set_default_compile_config(options: WaveCompileOptions) -> WaveCompileOptions:
     """Return default config for compilation."""
-    options.backend = "rocm"
     options.device = "hip"
     options.target = "gfx942"
     return options
