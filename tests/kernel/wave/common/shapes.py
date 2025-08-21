@@ -63,11 +63,11 @@ _e2e_test_shapes["extend"] = [
     AttentionShape(
         num_seqs=4,
         context_len=1024,
-        num_query_heads=8,
-        num_kv_heads=8,
-        head_size=8,
-        head_size_kv=8,
-        block_size=32,
+        num_query_heads=4,
+        num_kv_heads=4,
+        head_size=256,
+        head_size_kv=256,
+        block_size=64,
     ),
 ]
 
