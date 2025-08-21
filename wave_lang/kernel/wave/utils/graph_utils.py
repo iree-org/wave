@@ -224,8 +224,6 @@ def propagate_loop_carried_vars(n: fx.Node, depth: int = 0) -> fx.Node:
     c = get_custom(n)
     if isinstance(c, IterArg):
         idx = c.iter_idx
-        if idx is None:
-            return n
         iterate = c.parent_op()
         assert isinstance(iterate, Iterate), f"Expected Iterate, but got {iterate}"
         args = iterate.init_args if depth == 0 else iterate.outputs()
@@ -236,6 +234,9 @@ def propagate_loop_carried_vars(n: fx.Node, depth: int = 0) -> fx.Node:
         return propagate_loop_carried_vars(args[idx], depth)
     elif isinstance(c, Placeholder):
         p = c.get_captured_fx_node()
+
+        # Top level placeholders correspond to kernel arguments and don't have
+        # captured nodes.
         if p is not None:
             return p
     elif isinstance(c, GetResult):
