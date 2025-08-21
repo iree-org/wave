@@ -403,3 +403,77 @@ def test_bshd_attention_pipelined_prefetch():
     # CHECK-COUNT-32: vector.load
     # CHECK-COUNT-4: vector.load
     # CHECK-COUNT-8: amdgpu.mfma
+
+
+@run_test
+def test_bshd_attention_pipelined_prefetch_pingpong():
+    shape = AttentionShape(
+        num_query_heads=64,
+        num_kv_heads=64,
+        query_seq_len=16384,
+        head_size_kv=128,
+        head_size=128,
+        kv_seq_len=16384,
+    )
+    mfma_variant = (tkw.MMAType.F32_32x32x8_F16,) * 2
+    base_attention, hyperparams, _ = get_bshd_attention_kernel(
+        shape,
+        mfma_variant,
+        dynamic_dims=False,
+        num_waves=8,
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=False,
+        schedule=SchedulingType.PREFETCH_ATTENTION,
+        use_scheduling_barriers=False,
+        compile_to_mlir=True,
+        multi_buffer_count=2,
+    )
+    base_attention = wave_compile(options, base_attention)
+    print(base_attention.asm)
+
+    # CHECK: func.func @base_attention
+
+    # CHECK: scf.if
+    # CHECK-NEXT: rocdl.s.barrier
+
+    # CHECK: {{.*}} = scf.for
+
+    # MMA
+    # CHECK: rocdl.s.setprio 1
+    # CHECK-COUNT-32: amdgpu.mfma
+    # CHECK: rocdl.s.setprio 0
+    # Softmax
+    # CHECK: gpu.shuffle
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # Global load, shared write, shared read
+    # CHECK-COUNT-2: vector.load
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT-2: vector.store
+    # CHECK-COUNT-1: memref.reinterpret_cast
+    # CHECK-COUNT-4: memref.load
+    # CHECK-COUNT-1: vector.from_elements
+    # CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # MMA
+    # CHECK: rocdl.s.setprio 1
+    # CHECK-COUNT-16: amdgpu.mfma
+    # CHECK: rocdl.s.setprio 0
+    # Softmax
+    # CHECK: gpu.shuffle
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # Global load, shared write, shared read
+    # CHECK-COUNT: vector.load
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT: vector.store
+    # CHECK-COUNT-32: vector.load
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # CHECK: scf.if
+    # CHECK-NEXT: rocdl.s.barrier
