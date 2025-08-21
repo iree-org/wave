@@ -8,9 +8,7 @@ from wave_lang.support.logging import get_logger
 from ..._support.indexing import IndexSymbol, IndexSequence
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
-    Allocate,
     CustomOp,
-    GatherToLDS,
     GetResult,
     IterArg,
     Iterate,
@@ -18,15 +16,16 @@ from ...ops.wave_ops import (
     NewRegister,
     Output,
     Placeholder,
-    Read,
     SchedulingGroupBarrier,
-    Write,
     get_custom,
 )
-from ...lang.global_symbols import SHARED_ADDRESS_SPACE
 from ..constraints import Constraint
-from ..utils.general_utils import get_induction_variable, rotate_list
-from ..utils.graph_utils import propagate_placeholders, replace_uses_in
+from ..utils.general_utils import (
+    get_induction_variable,
+    rotate_list,
+    collect_shared_memory_operands,
+)
+from ..utils.graph_utils import replace_uses_in
 from ..visualization import visualize_graph, visualize_mapped_graphs
 from .loop_reconstruction_utils import (
     ArgumentContext,
@@ -743,33 +742,6 @@ def construct_epilogue(
                 arg_context.argument_map,
                 "epilogue.png",
             )
-
-
-def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
-    custom = get_custom(node)
-    if (
-        isinstance(custom, (Write, Read))
-        and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
-    ):
-        return custom.memory
-    if isinstance(custom, GatherToLDS):
-        return custom.dst
-
-    return None
-
-
-def collect_shared_memory_operands(graph: fx.Graph) -> list[fx.Node]:
-    shared_memory_operands = {}
-    for node in graph.nodes:
-        operand = get_shared_memory_operand(node)
-        if operand is not None:
-            operand = propagate_placeholders(operand)
-            assert isinstance(
-                get_custom(operand), Allocate
-            ), f"Expected Allocate, but got {get_custom(operand)}"
-            shared_memory_operands[operand] = node
-
-    return list(shared_memory_operands.keys())
 
 
 def construct_pipelined_loop(

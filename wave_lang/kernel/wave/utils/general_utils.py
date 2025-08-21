@@ -19,7 +19,15 @@ import wave_lang.kernel.lang as tkl
 
 from ..._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ...lang.global_symbols import *
-from ...ops.wave_ops import CustomOp, Iterate, Read, Write, get_custom
+from ...ops.wave_ops import (
+    Allocate,
+    CustomOp,
+    GatherToLDS,
+    Iterate,
+    Read,
+    Write,
+    get_custom,
+)
 from ..assumptions import Assumption
 from ..constraints import (
     Constraint,
@@ -29,6 +37,7 @@ from ..constraints import (
     TilingConstraint,
     WorkgroupConstraint,
 )
+from .graph_utils import propagate_loop_carried_vars
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
 
 
@@ -453,6 +462,30 @@ def is_shared_read(node: CustomOp) -> bool:
         isinstance(node, Read)
         and subs_idxc(node.memory_type.address_space) == SHARED_ADDRESS_SPACE
     )
+
+
+def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
+    custom = get_custom(node)
+    if is_shared_read(custom) or is_shared_write(custom):
+        return custom.memory
+    if isinstance(custom, GatherToLDS):
+        return custom.dst
+
+    return None
+
+
+def collect_shared_memory_operands(graph: fx.Graph) -> list[fx.Node]:
+    shared_memory_operands = {}
+    for node in graph.nodes:
+        operand = get_shared_memory_operand(node)
+        if operand is not None:
+            operand = propagate_loop_carried_vars(operand)
+            assert isinstance(
+                get_custom(operand), Allocate
+            ), f"Expected Allocate, but got {get_custom(operand)}"
+            shared_memory_operands[operand] = node
+
+    return list(shared_memory_operands.keys())
 
 
 def has_write_shared_user(node: Read) -> bool:
