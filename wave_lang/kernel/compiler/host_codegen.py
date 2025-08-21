@@ -182,24 +182,6 @@ def isolated_test_call(
                 idx = arith_d.constant(IndexType.get(), dim_idx)
                 dynamic_argument_map[symbol] = tensor_d.dim(arguments[arg_idx], idx)
 
-            device_tensor_map = {}  # Store all device maps
-            constant_map = {}
-            for i, (host_tensor, binding) in enumerate(
-                zip(
-                    arguments[: len(host_sig.buffer_bindings)], host_sig.buffer_bindings
-                )
-            ):
-                if device_constraints and device_layout:
-                    device_tensor_map, constant_map = split_input_tensors(
-                        host_tensor,
-                        binding,
-                        device_layout,
-                        device_constraints,
-                        dynamic_argument_map,
-                        device_tensor_map,
-                        constant_map,
-                    )
-
             assert isinstance(entry_block, Block)
             # Create a flow.dispatch op to the kernel
             dispatch = SymbolRefAttr.get([exe.sym_name.value, entrypoint])
@@ -216,13 +198,31 @@ def isolated_test_call(
 
             out = None
             if device_constraints and device_layout:
-                # If device constraints are provided, we need to dispatch to each device
-                # and collect the results.
+                device_tensor_map = {}  # Store all device maps
+                constant_map = {}
+                # If device constraints are provided, we need to split the input tensors
+                # into device-specific tensors.
+                for i, binding in enumerate(host_sig.buffer_bindings):
+                    host_tensor = arguments[i]
+                    device_tensor_map, constant_map = split_input_tensors(
+                        host_tensor,
+                        binding,
+                        device_layout,
+                        device_constraints,
+                        dynamic_argument_map,
+                        device_tensor_map,
+                        constant_map,
+                    )
+
+                # flow dispatch to each device and collect the results
                 output_list = []
                 for i in range(0, len(device_tensor_map.keys())):
                     block_argument_list = []
                     output_slices = []
-                    # for each device, iterate over all the arguments
+                    # for each device where the kernel is dispatched
+                    # collect the arguments from the device tensor map
+                    # and append inputs to block_arugment_list
+                    # and outputs to output_slices
                     for arg in device_tensor_map[i]:
                         block_argument_list.append(arg["slice"])
                         if arg["binding_name"] in [
@@ -260,7 +260,8 @@ def isolated_test_call(
                 else:
                     out = output_list[0]
             else:
-                # If no device constraints, just dispatch to the kernel directly
+                # If no device constraints, just dispatch the kernel directly
+                # with the provided host signature arguments.
                 out = flow_d.DispatchOp(
                     memref_to_tensor(output_types),
                     [dynamic_argument_map[dim] for dim in dynamic_symbols]
