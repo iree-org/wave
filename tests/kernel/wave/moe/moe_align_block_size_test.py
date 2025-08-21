@@ -6,26 +6,7 @@
 
 import pytest
 import torch
-import wave_lang.kernel as tk
-import wave_lang.kernel.lang as tkl
-from wave_lang.kernel.lang.global_symbols import *
-from wave_lang.kernel.wave.utils.run_utils import (
-    set_default_run_config,
-    enable_scheduling_barriers,
-    dump_generated_mlir,
-    check_individual_kernels,
-)
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.utils.general_utils import (
-    get_default_scheduling_params,
-)
-from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-from wave_lang.kernel.wave.templates.moe import (
-    get_gemm_kernel,
-    get_silu_and_mul_kernel,
-)
-from wave_lang.kernel.wave.constraints import MMAType
-from wave_lang.kernel.lang import DataType
+from .torch_kernels import moe_align_block_size_pytorch
 import torch.nn.functional as F
 
 torch.manual_seed(0)
@@ -222,15 +203,6 @@ def test_moe_align_block_size(
         (max_num_m_blocks,), dtype=torch.int32, device=topk_ids.device
     )
     num_tokens_post_pad = torch.empty((1), dtype=torch.int32, device=topk_ids.device)
-
-    cumsum_buffer = torch.empty(
-        (num_experts + 1,), dtype=torch.int32, device=topk_ids.device
-    )
-    token_cnts_buffer = torch.empty(
-        (num_experts + 1) * num_experts,
-        dtype=torch.int32,
-        device=topk_ids.device,
-    )
 
     fuse_sorted_ids_padding = sorted_ids.shape[0] <= 4096
     if not fuse_sorted_ids_padding:
