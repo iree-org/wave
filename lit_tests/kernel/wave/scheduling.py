@@ -120,10 +120,10 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %rotating_reg_1
     # CHECK-NEXT: %rotating_reg_2
     # CHECK-NEXT: %rotating_reg_3
-    # CHECK-NEXT: %outer_rotating_reg_2
-    # CHECK-NEXT: %outer_rotating_reg_1
-    # CHECK-NEXT: %outer_rotating_reg_3
-    # CHECK-NEXT: %outer_rotating_reg_4
+    # CHECK-NEXT: %outer_rotating_reg_8
+    # CHECK-NEXT: %outer_rotating_reg_9
+    # CHECK-NEXT: %outer_rotating_reg_10
+    # CHECK-NEXT: %outer_rotating_reg_11
     # CHECK-NEXT: %read_4_shared_M:0_N:0_K:0_mapped_1_1
     # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0_mapped_1_1
     # CHECK-NEXT: %read_21
@@ -162,7 +162,7 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
     # CHECK-NEXT: %scheduling_group_barrier_4
     # CHECK-SAME: ({Operation.MMA: 2, Operation.READ_SHARED: 2}, 0)
-    # CHECK-NEXT: [mma_M:0_N:0_K:1_mapped_1_1, mma_M:0_N:1_K:1_mapped_1_1, mma_M:1_N:0_K:1_mapped_1_1, mma_M:1_N:1_K:1_mapped_1_1, read_4_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:1_N:0_K:0_mapped_2_0, read_2_shared_M:1_N:0_K:1_mapped_2_0, outer_rotating_reg_1, outer_rotating_reg_2, outer_rotating_reg_4, outer_rotating_reg_3]
+    # CHECK-NEXT: [mma_M:0_N:0_K:1_mapped_1_1, mma_M:0_N:1_K:1_mapped_1_1, mma_M:1_N:0_K:1_mapped_1_1, mma_M:1_N:1_K:1_mapped_1_1, read_4_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:1_N:0_K:0_mapped_2_0, read_2_shared_M:1_N:0_K:1_mapped_2_0, outer_rotating_reg_9, outer_rotating_reg_8, outer_rotating_reg_11, outer_rotating_reg_10]
 
     print_subgraph(trace, "region_1", False)
     # CHECK: %a
