@@ -6,11 +6,20 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+)
+from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
 from wave_lang.kernel.wave.utils.mma_utils import (
     get_mfma_load_elems_per_thread,
     get_mfma_store_elems_per_thread,
+)
+from wave_lang.kernel.wave.templates.attention_common import (
+    AttentionShape,
+)
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_bshd_attention_kernel,
 )
 
 # Input sizes
@@ -287,3 +296,48 @@ def test_attention_pipelined():
     # CHECK-COUNT-15:            {{.*}} = amdgpu.mfma
     # CHECK-COUNT-5:            {{.*}} = gpu.shuffle xor {{.*}}
     # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+
+
+@run_test
+def test_bshd_attention_pipelined():
+    shape = AttentionShape(
+        num_query_heads=8,
+        num_kv_heads=8,
+        query_seq_len=128,
+        head_size_kv=128,
+        head_size=64,
+        kv_seq_len=256,
+    )
+    mfma_variant = (tkw.MMAType.F32_16x16x16_F16,) * 2
+    base_attention, hyperparams, _ = get_bshd_attention_kernel(
+        shape,
+        mfma_variant,
+        dynamic_dims=False,
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=False,
+        schedule=SchedulingType.MODULO,
+        use_scheduling_barriers=False,
+        compile_to_mlir=True,
+    )
+    base_attention = wave_compile(options, base_attention)
+    print(base_attention.asm)
+
+    # CHECK-LABEL:       func.func @base_attention
+    # CHECK:                {{.*}} = scf.for
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-24:           {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-2:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-17:           {{.*}} = amdgpu.mfma
