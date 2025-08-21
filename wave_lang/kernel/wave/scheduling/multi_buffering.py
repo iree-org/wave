@@ -13,7 +13,6 @@ from ..._support.indexing import (
 from ..._support.tracing import CapturedTrace
 from ...compiler.base import CodegenError
 from ...lang.global_symbols import SHARED_ADDRESS_SPACE
-from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
     CustomOp,
     Iterate,
@@ -22,7 +21,6 @@ from ...ops.wave_ops import (
     get_custom,
 )
 import copy
-from ..utils.mapping_utils import get_dict_with_updated_key
 from typing import Optional
 
 
@@ -64,29 +62,10 @@ def heuristically_multi_buffer_shared_memory(
         offset = block_size * which_buffer
         new_node_idx[dim].start += offset
 
-        # Update the mapping for the operation as the keys for the
-        # mapping have to match the shape of memory location the
-
-        # operation reads from / writes to, which we change below.
-        new_node_idx = get_dict_with_updated_key(
-            new_node_idx, dim, dim * multi_buffer_count
-        )
         if not is_read_write:
             new_node.dst_index = new_node_idx
             return
         new_node.index = new_node_idx
-
-        if isinstance(new_node.mapping, IndexMapping):
-            input_mapping = new_node.mapping.input_mapping
-            output_mapping = new_node.mapping.output_mapping
-            if dim in input_mapping:
-                new_node.mapping.input_mapping = get_dict_with_updated_key(
-                    input_mapping, dim, dim * multi_buffer_count
-                )
-            if dim in output_mapping:
-                new_node.mapping.output_mapping = get_dict_with_updated_key(
-                    output_mapping, dim, dim * multi_buffer_count
-                )
 
         return
 
