@@ -594,6 +594,8 @@ class CustomOp(ABC):
                 if attr_name == "index":
                     attr = copy.deepcopy(attr)
                 setattr(new_node, attr_name, attr)
+        for key, value in self.fx_node.meta.items():
+            new_node.meta[key] = value
 
     def copy(
         self,
@@ -1173,7 +1175,8 @@ class Placeholder(CustomOp):
 class IterArg(Placeholder):
     """
     Represents a specific placeholder node in the graph that is an iter arg of
-    a reduction node.
+    a reduction node. IterArgs can be of type Register or Memory with
+    a Shared memory address space.
     """
 
     def parent_op(self):
@@ -1188,6 +1191,14 @@ class IterArg(Placeholder):
     @iter_idx.setter
     def iter_idx(self, value):
         self.fx_node.iter_idx = value
+
+    @property
+    def distributed_shape(self):
+        return self.fx_node.distributed_shape
+
+    @distributed_shape.setter
+    def distributed_shape(self, value):
+        self.fx_node.distributed_shape = value
 
     def infer_type(self, *args):
         parent_op = self.parent_op()
@@ -2266,6 +2277,14 @@ class GetResult(CustomOp):
     @index.setter
     def index(self, value: dict[IndexSymbol, IndexSequence]):
         CustomOp.index.fset(self, value)
+
+    @property
+    def distributed_shape(self):
+        return self.fx_node.distributed_shape
+
+    @distributed_shape.setter
+    def distributed_shape(self, value):
+        self.fx_node.distributed_shape = value
 
 
 @define_op("extract")

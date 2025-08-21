@@ -1067,6 +1067,7 @@ def testAttentionBSHD_Prefetch_MultiBuffer(
         dynamic_dims,
         is_causal=is_causal,
         is_custom_mask=is_custom_mask,
+        num_waves=8,
     )
     q_shape = (1, shape.num_query_heads, shape.query_seq_len, shape.head_size)
     k_shape = (1, shape.num_kv_heads, shape.kv_seq_len, shape.head_size)

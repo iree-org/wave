@@ -124,6 +124,10 @@ def add_nodes_by_schedule(
                     else x
                 ),
             )
+            if custom_node.scheduling_parameters["prefetch_stage"]:
+                new_node.fx_node.meta["prefetch_stage"] = (
+                    custom_node.scheduling_parameters["prefetch_stage"]
+                )
             if hasattr(new_node, "_write_dependency"):
                 # We cannot properly handle write dependencies for mapped nodes
                 # yet, so just drop it for now.
@@ -279,6 +283,7 @@ def populate_kernel_outer_vars(
             iter_arg.type = custom.type
             iter_arg.index = custom.index
             iter_arg.iter_idx = counter
+            iter_arg.distributed_shape = custom.distributed_shape
             counter += 1
             new_iter_args.append(iter_arg)
 
@@ -307,6 +312,7 @@ def populate_epilogue_outer_vars(
                 pipelined_reduction.graph,
                 type=custom.type,
             )
+            result.distributed_shape = custom.distributed_shape
             counter += 1
             new_results.append(result)
 
