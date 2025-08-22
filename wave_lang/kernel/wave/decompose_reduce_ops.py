@@ -172,7 +172,7 @@ def emit_scalarized_local_reduction(
     return local_reduction
 
 
-def emit_global_reduction(
+def emit_intrawave_reduction(
     binary_fn: Callable,
     src: fx.Node,
     graph: fx.Graph,
@@ -395,7 +395,7 @@ def decompose_reduce_ops(
                 subgroup_size,
                 induction_vars,
             )
-            global_reduction = emit_global_reduction(
+            global_reduction = emit_intrawave_reduction(
                 binary_fn,
                 local_reduction,
                 custom.graph,
