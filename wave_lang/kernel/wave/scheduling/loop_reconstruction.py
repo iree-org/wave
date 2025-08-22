@@ -779,6 +779,8 @@ def construct_pipelined_loop(
 
     outer_vars = defaultdict(list)
     shared_memory_allocs = None
+
+    # TODO: Get required buffer count from the liveness analysis.
     if multi_buffer_count is not None:
         shared_memory_allocs = create_multibuffered_allocs(
             graph, multi_buffer_count, outer_vars
