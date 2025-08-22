@@ -684,16 +684,17 @@ def schedule_reordering(
         2. Get MMAs inside reduction/iterate op that is tiled with reduction dim.
         3. Based on mma_node's expanded_dim and consumers we can classify global read, local read, mma, and local write.
     """
-
-    # Only handles if scheduling type is prefetch
+    if scheduling_type == SchedulingType.PREFETCH_ATTENTION:
+        return attention_schedule_reordering(trace, constraints)
     if scheduling_type != SchedulingType.PREFETCH:
         return
+
     hardware_constraint = get_hardware_constraint(constraints)
     iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
     if not iterate_nodes:
         return
     for iterate_node in iterate_nodes:
-        custom_iterate = get_custom(iterate_nodes[0])
+        custom_iterate = get_custom(iterate_node)
         graph = trace.get_subgraph(custom_iterate.subgraph_name)
         iteration_dim = custom_iterate.axis
         # Get MMA nodes inside a for op, who's reduction dim is being tiled in the for op.
@@ -786,3 +787,14 @@ def schedule_reordering(
         custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
         if is_pingpong_strategy(reorder_strategy):
             add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
+
+
+def attention_schedule_reordering(trace: CapturedTrace, constraints: list[Constraint]):
+    return
+    hardware_constraint = get_hardware_constraint(constraints)
+    iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
+    if not iterate_nodes:
+        return
+    for iterate_node in iterate_nodes:
+        custom_iterate = get_custom(iterate_node)
+        add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
