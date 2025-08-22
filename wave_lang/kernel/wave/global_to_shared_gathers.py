@@ -24,11 +24,12 @@ from ..wave.constraints import (
 from .minimize_global_loads import (
     SharedReadMetadata,
     construct_min_global_access_pattern,
-    identify_optimizable_loads,
+    is_transposed_read,
     materialize_shape,
     update_write_dependencies,
 )
 from .utils.general_utils import (
+    ceildiv,
     has_write_shared_user,
     is_gather,
 )
@@ -206,6 +207,98 @@ def update_read_mapping_dynamic_values(read: Read):
                     new_read.index[dim] = read.index[dim]
 
     read.update_arg("mapping_dynamic_vals", new_dyn_vals)
+
+
+def identify_optimizable_loads(
+    global_read_nodes: list[fx.Node],
+    constraint_tile_size: dict[IndexSymbol, int],
+    load_elems_per_thread: int,
+    max_elements_per_load: int,
+    total_number_of_threads: int,
+    allow_dynamic_transposed: bool = False,
+    use_memory_type: bool = False,
+) -> list[Read]:
+    """
+    Identify sub-optimal global loads that can be removed. A given memory has
+    sub-optimal global loads if
+        num_global_loads > (M * N) / (T * L)
+    where the memory has shape [M, N], there are T threads and each thread can load L elements.
+    """
+    optimizable_loads: dict[fx.Node, tuple[int, list[Read], set["Custom"]]] = {}
+    processed_memories = set()
+    for read_node in global_read_nodes:
+        custom = get_custom(read_node)
+        if custom.memory in processed_memories:
+            if custom.memory in optimizable_loads:
+                optimizable_loads[custom.memory][1].append(custom)
+            continue
+
+        # TODO: We need to properly update index/elements_per_thread on dependent reads.
+        if is_transposed_read(custom) and len(custom.mapping_dynamic_vals) > 0:
+            if not allow_dynamic_transposed:
+                continue
+
+        processed_memories.add(custom.memory)
+        symbolic_shape = custom.type.symbolic_shape
+        if use_memory_type:
+            symbolic_shape = custom.memory_type.symbolic_shape
+        materialized_shape = materialize_shape(
+            constraint_tile_size, symbolic_shape, custom.vector_shapes
+        )
+        # Ensure that the innermost dimension of the shape is a multiple of the elements being loaded.
+        if materialized_shape[-1] % max_elements_per_load == 0:
+            continue
+
+        total_number_of_elements = prod(materialized_shape)
+        expected_number_of_loads = ceildiv(
+            total_number_of_elements, max_elements_per_load
+        )
+
+        expanded_dynamic_vals = None
+        data_per_thread = ceildiv(total_number_of_elements, total_number_of_threads)
+        memory_load_elems_per_thread = min(load_elems_per_thread, data_per_thread)
+        memory_max_elements_per_load = max_elements_per_load
+        if len(custom.mapping_dynamic_vals) > 0 and not allow_dynamic_transposed:
+            expanded_dynamic_vals = set(
+                [
+                    get_custom(user).mapping_dynamic_vals
+                    for user in custom.memory.users.keys()
+                ]
+            )
+            expanded_dynamic_vals = list(expanded_dynamic_vals)
+            num_dynamic_vals = len(expanded_dynamic_vals)
+            if num_dynamic_vals == expected_number_of_loads:
+                pass
+            elif expected_number_of_loads > 1 and num_dynamic_vals == 1:
+                # If only one dyn val and many loads, broadcast dynamic vals across all the loads.
+                # We would need actual copies instead of same reference, because each copy will have
+                # it's own unique offset from the minimum_global_access_pattern.
+                for i in range(1, expected_number_of_loads):
+                    cur_expanded_dyn_vals = [
+                        get_custom(dyn_val).copy(anchor=(dyn_val)).fx_node
+                        for dyn_val in expanded_dynamic_vals[0]
+                    ]
+                    expanded_dynamic_vals.append(cur_expanded_dyn_vals)
+            elif (
+                num_dynamic_vals > 1
+                and expected_number_of_loads == 1
+                and load_elems_per_thread % num_dynamic_vals == 0
+            ):
+                # If expected one loads but many dyn val, break apart the load to as many dyn val.
+                expected_number_of_loads = num_dynamic_vals
+                memory_load_elems_per_thread //= num_dynamic_vals
+                memory_max_elements_per_load //= num_dynamic_vals
+            else:
+                # Optimization do not handle other cases than above, so skip.
+                continue
+        optimizable_loads[custom.memory] = (
+            expected_number_of_loads,
+            [custom],
+            expanded_dynamic_vals,
+            memory_load_elems_per_thread,
+            memory_max_elements_per_load,
+        )
+    return optimizable_loads
 
 
 def add_optimized_nodes(

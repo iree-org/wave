@@ -107,13 +107,13 @@ def test_read_write_equal_sizes():
     # CHECK-NEXT: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None, False)
     # CHECK-NEXT: %read_M:0_N:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None, False)
     # CHECK-NEXT: %read_M:1_N:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None, False)
     # CHECK-NEXT: %read_M:1_N:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, None, None, None, False)
     # CHECK-NEXT: %write_1_shared_M:0_N:0
     # CHECK-SAME: (%read_M:0_N:0, %allocate, 4, None, (), None, None, None)
     # CHECK-NEXT: %write_1_shared_M:0_N:1
