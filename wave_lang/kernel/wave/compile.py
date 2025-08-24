@@ -373,10 +373,6 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 debug_handlers,
             )
 
-        options.num_devices = 1
-        for dim in device_layout.dims:
-            options.num_devices *= dim
-
         compiled_wave_vmfb = compile_to_vmfb(asm, options)
         if options.create_vmfb_file:
             write_file(options.create_vmfb_file, "wb", compiled_wave_vmfb)
