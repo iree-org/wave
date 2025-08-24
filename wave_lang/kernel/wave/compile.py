@@ -313,6 +313,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             options,
             debug_arg_info,
             debug_handlers,
+            device_layout,
         ) = kernel._trace_and_get_kernel_signature(options)
         options.kernel_sig = kernel_sig
 
