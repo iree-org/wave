@@ -1832,8 +1832,8 @@ def test_block_scanop_cumsum(shape, run_bench):
         canonicalize=True,
         wave_runtime=True,
         run_bench=run_bench,
-        print_ir_after=["all"],
-        print_ir_before=["all"],
+        # print_ir_after=["all"],
+        # print_ir_before=["all"],
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
