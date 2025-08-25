@@ -143,6 +143,13 @@ def testPureGemm(
         shape, dynamic_dims, mfma_variant, datatype
     )
 
+    multibuffer = enable_scheduling in [
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ]
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    hyperparams[UNROLL_FACTOR] = 2 if multibuffer else 1
+
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -152,12 +159,17 @@ def testPureGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
+        multi_buffer_count=2 if multibuffer else None,
     )
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
@@ -365,8 +377,7 @@ def testGemmSmallTiles(
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
+        use_buffer_ops=True,
         benchmark_results_file=perf_filename_tk,
     )
     options = set_default_run_config(options)

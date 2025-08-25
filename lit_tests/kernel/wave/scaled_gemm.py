@@ -8,6 +8,9 @@ from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
 from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
+from wave_lang.kernel.wave.templates.test_kernels import (
+    get_broadcasted_scale_gemm_mxfp4,
+)
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     run_test,
@@ -448,9 +451,7 @@ def batched_prefetch_mxfp4_test():
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         compile_to_mlir=True,
     )
     batched_gemm_mxfp4_prefetch = wave_compile(options, batched_gemm_mxfp4_prefetch)
@@ -698,10 +699,9 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
+        compile_to_mlir=True,
         schedule=enable_scheduling,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         dynamic_symbols=dynamic_symbols,
     )
     from wave_lang.kernel.wave.utils.run_utils import (
@@ -737,7 +737,8 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK:            %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP3]]()[%arg6]
     # CHECK:            %[[MUL1:.*]] = arith.muli %[[BLOCK_ID_Z]], %[[AFFINE_APPLY2]] overflow<nsw> : index
-    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %[[SPAN0]] to offset: [%[[C0]]], sizes: [%[[C2147483646]]], strides: [1] : memref<?x?x8192xi8, strided<[?, 8192, 1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
+    # CHECK:            %{{.*}}, %[[OFFSET_TO_TENSOR:.+]], %{{.*}}, %{{.*}} = memref.extract_strided_metadata %[[SPAN0]] : memref<?x?x8192xi8, strided<[?, 8192, 1], offset: ?>> -> memref<i8>, index, index, index, index, index, index, index
+    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %[[SPAN0]] to offset: [%[[OFFSET_TO_TENSOR]]], sizes: [%[[C2147483646]]], strides: [1] : memref<?x?x8192xi8, strided<[?, 8192, 1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
     # CHECK:            %[[BUFF_CAST:.*]] = amdgpu.fat_raw_buffer_cast %[[REINTERPRET_CAST]] validBytes(%[[C2147483646_I32]]) cacheSwizzleStride(%[[C_NEG_8192_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:            %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
     # CHECK:            %[[CMP1:.*]] = arith.cmpi slt, %[[AFFINE_APPLY3]], %arg6 : index
@@ -754,3 +755,33 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK:                %[[SELECT2:.*]] = arith.select %[[BROADCAST1]], %[[IDX_CAST4]], %[[CST2]] : vector<16xi1>, vector<16xindex>
     # CHECK:                %[[EXTRACT2:.*]] = vector.extract %[[SELECT2]][0] : index from vector<16xindex>
     # CHECK:                %[[LOAD2:.*]] = vector.load %[[BUFF_CAST]][%[[EXTRACT2]]] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+
+
+@run_test
+def test_mxfp4_broadcasted_scale_scaled_mma_16x16x128():
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+    shape = (32, 32, 256)
+    broadcasted_scale_scaled_mma, hyperparams = get_broadcasted_scale_gemm_mxfp4(
+        shape, mfma_variant
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="rocm",
+        target="gfx950",
+        compile_to_mlir=True,
+    )
+    broadcasted_scale_scaled_mma = wave_compile(options, broadcasted_scale_scaled_mma)
+    print(broadcasted_scale_scaled_mma.asm)
+
+    # This test is important to check that broadcasting on scaled dimension works.
+    # The thing to look out for in this test is the same lhs_scale is being used on the two different mfmas.
+
+    # CHECK-LABEL:  test_mxfp4_broadcasted_scale_scaled_mma_16x16x128
+    # CHECK:   func.func @broadcasted_scale_scaled_mma(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding) attributes {translation_info = #translation} {
+    # CHECK:            %[[LHS_SCALE:.+]] = vector.load {{.*}} : memref<40xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK:            %[[LHS_SCALE_BITCAST:.+]] = vector.bitcast %[[LHS_SCALE]] : vector<1xi8> to vector<1xf8E8M0FNU>
+    # CHECK:            %[[LHS_SCALE_EXTRACT:.+]] = vector.extract %[[LHS_SCALE_BITCAST]][0] : f8E8M0FNU from vector<1xf8E8M0FNU>
+    # CHECK-COUNT-2:    amdgpu.scaled_mfma(%[[LHS_SCALE_EXTRACT]][0] * %{{.*}}) * (%{{.*}}[0] * %{{.*}}) + %{{.*}} {k = 128 : i32, m = 16 : i32, n = 16 : i32} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>

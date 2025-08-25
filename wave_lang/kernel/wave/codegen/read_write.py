@@ -29,6 +29,7 @@ from wave_lang.support.ir_imports import (
     memref_d,
     vector_d,
     func_d,
+    Operation,
 )
 from wave_lang.aot.support.ir_utils import (
     _is_float_type,
@@ -381,6 +382,9 @@ def _linearize_memref(
         layout=Attribute.parse("strided<[1], offset: ?>"),
         memory_space=memory_space,
     )
+    memref_metadata = memref_d.extract_strided_metadata(mem)
+    memref_base_offset = memref_metadata[1]
+    offset = arith_d.addi(offset, memref_base_offset, overflow_flags=overflow_flags)
     return (
         memref_d.reinterpret_cast(
             resut_type,
@@ -444,6 +448,19 @@ def _get_out_of_bounds_index(element_type: IrType) -> int:
     return oob_index_value
 
 
+def _get_constant_value(candidate: Value):
+    """
+    returns constantOp's value if candidate is arith.constantOp. Else, returns None.
+    """
+    if not isinstance(candidate.owner, Operation):
+        return None
+    if not hasattr(candidate.owner, "name"):
+        return None
+    if candidate.owner.name != "arith.constant":
+        return None
+    return candidate.owner.attributes["value"].value
+
+
 def _cast_buffer_and_encode_stride(
     ptr: Value, strides: tuple[Value], elem_type: IrType, emitter: WaveEmitter
 ) -> Value:
@@ -456,25 +473,24 @@ def _cast_buffer_and_encode_stride(
     valid_bytes_constant = get_constant_attr(valid_bytes, uint32)
     valid_bytes_constant = arith_d.constant(uint32, valid_bytes_constant)
     stride_rank = len(strides)
-    stride = None
+    swizzle_stride = None
 
-    if stride_rank >= 2 and emitter.options.use_stride_cache_swizzle:
+    if stride_rank >= 2:
         # fastest_dim_bound == second to last stride.
         stride_candidate = strides[-2]
-        stride_int = stride_candidate.owner.attributes["value"].value
-        # Swizzle is only useful upto swizzle stride <= 8192.
-        if stride_int <= 8192:
-            stride = arith_d.index_cast(uint14, stride_candidate)
+        stride_int = _get_constant_value(stride_candidate)
+        # Only swizzle if stride is static and <= 8192(the useful case).
+        if stride_int and stride_int <= 8192:
+            swizzle_stride = arith_d.index_cast(uint14, stride_candidate)
 
-    if stride and emitter.options.use_stride_cache_swizzle:
+    if swizzle_stride:
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
-            cache_swizzle_stride=stride,
+            cache_swizzle_stride=swizzle_stride,
             bounds_check=True,
             reset_offset=True,
             valid_bytes=valid_bytes_constant,
         )
-
     else:
         ptr = amdgpu_d.fat_raw_buffer_cast(
             ptr,
@@ -512,13 +528,8 @@ def _create_vec_read_write(
         symbolic_shape = memory.distributed_shape
 
     # only use buffer ops on global memory
-    use_buffer_ops = mem.type.memory_space is None
-
-    buffer_ops_enabled = (
-        emitter.options.use_buffer_load_ops
-        if is_read
-        else emitter.options.use_buffer_store_ops
-    )
+    is_global_mem = mem.type.memory_space is None
+    buffer_ops_enabled = emitter.options.use_buffer_ops and is_global_mem
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
@@ -526,7 +537,6 @@ def _create_vec_read_write(
     has_int_strides = all(isinstance(s, int) for s in strides)
     strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
 
-    buffer_ops_enabled = buffer_ops_enabled and use_buffer_ops
     no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)

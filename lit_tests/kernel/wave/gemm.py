@@ -1341,33 +1341,35 @@ def test_gemm_four_stage():
     # Test multibuffering: verify shared memory views are correctly allocated
     # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<18432xi8
     # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<18432xi8
-    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c9216][] : memref<18432xi8
+    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c4608][] : memref<18432xi8
+    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c9216][] : memref<18432xi8
+    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c13824][] : memref<18432xi8
 
     # Prologue
     # Verify prologue stores to shared memory
     # CHECK: %[[STORE_IDX:.*]] = affine.apply #[[MAP_STORE:.*]]()[%thread_id_x, %thread_id_y]
-    # CHECK: vector.store %{{.*}}, %[[VIEW1]][%[[STORE_IDX]], %{{.*}}] : memref<128x36xf16
-    # CHECK: vector.store %{{.*}}, %[[VIEW0]][%[[STORE_IDX]], %{{.*}}] : memref<128x36xf16
+    # CHECK: vector.store %{{.*}}, %[[VIEW3]][%[[STORE_IDX]], %{{.*}}]
+    # CHECK: vector.store %{{.*}}, %[[VIEW1]][%[[STORE_IDX]], %{{.*}}]
 
     # Verify prologue loads from shared memory
     # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%thread_id_x, %thread_id_y]
     # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
-    # CHECK: vector.load %[[VIEW0]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]] : memref<128x36xf16
+    # CHECK: vector.load %[[VIEW1]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]]
 
     # Main Loop:
     # Verify Pipelined Loop, iter_args should contain vector values from prologue
-    # CHECK: scf.for %[[ARG3:.*]] = %c0 to %c5 step %c1 iter_args(%{{.*}} = %cst, %{{.*}} = %cst, %{{.*}} = %cst, %{{.*}} = %cst, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}})
+    # CHECK: scf.for %[[ARG3:.*]] = %c0 to %c5 step %c1 iter_args({{.*}}, %[[LVIEW3:.*]] = %[[VIEW3]], %[[LVIEW2:.*]] = %[[VIEW2]], %[[LVIEW1:.*]] = %[[VIEW1]], %[[LVIEW0:.*]] = %[[VIEW0]])
 
     # Verify MFMA exists
     # CHECK: amdgpu.mfma %{{.*}} * %{{.*}} + %{{.*}}
 
-    # Verify that affine maps using iter_arg %[[ARG3]] are used for pipelined indexing
-    # CHECK: %[[PIPE_IDX1:.*]] = affine.apply #[[MAP_PIPE1:.*]]()[%thread_id_x, %[[ARG3]], %thread_id_y]
-    # CHECK: vector.load %[[VIEW0]][%[[PIPE_IDX1]], %{{.*}}] : memref<128x36xf16
+    # CHECK-COUNT-4: vector.load %[[LVIEW0]]
+    # CHECK-COUNT-4: vector.load %[[LVIEW2]]
 
-    # Verify that stores use iter arg for indexing as well
-    # CHECK: %[[STORE_PIPE_IDX:.*]] = affine.apply #[[MAP_STORE_PIPE:.*]]()[%thread_id_x, %thread_id_y, %[[ARG3]]]
-    # CHECK: vector.store %{{.*}}, %[[VIEW1]][%[[STORE_PIPE_IDX]], %{{.*}}] : memref<128x36xf16
+    # CHECK: vector.store %{{.*}}, %[[LVIEW3]]
+    # CHECK: vector.store %{{.*}}, %[[LVIEW1]]
+
+    # CHECK: scf.yield {{.*}}, %[[LVIEW2]], %[[LVIEW3]], %[[LVIEW0]], %[[LVIEW1]]
 
 
 @run_test

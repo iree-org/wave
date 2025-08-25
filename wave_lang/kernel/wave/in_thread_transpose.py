@@ -155,8 +155,9 @@ def get_transpose_config(
             f"scaled dimensions are not supported, dst_symbolic_shape={dst_symbolic_shape}, read.index={read.index}"
         )
         return None
-
-    materialized_shape = materialize_shape(constraint_tile_size, dst_symbolic_shape)
+    materialized_shape = materialize_shape(
+        constraint_tile_size, dst_symbolic_shape, read.vector_shapes
+    )
     if any(s > 1 for s in materialized_shape[:-2]) or any(
         s <= 1 for s in materialized_shape[-2:]
     ):
@@ -218,7 +219,7 @@ def create_transpose_reads(
     Create new reads for transpose.
     """
     load_shape = get_tiled_shape(
-        materialize_shape(constraint_tile_size, src_symbolic_shape),
+        materialize_shape(constraint_tile_size, src_symbolic_shape, read.vector_shapes),
         load_elems_per_thread,
         expected_number_of_loads,
     )

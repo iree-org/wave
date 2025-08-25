@@ -7,6 +7,7 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.templates.test_kernels import get_broadcast_scaled_add
 from wave_lang.kernel.wave.utils.compile_utils import (
     set_default_compile_config,
 )
@@ -151,8 +152,7 @@ def test_read_mapped_buffer():
             BLOCK_K: 16,
             ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
+        use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
     )
@@ -194,9 +194,7 @@ def test_read_dynamic_3d_buffer():
             ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
         dynamic_symbols=dynamic_symbols,
-        use_buffer_load_ops=True,
-        use_buffer_store_ops=True,
-        use_stride_cache_swizzle=True,
+        use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
     )
@@ -205,7 +203,12 @@ def test_read_dynamic_3d_buffer():
 
     # CHECK-LABEL:    func.func @read_dynamic_buffer
     # CHECK:            %[[ARG0:.*]] = stream.binding.subspan {{.*}} : !stream.binding -> memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>>
-    # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] {{.*}} : memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
+
+    # Gets offset to tensor's base pointer, then set memref_offset = indexing_offset + base_tensor_offset.
+    # CHECK:            %{{.*}}, %[[BASE_TENSOR_OFFSET:.+]], %{{.*}}, %{{.*}} = memref.extract_strided_metadata %[[ARG0]] : memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> -> memref<f16>, index, index, index, index, index, index, index
+    # CHECK:            %[[MEMREF_OFFSET:.+]] = arith.addi %{{.*}}, %[[BASE_TENSOR_OFFSET]] overflow<nsw> : index
+
+    # CHECK:            %[[MEMREF_CAST:.*]] = memref.reinterpret_cast %[[ARG0]] to offset: [%[[MEMREF_OFFSET]]], {{.*}}: memref<?x?x16xf16, strided<[?, 16, 1], offset: ?>> to memref<?xf16, strided<[1], offset: ?>>
     # CHECK:            %[[SWIZZLE_CAST:.*]] = arith.index_cast %c16{{.*}} : index to i14
     # CHECK:            %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast %[[MEMREF_CAST]] validBytes{{.*}} cacheSwizzleStride{{.*}} resetOffset : memref<?xf16, strided<[1], offset: ?>> to memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
 
@@ -1929,6 +1932,31 @@ def test_broadcast_add():
 
 
 @run_test
+def test_broadcast_scaled_add():
+    shape = (256, 256)
+    broadcast_scaled_add, hyperparams = get_broadcast_scaled_add(shape)
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        use_buffer_ops=True,
+        compile_to_mlir=True,
+    )
+    options = set_default_compile_config(options)
+    broadcast_scaled_add = wave_compile(options, broadcast_scaled_add)
+    print(broadcast_scaled_add.asm)
+
+    # This test checks that broadcast to scaled symbolic shapes works (`tkw.broadcast(rhs, [M, N / 2])`).
+    # The thing to look out for in this test is we are generating a vector.broadcast
+    # on the rhs before doing add.
+
+    # CHECK-LABEL: func @broadcast_scaled_add
+    # CHECK: %[[RHS:.+]] = memref.load {{.*}} : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK: %[[BROADCAST_RHS:.+]] = vector.broadcast %[[RHS]] : f16 to vector<2xf16>
+    # CHECK: arith.addf %{{.*}}, %[[BROADCAST_RHS]] : vector<2xf16>
+
+
+@run_test
 def test_binary_lowerings():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
@@ -2504,8 +2532,7 @@ def test_atomic_min():
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
         },
         canonicalize=True,
-        use_buffer_load_ops=False,
-        use_buffer_store_ops=False,
+        use_buffer_ops=False,
         compile_to_mlir=True,
         minimize_shared_allocs=False,
     )

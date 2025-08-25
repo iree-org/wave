@@ -174,6 +174,6 @@ def benchmark_module(
 
     benchmark_results = parse_benchmark_results(out)
     for file in tempfiles:
-        Path.unlink(file.name)
+        Path(file.name).unlink()
 
     return benchmark_results

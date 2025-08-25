@@ -50,7 +50,25 @@ _e2e_test_shapes["extend"] = [
         head_size=128,
         head_size_kv=128,
         block_size=64,
-    )
+    ),
+    AttentionShape(
+        num_seqs=1,
+        context_len=1024,
+        num_query_heads=16,
+        num_kv_heads=2,
+        head_size=64,
+        head_size_kv=64,
+        block_size=128,
+    ),
+    AttentionShape(
+        num_seqs=4,
+        context_len=1024,
+        num_query_heads=4,
+        num_kv_heads=4,
+        head_size=256,
+        head_size_kv=256,
+        block_size=64,
+    ),
 ]
 
 _e2e_test_shapes["gqa_bshd_attention"] = [

@@ -212,6 +212,47 @@ def propagate_placeholders(n: fx.Node) -> fx.Node:
     return n
 
 
+def propagate_loop_carried_vars(n: fx.Node, depth: int = 0) -> fx.Node:
+    """
+    Propagates node through placeholders and loop-carried vars.
+
+    `depth` is the number of iterations to propagate through.
+    For example, if `depth` is 1, then the function will propagate through the
+    loop-carried vars to the previous iteration.
+    If `depth` is 0, then the function will propagate to the loop init_args.
+    """
+    c = get_custom(n)
+    if isinstance(c, IterArg):
+        idx = c.iter_idx
+        iterate = c.parent_op()
+        assert isinstance(iterate, Iterate), f"Expected Iterate, but got {iterate}"
+        args = iterate.init_args if depth == 0 else iterate.outputs()
+        assert idx < len(
+            args
+        ), f"IterArg index {idx} out of range for {args}, depth={depth}"
+        depth = max(depth - 1, 0)
+        return propagate_loop_carried_vars(args[idx], depth)
+    elif isinstance(c, Placeholder):
+        p = c.get_captured_fx_node()
+
+        # Top level placeholders correspond to kernel arguments and don't have
+        # captured nodes.
+        if p is not None:
+            return p
+    elif isinstance(c, GetResult):
+        iterate = get_custom(c.value)
+        assert isinstance(iterate, Iterate), f"Expected Iterate, but got {iterate}"
+        idx = c.res_idx
+        args = iterate.init_args if depth == 0 else iterate.outputs()
+        assert idx < len(
+            args
+        ), f"GetResult index {idx} out of range for {args}, depth={depth}"
+        depth = max(depth - 1, 0)
+        return propagate_loop_carried_vars(args[idx], depth)
+
+    return n
+
+
 def get_inputs(
     node: fx.Node, reduction: fx.Node = None
 ) -> tuple[list[fx.Node], fx.Node]:
