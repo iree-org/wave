@@ -75,7 +75,8 @@ def silu_and_mul(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
 
     out = torch.zeros(gate.shape, dtype=gate.dtype, device=gate.device)
     wave_kernel(gate, up, out)
-    ref = silu_and_mul_ref(gate, up)
+    ref = silu_and_mul_torch_ref(gate, up)
+
     if check_individual_kernels:
         torch.testing.assert_close(out, ref, rtol=rtol, atol=atol, check_device=False)
     return out
