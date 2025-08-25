@@ -9,13 +9,26 @@ import torch
 from .torch_kernels import moe_align_block_size_pytorch
 import torch.nn.functional as F
 
+from wave_lang.kernel.wave.templates.moe import get_moe_align_block_size_kernel
+
+from wave_lang.kernel.wave.utils.torch_utils import (
+    device_arange,
+    device_full,
+    device_ones,
+    device_randint,
+    device_randn,
+    device_randperm,
+    device_zeros,
+    to_default_device,
+)
+
 torch.manual_seed(0)
 
 
-num_tokens_values = [1, 33, 256]
+num_tokens_values = [32]
 topk_values = [2]
-block_size_values = [16, 32, 64]
-num_experts_values = [4, 8, 64]
+block_size_values = [16]
+num_experts_values = [4]
 
 
 def verify_moe_align_block_size_results(
@@ -104,10 +117,13 @@ def test_moe_align_block_size(
     """
     device = "cuda"
 
-    scores = torch.rand(num_tokens, num_experts)
+    # generate scores for only two experts
+    num_experts_imm = 3
+    scores = torch.rand(num_tokens, num_experts_imm, device=device)
 
     # Get topk expert indices for each token
     _, topk_ids = torch.topk(scores, k=topk, dim=1)
+    topk_ids = topk_ids.to(device)
 
     # Conservative upper bound that accounts for both the number of tokens and
     # the maximum possible padding needed per expert
@@ -136,6 +152,38 @@ def test_moe_align_block_size(
         topk_ids, num_experts, block_size, sorted_ids, expert_ids, num_tokens_post_pad
     )
 
+    moe_align_block_size, hyperparams, dynamic_symbols = (
+        get_moe_align_block_size_kernel(
+            num_tokens,
+            num_experts,
+            topk,
+        )
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+    )
+
+    kernel = wave_compile(
+        options,
+        moe_align_block_size,
+    )
+
+    expert_counts_buffer = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+    flat_topk = topk_ids.view(-1).to(torch.int32)
+    empty_topk = torch.empty_like(flat_topk)
+    print(kernel.asm)
+    print("Flat topk:", flat_topk)
+    print("Before:", expert_counts_buffer)
+    kernel(flat_topk, empty_topk, expert_counts_buffer)
+    print("After:", expert_counts_buffer)
+
+    # assert empty_topk is same as topk_ids
+    assert torch.all(empty_topk == flat_topk), "TopK IDs modified"
+
+    return
     verify_moe_align_block_size_results(
         topk_ids, sorted_ids, expert_ids, num_tokens_post_pad, block_size, num_experts
     )

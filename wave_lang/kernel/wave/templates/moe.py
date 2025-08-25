@@ -10,6 +10,194 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel._support.dtype import DataType
 import sympy
+import torch
+
+# Copyright 2025 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel._support.dtype import DataType
+
+from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+    torch_dtype_to_wave,
+)
+
+
+def get_moe_align_block_size_kernel(
+    num_tokens: int,
+    num_experts: int,
+    top_k_value: int = 2,
+    dtype: torch.dtype = torch.int32,
+):
+    """
+    Wave kernel for MoE token alignment and block size padding.
+
+    This kernel sorts tokens by their assigned expert IDs and pads each expert's
+    tokens to align with the specified block size for efficient processing.
+    """
+    dtype = torch_dtype_to_wave(dtype)
+
+    # Input sizes
+    NUM_TOKENS = tkl.sym.NUM_TOKENS
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+    NUMEL = tkl.sym.NUMEL
+    TOPK = tkl.sym.TOPK
+
+    # Workgroup tile sizes
+    BLOCK_TOKENS = tkl.sym.BLOCK_TOKENS
+    BLOCK_EXPERTS = tkl.sym.BLOCK_EXPERTS
+
+    # Other hyperparameters
+    ELEMS_PER_THREAD = tkl.sym.ELEMS_PER_THREAD
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = []
+
+    # one workgroup to handle the worload
+    constraints += [tkw.WorkgroupConstraint(NUMEL, NUMEL, 0)]
+    constraints += [tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 1)]
+    # one wave to handle the workload
+    constraints += [tkw.WaveConstraint(NUMEL, NUMEL)]
+    constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
+    # constraints += [tkw.TilingConstraint(NUMEL, NUMEL)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={NUMEL: NUMEL, NUM_EXPERTS: NUM_EXPERTS},
+        )
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    expert_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    expert_write_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: i},
+        outputs={NUM_EXPERTS: d0},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    mapping = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: i},
+        outputs={NUM_EXPERTS: i},
+    )
+
+    topk_mapping = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUMEL: i},
+        outputs={NUMEL: i},
+    )
+
+    @tkw.wave(constraints)
+    def moe_align_block_size(
+        topk_ids: tkl.Memory[NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype],
+        return_topk_ids: tkl.Memory[
+            NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
+        expert_counts: tkl.Memory[
+            NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
+    ):
+
+        # zero_counts = tkl.Register[NUM_EXPERTS, dtype](0)
+        # tkw.write(zero_counts, expert_counts)
+
+        # This reads all the values from expert counts and increments them by 1, regardless of expert_id value
+        expert_id = tkw.read(topk_ids, mapping=topk_mapping, elements_per_thread=1)
+
+        # validate that expert_ids are read correctly by writing to return_topk_ids
+        tkw.write(
+            expert_id, return_topk_ids, mapping=topk_mapping, elements_per_thread=1
+        )
+
+        e_reg = tkw.read(
+            expert_counts,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(expert_id,),
+            elements_per_thread=1,
+        )
+        # e_reg = e_reg + tkw.Register[sympy.Integer(1), dtype](1)
+        e_reg = e_reg + tkw.Register[NUM_EXPERTS, dtype](1)
+        tkw.write(
+            e_reg,
+            expert_counts,
+            mapping=expert_write_map,
+            mapping_dynamic_vals=(expert_id,),
+            elements_per_thread=1,
+        )
+
+        # --------------------------------------------------------------------------------
+        # expert_id = tkw.read(topk_ids, mapping=topk_mapping, elements_per_thread=1)
+
+        # dyn_i = tkw.IndexMapping.dynamic_val(0)
+        # dynamic_mapping = tkw.IndexMapping(
+        #     num_iterators=1,
+        #     inputs={NUM_EXPERTS: dyn_i},  # Input is dynamic value
+        #     outputs={NUM_EXPERTS: dyn_i},  # Output maps to current thread
+        #     dynamic_val_mappings={
+        #         NUM_EXPERTS: expert_id
+        #     },  # expert_id provides the dynamic value
+        # )
+
+        # # Read current count for this expert (1 element per thread)
+        # current_count = tkw.read(
+        #     expert_counts,
+        #     elements_per_thread=1,  # Read only 1 element
+        #     mapping=dynamic_mapping,
+        # )
+
+        # # Increment and write back
+        # new_count = current_count + tkw.Register[sympy.Integer(1), dtype](1)
+        # tkw.write(new_count, expert_counts, mapping=dynamic_mapping)
+
+        # --------------------------------------------------------------------------------
+        # shmem = tkw.allocate(
+        #     shape=(NUM_EXPERTS,),
+        #     distributed_shape=(NUM_EXPERTS,),
+        #     dtype=dtype,
+        # )
+
+        # tkw.write(expert_counts, shmem, mapping=mapping)
+
+        # # expert_id = tkw.read(topk_ids)
+        # one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
+        # e_reg = tkw.atomic_add(
+        #     one_reg,
+        #     shmem,
+        #     mapping=mapping,
+        #     mapping_dynamic_vals=(expert_id,),
+        # )
+        # e_reg = tkw.read(shmem, mapping=mapping)
+        # tkw.write(e_reg, expert_counts, mapping=mapping)
+
+    hyperparams = {
+        NUM_TOKENS: num_tokens,
+        NUM_EXPERTS: num_experts,
+        NUMEL: num_tokens * top_k_value,
+        BLOCK_TOKENS: min(64, num_tokens) if num_tokens > 0 else 1,
+        BLOCK_EXPERTS: min(8, num_experts) if num_experts > 0 else 1,
+        ELEMS_PER_THREAD: 4,
+        TOPK: top_k_value,
+    }
+    hyperparams.update(get_default_scheduling_params())
+    dynamic_symbols = []
+
+    return moe_align_block_size, hyperparams, dynamic_symbols
 
 
 # Writing our own version of GEMM kernel to support more datatypes
