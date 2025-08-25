@@ -18,6 +18,7 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.templates.conv import get_igemm_conv2d
+from wave_lang.kernel.wave.templates.test_kernels import get_broadcast_scaled_add
 from wave_lang.kernel.wave.utils.general_utils import (
     ceildiv,
     check_leaks,
@@ -1854,37 +1855,7 @@ def test_vector_add(shape, use_buffer_ops, run_bench):
 @require_e2e
 @pytest.mark.parametrize("shape", [(256, 256)])
 def test_broadcast_scaled_add(shape, run_bench):
-    M = tkl.sym.M
-    N = tkl.sym.N
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    wave_size = 64
-    BLOCK_M = 1
-    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
-
-    constraints: list[tkw.Constraint] = [
-        tkw.HardwareConstraint(
-            threads_per_wave=wave_size,
-            vector_shapes={M: BLOCK_M, N: BLOCK_N},
-        )
-    ]
-
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
-
-    @tkw.wave(constraints)
-    def test(
-        a: tkl.Memory[M, N / 2, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[M, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N / 2, ADDRESS_SPACE, tkl.f16],
-    ):
-        lhs = tkw.read(a)
-        rhs = tkw.read(b)
-        rhs = tkw.broadcast(rhs, [M, N / 2])
-        res = lhs + rhs
-        tkw.write(res, c)
+    broadcast_scaled_add, hyperparams = get_broadcast_scaled_add(shape)
 
     scaled_shape = list(shape)
     scaled_shape[-1] = int(scaled_shape[-1] / 2)
@@ -1895,17 +1866,13 @@ def test_broadcast_scaled_add(shape, run_bench):
     ref = a + b.view(-1, 1)
 
     options = WaveCompileOptions(
-        subs={
-            M: shape[0],
-            N: shape[1],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-        },
+        subs=hyperparams,
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=True,
     )
     options = set_default_run_config(options)
-    test = wave_compile(options, test)
+    test = wave_compile(options, broadcast_scaled_add)
 
     test(a, b, c)
     assert_close(ref, c)

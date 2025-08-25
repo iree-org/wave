@@ -8,6 +8,9 @@ from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
 from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
+from wave_lang.kernel.wave.templates.test_kernels import (
+    get_broadcasted_scale_gemm_mxfp4,
+)
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     run_test,
@@ -752,3 +755,33 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK:                %[[SELECT2:.*]] = arith.select %[[BROADCAST1]], %[[IDX_CAST4]], %[[CST2]] : vector<16xi1>, vector<16xindex>
     # CHECK:                %[[EXTRACT2:.*]] = vector.extract %[[SELECT2]][0] : index from vector<16xindex>
     # CHECK:                %[[LOAD2:.*]] = vector.load %[[BUFF_CAST]][%[[EXTRACT2]]] : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
+
+
+@run_test
+def test_mxfp4_broadcasted_scale_scaled_mma_16x16x128():
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+    shape = (32, 32, 256)
+    broadcasted_scale_scaled_mma, hyperparams = get_broadcasted_scale_gemm_mxfp4(
+        shape, mfma_variant
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        backend="rocm",
+        target="gfx950",
+        compile_to_mlir=True,
+    )
+    broadcasted_scale_scaled_mma = wave_compile(options, broadcasted_scale_scaled_mma)
+    print(broadcasted_scale_scaled_mma.asm)
+
+    # This test is important to check that broadcasting on scaled dimension works.
+    # The thing to look out for in this test is the same lhs_scale is being used on the two different mfmas.
+
+    # CHECK-LABEL:  test_mxfp4_broadcasted_scale_scaled_mma_16x16x128
+    # CHECK:   func.func @broadcasted_scale_scaled_mma(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding) attributes {translation_info = #translation} {
+    # CHECK:            %[[LHS_SCALE:.+]] = vector.load {{.*}} : memref<40xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK:            %[[LHS_SCALE_BITCAST:.+]] = vector.bitcast %[[LHS_SCALE]] : vector<1xi8> to vector<1xf8E8M0FNU>
+    # CHECK:            %[[LHS_SCALE_EXTRACT:.+]] = vector.extract %[[LHS_SCALE_BITCAST]][0] : f8E8M0FNU from vector<1xf8E8M0FNU>
+    # CHECK-COUNT-2:    amdgpu.scaled_mfma(%[[LHS_SCALE_EXTRACT]][0] * %{{.*}}) * (%{{.*}}[0] * %{{.*}}) + %{{.*}} {k = 128 : i32, m = 16 : i32, n = 16 : i32} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
