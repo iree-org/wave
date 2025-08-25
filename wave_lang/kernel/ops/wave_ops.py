@@ -2365,7 +2365,12 @@ class Broadcast(CustomOp, ABC):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        return self.target_shape
+        from ..wave.utils.general_utils import infer_dim
+
+        # infer_dim to handle cases where target_shape has
+        # scaled expressions (i.e K/32 -> K).
+        dims = [infer_dim(expr) for expr in self.target_shape]
+        return dims
 
     def infer_type(self, *args):
         src_dtype = get_custom(self.arg).type.dtype

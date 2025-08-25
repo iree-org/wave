@@ -7,6 +7,7 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.templates.test_kernels import get_broadcast_scaled_add
 from wave_lang.kernel.wave.utils.compile_utils import (
     set_default_compile_config,
 )
@@ -1928,6 +1929,31 @@ def test_broadcast_add():
     # Broadcast-ADD RHS
     # CHECK: arith.addf %[[LHS_0]], %[[BCAST_RHS_0]] : vector<2xf16>
     # CHECK: arith.addf %[[LHS_1]], %[[BCAST_RHS_1]] : vector<2xf16>
+
+
+@run_test
+def test_broadcast_scaled_add():
+    shape = (256, 256)
+    broadcast_scaled_add, hyperparams = get_broadcast_scaled_add(shape)
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        use_buffer_ops=True,
+        compile_to_mlir=True,
+    )
+    options = set_default_compile_config(options)
+    broadcast_scaled_add = wave_compile(options, broadcast_scaled_add)
+    print(broadcast_scaled_add.asm)
+
+    # This test checks that broadcast to scaled symbolic shapes works (`tkw.broadcast(rhs, [M, N / 2])`).
+    # The thing to look out for in this test is we are generating a vector.broadcast
+    # on the rhs before doing add.
+
+    # CHECK-LABEL: func @broadcast_scaled_add
+    # CHECK: %[[RHS:.+]] = memref.load {{.*}} : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK: %[[BROADCAST_RHS:.+]] = vector.broadcast %[[RHS]] : f16 to vector<2xf16>
+    # CHECK: arith.addf %{{.*}}, %[[BROADCAST_RHS]] : vector<2xf16>
 
 
 @run_test

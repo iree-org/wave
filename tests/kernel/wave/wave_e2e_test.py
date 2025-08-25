@@ -18,6 +18,7 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.templates.conv import get_igemm_conv2d
+from wave_lang.kernel.wave.templates.test_kernels import get_broadcast_scaled_add
 from wave_lang.kernel.wave.utils.general_utils import (
     ceildiv,
     check_leaks,
@@ -1846,6 +1847,32 @@ def test_vector_add(shape, use_buffer_ops, run_bench):
     options = set_default_run_config(options)
 
     test = wave_compile(options, test)
+
+    test(a, b, c)
+    assert_close(ref, c)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", [(256, 256)])
+def test_broadcast_scaled_add(shape, run_bench):
+    broadcast_scaled_add, hyperparams = get_broadcast_scaled_add(shape)
+
+    scaled_shape = list(shape)
+    scaled_shape[-1] = int(scaled_shape[-1] / 2)
+    scaled_shape = tuple(scaled_shape)
+    a = device_randn(scaled_shape, dtype=torch.float16)
+    b = device_randn((scaled_shape[0]), dtype=torch.float16)
+    c = device_zeros(scaled_shape, dtype=torch.float16)
+    ref = a + b.view(-1, 1)
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=run_bench,
+        use_buffer_ops=True,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, broadcast_scaled_add)
 
     test(a, b, c)
     assert_close(ref, c)
