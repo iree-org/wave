@@ -2500,17 +2500,6 @@ class ReduceOp(CustomOp, ABC):
             )
 
     @property
-    def num_reduction_dims(self) -> int:
-        if self.dim is None:
-            raise NotImplementedError(
-                "Currently do not support ReduceOp with no dims specified."
-            )
-        if isinstance(self.dim, Sequence):
-            return len(self.dim)
-        else:
-            return 1
-
-    @property
     def reduction_dim(self) -> IndexSymbol:
         return self.dim
 

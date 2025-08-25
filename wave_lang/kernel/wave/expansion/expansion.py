@@ -74,9 +74,9 @@ class ExpansionInfo:
         return f"ExpansionInfo({self.node.fx_node}, {self.indexed_dims})"
 
 
-class ReductionInfo:
+class ItertionInfo:
     """
-    Contains fixup information for a reduction node.
+    Contains fixup information for an Iterate node.
     """
 
     def __init__(self, reduction: Iterate):
@@ -103,7 +103,7 @@ class ExpansionContext:
     def __init__(self):
         self.expansion_context: dict[ExpansionInfo, CustomOp] = {}
         # Additional operator specific information.
-        self.reduction_context: dict[Iterate, ReductionInfo] = {}
+        self.iterate_context: dict[Iterate, ItertionInfo] = {}
         self.mma_connections: list[tuple[MMA, MMA]] = []
         self.mma_nodes: list[tuple[MMA]] = []
 
@@ -236,8 +236,8 @@ def to_dict(t: tuple[int, ...]) -> dict[IndexSymbol, int]:
     return {k: v for k, v in t}
 
 
-def handle_reduction_entry(
-    reduction: Iterate,
+def handle_iterate_entry(
+    iterate: Iterate,
     inputs: list[CustomOp],
     new_node: CustomOp,
     node: CustomOp,
@@ -245,30 +245,30 @@ def handle_reduction_entry(
     dim_scaling: dict[IndexSymbol, int],
     expansion_context: ExpansionContext,
 ):
-    reduction_context = expansion_context.reduction_context
+    iterate_context = expansion_context.iterate_context
     if isinstance(new_node, GetResult):
         assert len(inputs) == 1, f"Expected one input, got {inputs}"
-        outputs = reduction.outputs(inputs[0].graph)
+        outputs = iterate.outputs(inputs[0].graph)
         if not isinstance(outputs, Sequence):
             outputs = [outputs]
-        if reduction not in reduction_context:
-            reduction_context[reduction] = ReductionInfo(reduction)
+        if iterate not in iterate_context:
+            iterate_context[iterate] = ItertionInfo(iterate)
         result_index = compute_result_index(
             dim_query, dim_scaling, inputs[0], outputs, new_node.res_idx
         )
         custom = get_custom(inputs[0])
         key = ExpansionInfo(custom, get_indexed_dims(dim_query, custom))
-        reduction_info = reduction_context[reduction]
+        iterate_info = iterate_context[iterate]
         assert (
-            result_index not in reduction_info.outputs
-            and result_index not in reduction_info.get_results
-        ), f"{result_index=} has already been computed for {reduction_info}"
-        reduction_info.outputs[result_index] = key
-        reduction_info.get_results[result_index] = new_node
+            result_index not in iterate_info.outputs
+            and result_index not in iterate_info.get_results
+        ), f"{result_index=} has already been computed for {iterate_info}"
+        iterate_info.outputs[result_index] = key
+        iterate_info.get_results[result_index] = new_node
 
 
-def handle_reduction_exit(
-    reduction: Iterate,
+def handle_iterate_exit(
+    iterate: Iterate,
     inputs: list[CustomOp],
     new_node: CustomOp,
     node: CustomOp,
@@ -277,18 +277,18 @@ def handle_reduction_exit(
     expansion_context: ExpansionContext,
 ):
     # If we are an iter arg, then we are exiting a reduction.
-    reduction_context = expansion_context.reduction_context
+    iterate_context = expansion_context.iterate_context
     if isinstance(new_node, IterArg):
         assert len(inputs) == 1, f"Expected one input, got {inputs}"
-        reduction = new_node.parent_op()
+        iterate = new_node.parent_op()
         result_index = compute_result_index(
-            dim_query, dim_scaling, inputs[0], reduction.init_args, new_node.iter_idx
+            dim_query, dim_scaling, inputs[0], iterate.init_args, new_node.iter_idx
         )
-        assert reduction in reduction_context, f"Reduction not found: {reduction}"
+        assert iterate in iterate_context, f"Iterate not found: {iterate}"
         new_node.iter_idx = result_index
         custom = get_custom(inputs[0])
         key = ExpansionInfo(custom, get_indexed_dims(dim_query, custom))
-        reduction_context[reduction].init_args[result_index] = key
+        iterate_context[iterate].init_args[result_index] = key
 
 
 def concatenate_outputs(
@@ -408,15 +408,15 @@ def get_mma_reduction_count(arg: MMA, dim_scaling: dict[IndexSymbol, int]) -> in
 
 
 def add_get_results(trace: CapturedTrace):
-    reductions = trace.walk(lambda x: isinstance(get_custom(x), Iterate))
-    for reduction in reductions:
-        reduction = get_custom(reduction)
-        if len(reduction.init_args) == 1:
-            reduction.graph.inserting_after(reduction.fx_node)
+    iterate_ops = trace.walk(lambda x: isinstance(get_custom(x), Iterate))
+    for iterate in iterate_ops:
+        iterate = get_custom(iterate)
+        if len(iterate.init_args) == 1:
+            iterate.graph.inserting_after(iterate.fx_node)
             get_result = get_custom(
-                GetResult(reduction.fx_node, 0).add_to_graph(reduction.graph)
+                GetResult(iterate.fx_node, 0).add_to_graph(iterate.graph)
             )
-            reduction.replace_all_uses_with_except(get_result, [get_result])
+            iterate.replace_all_uses_with_except(get_result, [get_result])
 
 
 def populate_inputs(
@@ -588,10 +588,10 @@ def expand_node(
     update_users(node, new_node, metadata, expansion_context)
 
     # Add expandable inputs to the list of nodes to expand.
-    inputs, reduction = get_inputs(node.fx_node, None)
+    inputs, iterate_node = get_inputs(node.fx_node, None)
 
-    handle_reduction_entry(
-        reduction,
+    handle_iterate_entry(
+        iterate_node,
         inputs,
         new_node,
         node,
@@ -599,8 +599,8 @@ def expand_node(
         dim_scaling,
         expansion_context,
     )
-    handle_reduction_exit(
-        reduction,
+    handle_iterate_exit(
+        iterate_node,
         inputs,
         new_node,
         node,
@@ -677,27 +677,27 @@ def get_mma_indexed_dims(
     return indexed_dims
 
 
-def fixup_reduction_nodes(
+def fixup_iterate_nodes(
     trace: CapturedTrace,
     expansion_context: ExpansionContext,
 ):
     """
-    This function fixes up the reduction nodes by updating the outputs,
-    init_args and get_results of the reduction nodes. It also removes the
+    This function fixes up the iterate nodes by updating the outputs,
+    init_args and get_results of the iterate nodes. It also removes the
     original nodes from the graph.
 
-    In situations where we have multiple reductions, and the outputs of a
-    reduction are used as inputs to another reduction, we need to ensure
+    In situations where we have multiple iterate nodes, and the outputs of an
+    iterate are used as inputs to another iterate, we need to ensure
     the fixup is done in the correct order, specifically from the last
-    reduction to the first reduction since that is the order in
+    iterate to the first iterate since that is the order in
     which expansion proceeds.
 
     """
-    reduction_context = expansion_context.reduction_context
-    reduction_nodes = trace.walk(lambda x: isinstance(get_custom(x), Iterate))
-    for reduction in reversed(reduction_nodes):
-        reduction = get_custom(reduction)
-        reduction_subgraph = trace.get_subgraph(reduction.subgraph_name)
+    iterate_context = expansion_context.iterate_context
+    iterate_nodes = trace.walk(lambda x: isinstance(get_custom(x), Iterate))
+    for iterate in reversed(iterate_nodes):
+        iterate = get_custom(iterate)
+        reduction_subgraph = trace.get_subgraph(iterate.subgraph_name)
         output = get_custom(get_last(reduction_subgraph.nodes))
         if all(x is None for x in output.return_vals):
             continue
@@ -706,8 +706,8 @@ def fixup_reduction_nodes(
             return_vals = [get_custom(x) for x in output.return_vals[0]]
         else:
             return_vals = [get_custom(return_vals)]
-        reduction_info = reduction_context[reduction]
-        sorted_keys = dict(sorted(reduction_info.outputs.items(), key=lambda x: x[0]))
+        iterate_info = iterate_context[iterate]
+        sorted_keys = dict(sorted(iterate_info.outputs.items(), key=lambda x: x[0]))
         new_outputs = []
         for key in sorted_keys.values():
             if key not in expansion_context and isinstance(key.node, MMA):
@@ -719,13 +719,13 @@ def fixup_reduction_nodes(
             new_outputs.append(expansion_context[key].fx_node)
         output.update_arg("return_vals", new_outputs)
 
-        sorted_keys = dict(sorted(reduction_info.init_args.items(), key=lambda x: x[0]))
+        sorted_keys = dict(sorted(iterate_info.init_args.items(), key=lambda x: x[0]))
         new_init_args = []
         for key in sorted_keys.values():
             new_init_args.append(expansion_context[key].fx_node)
-        reduction.update_arg("init_args", new_init_args)
+        iterate.update_arg("init_args", new_init_args)
 
-        for result_index, get_item in reduction_info.get_results.items():
+        for result_index, get_item in iterate_info.get_results.items():
             get_item.graph.inserting_before(get_item.fx_node)
             get_result = GetResult(get_item.value, result_index).add_to_graph(
                 get_item.graph, get_item.type
@@ -775,6 +775,14 @@ def expand_graph(
     The constraints are used to determine how the graph should be expanded.
     The expansion does a DFS starting at the leaf nodes and expanding them
     to the root of the graph.
+
+    In other words, expand from SIMW to SIMD.  This replaces wave-level types
+    (eg. a single Register representing a WAVE_MxWAVE_N tile) to a thread-level
+    representation, including splitting based on constraints and vector shapes
+    into multiple registers per thread.
+
+    Functions that influence the splitting include `get_dim_combinations` and
+    `compute_result_index`.
     """
 
     leaf_ops = [get_custom(node) for node in reversed(trace.walk(is_leaf_node))]
@@ -807,8 +815,8 @@ def expand_graph(
                 get_scaling,
             )
 
-    # Fixup all reduction nodes.
-    fixup_reduction_nodes(trace, expansion_context)
+    # Fixup all iterate nodes.
+    fixup_iterate_nodes(trace, expansion_context)
     # Fixup all mma nodes.
     fixup_mma_nodes(trace, expansion_context)
     # Remove original nodes in root graph.
