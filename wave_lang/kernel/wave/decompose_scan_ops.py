@@ -4,27 +4,42 @@ from typing import Callable
 
 import torch.fx as fx
 
-from wave_lang.kernel._support.indexing import IndexSymbol
-from wave_lang.kernel.wave.utils.general_utils import all_equal
+from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE
+from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
+from wave_lang.kernel.wave.utils.general_utils import all_equal, delinearize_index
 from wave_lang.kernel.wave.utils.symbol_utils import subs_idxc
+
+import wave_lang.kernel.lang as tkl
 
 from .._support.dtype import i1
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     Add,
+    Allocate,
+    Broadcast,
+    Conditional,
     Cumsum,
     CustomOp,
     Extract,
+    Eq,
     NewRegister,
+    NewScalar,
+    Placeholder,
+    Read,
     Reshape,
     ScanOp,
     SelectOp,
     ShuffleOp,
+    Write,
     get_custom,
+    Mul,
+    Sub,
+    Ge,
+    Gt,
 )
-from .constraints import HardwareConstraint
+from .constraints import HardwareConstraint, WaveConstraint, WorkgroupConstraint
 from .utils.classes import ShuffleMode
-from .utils.graph_utils import DCE
+from .utils.graph_utils import DCE, get_outer_node
 
 
 def get_graph_node(custom: CustomOp, graph: fx.Graph) -> fx.Node:
@@ -50,6 +65,38 @@ def emit_local_inclusive_scan(
         values[0].index = node.index
 
         for i in range(1, elements_per_thread):
+            values[i] = get_graph_node(binary_fn(values[i], values[i - 1]), graph)
+            values[i].index = node.index
+
+        result.append(values)
+    return result
+
+
+def emit_local_inclusive_scan_block(
+    binary_fn: Callable,
+    scan_src: list[fx.Node],
+    graph: fx.Graph,
+    elements_per_thread: int,
+) -> list[list[fx.Node]]:
+    """
+    Perform local inclusive scan for `n` elements per thread.
+    """
+    result = []
+    for node in scan_src:
+        values = [
+            get_graph_node(Extract(node, [i]), graph)
+            for i in range(elements_per_thread - 1)
+        ]
+        values.insert(
+            0,
+            get_graph_node(
+                NewRegister(node.type.symbolic_shape, node.type.dtype, 0.0), graph
+            ),
+        )
+        values[0].index = node.index
+        values[1].index = node.index
+
+        for i in range(2, elements_per_thread):
             values[i] = get_graph_node(binary_fn(values[i], values[i - 1]), graph)
             values[i].index = node.index
 
@@ -147,6 +194,10 @@ def emit_global_scan(
 
         # perform binary scan op
         scanop_result = get_graph_node(binary_fn(scanop_result, masked), graph)
+        custom = get_custom(local_scan[0][0])
+        scanop_result.index = custom.index
+        scanop_result.expanded_dims = custom.expanded_dims
+        scanop_result.vector_shapes = custom.vector_shapes
         final_scanop_result = [scanop_result]
 
     if local_scan_size > 1:
@@ -209,6 +260,200 @@ def emit_global_scan(
     return final_scanop_result
 
 
+def emit_apply_wave_offsets(
+    binary_fn,
+    src,  # fx.Node, Register[(M,)].of(dtype); already intra-wave scanned
+    incl: list[fx.Node],  # len = = num_waves; per-wave inclusive totals
+    graph: fx.Graph,
+    wave_size: int,  # threads_per_wave (e.g., 64)
+    scan_dim,
+    wave_id: int,
+):
+    """ """
+
+    srcc = get_custom(src)
+    dtype = srcc.type.dtype
+
+    # Resolve M (vector length)
+    M_sym = srcc.type.symbolic_shape
+    M_val = subs_idxc(M_sym)
+    num_waves = len(incl)
+
+    offsets_vec_excl = [get_graph_node(NewScalar(0, dtype), graph), *incl[1:]]
+    offsets_vec_excl[0].index = offsets_vec_excl[1].index
+
+    # combined_offset = Reshape(
+    #     args=offsets_vec_excl,
+    #     target_vector_shape={scan_dim: num_waves},
+    # ).add_to_graph(graph)
+
+    for offset in offsets_vec_excl:
+        offset_values = [
+            get_graph_node(Extract(offset, [0]), graph) for i in range(num_waves)
+        ]
+
+    out = []
+
+    for i in range(wave_size):
+        # we cannot do this
+        cur_val = get_graph_node(Extract(src, [i]), graph)
+        # How to get right offset and src slice?
+        cur_offset = offset_values[i // wave_size]
+        offset_val = get_graph_node(binary_fn(cur_offset, cur_val), graph)
+        out.append(offset_val)
+
+    return out
+
+
+def emit_interwave_scan(
+    binary_fn,
+    orig_src,
+    src,
+    graph,
+    trace,
+    scan_dim,
+    num_scan_waves,
+    wg_constraint_map,
+    hardware_constraint,
+):
+    """
+    Steps:
+      1) Last active lane of each wave writes its per-wave total to shared.
+      2) Wave 0 inclusive-scans these totals, then converts to exclusive offsets.
+      3) Each wave reads its exclusive offset and adds it to its scalar.
+    """
+
+    lane_id = (
+        hardware_constraint.linearized_thread_id % hardware_constraint.threads_per_wave
+    )
+    wave_id = delinearize_index(
+        hardware_constraint.linearized_thread_id
+        // hardware_constraint.threads_per_wave,
+        hardware_constraint.waves_per_block,
+    )
+    scan_wg_dim = wg_constraint_map[scan_dim].workgroup_dim
+    scan_wave_id = wave_id[scan_wg_dim]  # 0...3; [Mod(floor($T0/64), 4), 0, 0]
+
+    src = get_graph_node(
+        Broadcast(src, target_shape=orig_src.type.symbolic_shape), graph
+    )
+    src.index = orig_src.index
+    src.index.update({scan_dim: IndexSequence(0, 1, 1)})
+
+    src_custom = get_custom(src)
+    total_len = subs_idxc(scan_dim)  # 256
+    tpw = hardware_constraint.threads_per_wave  # 64
+
+    ### for partial last wave
+    W_s = get_graph_node(NewScalar(tpw, tkl.i32), graph)
+    temp_rem_after_start = total_len - (scan_wave_id * tpw)
+    rem_after_start = get_graph_node(NewScalar(temp_rem_after_start, tkl.i32), graph)
+    max_cond = get_graph_node(Gt(W_s, rem_after_start), graph)
+    this_wave_len = get_graph_node(
+        SelectOp(cond=max_cond, if_true=W_s, if_false=rem_after_start), graph
+    )
+
+    # Get last lane id
+    lane_id_s = get_graph_node(NewScalar(lane_id, tkl.i32), graph)
+    # get the last lane idx; including case when it is less than 64
+    prev_lane_idx = get_graph_node(
+        Sub(this_wave_len, get_graph_node(NewScalar(1, tkl.i32), graph)), graph
+    )
+    gt_zero = get_graph_node(
+        Ge(this_wave_len, get_graph_node(NewScalar(1, tkl.i32), graph)), graph
+    )  # i1
+    eq_last = get_graph_node(Eq(lane_id_s, prev_lane_idx), graph)
+
+    # logical AND via multiply
+    is_last_lane = get_graph_node(Mul(gt_zero, eq_last), graph)
+
+    sums_buf = Allocate(
+        (scan_dim,), (num_scan_waves,), src_custom.type.dtype, SHARED_ADDRESS_SPACE
+    ).add_to_graph(graph)
+
+    exec_on_last = fx.Graph()
+    sub_store = f"store_wave_sum_{src.name}"
+
+    ph_src = get_graph_node(Placeholder.from_fx_node(src), exec_on_last)
+    ph_src.type = src_custom.type
+    # ph_src.meta["lifted"] = src
+
+    ph_sums = get_graph_node(
+        Placeholder.from_fx_node(get_custom(sums_buf)), exec_on_last
+    )
+    ph_sums.type = get_custom(sums_buf).type
+    ph_sums.meta["lifted"] = sums_buf
+
+    write_sum = Write(ph_src, ph_sums, 1).add_to_graph(exec_on_last)
+    write_sum.index = {scan_dim: IndexSequence(scan_wave_id, 1, 1)}
+
+    cond_store = get_graph_node(
+        Conditional(
+            is_last_lane,
+            subgraph_name=sub_store,
+            implicit_captures=[get_outer_node(src), sums_buf],
+        ),
+        graph,
+    )
+    exec_on_last.parent_op = cond_store
+    trace.add_subgraph(sub_store, exec_on_last)
+    trace.get_root_graph().subgraphs[sub_store] = exec_on_last
+
+    read_totals = Read(
+        sums_buf,
+        elements_per_thread=num_scan_waves,
+        _write_dependency=[cond_store, write_sum],
+    ).add_to_graph(graph)
+
+    read_totals.index = {scan_dim: IndexSequence(scan_wave_id, 1, 1)}
+
+    incl_nested = emit_local_inclusive_scan_block(
+        binary_fn, [read_totals], graph, num_scan_waves
+    )
+    # TODO: this is just to test; fix accessed offset
+    # updated_offsets = incl_nested[-1][-1]
+    updated_offsets = incl_nested[-1]
+    updated_offsets = Reshape(
+        args=updated_offsets,
+        target_vector_shape={scan_dim: num_scan_waves},
+    ).add_to_graph(graph)
+
+    off = get_graph_node(Extract(updated_offsets, [0]), graph)
+    off = get_graph_node(Broadcast(off, src.type.symbolic_shape), graph)
+    off.index = src.index
+
+    # list length == num_scan_waves; incl == [extract_1 (used by wave_id1), add_6(used by wave_id2), add_7, add_8]
+    # read_totals = [64, 64, 64, 64]
+    # updated_offsets = [0, 64, 128, 192]
+
+    # offsets_vec_excl = [get_graph_node(NewScalar(0, src.type.dtype), graph), *incl[:-1]]
+    # Remove redundant zero_reg from the final code.
+    # zero_reg = get_graph_node(
+    #     NewRegister(
+    #         get_custom(src).type.symbolic_shape,
+    #         get_custom(src).type.dtype,
+    #         0.0,
+    #     ),
+    #     graph,
+    # )
+    # zero_reg.index = src.index
+
+    # if_scan_wave_id_zero = eq(scan_wave_id, 0)
+    # cond_node = get_graph_node(
+    #     NewRegister(src.type.symbolic_shape, i1, if_scan_wave_id_zero),
+    #     graph,
+    # )
+    # cond_node.index = src.index
+
+    # masked = get_graph_node(
+    #     SelectOp(cond=cond_node, if_true=zero_reg, if_false=off), graph
+    # )
+
+    final_scalar = get_graph_node(binary_fn(off, src), graph)
+
+    return [final_scalar]
+
+
 def decompose_scan_ops(
     trace: CapturedTrace,
     constraints: list,
@@ -233,6 +478,13 @@ def decompose_scan_ops(
         c for c in constraints if isinstance(c, HardwareConstraint)
     )
 
+    wave_constraint_map = {
+        c.dim: c for c in constraints if isinstance(c, WaveConstraint)
+    }
+    workgroup_constraint_map = {
+        c.dim: c for c in constraints if isinstance(c, WorkgroupConstraint)
+    }
+
     subgroup_size = hardware_constraint.threads_per_wave
 
     for node in scan_nodes:
@@ -241,7 +493,7 @@ def decompose_scan_ops(
             raise NotImplementedError(f"ScanOp '{custom}' not supported")
 
         with custom.graph.inserting_before(custom.fx_node):
-            scan_src, scan_acc, scan_dim = node.args
+            scan_src, scan_acc, scan_dim, block_scan = node.args
             binary_fn = Add
 
             if scan_dim is None:
@@ -296,7 +548,7 @@ def decompose_scan_ops(
                 binary_fn, local_scan, custom.graph, local_scan_sizes[0]
             )
 
-            global_scan = emit_global_scan(
+            final_scan = emit_global_scan(
                 binary_fn,
                 scan_src[0],
                 local_scan,
@@ -307,10 +559,38 @@ def decompose_scan_ops(
                 scan_dim,
             )
 
+            if block_scan:
+                # compute num_warps to scan across
+                num_scan_waves = int(
+                    workgroup_constraint_map[scan_dim].tile_size
+                    // wave_constraint_map[scan_dim].tile_size
+                )
+
+                if num_scan_waves > subgroup_size:
+                    raise NotImplementedError(
+                        "The 2nd stage butterfly shuffle reduces the"
+                        "the reduction outputs from all the wave. Hence, can only handle at most "
+                        "threads_per_wave number of warps."
+                    )
+
+                # Scan and update output between waves, by storing individual wave result into shared memory,
+                # and then adding it to the rest waves to update it.
+                final_scan = emit_interwave_scan(
+                    binary_fn,
+                    scan_src[0],
+                    final_scan[0],
+                    custom.graph,
+                    trace,
+                    scan_dim,
+                    num_scan_waves,
+                    workgroup_constraint_map,
+                    hardware_constraint,
+                )
+
             # Update the users based on the global scan `reshape` results.
             for user in custom.users:
                 user.update_arg(
-                    custom.fx_node, global_scan[user.expanded_dims[scan_dim]]
+                    custom.fx_node, final_scan[user.expanded_dims[scan_dim]]
                 )
 
     DCE(trace)
