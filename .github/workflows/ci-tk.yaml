@@ -86,7 +86,7 @@ jobs:
           cmake ../llvm-project/llvm                                           \
             -GNinja                                                            \
             -DCMAKE_BUILD_TYPE=Release                                         \
-            -DLLVM_ENABLE_PROJECTS="mlir"                                      \
+            -DLLVM_ENABLE_PROJECTS="mlir;llvm"                                 \
             -DLLVM_ENABLE_ASSERTIONS=ON                                        \
             -DLLVM_INSTALL_UTILS=ON                                            \
             -DLLVM_TARGETS_TO_BUILD="X86;AMDGPU"                               \
@@ -94,7 +94,8 @@ jobs:
             -DLLVM_ENABLE_ZSTD=OFF                                             \
             -DMLIR_INCLUDE_TESTS=OFF                                           \
             -DLLVM_USE_LINKER=lld                                              \
-            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen" \
+            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen;mlir-python-sources" \
+            -DMLIR_ENABLE_BINDINGS_PYTHON=ON                                   \
             -DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
           ninja install-distribution-stripped
           popd
