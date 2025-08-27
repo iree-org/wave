@@ -40,6 +40,11 @@ jobs:
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 240 # Building LLVM can take multiple hours on public GH runners
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
       - name: Setup Cache Vars
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
@@ -125,7 +130,10 @@ jobs:
             echo "HAS_NO_GPU=true" >> $GITHUB_ENV
           fi
 
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Checkout repo
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
 
       - name: Setup Cache Vars
         if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
@@ -268,7 +276,7 @@ jobs:
 
       - name: Build water
         run: |
-          export EXTERNAL_LIT=${GITHUB_WORKSPACE}/scripts/runlit.py
+          export EXTERNAL_LIT=${GITHUB_WORKSPACE}/water/scripts/runlit.py
           export LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
           mkdir -p cmake_build
           cd cmake_build
