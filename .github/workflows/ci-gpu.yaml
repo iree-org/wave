@@ -251,7 +251,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y ninja-build cmake clang lld
-          pip install -r requirements-dev.txt
+          pip install -r water/requirements-dev.txt
 
       - name: Setup Cache Vars
         run: |
@@ -327,7 +327,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y ninja-build cmake clang lld
-          pip install -r requirements-dev.txt
+          pip install -r water/requirements-dev.txt
 
       - name: Setup Cache Vars
         run: |
@@ -343,17 +343,17 @@ jobs:
 
       - name: Install editable python package
         run: |
-          cd ${GITHUB_WORKSPACE}/build_tools/wheel
+          cd ${GITHUB_WORKSPACE}/water/build_tools/wheel
           export WATER_MLIR_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install/lib/cmake/mlir
           pip install -e .
 
       - name: Run python tests
         run: |
-          cd ${GITHUB_WORKSPACE}/build_tools/wheel
+          cd ${GITHUB_WORKSPACE}/water/build_tools/wheel
           pytest -n auto --capture=tee-sys -vv --durations=100 --timeout=300 tests/
 
       - name: Build python package
         run: |
-          cd ${GITHUB_WORKSPACE}/build_tools/wheel
+          cd ${GITHUB_WORKSPACE}/water/build_tools/wheel
           export WATER_MLIR_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install/lib/cmake/mlir
           pip wheel .
