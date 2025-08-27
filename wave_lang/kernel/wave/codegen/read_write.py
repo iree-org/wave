@@ -86,6 +86,11 @@ def _get_start_indices(
     return start_indices
 
 
+@functools.lru_cache
+def _simplify(expr):
+    return sympy.simplify(expr)
+
+
 def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     """
     Split index expr into thread-dependent and thread-independent parts
@@ -97,7 +102,7 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
 
     # Compute thread-independent index as `orig_index - thread_dependent_index`
     # All thread symbols and dynamic should cancel-out in the result.
-    thread_independent_index = sympy.simplify(src - thread_dependent_index)
+    thread_independent_index = _simplify(src - thread_dependent_index)
     if thread_independent_index.free_symbols - set(subs_wg.keys()):
         # If we have any symbols besides wg symbols, means some thread or
         # dynamic symbols were not canceled out, use the entire index as
