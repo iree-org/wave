@@ -41,6 +41,7 @@ from typing import List, Optional
 # Reference paged attention implementation from vLLM and sglang.
 # (NUM_Q_HEADS, NUM_KV_HEADS, HEAD_SIZE_QK, HEAD_SIZE_V, BLOCK_SIZE, NUM_SEQS, SEQ_LEN)
 shapes = [(16, 1, 64, 64, 32, 2, 100)]
+shapes += [(16, 1, 65, 64, 32, 2, 100)]
 shapes += [(6, 1, 128, 128, 32, 1, 100)]
 shapes += [(64, 1, 13, 13, 32, 1, 100)]
 shapes += [(16, 2, 64, 64, 32, 1, 100)]  # (16 // 2) < 16
