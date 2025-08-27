@@ -1,10 +1,13 @@
 from sympy import Max, Min, ceiling
+import torch
+from typing import Literal
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
+    torch_dtype_to_wave,
 )
 
 
@@ -19,6 +22,10 @@ def get_reordered_matmul(
     block_k_size: int,
     group_m_size: int,
     mfma_variant,
+    input_dtype: torch.dtype = torch.float16,
+    output_dtype: torch.dtype = torch.float32,
+    tA: Literal["N", "T"] = "N",
+    tB: Literal["N", "T"] = "T",
 ):
     # Input sizes
     M = tkl.sym.M
@@ -32,6 +39,8 @@ def get_reordered_matmul(
     GROUP_SIZE_M = tkl.sym.GROUP_SIZE_M
     # Address space (for GPU, shared(1) or global(0))
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    input_dtype = torch_dtype_to_wave(input_dtype)
+    output_dtype = torch_dtype_to_wave(torch.float32)
 
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -77,20 +86,35 @@ def get_reordered_matmul(
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+
+    a_shape = (K, M) if tA == "T" else (M, K)
+    b_shape = (N, K) if tB == "T" else (K, N)
+
+    a_mapping = tkw.IndexMapping(
+        num_iterators=2, inputs={M: i, K: j}, outputs={M: i, K: j}
+    )
+    b_mapping = tkw.IndexMapping(
+        num_iterators=2, inputs={N: i, K: j}, outputs={N: i, K: j}
+    )
+
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        a: tkl.Memory[a_shape[0], a_shape[1], ADDRESS_SPACE, input_dtype],
+        b: tkl.Memory[b_shape[0], b_shape[1], ADDRESS_SPACE, input_dtype],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, output_dtype],
     ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        c_reg = tkl.Register[M, N, output_dtype](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+        def repeat(
+            acc: tkl.Register[M, N, output_dtype],
+        ) -> tkl.Register[M, N, output_dtype]:
             # a_reg: tkw.Register[M, K, tkl.f16]
-            a_reg = tkw.read(a)
+            a_reg = tkw.read(a, mapping=a_mapping)
             # b_reg: tkw.Register[N, K, tkl.f16]
-            b_reg = tkw.read(b)
+            b_reg = tkw.read(b, mapping=b_mapping)
             # acc: tkw.Register[M, N, tkl.f32]
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
