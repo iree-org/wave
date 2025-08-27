@@ -88,6 +88,11 @@ def _get_start_indices(
 
 @functools.lru_cache
 def _simplify(expr):
+    """
+    Simple wrapper around simplify in order to utilize LRU Cache.
+    This is important to minimize compile time caused by re-simplifying
+    expressions.
+    """
     return sympy.simplify(expr)
 
 
