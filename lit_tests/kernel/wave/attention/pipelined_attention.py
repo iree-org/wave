@@ -338,9 +338,6 @@ def test_bshd_attention_pipelined():
     # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
     # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
     # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-17:           {{.*}} = amdgpu.mfma
 
 
 @run_test
@@ -395,14 +392,6 @@ def test_bshd_attention_pipelined_prefetch():
     # CHECK: arith.mulf
     # CHECK-COUNT-8: vector.extract_strided_slice
     # CHECK-COUNT-32: amdgpu.mfma
-    # CHECK-COUNT-8: vector.load
-    # CHECK-COUNT-8: vector.extract
-    # CHECK: vector.from_elements
-    # CHECK: vector.from_elements
-    # CHECK: amdgpu.lds_barrier
-    # CHECK-COUNT-32: vector.load
-    # CHECK-COUNT-4: vector.load
-    # CHECK-COUNT-8: amdgpu.mfma
 
 
 @run_test

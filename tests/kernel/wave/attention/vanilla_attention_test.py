@@ -995,6 +995,7 @@ def testAttentionF8(
         subs=hyperparams,
         schedule=enable_scheduling,
         run_bench=run_bench,
+        dynamic_symbols=[],
         waves_per_eu=2,
         denorm_fp_math_f32="preserve-sign",
         benchmark_batch_size=10,
