@@ -6,7 +6,6 @@ try:
     from water_mlir import ir
     from water_mlir.dialects import wave
     import water_mlir.ir as ir2
-    import water_mlir.dialects as dialects2
     from water_mlir.dialects import wave as wave2
 
     # Verify both import styles resolve to the same modules/symbols.
