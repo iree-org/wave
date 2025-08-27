@@ -882,7 +882,7 @@ class BinaryOpBase(CustomOp, ABC):
 
         lhs_dim_set = set(lhs_type.symbolic_shape)
         rhs_dim_set = set(rhs_type.symbolic_shape)
-        if lhs_dim_set.isdisjoint(rhs_dim_set):
+        if lhs_dim_set and rhs_dim_set and lhs_dim_set.isdisjoint(rhs_dim_set):
             raise ValueError(
                 "BinaryPyOp requires lhs and rhs shape to be at least broadcastable."
                 f" got {lhs_type.symbolic_shape} vs {rhs_type.symbolic_shape}"
@@ -1006,6 +1006,29 @@ class SelectOp(CustomOp):
         combined_dims += get_custom(self.if_false).indexing_dims
         return list(dict.fromkeys(combined_dims))
 
+    def infer_broadcast_shape(self, cond_type, t_type, f_type):
+        c_shape = getattr(cond_type, "symbolic_shape", ())
+        t_shape = getattr(t_type, "symbolic_shape", ())
+        f_shape = getattr(f_type, "symbolic_shape", ())
+
+        # Check if shapes are broadcastable - they should not be disjoint
+        non_empty_shapes = [s for s in [c_shape, t_shape, f_shape] if s]
+        for i in range(len(non_empty_shapes)):
+            for j in range(i + 1, len(non_empty_shapes)):
+                if set(non_empty_shapes[i]).isdisjoint(set(non_empty_shapes[j])):
+                    raise ValueError(
+                        f"SelectOp requires operand shapes to be broadcastable. "
+                        f"Got condition: {c_shape}, if_true: {t_shape}, if_false: {f_shape}"
+                    )
+
+        # Find the most general shape
+        result_shape = ()
+        for t in [cond_type, t_type, f_type]:
+            if hasattr(t, "symbolic_shape"):
+                if len(t.symbolic_shape) >= len(result_shape):
+                    result_shape = t.symbolic_shape
+        return result_shape
+
     def infer_type(self, *args):
         cond_type = get_custom(self.cond).type
         if_true_type = get_custom(self.if_true).type
@@ -1017,14 +1040,13 @@ class SelectOp(CustomOp):
         if if_true_type.dtype != if_false_type.dtype:
             raise ValueError("SelectOp expects lhs and rhs dtype to match.")
 
-        # TODO: support broadcasting behavior.
-        if (
-            cond_type.symbolic_shape != if_true_type.symbolic_shape
-            or cond_type.symbolic_shape != if_false_type.symbolic_shape
-        ):
-            raise ValueError("SelectOp doesn't support broadcasting. (yet?)")
+        broadcasted_shape = self.infer_broadcast_shape(
+            cond_type, if_true_type, if_false_type
+        )
 
-        self.type = if_true_type
+        result_type = Register[broadcasted_shape, if_true_type.dtype]
+
+        self.type = result_type
 
 
 @final
