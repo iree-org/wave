@@ -35,6 +35,7 @@ from ...ops.wave_ops import (
     Read,
     ReduceOp,
     ScaledMMA,
+    SelectOp,
     SetWavePrio,
     SharedMemoryBarrier,
     WorkgroupBarrier,
@@ -217,7 +218,9 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
             continue
         if isinstance(custom.type, DataType):
             continue
-        assert custom.index, f"Index not set for node {custom.fx_node}: {custom}"
+        assert (
+            custom.index != None
+        ), f"Index not set for node {custom.fx_node}: {custom}"
 
         if not custom.vector_shapes:
             # If vector_shapes is not set, see if it can be derived from the hardware constraints.
@@ -946,26 +949,109 @@ def set_post_expansion_indices(trace: CapturedTrace, constraints: list[Constrain
     trace.walk(apply_offset)
 
 
+def get_index(custom: CustomOp):
+    """Get the index from a CustomOp, handling special cases like MMABase."""
+    if not custom.indexing_dims:
+        return None
+    if isinstance(custom, MMABase):
+        return custom.acc.index
+    return custom.index
+
+
 def create_broadcast(
-    binary_op: BinaryPyOp,
-    to_broadcast: CustomOp,
+    op: CustomOp,
+    to_broadcast_arg_name: str,
     broadcast_dim: IndexSymbol,
     broadcast_size: int,
     target_node: CustomOp,
 ):
     """
-    Create a broadcast node for the given binary operator.
+    Create a broadcast node for any multi-operand operator.
     """
-    with binary_op.graph.inserting_before(binary_op.fx_node):
+    to_broadcast = get_custom(getattr(op, to_broadcast_arg_name))
+
+    with op.graph.inserting_before(op.fx_node):
         broadcasted = Broadcast(
             to_broadcast.fx_node, target_node.type.symbolic_shape
-        ).add_to_graph(binary_op.graph)
+        ).add_to_graph(op.graph)
         custom = get_custom(broadcasted)
-        custom.vector_shapes = binary_op.vector_shapes
+        custom.vector_shapes = op.vector_shapes
         custom.index = deepcopy(target_node.index)
         custom.index[broadcast_dim].size = broadcast_size
-        broadcast_idx = list(binary_op.node_args.values()).index(to_broadcast)
-        binary_op.update_arg(broadcast_idx, custom.fx_node)
+
+        op.update_arg(to_broadcast_arg_name, custom.fx_node)
+
+
+def resolve_broadcasting_for_op(
+    trace: CapturedTrace, op_type: type, operand_identifiers: list[str]
+):
+    """Generic broadcasting resolution for any multi-operand operation."""
+
+    ops = trace.walk(lambda node: isinstance(get_custom(node), op_type))
+
+    for op_node in ops:
+        custom = get_custom(op_node)
+
+        operands = []
+        for identifier in operand_identifiers:
+            operand_custom = get_custom(getattr(custom, identifier))
+
+            index = get_index(operand_custom)
+            dim, size = get_largest_index_and_size(index, operand_custom)
+            operands.append(
+                {"custom": operand_custom, "dim": dim, "size": size, "id": identifier}
+            )
+
+        sizes = [operand["size"] for operand in operands]
+        if len(set(sizes)) <= 1 or all(size == 1 for size in sizes):
+            continue
+
+        target = max(operands, key=lambda x: x["size"])
+
+        def generate_error_context():
+            context_lines = [f"\n{op_type.__name__.lower()}={custom}"]
+            for op in operands:
+                context_lines.extend(
+                    [
+                        f"\n{op['id']}: {op['custom']}",
+                        f"\n{op['id']}_index: {get_index(op['custom'])}",
+                        f"\n{op['id']}_dim: {op['dim']}",
+                        f"\n{op['id']}_size: {op['size']}",
+                        f"\n{op['id']}.type.symbolic_shape: {op['custom'].type.symbolic_shape}",
+                    ]
+                )
+            return "".join(context_lines)
+
+        for operand in operands:
+            if operand["size"] < target["size"]:
+                if operand["size"] > 1 and target["size"] > 1:
+                    raise NotImplementedError(
+                        f"Currently only support resolving discrepancies when one of the shapes is 1."
+                        f"{generate_error_context()}"
+                    )
+
+                if operand["dim"] != target["dim"]:
+                    missing_dims = set(target["custom"].type.symbolic_shape).difference(
+                        set(operand["custom"].type.symbolic_shape)
+                    )
+                    is_only_missing_dim = missing_dims == {target["dim"]}
+                    is_innermost_dim = (
+                        target["dim"] == target["custom"].type.symbolic_shape[-1]
+                    )
+
+                    if not is_only_missing_dim and not is_innermost_dim:
+                        raise NotImplementedError(
+                            f"Currently only support resolving discrepancies when the broadcasting"
+                            f" dimension is the innermost dimension for {op_type.__name__}."
+                        )
+
+                create_broadcast(
+                    custom,
+                    operand["id"],
+                    target["dim"],
+                    target["size"],
+                    target["custom"],
+                )
 
 
 def resolve_thread_shapes(trace: CapturedTrace, constraints: list[Constraint]):
@@ -978,13 +1064,6 @@ def resolve_thread_shapes(trace: CapturedTrace, constraints: list[Constraint]):
     the shapes is 1 and the other is > 1.
     """
 
-    def get_index(custom: CustomOp):
-        if not custom.indexing_dims:
-            return None
-        if isinstance(custom, MMABase):
-            return custom.acc.index
-        return custom.index
-
     for node in trace.walk(
         lambda x: isinstance(get_custom(x), (Read, Write, AtomicOp))
     ):
@@ -993,71 +1072,5 @@ def resolve_thread_shapes(trace: CapturedTrace, constraints: list[Constraint]):
             _, size = get_largest_index_and_size(get_index(custom))
             custom.update_arg("elements_per_thread", size)
 
-    binary_ops = trace.walk(lambda node: isinstance(get_custom(node), BinaryPyOp))
-    for binary_op in binary_ops:
-        custom = get_custom(binary_op)
-        # Get the largest dim and shape from the lhs and rhs.
-        lhs = get_custom(custom.lhs)
-        rhs = get_custom(custom.rhs)
-
-        lhs_index = get_index(lhs)
-        rhs_index = get_index(rhs)
-
-        # Updatedto broadcast implicitly when we perform mul binary op with scalar.
-        lhs_dim, lhs_size = get_largest_index_and_size(lhs_index, lhs)
-        rhs_dim, rhs_size = get_largest_index_and_size(rhs_index, rhs)
-
-        extra_error_info = (
-            f"\n{binary_op=}"
-            f"\n{lhs=}"
-            f"\n{lhs_index=}"
-            f"\n{lhs_dim=}"
-            f"\n{lhs_size=}"
-            f"\n{lhs.type.symbolic_shape=}"
-            f"\n{rhs=}"
-            f"\n{rhs_index=}"
-            f"\n{rhs_dim=}"
-            f"\n{rhs_size=}"
-            f"\n{rhs.type.symbolic_shape=}"
-        )
-
-        # If they are equal we are done.
-        if lhs_dim == rhs_dim and lhs_size == rhs_size:
-            continue
-        # If all are unit dims, there is nothing to do.
-        if lhs_size == 1 and rhs_size == 1:
-            continue
-        # Cannot handle discrepancies when both shapes are > 1.
-        if lhs_size > 1 and rhs_size > 1:
-            raise NotImplementedError(
-                f"Currently only support resolving discrepancies when one of the shapes is 1."
-                f"{extra_error_info}"
-            )
-
-        broadcast_rhs = lhs_size > rhs_size
-        to_broadcast = rhs if broadcast_rhs else lhs
-        broadcast_dim = lhs_dim if broadcast_rhs else rhs_dim
-        broadcast_size = lhs_size if broadcast_rhs else rhs_size
-        broadcasted = lhs if broadcast_rhs else rhs
-
-        if lhs_dim != rhs_dim:
-            # If the dimensions don't agree, we can still do this broadcast only if
-            # the two nodes differ in shape along the broadcasting dimension and the
-            # broadcasting dimension is the innermost dimension.
-            missing_dims = set(broadcasted.type.symbolic_shape).difference(
-                set(to_broadcast.type.symbolic_shape)
-            )
-            is_only_missing_dim = missing_dims == {broadcast_dim}
-            is_innermost_dim = broadcast_dim == broadcasted.type.symbolic_shape[-1]
-
-            if not is_only_missing_dim and not is_innermost_dim:
-                raise NotImplementedError(
-                    f"Currently only support resolving discrepancies when the broadcasting"
-                    f" dimension is the innermost dimension. {extra_error_info}"
-                    f"\n{broadcast_dim=}"
-                )
-
-        # Broadcast
-        create_broadcast(
-            custom, to_broadcast, broadcast_dim, broadcast_size, broadcasted
-        )
+    resolve_broadcasting_for_op(trace, BinaryPyOp, ["lhs", "rhs"])
+    resolve_broadcasting_for_op(trace, SelectOp, ["cond", "if_true", "if_false"])
