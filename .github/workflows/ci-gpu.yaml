@@ -61,7 +61,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y ninja-build cmake clang lld
-
+          pip install -r water/requirements-dev.txt
 
       - name: Checkout LLVM
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
