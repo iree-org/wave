@@ -338,6 +338,3 @@ def test_bshd_attention_pipelined():
     # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
     # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
     # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-17:           {{.*}} = amdgpu.mfma

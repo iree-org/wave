@@ -69,8 +69,8 @@ from .expansion.expansion import add_get_results, expand_graph
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
+from .hardware_transpose import mark_hardware_transpose_candidates
 from .hoisting import hoist_loop_invariant_ops
-from .in_thread_transpose import in_thread_transpose
 from .memory_analysis.minimize_shared_allocs import minimize_shared_allocs
 from .minimize_global_loads import minimize_global_loads
 from .promotion import compute_shared_memory_usage, promote_placeholders
@@ -678,8 +678,8 @@ class LaunchableWave(Launchable):
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(gather_to_shared, trace, self.constraints, options),
                 partial(gather_to_shared_swizzling, trace, self.constraints, options),
-                partial(in_thread_transpose, trace, self.constraints),
                 partial(global_to_shared_gathers, trace, self.constraints),
+                partial(mark_hardware_transpose_candidates, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
             ]
         graph_passes += [

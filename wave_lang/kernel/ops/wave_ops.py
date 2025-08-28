@@ -652,7 +652,7 @@ class CustomOp(ABC):
         """Erase the current node from the graph where it exists."""
         assert (
             not self.fx_node.users
-        ), f"Attempting to erase {self.fx_node} which has {self.fx_node.users} users!"
+        ), f"Attempting to erase {self.fx_node} which has {len(self.fx.users)} users!"
         self.graph.erase_node(self.fx_node)
 
     @classmethod
@@ -1643,6 +1643,7 @@ class Read(CustomOp):
     source: Optional[tuple[IndexExpr]] = None
     target: Optional[tuple[IndexExpr]] = None
     _write_dependency: Optional[list[fx.Node]] = None
+    transpose: bool = False
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1683,7 +1684,7 @@ class Read(CustomOp):
 
     @write_dependency.setter
     def write_dependency(self, value: fx.Node):
-        self.update_arg(len(self.fx_node.args) - 1, value)
+        self.update_arg("_write_dependency", value)
 
     def transform_index_backwards(
         self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
