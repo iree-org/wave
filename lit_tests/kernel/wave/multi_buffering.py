@@ -134,7 +134,6 @@ def test_gemm_multibuffering():
             constraints,
             True,
             scheduling_type=SchedulingType.MODULO,
-            multi_buffer_count=2,
         )
 
     def print_affected_node(node: fx.Node):

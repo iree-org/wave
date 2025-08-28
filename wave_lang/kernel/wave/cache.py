@@ -193,7 +193,6 @@ class WaveCacheManager(object):
             options.dynamic_symbols,
             options.schedule,
             options.use_scheduling_barriers,
-            options.multi_buffer_count,
             options.device,
             options.num_devices,
             options.target,

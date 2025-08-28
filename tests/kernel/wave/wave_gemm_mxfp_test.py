@@ -215,11 +215,6 @@ def testScaledGemmMXFP4(
         canonicalize=True,
         schedule=enable_scheduling,
         use_global_to_shared=use_global_to_shared,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
