@@ -15,6 +15,7 @@ from ...ops.wave_ops import (
     GatherToLDS,
     GetResult,
     IterArg,
+    Write,
     get_custom,
 )
 
@@ -300,6 +301,9 @@ def compute_multi_buffer_count(
     lifetime: dict[fx.Node, int] = compute_lifetime(graph, use_absolute_cycle=True)
     result: dict[fx.Node, int] = defaultdict(int)
     for node in graph.nodes:
+        if not isinstance(node, (Write, GatherToLDS)):
+            continue
+
         shared_memory_operand = get_shared_memory_operand(node)
         if shared_memory_operand is None:
             continue
