@@ -2175,7 +2175,6 @@ def testF16HwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
         num_iterators=2, inputs={N: i, K: j}, outputs={N: i, K: j}
     )
 
-
     @tkw.wave(constraints)
     def gemm(
         a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
@@ -2214,10 +2213,12 @@ def testF16HwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
 
-    a = device_randn(shape[0], shape[2], device='cuda', dtype=torch.float16)
-    b = device_randn(shape[2], shape[1], device='cuda', dtype=torch.float16)
-    c = device_randn(shape[0], shape[1], device='cuda', dtype=torch.float32)
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[2], shape[1], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
     asm = gemm(a, b, c)
 
     torch_ref = torch.matmul(a.cpu().to(torch.float32), b.cpu().to(torch.float32))
-    assert_close(c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False)
+    assert_close(
+        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
+    )

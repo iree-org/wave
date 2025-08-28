@@ -14,7 +14,12 @@ from .utils.general_utils import get_hardware_constraint
 from ..lang.global_symbols import THREAD_0, SHARED_ADDRESS_SPACE
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import Read, get_custom
-from ..wave.constraints import Constraint, MMAType, TilingConstraint, WorkgroupConstraint
+from ..wave.constraints import (
+    Constraint,
+    MMAType,
+    TilingConstraint,
+    WorkgroupConstraint,
+)
 from ..wave.utils.run_utils import get_default_arch
 
 
@@ -62,7 +67,10 @@ def modify_index(index, hardware_constraint, elem_type):
     thread_ids = [THREAD_0]
     new_index = {key: index[key].subs({t: 0 for t in thread_ids}) for key in index}
     mul = 4 if elem_type.bitwidth() == 16 else 2
-    delinearized = [(thread_id % div_factor) * mul_factor, sympy.floor((thread_id % 64) / div_factor)]
+    delinearized = [
+        (thread_id % div_factor) * mul_factor,
+        sympy.floor((thread_id % 64) / div_factor),
+    ]
     for i, key in enumerate(index.keys()):
         new_index[key].start += delinearized[i]
         new_index[key].size = load_elems_per_thread if i == len(index.keys()) - 1 else 1
@@ -75,7 +83,8 @@ def mark_hardware_transpose_candidates(
 ):
     hardware_constraint = get_hardware_constraint(constraints)
     supported_mfma_types = [
-        MMAType.I32_16x16x32_I8, MMAType.F32_16x16x16_F16,
+        MMAType.I32_16x16x32_I8,
+        MMAType.F32_16x16x16_F16,
     ]
 
     if not hardware_constraint.mma_type in supported_mfma_types:
@@ -90,5 +99,7 @@ def mark_hardware_transpose_candidates(
     for read in trace.walk(transpose_wrapper):
         custom_node = get_custom(read)
         if meets_hw_transpose_requirements(custom_node, constraints):
-            custom_node.index = modify_index(read.index, hardware_constraint, custom_node.type.dtype)
+            custom_node.index = modify_index(
+                read.index, hardware_constraint, custom_node.type.dtype
+            )
             custom_node.update_arg("transpose", True)
