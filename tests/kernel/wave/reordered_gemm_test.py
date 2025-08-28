@@ -17,11 +17,10 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 import os
 from torch.testing import assert_close
 
-from .common.utils import (
-    require_e2e,
-)
+from .common.utils import require_e2e, require_cdna3
 
 
+@require_cdna3
 @require_e2e
 @pytest.mark.parametrize("shape", [(8192, 8192, 8192)])
 @pytest.mark.parametrize(
@@ -81,6 +80,7 @@ def testReorderedPingPongGemm(
 
 
 @require_e2e
+@require_cdna3
 @pytest.mark.parametrize("shape", [(8192, 8192, 8192)])
 @pytest.mark.parametrize(
     "enable_scheduling",
