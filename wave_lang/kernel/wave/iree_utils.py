@@ -121,7 +121,7 @@ def _convert_dtype_to_mlir(dtype: str) -> ir.Type:
     return dtypes[dtype]()
 
 
-def get_matmul_asm(
+def get_mm_asm(
     lhs_type: str,
     rhs_type: str,
     acc_type: str,
@@ -157,25 +157,11 @@ def get_matmul_asm(
             else ir.FloatAttr.get(acc_element_type, 0.0)
         )
 
-        # Transpose A
-        if tA == "T":
-            arg0_type = ir.RankedTensorType.get([K, M], operand_element_type)
-            arg0_M_idx = 1
-            arg1_type = ir.RankedTensorType.get([K, N], operand_element_type)
-            arg1_N_idx = 1
-        # Transpose B
-        elif tB == "T":
-            arg0_type = ir.RankedTensorType.get([M, K], operand_element_type)
-            arg0_M_idx = 0
-            arg1_type = ir.RankedTensorType.get([N, K], operand_element_type)
-            arg1_N_idx = 0
-        # "Normal" path (can't transpose both)
-        else:
-            assert tA == "N" and tB == "N"
-            arg0_type = ir.RankedTensorType.get([M, K], operand_element_type)
-            arg0_M_idx = 0
-            arg1_type = ir.RankedTensorType.get([K, N], operand_element_type)
-            arg1_N_idx = 1
+        shape_A = [K, M] if tA == "T" else [M, K]
+        shape_B = [N, K] if tB == "T" else [K, N]
+
+        arg0_type = ir.RankedTensorType.get(shape_A, operand_element_type)
+        arg1_type = ir.RankedTensorType.get(shape_B, operand_element_type)
         result_type = ir.RankedTensorType.get([M, N], result_element_type)
 
         module = ir.Module.create()
@@ -183,6 +169,13 @@ def get_matmul_asm(
 
             @func.FuncOp.from_py_func(arg0_type, arg1_type)
             def main(arg0, arg1):
+                if cast_fp8:
+                    f8_dtype = _convert_dtype_to_mlir("f8E4M3FNUZ")
+                    arg0_fp8_type = ir.RankedTensorType.get(shape_A, f8_dtype)
+                    arg1_fp8_type = ir.RankedTensorType.get(shape_B, f8_dtype)
+                    arg0_fp8 = arith.truncf(arg0_fp8_type, arg0)
+                    arg1_fp8 = arith.truncf(arg1_fp8_type, arg1)
+
                 zero_element = arith.constant(
                     value=literal_zero, result=acc_element_type
                 )
@@ -212,8 +205,8 @@ def get_matmul_asm(
                 )
 
                 acc = linalg.matmul(
-                    arg0,
-                    arg1,
+                    arg0_fp8 if cast_fp8 else arg0,
+                    arg1_fp8 if cast_fp8 else arg1,
                     outs=[filled_tensor],
                     indexing_maps=indexing_maps,
                 )
@@ -337,12 +330,12 @@ def generate_iree_ref(
         rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
         acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
         tA, tB = kernel_type.split("_")[1]
-        asm, func_name = get_matmul_asm(
+        asm, func_name = get_mm_asm(
             lhs_type,
             rhs_type,
             acc_type,
             batch=False,
-            cast_fp8="f8" in kernel_type,
+            cast_fp8="fp8" in kernel_type,
             tA=tA,
             tB=tB,
         )
