@@ -70,7 +70,7 @@ def test_mxfp4_scaled_mma_16x16x128():
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        backend="rocm",
+        device="hip",
         target="gfx950",
         compile_to_mlir=True,
     )
@@ -193,7 +193,7 @@ def test_mxfp8_scaled_mma_16x16x128():
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        backend="rocm",
+        device="hip",
         target="gfx950",
         compile_to_mlir=True,
     )
@@ -343,7 +343,7 @@ def test_mxfp4_scaled_mma_256x256x256():
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        backend="rocm",
+        device="hip",
         target="gfx950",
         compile_to_mlir=True,
     )

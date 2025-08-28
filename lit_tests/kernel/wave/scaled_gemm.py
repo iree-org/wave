@@ -84,7 +84,7 @@ def test_scaled_gemm_mxfp4():
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.NONE,
-        backend="rocm",
+        device="hip",
         target="gfx950",
         compile_to_mlir=True,
     )
@@ -183,7 +183,7 @@ def test_scaled_gemm_mxfp8():
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.NONE,
-        backend="rocm",
+        device="hip",
         target="gfx950",
         compile_to_mlir=True,
     )
@@ -586,7 +586,7 @@ def test_unaligned_scaled_gemm_mxfp4():
         subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.NONE,
-        backend="rocm",
+        device="hip",
         target="gfx950",
         compile_to_mlir=True,
     )
