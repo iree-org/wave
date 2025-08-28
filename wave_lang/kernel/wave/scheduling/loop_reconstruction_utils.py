@@ -5,12 +5,16 @@ from typing import Optional, Sequence
 import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
-from ..utils.general_utils import is_shared_write
+from ..utils.general_utils import (
+    is_shared_write,
+    get_shared_memory_operand,
+    ceildiv,
+    propagate_loop_carried_vars,
+)
 from ...ops.wave_ops import (
     GatherToLDS,
     GetResult,
     IterArg,
-    Iterate,
     get_custom,
 )
 
@@ -229,10 +233,9 @@ def create_drain_stage_schedule(n: int) -> list[list[int]]:
     return schedule
 
 
-def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]:
+def compute_lifetime(graph: fx.Graph) -> dict[fx.Node, int]:
     """
-    Perform liveness analysis on the graph to determine the live ranges of
-    variables and use that to deduce how many rotating registers we need.
+    Compute number of clocks each node result needs to be alive.
     """
     lifetime: dict[fx.Node, int] = defaultdict(int)
     for node in graph.nodes:
@@ -253,6 +256,16 @@ def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]
             )
             lifetime[node] = max(user_lifetime, lifetime[node])
 
+    return lifetime
+
+
+def liveness_analysis(graph: fx.Graph) -> dict[fx.Node, int]:
+    """
+    Perform liveness analysis on the graph to determine the live ranges of
+    variables and use that to deduce how many rotating registers we need.
+    """
+    lifetime: dict[fx.Node, int] = compute_lifetime(graph)
+
     # Determine how many copies we need for each node. If the lifetime of a node
     # is l clocks and the initiation interval is T, then only ceil(l/T) values
     # of the node can be live at the same time. We need to create copies of only
@@ -272,6 +285,35 @@ def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]
             num_rotating_registers[node] = l
 
     return num_rotating_registers
+
+
+def compute_multi_buffer_count(
+    graph: fx.Graph, initiation_interval: int
+) -> dict[fx.Node, int]:
+    """
+    Compute the number of buffers needed for each node.
+
+    """
+    lifetime: dict[fx.Node, int] = compute_lifetime(graph)
+    result: dict[fx.Node, int] = defaultdict(int)
+    for node in graph.nodes:
+        shared_memory_operand = get_shared_memory_operand(node)
+        if shared_memory_operand is None:
+            continue
+
+        shared_memory_operand = propagate_loop_carried_vars(shared_memory_operand)
+
+        assert node in lifetime, f"Node {node} not found in lifetime"
+        # Lifetime returns 0 if node result only used on same clock, 1 if it used on next clock, etc,
+        # so we need to add 1 to the lifetime to get the number of clocks the result is live.
+        buffer_count = ceildiv(lifetime[node] + 1, initiation_interval)
+        logger.debug(f"Node: {node}, Buffer count: {buffer_count}")
+        if buffer_count < 2:
+            continue
+
+        result[shared_memory_operand] = max(result[shared_memory_operand], buffer_count)
+
+    return result
 
 
 def partition_graph_by_stage(
