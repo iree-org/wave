@@ -296,7 +296,6 @@ def compute_multi_buffer_count(
 ) -> dict[fx.Node, int]:
     """
     Compute the number of buffers needed for each node.
-
     """
     lifetime: dict[fx.Node, int] = compute_lifetime(graph, use_absolute_cycle=True)
     result: dict[fx.Node, int] = defaultdict(int)
