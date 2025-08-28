@@ -5,14 +5,12 @@ from typing import Optional, Sequence
 import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
-
-from ...lang.global_symbols import SHARED_ADDRESS_SPACE
+from ..utils.general_utils import is_shared_write
 from ...ops.wave_ops import (
     GatherToLDS,
     GetResult,
     IterArg,
     Iterate,
-    Write,
     get_custom,
 )
 
@@ -236,22 +234,22 @@ def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]
     Perform liveness analysis on the graph to determine the live ranges of
     variables and use that to deduce how many rotating registers we need.
     """
-    lifetime: dict[fx.Node, int] = {}
+    lifetime: dict[fx.Node, int] = defaultdict(int)
     for node in graph.nodes:
         custom = get_custom(node)
         if custom.scheduling_parameters is None:
             continue
-        if node not in lifetime:
-            lifetime[node] = 0
+
+        node_stage = custom.scheduling_parameters["stage"]
         for user in custom.users:
             if user.scheduling_parameters is None:
                 continue
+
+            user_stage = user.scheduling_parameters["stage"]
+            user_lifetime = user_stage - node_stage
+
             logger.debug(
-                f"Node: {node}, User: {user.fx_node}, lifetime: {user.scheduling_parameters['stage'] - custom.scheduling_parameters['stage']}"
-            )
-            user_lifetime = (
-                user.scheduling_parameters["stage"]
-                - custom.scheduling_parameters["stage"]
+                f"Node: {node}, User: {user.fx_node}, lifetime: {user_lifetime}"
             )
             lifetime[node] = max(user_lifetime, lifetime[node])
 
@@ -264,10 +262,7 @@ def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]
         if node in num_rotating_registers:
             continue
         custom = get_custom(node)
-        if (
-            isinstance(custom, Write)
-            and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
-        ):
+        if is_shared_write(custom):
             continue
 
         if isinstance(custom, GatherToLDS):
