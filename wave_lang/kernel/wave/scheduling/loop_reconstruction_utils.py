@@ -233,22 +233,25 @@ def create_drain_stage_schedule(n: int) -> list[list[int]]:
     return schedule
 
 
-def compute_lifetime(graph: fx.Graph) -> dict[fx.Node, int]:
+def compute_lifetime(
+    graph: fx.Graph, use_absolute_cycle: bool = False
+) -> dict[fx.Node, int]:
     """
     Compute number of clocks each node result needs to be alive.
     """
     lifetime: dict[fx.Node, int] = defaultdict(int)
+    name = "absolute_cycle" if use_absolute_cycle else "stage"
     for node in graph.nodes:
         custom = get_custom(node)
         if custom.scheduling_parameters is None:
             continue
 
-        node_stage = custom.scheduling_parameters["absolute_cycle"]
+        node_stage = custom.scheduling_parameters[name]
         for user in custom.users:
             if user.scheduling_parameters is None:
                 continue
 
-            user_stage = user.scheduling_parameters["absolute_cycle"]
+            user_stage = user.scheduling_parameters[name]
             user_lifetime = user_stage - node_stage
 
             logger.debug(
@@ -264,7 +267,7 @@ def liveness_analysis(graph: fx.Graph) -> dict[fx.Node, int]:
     Perform liveness analysis on the graph to determine the live ranges of
     variables and use that to deduce how many rotating registers we need.
     """
-    lifetime: dict[fx.Node, int] = compute_lifetime(graph)
+    lifetime: dict[fx.Node, int] = compute_lifetime(graph, use_absolute_cycle=False)
 
     # Determine how many copies we need for each node. If the lifetime of a node
     # is l clocks and the initiation interval is T, then only ceil(l/T) values
@@ -294,7 +297,7 @@ def compute_multi_buffer_count(
     Compute the number of buffers needed for each node.
 
     """
-    lifetime: dict[fx.Node, int] = compute_lifetime(graph)
+    lifetime: dict[fx.Node, int] = compute_lifetime(graph, use_absolute_cycle=True)
     result: dict[fx.Node, int] = defaultdict(int)
     for node in graph.nodes:
         shared_memory_operand = get_shared_memory_operand(node)
