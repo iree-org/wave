@@ -1,0 +1,92 @@
+# Copyright 2024 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: "Wave GPU CI (mi35x)"
+
+on:
+  workflow_dispatch:
+  pull_request:
+      types: [opened, synchronize, ready, ready_for_review, converted_to_draft]
+  push:
+    branches:
+      - main
+
+concurrency:
+  # A PR number if a pull request and otherwise the commit hash. This cancels
+  # queued and in-progress runs for the same PR (presubmit) or commit
+  # (postsubmit). The workflow name is prepended to avoid conflicts between
+  # different workflows.
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "${{ matrix.os }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [3.11]
+        os: [linux-mi35x-1gpu-ossci-iree-org]
+    runs-on: ${{matrix.os}}
+    timeout-minutes: 60
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+
+    container:
+      image: rocm/7.0-preview:rocm7.0_preview_ubuntu_22.04_vllm_0.8.5_mi35X_prealpha
+      options: >-
+        --device=/dev/kfd
+        --device=/dev/dri
+        --group-add video
+        --ipc=host
+        --shm-size=16g
+        --cap-add=SYS_PTRACE
+        --security-opt seccomp=unconfined
+
+    env:
+      VENV_DIR: ${{ github.workspace }}/.wave-venv
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Install Rust via rustup.sh
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "CARGO_HOME=$HOME/.cargo" >> $GITHUB_ENV
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install pip deps
+        if: ${{ !cancelled() }}
+        run: |
+          python -m pip install --no-compile --upgrade pip
+          pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
+          pip install -r requirements.txt -e .
+
+      - name: Run unit tests
+        if: ${{ !cancelled() }}
+        run: |
+          pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+
+      - name: Test TKW runtime related stack on amdgpu
+        if: ${{ !cancelled() }}
+        run: |
+          export WAVE_CACHE_DIR=$PWD/.wave
+          rm -rf ./.wave
+          nproc
+          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+
+      - name: Run e2e tests on AMD GPU
+        if: ${{ (github.event_name == 'pull_request') && !cancelled() }}
+        run: |
+          WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+
+      - name: Run expensive e2e tests on AMD GPU
+        if: ${{ (github.event_name != 'pull_request') && !cancelled() }}
+        run: |
+          WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
+
+      - name: Run LIT tests
+        if: ${{ !cancelled() }}
+        run: |
+          lit lit_tests/ -v
