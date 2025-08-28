@@ -19,6 +19,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 
 from .common.utils import (
     require_cdna_2_or_3_or_4,
+    require_cdna3,
     require_e2e,
 )
 
@@ -29,6 +30,7 @@ reordered_gemm_test_shapes = [
 ]
 
 
+@require_cdna3
 @require_e2e
 @require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", reordered_gemm_test_shapes)
@@ -89,6 +91,7 @@ def testReorderedPingPongGemm(
 
 
 @require_e2e
+@require_cdna3
 @pytest.mark.parametrize("shape", [(8192, 8192, 8192)])
 @pytest.mark.parametrize(
     "enable_scheduling",
