@@ -13,18 +13,29 @@ from wave_lang.kernel._support.tracing import CapturedTrace
 
 from ..._support.dtype import i8
 from ...lang.global_symbols import *
-from ...ops.wave_ops import Allocate, SharedMemoryBarrier, get_custom
+from ...ops.wave_ops import Allocate, IterArg, Iterate, SharedMemoryBarrier, get_custom
 from ..utils.graph_utils import get_users, is_barrier_between, update_sort_keys
 from ..utils.symbol_utils import subs_idxc
 from .solver import (
     determine_allocations_offsets,
 )
+from ..utils.general_utils import flatten_list
 
 
 @dataclass
 class LiveInterval:
     start: tuple[int] = (10000,)
     end: tuple[int] = (-1,)
+
+
+def propagate_user(user: fx.Node) -> list[fx.Node]:
+    custom = get_custom(user)
+    if isinstance(custom, Iterate):
+        arg_index = custom.init_args.index(user)
+        return [custom.iter_args()[arg_index]]
+    if isinstance(custom, IterArg):
+        return [u.fx_node for u in custom.users]
+    return [user]
 
 
 def compute_live_intervals(allocs: list[fx.Node]):
@@ -35,6 +46,7 @@ def compute_live_intervals(allocs: list[fx.Node]):
     for alloc in allocs:
         live_intervals[alloc] = LiveInterval()
         users, _ = get_users(alloc, None)
+        users = flatten_list([propagate_user(u) for u in users])
         for user in users:
             if user._sort_key < live_intervals[alloc].start:
                 live_intervals[alloc].start = user._sort_key
@@ -51,6 +63,7 @@ def get_use(
     alloc: fx.Node, live_interval: LiveInterval, match_sort_key: int
 ) -> fx.Node:
     users, _ = get_users(alloc, None)
+    users = flatten_list([propagate_user(u) for u in users])
     matches = [x for x in users if x._sort_key == live_interval.start]
     if len(matches) != 1:
         raise ValueError(
