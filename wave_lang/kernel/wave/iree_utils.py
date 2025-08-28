@@ -325,20 +325,6 @@ def generate_iree_ref(
             batch=False,
             cast_fp8=kernel_type == "mmt_f8",
         )
-    elif "mm" in kernel_type:
-        lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
-        rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
-        acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
-        tA, tB = kernel_type.split("_")[1]
-        asm, func_name = get_mm_asm(
-            lhs_type,
-            rhs_type,
-            acc_type,
-            batch=False,
-            cast_fp8="fp8" in kernel_type,
-            tA=tA,
-            tB=tB,
-        )
     elif kernel_type == "bmmt":
         lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
         rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
@@ -359,6 +345,20 @@ def generate_iree_ref(
         output_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
         asm, func_name = get_chain_mmt_f8_asm(
             query_type, key_type, value_type, output_type
+        )
+    elif kernel_type.startswith("mm"):
+        lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
+        rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
+        acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
+        tA, tB = kernel_type.split("_")[1]
+        asm, func_name = get_mm_asm(
+            lhs_type,
+            rhs_type,
+            acc_type,
+            batch=False,
+            cast_fp8="fp8" in kernel_type,
+            tA=tA,
+            tB=tB,
         )
     elif kernel_type.startswith(conv_str):
         lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
