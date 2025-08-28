@@ -1,13 +1,18 @@
 from sympy import Max, Min, ceiling
 import torch
-from typing import Literal
+from typing import Literal, Optional
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
     torch_dtype_to_wave,
+)
+from wave_lang.kernel.wave.utils.mma_utils import (
+    get_mfma_load_elems_per_thread,
+    get_mfma_store_elems_per_thread,
 )
 
 
@@ -21,9 +26,10 @@ def get_reordered_matmul(
     block_n_size: int,
     block_k_size: int,
     group_m_size: int,
-    mfma_variant,
+    mfma_variant: tuple[MMAType, MMAType],
     input_dtype: torch.dtype = torch.float16,
     output_dtype: torch.dtype = torch.float32,
+    quantized_dtype: Optional[torch.dtype] = None,
     tA: Literal["N", "T"] = "N",
     tB: Literal["N", "T"] = "T",
 ):
@@ -39,8 +45,17 @@ def get_reordered_matmul(
     GROUP_SIZE_M = tkl.sym.GROUP_SIZE_M
     # Address space (for GPU, shared(1) or global(0))
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    # Other hyperparameters
+    LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
+    STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
+
     input_dtype = torch_dtype_to_wave(input_dtype)
     output_dtype = torch_dtype_to_wave(torch.float32)
+    if quantized_dtype:
+        quantized_dtype = torch_dtype_to_wave(quantized_dtype)
+
+    if not isinstance(mfma_variant, tuple):
+        mfma_variant = (mfma_variant, mfma_variant)
 
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -84,7 +99,9 @@ def get_reordered_matmul(
     constraints += [tkw.ReorderingConstraint(new_wg0, 0)]
     constraints += [tkw.ReorderingConstraint(new_wg1, 1)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant[0])
+    ]
 
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
@@ -111,15 +128,22 @@ def get_reordered_matmul(
         def repeat(
             acc: tkl.Register[M, N, output_dtype],
         ) -> tkl.Register[M, N, output_dtype]:
-            # a_reg: tkw.Register[M, K, tkl.f16]
-            a_reg = tkw.read(a, mapping=a_mapping)
-            # b_reg: tkw.Register[N, K, tkl.f16]
-            b_reg = tkw.read(b, mapping=b_mapping)
-            # acc: tkw.Register[M, N, tkl.f32]
+            # a_reg: tkw.Register[M, K, input_dtype]
+            a_reg = tkw.read(
+                a, elements_per_thread=LOAD_ELEMS_PER_THREAD, mapping=a_mapping
+            )
+            # b_reg: tkw.Register[N, K, input_dtype]
+            b_reg = tkw.read(
+                b, elements_per_thread=LOAD_ELEMS_PER_THREAD, mapping=b_mapping
+            )
+            if quantized_dtype:
+                a_reg = tkw.cast(a_reg, quantized_dtype)
+                b_reg = tkw.cast(b_reg, quantized_dtype)
+            # acc: tkw.Register[M, N, output_dtype]
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
 
-        tkw.write(repeat, c)
+        tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
 
     hyperparams = {
         M: m_size,
@@ -130,6 +154,8 @@ def get_reordered_matmul(
         BLOCK_K: block_k_size,
         GROUP_SIZE_M: group_m_size,
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        LOAD_ELEMS_PER_THREAD: get_mfma_load_elems_per_thread(mfma_variant[0]),
+        STORE_ELEMS_PER_THREAD: get_mfma_store_elems_per_thread(mfma_variant[1]),
     }
     hyperparams.update(get_default_scheduling_params())
     return gemm, hyperparams

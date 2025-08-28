@@ -9,8 +9,9 @@ from typing import Sequence
 
 import torch.fx as fx
 
+from ...ops.wave_ops import get_custom
 from .graph_utils import Edge, sort_graph_by_edge_weight
-from .resources import Operation
+from .resources import SCHEDULING_NOOPS, Operation
 from .scheduler_utils import get_scheduling_stage, BaseScheduler
 from ...ops.wave_ops import (
     get_custom,
@@ -106,9 +107,12 @@ class PrefetchScheduler(BaseScheduler):
         current_stage = get_scheduling_stage(sorted_nodes[0], _operation_stage_table)
         for node in sorted_nodes:
             node_stage = get_scheduling_stage(node, _operation_stage_table)
+            custom = get_custom(node)
             logger.info(f"Node {node} is in stage {node_stage}")
             if node_stage == current_stage:
                 schedule[node] = node_stage.value
+            elif isinstance(custom, SCHEDULING_NOOPS):
+                schedule[node] = current_stage.value
             elif PrefetchStage.is_valid_transition(current_stage, node_stage):
                 schedule[node] = node_stage.value
                 current_stage = node_stage

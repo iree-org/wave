@@ -6,6 +6,7 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
+from wave_lang.kernel.wave.utils.general_utils import torch_dtype_to_wave
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.templates.reordered_gemm import get_reordered_matmul
 from wave_lang.kernel.wave.utils.run_utils import (
@@ -91,20 +92,30 @@ def testReorderedPingPongGemm(
 @pytest.mark.parametrize("shape", [(8192, 8192, 8192)])
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.FOUR_STAGE, SchedulingType.NONE],
+    [SchedulingType.PREFETCH, SchedulingType.NONE, SchedulingType.FOUR_STAGE],
 )
 @pytest.mark.parametrize(
-    "mfma_variant",
-    [MMAType.F32_16x16x16_F16],
+    "input_dtype, quant_dtype, mfma_variant",
+    [
+        (
+            torch.float16,
+            torch.float8_e4m3fnuz,
+            (MMAType.F32_32x32x16_F8, MMAType.F32_32x32x16_K8_F16),
+        ),
+        (torch.float16, None, MMAType.F32_16x16x16_F16),
+        (torch.bfloat16, None, MMAType.F32_16x16x16_F16),
+    ],
 )
 @pytest.mark.parametrize("transpose", ["NN", "NT", "TN"])
 def testReorderedGemmTranspose(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
-    mfma_variant: MMAType,
+    mfma_variant: tuple[MMAType, MMAType],
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
+    input_dtype: torch.dtype,
+    quant_dtype: torch.dtype,
     transpose: str,
 ):
     tA, tB = transpose
@@ -130,8 +141,9 @@ def testReorderedGemmTranspose(
         BLOCK_K,
         GROUP_SIZE_M,
         mfma_variant,
-        input_dtype=torch.float16,
+        input_dtype=input_dtype,
         output_dtype=torch.float32,
+        quantized_dtype=quant_dtype,
         tA=tA,
         tB=tB,
     )
@@ -154,8 +166,8 @@ def testReorderedGemmTranspose(
     b_shape = (k, n) if tB == "N" else (n, k)
     c_shape = (m, n)
 
-    a = device_randn(*a_shape, dtype=torch.float16)
-    b = device_randn(*b_shape, dtype=torch.float16)
+    a = device_randn(*a_shape, dtype=input_dtype)
+    b = device_randn(*b_shape, dtype=input_dtype)
     c = device_zeros(*c_shape, dtype=torch.float32)
     reordered_gemm(a, b, c)
 
@@ -163,5 +175,7 @@ def testReorderedGemmTranspose(
         options.benchmark_results_file = perf_filename_iree
 
     iree_ref = device_zeros(*c_shape, dtype=torch.float32)
-    generate_iree_ref(f"mm_{tA}{tB}", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    generate_iree_ref(
+        f"mm_{tA}{tB}" + ("_fp8" if quant_dtype else ""), [a, b], [iree_ref], options
+    )
+    assert_close(c, iree_ref, atol=3e-5, rtol=3e-4, check_device=False)
