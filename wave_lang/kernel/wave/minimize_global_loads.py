@@ -15,7 +15,7 @@ from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
-from ..ops.wave_ops import Read, Write, get_custom
+from ..ops.wave_ops import Read, Write, GatherToLDS, get_custom
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
@@ -28,6 +28,7 @@ from .utils.general_utils import (
     get_fastest_index,
     infer_dim,
     is_shared_read,
+    is_shared_write,
     is_valid_global_read,
 )
 from .utils.graph_utils import (
@@ -321,13 +322,15 @@ def update_write_dependencies(
     for memory, writes in optimized_writes.items():
 
         def is_replaceable_write(node: fx.Node) -> bool:
+            if node in writes:
+                return False
+
             custom = get_custom(node)
-            return (
-                isinstance(custom, Write)
-                and custom.memory == memory
-                and custom.type.address_space == SHARED_ADDRESS_SPACE
-                and not custom.fx_node in writes
-            )
+            if is_shared_write(custom) and custom.memory == memory:
+                return True
+            if isinstance(custom, GatherToLDS) and custom.dst == memory:
+                return True
+            return False
 
         replaceable_writes = trace.walk(is_replaceable_write)
         for replaceable_write in replaceable_writes:
