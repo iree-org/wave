@@ -243,12 +243,12 @@ def compute_lifetime(graph: fx.Graph) -> dict[fx.Node, int]:
         if custom.scheduling_parameters is None:
             continue
 
-        node_stage = custom.scheduling_parameters["stage"]
+        node_stage = custom.scheduling_parameters["absolute_cycle"]
         for user in custom.users:
             if user.scheduling_parameters is None:
                 continue
 
-            user_stage = user.scheduling_parameters["stage"]
+            user_stage = user.scheduling_parameters["absolute_cycle"]
             user_lifetime = user_stage - node_stage
 
             logger.debug(
