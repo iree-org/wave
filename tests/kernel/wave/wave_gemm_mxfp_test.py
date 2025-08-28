@@ -145,6 +145,7 @@ def torchScaledGemmMXFP8(x, w, x_scales, w_scales):
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
         SchedulingType.MODULO,
+        SchedulingType.FOUR_STAGE,
     ],
 )
 def testScaledGemmMXFP4(
@@ -247,7 +248,13 @@ def testScaledGemmMXFP4(
         ScaledMMAType.F32_16x16x128_F8F6F4,
     ],
 )
-@pytest.mark.parametrize("enable_scheduling", [SchedulingType.PREFETCH])
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.PREFETCH,
+        SchedulingType.FOUR_STAGE,
+    ],
+)
 def testScaledBatchedGemmMXFP4(
     batch: int,
     shape: tuple[int],
