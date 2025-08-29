@@ -198,6 +198,7 @@ def get_bshd_attention_kernel(
     dynamic_dims: bool,
     is_causal: bool = False,
     is_custom_mask: bool = False,
+    num_waves: int = 4,
 ):
     # Input sizes
     # BxS_QxHxD x BxS_KVxH_KVxD
@@ -222,7 +223,7 @@ def get_bshd_attention_kernel(
     constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
     constraints += [tkw.WorkgroupConstraint(H, BLOCK_H, 3)]
     constraints += [tkw.TilingConstraint(K2, BLOCK_K2)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / num_waves)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
@@ -408,7 +409,7 @@ def get_bshd_attention_kernel(
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         BLOCK_B: 1,
         BLOCK_H: 1,
-        BLOCK_M: 128,
+        BLOCK_M: 128 * (num_waves // 4),
         BLOCK_N: 64,
         BLOCK_K2: 64,
         B: 1,
