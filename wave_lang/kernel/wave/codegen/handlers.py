@@ -19,7 +19,6 @@ from wave_lang.aot.support.ir_utils import (
     _is_signed_or_signless_type,
     get_conversion_op,
 )
-from wave_lang.kernel._support.shaped_type import ShapedType
 
 # TK infrastructure imports.
 from wave_lang.kernel.lang.global_symbols import *
@@ -557,11 +556,12 @@ def handle_atomic_op(op):
 
 
 def get_rank(mlir_type):
-    if not isinstance(mlir_type, ShapedType):
+    if hasattr(mlir_type, "rank"):
+        return mlir_type.rank
+    else:
         # Not 0 because vector<f32> is rank 0, and in theory,
         # is broadcastable from pure scalar.
         return -1
-    return mlir_type.rank
 
 
 def handle_binary_op(op):
@@ -1620,8 +1620,66 @@ def handle_select(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    unwrap = lambda x: cast_py_value(emitter, x).ir_value
-    selected = arith_d.select(unwrap(cond), unwrap(if_true), unwrap(if_false))
+    c_value = cast_py_value(emitter, cond).ir_value
+    t_value = cast_py_value(emitter, if_true).ir_value
+    f_value = cast_py_value(emitter, if_false).ir_value
+
+    # Handle broadcasting
+    c_rank = get_rank(c_value.type)
+    t_rank = get_rank(t_value.type)
+    f_rank = get_rank(f_value.type)
+
+    max_rank = max(c_rank, t_rank, f_rank)
+
+    if max_rank != -1:
+        if isinstance(c_value.type, VectorType):
+            cond_dtype = c_value.type.element_type
+        else:
+            cond_dtype = c_value.type
+        if isinstance(t_value.type, VectorType):
+            if_true_dtype = t_value.type.element_type
+        else:
+            if_true_dtype = t_value.type
+        if isinstance(f_value.type, VectorType):
+            if_false_dtype = f_value.type.element_type
+        else:
+            if_false_dtype = f_value.type
+
+        target_shape = None
+        if c_rank == max_rank and isinstance(c_value.type, VectorType):
+            target_shape = c_value.type.shape
+        elif t_rank == max_rank and isinstance(t_value.type, VectorType):
+            target_shape = t_value.type.shape
+        elif f_rank == max_rank and isinstance(f_value.type, VectorType):
+            target_shape = f_value.type.shape
+
+        if target_shape is None:
+            raise ValidationError(
+                f"SelectOp broadcast couldn't find target shape\n"
+                f"{get_custom(node)}\n"
+                f"cond: {c_value.type}\n"
+                f"if_true: {t_value.type}\n"
+                f"if_false: {f_value.type}"
+            )
+        target_cond_type = VectorType.get(target_shape, cond_dtype)
+        target_value_type = VectorType.get(target_shape, if_true_dtype)
+
+        if c_rank < max_rank:
+            c_value = vector_d.broadcast(target_cond_type, c_value)
+        if t_rank < max_rank:
+            t_value = vector_d.broadcast(target_value_type, t_value)
+        if f_rank < max_rank:
+            f_value = vector_d.broadcast(target_value_type, f_value)
+
+    if t_value.type != f_value.type:
+        op = get_custom(node)
+        raise ValidationError(
+            f"Expected if_true and if_false to have same type after broadcasting\n"
+            f"{op}\nGot\n"
+            f"if_true: {t_value.type}, if_false: {f_value.type}"
+        )
+
+    selected = arith_d.select(c_value, t_value, f_value)
     emitter.bind_node_proxy(node, IRProxyValue(selected))
 
 
