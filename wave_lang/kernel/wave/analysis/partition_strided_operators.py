@@ -81,6 +81,9 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
         """
         custom = get_custom(node)
         if isinstance(custom, Write):
+            if custom.elements_per_thread == 1:
+                return False
+
             # `custom.register_index` calls are expensive, try to minimize the number
             # of calls.
             strides_and_sizes = [
@@ -368,6 +371,99 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                 # Useful to handle write/read dependency
                 custom.replace_all_uses_with(ops_to_combine)
             elif isinstance(custom, (Read, SelfIndex)):
+                reshape = Reshape(ops_to_combine, custom.vector_shapes).add_to_graph(
+                    custom.graph
+                )
+                reshape.expanded_dims = custom.expanded_dims
+                reshape.vector_shapes = custom.vector_shapes
+
+                # Save the original index on the reshape op so later we can
+                # detect if op was part of `gpr_offset` partition.
+                reshape.index = index
+                custom.replace_all_uses_with(reshape)
+
+            custom.graph.erase_node(custom.fx_node)
+
+
+def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint]):
+    def has_gather_mapping(node: fx.Node) -> bool:
+        """
+        Checks for writes on 2d tensors with strided access on a single dimension that
+        read more than a single element.
+        """
+        custom = get_custom(node)
+        # if isinstance(custom, (Read, Write)):
+        if isinstance(custom, Write):
+            is_contiguous = custom.is_contiguous_vec()
+            print(f"Partitioning gather like op: {node}: {is_contiguous}")
+            return not is_contiguous
+
+        return False
+
+    strided_operators = trace.walk(has_gather_mapping)
+    for operator in strided_operators:
+        custom = get_custom(operator)
+        index = custom.index
+        elements_per_thread = custom.elements_per_thread
+
+        # Break apart Reads/Writes that has non-contiguous GPR Read/Writes.
+        with custom.graph.inserting_before(operator):
+            ops_to_combine = []
+            for i in range(elements_per_thread):
+                new_index = deepcopy(index)
+                for v in new_index.values():
+                    v.start = v.start + i
+                    v.size = 1
+                    v.stride = 1
+
+                if hasattr(custom, "mapping_dynamic_vals"):
+                    # If we are partitioning read/write ops, dynamic_vals can be
+                    # potentially partitioned as well. Partitioned dyn vals are
+                    # are merged into single value using Reshape op which still
+                    # holds the original index containing `GPR_NUM`.
+                    # Extract corresponding partitioned chunk from such ops.
+                    new_dynamic_vals = []
+                    for dyn_val in custom.mapping_dynamic_vals:
+                        extract = ExtractSlice(dyn_val, [i], [1], [1]).add_to_graph(
+                            custom.graph
+                        )
+                        new_dynamic_vals.append(extract)
+
+                # Generate new Read/Write that has contiguous VGPR elements.
+                if isinstance(custom, Write):
+                    extract = ExtractSlice(
+                        custom.register_, [i], [1], [1]
+                    ).add_to_graph(custom.graph)
+                    extract.index = new_index
+                    new_node = Write(
+                        extract,
+                        custom.memory,
+                        mapping=custom.mapping,
+                        mapping_dynamic_vals=new_dynamic_vals,
+                        elements_per_thread=1,
+                    ).add_to_graph(custom.graph)
+                elif isinstance(custom, Read):
+                    # TODO: Add support on how to handle strided reads.
+                    new_node = Read(
+                        custom.memory,
+                        elements_per_thread=1,
+                        mapping=custom.mapping,
+                        mapping_dynamic_vals=new_dynamic_vals,
+                        _write_dependency=custom._write_dependency,
+                    ).add_to_graph(custom.graph)
+                else:
+                    raise NotImplementedError(f"Unsupported op type: {custom}")
+
+                # Update new_node information
+                new_node.index = new_index
+                new_node.vector_shapes = custom.vector_shapes
+                ops_to_combine.append(new_node)
+
+            # Update users of original op.
+            if isinstance(custom, Write):
+                # Useful to handle write/read dependency
+                custom.replace_all_uses_with(ops_to_combine)
+            elif isinstance(custom, Read):
                 reshape = Reshape(ops_to_combine, custom.vector_shapes).add_to_graph(
                     custom.graph
                 )

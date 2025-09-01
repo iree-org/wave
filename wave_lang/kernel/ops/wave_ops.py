@@ -1767,13 +1767,18 @@ class Read(CustomOp):
 
         mapping = self.mapping
 
-        mem_shape = get_custom(self.memory).type.symbolic_shape
+        memory = get_custom(self.memory)
+        symbolic_shape = memory.type.symbolic_shape
+        array_shape = symbolic_shape
+        if memory.type.address_space == SHARED_ADDRESS_SPACE:
+            array_shape = memory.distributed_shape
 
         from ..wave.utils.mapping_utils import check_is_mapping_contiguous
 
         return check_is_mapping_contiguous(
             mapping=mapping,
-            symbolic_shape=mem_shape,
+            symbolic_shape=symbolic_shape,
+            array_shape=array_shape,
             index=self.index,
             elements_per_thread=self.elements_per_thread,
             is_read=True,
@@ -2105,13 +2110,18 @@ class Write(CustomOp):
             return True
         mapping = self.mapping
 
-        mem_shape = get_custom(self.memory).type.symbolic_shape
+        memory = get_custom(self.memory)
+        symbolic_shape = memory.type.symbolic_shape
+        array_shape = symbolic_shape
+        if memory.type.address_space == SHARED_ADDRESS_SPACE:
+            array_shape = memory.distributed_shape
 
         from ..wave.utils.mapping_utils import check_is_mapping_contiguous
 
         return check_is_mapping_contiguous(
             mapping=mapping,
-            symbolic_shape=mem_shape,
+            symbolic_shape=symbolic_shape,
+            array_shape=array_shape,
             index=self.index,
             elements_per_thread=self.elements_per_thread,
             is_read=False,
