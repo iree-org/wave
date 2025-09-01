@@ -421,7 +421,7 @@ def test_read_write_mapping():
     # We are transposing, so contiguous load becomes non-contiguous store
     # CHECK:            vector.load
     # CHECK-NOT:        vector.load
-    # CHECK-COUNT-16:   memref.store
+    # CHECK-COUNT-16:   vector.store
 
 
 @run_test
