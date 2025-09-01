@@ -308,7 +308,7 @@ def test_flash_decoding():
     # CHECK-COUNT-2:           arith.mulf
     # CHECK-COUNT-1:           arith.addf
     # CHECK-COUNT-1:      arith.divf
-    # CHECK-COUNT-1:      vector.scatter
+    # CHECK-COUNT-2:      vector.maskedstore
 
 
 @run_test
