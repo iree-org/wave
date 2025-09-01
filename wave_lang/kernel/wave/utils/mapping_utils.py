@@ -4,13 +4,14 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from typing import TypeVar
-
+from copy import deepcopy
 import sympy
 
 from ..._support.indexing import IndexingContext
 from ...lang.wave_types import IndexMapping
-from .general_utils import infer_dim
+from .general_utils import infer_dim, get_fastest_index
 from .symbol_utils import IndexExpr, IndexSymbol, subs_idxc
+from ...compiler.utils import strides_from_symbolic_shape
 
 K = TypeVar("K")  # Key type
 V = TypeVar("V")  # Value type
@@ -217,9 +218,14 @@ def approximate_difference(
     return expr
 
 
+def _compute_offset(indices: list[IndexExpr], strides: list[IndexExpr]) -> IndexExpr:
+    return sum(i * s for i, s in zip(indices, strides))
+
+
 def check_is_mapping_contiguous(
     mapping: IndexMapping,
     symbolic_shape: tuple[IndexExpr, ...],
+    array_shape: tuple[IndexExpr, ...],
     index: tuple[IndexExpr, ...],
     elements_per_thread: int | IndexExpr,
     is_read: bool,
@@ -260,8 +266,23 @@ def check_is_mapping_contiguous(
 
     expected_diff = [0] * len(index_mapping)
     expected_diff[-1] = 1
+    if expected_diff == diff:
+        return True
 
-    return diff == expected_diff
+    idxc = IndexingContext.current()
+    strides = strides_from_symbolic_shape(idxc, array_shape, allow_mixed_shapes=True)
+    fastest_dim = list(index.keys())[get_fastest_index(index)]
+    prev_offset = _compute_offset([index[d].start for d in symbolic_shape], strides)
+    for i in range(1, elements_per_thread):
+        new_index = deepcopy(index)
+        new_index[fastest_dim].start += i
+        offset = _compute_offset([new_index[d].start for d in symbolic_shape], strides)
+        if (offset - prev_offset) != 1:
+            return False
+
+        prev_offset = offset
+
+    return True
 
 
 def transform_index_on_mapping(
