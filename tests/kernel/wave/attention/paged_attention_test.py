@@ -33,7 +33,7 @@ from torch.testing import assert_close
 from ..common.utils import (
     expensive_test_param,
     param_bool,
-    require_cdna3,
+    require_cdna_3_or_4,
     require_e2e,
 )
 from typing import List, Optional
@@ -182,7 +182,7 @@ def load_inputs(directory):
 
 # TODO: Investigate errors on MI250.
 @require_e2e
-@require_cdna3
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
@@ -345,7 +345,7 @@ def testPagedFlashDecoding(
 
 
 @require_e2e
-@require_cdna3
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", mha_shapes)
 @pytest.mark.parametrize("dtype", [torch.float16])
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
