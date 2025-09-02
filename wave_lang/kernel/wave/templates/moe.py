@@ -108,54 +108,55 @@ def get_moe_align_block_size_kernel(
         ],
     ):
 
-        # zero_counts = tkl.Register[NUM_EXPERTS, dtype](0)
-        # tkw.write(zero_counts, expert_counts)
+        if 0:
 
-        # This reads all the values from expert counts and increments them by 1, regardless of expert_id value
-        # expert_id = tkw.read(topk_ids, elements_per_thread=1)
-        # tkw.write(expert_id, return_topk_ids, elements_per_thread=1)
+            zero_counts = tkl.Register[NUM_EXPERTS, dtype](0)
+            tkw.write(zero_counts, expert_counts)
 
-        # e_reg = tkw.read(
-        #     expert_counts,
-        #     mapping=expert_read_map,
-        #     mapping_dynamic_vals=(expert_id,),
-        #     elements_per_thread=1,
-        # )
+            # This reads all the values from expert counts and increments them by 1, regardless of expert_id value
+            expert_id = tkw.read(topk_ids, elements_per_thread=1)
+            tkw.write(expert_id, return_topk_ids, elements_per_thread=1)
 
-        # # e_reg = e_reg + tkw.Register[sympy.Integer(1), dtype](1)
-        # e_reg = e_reg + tkw.Register[NUM_EXPERTS, dtype](1)
-        # tkw.write(
-        #     e_reg,
-        #     expert_counts,
-        #     mapping=expert_write_map,
-        #     mapping_dynamic_vals=(expert_id,),
-        #     elements_per_thread=1,
-        # )
+            e_reg = tkw.read(
+                expert_counts,
+                mapping=expert_read_map,
+                mapping_dynamic_vals=(expert_id,),
+                elements_per_thread=1,
+            )
 
-        # --------------------------------------------------------------------------------
-        expert_id = tkw.read(topk_ids, elements_per_thread=1)
-        tkw.write(expert_id, return_topk_ids, elements_per_thread=1)
+            # e_reg = e_reg + tkw.Register[sympy.Integer(1), dtype](1)
+            e_reg = e_reg + tkw.Register[NUM_EXPERTS, dtype](1)
+            tkw.write(
+                e_reg,
+                expert_counts,
+                mapping=expert_write_map,
+                mapping_dynamic_vals=(expert_id,),
+                elements_per_thread=1,
+            )
 
-        shmem = tkw.allocate(
-            shape=(NUM_EXPERTS,),
-            distributed_shape=(NUM_EXPERTS,),
-            dtype=dtype,
-        )
-        tkw.write(expert_counts, shmem, mapping=simple_read_map)
+            # --------------------------------------------------------------------------------
+        else:
+            # create shared memory to hold the histogram
+            shmem = tkw.allocate(
+                shape=(NUM_EXPERTS,),
+                distributed_shape=(NUM_EXPERTS,),
+                dtype=dtype,
+            )
 
-        one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
-        e_reg = tkw.atomic_add(
-            one_reg,
-            shmem,
-            mapping=simple_read_map,
-        )
-        tkw.write(
-            shmem,
-            expert_counts,
-            mapping=expert_write_map,
-            mapping_dynamic_vals=(expert_id,),
-            elements_per_thread=1,
-        )
+            expert_id = tkw.read(topk_ids, elements_per_thread=1)
+
+            one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
+            e_reg = tkw.atomic_add(
+                one_reg,
+                shmem,
+                mapping=expert_read_map,
+                mapping_dynamic_vals=(expert_id,),
+            )
+            e_reg = tkw.read(shmem, mapping=simple_read_map)
+            tkw.write(
+                e_reg,
+                expert_counts,
+            )
 
     hyperparams = {
         NUM_TOKENS: num_tokens,
