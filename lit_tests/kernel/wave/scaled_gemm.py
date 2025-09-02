@@ -454,7 +454,7 @@ def packed_mxfp4_global_to_lds_test():
     print(gemm_mxfp4_global_to_lds_prefetch.asm)
 
     # This test is important to protect efficiency and correctness of gather_to_lds version of MXFP4 prefetch GEMM.
-    # The thing to look out for in this LIT test is we want to ensure the instruction ordering within the stead state
+    # The thing to look out for in this LIT test is we want to ensure the instruction ordering within the steady state
     # is correct, to protect from unexpected changes in schedule/instruction reordering.
 
     # CHECK-LABEL:    packed_mxfp4_global_to_lds_test
@@ -572,7 +572,7 @@ def batched_prefetch_mxfp4_test():
     batched_gemm_mxfp4_prefetch = wave_compile(options, batched_gemm_mxfp4_prefetch)
     print(batched_gemm_mxfp4_prefetch.asm)
 
-    # CHECK-LABEL:    batched_prefetch_mxfp4_test
+    # CHECK-LABEL:    batched_gemm_mxfp4_prefetch
 
     # CHECK-DAG:      %[[C32_I14:.+]] = arith.constant 32 : i14
     # CHECK-DAG:      %[[C512_I14:.+]] = arith.constant 512 : i14
