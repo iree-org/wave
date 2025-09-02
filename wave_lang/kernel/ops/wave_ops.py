@@ -1761,6 +1761,17 @@ class Read(CustomOp):
         if self.has_identity_mapping():
             return True
 
+        if self.elements_per_thread == 1:
+            return True
+
+        from ..wave.utils.mapping_utils import (
+            check_is_mapping_contiguous,
+            check_is_dynamic_vals_broadcted,
+        )
+
+        if not check_is_dynamic_vals_broadcted(self.mapping_dynamic_vals):
+            return False
+
         mapping = self.mapping
 
         memory = get_custom(self.memory)
@@ -1768,8 +1779,6 @@ class Read(CustomOp):
         array_shape = symbolic_shape
         if memory.type.address_space == SHARED_ADDRESS_SPACE:
             array_shape = memory.distributed_shape
-
-        from ..wave.utils.mapping_utils import check_is_mapping_contiguous
 
         return check_is_mapping_contiguous(
             mapping=mapping,
@@ -2102,6 +2111,18 @@ class Write(CustomOp):
         If False we will have to lower it to gather"""
         if self.has_identity_mapping():
             return True
+
+        if self.elements_per_thread == 1:
+            return True
+
+        from ..wave.utils.mapping_utils import (
+            check_is_mapping_contiguous,
+            check_is_dynamic_vals_broadcted,
+        )
+
+        if not check_is_dynamic_vals_broadcted(self.mapping_dynamic_vals):
+            return False
+
         mapping = self.mapping
 
         memory = get_custom(self.memory)
@@ -2109,8 +2130,6 @@ class Write(CustomOp):
         array_shape = symbolic_shape
         if memory.type.address_space == SHARED_ADDRESS_SPACE:
             array_shape = memory.distributed_shape
-
-        from ..wave.utils.mapping_utils import check_is_mapping_contiguous
 
         return check_is_mapping_contiguous(
             mapping=mapping,
