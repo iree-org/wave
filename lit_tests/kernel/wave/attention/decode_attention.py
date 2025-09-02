@@ -220,22 +220,28 @@ def test_paged_flash_decoding_small_head_size():
     # CHECK:                func.func @phase_0
     # Check we are generating comparison against 13
     # CHECK:                   %[[C13:.*]] = arith.constant 13 : index
-    # CHECK:                   %[[COND:.*]] = arith.cmpi slt, %{{.*}}, %[[C13]] : index
-    # CHECK:                   %[[COND_SPLAT:.*]] = vector.broadcast %[[COND]] : i1 to vector<4xi1>
-    # CHECK:                   %[[COND_AND:.*]] = arith.andi %[[COND_SPLAT]], %{{.*}} : vector<4xi1>
+    # CHECK:                   %[[COND1:.*]] = arith.cmpi slt, %{{.*}}, %[[C13]]
+    # CHECK:                   %[[COND2:.*]] = arith.cmpi slt, %{{.*}}, %[[C13]]
+    # CHECK:                   %[[COND3:.*]] = arith.cmpi slt, %{{.*}}, %[[C13]]
+    # CHECK:                   %[[COND4:.*]] = arith.cmpi slt, %{{.*}}, %[[C13]]
 
-    # CHECK:                   %[[ELEM0:.*]] = vector.extract %[[COND_AND]][0] : i1 from vector<4xi1>
-    # CHECK:                   %[[ELEM0_SPLAT:.*]] = vector.broadcast %[[ELEM0:.*]] : i1 to vector<1xi1>
-    # CHECK:                   vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM0_SPLAT]], %{{.*}}
-    # CHECK:                   %[[ELEM1:.*]] = vector.extract %[[COND_AND]][1] : i1 from vector<4xi1>
-    # CHECK:                   %[[ELEM1_SPLAT:.*]] = vector.broadcast %[[ELEM1:.*]] : i1 to vector<1xi1>
-    # CHECK:                   vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM1_SPLAT]], %{{.*}}
-    # CHECK:                   %[[ELEM2:.*]] = vector.extract %[[COND_AND]][2] : i1 from vector<4xi1>
-    # CHECK:                   %[[ELEM2_SPLAT:.*]] = vector.broadcast %[[ELEM2:.*]] : i1 to vector<1xi1>
-    # CHECK:                   vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM2_SPLAT]], %{{.*}}
-    # CHECK:                   %[[ELEM3:.*]] = vector.extract %[[COND_AND]][3] : i1 from vector<4xi1>
-    # CHECK:                   %[[ELEM3_SPLAT:.*]] = vector.broadcast %[[ELEM3:.*]] : i1 to vector<1xi1>
-    # CHECK:                   vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM3_SPLAT]], %{{.*}}
+    # CHECK:                   scf.for
+
+    # CHECK:                     %[[COND_AND1:.*]] = arith.andi %[[COND1]], %{{.*}}
+    # CHECK:                     %[[ELEM1_SPLAT:.*]] = vector.broadcast %[[COND_AND1]] : i1 to vector<1xi1>
+    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM1_SPLAT]], %{{.*}}
+
+    # CHECK:                     %[[COND_AND2:.*]] = arith.andi %[[COND2]], %{{.*}}
+    # CHECK:                     %[[ELEM2_SPLAT:.*]] = vector.broadcast %[[COND_AND2]] : i1 to vector<1xi1>
+    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM2_SPLAT]], %{{.*}}
+
+    # CHECK:                     %[[COND_AND3:.*]] = arith.andi %[[COND3]], %{{.*}}
+    # CHECK:                     %[[ELEM3_SPLAT:.*]] = vector.broadcast %[[COND_AND3]] : i1 to vector<1xi1>
+    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM3_SPLAT]], %{{.*}}
+
+    # CHECK:                     %[[COND_AND4:.*]] = arith.andi %[[COND4]], %{{.*}}
+    # CHECK:                     %[[ELEM4_SPLAT:.*]] = vector.broadcast %[[COND_AND4]] : i1 to vector<1xi1>
+    # CHECK:                     vector.maskedload %{{.*}}[%{{.*}}], %[[ELEM4_SPLAT]], %{{.*}}
 
 
 @run_test
