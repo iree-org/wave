@@ -11,7 +11,7 @@ import torch.fx as fx
 from ..._support.indexing import IndexingContext
 from ...lang.wave_types import IndexMapping
 from .general_utils import infer_dim, get_fastest_index
-from .symbol_utils import IndexExpr, IndexSymbol, subs_idxc
+from .symbol_utils import IndexExpr, IndexSequence, IndexSymbol, subs_idxc
 from ...compiler.utils import strides_from_symbolic_shape
 
 K = TypeVar("K")  # Key type
@@ -294,12 +294,17 @@ def check_is_mapping_contiguous(
 def transform_index_on_mapping(
     mapping: IndexMapping,
     symbolic_shape: tuple[IndexExpr, ...],
-    index: tuple[IndexExpr, ...],
+    index: dict[IndexExpr, IndexSequence],
+    is_read: bool = True,
 ) -> tuple[IndexExpr, ...]:
-    """ "Transforms the index according to the specified mapping"""
-    input_index_mapping = mapping.map_input_indices(symbolic_shape)
+    """Transforms the index according to the specified mapping"""
+    if is_read:
+        index_mapping = mapping.map_input_indices(symbolic_shape)
+    else:
+        index_mapping = mapping.map_output_indices(symbolic_shape)
+
     idxc = IndexingContext.current()
-    index_mapping = tuple(i.subs(idxc.subs) for i in input_index_mapping)
+    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
     iters = mapping.iters
     subs = [
         (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
