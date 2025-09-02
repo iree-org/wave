@@ -439,6 +439,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                     raise NotImplementedError(f"Unsupported op type: {custom}")
 
                 # Update new_node information
+                custom.infer_type()
                 new_node.index = new_index
                 new_node.vector_shapes = custom.vector_shapes
                 ops_to_combine.append(new_node)
