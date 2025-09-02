@@ -571,7 +571,7 @@ def batched_prefetch_mxfp4_test():
     batched_gemm_mxfp4_prefetch = wave_compile(options, batched_gemm_mxfp4_prefetch)
     print(batched_gemm_mxfp4_prefetch.asm)
 
-    # CHECK-LABEL:    batched_gemm_mxfp4_prefetch
+    # CHECK-LABEL:    batched_prefetch_mxfp4_test
 
     # CHECK-DAG:      %[[C32_I14:.+]] = arith.constant 32 : i14
     # CHECK-DAG:      %[[C512_I14:.+]] = arith.constant 512 : i14
