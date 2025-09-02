@@ -47,6 +47,7 @@ from .utils.general_utils import (
     topological_sort_with_dependencies,
 )
 from .utils.symbol_utils import subs_idxc
+from .utils.classes import AttentionOperationType
 
 ##############################################################
 # General graph helper functions
@@ -74,63 +75,6 @@ class SchedReorderStrategy(Enum):
     NONE = 0x00
     TWO_PP_CLUSTER = 0x220
     MXFP4_PP_CLUSTER = 0x101
-
-
-class AttentionOperationType(Enum):
-    """Enumeration of attention operation types for prefetch stages."""
-
-    MMA_0 = "mma_0"
-    MMA_1 = "mma_1"
-    SOFTMAX_0 = "softmax_0"
-    SOFTMAX_1 = "softmax_1"
-    LOCAL_LOAD_0 = "local_load_0"
-    GLOBAL_LOAD_0 = "global_load_0"
-    LOCAL_STORE_0 = "local_store_0"
-    LOCAL_LOAD_1 = "local_load_1"
-    GLOBAL_LOAD_1 = "global_load_1"
-    LOCAL_STORE_1 = "local_store_1"
-
-    @classmethod
-    def get_all_types(cls) -> List["AttentionOperationType"]:
-        """Get all operation types as a list."""
-        return list(cls)
-
-    @classmethod
-    def from_string(cls, value: str) -> "AttentionOperationType":
-        """Create an enum value from a string, with error handling."""
-        try:
-            return cls(value)
-        except ValueError:
-            raise ValueError(f"Unknown attention operation type: {value}")
-
-    def __str__(self) -> str:
-        """Return the string value of the enum."""
-        return self.value
-
-    @classmethod
-    def get_mma_types(cls) -> List["AttentionOperationType"]:
-        """Get all MMA operation types."""
-        return [cls.MMA_0, cls.MMA_1]
-
-    @classmethod
-    def get_softmax_types(cls) -> List["AttentionOperationType"]:
-        """Get all softmax operation types."""
-        return [cls.SOFTMAX_0, cls.SOFTMAX_1]
-
-    @classmethod
-    def get_load_types(cls) -> List["AttentionOperationType"]:
-        """Get all load operation types."""
-        return [
-            cls.LOCAL_LOAD_0,
-            cls.LOCAL_LOAD_1,
-            cls.GLOBAL_LOAD_0,
-            cls.GLOBAL_LOAD_1,
-        ]
-
-    @classmethod
-    def get_store_types(cls) -> List["AttentionOperationType"]:
-        """Get all store operation types."""
-        return [cls.LOCAL_STORE_0, cls.LOCAL_STORE_1]
 
 
 def is_pingpong_strategy(strategy):
@@ -1026,9 +970,8 @@ def _classify_attention_operations(
             try:
                 op_type = AttentionOperationType.from_string(prefetch_stage)
                 operation_groups[op_type].append(node)
-            except ValueError:
-                # Skip unknown prefetch stages
-                continue
+            except:
+                raise ValueError(f"Unknown prefetch stage: {prefetch_stage}")
 
     return operation_groups
 

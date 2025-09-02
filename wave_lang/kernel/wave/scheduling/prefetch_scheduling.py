@@ -7,8 +7,6 @@
 from enum import Enum
 from typing import Sequence
 
-from ..schedule_reordering import AttentionOperationType
-
 import torch.fx as fx
 
 from .graph_utils import Edge, sort_graph_by_edge_weight
@@ -25,6 +23,7 @@ from ...ops.wave_ops import (
     Extract,
 )
 from ..utils.graph_utils import capture_backward_slice
+from ..utils.classes import AttentionOperationType
 
 import logging
 
