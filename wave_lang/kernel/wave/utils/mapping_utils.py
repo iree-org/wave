@@ -269,14 +269,16 @@ def check_is_mapping_contiguous(
     if expected_diff == diff:
         return True
 
+    fastest_dim = list(index.keys())[get_fastest_index(index)]
+    index = transform_index_on_mapping(mapping, symbolic_shape, index)
+
     idxc = IndexingContext.current()
     strides = strides_from_symbolic_shape(idxc, array_shape, allow_mixed_shapes=True)
-    fastest_dim = list(index.keys())[get_fastest_index(index)]
-    prev_offset = _compute_offset([index[d].start for d in symbolic_shape], strides)
+    prev_offset = _compute_offset([index[d] for d in symbolic_shape], strides)
     for i in range(1, elements_per_thread):
         new_index = deepcopy(index)
-        new_index[fastest_dim].start += i
-        offset = _compute_offset([new_index[d].start for d in symbolic_shape], strides)
+        new_index[fastest_dim] += i
+        offset = _compute_offset([new_index[d] for d in symbolic_shape], strides)
         if (offset - prev_offset) != 1:
             return False
 
