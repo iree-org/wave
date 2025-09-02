@@ -392,11 +392,8 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
         read more than a single element.
         """
         custom = get_custom(node)
-        # if isinstance(custom, (Read, Write)):
-        if isinstance(custom, Write):
-            is_contiguous = custom.is_contiguous_vec()
-            print(f"Partitioning gather like op: {node}: {is_contiguous}")
-            return not is_contiguous
+        if isinstance(custom, (Read, Write)):
+            return not custom.is_contiguous_vec()
 
         return False
 
@@ -404,7 +401,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
     for operator in strided_operators:
         custom = get_custom(operator)
         index = custom.index
-        elements_per_thread = custom.elements_per_thread
+        elements_per_thread = subs_idxc(custom.elements_per_thread)
 
         # Break apart Reads/Writes that has non-contiguous GPR Read/Writes.
         with custom.graph.inserting_before(operator):
