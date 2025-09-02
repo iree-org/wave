@@ -6,6 +6,7 @@
 from typing import TypeVar
 from copy import deepcopy
 import sympy
+import torch.fx as fx
 
 from ..._support.indexing import IndexingContext
 from ...lang.wave_types import IndexMapping
@@ -222,6 +223,13 @@ def _compute_offset(indices: list[IndexExpr], strides: list[IndexExpr]) -> Index
     return sum(i * s for i, s in zip(indices, strides))
 
 
+def check_is_dynamic_vals_broadcted(nodes: list[fx.Node]) -> bool:
+    for node in nodes:
+        if any(subs_idxc(i.size) > 1 for i in node.index.values()):
+            return False
+    return True
+
+
 def check_is_mapping_contiguous(
     mapping: IndexMapping,
     symbolic_shape: tuple[IndexExpr, ...],
@@ -234,10 +242,6 @@ def check_is_mapping_contiguous(
     elements_per_thread = subs_idxc(elements_per_thread)
     if elements_per_thread == 1:
         return True
-
-    # TODO: Better dyn vals analysis.
-    if mapping.num_dynamic_vals != 0:
-        return False
 
     if is_read:
         assert (
