@@ -117,9 +117,7 @@ def test_moe_align_block_size(
     """
     device = "cuda"
 
-    # generate scores for only two experts
-    num_experts_imm = 3
-    scores = torch.rand(num_tokens, num_experts_imm, device=device)
+    scores = torch.rand(num_tokens, num_experts, device=device)
 
     # Get topk expert indices for each token
     _, topk_ids = torch.topk(scores, k=topk, dim=1)
@@ -174,15 +172,14 @@ def test_moe_align_block_size(
         size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
     )
     flat_topk = topk_ids.view(-1).to(torch.int32)
-    empty_topk = torch.empty_like(flat_topk)
     print(kernel.asm)
     print("Flat topk:", flat_topk)
     print("Before:", expert_counts_buffer)
-    kernel(flat_topk, empty_topk, expert_counts_buffer)
+    kernel(flat_topk, expert_counts_buffer)
     print("After:", expert_counts_buffer)
 
     # assert empty_topk is same as topk_ids
-    assert torch.all(empty_topk == flat_topk), "TopK IDs modified"
+    # assert torch.all(empty_topk == flat_topk), "TopK IDs modified"
 
     return
     verify_moe_align_block_size_results(
