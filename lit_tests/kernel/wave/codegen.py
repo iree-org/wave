@@ -650,7 +650,6 @@ def test_read_write_dynamic_symbol():
         num_iterators=2,
         inputs={S: S, N: j},
         outputs={S: i, N: j},
-        dynamic_val_mappings={S: i, N: j},
     )
 
     @tkw.wave(constraints)
@@ -709,7 +708,6 @@ def test_read_write_dynamic_symbol_expr():
         num_iterators=2,
         inputs={S: S, N: j},
         outputs={S: i, N: j},
-        dynamic_val_mappings={S: i, N: j},
     )
 
     @tkw.wave(constraints)
