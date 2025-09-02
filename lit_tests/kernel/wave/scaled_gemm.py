@@ -429,6 +429,7 @@ def packed_mxfp4_global_to_lds_test():
         K: shape[2],
         READ_SHARED_DELAY: 1,
         WRITE_SHARED_DELAY: 1,
+        GLOBAL_TO_SHARED_DELAY: 2,
         READ_GLOBAL_DELAY: 2,
         WRITE_GLOBAL_DELAY: 2,
         MMA_DELAY: 1,
