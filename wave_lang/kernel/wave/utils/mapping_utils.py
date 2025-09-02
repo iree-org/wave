@@ -274,7 +274,7 @@ def check_is_mapping_contiguous(
         return True
 
     fastest_dim = list(index.keys())[get_fastest_index(index)]
-    index = transform_index_on_mapping(mapping, symbolic_shape, index)
+    index = transform_index_on_mapping(mapping, symbolic_shape, index, is_read=is_read)
 
     idxc = IndexingContext.current()
     strides = strides_from_symbolic_shape(idxc, array_shape, allow_mixed_shapes=True)
