@@ -161,8 +161,9 @@ def test_read_mapped_buffer():
 
     # CHECK-LABEL:    func.func @read_mapped_buffer
     # CHECK: %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast
-    # CHECK: %[[COND:.*]] = arith.select {{%[0-9a-zA-Z_]+}}, {{%[0-9a-zA-Z_]+}}, {{%[0-9a-zA-Z_]+}} : index
-    # CHECK: %[[RES:.*]] = vector.load %[[BUF]][%[[COND]]] : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf16>
+    # CHECK: %[[COND:.*]] = arith.select %{{.*}}, %{{.*}}, %{{.*}} : vector<1xi1>, vector<1xindex>
+    # CHECK: %[[COND_EXT:.*]] = vector.extract %[[COND]][0] : index from vector<1xindex>
+    # CHECK: %[[RES:.*]] = vector.load %[[BUF]][%[[COND_EXT]]] : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf16>
     # CHECK: %[[EXTRACT:.*]] = vector.extract %[[RES]][0] : f16 from vector<1xf16>
     # CHECK: %[[FROM:.*]] = vector.from_elements %[[EXTRACT]]
 
@@ -465,7 +466,22 @@ def test_read_write_dynamic_mapping():
 
     # CHECK-LABEL:    test_read_write_dynamic_mapping
     # CHECK-DAG:        #[[map0:.*]] = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48)>
-    # CHECK-DAG:        #[[map1:.*]] = affine_map<()[s0] -> (s0 * 16 - (s0 floordiv 64) * 768)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 1)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 2)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 3)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 4)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 5)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 6)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 7)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 8)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 9)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 10)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 11)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 12)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 13)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 14)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 15)>
+
     # CHECK:          func.func @read_write_dynamic_mapping
     # CHECK-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
@@ -473,11 +489,6 @@ def test_read_write_dynamic_mapping():
     # CHECK:            %[[D0:.*]] = stream.binding.subspan %[[ARG1]][%[[C0]]] : !stream.binding -> memref<16x16xi32, strided<[16, 1], offset: ?>>
     # CHECK:            %[[D1:.*]] = affine.apply #[[map0]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[D2:.*]] = vector.load %[[D0]][%[[D1]], %[[C0]]] : memref<16x16xi32, strided<[16, 1], offset: ?>>, vector<16xi32>
-    # CHECK:            %[[D3:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<16x16xf16, strided<[16, 1], offset: ?>>
-    # CHECK:            %[[D4:.*]] = arith.index_cast %[[D2]] : vector<16xi32> to vector<16xindex>
-    # CHECK:            %[[D5:.*]] = affine.apply #[[map1]]()[%[[THREAD_ID_X]]]
-    # CHECK:            %[[D6:.*]] = vector.broadcast %[[D5]] : index to vector<16xindex>
-    # CHECK:            %[[D7:.*]] = arith.addi %[[D6]], %[[D4]] overflow<nsw, nuw> : vector<16xindex>
     # CHECK-COUNT-16:   memref.load
     # CHECK-NOT:        vector.extract
     # CHECK:            %[[RES:.*]] = vector.from_elements
