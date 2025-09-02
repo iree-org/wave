@@ -47,6 +47,7 @@ def get_moe_align_block_size_kernel(
     NUM_EXPERTS = tkl.sym.NUM_EXPERTS
     NUMEL = tkl.sym.NUMEL
     TOPK = tkl.sym.TOPK
+    BLOCK_SIZE = tkl.sym.BLOCK_SIZE
 
     # Workgroup tile sizes
     BLOCK_TOKENS = tkl.sym.BLOCK_TOKENS
@@ -84,23 +85,13 @@ def get_moe_align_block_size_kernel(
         dynamic_val_mappings={NUM_EXPERTS: i},
     )
 
-    expert_write_map = tkw.IndexMapping(
-        num_iterators=1,
-        inputs={NUM_EXPERTS: i},
-        outputs={NUM_EXPERTS: d0},
-        dynamic_val_mappings={NUM_EXPERTS: i},
-    )
-
-    simple_read_map = tkw.IndexMapping(
-        num_iterators=1,
-        inputs={NUM_EXPERTS: i},
-        outputs={NUM_EXPERTS: i},
-    )
-
     @tkw.wave(constraints)
     def moe_align_block_size(
         topk_ids: tkl.Memory[NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype],
         expert_counts: tkl.Memory[
+            NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
+        padded_counts: tkl.Memory[
             NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
         ],
     ):
@@ -117,16 +108,32 @@ def get_moe_align_block_size_kernel(
         expert_id = tkw.read(topk_ids, elements_per_thread=1)
 
         one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
-        e_reg = tkw.atomic_add(
+        tkw.atomic_add(
             one_reg,
             shmem,
             mapping=expert_read_map,
             mapping_dynamic_vals=(expert_id,),
         )
-        e_reg = tkw.read(shmem, mapping=simple_read_map)
+        counts = tkw.read(shmem)
         tkw.write(
-            e_reg,
+            counts,
             expert_counts,
+        )
+
+        # Implement the padding logic
+        block_size_reg = tkl.Register[NUM_EXPERTS, dtype](BLOCK_SIZE)
+        one_reg = tkl.Register[NUM_EXPERTS, dtype](1)
+
+        # (count + block_size - 1) // block_size * block_size
+        temp1 = counts + block_size_reg - one_reg
+        temp2 = temp1 / block_size_reg
+        padded_counts_reg = temp2 * block_size_reg
+
+        tkw.write(padded_counts_reg, padded_counts)
+
+        tkw.write(
+            padded_counts_reg,
+            padded_counts,
         )
 
     hyperparams = {
@@ -136,6 +143,7 @@ def get_moe_align_block_size_kernel(
         BLOCK_TOKENS: min(64, num_tokens) if num_tokens > 0 else 1,
         BLOCK_EXPERTS: min(8, num_experts) if num_experts > 0 else 1,
         ELEMS_PER_THREAD: 4,
+        BLOCK_SIZE: 16,
         TOPK: top_k_value,
     }
     hyperparams.update(get_default_scheduling_params())
