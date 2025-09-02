@@ -413,19 +413,6 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                     v.size = 1
                     v.stride = 1
 
-                if hasattr(custom, "mapping_dynamic_vals"):
-                    # If we are partitioning read/write ops, dynamic_vals can be
-                    # potentially partitioned as well. Partitioned dyn vals are
-                    # are merged into single value using Reshape op which still
-                    # holds the original index containing `GPR_NUM`.
-                    # Extract corresponding partitioned chunk from such ops.
-                    new_dynamic_vals = []
-                    for dyn_val in custom.mapping_dynamic_vals:
-                        extract = ExtractSlice(dyn_val, [i], [1], [1]).add_to_graph(
-                            custom.graph
-                        )
-                        new_dynamic_vals.append(extract)
-
                 # Generate new Read/Write that has contiguous VGPR elements.
                 if isinstance(custom, Write):
                     extract = ExtractSlice(
@@ -436,7 +423,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         extract,
                         custom.memory,
                         mapping=custom.mapping,
-                        mapping_dynamic_vals=new_dynamic_vals,
+                        mapping_dynamic_vals=custom.mapping_dynamic_vals,
                         elements_per_thread=1,
                     ).add_to_graph(custom.graph)
                 elif isinstance(custom, Read):
@@ -445,7 +432,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         custom.memory,
                         elements_per_thread=1,
                         mapping=custom.mapping,
-                        mapping_dynamic_vals=new_dynamic_vals,
+                        mapping_dynamic_vals=custom.mapping_dynamic_vals,
                         _write_dependency=custom._write_dependency,
                     ).add_to_graph(custom.graph)
                 else:
