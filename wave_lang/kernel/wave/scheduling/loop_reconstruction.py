@@ -283,7 +283,6 @@ def populate_kernel_outer_vars(
             iter_arg.type = custom.type
             iter_arg.index = custom.index
             iter_arg.iter_idx = counter
-            iter_arg.distributed_shape = custom.distributed_shape
             counter += 1
             new_iter_args.append(iter_arg)
 
@@ -312,7 +311,6 @@ def populate_epilogue_outer_vars(
                 pipelined_reduction.graph,
                 type=custom.type,
             )
-            result.distributed_shape = custom.distributed_shape
             counter += 1
             new_results.append(result)
 

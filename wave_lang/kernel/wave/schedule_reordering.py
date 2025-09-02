@@ -252,16 +252,12 @@ def get_mma_tile_size(mma_nodes, constraints):
 
 
 def schedule_nodes_to_graph(graph, node_map, nodes):
-    from wave_lang.kernel.ops.wave_ops import IterArg, GetResult
 
     for node in nodes:
         custom = get_custom(node)
         new_node = custom.copy(
             new_graph=graph, arg_transform=lambda x: node_map[x] if x in node_map else x
         )
-        if isinstance(custom, (IterArg, GetResult)):
-            if hasattr(custom, "distributed_shape"):
-                new_node.distributed_shape = custom.distributed_shape
         node_map[node] = new_node.fx_node
 
 

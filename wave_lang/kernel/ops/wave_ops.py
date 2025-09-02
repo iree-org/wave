@@ -1194,11 +1194,10 @@ class IterArg(Placeholder):
 
     @property
     def distributed_shape(self):
-        return self.fx_node.distributed_shape
-
-    @distributed_shape.setter
-    def distributed_shape(self, value):
-        self.fx_node.distributed_shape = value
+        init_arg = self.parent_op().init_args[self.iter_idx]
+        allocate = get_custom(init_arg)
+        assert isinstance(allocate, Allocate)
+        return allocate.distributed_shape
 
     def infer_type(self, *args):
         parent_op = self.parent_op()
@@ -2280,11 +2279,10 @@ class GetResult(CustomOp):
 
     @property
     def distributed_shape(self):
-        return self.fx_node.distributed_shape
-
-    @distributed_shape.setter
-    def distributed_shape(self, value):
-        self.fx_node.distributed_shape = value
+        iterate = get_custom(self.value)
+        allocate = get_custom(iterate.init_args[self.res_idx])
+        assert isinstance(allocate, Allocate)
+        return allocate.distributed_shape
 
 
 @define_op("extract")
