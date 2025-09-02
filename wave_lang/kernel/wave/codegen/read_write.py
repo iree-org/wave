@@ -117,6 +117,26 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     return thread_independent_index, thread_dependent_index
 
 
+def _extract0(src):
+    static_pos = [0] * src.type.rank
+    return vector_d.extract(src, static_position=static_pos, dynamic_position=[])
+
+
+def _build_dyn_vals_map(
+    mapping: Optional[IndexMapping], dynamic_vals: tuple[Value, ...]
+) -> dict[IndexExpr, Value]:
+    if mapping is None:
+        return {}
+
+    assert len(mapping.dynamic_val_indices) == len(
+        dynamic_vals
+    ), f"Expected {len(mapping.dynamic_val_indices)} dynamic values but got {len(dynamic_vals)}"
+    return {
+        sym: _extract0(val)
+        for sym, val in zip(mapping.dynamic_val_indices.keys(), dynamic_vals)
+    }
+
+
 def _build_start_indices(
     emitter: WaveEmitter,
     src_indices: dict[IndexExpr, IndexSequence | IndexExpr],
@@ -809,11 +829,20 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     vector_type = VectorType.get(vector_shape, element_type)
     input_shape = _get_symbolic_shape(memory)
     elements_per_thread = cast_py_literal(emitter, elements_per_thread)
-    if get_custom(node).has_identity_mapping():
-        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-            emitter, index
-        )
+    dyn_vals = tuple(
+        cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
+    )
+    dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
+    if True or get_custom(node).has_identity_mapping():
         mask = _build_mask(emitter, index, elements_per_thread, bounds)
+        if mapping:
+            index = transform_index_on_mapping(
+                mapping, input_shape, index, is_read=True
+            )
+
+        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+            emitter, index, dynamic_vals_map_start
+        )
         result = _create_vec_read_write(
             emitter,
             input_shape,
@@ -830,9 +859,6 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
             offsets_vec=None,
         )
     else:
-        dyn_vals = tuple(
-            cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
-        )
         (
             start_indices,
             start_indices_wg,
@@ -898,11 +924,20 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     input_shape = _get_symbolic_shape(register)
     output_shape = _get_symbolic_shape(memory)
     elements_per_thread = cast_py_literal(emitter, elements_per_thread)
-    if get_custom(node).has_identity_mapping():
-        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-            emitter, index
-        )
+    dyn_vals = tuple(
+        cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
+    )
+    dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
+    if True or get_custom(node).has_identity_mapping():
         mask = _build_mask(emitter, index, elements_per_thread, bounds)
+        if mapping:
+            index = transform_index_on_mapping(
+                mapping, output_shape, index, is_read=False
+            )
+
+        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+            emitter, index, dynamic_vals_map_start
+        )
         _create_vec_read_write(
             emitter,
             output_shape,
