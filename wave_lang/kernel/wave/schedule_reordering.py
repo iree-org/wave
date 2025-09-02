@@ -719,6 +719,17 @@ def schedule_reordering(
         local_write_rhs = get_local_writes(local_load_rhs)
         global_load_lhs = get_global_loads(local_write_lhs)
         global_load_rhs = get_global_loads(local_write_rhs)
+        # Early exit if cannot find either operand's local write or global loads.
+        if any(
+            not memory_op
+            for memory_op in [
+                local_write_lhs,
+                local_write_rhs,
+                global_load_lhs,
+                global_load_rhs,
+            ]
+        ):
+            continue
 
         local_load_lhs_scale = None
         local_load_rhs_scale = None
@@ -734,6 +745,17 @@ def schedule_reordering(
             local_write_rhs_scale = get_local_writes(local_load_rhs_scale)
             global_load_lhs_scale = get_global_loads(local_write_lhs_scale)
             global_load_rhs_scale = get_global_loads(local_write_rhs_scale)
+            # Early exit if cannot find any scale's local write or global loads.
+            if any(
+                not scale_memory_op
+                for scale_memory_op in [
+                    local_write_lhs_scale,
+                    local_write_rhs_scale,
+                    global_load_lhs_scale,
+                    global_load_rhs_scale,
+                ]
+            ):
+                continue
 
         # Heuristic to select reorder strategy.
         mTile, nTile, kTile = get_mma_tile_size(mma_nodes, constraints)
