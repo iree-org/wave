@@ -13,7 +13,7 @@ from wave_lang.kernel._support.tracing import CapturedTrace
 
 from ..._support.dtype import i8
 from ...lang.global_symbols import *
-from ...ops.wave_ops import Allocate, IterArg, SharedMemoryBarrier, get_custom
+from ...ops.wave_ops import Allocate, IterArg, Iterate, SharedMemoryBarrier, get_custom
 from ..utils.graph_utils import get_users, is_barrier_between, update_sort_keys
 from ..utils.symbol_utils import subs_idxc
 from .solver import (
@@ -30,6 +30,9 @@ class LiveInterval:
 
 def propagate_user(user: fx.Node) -> list[fx.Node]:
     custom = get_custom(user)
+    if isinstance(custom, Iterate):
+        arg_index = custom.init_args.index(user)
+        return [custom.iter_args()[arg_index]]
     if isinstance(custom, IterArg):
         return [u.fx_node for u in custom.users]
     return [user]
