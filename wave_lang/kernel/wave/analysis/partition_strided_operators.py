@@ -31,6 +31,7 @@ from ..constraints import (
 )
 from ..utils.general_utils import (
     all_equal,
+    get_fastest_index,
 )
 from ..utils.mma_utils import (
     simplify_index,
@@ -401,6 +402,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
     for operator in strided_operators:
         custom = get_custom(operator)
         index = custom.index
+        fastest_index = get_fastest_index(index)
         elements_per_thread = subs_idxc(custom.elements_per_thread)
 
         # Break apart Reads/Writes that has non-contiguous GPR Read/Writes.
@@ -408,8 +410,9 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
             ops_to_combine = []
             for i in range(elements_per_thread):
                 new_index = deepcopy(index)
-                for v in new_index.values():
-                    v.start = v.start + i
+                for j, v in enumerate(new_index.values()):
+                    if j == fastest_index:
+                        v.start = v.start + i
                     v.size = 1
                     v.stride = 1
 
