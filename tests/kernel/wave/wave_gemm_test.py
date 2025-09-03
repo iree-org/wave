@@ -2061,158 +2061,20 @@ def testBatchedGemmWithPermute(
 @require_e2e
 @require_cdna4
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
-@pytest.mark.parametrize(
-    "mfma_variant",
-    [
-        MMAType.F32_16x16x32_F16,
-        MMAType.F32_32x32x16_F16,
-    ],
-)
-def test_cdna4_mfma_f16(shape: tuple[int], mfma_variant: MMAType):
-    # Input sizes
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-
-    # Workgroup tile sizes
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-    # Address space (for GPU, shared(1) or global(0))
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    # Expose user-constraints
-    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
-
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
-
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
-    b_mapping = tkw.IndexMapping(
-        num_iterators=2, inputs={N: i, K: j}, outputs={N: i, K: j}
-    )
-
-    @tkw.wave(constraints)
-    def gemm(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[K, N, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            b_reg = tkw.read(b, mapping=b_mapping)
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(repeat, c)
-
-    hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 128,
-        BLOCK_N: 256,
-        BLOCK_K: 64,
-        M: shape[0],
-        N: shape[1],
-        K: shape[2],
-    }
-    hyperparams.update(get_default_scheduling_params())
-
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        wave_runtime=True,
-        canonicalize=True,
-        use_scheduling_barriers=False,
-        dynamic_symbols=[],
-    )
-    options = set_default_run_config(options)
-
-    gemm = wave_compile(options, gemm)
-
-    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
-    b = device_randn(shape[2], shape[1], device="cuda", dtype=torch.float16)
-    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
-    asm = gemm(a, b, c)
-
-    torch_ref = torch.matmul(a.cpu().to(torch.float32), b.cpu().to(torch.float32))
-    assert_close(
-        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
-    )
-
-
-@require_e2e
-@require_cdna4
-@pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
+@pytest.mark.parametrize("datatype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize(
     "mfma_variant",
     [
         MMAType.F32_16x16x32_BF16,
         MMAType.F32_32x32x16_BF16,
+        MMAType.F32_16x16x32_F16,
+        MMAType.F32_32x32x16_F16,
     ],
 )
-def test_cdna4_mfma_bf16(shape: tuple[int], mfma_variant: MMAType):
-    # Input sizes
-    M = tkl.sym.M
-    N = tkl.sym.N
-    K = tkl.sym.K
-
-    # Workgroup tile sizes
-    BLOCK_M = tkl.sym.BLOCK_M
-    BLOCK_N = tkl.sym.BLOCK_N
-    BLOCK_K = tkl.sym.BLOCK_K
-    # Address space (for GPU, shared(1) or global(0))
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    # Expose user-constraints
-    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
-
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
-
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
-    b_mapping = tkw.IndexMapping(
-        num_iterators=2, inputs={N: i, K: j}, outputs={N: i, K: j}
+def test_cdna4_mfma(shape: tuple[int], datatype: torch.dtype, mfma_variant: MMAType):
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
+        shape, False, mfma_variant, datatype
     )
-
-    @tkw.wave(constraints)
-    def gemm(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.bf16],
-        b: tkl.Memory[K, N, ADDRESS_SPACE, tkl.bf16],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            b_reg = tkw.read(b, mapping=b_mapping)
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(repeat, c)
-
-    hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 128,
-        BLOCK_N: 256,
-        BLOCK_K: 64,
-        M: shape[0],
-        N: shape[1],
-        K: shape[2],
-    }
-    hyperparams.update(get_default_scheduling_params())
 
     options = WaveCompileOptions(
         subs=hyperparams,
@@ -2225,12 +2087,11 @@ def test_cdna4_mfma_bf16(shape: tuple[int], mfma_variant: MMAType):
 
     gemm = wave_compile(options, gemm)
 
-    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.bfloat16)
-    b = device_randn(shape[2], shape[1], device="cuda", dtype=torch.bfloat16)
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=datatype)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=datatype)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
     asm = gemm(a, b, c)
 
-    torch_ref = torch.matmul(a.cpu().to(torch.float32), b.cpu().to(torch.float32))
-    assert_close(
-        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
-    )
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
