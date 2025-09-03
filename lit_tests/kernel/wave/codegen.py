@@ -464,21 +464,6 @@ def test_read_write_dynamic_mapping():
 
     # CHECK-LABEL:    test_read_write_dynamic_mapping
     # CHECK-DAG:        #[[map0:.*]] = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 1)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 2)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 3)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 4)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 5)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 6)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 7)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 8)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 9)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 10)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 11)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 12)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 13)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 14)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48 + 15)>
 
     # CHECK:          func.func @read_write_dynamic_mapping
     # CHECK-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
