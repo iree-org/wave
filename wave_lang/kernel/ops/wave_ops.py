@@ -448,7 +448,7 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
 def get_custom(node: fx.Node) -> "CustomOp":
     """Get the corresponding CustomOp for a given fx.Node."""
     if not isinstance(node, fx.Node):
-        raise ValueError(f"Expected an fx.Node but got {type(node)}")
+        raise ValueError(f"Expected an fx.Node but got {node}")
 
     # If the node was created as a CustomOp it has a corresponding field
     if hasattr(node, "tkw_op"):

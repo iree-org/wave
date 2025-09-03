@@ -157,7 +157,7 @@ def get_users(
             graph = custom.get_root_graph().subgraphs[custom.subgraph_name]
             if node in custom.init_args:
                 init_arg_idx = custom.init_args.index(node)
-                users.append(custom.iter_args(graph)[init_arg_idx])
+                users += custom.iter_args(graph)[init_arg_idx].users
             else:
                 assert node in custom.implicit_captures
                 for outside_node in graph.nodes:
@@ -283,7 +283,7 @@ def get_inputs(node: fx.Node, iterate: fx.Node = None) -> tuple[list[fx.Node], f
             inputs.append(iterate.outputs(iteration_subgraph)[custom.res_idx])
     elif isinstance(custom, Iterate):
         iteration_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
-        inputs.append(custom.outputs(iteration_subgraph))
+        inputs += custom.outputs(iteration_subgraph)
     else:
         # Default handling for other ops.
         for input in node.all_input_nodes:
