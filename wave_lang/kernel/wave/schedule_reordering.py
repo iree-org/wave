@@ -8,7 +8,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from typing import Iterable, Dict, List
 
 import torch.fx as fx
 from torch.utils import _pytree as pytree
@@ -36,6 +36,7 @@ from ..ops.wave_ops import (
 )
 from .constraints import (
     Constraint,
+    HardwareConstraint,
     get_constrained_shape,
 )
 from .scheduling.schedule_enums import SchedulingType
@@ -46,6 +47,7 @@ from .utils.general_utils import (
     topological_sort_with_dependencies,
 )
 from .utils.symbol_utils import subs_idxc
+from .utils.classes import AttentionOperationType
 
 ##############################################################
 # General graph helper functions
@@ -194,6 +196,7 @@ def get_mma_tile_size(mma_nodes, constraints):
 
 
 def schedule_nodes_to_graph(graph, node_map, nodes):
+
     for node in nodes:
         custom = get_custom(node)
         new_node = custom.copy(
@@ -684,16 +687,17 @@ def schedule_reordering(
         2. Get MMAs inside reduction/iterate op that is tiled with reduction dim.
         3. Based on mma_node's expanded_dim and consumers we can classify global read, local read, mma, and local write.
     """
-
-    # Only handles if scheduling type is prefetch
+    if scheduling_type == SchedulingType.PREFETCH_ATTENTION:
+        return attention_schedule_reordering(trace, constraints)
     if scheduling_type != SchedulingType.PREFETCH:
         return
+
     hardware_constraint = get_hardware_constraint(constraints)
     iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
     if not iterate_nodes:
         return
     for iterate_node in iterate_nodes:
-        custom_iterate = get_custom(iterate_nodes[0])
+        custom_iterate = get_custom(iterate_node)
         graph = trace.get_subgraph(custom_iterate.subgraph_name)
         iteration_dim = custom_iterate.axis
         # Get MMA nodes inside a for op, who's reduction dim is being tiled in the for op.
@@ -808,3 +812,308 @@ def schedule_reordering(
         custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
         if is_pingpong_strategy(reorder_strategy):
             add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
+
+
+def create_attention_clusters(
+    mma0_nodes: List[fx.Node],
+    local_load_k: List[fx.Node],
+    local_write_k: List[fx.Node],
+    global_load_k: List[fx.Node],
+    mma1_nodes: List[fx.Node],
+    local_load_v: List[fx.Node],
+    local_write_v: List[fx.Node],
+    global_load_v: List[fx.Node],
+    softmax0_nodes: List[fx.Node],
+    softmax1_nodes: List[fx.Node],
+) -> List:
+    """
+    Create clusters for attention schedule reordering.
+
+    Args:
+        mma0_nodes: First set of MMA operations (QK computation)
+        local_load_k: Local load operations for K
+        local_write_k: Local write operations for K
+        global_load_k: Global load operations for K
+        mma1_nodes: Second set of MMA operations (PV computation)
+        local_load_v: Local load operations for V
+        local_write_v: Local write operations for V
+        global_load_v: Global load operations for V
+        softmax0_nodes: First set of softmax operations
+        softmax1_nodes: Second set of softmax operations
+
+    Returns:
+        List of operation clusters for reordering
+    """
+    clusters = []
+    tmp_graph = fx.Graph()
+
+    # Cluster 0: QK computation and softmax1
+    clusters.extend(_create_qk_softmax_cluster(mma0_nodes, softmax1_nodes, tmp_graph))
+
+    # Cluster 1: K data movement (global load, local write, local load V)
+    clusters.extend(
+        _create_k_data_movement_cluster(
+            global_load_k, local_write_k, local_load_v, tmp_graph
+        )
+    )
+
+    # Cluster 2: PV computation and softmax0
+    clusters.extend(_create_pv_softmax_cluster(mma1_nodes, softmax0_nodes, tmp_graph))
+
+    # Cluster 3: V data movement (global load, local write, local load K)
+    clusters.extend(
+        _create_v_data_movement_cluster(
+            global_load_v, local_write_v, local_load_k, tmp_graph
+        )
+    )
+
+    return clusters
+
+
+def _create_qk_softmax_cluster(
+    mma0_nodes: List[fx.Node], softmax1_nodes: List[fx.Node], tmp_graph: fx.Graph
+) -> List:
+    """Create cluster for QK computation and softmax1."""
+    clusters = []
+
+    # Set wave priority for QK computation
+    clusters.append(
+        insert_op_before(SetWavePrio(1).add_to_graph(tmp_graph), mma0_nodes)
+    )
+    clusters.append(mma0_nodes)
+    clusters.append(insert_op_after(SetWavePrio(0).add_to_graph(tmp_graph), mma0_nodes))
+
+    # Add softmax1 operations
+    clusters.append(softmax1_nodes)
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), softmax1_nodes)
+    )
+    clusters.append(
+        insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    return clusters
+
+
+def _create_k_data_movement_cluster(
+    global_load_k: List[fx.Node],
+    local_write_k: List[fx.Node],
+    local_load_v: List[fx.Node],
+    tmp_graph: fx.Graph,
+) -> List:
+    """Create cluster for K data movement operations."""
+    clusters = []
+
+    # Global load K, local write K
+    clusters.append(global_load_k)
+    clusters.append(local_write_k)
+
+    # Local load V and scheduling barrier
+    clusters.append(local_load_v)
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), local_load_v)
+    )
+    clusters.append(
+        insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    return clusters
+
+
+def _create_pv_softmax_cluster(
+    mma1_nodes: List[fx.Node], softmax0_nodes: List[fx.Node], tmp_graph: fx.Graph
+) -> List:
+    """Create cluster for PV computation and softmax0."""
+    clusters = []
+
+    # Set wave priority for PV computation
+    clusters.append(
+        insert_op_before(SetWavePrio(1).add_to_graph(tmp_graph), mma1_nodes)
+    )
+    clusters.append(mma1_nodes)
+    clusters.append(insert_op_after(SetWavePrio(0).add_to_graph(tmp_graph), mma1_nodes))
+
+    # Add softmax0 operations
+    clusters.append(softmax0_nodes)
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), softmax0_nodes)
+    )
+    clusters.append(
+        insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    return clusters
+
+
+def _create_v_data_movement_cluster(
+    global_load_v: List[fx.Node],
+    local_write_v: List[fx.Node],
+    local_load_k: List[fx.Node],
+    tmp_graph: fx.Graph,
+) -> List:
+    """Create cluster for V data movement operations."""
+    clusters = []
+
+    # Global load V, local write V
+    clusters.append(global_load_v)
+    clusters.append(local_write_v)
+
+    # Local load K and scheduling barrier
+    clusters.append(local_load_k)
+    clusters.append(
+        insert_op_after(WorkgroupBarrier().add_to_graph(tmp_graph), local_load_k)
+    )
+    clusters.append(
+        insert_op_after(SchedulingBarrier([]).add_to_graph(tmp_graph), clusters[-1].op)
+    )
+
+    return clusters
+
+
+def _classify_attention_operations(
+    graph: fx.Graph,
+) -> Dict[AttentionOperationType, List[fx.Node]]:
+    """
+    Classify operations in the attention graph by their prefetch stage.
+
+    Args:
+        graph: The graph containing attention operations
+
+    Returns:
+        Dictionary mapping operation types to lists of nodes
+    """
+    operation_groups = {
+        op_type: [] for op_type in AttentionOperationType.get_all_types()
+    }
+
+    for node in graph.nodes:
+        prefetch_stage = node.meta.get("prefetch_stage", None)
+        if prefetch_stage:
+            try:
+                op_type = AttentionOperationType.from_string(prefetch_stage)
+                operation_groups[op_type].append(node)
+            except:
+                raise ValueError(f"Unknown prefetch stage: {prefetch_stage}")
+
+    return operation_groups
+
+
+def _validate_attention_operations(
+    operation_groups: Dict[AttentionOperationType, List[fx.Node]],
+) -> bool:
+    """
+    Validate that required attention operations are present.
+
+    Args:
+        operation_groups: Dictionary of operation groups
+
+    Returns:
+        True if validation passes, False otherwise
+    """
+    # All operation types are required
+    for op_type in AttentionOperationType.get_all_types():
+        if not operation_groups[op_type]:
+            return False
+
+    return True
+
+
+def attention_schedule_reordering(
+    trace: CapturedTrace, constraints: List[Constraint]
+) -> None:
+    """
+    Perform attention schedule reordering for prefetch attention kernels.
+
+    This function identifies attention operations in iterate nodes and reorders
+    them to optimize memory access patterns and computation scheduling.
+
+    Args:
+        trace: Captured trace containing the computation graph
+        constraints: List of constraints for the computation
+    """
+    hardware_constraint = get_hardware_constraint(constraints)
+    flat_wave_count = math.prod(hardware_constraint.waves_per_block)
+    # Only support 8 waves for now.
+    if flat_wave_count != 8:
+        return
+    iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
+
+    if not iterate_nodes:
+        return
+
+    for iterate_node in iterate_nodes:
+        _process_attention_iterate_node(iterate_node, trace, hardware_constraint)
+
+
+def _process_attention_iterate_node(
+    iterate_node: fx.Node, trace: CapturedTrace, hardware_constraint: HardwareConstraint
+) -> None:
+    """
+    Process a single iterate node for attention schedule reordering.
+
+    Args:
+        iterate_node: The iterate node to process
+        trace: Captured trace containing the computation graph
+        hardware_constraint: Hardware constraints for the computation
+    """
+    custom_iterate = get_custom(iterate_node)
+    graph = trace.get_subgraph(custom_iterate.subgraph_name)
+
+    # Classify operations by their prefetch stage
+    operation_groups = _classify_attention_operations(graph)
+
+    # Validate that all required operations are present
+    if not _validate_attention_operations(operation_groups):
+        return
+
+    # Create operation clusters for reordering
+    clusters = create_attention_clusters(
+        mma0_nodes=operation_groups[AttentionOperationType.MMA_0],
+        local_load_k=operation_groups[AttentionOperationType.LOCAL_LOAD_0],
+        local_write_k=operation_groups[AttentionOperationType.LOCAL_STORE_0],
+        global_load_k=operation_groups[AttentionOperationType.GLOBAL_LOAD_0],
+        mma1_nodes=operation_groups[AttentionOperationType.MMA_1],
+        local_load_v=operation_groups[AttentionOperationType.LOCAL_LOAD_1],
+        local_write_v=operation_groups[AttentionOperationType.LOCAL_STORE_1],
+        global_load_v=operation_groups[AttentionOperationType.GLOBAL_LOAD_1],
+        softmax0_nodes=operation_groups[AttentionOperationType.SOFTMAX_0],
+        softmax1_nodes=operation_groups[AttentionOperationType.SOFTMAX_1],
+    )
+
+    # Perform graph reordering
+    reordered_graph = reorder_graph(graph, clusters)
+    if reordered_graph is None:
+        return
+
+    # Update the trace with the reordered graph
+    _update_trace_with_reordered_graph(trace, graph, reordered_graph, custom_iterate)
+
+    # Add conditional barriers for ping-pong strategies
+    add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
+
+
+def _update_trace_with_reordered_graph(
+    trace: CapturedTrace,
+    original_graph: fx.Graph,
+    reordered_graph: fx.Graph,
+    custom_iterate: Iterate,
+) -> None:
+    """
+    Update the trace with the reordered graph.
+
+    Args:
+        trace: Captured trace containing the computation graph
+        original_graph: Original graph before reordering
+        reordered_graph: Reordered graph after optimization
+        custom_iterate: The iterate operation being updated
+    """
+    # Set parent operation for the reordered graph
+    reordered_graph.parent_op = original_graph.parent_op
+
+    # Create new subgraph name and add to trace
+    reordered_subgraph_name = f"reordered_{custom_iterate.subgraph_name}"
+    trace.add_subgraph(reordered_subgraph_name, reordered_graph)
+    trace.get_root_graph().subgraphs[reordered_subgraph_name] = reordered_graph
+
+    # Update the iterate operation to use the new subgraph
+    custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
