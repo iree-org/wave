@@ -1761,15 +1761,29 @@ class Read(CustomOp):
         if self.has_identity_mapping():
             return True
 
+        if self.elements_per_thread == 1:
+            return True
+
+        from ..wave.utils.mapping_utils import (
+            check_is_mapping_contiguous,
+            check_is_dynamic_vals_broadcted,
+        )
+
+        if not check_is_dynamic_vals_broadcted(self.mapping_dynamic_vals):
+            return False
+
         mapping = self.mapping
 
-        mem_shape = get_custom(self.memory).type.symbolic_shape
-
-        from ..wave.utils.mapping_utils import check_is_mapping_contiguous
+        memory = get_custom(self.memory)
+        symbolic_shape = memory.type.symbolic_shape
+        array_shape = symbolic_shape
+        if memory.type.address_space == SHARED_ADDRESS_SPACE:
+            array_shape = memory.distributed_shape
 
         return check_is_mapping_contiguous(
             mapping=mapping,
-            symbolic_shape=mem_shape,
+            symbolic_shape=symbolic_shape,
+            array_shape=array_shape,
             index=self.index,
             elements_per_thread=self.elements_per_thread,
             is_read=True,
@@ -2097,15 +2111,30 @@ class Write(CustomOp):
         If False we will have to lower it to gather"""
         if self.has_identity_mapping():
             return True
+
+        if self.elements_per_thread == 1:
+            return True
+
+        from ..wave.utils.mapping_utils import (
+            check_is_mapping_contiguous,
+            check_is_dynamic_vals_broadcted,
+        )
+
+        if not check_is_dynamic_vals_broadcted(self.mapping_dynamic_vals):
+            return False
+
         mapping = self.mapping
 
-        mem_shape = get_custom(self.memory).type.symbolic_shape
-
-        from ..wave.utils.mapping_utils import check_is_mapping_contiguous
+        memory = get_custom(self.memory)
+        symbolic_shape = memory.type.symbolic_shape
+        array_shape = symbolic_shape
+        if memory.type.address_space == SHARED_ADDRESS_SPACE:
+            array_shape = memory.distributed_shape
 
         return check_is_mapping_contiguous(
             mapping=mapping,
-            symbolic_shape=mem_shape,
+            symbolic_shape=symbolic_shape,
+            array_shape=array_shape,
             index=self.index,
             elements_per_thread=self.elements_per_thread,
             is_read=False,
