@@ -12,6 +12,7 @@
 
 #include "llvm/ADT/TypeSwitch.h"
 
+#include "water/Dialect/Wave/IR/WaveEnums.cpp.inc"
 #define GET_ATTRDEF_CLASSES
 #include "water/Dialect/Wave/IR/WaveAttrs.cpp.inc"
 

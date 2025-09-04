@@ -1,6 +1,8 @@
 add_custom_target(MLIRWaveIncGen)
 
 set(LLVM_TARGET_DEFINITIONS WaveAttrs.td)
+mlir_tablegen(WaveEnums.h.inc -gen-enum-decls)
+mlir_tablegen(WaveEnums.cpp.inc -gen-enum-defs)
 mlir_tablegen(WaveAttrs.h.inc -gen-attrdef-decls)
 mlir_tablegen(WaveAttrs.cpp.inc -gen-attrdef-defs)
 add_public_tablegen_target(MLIRWaveAttrsIncGen)

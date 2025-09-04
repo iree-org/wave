@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveTypes.h"
+#include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 
 #include "mlir/IR/Builders.h"
@@ -68,7 +69,7 @@ void wave::WaveDialect::registerTypes() {
 mlir::LogicalResult wave::WaveTensorType::verify(
     llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
     llvm::ArrayRef<wave::WaveSymbolAttr> shape, bool fullySpecified,
-    mlir::Type elementType) {
+    mlir::Type elementType, wave::WaveAddressSpaceAttr addressSpace) {
   if (!fullySpecified && !shape.empty()) {
     return emitError() << "shape not expected for non-fully specified tensors";
   }

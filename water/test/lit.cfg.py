@@ -1,11 +1,17 @@
 # -*- Python -*-
 
 import os
+import platform
+import re
+import subprocess
+import tempfile
 
 import lit.formats
 import lit.util
 
 from lit.llvm import llvm_config
+from lit.llvm.subst import ToolSubst
+from lit.llvm.subst import FindTool
 
 # Configuration file for the 'lit' test runner.
 
@@ -48,13 +54,20 @@ config.water_tools_dir = os.path.join(config.water_obj_root, "bin")
 config.water_libs_dir = os.path.join(config.water_obj_root, "lib")
 
 config.substitutions.append(("%water_libs", config.water_libs_dir))
-py_root_base = os.path.dirname(os.path.dirname(config.water_obj_root))  # -> .../build
-config.substitutions.append(
-    ("%py_pkg_root", os.path.join(py_root_base, "python_packages"))
-)
 
-if os.path.isdir(os.path.join(py_root_base, "python_packages", "water_mlir")):
+# Locate the Python package root:
+# 1) Prefer build-tree location produced by add_mlir_python_modules:
+#    <build>/python_packages
+# 2) Allow override to point at an install prefix via WATER_PYTHON_PACKAGE_ROOT
+py_pkg_root = os.path.join(config.water_obj_root, "python_packages")
+py_pkg_root = os.environ.get("WATER_PYTHON_PACKAGE_ROOT", py_pkg_root)
+
+config.substitutions.append(("%py_pkg_root", py_pkg_root))
+
+if os.path.isdir(os.path.join(py_pkg_root, "water_mlir")):
     config.available_features.add("water_python")
+    # Ensure spawned processes can import the package during tests
+    llvm_config.with_environment("PYTHONPATH", py_pkg_root, append_path=True)
 
 # Tweak the PATH to include the tools dir.
 llvm_config.with_environment("PATH", config.llvm_tools_dir, append_path=True)
