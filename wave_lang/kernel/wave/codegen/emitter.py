@@ -17,6 +17,10 @@ from wave_lang.aot.support.ir_utils import (
     _is_float_type,
     _is_integer_like_type,
 )
+
+from wave_lang.kernel.ops.wave_ops import get_custom
+from wave_lang.kernel.lang import Memory
+from wave_lang.kernel.lang.kernel_buffer import KernelBuffer
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.support.ir_imports import (
     AffineExpr,
@@ -30,6 +34,7 @@ from wave_lang.support.ir_imports import (
     IntegerType,
     IrType,
     Location,
+    MemRefType,
     OpResult,
     ShapedType,
     Value,
@@ -44,7 +49,7 @@ from wave_lang.support.ir_imports import (
 from ..._support.indexing import IndexExpr, IndexingContext, xor
 from ..._support.tracing import CapturedTrace
 from ...compiler.base import NDEBUG, CodegenError
-from ...compiler.builder import IRProxyValue
+from ...compiler.builder import IRProxyValue, ScalarBuilder
 from ...compiler.kernel_codegen import BindingType, BoundKernelSignature
 from ...lang.wave_types import IndexSymbol
 from ..compile_options import WaveCompileOptions
@@ -712,3 +717,176 @@ def get_constant_attr(value: Any, element_type: IrType) -> Attribute:
     if _is_float_type(element_type):
         return FloatAttr.get(element_type, float(value))
     raise CodegenError(f"Cannot create a constant attribute for type `{element_type}`")
+
+
+def cast_py_literal(emitter: WaveEmitter, value) -> Any:
+    """Treats the given value as a Python literal.
+
+    An exception will be raised if it cannot be computed statically.
+    """
+    if isinstance(value, IndexExpr):
+        simplified = IndexingContext.current().simplify_expr(value)
+        try:
+            return int(simplified)
+        except TypeError as e:
+            raise CodegenError(
+                f"Literal value required but got symbolic value requiring "
+                f"dynamic resolution: {simplified}"
+            ) from e
+    elif isinstance(value, tuple):
+        return tuple(cast_py_literal(emitter, v) for v in value)
+    elif isinstance(value, list):
+        return [cast_py_literal(emitter, v) for v in value]
+    elif isinstance(value, dict):
+        return {
+            cast_py_literal(emitter, k): cast_py_literal(emitter, v)
+            for k, v in value.items()
+        }
+    elif isinstance(value, (int, float, str)):
+        return value
+
+
+def cast_py_value(
+    emitter: WaveEmitter, value: Value, element_type: Optional[IrType] = None
+) -> IRProxyValue:
+    """
+    Converts the given value to an IR Value.
+    If the value is a fx.Node, the result of the fx.Node should corresspond to
+    exactly one IR Value.
+    If the value is a constant, a constant value will be built for it.
+    """
+    if isinstance(value, fx.Node):
+        try:
+            node_values = emitter.lookup_node_values(value)
+            assert len(node_values) == 1, f"Expected exactly one value for node {value}"
+            return (
+                node_values[0]
+                if isinstance(node_values[0], IRProxyValue)
+                else IRProxyValue(node_values[0])
+            )
+        except KeyError:
+            raise CodegenError(f"Producer node `{value}` has no IR Value")
+    elif isinstance(value, IndexExpr):
+        simplified = IndexingContext.current().simplify_expr(value)
+        try:
+            value = int(simplified)
+        except TypeError as e:
+            raise CodegenError(
+                f"Dynamically resolved symbolic values not yet implemented. Got: "
+                f"{simplified}"
+            ) from e
+    element_type = IndexType.get() if element_type is None else element_type
+    return ScalarBuilder.constant(value, element_type)
+
+
+def cast_vector(emitter: WaveEmitter, value, *, element_type: Optional[IrType] = None):
+    proxy_value = cast_py_value(emitter, value)
+
+    # Cast scalar types correctly first.
+    if element_type and not ShapedType.isinstance(proxy_value.ir_value.type):
+        # Implicit scalar type promotion.
+        proxy_value = ScalarBuilder.to_dtype(proxy_value, element_type)
+
+    value = proxy_value.ir_value
+
+    # After scalar promotion, promote to vector.
+    if VectorType.isinstance(value.type):
+        # Already a vector. Coerce or return.
+        if element_type is not None:
+            value = ScalarBuilder.to_dtype(proxy_value, element_type).ir_value
+        # No target element_type.
+        return value
+    else:
+        # Scalar -> vector.
+        element_type = value.type
+        vector_type = VectorType.get([], element_type)
+        return vector_d.broadcast(vector_type, value)
+
+
+def cast_scalar(emitter: WaveEmitter, value):
+    proxy_value = cast_py_value(emitter, value)
+    value = proxy_value.ir_value
+
+    # After scalar promotion, promote to vector.
+    if VectorType.isinstance(value.type):
+        # Vector -> scalar.
+        return vector_d.extract(value, static_position=[0], dynamic_position=[])
+    else:
+        # Already a scalar. Coerce or return.
+        # No target element_type.
+        return value
+
+
+def cast_py_value(
+    emitter: WaveEmitter, value: Value, element_type: Optional[IrType] = None
+) -> IRProxyValue:
+    """
+    Converts the given value to an IR Value.
+    If the value is a fx.Node, the result of the fx.Node should corresspond to
+    exactly one IR Value.
+    If the value is a constant, a constant value will be built for it.
+    """
+    if isinstance(value, fx.Node):
+        try:
+            node_values = emitter.lookup_node_values(value)
+            assert len(node_values) == 1, f"Expected exactly one value for node {value}"
+            return (
+                node_values[0]
+                if isinstance(node_values[0], IRProxyValue)
+                else IRProxyValue(node_values[0])
+            )
+        except KeyError:
+            raise CodegenError(f"Producer node `{value}` has no IR Value")
+    elif isinstance(value, IndexExpr):
+        simplified = IndexingContext.current().simplify_expr(value)
+        try:
+            value = int(simplified)
+        except TypeError as e:
+            raise CodegenError(
+                f"Dynamically resolved symbolic values not yet implemented. Got: "
+                f"{simplified}"
+            ) from e
+    element_type = IndexType.get() if element_type is None else element_type
+    return ScalarBuilder.constant(value, element_type)
+
+
+def cast_py_lvalue(emitter: WaveEmitter, py_value: fx.Node) -> tuple[Value, fx.Node]:
+    if isinstance(py_value, fx.Node):
+        try:
+            node_values = emitter.lookup_node_values(py_value)
+            assert (
+                len(node_values) == 1
+            ), f"Expected exactly one value for node {py_value}"
+            return node_values[0], py_value
+        except KeyError:
+            raise CodegenError(f"Producer node `{py_value}` has no IR Value")
+    else:
+        raise CodegenError(
+            f"Required a traced node in the graph. Got: {py_value} (type {type(py_value)})"
+        )
+
+
+def cast_kernel_buffer(
+    emitter: WaveEmitter, kb
+) -> tuple[Value, MemRefType, Type[KernelBuffer]]:
+    """Casts a Python value of type KernelBuffer, which lowers to a MemRefType'd value."""
+    value, node = cast_py_lvalue(emitter, kb)
+    ir_type = value.type
+    py_type = node.type
+    if py_type is None:
+        try:
+            py_type = get_custom(node).type
+        except:
+            raise CodegenError(f"Could not find type for node {node}")
+
+    if not MemRefType.isinstance(ir_type):
+        raise CodegenError(
+            f"Expected a KernelBuffer (aka. `memref`) but got `{ir_type}`"
+        )
+
+    if not (issubclass(py_type, KernelBuffer) or issubclass(py_type, Memory)):
+        raise CodegenError(
+            f"Expected an lvalue of type KernelBuffer but got '{py_type}' for node {node}"
+        )
+
+    return value, MemRefType(ir_type), py_type
