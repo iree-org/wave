@@ -71,7 +71,6 @@ from ...ops.wave_ops import (
     extract_slice,
     ge,
     get_custom,
-    get_custom,
     get_result,
     gt,
     iterate,
@@ -607,17 +606,20 @@ def handle_binary_op(op, maybe_scalarize: bool = False):
                 )
 
             if maybe_scalarize and _near_mma(node):
-                values = []
-                assert (
-                    lhs.type.shape == rhs.type.shape
-                ), f"Expected lhs and rhs to have same shape, got {lhs.type.shape} and {rhs.type.shape}"
+                lhs_values = []
                 for i in range(lhs.type.shape[0]):
                     lhs_elem = vector_d.extract(
                         lhs, static_position=[i], dynamic_position=[]
                     )
+                    lhs_values.append(lhs_elem)
+                rhs_values = []
+                for i in range(rhs.type.shape[0]):
                     rhs_elem = vector_d.extract(
                         rhs, static_position=[i], dynamic_position=[]
                     )
+                    rhs_values.append(rhs_elem)
+                values = []
+                for lhs_elem, rhs_elem in zip(lhs_values, rhs_values):
                     result = binary_fn(lhs_elem, rhs_elem, emitter.options)
                     elem_type = result.type
                     values.append(result)
@@ -1698,7 +1700,20 @@ def handle_cast(emitter: WaveEmitter, node: fx.Node):
     conversion_op = get_conversion_op(
         src_elem_type, dst_elem_type, fastmath=get_fast_math_flags(emitter.options)
     )
-    casted_vector = conversion_op(dst_vector_type, vector_src)
+    if _near_mma(node):
+        src_values = []
+        for i in range(src_vector_type.shape[0]):
+            src_elem = vector_d.extract(
+                vector_src, static_position=[i], dynamic_position=[]
+            )
+            src_values.append(src_elem)
+
+        values = []
+        for src_elem in src_values:
+            values.append(conversion_op(dst_vector_type.element_type, src_elem))
+        casted_vector = vector_d.from_elements(dst_vector_type, values)
+    else:
+        casted_vector = conversion_op(dst_vector_type, vector_src)
     emitter.bind_node_proxy(node, IRProxyValue(casted_vector))
 
 
