@@ -52,7 +52,11 @@ def compile_to_vmfb(
     if options.mlir_print_ir_after_all:
         flags.append("--mlir-print-ir-after-all")
 
-    flags.append("--iree-hip-llvm-slp-vec=false")
+    if options.scalarize_packed_math:
+        # scalarize_packed_math decomposes packed math into scalar math
+        # so we need to disable SLP vectorization to prevent recombinining it
+        # back on LLVM level.
+        flags.append("--iree-hip-llvm-slp-vec=false")
 
     if options.iree_preprocessing_pass_pipeline:
         flags.append(
