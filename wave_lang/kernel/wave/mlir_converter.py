@@ -4,6 +4,19 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+"""
+MLIR Converter for Wave Dialect
+
+This provides functionality to convert Wave traces into MLIR code
+using the Wave dialect. It serializes the trace data and spawns a separate water emitter
+process that uses Water Python bindings to generate the MLIR output.
+
+The converter handles:
+- Serialization of Wave kernel traces to JSON format
+- Spawning the water emitter as a subprocess
+- Triggering operation type inference and some simple wave type mapping
+"""
+
 import json
 import subprocess
 import sys

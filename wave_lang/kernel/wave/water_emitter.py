@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""
+Water Emitter for Wave Dialect
+
+This generates operations Wave dialect from a serialized wave trace (json).
+It runs as a standalone process with access to Water Python bindings and emits
+Wave operations with fallback support for unknown operations.
+"""
+
 import json
 import sys
 
