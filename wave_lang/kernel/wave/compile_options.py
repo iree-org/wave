@@ -74,6 +74,7 @@ class WaveCompileOptions:
     use_buffer_ops: bool = False
     use_fast_math: bool = False
     use_global_to_shared: bool = False
+    linearize_shared_access: bool = False
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True

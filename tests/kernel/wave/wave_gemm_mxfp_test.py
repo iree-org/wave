@@ -327,6 +327,7 @@ def testScaledBatchedGemmMXFP4(
         canonicalize=True,
         schedule=enable_scheduling,
         use_buffer_ops=True,
+        linearize_shared_access=True,
         dynamic_symbols=dynamic_symbols,
     )
     options = set_default_run_config(options)
