@@ -328,7 +328,8 @@ def test_attention():
     base_attention = wave_compile(options, base_attention)
     print(base_attention.asm)
 
-    # CHECK-LABEL:       func.func @base_attention
+    # CHECK-LABEL:       test_attention
+    # CHECK:             func.func @base_attention
     # CHECK:                {{.*}} = scf.for
     # CHECK-COUNT-16:           {{.*}} = amdgpu.mfma
     # CHECK-COUNT-4:            {{.*}} = arith.cmpi slt
@@ -338,6 +339,42 @@ def test_attention():
     # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
 
     # CHECK-LABEL:      func.func @test_vanilla_attention
+
+
+@run_test
+def test_attention_scalarize_packed_math():
+    shape = AttentionShape(
+        num_query_heads=8,
+        num_kv_heads=8,
+        query_seq_len=128,
+        head_size_kv=128,
+        head_size=64,
+        kv_seq_len=256,
+    )
+    mfma_variant = (tkw.MMAType.F32_16x16x16_F16,) * 2
+    base_attention, hyperparams, _ = get_vanilla_attention_kernel(
+        shape, mfma_variant, False
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=False,
+        schedule=SchedulingType.NONE,
+        use_scheduling_barriers=False,
+        compile_to_mlir=True,
+        scalarize_packed_math=True,
+    )
+    base_attention = wave_compile(options, base_attention)
+    print(base_attention.asm)
+
+    # CHECK-LABEL:       test_attention_scalarize_packed_math
+    # CHECK:             func.func @base_attention
+    # CHECK:                {{.*}} = scf.for
+    # CHECK-COUNT-16:           {{.*}} = amdgpu.mfma
+    # Check that we are scalarizing packed math
+    # CHECK-COUNT-32:           {{.*}} = arith.addf %{{.*}}, %{{.*}} : f32
+    # CHECK-COUNT-32:           {{.*}} = arith.mulf %{{.*}}, %{{.*}} : f32
 
 
 @run_test
@@ -366,7 +403,8 @@ def test_attention_causal():
     base_attention = wave_compile(options, base_attention)
     print(base_attention.asm)
 
-    # CHECK-LABEL:       func.func @base_attention
+    # CHECK-LABEL:       test_attention_causal
+    # CHECK:             func.func @base_attention
     # CHECK:                %[[NEG_INF:.+]] = arith.constant dense<-1.000000e+06> : vector<4xf32>
     # CHECK:                %[[ZERO:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
     # CHECK:                {{.*}} = scf.for

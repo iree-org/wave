@@ -52,6 +52,7 @@ from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, inde
 from ...compiler.base import CodegenError, ValidationError
 from ...compiler.builder import IRProxyValue
 from ...ops.wave_ops import (
+    MMABase,
     abs,
     allocate,
     apply_expr,
@@ -74,8 +75,8 @@ from ...ops.wave_ops import (
     gt,
     iterate,
     le,
-    log2,
     log10,
+    log2,
     lt,
     maximum,
     minimum,
@@ -554,6 +555,14 @@ def handle_atomic_op(op):
 ###############################################################################
 
 
+def _near_mma(node: fx.Node) -> bool:
+    """Check if there is any mma op in same block"""
+    for node in node.graph.nodes:
+        if isinstance(get_custom(node), MMABase):
+            return True
+    return False
+
+
 def get_rank(mlir_type):
     if not isinstance(mlir_type, ShapedType):
         # Not 0 because vector<f32> is rank 0, and in theory,
@@ -562,7 +571,7 @@ def get_rank(mlir_type):
     return mlir_type.rank
 
 
-def handle_binary_op(op):
+def handle_binary_op(op, maybe_scalarize: bool = False):
     def decorator(binary_fn: Callable[[Value, Value], OpResult]):
         @handle_op(op)
         def handle_generic_binary(emitter: WaveEmitter, node: fx.Node):
@@ -596,7 +605,33 @@ def handle_binary_op(op):
                     f"rhs={get_custom(op.rhs)}"
                 )
 
-            result = binary_fn(lhs, rhs, emitter.options)
+            if (
+                maybe_scalarize
+                and emitter.options.scalarize_packed_math
+                and _near_mma(node)
+            ):
+                lhs_values = []
+                for i in range(lhs.type.shape[0]):
+                    lhs_elem = vector_d.extract(
+                        lhs, static_position=[i], dynamic_position=[]
+                    )
+                    lhs_values.append(lhs_elem)
+                rhs_values = []
+                for i in range(rhs.type.shape[0]):
+                    rhs_elem = vector_d.extract(
+                        rhs, static_position=[i], dynamic_position=[]
+                    )
+                    rhs_values.append(rhs_elem)
+                values = []
+                for lhs_elem, rhs_elem in zip(lhs_values, rhs_values):
+                    result = binary_fn(lhs_elem, rhs_elem, emitter.options)
+                    values.append(result)
+
+                elem_type = values[0].type
+                res_type = VectorType.get(lhs.type.shape, elem_type)
+                result = vector_d.from_elements(res_type, values)
+            else:
+                result = binary_fn(lhs, rhs, emitter.options)
 
             emitter.bind_node_proxy(node, IRProxyValue(result))
 
@@ -612,7 +647,7 @@ def get_fast_math_flags(options: WaveCompileOptions) -> int | None:
     return arith_d.FastMathFlags.fast if options.use_fast_math else None
 
 
-@handle_binary_op(operator.add)
+@handle_binary_op(operator.add, maybe_scalarize=True)
 def handle_add(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
     if _is_float_type(element_type):
@@ -624,7 +659,7 @@ def handle_add(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
-@handle_binary_op(operator.sub)
+@handle_binary_op(operator.sub, maybe_scalarize=True)
 def handle_sub(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
     if _is_float_type(element_type):
@@ -636,7 +671,7 @@ def handle_sub(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
-@handle_binary_op(operator.mul)
+@handle_binary_op(operator.mul, maybe_scalarize=True)
 def handle_mul(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
     if _is_float_type(element_type):
@@ -1669,7 +1704,20 @@ def handle_cast(emitter: WaveEmitter, node: fx.Node):
     conversion_op = get_conversion_op(
         src_elem_type, dst_elem_type, fastmath=get_fast_math_flags(emitter.options)
     )
-    casted_vector = conversion_op(dst_vector_type, vector_src)
+    if emitter.options.scalarize_packed_math and _near_mma(node):
+        src_values = []
+        for i in range(src_vector_type.shape[0]):
+            src_elem = vector_d.extract(
+                vector_src, static_position=[i], dynamic_position=[]
+            )
+            src_values.append(src_elem)
+
+        values = []
+        for src_elem in src_values:
+            values.append(conversion_op(dst_vector_type.element_type, src_elem))
+        casted_vector = vector_d.from_elements(dst_vector_type, values)
+    else:
+        casted_vector = conversion_op(dst_vector_type, vector_src)
     emitter.bind_node_proxy(node, IRProxyValue(casted_vector))
 
 
