@@ -605,7 +605,11 @@ def handle_binary_op(op, maybe_scalarize: bool = False):
                     f"rhs={get_custom(op.rhs)}"
                 )
 
-            if maybe_scalarize and _near_mma(node):
+            if (
+                maybe_scalarize
+                and emitter.options.scalarize_packed_math
+                and _near_mma(node)
+            ):
                 lhs_values = []
                 for i in range(lhs.type.shape[0]):
                     lhs_elem = vector_d.extract(
@@ -1700,7 +1704,7 @@ def handle_cast(emitter: WaveEmitter, node: fx.Node):
     conversion_op = get_conversion_op(
         src_elem_type, dst_elem_type, fastmath=get_fast_math_flags(emitter.options)
     )
-    if _near_mma(node):
+    if emitter.options.scalarize_packed_math and _near_mma(node):
         src_values = []
         for i in range(src_vector_type.shape[0]):
             src_elem = vector_d.extract(
