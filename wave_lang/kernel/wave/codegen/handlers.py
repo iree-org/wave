@@ -625,9 +625,9 @@ def handle_binary_op(op, maybe_scalarize: bool = False):
                 values = []
                 for lhs_elem, rhs_elem in zip(lhs_values, rhs_values):
                     result = binary_fn(lhs_elem, rhs_elem, emitter.options)
-                    elem_type = result.type
                     values.append(result)
 
+                elem_type = values[0].type
                 res_type = VectorType.get(lhs.type.shape, elem_type)
                 result = vector_d.from_elements(res_type, values)
             else:
