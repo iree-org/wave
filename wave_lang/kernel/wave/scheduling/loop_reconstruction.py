@@ -37,6 +37,7 @@ from .loop_reconstruction_utils import (
     partition_graph_by_stage,
 )
 from .resources import get_custom_operation_type
+from typing import Optional
 
 logger = get_logger("wave.scheduling.loop_reconstruction")
 
@@ -776,6 +777,7 @@ def construct_pipelined_loop(
     max_induction_variable: int,
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
+    multi_buffer_count: Optional[int] = None,
 ) -> fx.Node:
     """
     Given a graph annotated with scheduling parameters, construct a pipelined loop
@@ -783,7 +785,9 @@ def construct_pipelined_loop(
     """
     induction_variable = get_induction_variable(reduction, constraints)
     num_rotating_registers = liveness_analysis(graph)
-    multi_buffer_count = compute_multi_buffer_count(graph, initiation_interval)
+    multi_buffer_count = compute_multi_buffer_count(
+        graph, initiation_interval, multi_buffer_count
+    )
 
     outer_vars = defaultdict(list)
 

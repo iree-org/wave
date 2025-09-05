@@ -196,6 +196,7 @@ class WaveCacheManager(object):
             options.device,
             options.num_devices,
             options.target,
+            options.multi_buffer_count,
             options.iree_preprocessing_pass_pipeline,
             options.override_mlir,
             options.optimization_level,

@@ -26,6 +26,8 @@ class WaveCompileOptions:
     # === Scheduling options ===
     schedule: bool = SchedulingType.NONE
     use_scheduling_barriers: bool = False
+    # None for buffer count to be computed automatically
+    multi_buffer_count: Optional[int] = None
 
     # === Runtime options ===
     kernel_launch_info: KernelLaunchInfo = field(default_factory=KernelLaunchInfo)
