@@ -114,7 +114,9 @@ def get_default_arch() -> str:
 
     # The gcnArchName comes back like gfx90a:sramecc+:xnack.
     colon_pos = gcnArch.find(":")
-    return gcnArch[0:colon_pos]
+    if colon_pos > 0:
+        return gcnArch[0:colon_pos]
+    return gcnArch
 
 
 # Whether to dump the generated MLIR module.
