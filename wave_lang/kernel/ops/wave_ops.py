@@ -220,6 +220,16 @@ def atomic_min(
     rhs: "Memory",
     elements_per_thread: Optional[IndexExpr | int] = None,
     mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+) -> "Register": ...
+
+
+def atomic_add(
+    lhs: "Register",
+    rhs: "Memory",
+    elements_per_thread: Optional[IndexExpr | int] = None,
+    mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ) -> "Register": ...
 
 
@@ -1330,6 +1340,7 @@ class AtomicOp(BinaryOpBase, ABC):
 
     elements_per_thread: Optional[Any] = None
     mapping: Optional[IndexMapping] = None
+    mapping_dynamic_vals: tuple[fx.Node, ...] = ()
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1343,6 +1354,12 @@ class AtomicOp(BinaryOpBase, ABC):
     @property
     def memory_type(self) -> "Memory":
         return get_custom(self.lhs).type
+
+
+@define_op("atomic_add")
+@dataclass
+class AtomicAddOp(AtomicOp):
+    pass
 
 
 @define_op("scheduling_group_barrier")
