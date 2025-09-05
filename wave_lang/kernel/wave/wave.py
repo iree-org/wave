@@ -740,6 +740,7 @@ class LaunchableWave(Launchable):
                 scheduling_type,
                 options.override_schedule,
                 options.dump_schedule,
+                options.multi_buffer_count,
             )
         )
 

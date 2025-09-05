@@ -292,7 +292,7 @@ def liveness_analysis(graph: fx.Graph) -> dict[fx.Node, int]:
 
 
 def compute_multi_buffer_count(
-    graph: fx.Graph, initiation_interval: int
+    graph: fx.Graph, initiation_interval: int, multi_buffer_count: Optional[int] = None
 ) -> dict[fx.Node, int]:
     """
     Compute the number of buffers needed for each node.
@@ -308,6 +308,9 @@ def compute_multi_buffer_count(
             continue
 
         shared_memory_operand = propagate_loop_carried_vars(shared_memory_operand)
+        if multi_buffer_count:
+            result[shared_memory_operand] = multi_buffer_count
+            continue
 
         assert node in lifetime, f"Node {node} not found in lifetime"
         # Lifetime returns 0 if node result only used on same clock, 1 if it used on next clock, etc,
