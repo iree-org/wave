@@ -52,6 +52,8 @@ def compile_to_vmfb(
     if options.mlir_print_ir_after_all:
         flags.append("--mlir-print-ir-after-all")
 
+    flags.append("--iree-hip-llvm-slp-vec=false")
+
     if options.iree_preprocessing_pass_pipeline:
         flags.append(
             f"--iree-preprocessing-pass-pipeline={options.iree_preprocessing_pass_pipeline}"
