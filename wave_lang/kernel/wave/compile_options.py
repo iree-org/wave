@@ -26,7 +26,7 @@ class WaveCompileOptions:
     # === Scheduling options ===
     schedule: bool = SchedulingType.NONE
     use_scheduling_barriers: bool = False
-    # None if no buffer count specified else 2 and up
+    # None for buffer count to be computed automatically
     multi_buffer_count: Optional[int] = None
 
     # === Runtime options ===

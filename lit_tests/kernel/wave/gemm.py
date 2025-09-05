@@ -1332,7 +1332,6 @@ def test_gemm_four_stage():
         schedule=SchedulingType.FOUR_STAGE,
         use_scheduling_barriers=True,
         compile_to_mlir=True,
-        multi_buffer_count=2,
     )
 
     gemm_four_stage = wave_compile(options, gemm_four_stage)

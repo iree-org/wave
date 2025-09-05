@@ -108,7 +108,10 @@ def test_gemm_pipelined():
         minimize_global_loads(trace, constraints)
         apply_shared_memory_indexing_corrections(trace, constraints)
         schedule_graph(
-            trace, constraints, True, SchedulingType.MODULO, multi_buffer_count=2
+            trace,
+            constraints,
+            True,
+            SchedulingType.MODULO,
         )
 
     print_subgraph(trace, "pipelined_iterate", False)
@@ -120,12 +123,8 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %rotating_reg_1
     # CHECK-NEXT: %rotating_reg_2
     # CHECK-NEXT: %rotating_reg_3
-    # CHECK-NEXT: %outer_rotating_reg_8
-    # CHECK-NEXT: %outer_rotating_reg_9
-    # CHECK-NEXT: %outer_rotating_reg_10
-    # CHECK-NEXT: %outer_rotating_reg_11
-    # CHECK-NEXT: %read_4_shared_M:0_N:0_K:0_mapped_1_1
-    # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0_mapped_1_1
+    # CHECK-NEXT: %read_4_shared_M:0_N:0_K:0
+    # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0
     # CHECK-NEXT: %read_21
     # CHECK-NEXT: %read_22
     # CHECK-NEXT: %scheduling_group_barrier
@@ -149,7 +148,7 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %mma_M:0_N:1_K:0
     # CHECK-SAME: (%read_2_shared_M:0_N:0_K:0_mapped_1_1, %read_4_shared_M:0_N:1_K:0_mapped_1_1, %acc_m_0_n_1_k_0, None)
     # CHECK-NEXT: %mma_M:1_N:1_K:0
-    # CHECK-SAME: (%rotating_reg_2, %read_4_shared_M:0_N:1_K:0_mapped_1_1, %acc_m_1_n_1_k_0, None), kwargs = {})
+    # CHECK-SAME: (%rotating_reg_2, %read_4_shared_M:0_N:1_K:0_mapped_1_1, %acc_m_1_n_1_k_0, None)
     # CHECK-NEXT: %read_2_shared_M:1_N:0_K:0
     # CHECK-NEXT: %read_2_shared_M:1_N:0_K:1
     # CHECK-NEXT: %scheduling_group_barrier_3
@@ -162,7 +161,7 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
     # CHECK-NEXT: %scheduling_group_barrier_4
     # CHECK-SAME: ({Operation.MMA: 2, Operation.READ_SHARED: 2}, 0)
-    # CHECK-NEXT: [mma_M:0_N:0_K:1_mapped_1_1, mma_M:0_N:1_K:1_mapped_1_1, mma_M:1_N:0_K:1_mapped_1_1, mma_M:1_N:1_K:1_mapped_1_1, read_4_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:1_N:0_K:0_mapped_2_0, read_2_shared_M:1_N:0_K:1_mapped_2_0, outer_rotating_reg_9, outer_rotating_reg_8, outer_rotating_reg_11, outer_rotating_reg_10]
+    # CHECK-NEXT: [mma_M:0_N:0_K:1_mapped_1_1, mma_M:0_N:1_K:1_mapped_1_1, mma_M:1_N:0_K:1_mapped_1_1, mma_M:1_N:1_K:1_mapped_1_1, read_4_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:0_N:0_K:1_mapped_2_0, read_2_shared_M:1_N:0_K:0_mapped_2_0, read_2_shared_M:1_N:0_K:1_mapped_2_0]
 
     print_subgraph(trace, "region_1", False)
     # CHECK: %a
@@ -172,10 +171,8 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %register_M:0_N:1_K:0
     # CHECK-NEXT: %register_M:1_N:0_K:0
     # CHECK-NEXT: %register_M:1_N:1_K:0
-    # CHECK-NEXT: %allocate_1_multi_buffer_1
-    # CHECK-NEXT: %allocate_1_multi_buffer_0
-    # CHECK-NEXT: %allocate_multi_buffer_1
-    # CHECK-NEXT: %allocate_multi_buffer_0
+    # CHECK-NEXT: %allocate_1
+    # CHECK-NEXT: %allocate
     # CHECK-NEXT: %read_21
     # CHECK-NEXT: %read_22
     # CHECK-NEXT: %write_10
@@ -220,7 +217,7 @@ def test_gemm_pipelined():
     # CHECK-NEXT: %read_2_shared_M:0_N:0_K:1
 
     # CHECK-NEXT: %iterate_1
-    # CHECK-SAME: (K, [%mma_M:0_N:0_K:1_mapped_0_1, %mma_M:0_N:1_K:1_mapped_0_1, %mma_M:1_N:0_K:1_mapped_0_1, %mma_M:1_N:1_K:1_mapped_0_1, %read_4_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:1_N:0_K:0_mapped_1_0, %read_2_shared_M:1_N:0_K:1_mapped_1_0, %allocate_multi_buffer_0, %allocate_multi_buffer_1, %allocate_1_multi_buffer_0, %allocate_1_multi_buffer_1], pipelined_iterate, [%a, %b], 1, None, None)
+    # CHECK-SAME: (K, [%mma_M:0_N:0_K:1_mapped_0_1, %mma_M:0_N:1_K:1_mapped_0_1, %mma_M:1_N:0_K:1_mapped_0_1, %mma_M:1_N:1_K:1_mapped_0_1, %read_4_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:0_N:0_K:1_mapped_1_0, %read_2_shared_M:1_N:0_K:0_mapped_1_0, %read_2_shared_M:1_N:0_K:1_mapped_1_0], pipelined_iterate, [%a, %b], 1, None, None)
 
     # CHECK-NEXT: %get_result_M:0_N:0_K:0
     # CHECK-SAME: (%iterate_1, 0)
@@ -238,14 +235,6 @@ def test_gemm_pipelined():
     # CHECK-SAME: (%iterate_1, 6)
     # CHECK-NEXT: %get_result_12
     # CHECK-SAME: (%iterate_1, 7)
-    # CHECK-NEXT: %get_result_13
-    # CHECK-SAME: (%iterate_1, 8)
-    # CHECK-NEXT: %get_result_14
-    # CHECK-SAME: (%iterate_1, 9)
-    # CHECK-NEXT: %get_result_15
-    # CHECK-SAME: (%iterate_1, 10)
-    # CHECK-NEXT: %get_result_16
-    # CHECK-SAME: (%iterate_1, 11)
 
     # CHECK-NEXT: %read_4_shared_M:0_N:0_K:0
     # CHECK-NEXT: %read_2_shared_M:0_N:0_K:0

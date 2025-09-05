@@ -145,6 +145,7 @@ def torchScaledGemmMXFP8(x, w, x_scales, w_scales):
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
         SchedulingType.MODULO,
+        SchedulingType.FOUR_STAGE,
     ],
 )
 def testScaledGemmMXFP4(
@@ -214,11 +215,6 @@ def testScaledGemmMXFP4(
         canonicalize=True,
         schedule=enable_scheduling,
         use_global_to_shared=use_global_to_shared,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -247,7 +243,13 @@ def testScaledGemmMXFP4(
         ScaledMMAType.F32_16x16x128_F8F6F4,
     ],
 )
-@pytest.mark.parametrize("enable_scheduling", [SchedulingType.PREFETCH])
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.PREFETCH,
+        SchedulingType.FOUR_STAGE,
+    ],
+)
 def testScaledBatchedGemmMXFP4(
     batch: int,
     shape: tuple[int],

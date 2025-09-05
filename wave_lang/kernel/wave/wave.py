@@ -731,9 +731,6 @@ class LaunchableWave(Launchable):
         # Schedule the reduction ops.
         scheduling_type = options.schedule
         use_scheduling_barriers = options.use_scheduling_barriers
-        multi_buffer_count = options.multi_buffer_count
-        if multi_buffer_count is not None:
-            multi_buffer_count = max(1, options.multi_buffer_count)
         graph_passes.append(
             partial(
                 schedule_graph,
@@ -743,7 +740,7 @@ class LaunchableWave(Launchable):
                 scheduling_type,
                 options.override_schedule,
                 options.dump_schedule,
-                multi_buffer_count,
+                options.multi_buffer_count,
             )
         )
 
