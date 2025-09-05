@@ -315,6 +315,11 @@ def compute_multi_buffer_count(
         assert node in lifetime, f"Node {node} not found in lifetime"
         # Lifetime returns 0 if node result only used on same clock, 1 if it used on next clock, etc,
         # so we need to add 1 to the lifetime to get the number of clocks the result is live.
+        # Ceildiv is required for cases like (lifetime=3, initiation_interval=2) which would otherwise
+        # result in buffer_count=1:
+        # 000
+        #   111
+        #     222
         buffer_count = ceildiv(lifetime[node] + 1, initiation_interval)
         logger.debug(f"Node: {node}, Buffer count: {buffer_count}")
         if buffer_count < 2:
