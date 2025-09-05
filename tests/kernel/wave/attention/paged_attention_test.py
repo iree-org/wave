@@ -19,6 +19,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     device_randint,
     device_randn,
     device_zeros,
+    device_empty,
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType, GenericDot, MMAOperand
@@ -33,7 +34,7 @@ from torch.testing import assert_close
 from ..common.utils import (
     expensive_test_param,
     param_bool,
-    require_cdna3,
+    require_cdna_3_or_4,
     require_e2e,
 )
 from typing import List, Optional
@@ -50,6 +51,16 @@ shapes += [(64, 1, 80, 80, 32, 2, 128)]
 shapes += [(128, 2, 80, 80, 32, 2, 500)]
 shapes += [(128, 2, 512, 512, 32, 32, 500)]
 shapes += [expensive_test_param((32, 8, 128, 128, 32, 1319, 1018))]
+
+# Test whether number of workgroups for query heads is calculated correctly
+#
+# This example requires 2 workgroups, since HEAD_BLOCK_SIZE will be 16 while the
+# number of query heads is 17
+shapes += [(17, 1, 1, 1, 1, 1, 1)]
+
+# Test KV splits where some splits do no work: [2, 2, 2, 2, 1, 0, 0, 0]
+# Assumes num_kv_splits is 8
+shapes += [(2, 1, 1, 1, 1, 1, 9)]
 
 # Test shapes for MHA paged attention
 # (NUM_HEADS, HEAD_SIZE_QK, HEAD_SIZE_V, BLOCK_SIZE, NUM_SEQS, SEQ_LEN)
@@ -182,7 +193,7 @@ def load_inputs(directory):
 
 # TODO: Investigate errors on MI250.
 @require_e2e
-@require_cdna3
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
@@ -274,9 +285,9 @@ def testPagedFlashDecoding(
         get_paged_decode_intermediate_arrays_shapes(shape, num_kv_splits)
     )
 
-    phase_0_output = device_zeros(phase_0_output_shape, dtype=torch.float32)
-    phase_0_output_max = device_zeros(phase_0_output_max_shape, dtype=torch.float32)
-    output = device_zeros(
+    phase_0_output = device_empty(phase_0_output_shape, dtype=torch.float32)
+    phase_0_output_max = device_empty(phase_0_output_max_shape, dtype=torch.float32)
+    output = device_empty(
         shape.num_seqs, shape.num_query_heads, shape.head_size_kv, dtype=dtype
     )
 
@@ -345,7 +356,7 @@ def testPagedFlashDecoding(
 
 
 @require_e2e
-@require_cdna3
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", mha_shapes)
 @pytest.mark.parametrize("dtype", [torch.float16])
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
@@ -438,9 +449,9 @@ def testPagedFlashDecodingMHA(
         get_paged_decode_intermediate_arrays_shapes(shape, num_kv_splits)
     )
 
-    phase_0_output = device_zeros(phase_0_output_shape, dtype=torch.float32)
-    phase_0_output_max = device_zeros(phase_0_output_max_shape, dtype=torch.float32)
-    output = device_zeros(
+    phase_0_output = device_empty(phase_0_output_shape, dtype=torch.float32)
+    phase_0_output_max = device_empty(phase_0_output_max_shape, dtype=torch.float32)
+    output = device_empty(
         shape.num_seqs, shape.num_query_heads, shape.head_size_kv, dtype=dtype
     )
 

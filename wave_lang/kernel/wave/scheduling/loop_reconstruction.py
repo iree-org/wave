@@ -124,6 +124,10 @@ def add_nodes_by_schedule(
                     else x
                 ),
             )
+            if custom_node.scheduling_parameters["prefetch_stage"]:
+                new_node.fx_node.meta["prefetch_stage"] = (
+                    custom_node.scheduling_parameters["prefetch_stage"]
+                )
             if hasattr(new_node, "_write_dependency"):
                 # We cannot properly handle write dependencies for mapped nodes
                 # yet, so just drop it for now.

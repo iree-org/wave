@@ -158,7 +158,15 @@ class WaveEmitter:
         assert NDEBUG or isinstance(node, fx.Node)
         values = self._node_values.get(node)
         if values is None:
-            values = [self.root_sig.resolve_by_reference(("node", node))]
+            # Force arg binding insertion point to be at the function level to
+            # avoid dominance errors when buffer is used inside multiple
+            # scf constructs.
+            ip = InsertionPoint.current
+            while not isinstance(ip.block.owner, func_d.FuncOp):
+                ip = InsertionPoint(ip.block.owner)
+
+            with ip:
+                values = [self.root_sig.resolve_by_reference(("node", node))]
             self._node_values[node] = values
         values = [v.ir_value if isinstance(v, IRProxyValue) else v for v in values]
         return values

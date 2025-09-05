@@ -158,7 +158,7 @@ def get_paged_decode_attention_kernels(
         # appropriate kv head index.
 
         wg_func_2 = lambda wg: wg // math.ceil(head_ratio / HEAD_BLOCK_SIZE)
-        count = shape.num_query_heads // min(HEAD_BLOCK_SIZE, head_ratio)
+        count = ceildiv(shape.num_query_heads, min(HEAD_BLOCK_SIZE, head_ratio))
         constraints += [
             tkw.WorkgroupConstraint(BH, BLOCK_BH, 1, apply_fn=wg_func_2, iters=count)
         ]
@@ -401,6 +401,16 @@ def get_paged_decode_attention_kernels(
 
             tkw.write(res_max_log_sum, output_max)
             res = tkw.broadcast(res, target_shape=[U, S, N, B])
+            tkw.write(res, output, mapping=logits_mapping)
+
+        # `sympy.Eq` is used because `==` tests for exact structural equality rather than symbolic equality
+        #
+        # See https://docs.sympy.org/dev/tutorials/intro-tutorial/gotchas.html#equals-signs
+        @tkw.conditional(sympy.Eq(SPLIT_LEN, 0))
+        def then():
+            # `res_max` is filled with -1e6, `res` is filled with 0 (see `init_max` and `new_acc`)
+            tkw.write(res_max, output_max)
+            res = tkw.broadcast(res_mm, target_shape=[U, S, N, B])
             tkw.write(res, output, mapping=logits_mapping)
 
     @tkw.wave(get_constraints(Phase.PHASE_1))
