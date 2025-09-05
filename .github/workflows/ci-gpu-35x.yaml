@@ -42,6 +42,10 @@ jobs:
         --device /dev/dri
         --env-file /etc/podinfo/gha-gpu-isolation-settings
 
+    defaults:
+      run:
+        shell: bash
+
     env:
       VENV_DIR: ${{ github.workspace }}/.wave-venv
     steps:
