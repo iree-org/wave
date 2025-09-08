@@ -1513,7 +1513,9 @@ def test_igemm_conv(
     x = device_randn(n, c, h, w, dtype=torch.float16)
     we = device_randn(nf, cf, hf, wf, dtype=torch.float16)
 
-    convRef = torch.nn.Conv2d(c, nf, hf, stride=stride, dilation=dilation, padding=padding, bias=False)
+    convRef = torch.nn.Conv2d(
+        c, nf, hf, stride=stride, dilation=dilation, padding=padding, bias=False
+    )
     convRef.weight = torch.nn.Parameter(we)
     out_ref = convRef(x).detach().to(torch.float32)
 
