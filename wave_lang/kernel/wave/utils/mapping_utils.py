@@ -223,9 +223,11 @@ def _compute_offset(indices: list[IndexExpr], strides: list[IndexExpr]) -> Index
     return sum(i * s for i, s in zip(indices, strides))
 
 
-def check_is_dynamic_vals_broadcted(nodes: list[fx.Node]) -> bool:
+def check_is_dynamic_vals_broadcasted(nodes: list[fx.Node]) -> bool:
     for node in nodes:
-        if any(subs_idxc(i.size) > 1 for i in node.index.values()):
+        index = node.index
+        assert index is not None, f"Node {node} has no index"
+        if any(subs_idxc(i.size) > 1 for i in index.values()):
             return False
     return True
 
