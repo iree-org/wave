@@ -51,12 +51,6 @@ from wave_lang.support.ir_imports import (
 from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, index_symbol
 from ...compiler.base import CodegenError, ValidationError
 from ...compiler.builder import IRProxyValue
-from ...compiler.vector_codegen import (
-    cast_py_literal,
-    cast_py_value,
-    cast_scalar,
-    cast_vector,
-)
 from ...ops.wave_ops import (
     abs,
     allocate,
@@ -122,6 +116,10 @@ from ..utils.symbol_utils import subs_idxc
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
+    cast_py_literal,
+    cast_py_value,
+    cast_scalar,
+    cast_vector,
     gen_sympy_index,
     get_constant_attr,
     get_type_or_element_type,

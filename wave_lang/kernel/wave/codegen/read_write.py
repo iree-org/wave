@@ -39,12 +39,6 @@ from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, Inde
 from ...compiler.base import ValidationError
 from ...compiler.builder import IRProxyValue
 from ...compiler.utils import strides_from_symbolic_shape
-from ...compiler.vector_codegen import (
-    cast_kernel_buffer,
-    cast_py_literal,
-    cast_py_value,
-    cast_vector,
-)
 from ...lang.global_symbols import *
 from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
@@ -61,6 +55,10 @@ from ..utils.symbol_utils import safe_subs, subs_idxc, is_literal
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
+    cast_kernel_buffer,
+    cast_py_literal,
+    cast_py_value,
+    cast_vector,
     gen_sympy_index,
     get_constant_attr,
     get_type_or_element_type,
