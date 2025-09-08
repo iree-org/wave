@@ -85,6 +85,19 @@ def get_moe_align_block_size_kernel(
         dynamic_val_mappings={NUM_EXPERTS: i},
     )
 
+    expert_write_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: i},
+        outputs={NUM_EXPERTS: d0},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    simple_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: i},
+        outputs={NUM_EXPERTS: i},
+    )
+
     @tkw.wave(constraints)
     def moe_align_block_size(
         topk_ids: tkl.Memory[NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype],
@@ -94,46 +107,74 @@ def get_moe_align_block_size_kernel(
         padded_counts: tkl.Memory[
             NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
         ],
+        cumsum_buffer: tkl.Memory[
+            NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
     ):
 
-        # create shared memory to hold the histogram
+        tid = tkw.scalar(THREAD_0, tkl.i32)
+        zero_counts = tkl.Register[NUM_EXPERTS, dtype](0)
+        one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
+
         shmem = tkw.allocate(
             shape=(NUM_EXPERTS,),
             distributed_shape=(NUM_EXPERTS,),
             dtype=dtype,
         )
-        zero_counts = tkl.Register[NUM_EXPERTS, dtype](0)
         tkw.write(zero_counts, shmem)
 
         expert_id = tkw.read(topk_ids, elements_per_thread=1)
-
-        one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
         tkw.atomic_add(
             one_reg,
             shmem,
             mapping=expert_read_map,
             mapping_dynamic_vals=(expert_id,),
+            elements_per_thread=1,
         )
-        counts = tkw.read(shmem)
+
+        counts = tkw.read(
+            shmem,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
         tkw.write(
             counts,
             expert_counts,
+            mapping=expert_write_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
         )
 
-        # Implement the padding logic
+        # # Implement the padding logic
         block_size_reg = tkl.Register[NUM_EXPERTS, dtype](BLOCK_SIZE)
-        one_reg = tkl.Register[NUM_EXPERTS, dtype](1)
 
         # (count + block_size - 1) // block_size * block_size
         temp1 = counts + block_size_reg - one_reg
         temp2 = temp1 / block_size_reg
         padded_counts_reg = temp2 * block_size_reg
 
-        tkw.write(padded_counts_reg, padded_counts)
-
         tkw.write(
             padded_counts_reg,
             padded_counts,
+            mapping=expert_write_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+        padded_counts_reg = tkw.read(
+            padded_counts,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+
+        prefix_sums = tkw.cumsum(padded_counts_reg, dim=NUM_EXPERTS)
+        tkw.write(
+            prefix_sums,
+            cumsum_buffer,
+            mapping=expert_write_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
         )
 
     hyperparams = {
