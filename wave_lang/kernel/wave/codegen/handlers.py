@@ -557,10 +557,7 @@ def handle_atomic_op(op):
 
 def _near_mma(node: fx.Node) -> bool:
     """Check if there is any mma op in same block"""
-    for node in node.graph.nodes:
-        if isinstance(get_custom(node), MMABase):
-            return True
-    return False
+    return any(isinstance(get_custom(node), MMABase) for node in node.graph.nodes)
 
 
 def get_rank(mlir_type):
@@ -571,7 +568,14 @@ def get_rank(mlir_type):
     return mlir_type.rank
 
 
-def handle_binary_op(op, maybe_scalarize: bool = False):
+_ops_to_scalarize = [
+    operator.add,
+    operator.sub,
+    operator.mul,
+]
+
+
+def handle_binary_op(op):
     def decorator(binary_fn: Callable[[Value, Value], OpResult]):
         @handle_op(op)
         def handle_generic_binary(emitter: WaveEmitter, node: fx.Node):
@@ -605,9 +609,22 @@ def handle_binary_op(op, maybe_scalarize: bool = False):
                     f"rhs={get_custom(op.rhs)}"
                 )
 
+            # Following from the same transformtion in Triton:
+            #  This Pass scalarizes vector `fmul`s and `fadd`s in basic blocks that contain
+            #  MFMAs. The point/purpose/value of doing is that these get codegened to
+            #  "packed" ops (`v_pk_mul_f32`/`v_pk_add_f32`) and while packed ops use
+            #  separate VALUs from MFMA tensor cores (no problem there), the instructions
+            #  themselves cannot be *issued* in parallel, thus there is a performance cost
+            #  to having such packed ops "near" MFMAs. Concretely/specifically this
+            #  eliminates `v_pk_mul_f32`/`v_pk_add_f32` operations in the final asm in bbs
+            #  with MFMAs.
+            #
+            #  Note, these "scalar" floating point ops will still get lowered to vector
+            #  instructions like `v_mul_f32_e32 v1, v163, v114` and
+            #  `v_add_u32_e32 v1, s16, v12`, just not the "packed" variants.
             if (
-                maybe_scalarize
-                and emitter.options.scalarize_packed_math
+                emitter.options.scalarize_packed_math
+                and op in _ops_to_scalarize
                 and _near_mma(node)
             ):
                 lhs_values = []
@@ -647,7 +664,7 @@ def get_fast_math_flags(options: WaveCompileOptions) -> int | None:
     return arith_d.FastMathFlags.fast if options.use_fast_math else None
 
 
-@handle_binary_op(operator.add, maybe_scalarize=True)
+@handle_binary_op(operator.add)
 def handle_add(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
     if _is_float_type(element_type):
@@ -659,7 +676,7 @@ def handle_add(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
-@handle_binary_op(operator.sub, maybe_scalarize=True)
+@handle_binary_op(operator.sub)
 def handle_sub(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
     if _is_float_type(element_type):
@@ -671,7 +688,7 @@ def handle_sub(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
-@handle_binary_op(operator.mul, maybe_scalarize=True)
+@handle_binary_op(operator.mul)
 def handle_mul(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
     if _is_float_type(element_type):
