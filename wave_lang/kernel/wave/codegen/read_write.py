@@ -409,7 +409,10 @@ def _linearize_memref(
     )
 
 
-def _linearize_shared_mem(memory: CustomOp):
+def _linearize_shared_mem(memory: CustomOp) -> Value:
+    """
+    Convert shared memory with statically shaped N-d memref into 1-D memref.
+    """
     flat_numel = math.prod(memory.type.shape)
     assert (
         memory.type.has_static_shape
