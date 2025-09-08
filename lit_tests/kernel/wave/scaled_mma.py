@@ -430,7 +430,7 @@ def test_mxfp4_scaled_mma_linearize_shrared_access():
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        backend="rocm",
+        device="hip",
         target="gfx950",
         linearize_shared_access=True,
         compile_to_mlir=True,
