@@ -145,6 +145,6 @@ def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:
     if enable_scheduling_barriers is not None:
         options.use_scheduling_barriers = bool(int(enable_scheduling_barriers))
 
-    options.backend = "rocm"
+    options.device = "hip"
     options.target = get_default_arch()
     return options
