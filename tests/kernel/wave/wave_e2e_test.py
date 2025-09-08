@@ -58,59 +58,6 @@ default_test_shapes = [
     (256, 1024),
 ]
 
-dilated_conv_cases = [
-    # Basic cases with dilation=2 (3x3 kernel needs 5x5+ input)
-    (1, 8, 8, 1, 3, 3, 1, 1, 2, "nchw_fchw"),
-    (3, 16, 16, 3, 3, 3, 1, 1, 2, "nchw_fchw"),
-    (10, 12, 12, 3, 3, 3, 1, 1, 2, "nchw_fchw"),
-    (4, 20, 20, 1, 5, 5, 1, 1, 2, "nchw_fchw"),  # 5x5 kernel needs 9x9+ input
-    (1, 32, 32, 3, 3, 3, 2, 1, 2, "nchw_fchw"),
-    # Cases with dilation=3 (3x3 kernel needs 7x7+ input)
-    (1, 10, 10, 1, 3, 3, 1, 1, 3, "nchw_fchw"),
-    (3, 18, 18, 3, 3, 3, 1, 1, 3, "nchw_fchw"),
-    (10, 15, 15, 3, 3, 3, 1, 1, 3, "nchw_fchw"),
-    (4, 25, 25, 1, 5, 5, 1, 1, 3, "nchw_fchw"),  # 5x5 kernel needs 13x13+ input
-    (1, 32, 32, 3, 3, 3, 2, 1, 3, "nchw_fchw"),
-    # Cases with dilation=4 (3x3 kernel needs 9x9+ input)
-    (1, 12, 12, 1, 3, 3, 1, 1, 4, "nchw_fchw"),
-    (3, 20, 20, 3, 3, 3, 1, 1, 4, "nchw_fchw"),
-    (10, 16, 16, 3, 3, 3, 1, 1, 4, "nchw_fchw"),
-    (4, 30, 30, 1, 5, 5, 1, 1, 4, "nchw_fchw"),  # 5x5 kernel needs 17x17+ input
-    (1, 32, 32, 3, 3, 3, 2, 1, 4, "nchw_fchw"),
-    # Cases with dilation=5 (3x3 kernel needs 11x11+ input)
-    (3, 22, 22, 3, 3, 3, 1, 1, 5, "nchw_fchw"),
-    (4, 35, 35, 1, 5, 5, 1, 1, 5, "nchw_fchw"),  # 5x5 kernel needs 21x21+ input
-    (1, 32, 32, 3, 3, 3, 2, 1, 5, "nchw_fchw"),
-    # Cases with dilation=6 (3x3 kernel needs 13x13+ input)
-    (1, 16, 16, 1, 3, 3, 1, 1, 6, "nchw_fchw"),
-    (2, 25, 25, 3, 3, 3, 1, 1, 6, "nchw_fchw"),
-    # Larger cases
-    (10, 25, 25, 3, 5, 5, 2, 1, 2, "nchw_fchw"),  # 5x5 kernel needs 9x9+ input
-    (4, 40, 40, 1, 7, 7, 1, 1, 3, "nchw_fchw"),  # 7x7 kernel needs 19x19+ input
-    (2, 30, 30, 3, 6, 6, 2, 1, 2, "nchw_fchw"),  # 6x6 kernel needs 11x11+ input
-    (12, 12, 12, 3, 3, 3, 2, 1, 2, "nchw_fchw"),
-    (8, 20, 20, 1, 7, 7, 1, 1, 2, "nchw_fchw"),  # 7x7 kernel needs 13x13+ input
-    (4, 64, 64, 1, 9, 9, 2, 1, 2, "nchw_fchw"),  # 9x9 kernel needs 17x17+ input
-    # Cases with stride=2
-    (1, 16, 16, 1, 3, 3, 1, 2, 2, "nchw_fchw"),
-    (3, 24, 24, 3, 3, 3, 1, 2, 2, "nchw_fchw"),
-    (4, 25, 25, 1, 5, 5, 1, 2, 3, "nchw_fchw"),  # 5x5 kernel needs 13x13+ input
-    (2, 32, 32, 3, 3, 3, 2, 2, 2, "nchw_fchw"),
-    # NHWC layout cases
-    (1, 8, 8, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
-    (3, 16, 16, 3, 3, 3, 1, 1, 2, "nhwc_hwcf"),
-    (1, 12, 12, 1, 3, 3, 1, 1, 3, "nhwc_hwcf"),
-    (1, 128, 128, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
-    (3, 18, 18, 3, 3, 3, 1, 1, 3, "nhwc_hwcf"),
-    (1, 15, 15, 1, 3, 3, 1, 1, 4, "nhwc_hwcf"),  # 3x3 kernel needs 9x9+ input
-    (1, 145, 145, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
-    (4, 12, 12, 1, 3, 3, 1, 1, 2, "nhwc_hwcf"),
-    (1, 80, 80, 1, 7, 7, 1, 1, 2, "nhwc_hwcf"),  # 7x7 kernel needs 13x13+ input
-    # Edge cases with higher dilations
-    (1, 18, 18, 1, 3, 3, 1, 1, 8, "nhwc_hwcf"),  # 3x3 kernel needs 17x17+ input
-    (2, 20, 20, 3, 3, 3, 1, 1, 7, "nchw_fchw"),  # 3x3 kernel needs 15x15+ input
-]
-
 user_specified_test_shapes = ""
 
 test_params_path = os.environ.get("TEST_PARAMS_PATH", None)
@@ -1429,57 +1376,107 @@ def test_im2col_mma(run_bench):
 
 
 _igemm_cases = [
-    (1, 5, 5, 10, 2, 2, 2, 2),
-    (2, 5, 5, 3, 2, 2, 1, 1),
-    (4, 5, 5, 10, 2, 2, 2, 1),
-    (2, 5, 5, 10, 2, 2, 1, 1),
-    (2, 5, 5, 10, 2, 2, 2, 1),
-    (1, 5, 5, 10, 2, 2, 16, 1),
-    (1, 5, 5, 10, 2, 2, 1, 2),
-    (1, 5, 5, 4, 2, 2, 2, 1),
-    (4, 5, 5, 10, 2, 2, 2, 3),
-    (4, 5, 5, 10, 2, 2, 1, 3),
-    (4, 5, 5, 10, 2, 2, 16, 2),
-    (1, 5, 5, 3, 2, 2, 2, 2),
-    (4, 5, 5, 10, 2, 2, 16, 1),
-    (4, 5, 5, 4, 2, 2, 16, 1),
-    (2, 5, 5, 4, 2, 2, 1, 3),
-    (2, 5, 5, 4, 2, 2, 2, 1),
-    (1, 5, 5, 10, 2, 2, 16, 3),
-    (4, 5, 5, 4, 2, 2, 16, 2),
-    (4, 5, 5, 10, 2, 2, 2, 1),
-    (4, 5, 5, 3, 2, 2, 1, 1),
-    (4, 5, 5, 4, 2, 2, 2, 1),
-    (4, 5, 5, 3, 2, 2, 2, 1),
-    (2, 5, 5, 1, 2, 2, 1, 3),
-    (2, 5, 5, 4, 2, 2, 2, 1),
-    (2, 5, 5, 10, 2, 2, 16, 1),
-    (1, 5, 5, 1, 3, 3, 1, 1),
+    (1, 5, 5, 10, 2, 2, 2, 2, 1),
+    (2, 5, 5, 3, 2, 2, 1, 1, 1),
+    (4, 5, 5, 10, 2, 2, 2, 1, 1),
+    (2, 5, 5, 10, 2, 2, 1, 1, 1),
+    (2, 5, 5, 10, 2, 2, 2, 1, 1),
+    (1, 5, 5, 10, 2, 2, 16, 1, 1),
+    (1, 5, 5, 10, 2, 2, 1, 2, 1),
+    (1, 5, 5, 4, 2, 2, 2, 1, 1),
+    (4, 5, 5, 10, 2, 2, 2, 3, 1),
+    (4, 5, 5, 10, 2, 2, 1, 3, 1),
+    (4, 5, 5, 10, 2, 2, 16, 2, 1),
+    (1, 5, 5, 3, 2, 2, 2, 2, 1),
+    (4, 5, 5, 10, 2, 2, 16, 1, 1),
+    (4, 5, 5, 4, 2, 2, 16, 1, 1),
+    (2, 5, 5, 4, 2, 2, 1, 3, 1),
+    (2, 5, 5, 4, 2, 2, 2, 1, 1),
+    (1, 5, 5, 10, 2, 2, 16, 3, 1),
+    (4, 5, 5, 4, 2, 2, 16, 2, 1),
+    (4, 5, 5, 10, 2, 2, 2, 1, 1),
+    (4, 5, 5, 3, 2, 2, 1, 1, 1),
+    (4, 5, 5, 4, 2, 2, 2, 1, 1),
+    (4, 5, 5, 3, 2, 2, 2, 1, 1),
+    (2, 5, 5, 1, 2, 2, 1, 3, 1),
+    (2, 5, 5, 4, 2, 2, 2, 1, 1),
+    (2, 5, 5, 10, 2, 2, 16, 1, 1),
+    (1, 5, 5, 1, 3, 3, 1, 1, 1),
+    # Basic cases with dilation=2 (3x3 kernel needs 5x5+ input)
+    (1, 8, 8, 1, 3, 3, 1, 1, 2),
+    (3, 16, 16, 3, 3, 3, 1, 1, 2),
+    (10, 12, 12, 3, 3, 3, 1, 1, 2),
+    (4, 20, 20, 1, 5, 5, 1, 1, 2),  # 5x5 kernel needs 9x9+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 2),
+    # Cases with dilation=3 (3x3 kernel needs 7x7+ input)
+    (1, 10, 10, 1, 3, 3, 1, 1, 3),
+    (3, 18, 18, 3, 3, 3, 1, 1, 3),
+    (10, 15, 15, 3, 3, 3, 1, 1, 3),
+    (4, 25, 25, 1, 5, 5, 1, 1, 3),  # 5x5 kernel needs 13x13+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 3),
+    # Cases with dilation=4 (3x3 kernel needs 9x9+ input)
+    (1, 12, 12, 1, 3, 3, 1, 1, 4),
+    (3, 20, 20, 3, 3, 3, 1, 1, 4),
+    (10, 16, 16, 3, 3, 3, 1, 1, 4),
+    (4, 30, 30, 1, 5, 5, 1, 1, 4),  # 5x5 kernel needs 17x17+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 4),
+    # Cases with dilation=5 (3x3 kernel needs 11x11+ input)
+    (3, 22, 22, 3, 3, 3, 1, 1, 5),
+    (4, 35, 35, 1, 5, 5, 1, 1, 5),  # 5x5 kernel needs 21x21+ input
+    (1, 32, 32, 3, 3, 3, 2, 1, 5),
+    # Cases with dilation=6 (3x3 kernel needs 13x13+ input)
+    (1, 16, 16, 1, 3, 3, 1, 1, 6),
+    (2, 25, 25, 3, 3, 3, 1, 1, 6),
+    # Larger cases
+    (10, 25, 25, 3, 5, 5, 2, 1, 2),  # 5x5 kernel needs 9x9+ input
+    (4, 40, 40, 1, 7, 7, 1, 1, 3),  # 7x7 kernel needs 19x19+ input
+    (2, 30, 30, 3, 6, 6, 2, 1, 2),  # 6x6 kernel needs 11x11+ input
+    (12, 12, 12, 3, 3, 3, 2, 1, 2),
+    (8, 20, 20, 1, 7, 7, 1, 1, 2),  # 7x7 kernel needs 13x13+ input
+    (4, 64, 64, 1, 9, 9, 2, 1, 2),  # 9x9 kernel needs 17x17+ input
+    # Cases with stride=2
+    (1, 16, 16, 1, 3, 3, 1, 2, 2),
+    (3, 24, 24, 3, 3, 3, 1, 2, 2),
+    (4, 25, 25, 1, 5, 5, 1, 2, 3),  # 5x5 kernel needs 13x13+ input
+    (2, 32, 32, 3, 3, 3, 2, 2, 2),
+    # NHWC layout cases
+    (1, 8, 8, 1, 3, 3, 1, 1, 2),
+    (3, 16, 16, 3, 3, 3, 1, 1, 2),
+    (1, 12, 12, 1, 3, 3, 1, 1, 3),
+    (1, 128, 128, 1, 3, 3, 1, 1, 2),
+    (3, 18, 18, 3, 3, 3, 1, 1, 3),
+    (1, 15, 15, 1, 3, 3, 1, 1, 4),  # 3x3 kernel needs 9x9+ input
+    (1, 145, 145, 1, 3, 3, 1, 1, 2),
+    (4, 12, 12, 1, 3, 3, 1, 1, 2),
+    (1, 80, 80, 1, 7, 7, 1, 1, 2),  # 7x7 kernel needs 13x13+ input
+    # Edge cases with higher dilations
+    (1, 18, 18, 1, 3, 3, 1, 1, 8),  # 3x3 kernel needs 17x17+ input
+    (2, 20, 20, 3, 3, 3, 1, 1, 7),  # 3x3 kernel needs 15x15+ input
 ]
 
 validation_test = lambda *a: pytest.param(*a, marks=pytest.mark.validate_only)
 
 _igemm_cases += [
-    perf_test(2, 128, 128, 16, 3, 3, 320, 1),
-    perf_test(2, 128, 128, 320, 1, 1, 640, 1),
-    perf_test(2, 128, 128, 320, 1, 1, 960, 1),
-    perf_test(2, 128, 128, 320, 3, 3, 16, 1),
-    perf_test(2, 128, 128, 320, 3, 3, 320, 1),
-    perf_test(2, 32, 32, 1280, 1, 1, 1920, 1),
-    perf_test(2, 32, 32, 1280, 1, 1, 2560, 1),
-    perf_test(2, 32, 32, 1280, 1, 1, 640, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 1280, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 1920, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 2560, 1),
-    perf_test(2, 32, 32, 1280, 3, 3, 640, 1),
-    perf_test(2, 32, 32, 640, 3, 3, 640, 1),
-    perf_test(2, 64, 64, 320, 3, 3, 320, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 1280, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 1920, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 320, 1),
-    perf_test(2, 64, 64, 640, 1, 1, 960, 1),
-    perf_test(2, 64, 64, 640, 3, 3, 320, 1),
-    perf_test(2, 64, 64, 640, 3, 3, 640, 1),
+    perf_test(2, 128, 128, 16, 3, 3, 320, 1, 1),
+    perf_test(2, 128, 128, 320, 1, 1, 640, 1, 1),
+    perf_test(2, 128, 128, 320, 1, 1, 960, 1, 1),
+    perf_test(2, 128, 128, 320, 3, 3, 16, 1, 1),
+    perf_test(2, 128, 128, 320, 3, 3, 320, 1, 1),
+    perf_test(2, 32, 32, 1280, 1, 1, 1920, 1, 1),
+    perf_test(2, 32, 32, 1280, 1, 1, 2560, 1, 1),
+    perf_test(2, 32, 32, 1280, 1, 1, 640, 1, 1),
+    perf_test(2, 32, 32, 1280, 3, 3, 1280, 1, 1),
+    perf_test(2, 32, 32, 1280, 3, 3, 1920, 1, 1),
+    perf_test(2, 32, 32, 1280, 3, 3, 2560, 1, 1),
+    perf_test(2, 32, 32, 1280, 3, 3, 640, 1, 1),
+    perf_test(2, 32, 32, 640, 3, 3, 640, 1, 1),
+    perf_test(2, 64, 64, 320, 3, 3, 320, 1, 1),
+    perf_test(2, 64, 64, 640, 1, 1, 1280, 1, 1),
+    perf_test(2, 64, 64, 640, 1, 1, 1920, 1, 1),
+    perf_test(2, 64, 64, 640, 1, 1, 320, 1, 1),
+    perf_test(2, 64, 64, 640, 1, 1, 960, 1, 1),
+    perf_test(2, 64, 64, 640, 3, 3, 320, 1, 1),
+    perf_test(2, 64, 64, 640, 3, 3, 640, 1, 1),
 ]
 
 _mem_spaces = [
@@ -1495,7 +1492,7 @@ _layouts = [
 
 @require_e2e
 @require_cdna3
-@pytest.mark.parametrize("n, h, w, c, hf, wf, nf, stride", _igemm_cases)
+@pytest.mark.parametrize("n, h, w, c, hf, wf, nf, stride, dilation", _igemm_cases)
 @pytest.mark.parametrize("mem_space", _mem_spaces)
 @pytest.mark.parametrize("layout", _layouts)
 @pytest.mark.parametrize("optimization_level", [False, True])
@@ -1509,6 +1506,7 @@ def test_igemm_conv(
     wf,
     nf,
     stride,
+    dilation,
     mem_space,
     layout,
     optimization_level,
@@ -1524,7 +1522,7 @@ def test_igemm_conv(
     x = device_randn(n, c, h, w, dtype=torch.float16)
     we = device_randn(nf, cf, hf, wf, dtype=torch.float16)
 
-    convRef = torch.nn.Conv2d(c, nf, hf, stride=stride, padding=padding, bias=False)
+    convRef = torch.nn.Conv2d(c, nf, hf, stride=stride, dilation=dilation, padding=padding, bias=False)
     convRef.weight = torch.nn.Parameter(we)
     out_ref = convRef(x).detach().to(torch.float32)
 
@@ -1547,6 +1545,7 @@ def test_igemm_conv(
         wf=wf,
         nf=nf,
         stride=stride,
+        dilation=dilation,
         input_dtype=tkl.f16,
         output_dtype=tkl.f32,
         mem_space=mem_space,
@@ -1568,7 +1567,7 @@ def test_igemm_conv(
     conv = wave_compile(options, conv)
 
     out = torch.zeros_like(out_ref)
-    conv(x, we, out)
+    conv(x, we, dilation, out)
     assert_close(out, out_ref, rtol=1e-03, atol=1e-03)
 
     if run_bench:
