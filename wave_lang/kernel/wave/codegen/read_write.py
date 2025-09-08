@@ -411,6 +411,9 @@ def _linearize_memref(
 
 def _linearize_shared_mem(memory: CustomOp):
     flat_numel = math.prod(memory.type.shape)
+    assert (
+        memory.type.has_static_shape
+    ), "Expecting static shape to linearize for shared memory."
     memory_space = memory.type.memory_space
     flat_memref_type = MemRefType.get(
         [flat_numel], memory.type.element_type, memory_space=memory_space

@@ -71,12 +71,15 @@ def get_default_scheduling_params() -> dict[IndexSymbol, Any]:
     }
 
 
-def linearize_index(expr_list: dict[IndexExpr, IndexSequence], strides: list[int]):
+def linearize_index(
+    expr_list: dict[IndexExpr, IndexSequence], strides: list[int]
+) -> IndexExpr:
     assert len(expr_list) == len(strides)
     linear_expr = None
     for expr, stride in zip(expr_list.values(), strides):
-        if not isinstance(expr, IndexSequence):
-            return None
+        assert isinstance(
+            expr, IndexSequence
+        ), f"linearize index expects expr to be of type IndexSequence but got {type(expr)}"
         current_expr = expr.start * stride
         if linear_expr is None:
             linear_expr = current_expr
