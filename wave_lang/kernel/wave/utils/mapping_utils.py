@@ -280,14 +280,18 @@ def check_is_mapping_contiguous(
     new_index = transform_index_on_mapping(
         mapping, symbolic_shape, index, is_read=is_read
     )
-    prev_offset = _compute_offset([new_index[d] for d in symbolic_shape], strides)
+    prev_offset = _compute_offset(
+        [new_index[infer_dim(d)] for d in symbolic_shape], strides
+    )
     for i in range(1, elements_per_thread):
         new_index = deepcopy(index)
         new_index[fastest_dim].start += i
         new_index = transform_index_on_mapping(
             mapping, symbolic_shape, new_index, is_read=is_read
         )
-        offset = _compute_offset([new_index[d] for d in symbolic_shape], strides)
+        offset = _compute_offset(
+            [new_index[infer_dim(d)] for d in symbolic_shape], strides
+        )
         if (offset - prev_offset) != 1:
             return False
 
@@ -303,6 +307,7 @@ def transform_index_on_mapping(
     is_read: bool = True,
 ) -> tuple[IndexExpr, ...]:
     """Transforms the index according to the specified mapping"""
+    symbolic_shape = tuple(infer_dim(d) for d in symbolic_shape)
     if is_read:
         index_mapping = mapping.map_input_indices(symbolic_shape)
     else:
