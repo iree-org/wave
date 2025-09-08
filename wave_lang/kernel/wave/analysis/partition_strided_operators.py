@@ -390,6 +390,22 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
 
 
 def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint]):
+    """
+    This pass partitions gather-like operations (reads/writes with non-contiguous access patterns) into
+    multiple contiguous operations.
+
+    For example, if we have a write operation that writes elements with stride 2:
+    write([0,2,4,6]) -> write([0]), write([2]), write([4]), write([6])
+
+    The pass:
+    1. Identifies reads/writes with non-contiguous access patterns
+    2. For each such operation:
+       - Creates multiple single-element reads/writes
+       - Updates indices to access the correct elements
+       - Handles dynamic values in mappings
+       - Combines results back together if needed (for reads)
+    """
+
     def has_gather_mapping(node: fx.Node) -> bool:
         """
         Checks for writes on 2d tensors with strided access on a single dimension that
