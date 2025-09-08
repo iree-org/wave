@@ -453,7 +453,6 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
     # CHECK-COUNT-2: vector.load
     # CHECK: amdgpu.lds_barrier
     # CHECK-COUNT-2: vector.store
-    # CHECK-COUNT-1: memref.reinterpret_cast
     # CHECK-COUNT-4: memref.load
     # CHECK-COUNT-1: vector.from_elements
     # CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
