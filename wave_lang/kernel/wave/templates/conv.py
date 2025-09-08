@@ -22,6 +22,7 @@ def get_igemm_conv2d(
     wf: int,
     nf: int,
     stride: int,
+    dilation: int,
     input_dtype: DataType,
     output_dtype: DataType,
     mem_space: tkl.IndexSymbol = SHARED_ADDRESS_SPACE,
@@ -34,10 +35,13 @@ def get_igemm_conv2d(
     assert input_dtype == tkl.f16, f"Unsupported input dtype: {input_dtype}"
     assert output_dtype == tkl.f32, f"Unsupported input dtype: {output_dtype}"
     padding = 0  # TODO: only pad=0 is supported for now
+    if dilation < 1:
+        raise ValueError(f"dilation must be >= 1, got {dilation}")
 
     sym = tkl.sym
     N, C, H, W = sym.N, sym.C, sym.H, sym.W
     NF, HF, WF = sym.NF, sym.HF, sym.WF
+    DILATION = sym.DILATION
     # Workgroup tile sizes
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
@@ -47,8 +51,11 @@ def get_igemm_conv2d(
     # Other hyperparameters
     ELEMS_PER_THREAD = tkl.sym.ELEMS_PER_THREAD
 
-    H_OUT = (H + 2 * padding - HF) // stride + 1
-    W_OUT = (W + 2 * padding - WF) // stride + 1
+    effective_HF = (hf - 1) * dilation + 1
+    effective_WF = (wf - 1) * dilation + 1
+
+    H_OUT = (H + 2 * padding - effective_HF) // stride + 1
+    W_OUT = (W + 2 * padding - effective_WF) // stride + 1
     SZ_OUT = H_OUT * W_OUT
 
     K = HF * WF * C
@@ -100,8 +107,8 @@ def get_igemm_conv2d(
     w = (m % SZ_OUT) // W_OUT * stride + wf
 
     n_out = m // SZ_OUT
-    h_out = (m % SZ_OUT) % W_OUT
-    w_out = (m % SZ_OUT) // W_OUT
+    h_out = ((m % SZ_OUT) % W_OUT) * DILATION
+    w_out = ((m % SZ_OUT) // W_OUT) * DILATION
 
     if layout == "nchw_fchw":
         x_type = tkl.Memory[N, C, H, W, ADDRESS_SPACE, input_dtype]
@@ -137,7 +144,10 @@ def get_igemm_conv2d(
     constraints += [tkw.IteratorBindings({m: M, k: K, nf: NF})]
 
     @tkw.wave(constraints)
-    def conv(x: x_type, we: we_type, out: out_type):
+    def conv(x: x_type, we: we_type, dilation_rate: tkl.i32, out: out_type):
+        # Set dilation symbol with dilation_rate value
+        tkw.set_symbol(DILATION, dilation_rate)
+
         c_reg = tkl.Register[M, NF, output_dtype](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
