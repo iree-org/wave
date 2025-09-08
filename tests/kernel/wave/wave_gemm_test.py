@@ -29,6 +29,7 @@ from .common.utils import (
     require_cdna3,
     require_cdna4,
     require_cdna_3_or_4,
+    require_rdna4,
     perf_test,
     param_bool,
 )
@@ -157,6 +158,84 @@ def testPureGemm(
         run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
+        benchmark_batch_size=10,
+        benchmark_repetitions=3,
+        benchmark_results_file=perf_filename_tk,
+    )
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm)
+
+    a = device_randn(shape[0], shape[2], dtype=datatype)
+    b = device_randn(shape[1], shape[2], dtype=datatype)
+    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    gemm(a, b, c)
+
+    if run_bench:
+        options.benchmark_results_file = perf_filename_iree
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@require_e2e
+@require_rdna4
+@pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.NONE,
+        SchedulingType.PREFETCH,
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ],
+)
+@param_bool("dynamic_dims", "dyn")
+# TODO(paulzzy): Not an exhaustive list of `wmma` instructions in RDNA 4
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [
+        MMAType.F32_16x16x16_F16,
+    ],
+)
+@pytest.mark.parametrize("datatype", [torch.float16, torch.bfloat16])
+def test_rdna4_wmma(
+    shape: tuple[int, int, int],
+    enable_scheduling: SchedulingType,
+    dynamic_dims: bool,
+    mfma_variant: MMAType,
+    datatype: torch.dtype,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
+):
+    # TODO(paulzzy): Benchmark wave32 vs wave64
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
+        shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=32
+    )
+
+    multibuffer = enable_scheduling in [
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ]
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    hyperparams[UNROLL_FACTOR] = 2 if multibuffer else 1
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        dynamic_symbols=dynamic_symbols,
+        multi_buffer_count=2 if multibuffer else None,
+        run_bench=run_bench,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,

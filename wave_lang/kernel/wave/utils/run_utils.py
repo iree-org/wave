@@ -3,16 +3,20 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from __future__ import annotations
+
 import functools
 import os
 from itertools import chain
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import torch
 
 from wave_lang.kernel.lang import IndexSymbol
 
-from ..compile_options import WaveCompileOptions
+# Avoid circular import
+if TYPE_CHECKING:
+    from ..compile_options import WaveCompileOptions
 
 
 @functools.lru_cache

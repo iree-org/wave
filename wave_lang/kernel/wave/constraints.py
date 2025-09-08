@@ -14,6 +14,7 @@ from sympy import Integer, Piecewise, ceiling, floor
 from .._support.dtype import DataType
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ..lang.global_symbols import *
+from .utils.run_utils import get_default_arch
 from .utils.symbol_utils import get_min_expr, subs_idxc
 
 """
@@ -286,19 +287,46 @@ class HardwareConstraint(Constraint):
         if mma_type is None:
             mma_type = self.mma_type
 
+        # Offset calculations from the AMD Matrix Instruction Calculator
+        # (https://github.com/ROCm/amd_matrix_instruction_calculator)
         match mma_type:
             # (M x K, N x K) -> M x N
             case GenericDot():
                 offset = mma_type.get_index_offset(lane, self.threads_per_wave)
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
-                offset = [
-                    Piecewise(
-                        (lane % 16, ~MMA_ACC),
-                        (4 * floor(lane / 16), MMA_ACC),
-                    ),  # M
-                    lane % 16,  # N
-                    4 * floor(lane / 16),  # K
-                ]
+                if get_default_arch().startswith("gfx12"):
+                    if self.threads_per_wave == 32:
+                        offset = [
+                            Piecewise(
+                                (lane % 16, ~MMA_ACC),
+                                (8 * floor(lane / 16), MMA_ACC),
+                            ),  # M
+                            lane % 16,  # N,
+                            # Frankly I'm not sure where this formula comes from, I arbitrarily
+                            # tried a bunch of different formulas before this one started working
+                            8 * floor(lane / 16),  # K
+                        ]
+                    else:
+                        offset = [
+                            Piecewise(
+                                (lane % 16, ~MMA_ACC),
+                                (
+                                    8 * (floor(lane / 16) % 2) + 4 * floor(lane / 32),
+                                    MMA_ACC,
+                                ),
+                            ),  # M
+                            lane % 16,  # N,
+                            4 * floor(lane / 16),  # K
+                        ]
+                else:
+                    offset = [
+                        Piecewise(
+                            (lane % 16, ~MMA_ACC),
+                            (4 * floor(lane / 16), MMA_ACC),
+                        ),  # M
+                        lane % 16,  # N
+                        4 * floor(lane / 16),  # K
+                    ]
             case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
                 offset = [
                     Piecewise(
@@ -474,16 +502,28 @@ class HardwareConstraint(Constraint):
                 size = mma_type.get_index_size(self.threads_per_wave)
                 stride = mma_type.get_index_stride(self.threads_per_wave)
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
-                size = [
-                    Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
-                    1,  # N
-                    4,  # K
-                ]
-                stride = [
-                    Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
-                    1,  # N
-                    1,  # K
-                ]
+                if get_default_arch().startswith("gfx12"):
+                    size = [
+                        Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
+                        1,  # N
+                        8,  # K
+                    ]
+                    stride = [
+                        Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                        1,  # N
+                        1,  # K
+                    ]
+                else:
+                    size = [
+                        Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
+                        1,  # N
+                        4,  # K
+                    ]
+                    stride = [
+                        Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                        1,  # N
+                        1,  # K
+                    ]
             case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
                 size = [
                     Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M

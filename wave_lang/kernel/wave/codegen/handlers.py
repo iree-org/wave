@@ -114,6 +114,7 @@ from ..scheduling.resources import get_scheduling_mask
 from ..utils.classes import ShuffleMode
 from ..utils.general_utils import get_fastest_index
 from ..utils.mapping_utils import transform_index_on_mapping
+from ..utils.run_utils import get_default_arch
 from ..utils.symbol_utils import subs_idxc
 from .emitter import (
     WaveEmitter,
@@ -365,6 +366,14 @@ def emit_mfma(m: int, n: int, k: int, acc: Value, values: list[Value]) -> Value:
     return result
 
 
+def emit_wmma(
+    acc: Value,
+    values: list[Value],
+) -> Value:
+    source_a, source_b = values
+    return amdgpu_d.wmma(source_a, source_b, acc)
+
+
 @handle_op(mma)
 def handle_mma(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -389,7 +398,11 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Dot product MMA was not decomposed.")
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
-    result = emit_mfma(m, n, k, acc, values)
+    result = (
+        emit_wmma(acc, values)
+        if get_default_arch().startswith("gfx12")
+        else emit_mfma(m, n, k, acc, values)
+    )
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
 
