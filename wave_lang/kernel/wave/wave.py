@@ -721,7 +721,6 @@ class LaunchableWave(Launchable):
         graph_passes += [
             partial(partition_ops_with_gpr_offsets, trace, self.constraints),
             partial(partition_strided_operators, trace, self.constraints),
-            partial(partition_gather_like_ops, trace, self.constraints),
             partial(remove_chained_extractslice, trace),
         ]
 
@@ -763,6 +762,7 @@ class LaunchableWave(Launchable):
         graph_passes += [
             partial(add_shared_memory_barriers, trace),
             partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
+            partial(partition_gather_like_ops, trace, self.constraints),
             partial(generate_bounds_exprs, trace, self.constraints),
         ]
 
