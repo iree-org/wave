@@ -174,13 +174,17 @@ def test_moe_align_block_size(
     padded_counts_buffer = torch.randint(
         size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
     )
+    cumsum_buffer = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
     flat_topk = topk_ids.view(-1).to(torch.int32)
     print(kernel.asm)
     print("Flat topk:", flat_topk)
     print("Before:", expert_counts_buffer)
-    kernel(flat_topk, expert_counts_buffer, padded_counts_buffer)
+    kernel(flat_topk, expert_counts_buffer, padded_counts_buffer, cumsum_buffer)
     print("After:", expert_counts_buffer)
     print("Padded:", padded_counts_buffer)
+    print("Cumsum:", cumsum_buffer)
     # assert empty_topk is same as topk_ids
     # assert torch.all(empty_topk == flat_topk), "TopK IDs modified"
 
