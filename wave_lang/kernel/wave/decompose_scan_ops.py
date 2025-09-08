@@ -118,7 +118,6 @@ def emit_global_scan(
     last_local_scan_node = get_custom(scanop_result)
 
     target_shape = list(src.type.symbolic_shape)
-    target_shape.pop(target_shape.index(scan_dim))
     scanop_result.index = {target_shape[0]: get_custom(src).index[target_shape[0]]}
 
     num_steps = int(math.log2(float(subgroup_size)))
@@ -343,4 +342,5 @@ def decompose_scan_ops(
                     custom.fx_node, global_scan[user.expanded_dims[scan_dim]]
                 )
 
+        custom.graph.erase_node(custom.fx_node)
     DCE(trace)
