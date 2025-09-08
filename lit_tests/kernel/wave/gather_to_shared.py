@@ -77,9 +77,18 @@ def test_gather_to_shared():
     # CHECK-LABEL:    test_gather_to_shared
     # CHECK:          func.func @gemm
     # CHECK-COUNT-1:    memref.alloc()
+    # CHECK:            %[[idx0:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx1:.*]] = arith.index_cast %[[idx0]] : i32 to index
+    # CHECK:            %[[idx2:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx3:.*]] = arith.index_cast %[[idx2]] : i32 to index
+    # CHECK:            %[[idx4:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx5:.*]] = arith.index_cast %[[idx4]] : i32 to index
+    # CHECK:            %[[idx6:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx7:.*]] = arith.index_cast %[[idx6]] : i32 to index
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
-    # CHECK-COUNT-2:      amdgpu.gather_to_lds {{.*}} vector<2xf16>
+    # CHECK:              amdgpu.gather_to_lds {{.*}}, %{{.*}}[%[[idx1]], %[[idx3]]] : vector<2xf16>
+    # CHECK:              amdgpu.gather_to_lds {{.*}}, %{{.*}}[%[[idx5]], %[[idx7]]] : vector<2xf16>
     # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      vector.load

@@ -8,6 +8,12 @@ from .._support.indexing import index_symbol
 GLOBAL_ADDRESS_SPACE = index_symbol("$GLOBAL_ADDRESS_SPACE")
 SHARED_ADDRESS_SPACE = index_symbol("$SHARED_ADDRESS_SPACE")
 
+# Device Distribution symbols.
+# TODO: Can only do three dimensions for now.
+DEVICE_DIM_0 = index_symbol("$DD0")
+DEVICE_DIM_1 = index_symbol("$DD1")
+DEVICE_DIM_2 = index_symbol("$DD2")
+
 
 # Distribution symbols.
 WORKGROUP_0 = index_symbol("$WG0")

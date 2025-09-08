@@ -62,6 +62,12 @@ class MMAType(Enum):
     I32_16x16x32_I8 = 0x12C0
     I32_32x32x16_I8 = 0x12C1
 
+    # Intrinsics introduced in CDNA4
+    F32_32x32x16_BF16 = 0x1320
+    F32_16x16x32_BF16 = 0x1321
+    F32_32x32x16_F16 = 0x1322
+    F32_16x16x32_F16 = 0x1323
+
 
 class ScaledMMAType(Enum):
     # Intrinsics introduced in CDNA4
@@ -252,6 +258,8 @@ class HardwareConstraint(Constraint):
                 return (32, 32, 8)
             case (
                 MMAType.F32_16x16x32_F8
+                | MMAType.F32_16x16x32_BF16
+                | MMAType.F32_16x16x32_F16
                 | MMAType.F32_16x16x32_K8_F16
                 | MMAType.F32_16x16x32_K4_F8
                 | MMAType.I32_16x16x32_I8
@@ -259,6 +267,8 @@ class HardwareConstraint(Constraint):
                 return (16, 16, 32)
             case (
                 MMAType.F32_32x32x16_F8
+                | MMAType.F32_32x32x16_BF16
+                | MMAType.F32_32x32x16_F16
                 | MMAType.F32_32x32x16_K8_F16
                 | MMAType.F32_32x32x16_K4_F8
                 | MMAType.I32_32x32x16_I8
@@ -305,6 +315,8 @@ class HardwareConstraint(Constraint):
                 ]
             case (
                 MMAType.F32_16x16x32_F8
+                | MMAType.F32_16x16x32_BF16
+                | MMAType.F32_16x16x32_F16
                 | MMAType.F32_16x16x32_K8_F16
                 | MMAType.F32_16x16x32_K4_F8
                 | MMAType.I32_16x16x32_I8
@@ -328,6 +340,8 @@ class HardwareConstraint(Constraint):
                     ]
             case (
                 MMAType.F32_32x32x16_F8
+                | MMAType.F32_32x32x16_BF16
+                | MMAType.F32_32x32x16_F16
                 | MMAType.F32_32x32x16_K8_F16
                 | MMAType.F32_32x32x16_K4_F8
                 | MMAType.I32_32x32x16_I8
@@ -483,6 +497,8 @@ class HardwareConstraint(Constraint):
                 ]
             case (
                 MMAType.F32_16x16x32_F8
+                | MMAType.F32_16x16x32_BF16
+                | MMAType.F32_16x16x32_F16
                 | MMAType.F32_16x16x32_K8_F16
                 | MMAType.F32_16x16x32_K4_F8
                 | MMAType.I32_16x16x32_I8
@@ -499,6 +515,8 @@ class HardwareConstraint(Constraint):
                 ]
             case (
                 MMAType.F32_32x32x16_F8
+                | MMAType.F32_32x32x16_BF16
+                | MMAType.F32_32x32x16_F16
                 | MMAType.F32_32x32x16_K8_F16
                 | MMAType.F32_32x32x16_K4_F8
                 | MMAType.I32_32x32x16_I8
@@ -564,6 +582,7 @@ class WorkgroupConstraint(DistributionConstraint):
     apply_fn: Optional[Callable] = None
     primary: Optional[bool] = True
     iters: Optional[IndexExpr | int] = None
+    per_device_dim: Optional[IndexExpr] = None
 
     def __post_init__(self):
         self.wg_dim = None
@@ -575,6 +594,9 @@ class WorkgroupConstraint(DistributionConstraint):
                     "Invalid workgroup dimension. Expected 0, 1, 2, 3 or 4."
                 )
 
+        # By default, assume that only one device is set for dim
+        self.per_device_dim = self.dim
+
     @property
     def count(self) -> IndexExpr:
         """
@@ -582,7 +604,15 @@ class WorkgroupConstraint(DistributionConstraint):
         """
         if self.iters:
             return self.iters
-        return ceiling(self.dim / self.tile_size)
+
+        return ceiling(self.per_device_dim / self.tile_size)
+
+    def set_per_device_dim(self, per_device_dim: IndexExpr):
+        """
+        Sets the per device dimensions for the workgroup constraint.
+        This is used to determine the total number of workgroups per device.
+        """
+        self.per_device_dim = per_device_dim
 
     def apply(self) -> IndexSequence:
         if self.apply_fn:
@@ -595,7 +625,7 @@ class WorkgroupConstraint(DistributionConstraint):
 
     @property
     def dim_bound(self) -> IndexExpr:
-        return self.dim
+        return self.per_device_dim
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
         bound = None
@@ -613,22 +643,6 @@ class WorkgroupConstraint(DistributionConstraint):
             bound = get_min_expr(bound, tile_bound)
 
         return bound
-
-
-def get_grid_shape(wg_constraints: list[WorkgroupConstraint]) -> list[IndexExpr]:
-    sorted_constraints = sorted(
-        [x for x in wg_constraints if x.primary], key=lambda x: x.workgroup_dim
-    )
-    # Currently not more than one primary constraint in each dimension supported.
-    if any(
-        sorted_constraints[i].workgroup_dim == sorted_constraints[i + 1].workgroup_dim
-        for i in range(len(sorted_constraints) - 1)
-    ):
-        raise ValueError(
-            "Multiple constraints in the same workgroup dimension are currently not supported."
-        )
-    grid: list[IndexExpr] = [constraint.count for constraint in sorted_constraints]
-    return grid
 
 
 @dataclass
@@ -776,7 +790,6 @@ class WaveConstraint(DistributionConstraint):
             bound = (
                 self.wg_constraint.apply().start + self.apply().start + self.tile_size
             )
-
         return bound
 
     @property
@@ -878,3 +891,160 @@ class IteratorBindings:
 
     def __init__(self, bindings: dict[IndexSymbol, IndexSymbol]):
         self.bindings = bindings
+
+    def __repr__(self):
+        return f"IteratorBindings({self.bindings})"
+
+
+@dataclass
+class DeviceConstraint(DistributionConstraint):
+    """
+    A constraint of the form `tkw.DeviceConstraint(M, DEVICE_M, <device dimension>)` specifies
+    that we want to distribute dimension M along the device with a tile size of DEVICE_M.
+    This translates to an index constraint for all tensors of the shape [M, ?] ->
+    index += (device_id * DEVICE_M, 0), where device_id is the id
+    of the device on which the tensor is located.
+
+    Device id is a tuple of (dev_id_x, devid_y, dev_id_z) where
+    dev_id_x is the id of the device in the x dimension, dev_id_y is
+    the id of the device in the y dimension and dev_id_z is the id of the
+    device in the z dimension. The device id is used to compute the index
+    offset for the tensor along the specified dimension.
+
+    Device constraints can be applied for multiple dimensions. For example,
+    constraint += [tkw.DeviceConstraint(M, DEVICE_M, 0)]
+    constraint += [tkw.DeviceConstraint(N, DEVICE_N, 1)]
+    specifies that we want to distribute DEVICE_M x DEVICE_N tiles of the tensor
+    across the devices, where DEVICE_M and DEVICE_N are the tile sizes for
+    dimensions M and N respectively.
+    """
+
+    dim: IndexExpr
+    tile_size: Optional[IndexExpr] = None
+    device_dim: int = 0
+
+    def __post_init__(self):
+        self.dev_dim = None
+        match self.device_dim:
+            case 0:
+                self.dev_dim = DEVICE_DIM_0
+            case 1:
+                self.dev_dim = DEVICE_DIM_1
+            case 2:
+                self.dev_dim = DEVICE_DIM_2
+            case _:
+                raise ValueError("Invalid workgroup dimension. Expected 0, 1 or 2.")
+
+    def apply(self) -> IndexSequence:
+        """
+        Apply the device constraint and return the index sequence.
+
+        For single device_id: returns device_id * tile_size
+        """
+        if self.dev_dim is None:
+            raise ValueError("Index is being computed without setting device dimension")
+
+        return IndexSequence(self.dev_dim * self.tile_size, 1)
+
+    @property
+    def count(self) -> IndexExpr:
+        """
+        Returns an expression for the total number of devices for the specific device_dim.
+        """
+        return ceiling(self.dim / self.tile_size)
+
+    @property
+    def work_bound(self) -> IndexExpr:
+        """
+        Returns the work bound for device constraint.
+
+        For device constraints, the work bound is simply the device's
+        starting position plus its tile size, representing the range
+        of data this device will process.
+        """
+        return self.apply().start + self.tile_size
+
+    @property
+    def dim_bound(self) -> IndexExpr:
+        """
+        Returns the actual dimension size being distributed.
+        """
+        return self.dim
+
+    def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
+        """
+        Returns the index bound for safe memory access.
+
+        For device constraints, bounds are needed when vector shapes
+        don't align with tile sizes to prevent out-of-bounds access.
+        """
+        bound = None
+
+        # Check if vector shape alignment requires bounds checking
+        if (
+            vector_shape is not None
+            and vector_shape > 1
+            and subs_idxc(self.tile_size) % vector_shape != 0
+        ):
+            # Vector size doesn't divide evenly into tile size
+            # Need bounds to prevent accessing beyond device's tile
+            bound = self.apply().start + self.tile_size
+
+        return bound
+
+
+def get_grid_shape(
+    wg_constraints: list[WorkgroupConstraint],
+    device_constraints: Optional[list[DeviceConstraint]] = None,
+) -> list[IndexExpr]:
+    dims = {}
+
+    # Create a mapping of dimensions to tile sizes for device constraints (if provided)
+    if device_constraints:
+        for constraint in device_constraints:
+            if constraint.dim not in dims:
+                dims[constraint.dim] = constraint.tile_size
+            else:
+                raise ValueError(
+                    f"Multiple device constraints for the same dimension {constraint.dim} are not supported."
+                )
+
+    # Set the per device dimension for each workgroup constraint
+    for constraint in wg_constraints:
+        if constraint.dim in dims:
+            constraint.set_per_device_dim(dims[constraint.dim])
+
+    sorted_constraints = sorted(
+        [x for x in wg_constraints if x.primary], key=lambda x: x.workgroup_dim
+    )
+    # Currently not more than one primary constraint in each dimension supported.
+    if any(
+        sorted_constraints[i].workgroup_dim == sorted_constraints[i + 1].workgroup_dim
+        for i in range(len(sorted_constraints) - 1)
+    ):
+        raise ValueError(
+            "Multiple constraints in the same workgroup dimension are currently not supported."
+        )
+    grid: list[IndexExpr] = [constraint.count for constraint in sorted_constraints]
+    return grid
+
+
+def get_device_layout(device_constraints: list[DeviceConstraint]) -> list[IndexExpr]:
+    """
+    Given a list of device constraints, returns the grid shape for the devices.
+    The grid shape is determined by the tile sizes of the device constraints.
+    """
+
+    sorted_constraints = sorted(
+        [x for x in device_constraints], key=lambda x: x.device_dim
+    )
+    # Currently not more than one primary constraint in each dimension supported.
+    if any(
+        sorted_constraints[i].device_dim == sorted_constraints[i + 1].device_dim
+        for i in range(len(sorted_constraints) - 1)
+    ):
+        raise ValueError(
+            "Multiple constraints in the same device dimension are currently not supported."
+        )
+    grid: list[IndexExpr] = [constraint.count for constraint in sorted_constraints]
+    return grid

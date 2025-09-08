@@ -15,7 +15,7 @@ from .utils.general_utils import (
     is_shared_mem_access,
     remove_global_indexing,
 )
-from .utils.graph_utils import get_custom
+from .utils.graph_utils import get_custom, propagate_loop_carried_vars
 from .utils.symbol_utils import IndexExpr, IndexSymbol, safe_subs, subs_idxc
 from .wave import CapturedTrace
 
@@ -59,7 +59,8 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
             # Masking against global bounds was already handled when reading from
             # global mem, but we still need to handle masking against vector
             # size during shared mem access.
-            unpadded_dims = get_custom(node.memory).get_unpadded_dims
+            memory = propagate_loop_carried_vars(node.memory)
+            unpadded_dims = get_custom(memory).get_unpadded_dims
             bounds = {
                 k: (
                     safe_subs(v, {k: _get_max_tile_size(k, constraints, unpadded_dims)})

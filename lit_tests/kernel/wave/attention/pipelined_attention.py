@@ -6,11 +6,20 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+)
+from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
 from wave_lang.kernel.wave.utils.mma_utils import (
     get_mfma_load_elems_per_thread,
     get_mfma_store_elems_per_thread,
+)
+from wave_lang.kernel.wave.templates.attention_common import (
+    AttentionShape,
+)
+from wave_lang.kernel.wave.templates.vanilla_attention import (
+    get_bshd_attention_kernel,
 )
 
 # Input sizes
@@ -287,3 +296,184 @@ def test_attention_pipelined():
     # CHECK-COUNT-15:            {{.*}} = amdgpu.mfma
     # CHECK-COUNT-5:            {{.*}} = gpu.shuffle xor {{.*}}
     # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+
+
+@run_test
+def test_bshd_attention_pipelined():
+    shape = AttentionShape(
+        num_query_heads=8,
+        num_kv_heads=8,
+        query_seq_len=128,
+        head_size_kv=128,
+        head_size=64,
+        kv_seq_len=256,
+    )
+    mfma_variant = (tkw.MMAType.F32_16x16x16_F16,) * 2
+    base_attention, hyperparams, _ = get_bshd_attention_kernel(
+        shape,
+        mfma_variant,
+        dynamic_dims=False,
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=False,
+        schedule=SchedulingType.MODULO,
+        use_scheduling_barriers=False,
+        compile_to_mlir=True,
+    )
+    base_attention = wave_compile(options, base_attention)
+    print(base_attention.asm)
+
+    # CHECK-LABEL:       func.func @base_attention
+    # CHECK:                {{.*}} = scf.for
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-24:           {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-2:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-8:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-1:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-2:            {{.*}} = amdgpu.mfma
+    # CHECK-COUNT-1:            {{.*}} = gpu.shuffle xor {{.*}}
+    # CHECK-COUNT-17:           {{.*}} = amdgpu.mfma
+
+
+@run_test
+def test_bshd_attention_pipelined_prefetch():
+    shape = AttentionShape(
+        num_query_heads=64,
+        num_kv_heads=64,
+        query_seq_len=16384,
+        head_size_kv=128,
+        head_size=128,
+        kv_seq_len=16384,
+    )
+    mfma_variant = (tkw.MMAType.F32_32x32x8_F16,) * 2
+    base_attention, hyperparams, _ = get_bshd_attention_kernel(
+        shape,
+        mfma_variant,
+        dynamic_dims=False,
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=False,
+        schedule=SchedulingType.PREFETCH_ATTENTION,
+        use_scheduling_barriers=False,
+        compile_to_mlir=True,
+        multi_buffer_count=2,
+    )
+    base_attention = wave_compile(options, base_attention)
+    print(base_attention.asm)
+
+    # CHECK: func.func @base_attention
+    # CHECK: {{.*}} = scf.for
+    # CHECK-COUNT-16: vector.load
+    # CHECK: arith.subf
+    # CHECK: math.exp2
+    # CHECK: math.exp2
+    # CHECK: arith.mulf
+    # CHECK: arith.addf
+    # CHECK-COUNT-16: vector.extract
+    # CHECK-COUNT-16: arith.addf
+    # CHECK: vector.broadcast
+    # CHECK: gpu.shuffle
+    # CHECK: arith.addf
+    # CHECK: arith.addf
+    # CHECK: arith.truncf
+    # CHECK: arith.truncf
+    # CHECK: vector.extract
+    # CHECK: vector.broadcast
+    # CHECK: arith.mulf
+    # CHECK: arith.mulf
+    # CHECK-COUNT-8: vector.extract_strided_slice
+    # CHECK-COUNT-32: amdgpu.mfma
+    # CHECK-COUNT-8: vector.load
+    # CHECK-COUNT-8: vector.extract
+    # CHECK: vector.from_elements
+    # CHECK: vector.from_elements
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT-32: vector.load
+    # CHECK-COUNT-4: vector.load
+    # CHECK-COUNT-8: amdgpu.mfma
+
+
+@run_test
+def test_bshd_attention_pipelined_prefetch_pingpong():
+    shape = AttentionShape(
+        num_query_heads=64,
+        num_kv_heads=64,
+        query_seq_len=16384,
+        head_size_kv=128,
+        head_size=128,
+        kv_seq_len=16384,
+    )
+    mfma_variant = (tkw.MMAType.F32_32x32x8_F16,) * 2
+    base_attention, hyperparams, _ = get_bshd_attention_kernel(
+        shape,
+        mfma_variant,
+        dynamic_dims=False,
+        num_waves=8,
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=False,
+        schedule=SchedulingType.PREFETCH_ATTENTION,
+        use_scheduling_barriers=False,
+        compile_to_mlir=True,
+        multi_buffer_count=2,
+    )
+    base_attention = wave_compile(options, base_attention)
+    print(base_attention.asm)
+
+    # CHECK: func.func @base_attention
+
+    # CHECK: scf.if
+    # CHECK-NEXT: rocdl.s.barrier
+
+    # CHECK: {{.*}} = scf.for
+
+    # MMA
+    # CHECK: rocdl.s.setprio 1
+    # CHECK-COUNT-32: amdgpu.mfma
+    # CHECK: rocdl.s.setprio 0
+    # Softmax
+    # CHECK: gpu.shuffle
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # Global load, shared write, shared read
+    # CHECK-COUNT-2: vector.load
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT-2: vector.store
+    # CHECK-COUNT-1: memref.reinterpret_cast
+    # CHECK-COUNT-4: memref.load
+    # CHECK-COUNT-1: vector.from_elements
+    # CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # MMA
+    # CHECK: rocdl.s.setprio 1
+    # CHECK-COUNT-16: amdgpu.mfma
+    # CHECK: rocdl.s.setprio 0
+    # Softmax
+    # CHECK: gpu.shuffle
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # Global load, shared write, shared read
+    # CHECK-COUNT: vector.load
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT: vector.store
+    # CHECK-COUNT-32: vector.load
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # CHECK: scf.if
+    # CHECK-NEXT: rocdl.s.barrier

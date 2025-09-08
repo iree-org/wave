@@ -1,6 +1,6 @@
 import random
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch.fx as fx
 
@@ -48,14 +48,20 @@ class ArgumentContext:
         for result, init_arg in zip(results, init_args):
             self.result_to_init_arg[result] = init_arg
 
-    def map_arg_all(self, from_: fx.Node, to_: fx.Node) -> None:
+    def map_arg_all(self, from_: fx.Node, to_: fx.Node | Sequence[fx.Node]) -> None:
         """
         Maps the given argument from one to another into the argument context for all stages
         and for all iterations.
         """
-        for iteration in range(self.num_iterations):
-            for stage in range(self.num_stages):
-                self.argument_map[iteration][stage][from_] = to_
+        if isinstance(to_, Sequence):
+            count = len(to_)
+            for iteration in range(self.num_iterations):
+                for stage in range(self.num_stages):
+                    self.argument_map[iteration][stage][from_] = to_[iteration % count]
+        else:
+            for iteration in range(self.num_iterations):
+                for stage in range(self.num_stages):
+                    self.argument_map[iteration][stage][from_] = to_
 
     def map_arg_all_after_iteration(
         self, from_: fx.Node, to_: fx.Node, iteration: int

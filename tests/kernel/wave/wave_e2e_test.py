@@ -18,7 +18,7 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.templates.conv import get_igemm_conv2d
-from wave_lang.kernel.wave.templates.dilated_conv import get_dilated_conv2d
+from wave_lang.kernel.wave.templates.test_kernels import get_broadcast_scaled_add
 from wave_lang.kernel.wave.utils.general_utils import (
     ceildiv,
     check_leaks,
@@ -178,8 +178,7 @@ def test_copy(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -234,8 +233,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -292,8 +290,7 @@ def test_transpose_read(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -349,8 +346,7 @@ def test_transpose_write(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -422,8 +418,7 @@ def test_offset_read(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -501,8 +496,7 @@ def test_offset_read_one(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -557,8 +551,7 @@ def test_read_write_same(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     double = wave_compile(options, double)
@@ -854,8 +847,7 @@ def test_offset_write(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -941,8 +933,7 @@ def test_offset_write_one(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -1556,8 +1547,7 @@ def test_igemm_conv(
         subs=hyperparams,
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
@@ -1904,12 +1894,37 @@ def test_vector_add(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
 
     test = wave_compile(options, test)
+
+    test(a, b, c)
+    assert_close(ref, c)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", [(256, 256)])
+def test_broadcast_scaled_add(shape, run_bench):
+    broadcast_scaled_add, hyperparams = get_broadcast_scaled_add(shape)
+
+    scaled_shape = list(shape)
+    scaled_shape[-1] = int(scaled_shape[-1] / 2)
+    scaled_shape = tuple(scaled_shape)
+    a = device_randn(scaled_shape, dtype=torch.float16)
+    b = device_randn((scaled_shape[0]), dtype=torch.float16)
+    c = device_zeros(scaled_shape, dtype=torch.float16)
+    ref = a + b.view(-1, 1)
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=run_bench,
+        use_buffer_ops=True,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, broadcast_scaled_add)
 
     test(a, b, c)
     assert_close(ref, c)
@@ -1964,8 +1979,7 @@ def test_fused_softmax(shape, use_buffer_ops):
         },
         canonicalize=True,
         run_bench=False,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -2045,8 +2059,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
         },
         canonicalize=True,
         run_bench=run_bench,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
         minimize_shared_allocs=False,
     )
     options = set_default_run_config(options)
@@ -2227,7 +2240,7 @@ def test_scatter_add(shape, elems_per_thread, request):
 
 @require_e2e
 @param_bool("dynamic_dims", "dyn")
-def test_debug_log(dynamic_dims: bool):
+def test_debug_log_core(dynamic_dims: bool):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -2327,62 +2340,87 @@ def test_debug_log(dynamic_dims: bool):
     )
     assert handler_arg == debug_logs
 
+def test_debug_log_iteration_dims():
+    iterations = 4
 
-@require_e2e
-@require_cdna3
-@pytest.mark.parametrize(
-    "n, h, w, c, hf, wf, nf, stride, dilation, layout", dilated_conv_cases
-)
-def test_dilated_conv(n, h, w, c, hf, wf, nf, stride, dilation, layout):
-    cf = c
-    padding = 0  # TODO: only pad=0 is supported for now
+    # Basic gemm since it has an iteration.
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64, mma_type=tkw.MMAType.F32_16x16x16_F16
+        ),
+    ]
 
-    torch.manual_seed(1)
-    x = device_randn(n, c, h, w, dtype=torch.float16)
-    we = device_randn(nf, cf, hf, wf, dtype=torch.float16)
+    debug_logs = None
 
-    # Reference implementation using PyTorch dilated convolution
-    convRef = torch.nn.Conv2d(
-        c, nf, hf, stride=stride, padding=padding, dilation=dilation, bias=False
-    )
-    convRef.weight = torch.nn.Parameter(we)
-    out_ref = convRef(x).detach().to(torch.float32)
+    def handler(logs):
+        nonlocal debug_logs
+        debug_logs = logs
 
-    # Handle layout transformations
-    if layout == "nchw_fchw":
-        pass  # Nothing to do
-    elif layout == "nhwc_hwcf":
-        x = torch.permute(x, (0, 2, 3, 1)).contiguous()
-        we = torch.permute(we, (2, 3, 1, 0)).contiguous()
-        out_ref = torch.permute(out_ref, (0, 2, 3, 1)).contiguous()
-    else:
-        raise ValueError(f"Invalid layout: {layout}")
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = Register[M, N, tkl.f32](0.0)
 
-    # Get dilated convolution kernel
-    dilated_conv, hyperparams = get_dilated_conv2d(
-        layout=layout,
-        n=n,
-        h=h,
-        w=w,
-        c=c,
-        hf=hf,
-        wf=wf,
-        nf=nf,
-        stride=stride,
-        dilation=dilation,
-        input_dtype=tkl.f16,
-        output_dtype=tkl.f32,
-    )
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: Register[M, N, tkl.f32]) -> Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            debug_log(
+                acc,
+                "acc",
+                extra_iteration_dimensions=[(tkl.sym.iter, k, iterations)],
+                handler=handler,
+            )
+            return acc
 
-    hyperparams.update(get_default_scheduling_params())
-    options = WaveCompileOptions(
-        subs=hyperparams,
-        canonicalize=True,
-    )
-    options = set_default_run_config(options)
+        tkw.write(repeat, c)
 
-    out = torch.zeros_like(out_ref)
-    dilated_conv = wave_compile(options, dilated_conv)
-    dilated_conv(x, we, dilation, out)
+    def test_gemm():
+        m, n, k = 128, 256, 128  # Small dimensions for testing
 
-    assert_close(out, out_ref, rtol=1e-03, atol=1e-02)
+        torch.manual_seed(0)
+        a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+        b = torch.randn(n, k, dtype=torch.float16, device="cuda")
+        c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
+        hyperparams = {
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+            BLOCK_K: 32,
+            M: m,
+            N: n,
+            K: k,
+        }
+
+        options = WaveCompileOptions(
+            subs=hyperparams,
+        )
+        options = set_default_run_config(options)
+        compiled_gemm = wave_compile(options, gemm)
+
+        compiled_gemm(a, b, c)
+
+        assert len(debug_logs["acc"]["value"]) == iterations
+        assert debug_logs["acc"]["iteration_dimensions"] == [tkl.sym.iter]
+        # The last element of the acc log should be the final iteration, and
+        # thus equal to the final output.
+        assert torch.equal(debug_logs["acc"]["value"][-1], c)
+        # Meanwhile the first element should be quite different.
+        assert not torch.allclose(debug_logs["acc"]["value"][0], c)

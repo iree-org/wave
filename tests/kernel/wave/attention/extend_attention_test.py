@@ -88,9 +88,9 @@ def context_attention_fwd(
         qkv_len = end - start
         Q = q[start:end].permute(1, 0, 2)
         K = k[start:end].permute(1, 0, 2)
-        K = K.expand(Q.shape[0], *K.shape[1:])
+        K = K.repeat_interleave(Q.shape[0] // K.shape[0], dim=0)
         V = v[start:end].permute(1, 0, 2)
-        V = V.expand(Q.shape[0], *V.shape[1:])
+        V = V.repeat_interleave(Q.shape[0] // V.shape[0], dim=0)
         dk_sqrt = math.sqrt(1.0 / Q.shape[-1])
         a = torch.bmm(Q * dk_sqrt, K.transpose(-1, -2))
         if score_mod == ScoreMod.SoftCap:
@@ -394,8 +394,7 @@ def testExtendAttention(
         run_bench=run_bench,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        use_buffer_load_ops=use_buffer_ops,
-        use_buffer_store_ops=use_buffer_ops,
+        use_buffer_ops=use_buffer_ops,
         benchmark_batch_size=1000,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,

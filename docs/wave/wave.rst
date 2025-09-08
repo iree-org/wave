@@ -72,3 +72,4 @@ For more detailed information about Wave's architecture and optimization passes,
    aplp
    gather_to_shared
    trace
+   debugging

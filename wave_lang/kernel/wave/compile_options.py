@@ -15,6 +15,7 @@ class WaveCompileOptions:
     """
 
     # === General options ===
+    postprocess: Optional[str] = None
     canonicalize: bool = True
     func_name: str = "isolated_benchmark"
 
@@ -70,9 +71,7 @@ class WaveCompileOptions:
     waves_per_eu: int = None
     wave_runtime: bool = False
     iree_launch_async: bool = True
-    use_buffer_load_ops: bool = False
-    use_buffer_store_ops: bool = False
-    use_stride_cache_swizzle: bool = False
+    use_buffer_ops: bool = False
     use_fast_math: bool = False
     use_global_to_shared: bool = False
 
@@ -83,6 +82,7 @@ class WaveCompileOptions:
     dump_schedule: Optional[str] = None
 
     # === Print options ===
+    mlir_print_ir_after_all: bool = False
     print_ir_after: list[str] = field(default_factory=list)
     print_ir_before: list[str] = field(default_factory=list)
     profile_pass: list[str] = field(default_factory=list)
@@ -91,5 +91,4 @@ class WaveCompileOptions:
     print_signature: bool = False
     print_mlir: bool = False
     print_mlir_file: Optional[str] = None
-    print_ir_after_all: bool = False
     print_pass_times: bool = False

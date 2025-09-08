@@ -51,12 +51,6 @@ from wave_lang.support.ir_imports import (
 from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, index_symbol
 from ...compiler.base import CodegenError, ValidationError
 from ...compiler.builder import IRProxyValue
-from ...compiler.vector_codegen import (
-    cast_py_literal,
-    cast_py_value,
-    cast_scalar,
-    cast_vector,
-)
 from ...ops.wave_ops import (
     abs,
     allocate,
@@ -122,6 +116,10 @@ from ..utils.symbol_utils import subs_idxc
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
+    cast_py_literal,
+    cast_py_value,
+    cast_scalar,
+    cast_vector,
     gen_sympy_index,
     get_constant_attr,
     get_type_or_element_type,
@@ -1583,8 +1581,9 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
 
     # Handle broadcasting to unit dims as no-op.
     # Most useful for handling broadcast in symbolic shapes.
+    target_dims = set(get_custom(node).indexing_dims)
     src_dims = set(get_custom(register).indexing_dims)
-    bcast_dims = list(set(target_shape) - src_dims)
+    bcast_dims = list(target_dims - src_dims)
     bcast_sizes = [subs_idxc(node.index[x].size) for x in bcast_dims]
     lane_level_broadcast = target_thread_size != src_thread_size
     if math.prod(bcast_sizes) == 1 and not lane_level_broadcast:
