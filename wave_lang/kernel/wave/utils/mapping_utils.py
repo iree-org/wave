@@ -224,6 +224,13 @@ def _compute_offset(indices: list[IndexExpr], strides: list[IndexExpr]) -> Index
 
 
 def check_is_dynamic_vals_broadcasted(nodes: list[fx.Node]) -> bool:
+    """
+    Check if dynamic values in a list of nodes are broadcasted.
+
+    A dynamic value is considered broadcasted if its index has size 1 in all dimensions.
+    This function checks all nodes in the list and returns True only if all dynamic values
+    are broadcasted (size 1 in all dims).
+    """
     for node in nodes:
         index = node.index
         assert index is not None, f"Node {node} has no index"
@@ -275,6 +282,17 @@ def check_is_mapping_contiguous(
     if expected_diff == diff:
         return True
 
+    # If the expected pattern is not found, check if the mapping still produces
+    # contiguous memory accesses by computing offsets for each element.
+    #
+    # The check works by:
+    # 1. Computing the linear memory offset symbolically for the first element
+    # 2. For each subsequent element:
+    #    - Updating the fastest dimension in the index for that element
+    #    - Transforming through the mapping
+    #    - Computing the new memory offset
+    #    - Verifying the offset increased by exactly 1
+    # 3. Returns True only if all elements are sequential
     fastest_dim = list(index.keys())[get_fastest_index(index)]
 
     idxc = IndexingContext.current()
