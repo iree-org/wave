@@ -479,5 +479,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                 # detect if op was part of `gpr_offset` partition.
                 reshape.index = index
                 custom.replace_all_uses_with(reshape)
+            else:
+                raise NotImplementedError(f"Unsupported op type: {custom}")
 
-            custom.graph.erase_node(custom.fx_node)
+            custom.erase()
