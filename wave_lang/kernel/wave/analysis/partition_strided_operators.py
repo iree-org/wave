@@ -202,6 +202,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                     )
                     for j, dim in enumerate(symbolic_shape)
                 }
+                extract.index = write.index
                 write.vector_shapes = vector_shapes
                 ops_to_combine.append(write)
 
@@ -329,6 +330,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                             extract = ExtractSlice(
                                 dyn_val, [cur_gpr_start_id], [gpr_size], [1]
                             ).add_to_graph(custom.graph)
+                            extract.index = updated_index_with_gpr_offset
                             new_dynamic_vals.append(extract)
                         else:
                             new_dynamic_vals.append(dyn_val)
@@ -431,6 +433,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                     extract = ExtractSlice(dynamic_val, [i], [1], [1]).add_to_graph(
                         custom.graph
                     )
+                    extract.index = new_index
                     new_dynamic_vals.append(extract)
 
                 # Generate new Read/Write that has contiguous VGPR elements.

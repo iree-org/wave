@@ -1770,10 +1770,10 @@ class Read(CustomOp):
 
         from ..wave.utils.mapping_utils import (
             check_is_mapping_contiguous,
-            check_is_dynamic_vals_broadcted,
+            check_is_dynamic_vals_broadcasted,
         )
 
-        if not check_is_dynamic_vals_broadcted(self.mapping_dynamic_vals):
+        if not check_is_dynamic_vals_broadcasted(self.mapping_dynamic_vals):
             return False
 
         mapping = self.mapping
@@ -2123,10 +2123,10 @@ class Write(CustomOp):
 
         from ..wave.utils.mapping_utils import (
             check_is_mapping_contiguous,
-            check_is_dynamic_vals_broadcted,
+            check_is_dynamic_vals_broadcasted,
         )
 
-        if not check_is_dynamic_vals_broadcted(self.mapping_dynamic_vals):
+        if not check_is_dynamic_vals_broadcasted(self.mapping_dynamic_vals):
             return False
 
         mapping = self.mapping
