@@ -576,6 +576,8 @@ _ops_to_scalarize = [
 
 
 def handle_binary_op(op):
+    captured_op = op
+
     def decorator(binary_fn: Callable[[Value, Value], OpResult]):
         @handle_op(op)
         def handle_generic_binary(emitter: WaveEmitter, node: fx.Node):
@@ -624,7 +626,7 @@ def handle_binary_op(op):
             #  `v_add_u32_e32 v1, s16, v12`, just not the "packed" variants.
             if (
                 emitter.options.scalarize_packed_math
-                and op in _ops_to_scalarize
+                and captured_op in _ops_to_scalarize
                 and _near_mma(node)
             ):
                 lhs_values = []
