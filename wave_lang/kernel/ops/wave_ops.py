@@ -212,6 +212,9 @@ def atan2(lhs: "Register", rhs: "Register") -> "Register": ...
 def powf(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
+def remf(lhs: "Register", rhs: "Register") -> "Register": ... # remainder float
+
+
 def cbrt(src: "Register") -> "Register": ...
 
 
@@ -906,6 +909,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_interface_op("minimum")
 @define_interface_op("atan2")
 @define_interface_op("powf")
+@define_interface_op("remf")
 @dataclass
 class BinaryPyOp(BinaryOpBase, ABC):
     def infer_type(self, *args):
