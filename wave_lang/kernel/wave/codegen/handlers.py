@@ -13,10 +13,10 @@ import sympy
 import torch.fx as fx
 import torch.utils._pytree as pytree
 
-from wave_lang.aot.support.ir_utils import (
-    _is_float_type,
-    _is_integer_like_type,
-    _is_signed_or_signless_type,
+from .ir_utils import (
+    is_float_type,
+    is_integer_like_type,
+    is_signed_or_signless_type,
     get_conversion_op,
 )
 
@@ -535,7 +535,7 @@ def handle_atomic_op(op):
                     f"{op}\nGot\n"
                     f"lhs: {lhs_data_type} vs rhs: {rhs_data_type}\n"
                 )
-            if _is_float_type(lhs_data_type):
+            if is_float_type(lhs_data_type):
                 # TODO: To support float types, MLIR LLVM dialect needs to be updated with
                 # float types. LLVM already supports fmin and fmax (https://llvm.org/docs/LangRef.html#atomicrmw-instruction)
                 # and thus atomicrmw operation in MLIR dialect needs to target those instructions with "workgroup" scope.
@@ -727,9 +727,9 @@ def get_fast_math_flags(options: WaveCompileOptions) -> int | None:
 @handle_binary_op(operator.add)
 def handle_add(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.addf(lhs, rhs, fastmath=get_fast_math_flags(options))
-    elif _is_integer_like_type(element_type):
+    elif is_integer_like_type(element_type):
         result = arith_d.addi(lhs, rhs)
     else:
         raise ValidationError(f"Found unhandled operand type for add: {element_type}")
@@ -739,9 +739,9 @@ def handle_add(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op(operator.sub)
 def handle_sub(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.subf(lhs, rhs, fastmath=get_fast_math_flags(options))
-    elif _is_integer_like_type(element_type):
+    elif is_integer_like_type(element_type):
         result = arith_d.subi(lhs, rhs)
     else:
         raise ValidationError(f"Found unhandled operand type for sub: {element_type}")
@@ -751,9 +751,9 @@ def handle_sub(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op(operator.mul)
 def handle_mul(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.mulf(lhs, rhs, fastmath=get_fast_math_flags(options))
-    elif _is_integer_like_type(element_type):
+    elif is_integer_like_type(element_type):
         result = arith_d.muli(lhs, rhs)
     else:
         raise ValidationError(f"Found unhandled operand type for mul: {element_type}")
@@ -763,7 +763,7 @@ def handle_mul(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op(powf)
 def handle_powf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = math_d.powf(lhs, rhs, fastmath=get_fast_math_flags(options))
     else:
         raise ValidationError(f"Found unhandled operand type for powf: {element_type}")
@@ -773,9 +773,9 @@ def handle_powf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult
 @handle_binary_op(operator.truediv)
 def handle_div(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.divf(lhs, rhs, fastmath=get_fast_math_flags(options))
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.divsi(lhs, rhs)
@@ -799,9 +799,7 @@ def handle_mod(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op(operator.and_)
 def handle_and(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_integer_like_type(element_type) and _is_signed_or_signless_type(
-        element_type
-    ):
+    if is_integer_like_type(element_type) and is_signed_or_signless_type(element_type):
         result = arith_d.andi(lhs, rhs)
     else:
         raise ValidationError(
@@ -813,9 +811,7 @@ def handle_and(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op(operator.or_)
 def handle_or(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_integer_like_type(element_type) and _is_signed_or_signless_type(
-        element_type
-    ):
+    if is_integer_like_type(element_type) and is_signed_or_signless_type(element_type):
         result = arith_d.ori(lhs, rhs)
     else:
         raise ValidationError(
@@ -827,9 +823,9 @@ def handle_or(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op([operator.gt, gt])
 def handle_gt(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.cmpf(arith_d.CmpFPredicate.OGT, lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.cmpi(arith_d.CmpIPredicate.sgt, lhs, rhs)
@@ -841,9 +837,9 @@ def handle_gt(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op([ge, operator.ge])
 def handle_ge(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.cmpf(arith_d.CmpFPredicate.OGE, lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.cmpi(arith_d.CmpIPredicate.sge, lhs, rhs)
@@ -855,9 +851,9 @@ def handle_ge(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op([operator.lt, lt])
 def handle_lt(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.cmpf(arith_d.CmpFPredicate.OLT, lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.cmpi(arith_d.CmpIPredicate.slt, lhs, rhs)
@@ -869,9 +865,9 @@ def handle_lt(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op([operator.le, le])
 def handle_le(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.cmpf(arith_d.CmpFPredicate.OLE, lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.cmpi(arith_d.CmpIPredicate.sle, lhs, rhs)
@@ -883,9 +879,9 @@ def handle_le(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op([operator.eq, eq])
 def handle_eq(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.cmpf(arith_d.CmpFPredicate.OEQ, lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.cmpi(arith_d.CmpIPredicate.eq, lhs, rhs)
@@ -897,9 +893,9 @@ def handle_eq(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op([operator.ne, ne])
 def handle_ne(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.cmpf(arith_d.CmpFPredicate.ONE, lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.cmpi(arith_d.CmpIPredicate.ne, lhs, rhs)
@@ -911,9 +907,9 @@ def handle_ne(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op(maximum)
 def handle_maximum(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.maximumf(lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.maxsi(lhs, rhs)
@@ -927,9 +923,9 @@ def handle_maximum(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpRes
 @handle_binary_op(minimum)
 def handle_minimum(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.minimumf(lhs, rhs)
-    elif _is_integer_like_type(element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(element_type) and is_signed_or_signless_type(
         element_type
     ):
         result = arith_d.minsi(lhs, rhs)
@@ -947,9 +943,9 @@ def handle_atomic_min(
     value_element_type = get_type_or_element_type(val.type)
     atomic_kind = None
     # Only scalars are supported currently
-    if _is_float_type(value_element_type):
+    if is_float_type(value_element_type):
         atomic_kind = arith_d.AtomicRMWKind.minimumf
-    elif _is_integer_like_type(value_element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(value_element_type) and is_signed_or_signless_type(
         value_element_type
     ):
         atomic_kind = arith_d.AtomicRMWKind.mins
@@ -986,7 +982,7 @@ def handle_atomic_add(
 def handle_atan2(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
 
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = math_d.atan2(lhs, rhs, fastmath=get_fast_math_flags(options))
     else:
         raise ValidationError(f"Found unhandled operand type for atan2: {element_type}")
@@ -1018,7 +1014,7 @@ def handle_unary_op(op):
 @handle_unary_op(operator.neg)
 def handle_neg(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.negf(source, fastmath=get_fast_math_flags(options))
     else:
         raise ValidationError(
@@ -1030,7 +1026,7 @@ def handle_neg(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(operator.invert)
 def handle_invert(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_integer_like_type(element_type):
+    if is_integer_like_type(element_type):
         if isinstance(source.type, VectorType):
             assert len(source.type.shape) == 1
             source = vector_d.extract(source, static_position=[0], dynamic_position=[])
@@ -1044,7 +1040,7 @@ def handle_invert(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(exp)
 def handle_exp(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = math_d.exp(source)
     else:
         raise ValidationError(f"Found unhandled operand type for exp: {element_type}")
@@ -1054,7 +1050,7 @@ def handle_exp(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(exp2)
 def handle_exp2(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = math_d.exp2(source)
     else:
         raise ValidationError(f"Found unhandled operand type for exp2: {element_type}")
@@ -1064,7 +1060,7 @@ def handle_exp2(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(sqrt)
 def handle_sqrt(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         return math_d.sqrt(source)
     raise ValidationError(f"Found unhandled operand type for sqrt: {element_type}")
 
@@ -1072,7 +1068,7 @@ def handle_sqrt(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(rsqrt)
 def handle_rsqrt(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         return math_d.rsqrt(source)
     raise ValidationError(f"Found unhandled operand type for sqrt: {element_type}")
 
@@ -1080,7 +1076,7 @@ def handle_rsqrt(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(log2)
 def handle_log2(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = math_d.log2(source)
     else:
         raise ValidationError(f"Found unhandled operand type for log2: {element_type}")
@@ -1090,7 +1086,7 @@ def handle_log2(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(log10)
 def handle_log10(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = math_d.log10(source)
     else:
         raise ValidationError(f"Found unhandled operand type for log10: {element_type}")
@@ -1100,7 +1096,7 @@ def handle_log10(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(reciprocal)
 def handle_reciprocal(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         splat_ones = DenseElementsAttr.get_splat(
             source.type, get_constant_attr(1.0, element_type)
         )
@@ -1116,9 +1112,9 @@ def handle_reciprocal(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(abs)
 def handle_abs(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         abs = math_d.absf(source)
-    elif _is_integer_like_type(element_type):
+    elif is_integer_like_type(element_type):
         abs = math_d.absi(source)
     else:
         raise ValidationError(f"Found unhandled operand type for abs: {element_type}")
@@ -1155,70 +1151,67 @@ def handle_tanh_approx(source: Value, options: WaveCompileOptions) -> OpResult:
     """
 
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
-        # a = x (source)
-        a = source
-
-        # s = |a|
-        s = math_d.absf(a)
-
-        # Constants:
-        # Compute log2(e)
-        log2e_val = math.log2(math.e)
-
-        # Compute factor = -2 * log2(e)
-        factor_val = -2.0 * log2e_val
-
-        factor = arith_d.ConstantOp(
-            source.type,
-            DenseElementsAttr.get_splat(
-                source.type, get_constant_attr(factor_val, element_type)
-            ),
-        )
-        # t = factor * s
-        t = arith_d.mulf(s, factor, fastmath=get_fast_math_flags(options))
-
-        # e = exp2(t) using fast hardware intrinsic via math_d
-        e = math_d.exp2(t)
-
-        one = arith_d.ConstantOp(
-            source.type,
-            DenseElementsAttr.get_splat(
-                source.type, get_constant_attr(1.0, element_type)
-            ),
-        )
-
-        # d = e + 1.0
-        d = arith_d.addf(e, one, fastmath=get_fast_math_flags(options))
-
-        # r = reciprocal(d)
-        r = arith_d.divf(one, d, fastmath=get_fast_math_flags(options))
-
-        neg_one = arith_d.ConstantOp(
-            source.type,
-            DenseElementsAttr.get_splat(
-                source.type, get_constant_attr(-1.0, element_type)
-            ),
-        )
-
-        # r = e * (-r) + r  (computes (e-1)/(e+1) without direct division)
-        neg_r = arith_d.mulf(r, neg_one, fastmath=get_fast_math_flags(options))
-        temp = arith_d.mulf(e, neg_r, fastmath=get_fast_math_flags(options))
-        r = arith_d.addf(temp, r, fastmath=get_fast_math_flags(options))
-
-        # # If s < threshold, then r = a (for small x, tanh(x) ~ x)
-        # thresh_val = 4.997253418e-3
-        # thresh = arith_d.ConstantOp(
-        #     source.type,
-        #     DenseElementsAttr.get_splat(source.type, get_constant_attr(thresh_val, element_type))
-        # )
-        # cmp = arith_d.cmpf(arith_d.CmpFPredicate.OLT, s, thresh)
-        # r = arith_d.select(cmp, a, r)
-
-        # Copy the sign of a to r: r = copysign(r, a)
-        result = math_d.copysign(r, a)
-    else:
+    if not is_float_type(element_type):
         raise ValidationError(f"Unhandled operand type for tanh_approx: {element_type}")
+
+    # a = x (source)
+    a = source
+
+    # s = |a|
+    s = math_d.absf(a)
+
+    # Constants:
+    # Compute log2(e)
+    log2e_val = math.log2(math.e)
+
+    # Compute factor = -2 * log2(e)
+    factor_val = -2.0 * log2e_val
+
+    factor = arith_d.ConstantOp(
+        source.type,
+        DenseElementsAttr.get_splat(
+            source.type, get_constant_attr(factor_val, element_type)
+        ),
+    )
+    # t = factor * s
+    t = arith_d.mulf(s, factor, fastmath=get_fast_math_flags(options))
+
+    # e = exp2(t) using fast hardware intrinsic via math_d
+    e = math_d.exp2(t)
+
+    one = arith_d.ConstantOp(
+        source.type,
+        DenseElementsAttr.get_splat(source.type, get_constant_attr(1.0, element_type)),
+    )
+
+    # d = e + 1.0
+    d = arith_d.addf(e, one, fastmath=get_fast_math_flags(options))
+
+    # r = reciprocal(d)
+    r = arith_d.divf(one, d, fastmath=get_fast_math_flags(options))
+
+    neg_one = arith_d.ConstantOp(
+        source.type,
+        DenseElementsAttr.get_splat(source.type, get_constant_attr(-1.0, element_type)),
+    )
+
+    # r = e * (-r) + r  (computes (e-1)/(e+1) without direct division)
+    neg_r = arith_d.mulf(r, neg_one, fastmath=get_fast_math_flags(options))
+    temp = arith_d.mulf(e, neg_r, fastmath=get_fast_math_flags(options))
+    r = arith_d.addf(temp, r, fastmath=get_fast_math_flags(options))
+
+    # # If s < threshold, then r = a (for small x, tanh(x) ~ x)
+    # thresh_val = 4.997253418e-3
+    # thresh = arith_d.ConstantOp(
+    #     source.type,
+    #     DenseElementsAttr.get_splat(source.type, get_constant_attr(thresh_val, element_type))
+    # )
+    # cmp = arith_d.cmpf(arith_d.CmpFPredicate.OLT, s, thresh)
+    # r = arith_d.select(cmp, a, r)
+
+    # Copy the sign of a to r: r = copysign(r, a)
+    result = math_d.copysign(r, a)
+
     return result
 
 
@@ -1280,7 +1273,7 @@ def handle_softsign(emitter: WaveEmitter, node: fx.Node) -> None:
 @handle_unary_op(tanh)
 def handle_tanh(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = math_d.tanh(source, fastmath=get_fast_math_flags(options))
     else:
         raise ValidationError(f"Found unhandled operand type for tanh: {element_type}")
@@ -1300,7 +1293,7 @@ def handle_round(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(roundeven)
 def handle_roundeven(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         roundeven = math_d.roundeven(source)
     else:
         raise ValidationError(
@@ -1312,7 +1305,7 @@ def handle_roundeven(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(sin)
 def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         sine_of_source = math_d.sin(source)
     else:
         raise ValidationError(f"Found unhandled operand type for sine: {element_type}")
@@ -1322,7 +1315,7 @@ def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(sinh)
 def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         sinh_of_source = math_d.sinh(source)
     else:
         raise ValidationError(f"Found unhandled operand type for sinh: {element_type}")
@@ -1332,7 +1325,7 @@ def handle_sin(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(cos)
 def handle_cos(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         res = math_d.cos(source)
     else:
         raise ValidationError(f"Found unhandled operand type for cos: {element_type}")
@@ -1342,7 +1335,7 @@ def handle_cos(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(cbrt)
 def handle_cbrt(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         res = math_d.cbrt(source)
     else:
         raise ValidationError(

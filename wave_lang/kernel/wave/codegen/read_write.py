@@ -32,8 +32,8 @@ from wave_lang.support.ir_imports import (
     func_d,
     Operation,
 )
-from wave_lang.aot.support.ir_utils import (
-    _is_float_type,
+from .ir_utils import (
+    is_float_type,
 )
 
 from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, IndexSymbol
@@ -913,7 +913,7 @@ def _handle_scatter_op(
 def handle_scatter_add(emitter: WaveEmitter, node: fx.Node):
     register_src = cast_py_value(emitter, node.args[0])
     src_data_type = get_type_or_element_type(register_src.ir_value.type)
-    if _is_float_type(src_data_type):
+    if is_float_type(src_data_type):
         rmw_kind = arith_d.AtomicRMWKind.addf
     else:
         rmw_kind = arith_d.AtomicRMWKind.addi
