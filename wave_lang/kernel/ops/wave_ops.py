@@ -191,6 +191,9 @@ def tanh(src: "Register") -> "Register": ...
 def cos(src: "Register") -> "Register": ...
 
 
+def round(src: "Register") -> "Register": ...
+
+
 def roundeven(src: "Register") -> "Register": ...
 
 
@@ -946,6 +949,7 @@ class ComparisonPyOp(BinaryOpBase, ABC):
 @define_interface_op("log2")
 @define_interface_op("log10")
 @define_interface_op("reciprocal")
+@define_interface_op("round")
 @define_interface_op("roundeven")
 @define_interface_op("sin")
 @define_interface_op("sinh")

@@ -915,6 +915,7 @@ def test_unary_lowerings():
         res = tkw.tanh(res)
         res = tkw.tanh_approx(res)
         res = tkw.softsign(res, logit_cap=30.0, apply_scaling=True, head_dim=128)
+        res = tkw.round(res)
         res = tkw.roundeven(res)
         res = tkw.sin(res)
         res = tkw.sinh(res)
@@ -973,8 +974,10 @@ def test_unary_lowerings():
     # CHECK: %[[RECIP_DENOM:.+]] = arith.divf %[[ONE]], %[[ADD]] : vector<4xf16>
     # CHECK: %[[SOFTSIGN:.+]] = arith.mulf %[[TANH_APPROX]], %[[RECIP_DENOM]] : vector<4xf16>
 
+    # Tests round
+    # CHECK: %[[ROUND:.+]] = math.round %[[SOFTSIGN]]
     # Tests roundeven
-    # CHECK: %[[ROUNDEVEN:.+]] = math.roundeven %[[SOFTSIGN]]
+    # CHECK: %[[ROUNDEVEN:.+]] = math.roundeven %[[ROUND]]
 
     # Tests sin
     # CHECK: %[[SIN:.+]] = math.sin %[[ROUNDEVEN]]
