@@ -90,7 +90,7 @@ def emit_local_inclusive_scan_block(
         values.insert(
             0,
             get_graph_node(
-                NewRegister(node.type.symbolic_shape, node.type.dtype, 0.0), graph
+                NewRegister(node.type.symbolic_shape, node.type.dtype, 0), graph
             ),
         )
         values[0].index = node.index
@@ -100,7 +100,8 @@ def emit_local_inclusive_scan_block(
             values[i] = get_graph_node(binary_fn(values[i], values[i - 1]), graph)
             values[i].index = node.index
 
-        result.append(values)
+    result.append(values[:4])
+
     return result
 
 
@@ -405,49 +406,22 @@ def emit_interwave_scan(
         _write_dependency=[cond_store, write_sum],
     ).add_to_graph(graph)
 
-    read_totals.index = {scan_dim: IndexSequence(scan_wave_id, 1, 1)}
+    read_totals.index = {scan_dim: IndexSequence(0, 1, 1)}  # scan_wave_id
 
     incl_nested = emit_local_inclusive_scan_block(
         binary_fn, [read_totals], graph, num_scan_waves
     )
     # TODO: this is just to test; fix accessed offset
     # updated_offsets = incl_nested[-1][-1]
-    updated_offsets = incl_nested[-1]
+    updated_offsets = incl_nested[-1]  # [0, 64, 128, 192]
     updated_offsets = Reshape(
         args=updated_offsets,
         target_vector_shape={scan_dim: num_scan_waves},
     ).add_to_graph(graph)
 
-    off = get_graph_node(Extract(updated_offsets, [0]), graph)
+    off = get_graph_node(Extract(updated_offsets, [scan_wave_id]), graph)
     off = get_graph_node(Broadcast(off, src.type.symbolic_shape), graph)
     off.index = src.index
-
-    # list length == num_scan_waves; incl == [extract_1 (used by wave_id1), add_6(used by wave_id2), add_7, add_8]
-    # read_totals = [64, 64, 64, 64]
-    # updated_offsets = [0, 64, 128, 192]
-
-    # offsets_vec_excl = [get_graph_node(NewScalar(0, src.type.dtype), graph), *incl[:-1]]
-    # Remove redundant zero_reg from the final code.
-    # zero_reg = get_graph_node(
-    #     NewRegister(
-    #         get_custom(src).type.symbolic_shape,
-    #         get_custom(src).type.dtype,
-    #         0.0,
-    #     ),
-    #     graph,
-    # )
-    # zero_reg.index = src.index
-
-    # if_scan_wave_id_zero = eq(scan_wave_id, 0)
-    # cond_node = get_graph_node(
-    #     NewRegister(src.type.symbolic_shape, i1, if_scan_wave_id_zero),
-    #     graph,
-    # )
-    # cond_node.index = src.index
-
-    # masked = get_graph_node(
-    #     SelectOp(cond=cond_node, if_true=zero_reg, if_false=off), graph
-    # )
 
     final_scalar = get_graph_node(binary_fn(off, src), graph)
 

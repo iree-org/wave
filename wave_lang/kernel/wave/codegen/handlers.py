@@ -1556,21 +1556,45 @@ def handle_workgroup_barrier(emitter: WaveEmitter, node: fx.Node):
 @handle_op(extract)
 def handle_extract(emitter: WaveEmitter, node: fx.Node):
     try:
-        register, offset = node.args
-    except ValueError as e:
-        raise ValidationError("Malformed arguments") from e
-    assert isinstance(offset, list) and len(offset) == 1
-    extract_vector = cast_vector(emitter, register)
-    result_type = VectorType.get([1], extract_vector.type.element_type)
-    # Instead of using `extract_strided_slice` op, we use `extract` + `splat`
-    # to construct the result vector, to enable more opportunities for them to
-    # be fused with nearby elementwise and memory ops.
-    element = vector_d.extract(
-        extract_vector, static_position=offset, dynamic_position=[]
-    )
-    element = vector_d.broadcast(result_type, element)
+        try:
+            register, offset = node.args
+        except ValueError as e:
+            raise ValidationError("Malformed arguments") from e
+        assert isinstance(offset, list) and len(offset) == 1
+        extract_vector = cast_vector(emitter, register)
+        result_type = VectorType.get([1], extract_vector.type.element_type)
+        # Instead of using `extract_strided_slice` op, we use `extract` + `splat`
+        # to construct the result vector, to enable more opportunities for them to
+        # be fused with nearby elementwise and memory ops.
+        element = vector_d.extract(
+            extract_vector, static_position=offset, dynamic_position=[]
+        )
+        element = vector_d.broadcast(result_type, element)
 
-    emitter.bind_node_proxy(node, IRProxyValue(element))
+        emitter.bind_node_proxy(node, IRProxyValue(element))
+    except:
+        try:
+            register, offset = node.args
+        except ValueError as e:
+            raise ValidationError("Malformed arguments") from e
+        assert isinstance(offset, list) and len(offset) == 1
+        extract_vector = cast_vector(emitter, register)
+        result_type = VectorType.get([1], extract_vector.type.element_type)
+        # Instead of using `extract_strided_slice` op, we use `extract` + `splat`
+        # to construct the result vector, to enable more opportunities for them to
+        # be fused with nearby elementwise and memory ops.
+        from iree.compiler import ir
+        dyn = ir.ShapedType.get_dynamic_size()
+        dynamic_position=[gen_sympy_index(add_emitter_subs(emitter), x) for x in offset]
+        
+        element = vector_d.extract(
+            extract_vector, dynamic_position=dynamic_position, static_position=[dyn,],
+        )
+        breakpoint()
+
+        element = vector_d.broadcast(result_type, element)
+
+        emitter.bind_node_proxy(node, IRProxyValue(element))
 
 
 @handle_op(extract_slice)
@@ -1644,9 +1668,12 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
         emitter.bind_node_proxy(node, IRProxyValue(vector_src))
         return
 
-    assert (
-        vector_type.shape[0] == 1
-    ), f"expected vector_type.shape[0] == 1 but got {vector_type}"
+    try:
+        assert (
+            vector_type.shape[0] == 1
+        ), f"expected vector_type.shape[0] == 1 but got {vector_type}"
+    except:
+        breakpoint()
 
     # Extract and Splat
     # If by chance broadcast size  matches current size, we can return src.
