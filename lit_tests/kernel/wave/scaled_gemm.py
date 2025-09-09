@@ -567,6 +567,7 @@ def batched_prefetch_mxfp4_test():
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,
         use_buffer_ops=True,
+        linearize_shared_access=True,
         compile_to_mlir=True,
     )
     batched_gemm_mxfp4_prefetch = wave_compile(options, batched_gemm_mxfp4_prefetch)
@@ -587,11 +588,15 @@ def batched_prefetch_mxfp4_test():
     # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
     # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
 
-    # Prologue Local Write
-    # CHECK-COUNT-4:  vector.store {{.*}} : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK:          vector.store {{.*}} : memref<1x256x16xi8, #gpu.address_space<workgroup>>, vector<4xi8>
-    # CHECK-COUNT-4:  vector.store {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK:          vector.store {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<4xi8>
+    # Prologue Linearize shared memory + Local Write
+    # CHECK:          memref.reinterpret_cast {{.*}} to offset: [0], sizes: [34816], strides: [1] : memref<1x256x136xi8, #gpu.address_space<workgroup>> to memref<34816xi8, #gpu.address_space<workgroup>>
+    # CHECK-COUNT-4:  vector.store {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:          memref.reinterpret_cast {{.*}} to offset: [0], sizes: [4096], strides: [1] : memref<1x256x16xi8, #gpu.address_space<workgroup>> to memref<4096xi8, #gpu.address_space<workgroup>>
+    # CHECK:          vector.store {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<4xi8>
+    # CHECK:          memref.reinterpret_cast {{.*}} to offset: [0], sizes: [34816], strides: [1] : memref<256x136xi8, #gpu.address_space<workgroup>> to memref<34816xi8, #gpu.address_space<workgroup>>
+    # CHECK-COUNT-4:  vector.store {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:          memref.reinterpret_cast {{.*}} to offset: [0], sizes: [4096], strides: [1] : memref<256x16xi8, #gpu.address_space<workgroup>> to memref<4096xi8, #gpu.address_space<workgroup>>
+    # CHECK:          vector.store {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<4xi8>
 
     # Steady State
     # CHECK:          scf.for
@@ -599,39 +604,39 @@ def batched_prefetch_mxfp4_test():
     # Steady State global_load_rhs_scale
     # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
     # Steady State local_load_rhs_scale
-    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_lhs_scale
     # CHECK:            vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
     # Steady State local_load_lhs_scale
-    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<1x256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
 
     # Steady State global_load_rhs
     # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
     # Steady State local_load_rhs
-    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Steady State global_load_lhs
     # CHECK-COUNT-4:    vector.load %{{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
     # Steady State local_load_lhs
-    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK=COUNT-16:   vector.load %{{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Steady State MFMA
     # CHECK-COUNT-64:   amdgpu.scaled_mfma
 
     # Steady State Local Write (lhs_scale, rhs_scale, lhs, rhs)
-    # CHECK:            vector.store {{.*}} : memref<1x256x16xi8, #gpu.address_space<workgroup>>, vector<4xi8>
-    # CHECK:            vector.store {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<4xi8>
-    # CHECK-COUNT-4:    vector.store {{.*}} : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK-COUNT-4:    vector.store {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:            vector.store {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<4xi8>
+    # CHECK:            vector.store {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<4xi8>
+    # CHECK-COUNT-4:    vector.store {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-COUNT-4:    vector.store {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
     # CHECK:            scf.yield
     # CHECK:          }
 
     # Epilogue Local Read
-    # CHECK-COUNT-16: vector.load {{.*}} : memref<256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
-    # CHECK-COUNT-16: vector.load {{.*}} : memref<256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK-COUNT-8:  vector.load {{.*}} : memref<1x256x16xi8, #gpu.address_space<workgroup>>, vector<1xi8>
-    # CHECK-COUNT-8:  vector.load {{.*}} : memref<1x256x136xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-COUNT-16: vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-16: vector.load {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK-COUNT-8:  vector.load {{.*}} : memref<4096xi8, #gpu.address_space<workgroup>>, vector<1xi8>
+    # CHECK-COUNT-8:  vector.load {{.*}} : memref<34816xi8, #gpu.address_space<workgroup>>, vector<16xi8>
 
     # Epilogue MFMA
     # CHECK-COUNT-64: amdgpu.scaled_mfma

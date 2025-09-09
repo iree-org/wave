@@ -71,6 +71,27 @@ def get_default_scheduling_params() -> dict[IndexSymbol, Any]:
     }
 
 
+def linearize_index(
+    expr_list: dict[IndexExpr, IndexSequence], strides: list[int]
+) -> IndexExpr:
+    """
+    Linearizes N-d IndexSequence with int/static strides into a
+    single 1D linearized IndexExpr.
+    """
+    assert len(expr_list) == len(strides)
+    linear_expr = None
+    for expr, stride in zip(expr_list.values(), strides):
+        assert isinstance(
+            expr, IndexSequence
+        ), f"linearize index expects expr to be of type IndexSequence but got {type(expr)}"
+        current_expr = expr.start * stride
+        if linear_expr is None:
+            linear_expr = current_expr
+        else:
+            linear_expr += current_expr
+    return linear_expr
+
+
 def delinearize_index(
     index: IndexExpr, shape: list[int | IndexExpr]
 ) -> list[IndexExpr]:
