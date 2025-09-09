@@ -23,7 +23,7 @@ import torch.fx as fx
 from typing_extensions import Self
 from itertools import combinations
 
-from .._support.dtype import DataType, i1, i32
+from .._support.dtype import DataType, i1
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.location import capture_location, CapturedLocation
 from .._support.regions import RegionGraph
@@ -280,6 +280,9 @@ def powf(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
 def mod(lhs: "Register", rhs: "Register") -> "Register": ...
+
+
+def remf(lhs: "Register", rhs: "Register") -> "Register": ... # remainder float
 
 
 def cbrt(src: "Register") -> "Register": ...
@@ -1041,6 +1044,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_interface_op("minimum")
 @define_interface_op("atan2")
 @define_interface_op("powf")
+@define_interface_op("remf")
 @dataclass
 class BinaryPyOp(BinaryOpBase, ABC):
     def infer_type(self, *args):
@@ -1974,17 +1978,6 @@ class Read(CustomOp):
 
         if self.has_identity_mapping():
             return True
-
-        if self.elements_per_thread == 1:
-            return True
-
-        from ..wave.utils.mapping_utils import (
-            check_is_mapping_contiguous,
-            check_is_dynamic_vals_broadcasted,
-        )
-
-        if not check_is_dynamic_vals_broadcasted(self.mapping_dynamic_vals):
-            return False
 
         mapping = self.mapping
 
