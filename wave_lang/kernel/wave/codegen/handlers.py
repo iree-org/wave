@@ -521,21 +521,21 @@ def handle_atomic_op(op):
                 lhs_type.rank == 0 or lhs_type.rank == 1
             ), f"expected lhs_type.rank == 1 but got {lhs_type.rank}, {node}"
 
-            start_index = node.index
+            transformed_index = node.index
             if mapping:
                 symbolic_shape = get_custom(node).type.symbolic_shape
-                start_index = transform_index_on_mapping(
-                    mapping, symbolic_shape, start_index
+                transformed_index = transform_index_on_mapping(
+                    mapping, symbolic_shape, transformed_index
                 )
 
             # Get start indices for every element in thread and unroll the op
             atomic_results = []
-            keys = list(start_index.keys())
+            keys = list(transformed_index.keys())
             fastest_dim = get_fastest_index(node.index)
             for i in range(elements_per_thread):
-                new_index = copy.deepcopy(start_index)
+                new_index = copy.deepcopy(transformed_index)
                 key = keys[fastest_dim]
-                new_index[key] += i
+                new_index[key].start += i
                 start_idx = _build_start_indices(emitter, new_index)
                 lhs_val = vector_d.extract(
                     lhs, static_position=[i], dynamic_position=[]
