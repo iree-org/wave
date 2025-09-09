@@ -1203,9 +1203,7 @@ def handle_round(source: Value, options: WaveCompileOptions) -> OpResult:
     if _is_float_type(element_type):
         round = math_d.round(source)
     else:
-        raise ValidationError(
-            f"Found unhandled operand type for round: {element_type}"
-        )
+        raise ValidationError(f"Found unhandled operand type for round: {element_type}")
     return round
 
 
