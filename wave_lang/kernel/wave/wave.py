@@ -574,7 +574,7 @@ class LaunchableWave(Launchable):
         except:
             logger.info("Error in emitter")
             asm = mb.module_op.get_asm()
-            logger.info(asm)
+            # logger.info(asm)
             raise
         emitter.finish()
 

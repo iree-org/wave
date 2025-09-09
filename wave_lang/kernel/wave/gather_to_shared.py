@@ -35,6 +35,7 @@ from .minimize_global_loads import (
     materialize_shape,
     update_write_dependencies,
 )
+from .global_to_shared_gathers import update_read_mapping_dynamic_values
 from .utils.general_utils import (
     ceildiv,
     delinearize_index,
@@ -264,30 +265,22 @@ def emit_global_to_lds(
                 read.mapping,
                 write.mapping,
                 bounds,
+                tuple(read.mapping_dynamic_vals),
             ).add_to_graph(write.graph)
 
-        if i == 0:
-            commmon_id = id(new_write)
+            # print("addednudummy")
 
-        # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
-        # they are part of the same group later.
-        new_write.pre_expansion_id = commmon_id
-
-        new_writes[write.memory].append(new_write)
-        if drop_padding:
-            custom_memory = get_custom(write.memory)
-            padding = custom_memory.padding
-            if padding != 0:
-                custom_memory.update_arg("padding", 0)
-                new_distributed_shape = list(custom_memory.distributed_shape)
-                new_distributed_shape[-1] -= padding
-                custom_memory.update_arg(
-                    "distributed_shape", tuple(new_distributed_shape)
-                )
-
-        if tail_padding != 0:
-            custom_memory = get_custom(write.memory)
-            custom_memory.update_arg("tail_padding", tail_padding)
+            new_writes[write.memory].append(new_write)
+            if drop_padding:
+                custom_memory = get_custom(write.memory)
+                padding = custom_memory.padding
+                if padding != 0:
+                    custom_memory.update_arg("padding", 0)
+                    new_distributed_shape = list(custom_memory.distributed_shape)
+                    new_distributed_shape[-1] -= padding
+                    custom_memory.update_arg(
+                        "distributed_shape", tuple(new_distributed_shape)
+                    )
 
     return new_writes
 
@@ -340,6 +333,8 @@ def gather_to_shared(
     """
     if not options.use_global_to_shared:
         return
+    
+    # print("iuiuhiuhiu")
 
     logger.info("gather_to_shared")
 
@@ -350,6 +345,7 @@ def gather_to_shared(
     id_to_read_write = defaultdict(list)
     for read in trace.walk(is_valid_read):
         read = get_custom(read)
+        # print("dynamic_val0" in str(read), " muy exquisite")
         for write in read.users:
             if not is_valid_write(write):
                 continue
@@ -393,11 +389,15 @@ def gather_to_shared(
 
     for reads_writes in id_to_read_write.values():
         read, write = reads_writes[0]
-        logger.info(f"processing read={read}, write={write}")
+        logger.info(f"BEFORE - processing read={read}, write={write}")
+        update_read_mapping_dynamic_values(read)
+        logger.info(f"AFTER - processing read={read}, write={write}")
 
         if not read.has_identity_mapping():
             logger.info("non-identity read mapping is not supported yet")
-            continue
+            # print("temper", read.mapping, write.mapping
+            # )
+            # continue
 
         assert read.index == write.index
 

@@ -2704,7 +2704,7 @@ class GatherToLDS(CustomOp):
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
     src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
-
+    src_dyn_vals: tuple[Any, ...]
 
 @define_op("scatter_add")
 @dataclass

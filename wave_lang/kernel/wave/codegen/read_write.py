@@ -140,27 +140,69 @@ def _get_symbolic_shape(node: fx.Node) -> tuple[IndexExpr]:
     return get_custom(node).type.symbolic_shape
 
 
+def _pick_fastest_dim_key(
+    index: dict[IndexExpr, IndexSequence | IndexExpr],
+    bounds: Optional[dict[IndexSymbol, IndexExpr]],
+) -> IndexExpr:
+    """
+    Heuristic for vectorization dim:
+    1) If any values are IndexSequence, pick the one with largest .size
+       (ties → most-minor among them).
+    2) Else if bounds are known, prefer the last symbolic dim present in `bounds`.
+    3) Else fallback to the last key in `index`.
+    """
+    # 1) Prefer IndexSequence (we know a lane width)
+    seq_items = [(k, v) for k, v in index.items() if isinstance(v, IndexSequence)]
+    if seq_items:
+        # choose max by subs_idxc(size); ties resolve by position (most-minor)
+        sizes = [subs_idxc(v.size) for _, v in seq_items]
+        max_size = max(sizes)
+        # pick last among max (most-minor)
+        for k, v in reversed(seq_items):
+            if subs_idxc(v.size) == max_size:
+                return k
+
+    # 2) Try to use the last bounded dim (often the fastest)
+    if bounds:
+        bounded_keys = [k for k in index.keys() if k in bounds]
+        if bounded_keys:
+            return bounded_keys[-1]
+
+    # 3) Fallback: last key (common “fastest is last” convention)
+    return list(index.keys())[-1]
+
+
 def _build_mask(
     emitter: WaveEmitter,
-    index: dict[IndexExpr, IndexExpr],
+    index: dict[IndexExpr, IndexSequence | IndexExpr],
     elements_per_thread: int,
     bounds: Optional[dict[IndexSymbol, IndexExpr]],
+    dynamic_values: Optional[dict[IndexExpr, Any]] = None,
 ) -> Optional[OpResult]:
     if not bounds:
         return None
 
     idxc = IndexingContext.current()
-    fastest_dim = get_fastest_index(index)
-    last_dim = list(index)[fastest_dim]
-    new_index = {k: _get_start_index(v) for k, v in index.items()}
+    subs = add_emitter_subs(emitter, dynamic_values or {})  # used only by gen_sympy_index
 
-    new_index[last_dim] = new_index[last_dim] + idxc.iota(elements_per_thread)
+    # Pick a good vectorization dim (fully symbolic; no MLIR in SymPy)
+    vect_dim = _pick_fastest_dim_key(index, bounds)
 
+    # Normalize entries to their "start" expressions (works for both Sequence/Expr)
+    new_index_sym = {k: subs_idxc(_get_start_index(v)) for k, v in index.items()}
+
+    # Vectorize along chosen dim
+    new_index_sym[vect_dim] = new_index_sym[vect_dim] + idxc.iota(elements_per_thread)
+
+    # Bounds stay symbolic too
+    bounds_sym = {k: subs_idxc(v) for k, v in bounds.items()}
+
+    # Build boolean mask expr symbolically and lower with MLIR-aware subs
     mask_expr = functools.reduce(
         lambda a, b: sympy.And(a, b),
-        (new_index[dim] < bound for dim, bound in bounds.items()),
+        (new_index_sym[dim] < bounds_sym[dim] for dim in bounds_sym.keys()),
     )
-    mask = gen_sympy_index(add_emitter_subs(emitter), mask_expr)
+    mask = gen_sympy_index(subs, mask_expr)
 
     mask_vec_type = VectorType.get([elements_per_thread], IntegerType.get_signless(1))
     if mask.type != mask_vec_type:
@@ -960,16 +1002,48 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             offsets_vec,
         )
 
+# --- at top of read_write.py ---
+import sympy as _sym
 
-def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
-    original_type = value.type
-    idx = arith_d.index_cast(element_type, value)
-    # TODO: use a proper ROCDL intrinsic for this after IREE is updated.
-    res = llvm_d.call_intrinsic(
-        element_type, "llvm.amdgcn.readfirstlane", [idx], [], []
-    )
-    res = arith_d.index_cast(original_type, res)
-    return res
+def _bind_dynamic_vals_for_mapping(emitter, read, wg_subs, th_subs, wave_subs):
+    """Bind $dynamic_val{i} -> MLIR value so gen_sympy_index can resolve it."""
+    dyns = getattr(read, "mapping_dynamic_vals", None)
+    dyn_maps = getattr(read.mapping, "dynamic_val_mappings", None)
+    if not dyns:
+        return []
+
+    bindings = []
+    for i, dyn in enumerate(dyns):
+        dyn_c = dyn  # already CustomOp
+        dyn_val = emitter.get_value(dyn_c.fx_node)   # MLIR value for the dynamic read
+
+        # Figure out which iterator indexes this dynamic depends on.
+        # For common patterns there is exactly one entry, e.g. {N_KV: $index2}
+        lane_expr = None
+        if dyn_maps and i < len(dyn_maps) and dyn_maps[i]:
+            # take the single iterator expr (e.g. $index2)
+            lane_expr = list(dyn_maps[i].values())[0]
+
+        # Make it wave-uniform if needed and substitute thread/wg symbols
+        if lane_expr is not None:
+            lane_expr = subs_idxc(lane_expr).xreplace({**wg_subs, **th_subs, **wave_subs})
+            lane_idx_val = emitter.gen_sympy_index({}, lane_expr)
+            # Extract the scalar from a vector/tensor dynamic value if needed
+            dyn_scalar = emitter.maybe_vector_extract(dyn_val, [lane_idx_val])
+        else:
+            # No iterator dependence: treat as already-scalar
+            dyn_scalar = dyn_val
+
+        # Register symbol so gen_sympy_index sees it
+        sym = _sym.Symbol(f"$dynamic_val{i}")
+        emitter.bind_symbol(sym, dyn_scalar)   # <-- use your emitter’s symbol/value binding API
+        bindings.append(sym)
+
+    return bindings
+
+def _unbind_dynamic_vals(emitter, symbols):
+    for s in symbols:
+        emitter.unbind_symbol(s)  # <-- corresponding unbind in your emitter
 
 
 @handle_op(gather_to_lds)
@@ -985,6 +1059,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             src_mapping,
             dst_mapping,
             src_bounds,
+            src_dyn_vals,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
@@ -1027,27 +1102,23 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     if dst_mapping:
         dst_idx = transform_index_on_mapping(dst_mapping, dst_symbolic_shape, dst_idx)
 
+    dyn_vals = tuple(cast_vector(emitter, reg, element_type=IndexType.get())
+                    for reg in src_dyn_vals)
+    def _extract0(src):  # first lane for start indices
+        static_pos = [0] * src.type.rank
+        return vector_d.extract(src, static_position=static_pos, dynamic_position=[])
+    dyn_keys = tuple(src_mapping.dynamic_val_indices.keys()) if src_mapping else tuple()
+    dynamic_vals_map_start = {sym: _extract0(val) for sym, val in zip(dyn_keys, dyn_vals)}
+
+    # print(dyn_vals, "zimbabwe")
+
+
     store_type = VectorType.get((elements_per_thread,), element_type)
 
-    src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
+    src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx, dynamic_values=dynamic_vals_map_start)
+    dst_index, _, _ = _build_start_indices(emitter, dst_idx)
 
-    ip = InsertionPoint.current
-
-    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
-
-    # Hoist to the function level, if not using induction variables.
-    if not any(
-        induction_vars.intersection(set(index.start.free_symbols))
-        for index in dst_idx.values()
-    ):
-        while not isinstance(ip.block.owner, func_d.FuncOp):
-            ip = InsertionPoint(ip.block.owner)
-
-    with ip:
-        dst_index, _, _ = _build_start_indices(emitter, dst_idx)
-        # We are indexing shared mem so i32 is enough.
-        i32 = IntegerType.get_signless(32)
-        dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
+    # print(src_index, dst_index, src_idx, "fuhuufhu")
 
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
@@ -1059,7 +1130,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # We previously checked mask is same for all elements, so we can use
     # elements_per_thread=1 to build the mask.
-    mask = _build_mask(emitter, src_idx, elements_per_thread=1, bounds=src_bounds)
+    mask = _build_mask(emitter, src_idx, elements_per_thread=1, bounds=src_bounds, dynamic_values=dynamic_vals_map_start,)
     if mask:
         mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
         oob_index_value = _get_out_of_bounds_index(element_type)
