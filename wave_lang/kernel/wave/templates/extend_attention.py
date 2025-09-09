@@ -185,10 +185,6 @@ def get_extend_attention_kernel(
             tkw.read(qo_indptr, elements_per_thread=1, source=(s + 1,), target=(s,))
             - seq_extend_start_idx
         )
-        # tkw.debug_log_write(seq_extend_start_idx, log_name="EXT_IDX")
-
-        tkw.debug_log_write(seq_extend_start_idx, log_name="a")
-        tkw.debug_log_write(seq_len_extend, log_name="b")
         tkw.set_symbol(N_Q, seq_len_extend)
         seq_kv_start_idx = tkw.read(kv_indptr, elements_per_thread=1)
         tkw.set_symbol(KV_START_IDX, seq_kv_start_idx)
@@ -361,8 +357,13 @@ def get_extend_attention_kernel(
         res = res_mm * reciprocal_sum
         if wave_output_dtype != tkl.f32:
             res = tkw.cast(res, wave_output_dtype)
-        tkw.write(res, c, mapping=mapping, elements_per_thread=STORE_ELEMS_PER_THREAD)
-        # tkw.debug_log_write(res,log_name="res")
+        tkw.write(
+            res,
+            c,
+            source=(h, d_kv, n_q),
+            target=(n_q + EXT_IDX, h, d_kv),
+            elements_per_thread=STORE_ELEMS_PER_THREAD,
+        )
 
     @tkw.wave(constraints)
     def extend_attention(

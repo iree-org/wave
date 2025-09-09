@@ -2257,12 +2257,18 @@ def test_debug_log_core(dynamic_dims: bool):
     c = device_zeros(shape, dtype=torch.float16)
     ref = a + b
 
+    subs = {
+        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+    }
+    dynamic_symbols = []
+    if dynamic_dims:
+        dynamic_symbols = [M, N]
+    else:
+        subs[M] = shape[0]
+        subs[N] = shape[1]
     options = WaveCompileOptions(
-        subs={
-            M: shape[0],
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-        },
-        dynamic_symbols=[N],
+        subs=subs,
+        dynamic_symbols=dynamic_symbols,
     )
     options = set_default_run_config(options)
 
