@@ -789,6 +789,7 @@ def handle_powf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult
         raise ValidationError(f"Found unhandled operand type for powf: {element_type}")
     return result
 
+
 @handle_binary_op(remf)
 def handle_remf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
