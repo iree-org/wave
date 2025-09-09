@@ -29,6 +29,7 @@ from ..utils.graph_utils import replace_uses_in
 from ..visualization import visualize_graph, visualize_mapped_graphs
 from .loop_reconstruction_utils import (
     ArgumentContext,
+    compute_multi_buffer_count,
     create_drain_stage_schedule,
     create_fill_stage_schedule,
     interleave_instructions,
@@ -736,20 +737,24 @@ def construct_epilogue(
 
 def create_multibuffered_allocs(
     graph: fx.Graph,
-    multi_buffer_count: int,
+    multi_buffer_count: dict[fx.Node, int],
     outer_vars: dict[fx.Node, list[fx.Node]],
-) -> list[fx.Node]:
+):
     """
     Create the multibuffered allocs for the shared memory operands.
     """
     shared_memory_allocs = collect_shared_memory_operands(graph)
     for alloc in shared_memory_allocs:
+        if alloc not in multi_buffer_count:
+            continue
+
+        count = multi_buffer_count[alloc]
+        logger.debug(f"Creating {count} multibuffered allocs for {alloc}")
+
         custom = get_custom(alloc)
-        for i in range(multi_buffer_count):
+        for i in range(count):
             new_alloc = custom.copy(new_name=f"{alloc.name}_multi_buffer_{i}")
             outer_vars[alloc].append(new_alloc.fx_node)
-
-    return shared_memory_allocs
 
 
 def erase_allocs(allocs: list[fx.Node]):
@@ -779,16 +784,15 @@ def construct_pipelined_loop(
     with a prologue, kernel and epilogue.
     """
     induction_variable = get_induction_variable(reduction, constraints)
-    num_rotating_registers = liveness_analysis(graph, reduction)
+    num_rotating_registers = liveness_analysis(graph)
+    multi_buffer_count = compute_multi_buffer_count(
+        graph, initiation_interval, multi_buffer_count
+    )
 
     outer_vars = defaultdict(list)
-    shared_memory_allocs = None
 
-    # TODO: Get required buffer count from the liveness analysis.
-    if multi_buffer_count is not None:
-        shared_memory_allocs = create_multibuffered_allocs(
-            graph, multi_buffer_count, outer_vars
-        )
+    if multi_buffer_count:
+        create_multibuffered_allocs(graph, multi_buffer_count, outer_vars)
 
     rotating_registers: dict[fx.Node, deque[fx.Node]] = {
         k: deque([None for _ in range(v)]) for k, v in num_rotating_registers.items()
@@ -851,8 +855,8 @@ def construct_pipelined_loop(
     reduction.erase()
 
     # All allocs should be replaced by the multi-buffer allocs at this point.
-    if shared_memory_allocs:
-        erase_allocs(shared_memory_allocs)
+    if outer_vars:
+        erase_allocs(outer_vars)
 
     if visualize:
         visualize_graph(pipelined_reduction.graph, "pipelined.png")

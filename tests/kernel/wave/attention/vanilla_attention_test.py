@@ -1083,8 +1083,8 @@ def testAttentionBSHD_Prefetch_MultiBuffer(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=2,
         scalarize_packed_math=True,
+        multi_buffer_count=2,  # TODO: Hack as schedule reordering doesn't respect lifetimes computed during the main scheduling algorithm.
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention_func)

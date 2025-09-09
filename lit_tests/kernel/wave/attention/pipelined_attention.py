@@ -368,7 +368,6 @@ def test_bshd_attention_pipelined_prefetch():
         schedule=SchedulingType.PREFETCH_ATTENTION,
         use_scheduling_barriers=False,
         compile_to_mlir=True,
-        multi_buffer_count=2,
     )
     base_attention = wave_compile(options, base_attention)
     print(base_attention.asm)
@@ -431,7 +430,6 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
         schedule=SchedulingType.PREFETCH_ATTENTION,
         use_scheduling_barriers=False,
         compile_to_mlir=True,
-        multi_buffer_count=2,
     )
     base_attention = wave_compile(options, base_attention)
     print(base_attention.asm)

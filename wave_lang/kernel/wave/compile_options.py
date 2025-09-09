@@ -26,7 +26,7 @@ class WaveCompileOptions:
     # === Scheduling options ===
     schedule: bool = SchedulingType.NONE
     use_scheduling_barriers: bool = False
-    # None if no buffer count specified else 2 and up
+    # None for buffer count to be computed automatically
     multi_buffer_count: Optional[int] = None
 
     # === Runtime options ===
@@ -75,6 +75,7 @@ class WaveCompileOptions:
     use_buffer_ops: bool = False
     use_fast_math: bool = False
     use_global_to_shared: bool = False
+    linearize_shared_access: bool = False
     scalarize_packed_math: bool = False
 
     # === Compiler options ===

@@ -7,6 +7,7 @@
 import functools
 from typing import Any, Optional
 
+import math
 import sympy
 import torch.fx as fx
 
@@ -49,7 +50,7 @@ from ...ops.wave_ops import (
     write,
     scatter_add,
 )
-from ..utils.general_utils import get_fastest_index, infer_dim
+from ..utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.symbol_utils import safe_subs, subs_idxc, is_literal
 from .emitter import (
@@ -408,6 +409,31 @@ def _linearize_memref(
     )
 
 
+def _linearize_shared_mem(memory: CustomOp) -> Value:
+    """
+    Convert shared memory with statically shaped N-d memref into 1-D memref.
+    """
+    flat_numel = math.prod(memory.type.shape)
+    assert (
+        memory.type.has_static_shape
+    ), "Expecting static shape to linearize for shared memory."
+    memory_space = memory.type.memory_space
+    flat_memref_type = MemRefType.get(
+        [flat_numel], memory.type.element_type, memory_space=memory_space
+    )
+    flattened_mem = memref_d.reinterpret_cast(
+        flat_memref_type,
+        memory,
+        offsets=[],
+        sizes=[],
+        strides=[],
+        static_offsets=[0],
+        static_sizes=[flat_numel],
+        static_strides=[1],
+    )
+    return flattened_mem
+
+
 def _get_splat_input(src: Optional[Value]) -> Optional[Value]:
     """
     If `src` is vector.splat result, return splat input, otherwise return None.
@@ -523,6 +549,7 @@ def _create_vec_read_write(
     memory: CustomOp,
     mask: Optional[Value],
     offsets_vec: Optional[Value],
+    node_index: Optional[IndexSequence] = None,
 ) -> Optional[Value]:
     is_read = value is None
     uint32 = IntegerType.get_signless(32)
@@ -538,12 +565,14 @@ def _create_vec_read_write(
     # only use buffer ops on global memory
     is_global_mem = mem.type.memory_space is None
     buffer_ops_enabled = emitter.options.use_buffer_ops and is_global_mem
+    is_shared_mem = memory.type.address_space == SHARED_ADDRESS_SPACE and node_index
+    linearize_shared_mem = is_shared_mem and emitter.options.linearize_shared_access
 
-    strides = strides_from_symbolic_shape(
+    stride_values = strides_from_symbolic_shape(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
     )
-    has_int_strides = all(isinstance(s, int) for s in strides)
-    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
+    has_int_strides = all(isinstance(s, int) for s in stride_values)
+    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
     no_masked_load_store_ops = buffer_ops_enabled
 
@@ -564,6 +593,12 @@ def _create_vec_read_write(
                 mem, start_indices_wg, start_indices_th, strides
             )
             mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+        if linearize_shared_mem:
+            mem = _linearize_shared_mem(mem)
+            linearized_index = {
+                "linearized_idx": linearize_index(node_index, stride_values)
+            }
+            start_indices, _, _ = _build_start_indices(emitter, linearized_index)
 
         indices = [offset_th] if buffer_ops_enabled else start_indices
         if is_read:
@@ -791,6 +826,7 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
             elements_per_thread,
             get_custom(memory),
             mask,
+            node_index=index,
             offsets_vec=None,
         )
     else:
@@ -879,6 +915,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             elements_per_thread,
             get_custom(memory),
             mask,
+            node_index=index,
             offsets_vec=None,
         )
     else:
