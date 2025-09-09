@@ -35,6 +35,7 @@ from .utils.general_utils import (
     remove_thread_indexing,
 )
 from .utils.symbol_utils import safe_subs
+from .compile_options import WaveCompileOptions
 
 logger = logging.getLogger(__name__)
 
@@ -358,7 +359,9 @@ def create_transpose_writes(
     return new_writes
 
 
-def in_thread_transpose(trace: CapturedTrace, constraints: list[Constraint]):
+def in_thread_transpose(
+    trace: CapturedTrace, constraints: list[Constraint], options: WaveCompileOptions
+):
     """
     This pass is detecting when read-write pair is doing transpose and tries to
     combine it with minimize_global_loads optimization.
@@ -367,6 +370,12 @@ def in_thread_transpose(trace: CapturedTrace, constraints: list[Constraint]):
     memory, we can do 8 x vector<4xf16> loads from global memory and do transpose
     in each thread registers, using sequence of vector.extract_strided_slice/insert_strided_slice.
     """
+    if "gfx95" in options.target:
+        logger.info(
+            "in_thread_transpose not preferred on this architecture because of transposed load instruction"
+        )
+        return
+
     logger.info("in_thread_transpose")
     candidates = trace.walk(is_transpose_read_candidate)
 
