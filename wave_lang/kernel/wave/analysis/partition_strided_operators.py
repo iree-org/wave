@@ -439,6 +439,8 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                 for dynamic_val in custom.mapping_dynamic_vals:
                     _, size = get_largest_index_and_size(dynamic_val.index)
                     if size == 1:
+                        # If size is 1, it means we are broadcasting same dynamic value to all
+                        # vector elements.
                         new_dynamic_vals.append(dynamic_val)
                         continue
 
@@ -446,6 +448,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         size == elements_per_thread
                     ), f"Expected size to be equal to {elements_per_thread}, got {size}"
 
+                    # Otherwise, we need to extract the dynamic value for the current vector element.
                     extract = ExtractSlice(dynamic_val, [i], [1], [1]).add_to_graph(
                         custom.graph
                     )
