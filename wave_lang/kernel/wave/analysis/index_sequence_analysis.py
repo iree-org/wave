@@ -68,6 +68,7 @@ from ..utils.print_utils import (
     print_trace,
     try_apply_pass,
 )
+from ..compile_options import WaveCompileOptions
 
 logger = get_logger("wave.index_sequence_analysis")
 
@@ -241,6 +242,7 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
 def set_node_indices(
     trace: CapturedTrace,
     constraints: list[Constraint],
+    options: WaveCompileOptions,
     print_ir_before: Sequence[str] = [],
     print_ir_after: Sequence[str] = [],
 ):
@@ -264,7 +266,11 @@ def set_node_indices(
     if mma_mapping:
         graph_passes += [
             partial(
-                set_thread_dependent_index_from_mma, constraints, mma_mapping, trace
+                set_thread_dependent_index_from_mma,
+                constraints,
+                mma_mapping,
+                trace,
+                options,
             )
         ]
     elif reduce_mapping := get_reduce_mapping(trace, constraints):
@@ -382,6 +388,7 @@ def populate_mma_source_indices(
     node: MMA,
     mma_index: dict[MMA, dict[IndexSymbol, int]],
     hardware_constraint: HardwareConstraint,
+    options: WaveCompileOptions,
 ):
     """
     Initialize the sources with the LHS, RHS, ACC and MMA node
@@ -392,7 +399,7 @@ def populate_mma_source_indices(
     mapping = mma_index[node]
     for dim, dim_index in mapping.items():
         index[dim] = hardware_constraint.apply_mma_mapping(
-            dim, dim_index, node.mma_type
+            dim, dim_index, node.mma_type, options
         )
     node.index = combine_indices(node.index, index)
     lhs_tuple = (
@@ -728,6 +735,7 @@ def set_thread_dependent_index_from_mma(
     constraints: Sequence[Constraint],
     mma_mapping: dict[MMABase, dict[IndexSymbol, int]],
     trace: CapturedTrace,
+    options: WaveCompileOptions,
 ):
     """
     Set the thread dependent index based on the hardware constraint.
@@ -751,7 +759,7 @@ def set_thread_dependent_index_from_mma(
             )
         elif isinstance(source, MMA):
             new_sources = populate_mma_source_indices(
-                source, mma_mapping, hardware_constraint
+                source, mma_mapping, hardware_constraint, options
             )
         else:
             assert False, "Invalid MMA type"

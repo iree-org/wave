@@ -8,15 +8,11 @@ from __future__ import annotations
 import functools
 import os
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 import torch
 
 from wave_lang.kernel.lang import IndexSymbol
-
-# Avoid circular import
-if TYPE_CHECKING:
-    from ..compile_options import WaveCompileOptions
 
 
 @functools.lru_cache

@@ -4,18 +4,22 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from sympy import Integer, Piecewise, ceiling, floor
 
 from .._support.dtype import DataType
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ..lang.global_symbols import *
-from .utils.run_utils import get_default_arch
 from .utils.symbol_utils import get_min_expr, subs_idxc
+
+if TYPE_CHECKING:
+    from .compile_options import WaveCompileOptions
 
 """
 Formatting for different target intrinsics:
@@ -282,7 +286,9 @@ class HardwareConstraint(Constraint):
             case _:
                 raise ValueError(f"Unsupported MMA type: {mma_type}")
 
-    def mma_index_offset(self, mma_type: Optional[MMAType | ScaledMMAType]):
+    def mma_index_offset(
+        self, mma_type: Optional[MMAType | ScaledMMAType], options: WaveCompileOptions
+    ):
         lane = self.linearized_thread_id % self.threads_per_wave
         if mma_type is None:
             mma_type = self.mma_type
@@ -294,7 +300,7 @@ class HardwareConstraint(Constraint):
             case GenericDot():
                 offset = mma_type.get_index_offset(lane, self.threads_per_wave)
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
-                if get_default_arch().startswith("gfx12"):
+                if options.target.startswith("gfx12"):
                     if self.threads_per_wave == 32:
                         offset = [
                             Piecewise(
@@ -303,7 +309,9 @@ class HardwareConstraint(Constraint):
                             ),  # M
                             lane % 16,  # N,
                             # Frankly I'm not sure where this formula comes from, I arbitrarily
-                            # tried a bunch of different formulas before this one started working
+                            # tried a bunch of different formulas before this one started working.
+                            # Unfortunately both `--register-layout` and `--detail-instruction` in
+                            # AMD's matrix_calculator.py appear to give wrong info.
                             8 * floor(lane / 16),  # K
                         ]
                     else:
@@ -491,18 +499,19 @@ class HardwareConstraint(Constraint):
         dim: IndexSymbol,
         constraint_index: int | MMAOperand,
         mma_type: MMAType | ScaledMMAType,
+        options: WaveCompileOptions,
     ) -> IndexSequence:
         if mma_type is None:
             mma_type = self.mma_type
 
-        offset = self.mma_index_offset(mma_type)
+        offset = self.mma_index_offset(mma_type, options)
         match mma_type:
             # (M x K, N x K) -> M x N
             case GenericDot():
                 size = mma_type.get_index_size(self.threads_per_wave)
                 stride = mma_type.get_index_stride(self.threads_per_wave)
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
-                if get_default_arch().startswith("gfx12"):
+                if options.target.startswith("gfx12"):
                     size = [
                         Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
                         1,  # N

@@ -200,7 +200,8 @@ def testPureGemm(
     ],
 )
 @param_bool("dynamic_dims", "dyn")
-# TODO(paulzzy): Not an exhaustive list of `wmma` instructions in RDNA 4
+# TODO(paulzzy): Not an exhaustive list of `wmma` instructions in RDNA 4, see
+# the RDNA 4 ISA documentation
 @pytest.mark.parametrize(
     "mfma_variant",
     [
