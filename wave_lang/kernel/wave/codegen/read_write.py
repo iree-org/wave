@@ -741,6 +741,7 @@ def _create_vec_read_write(
 
             if is_read:
                 passthru = vector_d.broadcast(vector_type, zero)
+                # print("alefi")
                 return vector_d.maskedload(vector_type, mem, indices, mask, passthru)
             else:
                 vector_d.maskedstore(mem, indices, mask, value)

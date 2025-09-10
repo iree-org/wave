@@ -57,6 +57,8 @@ def is_valid_read(node: fx.Node) -> bool:
         return False
 
     if subs_idxc(read.memory_type.address_space) != GLOBAL_ADDRESS_SPACE:
+        # print("case a")
+        pass
         return False
 
     return True
@@ -67,9 +69,13 @@ def is_valid_write(write: CustomOp) -> bool:
         return False
 
     if subs_idxc(write.memory_type.address_space) != SHARED_ADDRESS_SPACE:
+        # print("case b")
+        pass
         return False
 
     if not write.has_identity_mapping():
+        # print("this should be fine now")
+        pass
         return False
 
     return True
@@ -334,8 +340,6 @@ def gather_to_shared(
     if not options.use_global_to_shared:
         return
     
-    # print("iuiuhiuhiu")
-
     logger.info("gather_to_shared")
 
     if "gfx94" not in options.target and "gfx95" not in options.target:
@@ -343,13 +347,16 @@ def gather_to_shared(
         return
 
     id_to_read_write = defaultdict(list)
+    print(len(trace.walk(is_valid_read)))
     for read in trace.walk(is_valid_read):
         read = get_custom(read)
-        # print("dynamic_val0" in str(read), " muy exquisite")
         for write in read.users:
             if not is_valid_write(write):
+                if isinstance(write, Write):
+                    print("awh")
+                print(type(read), type(write))
                 continue
-
+            print("ayy")
             key = (read.pre_expansion_id, write.pre_expansion_id)
             id_to_read_write[key].append((read, write))
 
