@@ -424,7 +424,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
         fastest_index = get_fastest_index(index)
         elements_per_thread = subs_idxc(custom.elements_per_thread)
 
-        # Break apart Reads/Writes that has non-contiguous GPR Read/Writes.
+        # Break apart Reads/Writes that has non-contiguous access patterns.
         with custom.graph.inserting_before(operator):
             ops_to_combine = []
             for i in range(elements_per_thread):
@@ -452,7 +452,6 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                     extract.index = new_index
                     new_dynamic_vals.append(extract)
 
-                # Generate new Read/Write that has contiguous VGPR elements.
                 if isinstance(custom, Write):
                     extract = ExtractSlice(
                         custom.register_, [i], [1], [1]
@@ -466,7 +465,6 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         elements_per_thread=1,
                     ).add_to_graph(custom.graph)
                 elif isinstance(custom, Read):
-                    # TODO: Add support on how to handle strided reads.
                     new_node = Read(
                         custom.memory,
                         elements_per_thread=1,
@@ -493,8 +491,6 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                 reshape.expanded_dims = custom.expanded_dims
                 reshape.vector_shapes = custom.vector_shapes
 
-                # Save the original index on the reshape op so later we can
-                # detect if op was part of `gpr_offset` partition.
                 reshape.index = index
                 custom.replace_all_uses_with(reshape)
             else:
