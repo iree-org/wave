@@ -87,6 +87,7 @@ from ...ops.wave_ops import (
     reciprocal,
     register,
     reshape,
+    round,
     roundeven,
     rsqrt,
     scalar,
@@ -1194,6 +1195,16 @@ def handle_tanh(source: Value, options: WaveCompileOptions) -> OpResult:
     else:
         raise ValidationError(f"Found unhandled operand type for tanh: {element_type}")
     return result
+
+
+@handle_unary_op(round)
+def handle_round(source: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(source.type)
+    if _is_float_type(element_type):
+        round = math_d.round(source)
+    else:
+        raise ValidationError(f"Found unhandled operand type for round: {element_type}")
+    return round
 
 
 @handle_unary_op(roundeven)
