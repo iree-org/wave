@@ -38,10 +38,7 @@ def get_moe_align_block_size_kernel(
     NUMEL = tkl.sym.NUMEL
     TOPK = tkl.sym.TOPK
     BLOCK_SIZE = tkl.sym.BLOCK_SIZE
-    OFFSET = tkl.sym.OFFSET
-    ne = tkl.sym.ne
 
-    bindings = {ne: NUM_EXPERTS}
     # Workgroup tile sizes
     BLOCK_TOKENS = tkl.sym.BLOCK_TOKENS
     BLOCK_EXPERTS = tkl.sym.BLOCK_EXPERTS
@@ -60,7 +57,6 @@ def get_moe_align_block_size_kernel(
     constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
     # constraints += [tkw.TilingConstraint(NUMEL, NUMEL)]
 
-    constraints += [tkw.IteratorBindings(bindings)]
     constraints += [
         tkw.HardwareConstraint(
             threads_per_wave=64,
@@ -134,7 +130,6 @@ def get_moe_align_block_size_kernel(
         zero_counts = tkl.Register[NUM_EXPERTS, dtype](0)
         one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
         shifted_cumsum = tkw.Register[NUM_EXPERTS, dtype](0)
-        tkw.set_symbol(OFFSET, tkw.scalar(1, tkl.i32))
 
         shmem = tkw.allocate(
             shape=(NUM_EXPERTS,),
