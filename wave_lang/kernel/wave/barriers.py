@@ -124,9 +124,11 @@ def add_shared_memory_barriers(
                 else:
                     # Synchronize after the write to shared memory before we read from it.
                     with graph.inserting_before(node):
-                        SharedMemoryBarrier(wait_async_ops=state.is_async).add_to_graph(
-                            graph
-                        )
+                        barrier_node = SharedMemoryBarrier(
+                            wait_async_ops=state.is_async
+                        ).add_to_graph(graph)
+                        if hasattr(node, "location"):
+                            barrier_node.location = node.location
 
                 state.is_async = False
 
