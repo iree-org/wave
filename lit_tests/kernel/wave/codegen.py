@@ -117,7 +117,7 @@ def test_read_mapped():
     # CHECK-LABEL:    test_read_mapped
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2, s3, s4, s5, s6] -> (((s0 * s1) floordiv s2) * s3 + (s4 mod s5) * s6)>
     # CHECK:          func.func @read_mapped
-    # CHECK-COUNT-16:   vector.maskedload
+    # CHECK-COUNT-16:   vector.load
     # CHECK-COUNT-16:   vector.extract
     # CHECK:            vector.from_elements
 
@@ -161,8 +161,7 @@ def test_read_mapped_buffer():
 
     # CHECK-LABEL:    func.func @read_mapped_buffer
     # CHECK: %[[BUF:.*]] = amdgpu.fat_raw_buffer_cast
-    # CHECK: %[[COND:.*]] = arith.select {{%[0-9a-zA-Z_]+}}, {{%[0-9a-zA-Z_]+}}, {{%[0-9a-zA-Z_]+}} : index
-    # CHECK: %[[RES:.*]] = vector.load %[[BUF]][%[[COND]]] : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf16>
+    # CHECK: %[[RES:.*]] = vector.load %[[BUF]][%{{.*}}] : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf16>
     # CHECK: %[[EXTRACT:.*]] = vector.extract %[[RES]][0] : f16 from vector<1xf16>
     # CHECK: %[[FROM:.*]] = vector.from_elements %[[EXTRACT]]
 
@@ -421,7 +420,7 @@ def test_read_write_mapping():
     # We are transposing, so contiguous load becomes non-contiguous store
     # CHECK:            vector.load
     # CHECK-NOT:        vector.load
-    # CHECK-COUNT-16:   memref.store
+    # CHECK-COUNT-16:   vector.store
 
 
 @run_test
@@ -465,7 +464,7 @@ def test_read_write_dynamic_mapping():
 
     # CHECK-LABEL:    test_read_write_dynamic_mapping
     # CHECK-DAG:        #[[map0:.*]] = affine_map<()[s0] -> (s0 - (s0 floordiv 64) * 48)>
-    # CHECK-DAG:        #[[map1:.*]] = affine_map<()[s0] -> (s0 * 16 - (s0 floordiv 64) * 768)>
+
     # CHECK:          func.func @read_write_dynamic_mapping
     # CHECK-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
@@ -473,11 +472,6 @@ def test_read_write_dynamic_mapping():
     # CHECK:            %[[D0:.*]] = stream.binding.subspan %[[ARG1]][%[[C0]]] : !stream.binding -> memref<16x16xi32, strided<[16, 1], offset: ?>>
     # CHECK:            %[[D1:.*]] = affine.apply #[[map0]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[D2:.*]] = vector.load %[[D0]][%[[D1]], %[[C0]]] : memref<16x16xi32, strided<[16, 1], offset: ?>>, vector<16xi32>
-    # CHECK:            %[[D3:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<16x16xf16, strided<[16, 1], offset: ?>>
-    # CHECK:            %[[D4:.*]] = arith.index_cast %[[D2]] : vector<16xi32> to vector<16xindex>
-    # CHECK:            %[[D5:.*]] = affine.apply #[[map1]]()[%[[THREAD_ID_X]]]
-    # CHECK:            %[[D6:.*]] = vector.broadcast %[[D5]] : index to vector<16xindex>
-    # CHECK:            %[[D7:.*]] = arith.addi %[[D6]], %[[D4]] overflow<nsw, nuw> : vector<16xindex>
     # CHECK-COUNT-16:   memref.load
     # CHECK-NOT:        vector.extract
     # CHECK:            %[[RES:.*]] = vector.from_elements
@@ -639,7 +633,6 @@ def test_read_write_dynamic_symbol():
         num_iterators=2,
         inputs={S: S, N: j},
         outputs={S: i, N: j},
-        dynamic_val_mappings={S: i, N: j},
     )
 
     @tkw.wave(constraints)
@@ -698,7 +691,6 @@ def test_read_write_dynamic_symbol_expr():
         num_iterators=2,
         inputs={S: S, N: j},
         outputs={S: i, N: j},
-        dynamic_val_mappings={S: i, N: j},
     )
 
     @tkw.wave(constraints)
@@ -810,8 +802,8 @@ def test_dynamic_copy():
     print(dynamic_copy.asm)
 
     # CHECK-LABEL:    test_dynamic_copy
-    # CHECK-DAG:        #[[map1:.*]] = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 64) * 48)>
-    # CHECK-DAG:        #[[map2:.*]] = affine_map<()[s0] -> (s0 * 16)>
+    # CHECK-DAG:        #[[map1:.*]] = affine_map<()[s0] -> (s0 * 16)>
+    # CHECK-DAG:        #[[map2:.*]] = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 64) * 48)>
     # CHECK:          func.func @dynamic_copy
     # CHECH-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
     # CHECK-DAG:        %[[CST:.*]] = arith.constant dense<0.000000e+00> : vector<16xf16>
@@ -821,17 +813,17 @@ def test_dynamic_copy():
     # CHECK:            %[[WORKGROUP_ID_1:.*]] = gpu.block_id y
     # CHECK:            %[[THREAD_ID_X:.*]] = gpu.thread_id  x
     # CHECK:            %[[D0:.*]] = stream.binding.subspan %[[ARG0]][%[[C0]]] : !stream.binding -> memref<?x?xf16, strided<[?, 1], offset: ?>>{%[[ARG1]], %[[ARG2]]}
-    # CHECK:            %[[D1:.*]] = affine.apply #[[map1]]()[%[[THREAD_ID_X]], %[[WORKGROUP_ID_0]]]
-    # CHECK:            %[[D2:.*]] = affine.apply #[[map2]]()[%[[WORKGROUP_ID_1]]]
-    # CHECK:            %[[D3:.*]] = vector.broadcast %[[D2]] : index to vector<16xindex>
-    # CHECK:            %[[D4:.*]] = arith.addi %[[D3]], %[[CST_0]] overflow<nsw, nuw> : vector<16xindex>
-    # CHECK:            %[[D5:.*]] = vector.broadcast %[[ARG2]] : index to vector<16xindex>
-    # CHECK:            %[[D6:.*]] = arith.cmpi slt, %[[D4]], %[[D5]] : vector<16xindex>
-    # CHECK:            %[[D7:.*]] = arith.cmpi slt, %[[D1]], %[[ARG1]] : index
+    # CHECK:            %[[D1:.*]] = affine.apply #[[map1]]()[%[[WORKGROUP_ID_1]]]
+    # CHECK:            %[[D2:.*]] = vector.broadcast %[[D1]] : index to vector<16xindex>
+    # CHECK:            %[[D3:.*]] = arith.addi %[[D2]], %[[CST_0]] overflow<nsw, nuw> : vector<16xindex>
+    # CHECK:            %[[D4:.*]] = vector.broadcast %[[ARG2]] : index to vector<16xindex>
+    # CHECK:            %[[D5:.*]] = arith.cmpi slt, %[[D3]], %[[D4]] : vector<16xindex>
+    # CHECK:            %[[D6:.*]] = affine.apply #[[map2]]()[%[[THREAD_ID_X]], %[[WORKGROUP_ID_0]]]
+    # CHECK:            %[[D7:.*]] = arith.cmpi slt, %[[D6]], %[[ARG1]] : index
     # CHECK:            %[[D8:.*]] = vector.broadcast %[[D7]] : i1 to vector<16xi1>
-    # CHECK:            %[[D9:.*]] = arith.andi %[[D6]], %[[D8]] : vector<16xi1>
-    # CHECK:            %[[D10:.*]] = vector.maskedload %[[D0]][%[[D1]], %[[D2]]], %[[D9]], %[[CST]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
-    # CHECK:            vector.maskedstore %[[D0]][%[[D1]], %[[D2]]], %[[D9]], %[[D10]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16>
+    # CHECK:            %[[D9:.*]] = arith.andi %[[D5]], %[[D8]] : vector<16xi1>
+    # CHECK:            %[[D10:.*]] = vector.maskedload %[[D0]][%[[D6]], %[[D1]]], %[[D9]], %[[CST]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16> into vector<16xf16>
+    # CHECK:            vector.maskedstore %[[D0]][%[[D6]], %[[D1]]], %[[D9]], %[[D10]] : memref<?x?xf16, strided<[?, 1], offset: ?>>, vector<16xi1>, vector<16xf16>
     # CHECK:          func.func @isolated_benchmark$async(%[[ARG:.*]]: !hal.buffer_view, %[[FENCE:.*]]: !hal.fence, %{{.*}}: !hal.fence)
     # CHECK:            %[[D0:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[0] : index
     # CHECK:            %[[D1:.*]] = hal.buffer_view.dim<%[[ARG]] : !hal.buffer_view>[1] : index

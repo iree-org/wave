@@ -50,9 +50,9 @@ from ...ops.wave_ops import (
     write,
     scatter_add,
 )
-from ..utils.general_utils import get_fastest_index, infer_dim, linearize_index
+from ..utils.general_utils import get_fastest_index, linearize_index
 from ..utils.mapping_utils import transform_index_on_mapping
-from ..utils.symbol_utils import safe_subs, subs_idxc, is_literal
+from ..utils.symbol_utils import safe_subs
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -117,6 +117,26 @@ def _split_index(src: IndexExpr | int) -> tuple[IndexExpr, IndexExpr]:
     return thread_independent_index, thread_dependent_index
 
 
+def _extract0(src):
+    static_pos = [0] * src.type.rank
+    return vector_d.extract(src, static_position=static_pos, dynamic_position=[])
+
+
+def _build_dyn_vals_map(
+    mapping: Optional[IndexMapping], dynamic_vals: tuple[Value, ...]
+) -> dict[IndexExpr, Value]:
+    if mapping is None:
+        return {}
+
+    assert len(mapping.dynamic_val_indices) == len(
+        dynamic_vals
+    ), f"Expected {len(mapping.dynamic_val_indices)} dynamic values but got {len(dynamic_vals)}"
+    return {
+        sym: _extract0(val)
+        for sym, val in zip(mapping.dynamic_val_indices.keys(), dynamic_vals)
+    }
+
+
 def _build_start_indices(
     emitter: WaveEmitter,
     src_indices: dict[IndexExpr, IndexSequence | IndexExpr],
@@ -178,158 +198,6 @@ def _get_splat_const(vec_type: IrType, value: Any) -> Value:
 
 def _constant_mask(vec_type: IrType) -> Value:
     return _get_splat_const(vec_type, 1)
-
-
-def _construct_gather_scatter_indices(
-    emitter: WaveEmitter,
-    symbolic_shape: tuple[IndexExpr],
-    index: tuple[IndexExpr],
-    mapping: IndexMapping,
-    elements_per_thread: int,
-    is_read: bool,
-    dynamic_vals: tuple[Any, ...],
-    is_contiguous: bool,
-    memory: CustomOp,
-    bounds: Optional[dict[IndexSymbol, IndexExpr]],
-) -> tuple[list[OpResult], list[OpResult], list[OpResult], OpResult, OpResult]:
-    # Apply symbolic_shape order to indices, e.g. if original mapping is
-    # {M: iter(0), N: iter(1)} and symbolic_shape is (N, M), result will
-    # be (iter(1), iter(0))
-    if is_read:
-        assert (
-            mapping.is_output_identity()
-        ), "non-identity output mapping is not supported yet"
-        symbolic_dims = [infer_dim(dim_size) for dim_size in symbolic_shape]
-        index_mapping = mapping.map_input_indices(symbolic_dims)
-    else:
-        assert (
-            mapping.is_input_identity()
-        ), "non-identity input mapping is not supported yet"
-        index_mapping = mapping.map_output_indices(symbolic_shape)
-
-    idxc = IndexingContext.current()
-    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
-
-    iters = mapping.iters
-
-    # As we only support identity input/output mapping for now, we can directly
-    # substitute iterators with corresponding expanded index.
-    subs = [
-        (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
-    ] + list(idxc.subs.items())
-
-    # Contruct input/output index, substituting iterators in input mapping with
-    # expanded index.
-    result_index = {key: m.subs(subs) for key, m in zip(symbolic_shape, index_mapping)}
-
-    mask = _build_mask(emitter, index, elements_per_thread, bounds)
-    if mask is None:
-        mask_vec_type = VectorType.get(
-            [elements_per_thread], IntegerType.get_signless(1)
-        )
-        mask = _constant_mask(mask_vec_type)
-
-    def extract0(src):
-        static_pos = [0] * src.type.rank
-        return vector_d.extract(src, static_position=static_pos, dynamic_position=[])
-
-    dynamic_vals_map_start = {
-        sym: extract0(val)
-        for sym, val in zip(mapping.dynamic_val_indices.keys(), dynamic_vals)
-    }
-    if is_contiguous:
-        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-            emitter, result_index, dynamic_vals_map_start
-        )
-        return start_indices, start_indices_wg, start_indices_th, None, mask
-
-    start_indices = _get_start_indices(result_index)
-    start_indices_orig = _get_start_indices(index)
-    fastest_dim = get_fastest_index(index)
-    need_dynamic_offsets = False
-    for val in dynamic_vals:
-        shape = val.type.shape
-        assert shape in (
-            [1],
-            [elements_per_thread],
-        ), f"Dynamic val shape must be {[1]} or {[elements_per_thread]} but got {shape}"
-        if shape[0] > 1:
-            need_dynamic_offsets = True
-
-    offsets = []
-    if memory.type.address_space == SHARED_ADDRESS_SPACE:
-        symbolic_shape = memory.distributed_shape
-    strides = strides_from_symbolic_shape(idxc, symbolic_shape, allow_mixed_shapes=True)
-    start_indices_offset = _compute_offset(start_indices, strides)
-    for i in range(elements_per_thread):
-        # Update fastest dim, i.e. in case of identity mapping it will
-        # be equivalent to just vector.load
-        subs = [(sym, idx) for sym, idx in zip(iters.keys(), start_indices_orig)]
-        subs[fastest_dim] = (subs[fastest_dim][0], start_indices_orig[fastest_dim] + i)
-        indices = [i.subs(subs) for i in index_mapping]
-
-        # First, we build indices as if resulting gather/scatter `start_indices`
-        # are 0 as mapping expression may depend on absolute value of index
-        # (e.g. `index % 32`). Then we adjust for the non-0 `start_indices` by
-        # subtracting computed previously linear `start_indices_offset`. For
-        # simple cases like transpose, the resulting expression should fold into
-        # simple constant while more complex expressions may requires actual
-        # arith ops on dynamic values.
-        offset = _compute_offset(indices, strides) - start_indices_offset
-        offset = subs_idxc(offset)
-
-        if is_literal(offset):
-            # If resulted offset sympy expr is convertible to int constant it
-            # will be directly encoded into `arith.constant`.
-            # For non-constant expressions, we will generate a real sequence of
-            # arith ops and then `vector.insertelement` them into offsets vec.
-            offset = int(offset)
-        else:
-            need_dynamic_offsets = True
-            break
-
-        offsets.append(offset)
-
-    offsets_vec_type = VectorType.get([elements_per_thread], IndexType.get())
-    if need_dynamic_offsets:
-        # In case we need dynamic `offsets_vec`, set all `start_indices` to 0
-        # and encode entire index info in `offsets_vec`.
-        result_index = {key: 0 for key in symbolic_shape}
-        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-            emitter, result_index, dynamic_vals_map_start
-        )
-        subs = [(sym, idx) for sym, idx in zip(iters.keys(), start_indices_orig)]
-        # Last item in `subs` corresponds to last item in `start_indices_orig`
-        # which is fastest changing dim.
-        # Replacing last element with `idxc.iota(elements_per_thread)` will
-        # generate vectorized index code, each element in it corresponding to
-        # individual vector element index.
-        subs[-1] = (
-            subs[-1][0],
-            start_indices_orig[-1] + idxc.iota(elements_per_thread),
-        )
-        dynamic_vals_map = {
-            sym: val
-            for sym, val in zip(mapping.dynamic_val_indices.keys(), dynamic_vals)
-        }
-        indices = [i.subs(subs) for i in index_mapping]
-        offsets_vec = gen_sympy_index(
-            add_emitter_subs(emitter, dynamic_vals_map),
-            _compute_offset(indices, strides),
-        )
-    else:
-        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-            emitter, result_index, dynamic_vals_map_start
-        )
-        if offsets == list(range(elements_per_thread)):
-            return start_indices, start_indices_wg, start_indices_th, None, mask
-
-        offsets = [IntegerAttr.get(IndexType.get(), off) for off in offsets]
-        offsets_vec = arith_d.ConstantOp(
-            offsets_vec_type, DenseElementsAttr.get(offsets, offsets_vec_type)
-        )
-
-    return start_indices, start_indices_wg, start_indices_th, offsets_vec, mask
 
 
 def _get_max_buffer_size(elem_type: IrType) -> int:
@@ -548,7 +416,6 @@ def _create_vec_read_write(
     elements_per_thread: int,
     memory: CustomOp,
     mask: Optional[Value],
-    offsets_vec: Optional[Value],
     node_index: Optional[IndexSequence] = None,
 ) -> Optional[Value]:
     is_read = value is None
@@ -577,14 +444,14 @@ def _create_vec_read_write(
     no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)
-    splatted_mask = offsets_vec is None and mask_splat is not None
+    splatted_mask = mask_splat is not None
 
     if vector_type is None:
         vector_type = value.type
 
     element_type = vector_type.element_type
     # Case 1: Generate load/stores with no mask and no offset
-    if mask is None and offsets_vec is None:
+    if mask is None:
         offset_th = None
         if buffer_ops_enabled:
             # TODO: If strides cannot be converted into integers, means they are dynamic
@@ -616,176 +483,91 @@ def _create_vec_read_write(
         )
         mask = _constant_mask(mask_vec_type)
 
-    # Case 2: Generate load/stores with no offset
-    if offsets_vec is None:
-        # make offsets 0, 1, 2 ...
-        offsets_vec_type = VectorType.get(vector_type.shape, IndexType.get())
-        vals = [IntegerAttr.get(IndexType.get(), v) for v in range(elements_per_thread)]
+    # make offsets 0, 1, 2 ...
+    offsets_vec_type = VectorType.get(vector_type.shape, IndexType.get())
+    vals = [IntegerAttr.get(IndexType.get(), v) for v in range(elements_per_thread)]
 
-        offsets_vec = arith_d.constant(
-            offsets_vec_type, DenseElementsAttr.get(vals, offsets_vec_type)
+    offsets_vec = arith_d.constant(
+        offsets_vec_type, DenseElementsAttr.get(vals, offsets_vec_type)
+    )
+
+    if buffer_ops_enabled:
+        mem, offset_th = _linearize_memref(
+            mem, start_indices_wg, start_indices_th, strides
+        )
+        mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+
+    indices = [offset_th] if buffer_ops_enabled else start_indices
+
+    if no_masked_load_store_ops:
+        # find the index at which memory out of bounds of buffer
+        oob_index_value = _get_out_of_bounds_index(element_type)
+        oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+
+        oob_index = vector_d.broadcast(
+            VectorType.get(vector_type.shape, IndexType.get()), oob_index
         )
 
-        if buffer_ops_enabled:
-            mem, offset_th = _linearize_memref(
-                mem, start_indices_wg, start_indices_th, strides
-            )
-            mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+        offset_th = vector_d.broadcast(
+            VectorType.get(vector_type.shape, IndexType.get()), offset_th
+        )
 
-        indices = [offset_th] if buffer_ops_enabled else start_indices
+        uint32_vec_type = VectorType.get([elements_per_thread], uint32)
+        indexvec_type = VectorType.get([elements_per_thread], IndexType.get())
 
-        if no_masked_load_store_ops:
-            # find the index at which memory out of bounds of buffer
-            oob_index_value = _get_out_of_bounds_index(element_type)
-            oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+        offsets_vec = arith_d.index_cast(uint32_vec_type, offsets_vec)
+        offset_th = arith_d.index_cast(uint32_vec_type, offset_th)
 
-            oob_index = vector_d.broadcast(
-                VectorType.get(vector_type.shape, IndexType.get()), oob_index
-            )
+        # add the thread offset and the vec offsets
+        offsets_vec = arith_d.addi(offsets_vec, offset_th)
+        offsets_vec = arith_d.index_cast(indexvec_type, offsets_vec)
 
-            offset_th = vector_d.broadcast(
-                VectorType.get(vector_type.shape, IndexType.get()), offset_th
-            )
+        # based on mask, select between the offsets_vec and out of bounds. In this case all 3 operands can be vectors
+        selected_index = arith_d.select(mask, offsets_vec, oob_index)
+        elems = list()
 
-            uint32_vec_type = VectorType.get([elements_per_thread], uint32)
-            indexvec_type = VectorType.get([elements_per_thread], IndexType.get())
-
-            offsets_vec = arith_d.index_cast(uint32_vec_type, offsets_vec)
-            offset_th = arith_d.index_cast(uint32_vec_type, offset_th)
-
-            # add the thread offset and the vec offsets
-            offsets_vec = arith_d.addi(offsets_vec, offset_th)
-            offsets_vec = arith_d.index_cast(indexvec_type, offsets_vec)
-
-            # based on mask, select between the offsets_vec and out of bounds. In this case all 3 operands can be vectors
-            selected_index = arith_d.select(mask, offsets_vec, oob_index)
-            elems = list()
-
-            if splatted_mask:
-                # mask is same for all of them, can just pick the first index
-                selected_index = extract(selected_index, 0)
-
-                if is_read:
-                    return vector_d.load(vector_type, mem, indices=[selected_index])
-
-                else:
-                    vector_d.store(value, mem, indices=[selected_index])
-                    return
-
-            for i in range(elements_per_thread):
-                # mask is not same for all elements, need to unroll
-                this_index = extract(selected_index, i)  # this element
-
-                # Unmasked load, using selected_index
-                singlenumvec_type = VectorType.get([1], vector_type.element_type)
-                if is_read:
-                    elem = vector_d.load(singlenumvec_type, mem, indices=[this_index])
-                    elem = extract(elem, 0)
-                    elems.append(elem)
-                else:
-                    elem = extract(value, i)
-                    single_num_vector = vector_d.broadcast(singlenumvec_type, elem)
-                    vector_d.store(single_num_vector, mem, indices=[this_index])
+        if splatted_mask:
+            # mask is same for all of them, can just pick the first index
+            selected_index = extract(selected_index, 0)
 
             if is_read:
-                # now make a vector from all the elements loaded
-                return vector_d.from_elements(vector_type, elems)
+                return vector_d.load(vector_type, mem, indices=[selected_index])
 
-            else:  # it was a store, return
-                return
-
-        else:
-            # normal masked load/store
-
-            if is_read:
-                passthru = vector_d.broadcast(vector_type, zero)
-                return vector_d.maskedload(vector_type, mem, indices, mask, passthru)
             else:
-                vector_d.maskedstore(mem, indices, mask, value)
+                vector_d.store(value, mem, indices=[selected_index])
                 return
 
-    # Case 3: Generate efficient "unrolled" gather and scatter using vector.load/store if strides are constants.
-    #
-    # Per vector.gather/vector.scatter ABI, case 3 and 4 takes N-d indices as base offset,
-    # and offset_vec which is vector of linearized indices as additional offsets.
-    # TODO: Drop case 3 and case 4, by adding support for non-trivial mapping and readOps on partition_strided_operator.
-    if has_int_strides:
-        vec1 = VectorType.get([1], element_type)
-        vec1_mask = VectorType.get([1], IntegerType.get_signless(1))
-        # TODO: Need static strides for linearize to work.
-        mem, _ = _linearize_memref(
-            mem, start_indices, (0,) * len(start_indices), strides
-        )
-        if buffer_ops_enabled:
-            mem = _cast_buffer_and_encode_stride(mem, strides, element_type, emitter)
+        for i in range(elements_per_thread):
+            # mask is not same for all elements, need to unroll
+            this_index = extract(selected_index, i)  # this element
 
-        # Unroll gather/scatter into individual masked ops.
-        # Vector canonicalizations will convert them into unmasked later if
-        # mask is constant.
-        if is_read:
-            passthru = vector_d.broadcast(vec1, zero)
-            elements = []
-
-            for i in range(elements_per_thread):
-                mask_elem = extract(mask, i)
-                offset_th = extract(offsets_vec, i)
-
-                if no_masked_load_store_ops:
-                    oob_index_value = _get_out_of_bounds_index(element_type)
-                    oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-
-                    offsets_vec_type = (
-                        VectorType.get(vector_type.shape, IndexType.get())
-                        if offsets_vec is None
-                        else offsets_vec.type
-                    )
-
-                    # each of these are single element
-                    selected_index = arith_d.select(mask_elem, offset_th, oob_index)
-                    indices = [selected_index]
-                    elem = vector_d.load(vec1, mem, indices)
-
-                else:
-                    mask_elem = vector_d.broadcast(vec1_mask, mask_elem)
-                    elem = vector_d.maskedload(
-                        vec1, mem, [offset_th], mask_elem, passthru
-                    )
-                elements.append(elem)
-
-            elements = [extract(v, 0) for v in elements]
-            return vector_d.from_elements(vector_type, elements)
-        else:
-            for i in range(elements_per_thread):
-                mask_elem = extract(mask, i)
-
-                offset_th = extract(offsets_vec, i)
-
+            # Unmasked load, using selected_index
+            singlenumvec_type = VectorType.get([1], vector_type.element_type)
+            if is_read:
+                elem = vector_d.load(singlenumvec_type, mem, indices=[this_index])
+                elem = extract(elem, 0)
+                elems.append(elem)
+            else:
                 elem = extract(value, i)
-                elem = vector_d.broadcast(vec1, elem)
+                single_num_vector = vector_d.broadcast(singlenumvec_type, elem)
+                vector_d.store(single_num_vector, mem, indices=[this_index])
 
-                if no_masked_load_store_ops:
-                    oob_index_value = _get_out_of_bounds_index(element_type)
-                    oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+        if is_read:
+            # now make a vector from all the elements loaded
+            return vector_d.from_elements(vector_type, elems)
 
-                    selected_index = arith_d.select(mask_elem, offset_th, oob_index)
-                    vector_d.store(elem, mem, [selected_index])
-
-                else:
-                    mask_elem = vector_d.broadcast(vec1_mask, mask_elem)
-
-                    vector_d.maskedstore(mem, [offset_th], mask_elem, elem)
-
+        else:  # it was a store, return
             return
 
-    # Case 4: Default gather scatter case (slowest path).
-    if is_read:
-        passthru = vector_d.broadcast(vector_type, zero)
-        return vector_d.gather(
-            vector_type, mem, start_indices, offsets_vec, mask, passthru
-        )
     else:
-        vector_d.scatter(mem, start_indices, offsets_vec, mask, value)
-        return
+        # normal masked load/store
+
+        if is_read:
+            passthru = vector_d.broadcast(vector_type, zero)
+            return vector_d.maskedload(vector_type, mem, indices, mask, passthru)
+        else:
+            vector_d.maskedstore(mem, indices, mask, value)
+            return
 
 
 @handle_op(read)
@@ -809,62 +591,32 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     vector_type = VectorType.get(vector_shape, element_type)
     input_shape = _get_symbolic_shape(memory)
     elements_per_thread = cast_py_literal(emitter, elements_per_thread)
-    if get_custom(node).has_identity_mapping():
-        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-            emitter, index
-        )
-        mask = _build_mask(emitter, index, elements_per_thread, bounds)
-        result = _create_vec_read_write(
-            emitter,
-            input_shape,
-            kb_src,
-            None,
-            vector_type,
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
-            elements_per_thread,
-            get_custom(memory),
-            mask,
-            node_index=index,
-            offsets_vec=None,
-        )
-    else:
-        dyn_vals = tuple(
-            cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
-        )
-        (
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
-            offsets_vec,
-            mask,
-        ) = _construct_gather_scatter_indices(
-            emitter=emitter,
-            symbolic_shape=input_shape,
-            index=index,
-            mapping=mapping,
-            elements_per_thread=elements_per_thread,
-            is_read=True,
-            dynamic_vals=dyn_vals,
-            is_contiguous=get_custom(node).is_contiguous_vec(),
-            memory=get_custom(memory),
-            bounds=bounds,
-        )
-        result = _create_vec_read_write(
-            emitter,
-            input_shape,
-            kb_src,
-            None,
-            vector_type,
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
-            elements_per_thread,
-            get_custom(memory),
-            mask,
-            offsets_vec,
-        )
+    dyn_vals = tuple(
+        cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
+    )
+    dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
+
+    mask = _build_mask(emitter, index, elements_per_thread, bounds)
+    if mapping:
+        index = transform_index_on_mapping(mapping, input_shape, index, is_read=True)
+
+    start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+        emitter, index, dynamic_vals_map_start
+    )
+    result = _create_vec_read_write(
+        emitter,
+        input_shape,
+        kb_src,
+        None,
+        vector_type,
+        start_indices,
+        start_indices_wg,
+        start_indices_th,
+        elements_per_thread,
+        get_custom(memory),
+        mask,
+        node_index=index,
+    )
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
@@ -898,67 +650,32 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     input_shape = _get_symbolic_shape(register)
     output_shape = _get_symbolic_shape(memory)
     elements_per_thread = cast_py_literal(emitter, elements_per_thread)
-    if get_custom(node).has_identity_mapping():
-        start_indices, start_indices_wg, start_indices_th = _build_start_indices(
-            emitter, index
-        )
-        mask = _build_mask(emitter, index, elements_per_thread, bounds)
-        _create_vec_read_write(
-            emitter,
-            output_shape,
-            kb_dest,
-            insert_vector,
-            None,
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
-            elements_per_thread,
-            get_custom(memory),
-            mask,
-            node_index=index,
-            offsets_vec=None,
-        )
-    else:
-        assert (
-            input_shape == mapping.input_shape
-        ), f"non-identity input mapping is not supported yet. \nFound input_shape as {input_shape} and mapping.input_shape as {mapping.input_shape}."
+    dyn_vals = tuple(
+        cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
+    )
+    dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
 
-        dyn_vals = tuple(
-            cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
-        )
-        (
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
-            offsets_vec,
-            mask,
-        ) = _construct_gather_scatter_indices(
-            emitter=emitter,
-            symbolic_shape=output_shape,
-            index=index,
-            mapping=mapping,
-            elements_per_thread=elements_per_thread,
-            is_read=False,
-            dynamic_vals=dyn_vals,
-            is_contiguous=get_custom(node).is_contiguous_vec(),
-            memory=get_custom(memory),
-            bounds=bounds,
-        )
+    mask = _build_mask(emitter, index, elements_per_thread, bounds)
+    if mapping:
+        index = transform_index_on_mapping(mapping, output_shape, index, is_read=False)
 
-        _create_vec_read_write(
-            emitter,
-            output_shape,
-            kb_dest,
-            insert_vector,
-            None,
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
-            elements_per_thread,
-            get_custom(memory),
-            mask,
-            offsets_vec,
-        )
+    start_indices, start_indices_wg, start_indices_th = _build_start_indices(
+        emitter, index, dynamic_vals_map_start
+    )
+    _create_vec_read_write(
+        emitter,
+        output_shape,
+        kb_dest,
+        insert_vector,
+        None,
+        start_indices,
+        start_indices_wg,
+        start_indices_th,
+        elements_per_thread,
+        get_custom(memory),
+        mask,
+        node_index=index,
+    )
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:

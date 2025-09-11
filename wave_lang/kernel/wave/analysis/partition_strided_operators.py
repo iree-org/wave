@@ -31,6 +31,8 @@ from ..constraints import (
 )
 from ..utils.general_utils import (
     all_equal,
+    get_fastest_index,
+    get_largest_index_and_size,
 )
 from ..utils.mma_utils import (
     simplify_index,
@@ -81,6 +83,9 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
         """
         custom = get_custom(node)
         if isinstance(custom, Write):
+            if custom.elements_per_thread == 1:
+                return False
+
             # `custom.register_index` calls are expensive, try to minimize the number
             # of calls.
             strides_and_sizes = [
@@ -197,6 +202,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                     )
                     for j, dim in enumerate(symbolic_shape)
                 }
+                extract.index = write.index
                 write.vector_shapes = vector_shapes
                 ops_to_combine.append(write)
 
@@ -324,6 +330,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                             extract = ExtractSlice(
                                 dyn_val, [cur_gpr_start_id], [gpr_size], [1]
                             ).add_to_graph(custom.graph)
+                            extract.index = updated_index_with_gpr_offset
                             new_dynamic_vals.append(extract)
                         else:
                             new_dynamic_vals.append(dyn_val)
@@ -380,3 +387,116 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                 custom.replace_all_uses_with(reshape)
 
             custom.graph.erase_node(custom.fx_node)
+
+
+def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint]):
+    """
+    This pass partitions gather-like operations (reads/writes with non-contiguous access patterns) into
+    multiple contiguous operations.
+
+    For example, if we have a write operation that writes elements with stride 2:
+    write([0,2,4,6]) -> write([0]), write([2]), write([4]), write([6])
+
+    The pass:
+    1. Identifies reads/writes with non-contiguous access patterns
+    2. For each such operation:
+       - Creates multiple single-element reads/writes
+       - Updates indices to access the correct elements
+       - Handles dynamic values in mappings
+       - Combines results back together if needed (for reads)
+    """
+
+    def has_gather_mapping(node: fx.Node) -> bool:
+        """
+        Checks for writes on 2d tensors with strided access on a single dimension that
+        read more than a single element.
+        """
+        custom = get_custom(node)
+        if isinstance(custom, (Read, Write)):
+            return not custom.is_contiguous_vec()
+
+        return False
+
+    strided_operators = trace.walk(has_gather_mapping)
+    for operator in strided_operators:
+        custom = get_custom(operator)
+        index = custom.index
+        fastest_index = get_fastest_index(index)
+        elements_per_thread = subs_idxc(custom.elements_per_thread)
+
+        # Break apart Reads/Writes that has non-contiguous access patterns.
+        with custom.graph.inserting_before(operator):
+            ops_to_combine = []
+            for i in range(elements_per_thread):
+                new_index = deepcopy(index)
+                for j, v in enumerate(new_index.values()):
+                    if j == fastest_index:
+                        v.start = v.start + i
+                    v.size = 1
+                    v.stride = 1
+
+                new_dynamic_vals = []
+                for dynamic_val in custom.mapping_dynamic_vals:
+                    _, size = get_largest_index_and_size(dynamic_val.index)
+                    if size == 1:
+                        # If size is 1, it means we are broadcasting same dynamic value to all
+                        # vector elements.
+                        new_dynamic_vals.append(dynamic_val)
+                        continue
+
+                    assert (
+                        size == elements_per_thread
+                    ), f"Expected size to be equal to {elements_per_thread}, got {size}"
+
+                    # Otherwise, we need to extract the dynamic value for the current vector element.
+                    extract = ExtractSlice(dynamic_val, [i], [1], [1]).add_to_graph(
+                        custom.graph
+                    )
+                    extract.index = new_index
+                    new_dynamic_vals.append(extract)
+
+                if isinstance(custom, Write):
+                    extract = ExtractSlice(
+                        custom.register_, [i], [1], [1]
+                    ).add_to_graph(custom.graph)
+                    extract.index = new_index
+                    new_node = Write(
+                        extract,
+                        custom.memory,
+                        mapping=custom.mapping,
+                        mapping_dynamic_vals=new_dynamic_vals,
+                        elements_per_thread=1,
+                    ).add_to_graph(custom.graph)
+                elif isinstance(custom, Read):
+                    new_node = Read(
+                        custom.memory,
+                        elements_per_thread=1,
+                        mapping=custom.mapping,
+                        mapping_dynamic_vals=new_dynamic_vals,
+                        _write_dependency=custom._write_dependency,
+                    ).add_to_graph(custom.graph)
+                else:
+                    raise NotImplementedError(f"Unsupported op type: {custom}")
+
+                # Update new_node information
+                new_node.index = new_index
+                new_node.vector_shapes = custom.vector_shapes
+                ops_to_combine.append(new_node)
+
+            # Update users of original op.
+            if isinstance(custom, Write):
+                # Useful to handle write/read dependency
+                custom.replace_all_uses_with(ops_to_combine)
+            elif isinstance(custom, Read):
+                reshape = Reshape(ops_to_combine, custom.vector_shapes).add_to_graph(
+                    custom.graph
+                )
+                reshape.expanded_dims = custom.expanded_dims
+                reshape.vector_shapes = custom.vector_shapes
+
+                reshape.index = index
+                custom.replace_all_uses_with(reshape)
+            else:
+                raise NotImplementedError(f"Unsupported op type: {custom}")
+
+            custom.erase()

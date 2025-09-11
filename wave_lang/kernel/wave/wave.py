@@ -39,6 +39,7 @@ from .analysis.index_sequence_analysis import (
     set_post_expansion_indices,
 )
 from .analysis.partition_strided_operators import (
+    partition_gather_like_ops,
     partition_ops_with_gpr_offsets,
     partition_strided_operators,
 )
@@ -761,6 +762,7 @@ class LaunchableWave(Launchable):
         graph_passes += [
             partial(add_shared_memory_barriers, trace),
             partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
+            partial(partition_gather_like_ops, trace, self.constraints),
             partial(generate_bounds_exprs, trace, self.constraints),
         ]
 
