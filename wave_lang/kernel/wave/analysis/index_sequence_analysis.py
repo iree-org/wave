@@ -974,6 +974,7 @@ def create_broadcast(
         broadcasted = Broadcast(
             to_broadcast.fx_node, target_node.type.symbolic_shape
         ).add_to_graph(op.graph)
+        broadcasted.location = op.location
         custom = get_custom(broadcasted)
         custom.vector_shapes = op.vector_shapes
         custom.index = deepcopy(target_node.index)

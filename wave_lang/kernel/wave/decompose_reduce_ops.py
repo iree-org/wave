@@ -202,6 +202,7 @@ def emit_interwave_reduction(
     num_reduction_waves,
     wg_constraint_map,
     hardware_constraint,
+    original_op_location=None,
 ):
     """
     Reduces partial reduced data from individual wave across the block.
@@ -231,6 +232,7 @@ def emit_interwave_reduction(
         src.type.dtype,
         SHARED_ADDRESS_SPACE,
     ).add_to_graph(graph)
+    allocate_node.location = original_op_location
 
     # Write individual wave result into shared_memory[wave_id]
     # 1. Create subgraph to store condition
@@ -434,6 +436,7 @@ def decompose_reduce_ops(
                     num_reduction_waves,
                     workgroup_constraint_map,
                     hardware_constraint,
+                    custom.location,
                 )
 
             # Replace all uses with global reduction

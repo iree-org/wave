@@ -103,11 +103,13 @@ def apply_promotion_pattern(
                 promoted_read = Read(
                     allocate_node.fx_node, elements_per_thread
                 ).add_to_graph(custom_node.graph)
+                promoted_read.location = custom_node.location
             custom_node.replace_all_uses_with(promoted_read)
             with custom_node.graph.inserting_before(promoted_read):
                 promoted_write = Write(
                     custom_node.fx_node, allocate_node.fx_node, elements_per_thread
                 ).add_to_graph(custom_node.graph)
+                promoted_write.location = custom_node.location
                 custom_read = get_custom(promoted_read)
                 custom_read.write_dependency = [promoted_write]
             custom_node.memory_type.address_space = GLOBAL_ADDRESS_SPACE
@@ -146,6 +148,7 @@ def promote_node(
             symbolic_shape, padded_shape, node.type.dtype, address_space, padding
         )
         allocate_node.add_to_graph(node.graph)
+        allocate_node.fx_node.location = node.location
     last_write_to_shared = apply_promotion_pattern(
         node, allocate_node, last_write_to_shared, reorder_allocs
     )
