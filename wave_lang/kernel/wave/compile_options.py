@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .._support.indexing import IndexSymbol
-from .._support.location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig
 from ..compiler.kernel_codegen import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
 from .utils.classes import KernelLaunchInfo

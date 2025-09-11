@@ -20,7 +20,7 @@ from sympy.utilities.lambdify import lambdastr
 from wave_lang.support.ir_imports import Context, Module, Operation
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
-from .._support.location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig
 from .._support.tracing import (
     CapturedTrace,
     CompiledContext,

@@ -7,7 +7,7 @@ import torch
 from wave_lang.kernel.lang import IndexSymbol
 
 from .._support.indexing import IndexingContext
-from .._support.location_config import LocationCaptureLevel
+from ...support.location_config import LocationCaptureLevel
 from ..compiler import host_codegen, kernel_codegen
 from .cache import (
     get_cache_base_dir,

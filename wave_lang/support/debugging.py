@@ -85,7 +85,7 @@ class DebugFlags:
         elif name == "runtime_trace_dir":
             self.runtime_trace_dir = value
         elif name == "location_level":
-            from ..kernel._support.location_config import LocationCaptureLevel
+            from .location_config import LocationCaptureLevel
 
             location_level_map = {
                 level.name.lower(): level for level in LocationCaptureLevel
@@ -132,7 +132,7 @@ flags = DebugFlags.parse_from_env()
 
 def get_location_capture_config():
     """Get LocationCaptureConfig based on the current debug flags."""
-    from ..kernel._support.location_config import (
+    from .location_config import (
         LocationCaptureConfig,
         LocationCaptureLevel,
     )
