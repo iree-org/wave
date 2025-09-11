@@ -12,10 +12,6 @@ import re
 import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
-from ..kernel._support.location_config import (
-    LocationCaptureConfig,
-    LocationCaptureLevel,
-)
 
 import numpy as np
 import torch
@@ -53,15 +49,13 @@ ENV_SETTINGS_MAP = {
 # Whether debug/prolific assertions are disabled.
 NDEBUG: bool = False
 
-location_level_map = {level.name.lower(): level for level in LocationCaptureLevel}
-
 
 @dataclass
 class DebugFlags:
     log_level: int = logging.WARNING
     asserts: bool = False
     runtime_trace_dir: Optional[str] = None
-    location_level: LocationCaptureLevel = LocationCaptureLevel.NONE
+    location_level: Optional[str] = None
 
     def set(self, part: str):
         m = re.match(SETTING_PART_PATTERN, part)
@@ -91,10 +85,13 @@ class DebugFlags:
         elif name == "runtime_trace_dir":
             self.runtime_trace_dir = value
         elif name == "location_level":
+            from ..kernel._support.location_config import LocationCaptureLevel
+
+            location_level_map = {
+                level.name.lower(): level for level in LocationCaptureLevel
+            }
             if value.lower() in location_level_map:
-                self.location_level = location_level_map.get(
-                    value.lower(), LocationCaptureLevel.NONE
-                )
+                self.location_level = value.lower()
             else:
                 logger.warning(
                     "Invalid location_level '%s'. Valid options: %s",
@@ -135,7 +132,15 @@ flags = DebugFlags.parse_from_env()
 
 def get_location_capture_config():
     """Get LocationCaptureConfig based on the current debug flags."""
-    return LocationCaptureConfig(level=flags.location_level)
+    from ..kernel._support.location_config import (
+        LocationCaptureConfig,
+        LocationCaptureLevel,
+    )
+
+    location_level_map = {level.name.lower(): level for level in LocationCaptureLevel}
+    return LocationCaptureConfig(
+        level=location_level_map.get(flags.location_level, LocationCaptureLevel.NONE)
+    )
 
 
 TraceKey = str
