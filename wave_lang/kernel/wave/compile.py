@@ -369,6 +369,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 None,
                 bound_scalar_symbols,
                 symbols_args_map,
+                trace,
                 debug_arg_info,
                 debug_handlers,
             )
