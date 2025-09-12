@@ -25,7 +25,7 @@ from ..common.utils import (
     param_bool,
     require_e2e,
     require_cdna3,
-    require_cdna_2_or_3_or_4
+    require_cdna_2_or_3_or_4,
 )
 from ..common.shapes import get_test_shapes
 from wave_lang.kernel.wave.templates.gqa_vanilla_attention import (
