@@ -25,7 +25,7 @@ from wave_lang.support.ir_imports import (
 
 from .._support.indexing import IndexSymbol
 from .._support.location import capture_location
-from .._support.location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig
 from .builder import (
     ModuleBuilder,
 )

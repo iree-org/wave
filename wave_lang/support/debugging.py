@@ -12,6 +12,11 @@ import re
 import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
+from .location_config import (
+    LocationCaptureConfig,
+    LocationCaptureLevel,
+)
+
 
 import numpy as np
 import torch
@@ -19,6 +24,7 @@ import torch
 __all__ = [
     "default_trace_tensor_callback",
     "flags",
+    "get_location_capture_config",
     "NDEBUG",
     "trace_tensor_callback",
     "trace_tensor_to_npy",
@@ -34,6 +40,7 @@ logger = logging.getLogger("wave.bootstrap")
 # Available settings:
 #   log_level: A log level name to enable.
 #   asserts: Whether to enable all assertions (defaults to enabled).
+#   location_level: Level of location information to capture (none, file_line_col, stack_trace, stack_trace_with_system).
 FLAGS_ENV_NAME = "WAVE_DEBUG"
 SETTING_PART_PATTERN = re.compile(r"""^([\\+\\-])?([^=]+)(=(.*))?$""")
 
@@ -41,6 +48,7 @@ SETTING_PART_PATTERN = re.compile(r"""^([\\+\\-])?([^=]+)(=(.*))?$""")
 # mapped here.
 ENV_SETTINGS_MAP = {
     "WAVE_LOG_LEVEL": "log_level",
+    "WAVE_LOCATION_LEVEL": "location_level",
 }
 
 # Whether debug/prolific assertions are disabled.
@@ -52,6 +60,7 @@ class DebugFlags:
     log_level: int = logging.WARNING
     asserts: bool = False
     runtime_trace_dir: Optional[str] = None
+    location_level: Optional[LocationCaptureLevel] = None
 
     def set(self, part: str):
         m = re.match(SETTING_PART_PATTERN, part)
@@ -80,6 +89,18 @@ class DebugFlags:
             NDEBUG = not logical_sense
         elif name == "runtime_trace_dir":
             self.runtime_trace_dir = value
+        elif name == "location_level":
+            location_level_map = {
+                level.name.lower(): level for level in LocationCaptureLevel
+            }
+            if value.lower() in location_level_map:
+                self.location_level = location_level_map.get(value.lower(), None)
+            else:
+                logger.warning(
+                    "Invalid location_level '%s'. Valid options: %s",
+                    value,
+                    list(location_level_map.keys()),
+                )
         else:
             logger.warning("Unrecognized %s flag: '%s'", FLAGS_ENV_NAME, name)
 
@@ -110,6 +131,15 @@ class DebugFlags:
 
 
 flags = DebugFlags.parse_from_env()
+
+
+def get_location_capture_config():
+    """Get LocationCaptureConfig based on the current debug flags."""
+    location_level_map = {level.name.lower(): level for level in LocationCaptureLevel}
+    return LocationCaptureConfig(
+        level=(flags.location_level or LocationCaptureLevel.NONE)
+    )
+
 
 TraceKey = str
 TraceTensorCallback = Callable[[TraceKey, torch.Tensor], None]

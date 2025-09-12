@@ -30,7 +30,7 @@ from .indexing import (
     IndexSymbol,
     backed_sym_index_type,
 )
-from .location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig
 from .regions import RegionGraph, SubgraphTracer
 
 try:

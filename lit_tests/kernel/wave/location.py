@@ -2,7 +2,7 @@
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel._support.location_config import (
+from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
 )

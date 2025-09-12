@@ -2,10 +2,17 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .._support.indexing import IndexSymbol
-from .._support.location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig
 from ..compiler.kernel_codegen import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
 from .utils.classes import KernelLaunchInfo
+
+
+def _get_location_capture_config():
+    """Wrapper to avoid circular import with debugging module."""
+    from ...support.debugging import get_location_capture_config
+
+    return get_location_capture_config()
 
 
 @dataclass
@@ -61,7 +68,7 @@ class WaveCompileOptions:
     dump_intermediates: str = False
     compile_to_mlir: bool = False
     location_capture_config: LocationCaptureConfig = field(
-        default_factory=LocationCaptureConfig
+        default_factory=_get_location_capture_config
     )
     use_local_scope: bool = False
     use_water_leak_check: bool | str = False  # If string, check the given IR instead.
