@@ -30,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         version: ["3.11"]
-        os: [linux-rdna4-1gpu-ossci-iree-org]
+        os: [Shark41]
     runs-on: [self-hosted, Linux, X64, rdna4]
     timeout-minutes: 60
       # TODO(megan.kuo) uncomment when tests are ready
