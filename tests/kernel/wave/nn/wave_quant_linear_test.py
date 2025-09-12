@@ -13,7 +13,6 @@ from ..common.utils import (
 )
 import wave_lang.kernel.wave.nn as wave_nn
 from wave_lang.kernel.wave.utils.general_utils import torch_dtype_range
-from ..common.utils import require_e2e
 
 
 class RefQuantLinear(nn.Module):

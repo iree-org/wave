@@ -29,6 +29,7 @@ from wave_lang.kernel.wave.constraints import MMAType
 from torch.testing import assert_close
 from ..common.utils import (
     require_e2e,
+    require_cdna_2_or_3_or_4,
     require_cdna3,
     param_bool,
 )
@@ -36,6 +37,7 @@ from ..common.shapes import get_test_shapes
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("chained_gemm"))
 @param_bool("enable_scheduling", "sched", [False])
 @pytest.mark.parametrize(

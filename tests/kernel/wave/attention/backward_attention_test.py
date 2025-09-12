@@ -27,10 +27,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-from ..common.utils import (
-    expensive_test,
-    require_e2e,
-)
+from ..common.utils import expensive_test, require_e2e, require_cdna_2_or_3_or_4
 from torch.testing import assert_close
 
 # batch, q_seq_len, v_head_dim, qk_head_dim, kv_seq_len
@@ -1109,6 +1106,7 @@ def testAttentionOpsReference(shape: tuple[int, ...]):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @param_mfma_shape
 def testAttentionForward(mfma_variant: MMAType, shape: tuple[int, ...]):
     batch, q_seq_len, v_head_dim, qk_head_dim, kv_seq_len = shape
@@ -1167,6 +1165,7 @@ def testAttentionForward(mfma_variant: MMAType, shape: tuple[int, ...]):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @param_mfma_shape_small
 @expensive_test
 def testAttentionBackward(mfma_variant: MMAType, shape: tuple[int, ...]):
@@ -1259,6 +1258,7 @@ def testAttentionBackward(mfma_variant: MMAType, shape: tuple[int, ...]):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @param_mfma_shape
 def testAttentionBackward_dv(mfma_variant: MMAType, shape: tuple[int, ...]):
     """This tests a kernel only for the gradient of v."""
@@ -1314,6 +1314,7 @@ def testAttentionBackward_dv(mfma_variant: MMAType, shape: tuple[int, ...]):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @param_mfma_shape
 def testAttentionBackward_dk(mfma_variant: MMAType, shape: tuple[int, ...]):
     """This tests a kernel only for the gradient of k."""
@@ -1391,6 +1392,7 @@ def testAttentionBackward_dk(mfma_variant: MMAType, shape: tuple[int, ...]):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @param_mfma_shape
 @expensive_test
 def testAttentionBackward_dq(mfma_variant: MMAType, shape: tuple[int, ...]):

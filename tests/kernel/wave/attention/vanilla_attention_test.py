@@ -31,6 +31,7 @@ from ..common.utils import (
     require_cdna3,
     require_e2e,
     require_cdna4,
+    require_cdna_2_or_3_or_4,
 )
 from ..common.shapes import get_test_shapes
 from wave_lang.kernel.wave.templates.vanilla_attention import (
@@ -47,6 +48,7 @@ from wave_lang.kernel.wave.utils.reference_kernel_utils import (
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("input_shape", get_test_shapes("attention"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -119,6 +121,7 @@ def testTransposedVAttentionPure(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("input_shape", get_test_shapes("attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("dynamic_dims", "dyn", [False])
@@ -186,6 +189,7 @@ def testAttentionPure(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("all_attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @pytest.mark.parametrize("sliding_window", ([-1, 1024]))
@@ -270,6 +274,7 @@ def testAttentionCausal(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("all_attention"))
 @pytest.mark.parametrize(
     "enable_scheduling", [SchedulingType.NONE, SchedulingType.MODULO]
@@ -379,6 +384,7 @@ def testAttentionBSHD(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("bhsd_attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("dynamic_dims", "dyn", [False, True])
@@ -507,6 +513,7 @@ def testAttentionBHSDCausal(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("dynamic_dims", "dyn")
@@ -688,6 +695,7 @@ def testAttentionBias(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("dynamic_dims", "dyn")

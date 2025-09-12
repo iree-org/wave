@@ -20,6 +20,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from .common.utils import (
     require_e2e,
+    require_cdna_2_or_3_or_4,
 )
 from wave_lang.kernel.wave.compile import wave_compile, WaveCompileOptions
 
@@ -31,6 +32,7 @@ from wave_lang.kernel.wave.compile import wave_compile, WaveCompileOptions
     ],
 )
 @require_e2e
+@require_cdna_2_or_3_or_4
 def test_rmsnorm(shape):
     M = tkl.sym.M
     N = tkl.sym.N

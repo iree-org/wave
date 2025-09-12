@@ -9,10 +9,11 @@ from torch import nn
 from torch.testing import assert_close
 
 import wave_lang.kernel.wave.nn as wave_nn
-from ..common.utils import require_e2e
+from ..common.utils import require_e2e, require_cdna_2_or_3_or_4
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def testLinearNoBatch():
     # Linear layer parameters
     torch.manual_seed(1)
@@ -49,6 +50,7 @@ def testLinearNoBatch():
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def testLinear1DBatchNoBias():
     # Linear layer parameters
     torch.manual_seed(1)
@@ -87,6 +89,7 @@ def testLinear1DBatchNoBias():
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def testLinear1DBatch():
     # Linear layer parameters
     torch.manual_seed(1)
@@ -124,6 +127,7 @@ def testLinear1DBatch():
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def testLinear3DBatch():
     # Linear layer parameters
     torch.manual_seed(1)
