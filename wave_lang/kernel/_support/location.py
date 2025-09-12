@@ -7,7 +7,7 @@
 import inspect
 import sys
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Callable
 
 from iree.compiler.ir import Context, Location
 
@@ -107,3 +107,85 @@ def capture_location(
         return StackTraceInfo.capture_current_location()
     if location_capture_config.level == LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM:
         return StackTraceInfo.capture_current_location(preserve_system_frames=True)
+
+
+def capture_function_location(
+    func: Callable, location_capture_config: LocationCaptureConfig
+) -> Optional[FileLineColInfo | StackTraceInfo]:
+    """
+    Capture location information for a specific function.
+
+    Args:
+        func: The function to capture location for
+        location_capture_config: Location capture configuration
+
+    Returns:
+        Location information for the function, or None if capture is disabled
+    """
+    if location_capture_config.level == LocationCaptureLevel.NONE:
+        return None
+
+    source_file = inspect.getfile(func)
+    source_lines, start_line = inspect.getsourcelines(func)
+
+    if location_capture_config.level == LocationCaptureLevel.FILE_LINE_COL:
+        return FileLineColInfo(
+            filename=source_file,
+            line=start_line,
+            col=0,  # Column info not easily available for function definitions
+        )
+    elif location_capture_config.level in [
+        LocationCaptureLevel.STACK_TRACE,
+        LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM,
+    ]:
+        # Create a single-frame stack trace for the function
+        frame_info = FileLineColInfo(filename=source_file, line=start_line, col=0)
+        return StackTraceInfo(frames=[frame_info])
+
+    return None
+
+
+def add_placeholder_locations(
+    trace: "CapturedTrace", kernel_func: Callable
+) -> "CapturedTrace":
+    """
+    Add location info to placeholder nodes.
+    The location used is the kernel function definition location.
+    Also adds the location to the output node of the graph, which is maybe
+    unnecessary, but it's convenient to have a location for the output as well
+    so that 100% of nodes have locations at the beginning of the pipeline.
+
+    Args:
+        trace: The captured trace to analyze
+        kernel_func:
+            The original kernel function being traced -- IE the function
+            definition with the @tkw.wave annotation.
+
+    Returns:
+        The modified trace with location information added
+    """
+    from ..ops.wave_ops import get_custom, Placeholder, Output
+
+    root_graph = trace.get_root_graph()
+    region_graph = getattr(trace, "region_graph", None)
+    location_capture_config = getattr(region_graph, "location_capture_config", None)
+
+    if (
+        location_capture_config is None
+        or location_capture_config.level == LocationCaptureLevel.NONE
+    ):
+        return trace
+
+    kernel_location = capture_function_location(kernel_func, location_capture_config)
+    if kernel_location is None:
+        return trace
+
+    for node in root_graph.nodes:
+        custom_op = get_custom(node)
+        if hasattr(custom_op, "location") and custom_op.location is not None:
+            continue
+
+        if isinstance(custom_op, (Placeholder, Output)):
+            custom_op.fx_node.location = kernel_location
+
+    return trace
