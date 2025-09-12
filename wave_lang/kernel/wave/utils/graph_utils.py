@@ -3,36 +3,18 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import inspect
-import types
-from dataclasses import fields as dataclass_fields, is_dataclass
+from typing import Callable, Optional, Sequence
 
-import numpy as np
-from typing import (
-    Callable,
-    Optional,
-    Sequence,
-    TypeAlias,
-    Any,
-)
-
-import sympy
 import torch.fx as fx
 
 import wave_lang.kernel.lang as tkl
 
-from ....support.indexing import IndexSequence
-from ..._support.dtype import DataType
 from ..._support.indexing import IndexSymbol
 from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
-from ...lang.global_symbols import GLOBAL_ADDRESS_SPACE, MMA_ACC, MMA_LHS, MMA_RHS
-from ...lang.wave_types import Memory, Register
-from ..constraints import HardwareConstraint, TilingConstraint
+from ...lang.global_symbols import *
 from ...ops.wave_ops import (
     MMA,
-    Allocate,
-    Broadcast,
     Conditional,
     CustomOp,
     ExtractSlice,
@@ -46,56 +28,13 @@ from ...ops.wave_ops import (
     TopkOp,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
-    MemoryCounterWaitBarrier,
     Write,
     get_custom,
 )
-from .classes import Failure, Result, Success
-from .symbol_utils import (
-    collect_allowed_induction_symbols,
-    strip_out_of_scope_induction_symbols,
-    subs_idxc,
-)
+from .symbol_utils import subs_idxc
 
 
-IndexDict: TypeAlias = dict[IndexSymbol, IndexSequence | sympy.Basic | int]
-Payload: TypeAlias = (
-    fx.Node
-    | IndexSequence
-    | sympy.Basic
-    | int
-    | DataType
-    | dict[Any, "Payload"]
-    | Sequence["Payload"]
-    | None
-)
-ResultType: TypeAlias = DataType | Memory | Register | Sequence["ResultType"] | None
-
-# Semantic attributes stored on fx.Node (via setattr) rather than declared as
-# dataclass fields.  These complement the dataclass field introspection in
-# _check_nodes_equivalent: dataclass fields are compared automatically via
-# fields(), while these must be checked explicitly because they live on the
-# fx.Node, not on the CustomOp dataclass.
-#
-# Excluded from comparison (non-semantic / scheduling artifacts):
-#   location, expanded_dims, scheduling_parameters
-#
-# See docs/wave/ir_design_notes.rst for background on this distinction.
-_ADDITIONAL_NODE_ATTRS = ("vector_shapes", "reduction_dim", "iter_idx")
-
-
-def _is_effectively_none(val: Any) -> bool:
-    """Return True for None or list/tuple containers of all-None values.
-
-    During graph construction, an unset index can surface as either `None`
-    or `[None]` depending on the op.  Treat both as "not yet populated".
-    """
-    if val is None:
-        return True
-    return isinstance(val, (list, tuple)) and all(v is None for v in val)
-
-
-def DCE(trace: CapturedTrace) -> None:
+def DCE(trace: CapturedTrace):
     """
     Removes all operators that are not used in the graph,
     excluding output and global write nodes.
@@ -140,847 +79,6 @@ def DCE(trace: CapturedTrace) -> None:
     while removable_nodes := trace.walk(is_removable_operator):
         for node in removable_nodes:
             get_custom(node).erase()
-
-
-_DTYPE_NAME_TO_NUMPY = {
-    "f16": np.float16,
-    "f32": np.float32,
-    "f64": np.float64,
-}
-
-
-def _truncate_float_to_dtype(value: float, dtype: DataType) -> float:
-    """Cast a Python float to the precision of `dtype` and back.
-
-    MLIR stores scalar constants (e.g. `arith.constant`) at the target
-    element type's precision, so a Python f64 value roundtripped through
-    e.g. f16 will come back truncated. Casting both sides to the target
-    dtype before comparison makes the check exact.
-    """
-    np_dtype = _DTYPE_NAME_TO_NUMPY.get(str(dtype))
-    if np_dtype is None:
-        return value
-    return float(np_dtype(value))
-
-
-def _expr_symbols(expr: IndexSequence | sympy.Basic | int) -> set[str]:
-    """Collect free-symbol names from index expressions."""
-    if isinstance(expr, IndexSequence):
-        return (
-            _expr_symbols(expr.start)
-            | _expr_symbols(expr.size)
-            | _expr_symbols(expr.stride)
-        )
-    if isinstance(expr, sympy.Basic):
-        return {s.name for s in expr.free_symbols}
-    if isinstance(expr, int):
-        return set()
-    raise ValueError(f"Unsupported expression type: {type(expr)}")
-
-
-def _apply_subs(
-    expr: IndexSequence | sympy.Basic | int, subs: Optional[dict[IndexSymbol, int]]
-) -> IndexSequence | sympy.Basic | int:
-    """Apply substitutions to expressions or index sequences."""
-    if subs is None:
-        return expr
-    if isinstance(expr, int):
-        return expr
-    if isinstance(expr, (sympy.Basic, IndexSequence)):
-        return expr.subs(subs)
-    raise ValueError(f"Unsupported expression type: {type(expr)}")
-
-
-def _check_expr_equivalent(
-    lhs: IndexSequence | sympy.Basic | int,
-    rhs: IndexSequence | sympy.Basic | int,
-    subs: Optional[dict[IndexSymbol, int]],
-) -> Result:
-    """Check symbolic equivalence after substitution and simplification."""
-    if _expr_symbols(lhs) != _expr_symbols(rhs):
-        return Failure(f"symbol mismatch: {_expr_symbols(lhs)} vs {_expr_symbols(rhs)}")
-    lhs = _apply_subs(lhs, subs)
-    rhs = _apply_subs(rhs, subs)
-    if isinstance(lhs, IndexSequence) and isinstance(rhs, IndexSequence):
-        if not (check_result := _check_expr_equivalent(lhs.start, rhs.start, subs)):
-            return Failure(f"IndexSequence.start mismatch: {check_result.error}")
-        if not (check_result := _check_expr_equivalent(lhs.size, rhs.size, subs)):
-            return Failure(f"IndexSequence.size mismatch: {check_result.error}")
-        if not (check_result := _check_expr_equivalent(lhs.stride, rhs.stride, subs)):
-            return Failure(f"IndexSequence.stride mismatch: {check_result.error}")
-        return Success()
-    if isinstance(lhs, int) and isinstance(rhs, int):
-        return Success() if lhs == rhs else Failure(f"int mismatch: {lhs} vs {rhs}")
-    if isinstance(lhs, sympy.Basic) and isinstance(rhs, sympy.Basic):
-        if sympy.simplify(lhs - rhs) == 0:
-            return Success()
-        return Failure(f"symbolic expr mismatch: {lhs} vs {rhs}")
-    if isinstance(lhs, (int, sympy.Basic)) and isinstance(rhs, (int, sympy.Basic)):
-        if sympy.simplify(sympy.sympify(lhs) - sympy.sympify(rhs)) == 0:
-            return Success()
-        return Failure(f"expr mismatch: {lhs} vs {rhs}")
-    raise ValueError(f"Unsupported expression types: {type(lhs)} vs {type(rhs)}")
-
-
-def _check_index_mapping_equivalent(
-    lhs: IndexDict, rhs: IndexDict, subs: Optional[dict[IndexSymbol, int]]
-) -> Result:
-    """Compare two index-mapping dictionaries for symbolic equivalence."""
-    if lhs.keys() != rhs.keys():
-        return Failure(f"index keys mismatch: {lhs.keys()} vs {rhs.keys()}")
-    for key in lhs:
-        if not (check_result := _check_expr_equivalent(lhs[key], rhs[key], subs)):
-            return Failure(f"index expr mismatch for '{key}': {check_result.error}")
-    return Success()
-
-
-def _resolve_node(node: fx.Node, node_map: dict[fx.Node, fx.Node]) -> fx.Node | None:
-    """Look up the mapped counterpart of `node`.
-
-    Tries a direct lookup first.  If that fails, sees through wrapper
-    ops (GetResult, Broadcast) that are structurally transparent for
-    comparison purposes and retries with the underlying value.
-    """
-    mapped = node_map.get(node)
-    if mapped is None and isinstance(get_custom(node), GetResult):
-        mapped = node_map.get(get_custom(node).value)
-    if mapped is None and isinstance(get_custom(node), Broadcast):
-        mapped = node_map.get(get_custom(node).arg)
-    return mapped
-
-
-def _nodes_match(expected: fx.Node, actual: fx.Node) -> bool:
-    """Check whether `actual` is structurally equivalent to `expected`.
-
-    Returns True when `actual` is `expected` directly, or when `actual`
-    is a wrapper (GetResult or Broadcast) whose underlying source is `expected`.
-    """
-    if actual is expected:
-        return True
-    if isinstance(get_custom(actual), GetResult):
-        return get_custom(actual).value is expected
-    if isinstance(get_custom(actual), Broadcast):
-        return get_custom(actual).arg is expected
-    return False
-
-
-def _sympy_equiv(a: sympy.Basic, b: sympy.Basic) -> bool:
-    """Check symbolic equivalence of two sympy expressions.
-
-    For numeric/algebraic expressions this checks `simplify(a - b) == 0`.
-    For relational expressions (e.g. `x < 5`), both sides must use the
-    same comparison operator and their canonical `lhs - rhs` forms must
-    be algebraically equivalent.
-    """
-    if a == b:
-        return True
-    if isinstance(a, sympy.Rel) and type(a) is type(b):
-        return sympy.simplify((a.lhs - a.rhs) - (b.lhs - b.rhs)) == 0
-    try:
-        return sympy.simplify(a - b) == 0
-    except TypeError:
-        return False
-
-
-SympyCallable: TypeAlias = Callable[..., sympy.Basic | tuple[sympy.Basic, ...]]
-
-
-def _check_callable_equivalent(lhs: SympyCallable, rhs: SympyCallable) -> Result:
-    """Compare two sympy-valued callables for symbolic equivalence.
-
-    Evaluates both callables with fresh `sympy.Symbol` inputs and checks
-    that the resulting expressions are equivalent via `_sympy_equiv`.
-    This covers the `expr` field of `ApplyExpr` nodes, whose lambdas
-    are reconstructed during MLIR import and differ by object identity.
-    """
-    lhs_params = inspect.signature(lhs).parameters
-    rhs_params = inspect.signature(rhs).parameters
-    if len(lhs_params) != len(rhs_params):
-        return Failure(
-            f"callable arity mismatch: {len(lhs_params)} vs {len(rhs_params)}"
-        )
-
-    # Plain Symbols (no assumptions) to avoid spurious simplifications:
-    # index_symbol() adds nonnegative=True which could make unequal
-    # expressions simplify to zero (e.g. abs(x) - x with nonneg x).
-    test_syms = [sympy.Symbol(f"_cmp_{i}") for i in range(len(lhs_params))]
-    lhs_result = lhs(*test_syms)
-    rhs_result = rhs(*test_syms)
-
-    lhs_elems = (
-        list(lhs_result) if isinstance(lhs_result, (list, tuple)) else [lhs_result]
-    )
-    rhs_elems = (
-        list(rhs_result) if isinstance(rhs_result, (list, tuple)) else [rhs_result]
-    )
-    if len(lhs_elems) != len(rhs_elems):
-        return Failure(
-            f"callable result count mismatch: {len(lhs_elems)} vs {len(rhs_elems)}"
-        )
-    for i, (l, r) in enumerate(zip(lhs_elems, rhs_elems)):
-        if not _sympy_equiv(l, r):
-            return Failure(f"callable result[{i}] mismatch: {l} vs {r}")
-    return Success()
-
-
-def _check_payloads_equivalent(
-    lhs: Payload,
-    rhs: Payload,
-    subs: Optional[dict[IndexSymbol, int]],
-    node_map: dict[fx.Node, fx.Node],
-) -> Result:
-    """Compare nested payloads, resolving nodes via node_map."""
-    # fx.Node comparison
-    if isinstance(lhs, fx.Node) or isinstance(rhs, fx.Node):
-        if not (isinstance(lhs, fx.Node) and isinstance(rhs, fx.Node)):
-            return Failure(f"node vs non-node: {type(lhs)} vs {type(rhs)}")
-        expected = _resolve_node(lhs, node_map)
-        if expected is None:
-            return Failure("node mapping not provided")
-        if not _nodes_match(expected, rhs):
-            return Failure(f"node mapping mismatch: {lhs} vs {rhs}")
-        return Success()
-
-    # Dict comparison
-    if isinstance(lhs, dict) and isinstance(rhs, dict):
-        if all(isinstance(k, IndexSymbol) for k in lhs.keys()):
-            return _check_index_mapping_equivalent(lhs, rhs, subs)
-        if lhs.keys() != rhs.keys():
-            return Failure(f"dict keys mismatch: {lhs.keys()} vs {rhs.keys()}")
-        for key in lhs:
-            if not (
-                check_result := _check_payloads_equivalent(
-                    lhs[key], rhs[key], subs, node_map
-                )
-            ):
-                return Failure(f"dict value mismatch at '{key}': {check_result.error}")
-        return Success()
-
-    # Sequence comparison (list, tuple, etc.) - handles node.args, return_vals, etc.
-    if isinstance(lhs, Sequence) and not isinstance(lhs, (str, bytes, dict)):
-        if not (isinstance(rhs, Sequence) and not isinstance(rhs, (str, bytes, dict))):
-            return Failure(f"sequence vs non-sequence: {type(lhs)} vs {type(rhs)}")
-        if len(lhs) != len(rhs):
-            return Failure(f"sequence length mismatch: {len(lhs)} vs {len(rhs)}")
-        for idx, (lval, rval) in enumerate(zip(lhs, rhs)):
-            if not (
-                check_result := _check_payloads_equivalent(lval, rval, subs, node_map)
-            ):
-                return Failure(f"sequence mismatch at {idx}: {check_result.error}")
-        return Success()
-
-    # IndexSequence and symbolic expression comparison
-    if isinstance(lhs, IndexSequence) or isinstance(rhs, IndexSequence):
-        if not (isinstance(lhs, IndexSequence) and isinstance(rhs, IndexSequence)):
-            return Failure(f"index sequence type mismatch: {type(lhs)} vs {type(rhs)}")
-        if not (check_result := _check_expr_equivalent(lhs, rhs, subs)):
-            return Failure(f"index sequence mismatch: {check_result.error}")
-        return Success()
-    if isinstance(lhs, (sympy.Basic, int)) or isinstance(rhs, (sympy.Basic, int)):
-        if not (check_result := _check_expr_equivalent(lhs, rhs, subs)):
-            return Failure(f"expr mismatch: {check_result.error}")
-        return Success()
-
-    # DataType comparison
-    if isinstance(lhs, DataType) or isinstance(rhs, DataType):
-        if not (isinstance(lhs, DataType) and isinstance(rhs, DataType)):
-            return Failure(f"dtype vs non-dtype: {type(lhs)} vs {type(rhs)}")
-        return Success() if lhs == rhs else Failure(f"dtype mismatch: {lhs} vs {rhs}")
-
-    # Callable comparison: two lambdas/functions are considered equivalent when
-    # they accept the same number of arguments and produce symbolically identical
-    # results for fresh symbolic inputs. This covers the `expr` field of
-    # ApplyExpr nodes, whose lambdas are reconstructed during MLIR import.
-    # Only match actual function objects, not classes or other callables.
-    if isinstance(lhs, types.FunctionType) and isinstance(rhs, types.FunctionType):
-        return _check_callable_equivalent(lhs, rhs)
-
-    # Fallback to default equality, e.g. lhs == rhs == None
-    return Success() if lhs == rhs else Failure(f"value mismatch: {lhs} vs {rhs}")
-
-
-def _check_result_types_equivalent(lhs: ResultType, rhs: ResultType) -> Result:
-    """Compare result types by shape, dtype, and address space."""
-    if lhs == rhs:
-        return Success()
-    # Directional: reference absent is OK (type may not yet be set),
-    # but reference present and actual absent means type was lost.
-    if lhs is None:
-        return Success()
-    if rhs is None:
-        return Failure("type lost: present in reference but absent in actual")
-
-    # Compare attributes that define type equivalence
-    for attr in ("symbolic_shape", "dtype", "address_space"):
-        lhs_val = getattr(lhs, attr, None)
-        rhs_val = getattr(rhs, attr, None)
-        if lhs_val != rhs_val:
-            return Failure(f"{attr} mismatch: {lhs_val} vs {rhs_val}")
-
-    return Success()
-
-
-def _check_index_equivalent(
-    lhs: IndexDict | Sequence[IndexDict] | None,
-    rhs: IndexDict | Sequence[IndexDict] | None,
-    subs: Optional[dict[IndexSymbol, int]],
-) -> Result:
-    """Compare index mappings or sequences for equivalence."""
-    if lhs == rhs:
-        return Success()
-
-    if _is_effectively_none(lhs) and _is_effectively_none(rhs):
-        return Success()
-
-    if lhs is None or rhs is None:
-        return Failure(f"index presence mismatch: {lhs} vs {rhs}")
-    if isinstance(lhs, dict) and isinstance(rhs, dict):
-        return _check_index_mapping_equivalent(lhs, rhs, subs)
-    if isinstance(lhs, (list, tuple)) and isinstance(rhs, (list, tuple)):
-        if len(lhs) != len(rhs):
-            return Failure(f"index list length mismatch: {len(lhs)} vs {len(rhs)}")
-        for idx, (lval, rval) in enumerate(zip(lhs, rhs)):
-            if not (check_result := _check_index_mapping_equivalent(lval, rval, subs)):
-                return Failure(f"index list mismatch at {idx}: {check_result.error}")
-        return Success()
-    raise ValueError(f"Unsupported index types: {type(lhs)} vs {type(rhs)}")
-
-
-def _check_nodes_equivalent(
-    lhs_custom: CustomOp,
-    rhs_custom: CustomOp,
-    lhs_trace: CapturedTrace,
-    rhs_trace: CapturedTrace,
-    subs: Optional[dict[IndexSymbol, int]],
-    node_map: dict[fx.Node, fx.Node],
-) -> Result:
-    """
-    Compare two CustomOp nodes for equivalence across traces.
-
-    Performs a field-by-field comparison in the following order:
-
-    1. Type identity
-    2. Result types (directional; skipped for structural nodes)
-    3. Dataclass fields with compare=True
-    4. Index mappings (directional; skipped for structural nodes)
-    5. Semantic attrs: vector_shapes, reduction_dim, iter_idx (directional)
-    6. Subgraph equivalence (for NestedRegionOps)
-
-    "Directional" means the reference (lhs) may be absent but the actual (rhs)
-    must not lose information that the reference has. Particular nodes
-    (Placeholder, Output -- but not IterArg) are exempt from checks
-    2/4/5 as they don't participate in verify_nodes.
-    """
-    # Check type identity
-    if type(lhs_custom) is not type(rhs_custom):
-        return Failure(
-            f"op mismatch: {type(lhs_custom).__name__} vs {type(rhs_custom).__name__}",
-        )
-
-    # Placeholder equivalence is handled by _match_root_placeholders (root
-    # graphs) and _reconcile_lifted_placeholders (subgraphs).  Output nodes
-    # don't carry types, indices, or semantic attrs; their return_vals field
-    # is compared via the dataclass field check below.  IterArg is a
-    # Placeholder subclass but is compared normally.
-    _skip_node_types = isinstance(lhs_custom, (Placeholder, Output)) and not isinstance(
-        lhs_custom, IterArg
-    )
-
-    # Check result types
-    if not _skip_node_types:
-        if not (
-            check_result := _check_result_types_equivalent(
-                lhs_custom.type, rhs_custom.type
-            )
-        ):
-            return Failure(
-                f"{type(lhs_custom).__name__}: {check_result.error}",
-            )
-
-    # Check dataclass fields (automatically skips compare=False fields)
-    if is_dataclass(lhs_custom):
-        for f in dataclass_fields(lhs_custom):
-            if not f.compare:
-                continue
-
-            lhs_val = getattr(lhs_custom, f.name, None)
-            rhs_val = getattr(rhs_custom, f.name, None)
-
-            # MLIR stores scalar constants at the target element type
-            # precision (e.g. f16/f32), truncating the Python f64 value.
-            # Always cast both sides to the node's dtype before comparing
-            # so the comparison is dtype-aware even when values happen to
-            # match at f64 precision.
-            if isinstance(lhs_val, float) and isinstance(rhs_val, float):
-                node_dtype = getattr(lhs_custom, "dtype", None)
-                if node_dtype is not None:
-                    lhs_val = _truncate_float_to_dtype(lhs_val, node_dtype)
-                    rhs_val = _truncate_float_to_dtype(rhs_val, node_dtype)
-
-            if not (
-                check_result := _check_payloads_equivalent(
-                    lhs_val, rhs_val, subs, node_map
-                )
-            ):
-                return Failure(
-                    f"field '{f.name}' mismatch: {check_result.error}",
-                )
-
-    if isinstance(lhs_custom, Output):
-        # Special handling because the above will not iterate through
-        # the property `yielded_values`.
-        if not (
-            check_result := _check_payloads_equivalent(
-                lhs_custom.yielded_values, rhs_custom.yielded_values, subs, node_map
-            )
-        ):
-            return Failure(f"yielded_values mismatch: {check_result.error}")
-
-    # Check dynamically-set index attribute.
-    # Directional: reference absent is OK (index may not yet be set in early
-    # pipeline stages), but reference present and actual absent means loss.
-    if not _skip_node_types:
-        lhs_index = getattr(lhs_custom, "index", None)
-        rhs_index = getattr(rhs_custom, "index", None)
-
-        # Allocate indices are derived via backward propagation
-        # (set_derived_index) and may contain induction symbols that belong
-        # to a nested Iterate scope rather than the Allocate's own scope.
-        # The wave-to-MLIR conversion strips these before emitting (see
-        # strip_out_of_scope_induction_symbols in symbol_utils.py).
-        # Only the LHS (reference / source trace) needs cleanup; the RHS
-        # comes from MLIR import where scoping is enforced structurally.
-        if isinstance(lhs_custom, Allocate):
-            if isinstance(lhs_index, dict):
-                allowed = collect_allowed_induction_symbols(lhs_custom.fx_node)
-                lhs_index = strip_out_of_scope_induction_symbols(lhs_index, allowed)
-
-        if lhs_index is not None:
-            if rhs_index is None:
-                return Failure(
-                    f"index lost on {type(lhs_custom).__name__}: present in reference but absent in actual",
-                )
-            if not (
-                check_result := _check_index_equivalent(lhs_index, rhs_index, subs)
-            ):
-                return check_result
-
-    # Check node-attached semantic attributes (see _NODE_SEMANTIC_ATTRS).
-    # Directional: lhs (reference) absent is OK (rhs may have enriched info),
-    # but lhs present and rhs absent means information was lost.
-    if not _skip_node_types:
-        for attr_name in _ADDITIONAL_NODE_ATTRS:
-            lhs_val = getattr(lhs_custom, attr_name, None)
-            rhs_val = getattr(rhs_custom, attr_name, None)
-            if lhs_val is None:
-                continue
-            if rhs_val is None:
-                return Failure(
-                    f"attr '{attr_name}' lost on {type(lhs_custom).__name__}: present in reference but absent in actual",
-                )
-            if not (
-                check_result := _check_payloads_equivalent(
-                    lhs_val, rhs_val, subs, node_map
-                )
-            ):
-                return Failure(f"attr '{attr_name}' mismatch: {check_result.error}")
-
-    # implicit_captures (compare=False) may differ in order (makeIsolated
-    # can reorder) or length (the source trace may have pruned dead
-    # captures after hoisting, while the MLIR-imported trace includes all
-    # values that makeIsolated found referenced from the region).
-    # Check that every LHS capture maps to a capture on the RHS.
-    lhs_captures = getattr(lhs_custom, "implicit_captures", None)
-    rhs_captures = getattr(rhs_custom, "implicit_captures", None)
-    if lhs_captures is not None:
-        if rhs_captures is None:
-            return Failure("implicit_captures present in LHS but absent in RHS")
-        rhs_capture_set = set(rhs_captures)
-        for lc in lhs_captures:
-            mapped = node_map.get(lc)
-            if mapped is not None and mapped not in rhs_capture_set:
-                return Failure(
-                    f"implicit_captures mismatch: LHS capture {lc} "
-                    f"(mapped to {mapped}) not found in RHS captures",
-                )
-
-    # Check subgraphs for NestedRegionOps
-    lhs_subgraph = getattr(lhs_custom, "subgraph_name", None)
-    rhs_subgraph = getattr(rhs_custom, "subgraph_name", None)
-    if (lhs_subgraph is None) != (rhs_subgraph is None):
-        return Failure("subgraph presence mismatch")
-    if lhs_subgraph is not None:
-        if not (
-            check_result := _check_graphs_equivalent(
-                lhs_trace, rhs_trace, subs, node_map, lhs_subgraph, rhs_subgraph
-            )
-        ):
-            return Failure(f"subgraph '{lhs_subgraph}' mismatch: {check_result.error}")
-
-    return Success()
-
-
-def _reconcile_lifted_placeholders(
-    lhs_nodes: list[fx.Node],
-    rhs_nodes: list[fx.Node],
-    node_map: dict[fx.Node, fx.Node],
-) -> tuple[list[fx.Node], list[fx.Node]]:
-    """Reconcile lifted placeholders between two subgraphs.
-
-    "Lifted" placeholders represent captured values from outer scopes.
-    The fx_emitter calls `makeIsolated` on every Iterate node,
-    which ensures captured values become explicit block arguments. They are
-    reconstructed as placeholder nodes in the FX graph.  However,
-    the source FX graph may have had them transformed away (e.g. by hoisting),
-    so the two sides can differ in whether a lifted placeholder exists.
-    This function updates `node_map` so that references resolve correctly
-    regardless of which form each side uses, and returns the non-lifted nodes
-    from each side for positional comparison.
-
-    Three cases are handled:
-    1. Both sides have a lifted placeholder for the same outer value --
-       the two placeholders are mapped to each other.
-    2. Only rhs has a lifted placeholder -- the lhs outer node is remapped
-       to the rhs placeholder within this subgraph scope.
-    3. Only lhs has a lifted placeholder -- it is mapped to the rhs outer node.
-    """
-    lhs_lifted_map = {
-        n.meta["lifted"]: n
-        for n in lhs_nodes
-        if isinstance(get_custom(n), Placeholder) and "lifted" in n.meta
-    }
-    rhs_lifted_map = {
-        n.meta["lifted"]: n
-        for n in rhs_nodes
-        if isinstance(get_custom(n), Placeholder) and "lifted" in n.meta
-    }
-
-    # Case 1: both sides have a lifted placeholder for equivalent outer values.
-    for lhs_outer, lhs_ph in lhs_lifted_map.items():
-        rhs_outer = node_map.get(lhs_outer)
-        if rhs_outer is not None and rhs_outer in rhs_lifted_map:
-            node_map[lhs_ph] = rhs_lifted_map[rhs_outer]
-
-    # Case 2: rhs has a lifted placeholder but lhs references the outer directly.
-    for rhs_outer, rhs_ph in rhs_lifted_map.items():
-        lhs_outer = next((ln for ln, rn in node_map.items() if rn == rhs_outer), None)
-        if lhs_outer is not None and lhs_outer not in lhs_lifted_map:
-            node_map[lhs_outer] = rhs_ph
-
-    # Case 3: lhs has a lifted placeholder but rhs references the outer directly.
-    for lhs_outer, lhs_ph in lhs_lifted_map.items():
-        rhs_outer = node_map.get(lhs_outer)
-        if rhs_outer is not None and rhs_outer not in rhs_lifted_map:
-            node_map[lhs_ph] = rhs_outer
-
-    # Return non-lifted nodes for positional comparison.
-    is_lifted = lambda n: isinstance(get_custom(n), Placeholder) and "lifted" in n.meta
-    lhs_non_lifted = [n for n in lhs_nodes if not is_lifted(n)]
-    rhs_non_lifted = [n for n in rhs_nodes if not is_lifted(n)]
-    return lhs_non_lifted, rhs_non_lifted
-
-
-def _match_root_placeholders(
-    lhs_nodes: list[fx.Node],
-    rhs_nodes: list[fx.Node],
-    lhs_trace: CapturedTrace,
-    rhs_trace: CapturedTrace,
-    subs: Optional[dict[IndexSymbol, int]],
-    node_map: dict[fx.Node, fx.Node],
-) -> Result[tuple[list[fx.Node], list[fx.Node]]]:
-    """Match root-graph placeholders by order and return non-placeholder nodes.
-
-    Placeholder names may differ (e.g. `a` vs `arg0`), but their order as
-    function parameters is what matters semantically.  Each matched pair is
-    checked for equivalence via `_check_nodes_equivalent`.  Returns the
-    non-placeholder nodes from each side, or a `Failure` on mismatch.
-    """
-    lhs_phs = [
-        (i, n)
-        for i, n in enumerate(lhs_nodes)
-        if isinstance(get_custom(n), Placeholder)
-    ]
-    rhs_phs = [
-        (i, n)
-        for i, n in enumerate(rhs_nodes)
-        if isinstance(get_custom(n), Placeholder)
-    ]
-
-    if len(lhs_phs) != len(rhs_phs):
-        return Failure(
-            f"placeholder count mismatch: {len(lhs_phs)} vs {len(rhs_phs)}",
-        )
-
-    lhs_ph_positions = set()
-    rhs_ph_positions = set()
-    for (lhs_pos, lhs_node), (rhs_pos, rhs_node) in zip(lhs_phs, rhs_phs):
-        node_map[lhs_node] = rhs_node
-        lhs_ph_positions.add(lhs_pos)
-        rhs_ph_positions.add(rhs_pos)
-
-        if not (
-            check_result := _check_nodes_equivalent(
-                get_custom(lhs_node),
-                get_custom(rhs_node),
-                lhs_trace,
-                rhs_trace,
-                subs,
-                node_map,
-            )
-        ):
-            return Failure(f"placeholder mismatch: {check_result.error}")
-
-    lhs_non_ph = [n for i, n in enumerate(lhs_nodes) if i not in lhs_ph_positions]
-    rhs_non_ph = [n for i, n in enumerate(rhs_nodes) if i not in rhs_ph_positions]
-    return Success((lhs_non_ph, rhs_non_ph))
-
-
-def _compare_node_lists(
-    lhs_nodes: list[fx.Node],
-    rhs_nodes: list[fx.Node],
-    lhs_trace: CapturedTrace,
-    rhs_trace: CapturedTrace,
-    subs: Optional[dict[IndexSymbol, int]],
-    node_map: dict[fx.Node, fx.Node],
-) -> Result:
-    """Compare two node lists positionally using _check_nodes_equivalent.
-
-    Transparent wrapper ops (GetResult, Broadcast) are expected to have
-    been filtered by the caller; this function does a straight positional
-    comparison of whatever it receives.
-    """
-    if len(lhs_nodes) != len(rhs_nodes):
-        return Failure(
-            f"node count mismatch: {len(lhs_nodes)} vs {len(rhs_nodes)}",
-        )
-    for lhs_node, rhs_node in zip(lhs_nodes, rhs_nodes):
-        node_map[lhs_node] = rhs_node
-        if not (
-            check_result := _check_nodes_equivalent(
-                get_custom(lhs_node),
-                get_custom(rhs_node),
-                lhs_trace,
-                rhs_trace,
-                subs,
-                node_map,
-            )
-        ):
-            return check_result
-    return Success()
-
-
-def _check_graphs_equivalent(
-    lhs_trace: CapturedTrace,
-    rhs_trace: CapturedTrace,
-    subs: Optional[dict[IndexSymbol, int]],
-    node_map: dict[fx.Node, fx.Node],
-    lhs_graph_name: str | None = None,
-    rhs_graph_name: str | None = None,
-) -> Result:
-    """Compare two graphs node-by-node with shared node_map.
-
-    Placeholder handling is delegated to helper functions:
-    - Subgraphs: `_reconcile_lifted_placeholders` maps captured values.
-    - Root graphs: `_match_root_placeholders` pairs parameters by order.
-
-    After placeholders are resolved, non-placeholder nodes are compared
-    positionally via `_compare_node_lists`.
-
-    Transparent wrapper ops (GetResult, Broadcast) may appear
-    asymmetrically between the two sides.  They are filtered from the
-    node lists before comparison, and `_nodes_match` /
-    `_resolve_node` see through them when resolving operand
-    references.  Filtering rather than trace mutation avoids interfering
-    with subsequent compilation passes and their roundtrips.
-    """
-    lhs = (
-        lhs_trace.get_root_graph()
-        if lhs_graph_name is None
-        else lhs_trace.get_subgraph(lhs_graph_name)
-    )
-    rhs = (
-        rhs_trace.get_root_graph()
-        if rhs_graph_name is None
-        else rhs_trace.get_subgraph(rhs_graph_name)
-    )
-
-    lhs_nodes = list(lhs.nodes)
-    rhs_nodes = list(rhs.nodes)
-
-    # Filter transparent wrapper ops that may appear asymmetrically.
-    #
-    # GetResult: filtered from rhs when the lhs is pre-canonical
-    # (add_get_results has not yet run; the MLIR importer always produces
-    # GetResult wrappers).
-    lhs_has_iterate = any(isinstance(get_custom(n), Iterate) for n in lhs_nodes)
-    lhs_has_getresult = any(isinstance(get_custom(n), GetResult) for n in lhs_nodes)
-    if lhs_has_iterate and not lhs_has_getresult:
-        rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), GetResult)]
-
-    # Broadcast: always filtered from both sides; either trace may
-    # contain explicit broadcasts at different positions.
-    lhs_nodes = [n for n in lhs_nodes if not isinstance(get_custom(n), Broadcast)]
-    rhs_nodes = [n for n in rhs_nodes if not isinstance(get_custom(n), Broadcast)]
-
-    if lhs_graph_name is not None:
-        # Subgraph: reconcile lifted placeholders, then compare non-lifted.
-        lhs_compare, rhs_compare = _reconcile_lifted_placeholders(
-            lhs_nodes, rhs_nodes, node_map
-        )
-    else:
-        # Root graph: match placeholders by order, then compare the rest.
-        if len(lhs_nodes) != len(rhs_nodes):
-            return Failure("node count mismatch")
-        result = _match_root_placeholders(
-            lhs_nodes, rhs_nodes, lhs_trace, rhs_trace, subs, node_map
-        )
-        if not result:
-            return result
-        lhs_compare, rhs_compare = result.value
-
-    return _compare_node_lists(
-        lhs_compare, rhs_compare, lhs_trace, rhs_trace, subs, node_map
-    )
-
-
-def assert_traces_equivalent(
-    lhs: CapturedTrace,
-    rhs: CapturedTrace,
-    subs: Optional[dict[IndexSymbol, int]] = None,
-) -> None:
-    """Assert structural equivalence between two traces.
-
-    Designed for MLIR roundtrip validation where `lhs` is the reference
-    (source trace, possibly sparsely populated in early pipeline stages) and
-    `rhs` is the actual (roundtrip result, eagerly populated from MLIR).
-
-    The comparison is directional: `rhs` may carry additional information
-    (e.g. indices or vector_shapes derived from constraints) that `lhs` does
-    not yet have, but any information present in `lhs` must also appear in
-    `rhs`.
-    """
-    node_map: dict[fx.Node, fx.Node] = {}
-    check_result = _check_graphs_equivalent(lhs, rhs, subs, node_map)
-    if not check_result:
-        raise AssertionError(f"Traces are not equivalent: {check_result.error}")
-
-
-def assert_constraints_equivalent(
-    lhs_constraints: Sequence[Any],
-    rhs_constraints: Sequence[Any],
-    custom_comparators: Optional[dict[type, callable]] = None,
-) -> None:
-    """
-    Assert that two lists of constraints are equivalent (order-independent).
-
-    Constraints use custom __eq__ methods that only compare semantically significant
-    fields, making this suitable for testing MLIR roundtrip fidelity. Order does not
-    matter as constraints form an unordered set.
-
-    Args:
-        lhs_constraints: First list of constraints
-        rhs_constraints: Second list of constraints
-        custom_comparators: Optional dict mapping constraint types to custom comparison
-            functions. Each function should take (lhs, rhs) and return bool.
-            If a constraint type is in this dict, its comparator is used instead of ==.
-
-    Raises:
-        AssertionError: If constraints are not equivalent
-    """
-    if len(lhs_constraints) != len(rhs_constraints):
-        raise AssertionError(
-            f"Constraint count mismatch: {len(lhs_constraints)} vs {len(rhs_constraints)}"
-        )
-
-    def constraints_equal(lhs_c, rhs_c) -> bool:
-        """Check if two constraints are equal, using custom comparator if available."""
-        if custom_comparators:
-            for constraint_type, comparator in custom_comparators.items():
-                if isinstance(lhs_c, constraint_type) and isinstance(
-                    rhs_c, constraint_type
-                ):
-                    return comparator(lhs_c, rhs_c)
-        return lhs_c == rhs_c
-
-    # Check each LHS constraint has a matching RHS constraint (order-independent)
-    for lhs_c in lhs_constraints:
-        if not any(constraints_equal(lhs_c, rhs_c) for rhs_c in rhs_constraints):
-            raise AssertionError(
-                f"No matching constraint found for:\n  {lhs_c}\n"
-                f"Available constraints:\n  "
-                + "\n  ".join(str(c) for c in rhs_constraints)
-            )
-
-
-def compare_hardware_constraints_for_mlir_roundtrip(
-    source: HardwareConstraint, roundtripped: HardwareConstraint
-) -> bool:
-    """
-    Compare HardwareConstraints for MLIR roundtrip testing.
-
-    The MLIR representation intentionally excludes certain Python-specific configuration
-    fields (workgroups_per_cluster, n_service_waves) that represent scheduling decisions
-    and runtime configuration rather than fundamental hardware constraints. This comparator
-    checks only the fields that are serialized to MLIR.
-
-    Args:
-        source: Source constraint (from Python, before MLIR roundtrip)
-        roundtripped: Constraint after MLIR roundtrip
-
-    Returns:
-        True if constraints are equivalent for MLIR roundtrip purposes
-    """
-    # Compare fields that are serialized to MLIR
-    if source.threads_per_wave != roundtripped.threads_per_wave:
-        return False
-    if source.waves_per_block != roundtripped.waves_per_block:
-        return False
-    if source.mma_type != roundtripped.mma_type:
-        return False
-    if source.max_bits_per_load != roundtripped.max_bits_per_load:
-        return False
-
-    # vector_shapes may not be present in the source trace if the set_node_indices pass
-    # (which populates vector_shapes on nodes from hardware constraints) hasn't run yet.
-    # On the MLIR side, vector_shapes are always inferred from the HardwareConstraint
-    # during conversion to fx, so roundtripped traces will always have them populated.
-    if (
-        source.vector_shapes is not None
-        and source.vector_shapes != roundtripped.vector_shapes
-    ):
-        return False
-
-    # workgroups_per_cluster and n_service_waves are intentionally NOT compared
-    # as they are not part of the MLIR representation
-
-    return True
-
-
-def compare_tiling_constraints_for_mlir_roundtrip(
-    source: TilingConstraint, roundtripped: TilingConstraint
-) -> bool:
-    """Directional comparison for TilingConstraint during MLIR roundtrip.
-
-    Before `create_induction_vars`, the fields `induction_var` and `iters`
-    are `None` in the source trace. The MLIR importer always reconstructs
-    them from the iterate operation, so the roundtripped constraint may
-    have values that the source doesn't yet. This comparator accepts
-    `None` on the source side for these fields even when they are set on
-    the roundtripped side.
-    """
-    if source.dim != roundtripped.dim:
-        return False
-    if source.tile_size != roundtripped.tile_size:
-        return False
-    # These fields are populated by `create_induction_vars`, a
-    # accept None on the source side
-    if source.induction_var is not None and (
-        source.induction_var != roundtripped.induction_var
-    ):
-        return False
-    if source.iters is not None and source.iters != roundtripped.iters:
-        return False
-    return True
 
 
 def move_node_after(src_node: fx.Node, anchor: fx.Node):
@@ -1046,22 +144,6 @@ def erase_graph(graph: fx.Graph):
         graph.erase_node(node)
 
 
-def _placeholder_captures(placeholder_node: fx.Node, target: fx.Node) -> bool:
-    """
-    Recursively check if a placeholder (or chain of placeholders) captures the target node.
-    """
-    custom = get_custom(placeholder_node)
-    if not isinstance(custom, Placeholder):
-        return placeholder_node == target
-
-    captured = custom.get_captured_fx_node()
-    if captured is None:
-        return False
-    # Recursively check if what this placeholder captures is itself
-    # a placeholder that captures target
-    return _placeholder_captures(captured, target)
-
-
 def get_users(
     node: fx.Node, region: fx.Node = None
 ) -> tuple[list[fx.Node], Optional[fx.Node]]:
@@ -1081,36 +163,34 @@ def get_users(
             if node in custom.init_args:
                 init_arg_idx = custom.init_args.index(node)
                 users.append(custom.iter_args(graph)[init_arg_idx])
-            elif node in custom.implicit_captures:
+            elif node == custom.start:
+                # don't know what to do
+                continue
+            else:
+                assert node in custom.implicit_captures
                 for outside_node in graph.nodes:
                     if outside_node.meta.get("lifted", None) == node:
                         users.append(outside_node)
                         break
-            else:
-                # Check if any placeholder in implicit_captures captures this node (recursively)
-                for capture in custom.implicit_captures:
-                    if _placeholder_captures(capture, node):
-                        for outside_node in graph.nodes:
-                            if outside_node.meta.get("lifted", None) == capture:
-                                users.append(outside_node)
-                                break
-                        break
             continue
         if isinstance(custom, Output):
-            return_vals = custom.yielded_values
+            # Map output to get result
+            return_vals = custom.return_vals[0]
             parent_region = custom.graph.parent_op
-            get_results = {
-                get_custom(x).res_idx: x
-                for x in parent_region.users
-                if isinstance(get_custom(x), GetResult)
-            }
-            if get_results:
+            if not isinstance(return_vals, (list, tuple)):
+                if parent_region.users:
+                    users.append(next(iter(parent_region.users)))
+            else:
+                # Handles case where DCE eliminate unused GetResult.
+                get_results = {
+                    get_custom(x).res_idx: x
+                    for x in parent_region.users
+                    if isinstance(get_custom(x), GetResult)
+                }
                 output_idx = return_vals.index(node)
                 # Sometime IterArg only used within the tkw.Reduction region
                 if output_idx in get_results:
                     users.append(get_results[output_idx])
-            elif parent_region.users:
-                users.append(next(iter(parent_region.users)))
             continue
         if isinstance(custom, Conditional):
             region = custom
@@ -1141,15 +221,10 @@ def get_users(
     return users, region
 
 
-def propagate_placeholders(n: fx.Node | tuple | None) -> fx.Node | tuple | None:
+def propagate_placeholders(n: fx.Node) -> fx.Node:
     """
     Returns the captured node of a placeholder if it exists.
-    Handles tuples by recursively propagating each element.
     """
-    if n is None:
-        return None
-    if isinstance(n, tuple):
-        return (propagate_placeholders(elem) for elem in n)
     c = get_custom(n)
     if isinstance(c, Placeholder):
         p = c.get_captured_fx_node()
@@ -1228,43 +303,44 @@ def get_inputs(
             # Map get result to output
             iteration_subgraph = region.get_root_graph().subgraphs[region.subgraph_name]
             if len(region.init_args) == 1:
-                inputs += region.outputs(iteration_subgraph)
+                outputs = region.outputs(iteration_subgraph)
+                if isinstance(outputs, Sequence):
+                    inputs += outputs
+                else:
+                    inputs.append(outputs)
             else:
                 inputs.append(region.outputs(iteration_subgraph)[custom.res_idx])
         elif isinstance(parent_op, Conditional):
             region = parent_op
+            # Map get result to output
             conditional_subgraph = region.get_root_graph().subgraphs[
                 region.subgraph_name
             ]
             outputs = region.outputs(conditional_subgraph)
-            if len(outputs) == 1:
-                inputs.append(outputs[0])
+            if isinstance(outputs, Sequence):
+                if len(outputs) == 1:
+                    inputs.append(outputs[0])
+                else:
+                    inputs.append(outputs[custom.res_idx])
             else:
-                inputs.append(outputs[custom.res_idx])
+                inputs.append(outputs)
         else:
             raise ValueError(
                 f"GetResult must be using an Iterate or Conditional, but\n{custom}\nis using\n{parent_op}"
             )
     elif isinstance(custom, Iterate):
         iteration_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
-        inputs.extend(custom.outputs(iteration_subgraph))
+        inputs.append(custom.outputs(iteration_subgraph))
     elif isinstance(custom, Conditional):
         conditional_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
-        inputs.extend(custom.outputs(conditional_subgraph))
+        inputs.append(custom.outputs(conditional_subgraph))
     else:
         # Default handling for other ops.
         for input in node.all_input_nodes:
             inputs.append(input)
 
     inputs = [propagate_placeholders(i) for i in inputs if i is not None]
-    # Flatten any sequences in inputs and filter out None values
-    flattened_inputs = []
-    for inp in inputs:
-        if isinstance(inp, Sequence):
-            flattened_inputs.extend(x for x in inp if x is not None)
-        elif inp is not None:
-            flattened_inputs.append(inp)
-    return flattened_inputs, region
+    return inputs, region
 
 
 def bfs(
@@ -1398,100 +474,18 @@ def is_barrier_between_same_graph(
     next_node = src.next
     if barrier_check is None:
         barrier_check = set()
-
     while next_node != dst and next_node.next.op != "root":
         custom_next_node = get_custom(next_node)
-
-        # Check for SharedMemoryBarrier (amdgpu.lds_barrier)
         if isinstance(custom_next_node, SharedMemoryBarrier):
             return next_node
-
-        # Check for split barriers (signal/wait)
         if isinstance(custom_next_node, SharedMemoryBarrierSignal):
             barrier_check.add(custom_next_node.barId)
         if isinstance(custom_next_node, SharedMemoryBarrierWait):
             if custom_next_node.barId == barId and barId in barrier_check:
                 return next_node
-
-        # Check for MemoryCounterWaitBarrier (amdgpu.memory_counter_wait + rocdl.s.barrier)
-        if isinstance(custom_next_node, MemoryCounterWaitBarrier):
-            return next_node
-
         next_node = next_node.next
 
     return None
-
-
-def _get_parent_chain(node: fx.Node) -> list[tuple[fx.Node, fx.Graph]]:
-    """
-    Get the chain of parent graphs and their parent_op nodes from node up to the root graph.
-    Returns a list of (parent_op, graph) tuples, ordered from innermost to outermost.
-    The node's own graph is not included, only its ancestors.
-    """
-    chain = []
-    current_graph = node.graph
-    while hasattr(current_graph, "parent_op"):
-        parent_op = current_graph.parent_op
-        parent_graph = parent_op.graph
-        chain.append((parent_op, parent_graph))
-        current_graph = parent_graph
-    return chain
-
-
-def _find_common_ancestor(
-    src: fx.Node, dst: fx.Node
-) -> tuple[Optional[fx.Graph], int, int]:
-    """
-    Find the closest common ancestor graph for src and dst nodes.
-    Returns (common_ancestor_graph, src_depth, dst_depth) where:
-    - common_ancestor_graph: The closest common ancestor graph (or None if src.graph == dst.graph)
-    - src_depth: Number of levels from src to common ancestor (0 if src is in common ancestor)
-    - dst_depth: Number of levels from dst to common ancestor (0 if dst is in common ancestor)
-    """
-    if src.graph == dst.graph:
-        return None, 0, 0
-
-    src_chain = _get_parent_chain(src)
-    dst_chain = _get_parent_chain(dst)
-
-    # Check if src is in dst's parent chain
-    for depth, (parent_op, parent_graph) in enumerate(dst_chain):
-        if src.graph == parent_graph:
-            return parent_graph, 0, depth + 1
-
-    # Check if dst is in src's parent chain
-    for depth, (parent_op, parent_graph) in enumerate(src_chain):
-        if dst.graph == parent_graph:
-            return parent_graph, depth + 1, 0
-
-    # Find common ancestor in both chains
-    # Reverse chains to go from root to leaf
-    src_chain_rev = list(reversed(src_chain))
-    dst_chain_rev = list(reversed(dst_chain))
-
-    # Find the deepest common graph
-    common_ancestor = None
-    common_depth = 0
-    for i, ((src_op, src_g), (dst_op, dst_g)) in enumerate(
-        zip(src_chain_rev, dst_chain_rev)
-    ):
-        if src_g == dst_g:
-            common_ancestor = src_g
-            common_depth = i
-        else:
-            break
-
-    if common_ancestor is None:
-        # No common ancestor found, they must be in different root graphs
-        return None, len(src_chain), len(dst_chain)
-
-    # Calculate depth from each node to the common ancestor
-    # common_depth is the index in the reversed chain where we found the common ancestor
-    # The depth is the total chain length minus the position of the common ancestor
-    src_depth = len(src_chain) - common_depth
-    dst_depth = len(dst_chain) - common_depth
-
-    return common_ancestor, src_depth, dst_depth
 
 
 def is_barrier_between(
@@ -1501,7 +495,6 @@ def is_barrier_between(
     Checks if there is a barrier between the source and destination nodes.
     """
     barriers = set()
-
     if src.graph == dst.graph:
         # The following cases are handled when src and dst are in same graph:
         # 1. src and dst is on the same iteration step and src < dst (topographic).
@@ -1524,61 +517,55 @@ def is_barrier_between(
                 list(dst.graph.nodes)[0], dst, barId, barriers
             )
     else:
-        # General algorithm for nodes in different graphs:
-        # 1. Get parent chains and find common ancestor
-        # 2. Check from src up to common ancestor (src to graph outputs)
-        # 3. Check in common ancestor (between ancestor nodes)
-        # 4. Check from common ancestor down to dst (graph inputs to dst)
+        # The following cases are handled when src and dst are in different graphs:
+        # 1. src and dst graphs at the same nested level.
+        # 2. src nested level = dst nested level + 1.
+        # 3. dst nested level = src nested level + 1.
 
-        common_ancestor, src_depth, dst_depth = _find_common_ancestor(src, dst)
+        # Case 1:
+        if hasattr(src.graph, "parent_op") and hasattr(dst.graph, "parent_op"):
+            assert (
+                src.graph.parent_op.graph == dst.graph.parent_op.graph
+            ), "src and dst parent ops must be in the same graph"
+            # Check if there is a barrier in the src graph between src and output.
+            src_check = is_barrier_between_same_graph(
+                src, list(src.graph.nodes)[-1], barId, barriers
+            )
+            # Check if there is a barrier in the graph above between src root and dst root.
+            root_check = is_barrier_between_same_graph(
+                src.graph.parent_op, dst.graph.parent_op, barId, barriers
+            )
+            # Check if there is a barrier in the dst graph between the root and dst.
+            dst_check = is_barrier_between_same_graph(
+                list(dst.graph.nodes)[0], dst, barId, barriers
+            )
+            return src_check or root_check or dst_check
 
-        if common_ancestor is None:
-            return None
+        # Case 2:
+        if hasattr(src.graph, "parent_op") and not hasattr(dst.graph, "parent_op"):
+            # Check if there is a barrier in the src graph between src and output.
+            src_check = is_barrier_between_same_graph(
+                src, list(src.graph.nodes)[-1], barId, barriers
+            )
+            # Check if there is a barrier in the graph above between src root and dst.
+            root_check = is_barrier_between_same_graph(
+                src.graph.parent_op, dst, barId, barriers
+            )
+            return src_check or root_check
 
-        # Step 2: Check from src up to common ancestor
-        # For each nested graph containing src, check from src to output
-        current_node = src
-        current_graph = src.graph
-        src_chain = _get_parent_chain(src)
-        for depth in range(src_depth):
-            if node := is_barrier_between_same_graph(
-                current_node, list(current_graph.nodes)[-1], barId, barriers
-            ):
-                return node
-            if depth < len(src_chain):
-                parent_op, parent_graph = src_chain[depth]
-                current_node = parent_op
-                current_graph = parent_graph
+        # Case 3:
+        if not hasattr(src.graph, "parent_op") and hasattr(dst.graph, "parent_op"):
+            # Check if there is a barrier in the graph above between src and dst root.
+            root_check = is_barrier_between_same_graph(
+                src, dst.graph.parent_op, barId, barriers
+            )
+            # Check if there is a barrier in the dst graph between the root and dst.
+            dst_check = is_barrier_between_same_graph(
+                list(dst.graph.nodes)[0], dst, barId, barriers
+            )
+            return dst_check or root_check
 
-        # Step 3: Check in common ancestor graph
-        src_ancestor = (
-            current_node  # This is the node in common_ancestor representing src's path
-        )
-        dst_chain = _get_parent_chain(dst)
-
-        if dst_depth > 0:
-            dst_ancestor = dst_chain[dst_depth - 1][0]  # parent_op at the right level
-        else:
-            dst_ancestor = dst
-        if node := is_barrier_between_same_graph(
-            src_ancestor, dst_ancestor, barId, barriers
-        ):
-            return node
-
-        # Step 4: Check from common ancestor down to dst
-        current_node = dst
-        current_graph = dst.graph
-        for depth in range(dst_depth):
-            if node := is_barrier_between_same_graph(
-                list(current_graph.nodes)[0], current_node, barId, barriers
-            ):
-                return node
-            if depth < len(dst_chain):
-                parent_op, parent_graph = dst_chain[depth]
-                current_node = parent_op
-                current_graph = parent_graph
-
-    return None
+        assert False, "Unhandled case when src and dst are in different graphs"
 
 
 def update_sort_keys(
