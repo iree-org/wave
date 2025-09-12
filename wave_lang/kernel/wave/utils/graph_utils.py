@@ -180,11 +180,9 @@ def get_users(
             if node in custom.init_args:
                 init_arg_idx = custom.init_args.index(node)
                 users.append(custom.iter_args(graph)[init_arg_idx])
-            elif node in custom.implicit_captures:
-                for outside_node in graph.nodes:
-                    if outside_node.meta.get("lifted", None) == node:
-                        users.append(outside_node)
-                        break
+            elif node == custom.start:
+                # don't know what to do
+                continue
             else:
                 # Check if any placeholder in implicit_captures captures this node (recursively)
                 for capture in custom.implicit_captures:
