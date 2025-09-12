@@ -450,17 +450,20 @@ def define_interface_op(op_name: str) -> Callable[[T], T]:
 
 def get_custom(node: fx.Node) -> "CustomOp":
     """Get the corresponding CustomOp for a given fx.Node."""
-    if not isinstance(node, fx.Node):
-        raise ValueError(f"Expected an fx.Node but got {type(node)}")
+    try:
+        if not isinstance(node, fx.Node):
+            raise ValueError(f"Expected an fx.Node but got {type(node)}")
 
-    # If the node was created as a CustomOp it has a corresponding field
-    if hasattr(node, "tkw_op"):
-        return node.tkw_op.from_fx_node(node)
-    if node.op == "placeholder":
-        return Placeholder.from_fx_node(node)
-    if node.op == "output":
-        return Output.from_fx_node(node)
-    return Unknown.from_fx_node(node)
+        # If the node was created as a CustomOp it has a corresponding field
+        if hasattr(node, "tkw_op"):
+            return node.tkw_op.from_fx_node(node)
+        if node.op == "placeholder":
+            return Placeholder.from_fx_node(node)
+        if node.op == "output":
+            return Output.from_fx_node(node)
+        return Unknown.from_fx_node(node)
+    except:
+        breakpoint()
 
 
 def has_same_custom_type(lhs_type: Memory, rhs_type: Memory) -> bool:
@@ -2409,11 +2412,13 @@ class ScanOp(CustomOp, ABC):
     arg: Source tensor/value to scan.
     init: Optional initial value.
     dim: Symbolic dimension along which to scan.
+    block: When set to true, scan across block, else scan across warp.
     """
 
     arg: fx.Node | list[fx.Node]
     init: Optional[fx.Node] = None
     dim: Optional[IndexSymbol] = None
+    block: Optional[bool] = False
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
