@@ -13,9 +13,9 @@ from typing import Any, Callable, ClassVar, List, Optional, Type
 import sympy
 import torch.fx as fx
 
-from wave_lang.aot.support.ir_utils import (
-    _is_float_type,
-    _is_integer_like_type,
+from .ir_utils import (
+    is_float_type,
+    is_integer_like_type,
 )
 
 from wave_lang.kernel.ops.wave_ops import get_custom
@@ -633,7 +633,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                     operand = stack.pop()
                     _enforce_non_rational(operand, term)
                     operand = _get_ir_value(operand)
-                    if _is_integer_like_type(elem_type):
+                    if is_integer_like_type(elem_type):
                         res = arith_d.maxsi(*_broadcast(res, operand))
                     else:
                         res = arith_d.maximumf(*_broadcast(res, operand))
@@ -649,7 +649,7 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                     operand = stack.pop()
                     _enforce_non_rational(operand, term)
                     operand = _get_ir_value(operand)
-                    if _is_integer_like_type(elem_type):
+                    if is_integer_like_type(elem_type):
                         res = arith_d.minsi(*_broadcast(res, operand))
                     else:
                         res = arith_d.minimumf(*_broadcast(res, operand))
@@ -712,9 +712,9 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
 
 def get_constant_attr(value: Any, element_type: IrType) -> Attribute:
-    if _is_integer_like_type(element_type):
+    if is_integer_like_type(element_type):
         return IntegerAttr.get(element_type, int(value))
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         return FloatAttr.get(element_type, float(value))
     raise CodegenError(f"Cannot create a constant attribute for type `{element_type}`")
 
