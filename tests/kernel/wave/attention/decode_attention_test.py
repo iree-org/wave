@@ -27,6 +27,7 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from torch.testing import assert_close
 from ..common.utils import (
     require_e2e,
+    require_cdna_2_or_3_or_4,
     param_bool,
 )
 from ..common.shapes import get_test_shapes
@@ -39,6 +40,7 @@ from wave_lang.kernel.wave.templates.attention_common import (
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("decode_attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("dynamic_dims", "dyn")
@@ -125,6 +127,7 @@ def testFlashDecoding(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("gqa_bshd_decode_attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @pytest.mark.parametrize(

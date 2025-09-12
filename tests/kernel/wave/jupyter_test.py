@@ -12,7 +12,7 @@ from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 import wave_lang.kernel as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from .common.utils import require_e2e
+from .common.utils import require_e2e, require_cdna_2_or_3_or_4
 import torch
 
 # Define symbolic dimensions for our matrices
@@ -69,6 +69,7 @@ def gemm(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def test_gemm():
     # Create test matrices
     m, n, k = 128, 256, 128  # Small dimensions for testing
