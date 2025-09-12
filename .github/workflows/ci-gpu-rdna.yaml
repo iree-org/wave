@@ -8,7 +8,7 @@ name: "Wave GPU CI (rdna4)"
 
 on:
   workflow_dispatch:
-    # Uncomment below when stable
+    # TODO(megan.kuo) uncomment when tests are ready
     # pull_request:
     # types: [opened, synchronize, ready, ready_for_review, converted_to_draft]
   push:
@@ -29,11 +29,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [3.11]
+        version: ["3.11"]
         os: [linux-rdna4-1gpu-ossci-iree-org]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, Linux, X64, rdna4]
     timeout-minutes: 60
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+      # TODO(megan.kuo) uncomment when tests are ready
+      # if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
 
     container:
       image: 'ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:405945a40deaff9db90b9839c0f41d4cba4a383c1a7459b28627047bf6302a26'
@@ -61,6 +62,8 @@ jobs:
         run: |
            python -m venv ${VENV_DIR}
            source ${VENV_DIR}/bin/activate
+           echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
+           echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust via rustup.sh
         run: |

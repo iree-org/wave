@@ -27,11 +27,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-from ..common.utils import (
-    expensive_test,
-    require_e2e,
-    require_cdna_2_or_3_or_4
-)
+from ..common.utils import expensive_test, require_e2e, require_cdna_2_or_3_or_4
 from torch.testing import assert_close
 
 # batch, q_seq_len, v_head_dim, qk_head_dim, kv_seq_len
