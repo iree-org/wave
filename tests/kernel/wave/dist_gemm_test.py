@@ -28,6 +28,7 @@ from .common.utils import (
     require_cdna2,
     require_cdna3,
     require_cdna_3_or_4,
+    require_cdna_2_or_3_or_4,
     perf_test,
     param_bool,
 )
@@ -40,6 +41,7 @@ from torch.testing import assert_close
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.skip(reason="Test not ready - will be enabled in follow-up PR")
 @pytest.mark.parametrize("shape", [(128, 128, 64)])
 @pytest.mark.parametrize(

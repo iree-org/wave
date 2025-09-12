@@ -29,6 +29,7 @@ from .common.utils import (
     require_cdna3,
     require_cdna4,
     require_cdna_3_or_4,
+    require_cdna_2_or_3_or_4,
     perf_test,
     param_bool,
 )
@@ -68,6 +69,7 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
 
 
 @require_e2e
+@require_cdna_3_or_4
 def testGemmBench(tmp_path):
     shape = (64, 64, 64)
     perf_filename_tk = tmp_path / "wave_gemm_bench.txt"
@@ -111,6 +113,7 @@ def testGemmBench(tmp_path):
 
 
 @require_e2e
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -265,6 +268,7 @@ def testGemmGatherToLDS(
 
 
 @require_e2e
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", [(32, 32, 32)] + get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -392,6 +396,7 @@ def testGemmSmallTiles(
 
 
 @require_e2e
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -516,6 +521,7 @@ def testNonTransposeGemm(
 
 
 @require_e2e
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
 @pytest.mark.parametrize(
     "mfma_variant",
@@ -694,6 +700,7 @@ def testGemmDumpOverrideSchedule(
 
 
 @require_e2e
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", [(64, 64, 64)])
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("dynamic_dims", "dyn")
@@ -821,6 +828,7 @@ def testGemmDot(
 
 
 @require_e2e
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -1273,6 +1281,7 @@ def testF8Gemm(
 
 
 @require_e2e
+@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -1394,6 +1403,7 @@ def testPackedGemm(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -1522,6 +1532,7 @@ def testPackedNonTransposeGemm(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_batched_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -1622,6 +1633,7 @@ def testBatchedGemm(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_batched_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -1927,6 +1939,7 @@ def testSequentialBatchedGemmWhileWithOutputSum(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_batched_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",

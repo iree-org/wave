@@ -31,6 +31,7 @@ from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from torch.testing import assert_close
 from ..common.utils import (
     require_e2e,
+    require_cdna_2_or_3_or_4,
 )
 from typing import Optional, Tuple
 
@@ -100,6 +101,7 @@ def create_inputs(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("dtype", [torch.float16])
 @pytest.mark.parametrize(

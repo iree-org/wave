@@ -18,10 +18,12 @@ from torch.testing import assert_close
 
 from .common.utils import (
     require_e2e,
+    require_cdna_2_or_3_or_4,
 )
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", [(8192, 8192, 8192)])
 @pytest.mark.parametrize(
     "enable_scheduling",

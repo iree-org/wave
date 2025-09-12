@@ -47,6 +47,7 @@ from wave_lang.kernel.wave.templates.vanilla_attention import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from ..common.utils import (
+    require_cdna_2_or_3_or_4,
     require_e2e,
 )
 
@@ -130,6 +131,7 @@ def generate_attention_kernel(constraints: list[Constraint], head_dim: int):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @require_cache
 def testSameConfig(tmp_path):
     reset_cache_manager(tmp_path)
@@ -236,6 +238,7 @@ def testSameConfig(tmp_path):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @require_cache
 def testDifferentDynamicSameBlock(tmp_path):
     reset_cache_manager(tmp_path)
@@ -371,6 +374,7 @@ def testDifferentDynamicSameBlock(tmp_path):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @require_cache
 def testSameSizeDifferentBlock(tmp_path):
     reset_cache_manager(tmp_path)
@@ -493,6 +497,7 @@ def testSameSizeDifferentBlock(tmp_path):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @require_cache
 def testSameConfigDifferentFreeVar(tmp_path):
     reset_cache_manager(tmp_path)
@@ -583,6 +588,7 @@ def testSameConfigDifferentFreeVar(tmp_path):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @require_cache
 def testDifferentSignatureSameCore(tmp_path):
     reset_cache_manager(tmp_path)

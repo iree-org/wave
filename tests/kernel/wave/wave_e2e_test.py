@@ -44,6 +44,7 @@ from .common.utils import (
     perf_test,
     require_cdna3,
     require_e2e,
+    require_cdna_2_or_3_or_4,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
 
@@ -80,6 +81,7 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy")[:1])
 def test_dump_vmfb(shape, tmp_path):
     M = tkl.sym.M
@@ -132,6 +134,7 @@ def test_dump_vmfb(shape, tmp_path):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 @check_leaks
@@ -188,6 +191,7 @@ def test_copy(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_dynamic_copy(shape, use_buffer_ops, run_bench):
@@ -243,6 +247,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_transpose_read"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_transpose_read(shape, use_buffer_ops, run_bench):
@@ -300,6 +305,7 @@ def test_transpose_read(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_transpose_write"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_transpose_write(shape, use_buffer_ops, run_bench):
@@ -356,6 +362,7 @@ def test_transpose_write(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_offset_read(shape, use_buffer_ops, run_bench):
@@ -429,6 +436,7 @@ def test_offset_read(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_offset_read_one(shape, use_buffer_ops, run_bench):
@@ -508,6 +516,7 @@ def test_offset_read_one(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_read_write_same(shape, use_buffer_ops, run_bench):
@@ -561,6 +570,7 @@ def test_read_write_same(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 def test_set_symbol(shape, run_bench):
     M = tkl.sym.M
@@ -639,6 +649,7 @@ def test_set_symbol(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 def test_apply_expr(shape, run_bench):
     M = tkl.sym.M
@@ -718,6 +729,7 @@ def test_apply_expr(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 def test_conditional(shape, run_bench):
     M = tkl.sym.M
@@ -780,6 +792,7 @@ def test_conditional(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_offset_write(shape, use_buffer_ops, run_bench):
@@ -859,6 +872,7 @@ def test_offset_write(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize(
     "shape",
     mark_shapes_skip(get_test_shapes("test_copy"), [(111, 813)], "TODO: OOB scatter"),
@@ -951,6 +965,7 @@ def test_offset_write_one(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_reduce_sum"))
 def test_reduce_sum(shape, run_bench):
     M = tkl.sym.M
@@ -1005,6 +1020,7 @@ def test_reduce_sum(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_common_test_shape("test_block_reduce"))
 def test_block_reduce_sum(shape, run_bench):
     round_to_divisible = lambda src, denom: sympy.ceiling(src / denom) * denom
@@ -1066,6 +1082,7 @@ def test_block_reduce_sum(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_tiled_reduce_max"))
 def test_toy_online_softmax(shape):
     M = tkl.sym.M
@@ -1135,6 +1152,7 @@ def test_toy_online_softmax(shape):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def test_im2col(run_bench):
     # TODO: we don't support unaligned access at the moment so all sizes must
     # be aligned to WG/Wave sizes, c * hw * wf == 8 and number of windows == 64.
@@ -1236,6 +1254,7 @@ def test_im2col(run_bench):
 
 # TODO: Fix test for CDNA2. CDNA2 seem to have worse accuracy, atol=0.0094, rtol=10.2405
 @require_e2e
+@require_cdna_2_or_3_or_4
 def test_im2col_mma(run_bench):
     # igemm without final col2im
     n, c, h, w = 1, 4, 9, 9  # Image.
@@ -1522,6 +1541,7 @@ def test_igemm_conv(
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", [(256, 64)])
 def test_cast(shape, run_bench):
     M = tkl.sym.M
@@ -1660,6 +1680,7 @@ def test_scalar_codegen(
 #  2. Scalars in Wave can be used for comparison/binaryOps
 #     as well as on select ops.
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 def test_scalar_cond_copy(shape, run_bench):
     M = tkl.sym.M
@@ -1733,6 +1754,7 @@ def test_scalar_cond_copy(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize(
     "shape",
     [
@@ -1795,6 +1817,7 @@ def test_scanop_cumsum(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_vector_add")[:2])
 @param_bool("use_buffer_ops", "buf_ops")
 def test_vector_add(shape, use_buffer_ops, run_bench):
@@ -1853,6 +1876,7 @@ def test_vector_add(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", [(256, 256)])
 def test_broadcast_scaled_add(shape, run_bench):
     broadcast_scaled_add, hyperparams = get_broadcast_scaled_add(shape)
@@ -1879,6 +1903,7 @@ def test_broadcast_scaled_add(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", [(2, 128), (256, 1024)])
 @param_bool("use_buffer_ops", "buf_ops")
 def test_fused_softmax(shape, use_buffer_ops):
@@ -1936,6 +1961,7 @@ def test_fused_softmax(shape, use_buffer_ops):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", [(2, 64)])
 @param_bool("use_buffer_ops", "buf_ops")
 def test_atomic_min(shape, use_buffer_ops, run_bench):
@@ -2018,6 +2044,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", [(48, 4, 128)])
 def test_self_index(shape, run_bench):
     M = tkl.sym.M
@@ -2080,6 +2107,7 @@ def test_self_index(shape, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize(
     "shape, elems_per_thread",
     [
@@ -2187,6 +2215,7 @@ def test_scatter_add(shape, elems_per_thread, request):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @param_bool("dynamic_dims", "dyn")
 def test_debug_log_core(dynamic_dims: bool):
     M = tkl.sym.M
@@ -2290,6 +2319,7 @@ def test_debug_log_core(dynamic_dims: bool):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def test_debug_log_iteration_dims():
     iterations = 4
 
