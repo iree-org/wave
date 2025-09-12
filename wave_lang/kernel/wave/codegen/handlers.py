@@ -51,13 +51,8 @@ from wave_lang.support.ir_imports import (
 from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, index_symbol
 from ...compiler.base import CodegenError, ValidationError
 from ...compiler.builder import IRProxyValue
-from ...compiler.vector_codegen import (
-    cast_py_literal,
-    cast_py_value,
-    cast_scalar,
-    cast_vector,
-)
 from ...ops.wave_ops import (
+    MMABase,
     abs,
     allocate,
     apply_expr,
@@ -80,8 +75,8 @@ from ...ops.wave_ops import (
     gt,
     iterate,
     le,
-    log2,
     log10,
+    log2,
     lt,
     maximum,
     minimum,
@@ -92,6 +87,7 @@ from ...ops.wave_ops import (
     reciprocal,
     register,
     reshape,
+    round,
     roundeven,
     rsqrt,
     scalar,
@@ -122,6 +118,10 @@ from ..utils.symbol_utils import subs_idxc
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
+    cast_py_literal,
+    cast_py_value,
+    cast_scalar,
+    cast_vector,
     gen_sympy_index,
     get_constant_attr,
     get_type_or_element_type,
@@ -556,6 +556,11 @@ def handle_atomic_op(op):
 ###############################################################################
 
 
+def _near_mma(node: fx.Node) -> bool:
+    """Check if there is any mma op in same block"""
+    return any(isinstance(get_custom(node), MMABase) for node in node.graph.nodes)
+
+
 def get_rank(mlir_type):
     if not isinstance(mlir_type, ShapedType):
         # Not 0 because vector<f32> is rank 0, and in theory,
@@ -564,7 +569,16 @@ def get_rank(mlir_type):
     return mlir_type.rank
 
 
+_ops_to_scalarize = [
+    operator.add,
+    operator.sub,
+    operator.mul,
+]
+
+
 def handle_binary_op(op):
+    captured_op = op
+
     def decorator(binary_fn: Callable[[Value, Value], OpResult]):
         @handle_op(op)
         def handle_generic_binary(emitter: WaveEmitter, node: fx.Node):
@@ -598,7 +612,46 @@ def handle_binary_op(op):
                     f"rhs={get_custom(op.rhs)}"
                 )
 
-            result = binary_fn(lhs, rhs, emitter.options)
+            # Following from the same transformtion in Triton:
+            #  This Pass scalarizes vector `fmul`s and `fadd`s in basic blocks that contain
+            #  MFMAs. The point/purpose/value of doing is that these get codegened to
+            #  "packed" ops (`v_pk_mul_f32`/`v_pk_add_f32`) and while packed ops use
+            #  separate VALUs from MFMA tensor cores (no problem there), the instructions
+            #  themselves cannot be *issued* in parallel, thus there is a performance cost
+            #  to having such packed ops "near" MFMAs. Concretely/specifically this
+            #  eliminates `v_pk_mul_f32`/`v_pk_add_f32` operations in the final asm in bbs
+            #  with MFMAs.
+            #
+            #  Note, these "scalar" floating point ops will still get lowered to vector
+            #  instructions like `v_mul_f32_e32 v1, v163, v114` and
+            #  `v_add_u32_e32 v1, s16, v12`, just not the "packed" variants.
+            if (
+                emitter.options.scalarize_packed_math
+                and captured_op in _ops_to_scalarize
+                and _near_mma(node)
+            ):
+                lhs_values = []
+                for i in range(lhs.type.shape[0]):
+                    lhs_elem = vector_d.extract(
+                        lhs, static_position=[i], dynamic_position=[]
+                    )
+                    lhs_values.append(lhs_elem)
+                rhs_values = []
+                for i in range(rhs.type.shape[0]):
+                    rhs_elem = vector_d.extract(
+                        rhs, static_position=[i], dynamic_position=[]
+                    )
+                    rhs_values.append(rhs_elem)
+                values = []
+                for lhs_elem, rhs_elem in zip(lhs_values, rhs_values):
+                    result = binary_fn(lhs_elem, rhs_elem, emitter.options)
+                    values.append(result)
+
+                elem_type = values[0].type
+                res_type = VectorType.get(lhs.type.shape, elem_type)
+                result = vector_d.from_elements(res_type, values)
+            else:
+                result = binary_fn(lhs, rhs, emitter.options)
 
             emitter.bind_node_proxy(node, IRProxyValue(result))
 
@@ -1144,6 +1197,16 @@ def handle_tanh(source: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
+@handle_unary_op(round)
+def handle_round(source: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(source.type)
+    if _is_float_type(element_type):
+        round = math_d.round(source)
+    else:
+        raise ValidationError(f"Found unhandled operand type for round: {element_type}")
+    return round
+
+
 @handle_unary_op(roundeven)
 def handle_roundeven(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
@@ -1583,8 +1646,9 @@ def handle_broadcast(emitter: WaveEmitter, node: fx.Node):
 
     # Handle broadcasting to unit dims as no-op.
     # Most useful for handling broadcast in symbolic shapes.
+    target_dims = set(get_custom(node).indexing_dims)
     src_dims = set(get_custom(register).indexing_dims)
-    bcast_dims = list(set(target_shape) - src_dims)
+    bcast_dims = list(target_dims - src_dims)
     bcast_sizes = [subs_idxc(node.index[x].size) for x in bcast_dims]
     lane_level_broadcast = target_thread_size != src_thread_size
     if math.prod(bcast_sizes) == 1 and not lane_level_broadcast:
@@ -1670,7 +1734,20 @@ def handle_cast(emitter: WaveEmitter, node: fx.Node):
     conversion_op = get_conversion_op(
         src_elem_type, dst_elem_type, fastmath=get_fast_math_flags(emitter.options)
     )
-    casted_vector = conversion_op(dst_vector_type, vector_src)
+    if emitter.options.scalarize_packed_math and _near_mma(node):
+        src_values = []
+        for i in range(src_vector_type.shape[0]):
+            src_elem = vector_d.extract(
+                vector_src, static_position=[i], dynamic_position=[]
+            )
+            src_values.append(src_elem)
+
+        values = []
+        for src_elem in src_values:
+            values.append(conversion_op(dst_vector_type.element_type, src_elem))
+        casted_vector = vector_d.from_elements(dst_vector_type, values)
+    else:
+        casted_vector = conversion_op(dst_vector_type, vector_src)
     emitter.bind_node_proxy(node, IRProxyValue(casted_vector))
 
 

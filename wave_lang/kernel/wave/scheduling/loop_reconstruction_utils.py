@@ -1,17 +1,20 @@
 import random
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
-
-from ...lang.global_symbols import SHARED_ADDRESS_SPACE
+from ..utils.general_utils import (
+    is_shared_write,
+    get_shared_memory_operand,
+    ceildiv,
+    propagate_loop_carried_vars,
+)
 from ...ops.wave_ops import (
     GatherToLDS,
     GetResult,
     IterArg,
-    Iterate,
     Write,
     get_custom,
 )
@@ -48,14 +51,20 @@ class ArgumentContext:
         for result, init_arg in zip(results, init_args):
             self.result_to_init_arg[result] = init_arg
 
-    def map_arg_all(self, from_: fx.Node, to_: fx.Node) -> None:
+    def map_arg_all(self, from_: fx.Node, to_: fx.Node | Sequence[fx.Node]) -> None:
         """
         Maps the given argument from one to another into the argument context for all stages
         and for all iterations.
         """
-        for iteration in range(self.num_iterations):
-            for stage in range(self.num_stages):
-                self.argument_map[iteration][stage][from_] = to_
+        if isinstance(to_, Sequence):
+            count = len(to_)
+            for iteration in range(self.num_iterations):
+                for stage in range(self.num_stages):
+                    self.argument_map[iteration][stage][from_] = to_[iteration % count]
+        else:
+            for iteration in range(self.num_iterations):
+                for stage in range(self.num_stages):
+                    self.argument_map[iteration][stage][from_] = to_
 
     def map_arg_all_after_iteration(
         self, from_: fx.Node, to_: fx.Node, iteration: int
@@ -225,29 +234,41 @@ def create_drain_stage_schedule(n: int) -> list[list[int]]:
     return schedule
 
 
-def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]:
+def compute_lifetime(
+    graph: fx.Graph, use_absolute_cycle: bool = False
+) -> dict[fx.Node, int]:
     """
-    Perform liveness analysis on the graph to determine the live ranges of
-    variables and use that to deduce how many rotating registers we need.
+    Compute number of clocks each node result needs to be alive.
     """
-    lifetime: dict[fx.Node, int] = {}
+    lifetime: dict[fx.Node, int] = defaultdict(int)
+    name = "absolute_cycle" if use_absolute_cycle else "stage"
     for node in graph.nodes:
         custom = get_custom(node)
         if custom.scheduling_parameters is None:
             continue
-        if node not in lifetime:
-            lifetime[node] = 0
+
+        node_stage = custom.scheduling_parameters[name]
         for user in custom.users:
             if user.scheduling_parameters is None:
                 continue
+
+            user_stage = user.scheduling_parameters[name]
+            user_lifetime = user_stage - node_stage
+
             logger.debug(
-                f"Node: {node}, User: {user.fx_node}, lifetime: {user.scheduling_parameters['stage'] - custom.scheduling_parameters['stage']}"
-            )
-            user_lifetime = (
-                user.scheduling_parameters["stage"]
-                - custom.scheduling_parameters["stage"]
+                f"Node: {node}, User: {user.fx_node}, lifetime: {user_lifetime}"
             )
             lifetime[node] = max(user_lifetime, lifetime[node])
+
+    return lifetime
+
+
+def liveness_analysis(graph: fx.Graph) -> dict[fx.Node, int]:
+    """
+    Perform liveness analysis on the graph to determine the live ranges of
+    variables and use that to deduce how many rotating registers we need.
+    """
+    lifetime: dict[fx.Node, int] = compute_lifetime(graph, use_absolute_cycle=False)
 
     # Determine how many copies we need for each node. If the lifetime of a node
     # is l clocks and the initiation interval is T, then only ceil(l/T) values
@@ -258,10 +279,7 @@ def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]
         if node in num_rotating_registers:
             continue
         custom = get_custom(node)
-        if (
-            isinstance(custom, Write)
-            and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
-        ):
+        if is_shared_write(custom):
             continue
 
         if isinstance(custom, GatherToLDS):
@@ -271,6 +289,45 @@ def liveness_analysis(graph: fx.Graph, reduction: Iterate) -> dict[fx.Node, int]
             num_rotating_registers[node] = l
 
     return num_rotating_registers
+
+
+def compute_multi_buffer_count(
+    graph: fx.Graph, initiation_interval: int, multi_buffer_count: Optional[int] = None
+) -> dict[fx.Node, int]:
+    """
+    Compute the number of buffers needed for each node.
+    """
+    lifetime: dict[fx.Node, int] = compute_lifetime(graph, use_absolute_cycle=True)
+    result: dict[fx.Node, int] = defaultdict(int)
+    for node in graph.nodes:
+        if not isinstance(get_custom(node), (Write, GatherToLDS)):
+            continue
+
+        shared_memory_operand = get_shared_memory_operand(node)
+        if shared_memory_operand is None:
+            continue
+
+        shared_memory_operand = propagate_loop_carried_vars(shared_memory_operand)
+        if multi_buffer_count:
+            result[shared_memory_operand] = multi_buffer_count
+            continue
+
+        assert node in lifetime, f"Node {node} not found in lifetime"
+        # Lifetime returns 0 if node result only used on same clock, 1 if it used on next clock, etc,
+        # so we need to add 1 to the lifetime to get the number of clocks the result is live.
+        # Ceildiv is required for cases like (lifetime=3, initiation_interval=2) which would otherwise
+        # result in buffer_count=1:
+        # 000
+        #   111
+        #     222
+        buffer_count = ceildiv(lifetime[node] + 1, initiation_interval)
+        logger.debug(f"Node: {node}, Buffer count: {buffer_count}")
+        if buffer_count < 2:
+            continue
+
+        result[shared_memory_operand] = max(result[shared_memory_operand], buffer_count)
+
+    return result
 
 
 def partition_graph_by_stage(

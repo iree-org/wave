@@ -7,7 +7,7 @@ import functools
 import glob
 import os
 from collections import deque
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 import warnings
 
 import sympy
@@ -19,7 +19,15 @@ import wave_lang.kernel.lang as tkl
 
 from ..._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ...lang.global_symbols import *
-from ...ops.wave_ops import CustomOp, Iterate, Read, Write, get_custom
+from ...ops.wave_ops import (
+    Allocate,
+    CustomOp,
+    GatherToLDS,
+    Iterate,
+    Read,
+    Write,
+    get_custom,
+)
 from ..assumptions import Assumption
 from ..constraints import (
     Constraint,
@@ -29,9 +37,8 @@ from ..constraints import (
     TilingConstraint,
     WorkgroupConstraint,
 )
+from .graph_utils import propagate_loop_carried_vars
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
-
-# TODO: Monkey-patching f16 support, need to fix in iree.
 
 
 def run_test(func: Callable[[], None]) -> Callable[[], None]:
@@ -62,6 +69,27 @@ def get_default_scheduling_params() -> dict[IndexSymbol, Any]:
         VALU_UNITS: 2,
         SHUFFLE_UNITS: 2,
     }
+
+
+def linearize_index(
+    expr_list: dict[IndexExpr, IndexSequence], strides: list[int]
+) -> IndexExpr:
+    """
+    Linearizes N-d IndexSequence with int/static strides into a
+    single 1D linearized IndexExpr.
+    """
+    assert len(expr_list) == len(strides)
+    linear_expr = None
+    for expr, stride in zip(expr_list.values(), strides):
+        assert isinstance(
+            expr, IndexSequence
+        ), f"linearize index expects expr to be of type IndexSequence but got {type(expr)}"
+        current_expr = expr.start * stride
+        if linear_expr is None:
+            linear_expr = current_expr
+        else:
+            linear_expr += current_expr
+    return linear_expr
 
 
 def delinearize_index(
@@ -457,6 +485,30 @@ def is_shared_read(node: CustomOp) -> bool:
     )
 
 
+def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
+    custom = get_custom(node)
+    if is_shared_read(custom) or is_shared_write(custom):
+        return custom.memory
+    if isinstance(custom, GatherToLDS):
+        return custom.dst
+
+    return None
+
+
+def collect_shared_memory_operands(graph: fx.Graph) -> list[fx.Node]:
+    shared_memory_operands = {}
+    for node in graph.nodes:
+        operand = get_shared_memory_operand(node)
+        if operand is not None:
+            operand = propagate_loop_carried_vars(operand)
+            assert isinstance(
+                get_custom(operand), Allocate
+            ), f"Expected Allocate, but got {get_custom(operand)}"
+            shared_memory_operands[operand] = node
+
+    return list(shared_memory_operands.keys())
+
+
 def has_write_shared_user(node: Read) -> bool:
     return any(
         isinstance(user, Write)
@@ -627,3 +679,7 @@ def topological_sort_with_dependencies(
             max([schedule_weight[dep] for dep in node_loop_deps]) + edge_weight
         )
     return sorted(nodes_to_reorder, key=lambda x: schedule_weight[x])
+
+
+def rotate_list(src: Sequence[Any], k: int) -> list[Any]:
+    return src[k:] + src[:k]

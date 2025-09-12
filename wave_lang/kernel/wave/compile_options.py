@@ -26,7 +26,7 @@ class WaveCompileOptions:
     # === Scheduling options ===
     schedule: bool = SchedulingType.NONE
     use_scheduling_barriers: bool = False
-    # None if no buffer count specified else 2 and up
+    # None for buffer count to be computed automatically
     multi_buffer_count: Optional[int] = None
 
     # === Runtime options ===
@@ -34,9 +34,10 @@ class WaveCompileOptions:
     kernel_usages: tuple[KernelBufferUsage] = None
 
     # === Backend options ===
-    backend: str = "rocm"
+    device: str = "hip"
     target: str = "gfx942"
     iree_preprocessing_pass_pipeline: str = None
+    num_devices: int = 1
 
     # === Benchmark options ===
     run_bench: bool = False
@@ -74,6 +75,8 @@ class WaveCompileOptions:
     use_buffer_ops: bool = False
     use_fast_math: bool = False
     use_global_to_shared: bool = False
+    linearize_shared_access: bool = False
+    scalarize_packed_math: bool = False
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True

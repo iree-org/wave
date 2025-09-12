@@ -27,6 +27,7 @@ from .common.utils import (
     require_e2e,
     require_cdna2,
     require_cdna3,
+    require_cdna4,
     require_cdna_3_or_4,
     perf_test,
     param_bool,
@@ -159,7 +160,6 @@ def testPureGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=2 if multibuffer else None,
     )
     options.postprocess = """
     module attributes {transform.with_named_sequence} {
@@ -245,11 +245,6 @@ def testGemmGatherToLDS(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -502,11 +497,6 @@ def testNonTransposeGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -936,11 +926,6 @@ def testVMFMAGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1065,11 +1050,6 @@ def testCDNA2IntGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1175,11 +1155,6 @@ def testCDNA3IntGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1280,11 +1255,6 @@ def testF8Gemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -1631,11 +1601,6 @@ def testBatchedGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        multi_buffer_count=(
-            2
-            if enable_scheduling in [SchedulingType.FOUR_STAGE, SchedulingType.MODULO]
-            else None
-        ),
     )
     options = set_default_run_config(options)
     batched_gemm = wave_compile(options, batched_gemm)
@@ -2055,3 +2020,42 @@ def testBatchedGemmWithPermute(
         torch.bmm(a, b.permute(0, 2, 1).contiguous()).permute(1, 0, 2).contiguous()
     )
     assert_close(c.to(torch.float16), torch_ref, atol=1e-3, rtol=5e-3)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
+@pytest.mark.parametrize("datatype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [
+        MMAType.F32_16x16x32_BF16,
+        MMAType.F32_32x32x16_BF16,
+        MMAType.F32_16x16x32_F16,
+        MMAType.F32_32x32x16_F16,
+    ],
+)
+def test_cdna4_mfma(shape: tuple[int], datatype: torch.dtype, mfma_variant: MMAType):
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
+        shape, False, mfma_variant, datatype
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        wave_runtime=True,
+        canonicalize=True,
+        use_scheduling_barriers=False,
+        dynamic_symbols=[],
+    )
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, gemm)
+
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=datatype)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=datatype)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+    asm = gemm(a, b, c)
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)

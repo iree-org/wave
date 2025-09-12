@@ -114,7 +114,9 @@ def get_default_arch() -> str:
 
     # The gcnArchName comes back like gfx90a:sramecc+:xnack.
     colon_pos = gcnArch.find(":")
-    return gcnArch[0:colon_pos]
+    if colon_pos > 0:
+        return gcnArch[0:colon_pos]
+    return gcnArch
 
 
 # Whether to dump the generated MLIR module.
@@ -143,6 +145,6 @@ def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:
     if enable_scheduling_barriers is not None:
         options.use_scheduling_barriers = bool(int(enable_scheduling_barriers))
 
-    options.backend = "rocm"
+    options.device = "hip"
     options.target = get_default_arch()
     return options

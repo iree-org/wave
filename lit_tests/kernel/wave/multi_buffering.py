@@ -133,8 +133,7 @@ def test_gemm_multibuffering():
             trace,
             constraints,
             True,
-            scheduling_type=SchedulingType.MODULO,
-            multi_buffer_count=2,
+            scheduling_type=SchedulingType.FOUR_STAGE,
         )
 
     def print_affected_node(node: fx.Node):
@@ -155,40 +154,50 @@ def test_gemm_multibuffering():
     for node in trace.get_root_graph().nodes:
         print_affected_node(node)
 
-        # CHECK: allocate(shape=(2*N, K), distributed_shape=(2*BLOCK_N, BLOCK_K + 4)
-        # CHECK-NEXT: allocate(shape=(2*M, K), distributed_shape=(2*BLOCK_M, BLOCK_K + 4)
-        # CHECK-NEXT: write(register_=read_21,
-        # CHECK-NEXT: write(register_=read_22,
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-NEXT: read(memory=allocate,
+        # CHECK: allocate(shape=(N, K), distributed_shape=(BLOCK_N, BLOCK_K + 4)
+        # CHECK-NEXT: allocate(shape=(N, K), distributed_shape=(BLOCK_N, BLOCK_K + 4)
+        # CHECK-NEXT: allocate(shape=(M, K), distributed_shape=(BLOCK_M, BLOCK_K + 4)
+        # CHECK-NEXT: allocate(shape=(M, K), distributed_shape=(BLOCK_M, BLOCK_K + 4)
+        # CHECK-NEXT: write(register_=read_21_mapped_0_0,
+        # CHECK-NEXT: write(register_=read_22_mapped_0_0,
+        # CHECK-NEXT: read(memory=allocate_1_multi_buffer_0,
+        # CHECK-NEXT: read(memory=allocate_1_multi_buffer_0,
+        # CHECK-NEXT: read(memory=allocate_1_multi_buffer_0,
+        # CHECK-NEXT: read(memory=allocate_1_multi_buffer_0,
+        # CHECK-NEXT: read(memory=allocate_multi_buffer_0,
+        # CHECK-NEXT: read(memory=allocate_multi_buffer_0,
+        # CHECK-NEXT: read(memory=allocate_multi_buffer_0,
+        # CHECK-NEXT: read(memory=allocate_multi_buffer_0,
         # CHECK: reduction begin
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: {2*N: BLOCK_N*(Mod(ARGK + 1, 2)) + BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={2*M: BLOCK_M*(Mod(ARGK + 1, 2)) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: {2*N: BLOCK_N*(Mod(ARGK + 1, 2)) + BLOCK_N/2 + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: {2*N: BLOCK_N*(Mod(ARGK + 1, 2)) + BLOCK_N/2 + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
-        # CHECK-NEXT: write(register_=read_21,
-        # CHECK-SAME: index={2*M: BLOCK_M*(Mod(ARGK, 2)) + Mod(32*$T1 + floor($T0/4), 64) : 1 : 1, K: 8*(Mod($T0, 4)) : 8 : 1}
-        # CHECK-NEXT: write(register_=read_22,
-        # CHECK-SAME: index={2*N: BLOCK_N*(Mod(ARGK, 2)) + BLOCK_N/2 + Mod(32*$T1 + floor($T0/4), 64) : 1 : 1, K: 8*(Mod($T0, 4)) : 8 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={2*M: BLOCK_M*(Mod(ARGK, 2)) + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={2*M: BLOCK_M*(Mod(ARGK, 2)) + Mod($T0, 16) + 16 : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-SAME: index={2*N: BLOCK_N*(Mod(ARGK, 2)) + BLOCK_N/2 + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-SAME: index={2*M: BLOCK_M*(Mod(ARGK, 2)) + Mod($T0, 16) : 1 : 1, K: 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1}
+        # CHECK-NEXT: read(memory=outer_rotating_reg_17,
+        # CHECK-NEXT: read(memory=outer_rotating_reg_17,
+        # CHECK-NEXT: read(memory=outer_rotating_reg_17,
+        # CHECK-NEXT: read(memory=outer_rotating_reg_17,
+        # CHECK-NEXT: read(memory=outer_rotating_reg_15,
+        # CHECK-NEXT: read(memory=outer_rotating_reg_15,
+        # CHECK-NEXT: read(memory=outer_rotating_reg_15,
+        # CHECK-NEXT: read(memory=outer_rotating_reg_15,
+        # CHECK-NEXT: write(register_=rotating_reg_0,
+        # CHECK-NEXT: write(register_=rotating_reg_1,
         # CHECK-NEXT: reduction end
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-NEXT: read(memory=allocate,
-        # CHECK-NEXT: read(memory=allocate_1,
-        # CHECK-NEXT: read(memory=allocate_1,
+        # CHECK-NEXT: read(memory=get_result_22,
+        # CHECK-NEXT: read(memory=get_result_22,
+        # CHECK-NEXT: read(memory=get_result_22,
+        # CHECK-NEXT: read(memory=get_result_22,
+        # CHECK-NEXT: read(memory=get_result_20,
+        # CHECK-NEXT: read(memory=get_result_20,
+        # CHECK-NEXT: read(memory=get_result_20,
+        # CHECK-NEXT: read(memory=get_result_20,
+        # CHECK-NEXT: write(register_=get_result_9,
+        # CHECK-NEXT: write(register_=get_result_10,
+        # CHECK-NEXT: read(memory=get_result_21,
+        # CHECK-NEXT: read(memory=get_result_21,
+        # CHECK-NEXT: read(memory=get_result_21,
+        # CHECK-NEXT: read(memory=get_result_21,
+        # CHECK-NEXT: read(memory=get_result_19,
+        # CHECK-NEXT: read(memory=get_result_19,
+        # CHECK-NEXT: read(memory=get_result_19,
+        # CHECK-NEXT: read(memory=get_result_19,
 
 
 if __name__ == "__main__":

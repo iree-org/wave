@@ -152,8 +152,8 @@ def get_extend_attention_kernel(
     k_layout = tkl.MemoryLayout(shape=set_dynamic_dim(k_shape))
     v_layout = tkl.MemoryLayout(shape=set_dynamic_dim(v_shape))
     o_layout = tkl.MemoryLayout(shape=set_dynamic_dim(o_shape))
-    k_cache_layout = tkl.MemoryLayout(shape=k_cache_shape)
-    v_cache_layout = tkl.MemoryLayout(shape=v_cache_shape)
+    k_cache_layout = tkl.MemoryLayout(shape=set_dynamic_dim(k_cache_shape))
+    v_cache_layout = tkl.MemoryLayout(shape=set_dynamic_dim(v_cache_shape))
     num_seqs_layout = tkl.MemoryLayout(shape=[None])
     kv_indices_layout = tkl.MemoryLayout(shape=[None])
 

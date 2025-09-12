@@ -26,7 +26,7 @@ from ..ops.wave_ops import (
 from .utils.graph_utils import (
     is_barrier_between,
     is_reduction_subgraph,
-    propagate_placeholders,
+    propagate_loop_carried_vars,
 )
 
 
@@ -39,14 +39,14 @@ class MemoryAccessType(Enum):
     READ_WRITE = auto()
 
 
-def is_shared_memory_op(node: CustomOp) -> Optional[fx.Node]:
+def is_shared_memory_op(node: CustomOp, depth: int) -> Optional[fx.Node]:
     if (
         isinstance(node, (Read, Write, AtomicOp))
         and node.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
-        return propagate_placeholders(node.memory)
+        return propagate_loop_carried_vars(node.memory, depth)
     elif isinstance(node, GatherToLDS):
-        return propagate_placeholders(node.dst)
+        return propagate_loop_carried_vars(node.dst, depth)
 
     return None
 
@@ -110,7 +110,8 @@ def add_shared_memory_barriers(
 
     for node in graph.nodes:
         custom = get_custom(node)
-        if mem := is_shared_memory_op(custom):
+        depth = 1 if checking_next_iter else 0
+        if mem := is_shared_memory_op(custom, depth):
             state = info[mem]
             if state.last_node and need_barrier(custom, state.last_node):
                 if barrier := is_barrier_between(

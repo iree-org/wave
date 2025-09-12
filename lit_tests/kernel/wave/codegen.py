@@ -7,6 +7,7 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.templates.test_kernels import get_broadcast_scaled_add
 from wave_lang.kernel.wave.utils.compile_utils import (
     set_default_compile_config,
 )
@@ -781,8 +782,8 @@ def test_read_write_conditional():
     #       CHECK:      %[[O1:.*]] = memref.load %[[A2]][%[[M]], %[[N]]] : memref<16x16xi32, strided<[16, 1], offset: ?>>
     #       CHECK:      %[[O2:.*]] = arith.index_cast %[[O1]] : i32 to index
     #       CHECK:      %[[O3:.*]] = arith.cmpi sgt, %[[O2]], %[[C0]] : index
+    #       CHECK:      %[[A3:.*]] = stream.binding.subspan %[[ARG2]][%[[C0]]] : !stream.binding -> memref<16x16xf16, strided<[16, 1], offset: ?>>
     #       CHECK:      scf.if %[[O3]] {
-    #       CHECK:        %[[A3:.*]] = stream.binding.subspan %[[ARG2]][%[[C0]]] : !stream.binding -> memref<16x16xf16, strided<[16, 1], offset: ?>>
     #       CHECK:        vector.store %[[RES]], %[[A3]][%[[M]], %[[N]]] : memref<16x16xf16, strided<[16, 1], offset: ?>>, vector<1xf16>
     #       CHECK:      }
 
@@ -914,6 +915,7 @@ def test_unary_lowerings():
         res = tkw.tanh(res)
         res = tkw.tanh_approx(res)
         res = tkw.softsign(res, logit_cap=30.0, apply_scaling=True, head_dim=128)
+        res = tkw.round(res)
         res = tkw.roundeven(res)
         res = tkw.sin(res)
         res = tkw.sinh(res)
@@ -972,8 +974,10 @@ def test_unary_lowerings():
     # CHECK: %[[RECIP_DENOM:.+]] = arith.divf %[[ONE]], %[[ADD]] : vector<4xf16>
     # CHECK: %[[SOFTSIGN:.+]] = arith.mulf %[[TANH_APPROX]], %[[RECIP_DENOM]] : vector<4xf16>
 
+    # Tests round
+    # CHECK: %[[ROUND:.+]] = math.round %[[SOFTSIGN]]
     # Tests roundeven
-    # CHECK: %[[ROUNDEVEN:.+]] = math.roundeven %[[SOFTSIGN]]
+    # CHECK: %[[ROUNDEVEN:.+]] = math.roundeven %[[ROUND]]
 
     # Tests sin
     # CHECK: %[[SIN:.+]] = math.sin %[[ROUNDEVEN]]
@@ -1928,6 +1932,31 @@ def test_broadcast_add():
     # Broadcast-ADD RHS
     # CHECK: arith.addf %[[LHS_0]], %[[BCAST_RHS_0]] : vector<2xf16>
     # CHECK: arith.addf %[[LHS_1]], %[[BCAST_RHS_1]] : vector<2xf16>
+
+
+@run_test
+def test_broadcast_scaled_add():
+    shape = (256, 256)
+    broadcast_scaled_add, hyperparams = get_broadcast_scaled_add(shape)
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        use_buffer_ops=True,
+        compile_to_mlir=True,
+    )
+    options = set_default_compile_config(options)
+    broadcast_scaled_add = wave_compile(options, broadcast_scaled_add)
+    print(broadcast_scaled_add.asm)
+
+    # This test checks that broadcast to scaled symbolic shapes works (`tkw.broadcast(rhs, [M, N / 2])`).
+    # The thing to look out for in this test is we are generating a vector.broadcast
+    # on the rhs before doing add.
+
+    # CHECK-LABEL: func @broadcast_scaled_add
+    # CHECK: %[[RHS:.+]] = memref.load {{.*}} : memref<?xf16, #amdgpu.address_space<fat_raw_buffer>>
+    # CHECK: %[[BROADCAST_RHS:.+]] = vector.broadcast %[[RHS]] : f16 to vector<2xf16>
+    # CHECK: arith.addf %{{.*}}, %[[BROADCAST_RHS]] : vector<2xf16>
 
 
 @run_test

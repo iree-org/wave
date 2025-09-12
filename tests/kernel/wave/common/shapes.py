@@ -24,6 +24,9 @@ _e2e_test_shapes["attention"] = [
 _e2e_test_shapes["bhsd_attention"] = [
     (4, 32, 128, 128, 128, 128),
 ]
+_e2e_test_shapes["cdna4_bshd_attention"] = [
+    (64, 16384, 128, 128, 16384),
+]
 _e2e_test_shapes["chained_gemm"] = _e2e_test_shapes["attention"]
 _e2e_test_shapes["decode_attention"] = _e2e_test_shapes["attention"]
 _e2e_test_shapes["quantized_attention"] = [(1, 4096, 64, 64, 4096)]
@@ -50,7 +53,25 @@ _e2e_test_shapes["extend"] = [
         head_size=128,
         head_size_kv=128,
         block_size=64,
-    )
+    ),
+    AttentionShape(
+        num_seqs=1,
+        context_len=1024,
+        num_query_heads=16,
+        num_kv_heads=2,
+        head_size=64,
+        head_size_kv=64,
+        block_size=128,
+    ),
+    AttentionShape(
+        num_seqs=4,
+        context_len=1024,
+        num_query_heads=4,
+        num_kv_heads=4,
+        head_size=256,
+        head_size_kv=256,
+        block_size=64,
+    ),
 ]
 
 _e2e_test_shapes["gqa_bshd_attention"] = [
@@ -86,6 +107,7 @@ _e2e_test_shapes["test_block_reduce"] = [
 test_names = [
     "attention",
     "bhsd_attention",
+    "cdna4_bshd_attention",
     "chained_gemm",
     "decode_attention",
     "unaligned_attention",

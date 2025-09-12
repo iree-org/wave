@@ -35,7 +35,7 @@ We can sprinkle in some debug_logs to get a picture of what is going on inside.
     a_reg = tkw.read(a)
     tkw.debug_log(a_reg, label="a_reg", printer=print)
 
-Note that the printer function will receive 2 arguments: the label, and the tensor data.
+Note that the printer function (which defaults to `print`) will receive 2 arguments: the label, and the tensor data.
 This will print out a global view of the contents of ``a_reg``, where “global view” means that it will print an entire MxK matrix based on the ``a_reg`` value from each wave.
 The ``debug_log`` op works by writing to global memory, where the global memory is automatically added to the kernel signature and launch arguments.
 Since ``a_reg`` is just read from the ``a`` memory, with an identity mapping, the result of the debug_log is equal to the ``a`` matrix.

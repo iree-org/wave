@@ -191,6 +191,9 @@ def tanh(src: "Register") -> "Register": ...
 def cos(src: "Register") -> "Register": ...
 
 
+def round(src: "Register") -> "Register": ...
+
+
 def roundeven(src: "Register") -> "Register": ...
 
 
@@ -594,6 +597,8 @@ class CustomOp(ABC):
                 if attr_name == "index":
                     attr = copy.deepcopy(attr)
                 setattr(new_node, attr_name, attr)
+        for key, value in self.fx_node.meta.items():
+            new_node.meta[key] = value
 
     def copy(
         self,
@@ -652,7 +657,7 @@ class CustomOp(ABC):
         """Erase the current node from the graph where it exists."""
         assert (
             not self.fx_node.users
-        ), f"Attempting to erase {self.fx_node} which has {len(self.fx_node.users)} users!"
+        ), f"Attempting to erase {self.fx_node} which has {self.fx_node.users} users!"
         self.graph.erase_node(self.fx_node)
 
     @classmethod
@@ -944,6 +949,7 @@ class ComparisonPyOp(BinaryOpBase, ABC):
 @define_interface_op("log2")
 @define_interface_op("log10")
 @define_interface_op("reciprocal")
+@define_interface_op("round")
 @define_interface_op("roundeven")
 @define_interface_op("sin")
 @define_interface_op("sinh")
@@ -1168,21 +1174,13 @@ class Placeholder(CustomOp):
 
         get_custom(var).index = value
 
-    # This method is created for parity with `Allocate` op and is used
-    # when calculating bound expressions.
-    @property
-    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
-        unpadded_dim = {}
-        for sym_type in self.type.symbolic_shape:
-            unpadded_dim[sym_type] = sym_type
-        return unpadded_dim
-
 
 @dataclass
 class IterArg(Placeholder):
     """
     Represents a specific placeholder node in the graph that is an iter arg of
-    a reduction node.
+    a reduction node. IterArgs can be of type Register or Memory with
+    a Shared memory address space.
     """
 
     def parent_op(self):
@@ -1197,6 +1195,13 @@ class IterArg(Placeholder):
     @iter_idx.setter
     def iter_idx(self, value):
         self.fx_node.iter_idx = value
+
+    @property
+    def distributed_shape(self):
+        init_arg = self.parent_op().init_args[self.iter_idx]
+        allocate = get_custom(init_arg)
+        assert isinstance(allocate, Allocate)
+        return allocate.distributed_shape
 
     def infer_type(self, *args):
         parent_op = self.parent_op()
@@ -1817,6 +1822,15 @@ class NestedRegionOp(CustomOp):
             cur_graph = cur_graph.parent_op.graph
         return cur_graph
 
+    def erase(self):
+        subgraphs = self.get_root_graph().subgraphs
+        subgraph = subgraphs[self.subgraph_name]
+        for node in list(subgraph.nodes)[::-1]:
+            get_custom(node).erase()
+
+        del subgraphs[self.subgraph_name]
+        super().erase()
+
 
 @define_op("conditional")
 @dataclass
@@ -1840,6 +1854,7 @@ class Conditional(NestedRegionOp):
             node._add_proxy_to_graph(graph)
             node.fx_node.node.tkw_op = cls
             node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
 
@@ -1894,6 +1909,7 @@ class Iterate(NestedRegionOp):
             node._add_proxy_to_graph(graph)
             node.fx_node.node.tkw_op = cls
             node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
 
@@ -1916,8 +1932,10 @@ class Iterate(NestedRegionOp):
             expand_dims = expand_dims[0]
         return expand_dims
 
-    def iter_args(self, graph: fx.Graph) -> list[fx.Node]:
+    def iter_args(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
         iter_args = []
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
         for nested_node in graph.nodes:
             custom = get_custom(nested_node)
             if isinstance(custom, IterArg):
@@ -1932,10 +1950,13 @@ class Iterate(NestedRegionOp):
             res_types = res_types[0]
         self.type = res_types
 
-    def outputs(self, graph: fx.Graph) -> list[fx.Node]:
-        for node in graph.nodes:
-            if isinstance(get_custom(node), Output):
-                return get_custom(node).return_vals[0]
+    def outputs(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
+
+        output = get_custom(graph.output_node())
+        assert isinstance(output, Output), f"Expected Output, but got {output}"
+        return output.return_vals[0]
 
     @property
     def index(self) -> list[dict[IndexSymbol, IndexSequence]]:
@@ -2114,7 +2135,7 @@ class DebugLog(CustomOp):
     Note that the logs collected in the `debug_logs` field, or handled by `printer` or `handler` represent a global view of the log after all writes, not limited to any one wave or loop iteration.
 
     The optional `printer` argument should be a function that accepts a string (the log's `label`) and the value of the log itself (a Torch tensor).
-    A handy value for this is `print`, though note that it will probably print an abbreviated view of the global tensor.
+    The default value for this is `print`, though note that it will probably print an abbreviated view of the global tensor.
 
     The optional `handler` argument should be a function that accepts the whole `debug_logs` object (IE all logs, not just one).
     The handler function gives a way to specify something like a viewer for all logs, but specify it inline among print functions rather than separately.
@@ -2136,7 +2157,7 @@ class DebugLog(CustomOp):
     ] = None
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
-    printer: Optional[Callable[[str, Any], Any]] = None
+    printer: Optional[Callable[[str, Any], Any]] = print
     handler: Optional[Callable[[dict[str, Any]], Any]] = None
 
     @property
@@ -2262,6 +2283,13 @@ class GetResult(CustomOp):
     def index(self, value: dict[IndexSymbol, IndexSequence]):
         CustomOp.index.fset(self, value)
 
+    @property
+    def distributed_shape(self):
+        iterate = get_custom(self.value)
+        allocate = get_custom(iterate.init_args[self.res_idx])
+        assert isinstance(allocate, Allocate)
+        return allocate.distributed_shape
+
 
 @define_op("extract")
 @dataclass
@@ -2360,7 +2388,12 @@ class Broadcast(CustomOp, ABC):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        return self.target_shape
+        from ..wave.utils.general_utils import infer_dim
+
+        # infer_dim to handle cases where target_shape has
+        # scaled expressions (i.e K/32 -> K).
+        dims = [infer_dim(expr) for expr in self.target_shape]
+        return dims
 
     def infer_type(self, *args):
         src_dtype = get_custom(self.arg).type.dtype
@@ -2493,17 +2526,6 @@ class ReduceOp(CustomOp, ABC):
                 f" must match reduce type {self.type.symbolic_shape}"
                 f"\n{self}"
             )
-
-    @property
-    def num_reduction_dims(self) -> int:
-        if self.dim is None:
-            raise NotImplementedError(
-                "Currently do not support ReduceOp with no dims specified."
-            )
-        if isinstance(self.dim, Sequence):
-            return len(self.dim)
-        else:
-            return 1
 
     @property
     def reduction_dim(self) -> IndexSymbol:

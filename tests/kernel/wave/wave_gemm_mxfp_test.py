@@ -15,6 +15,9 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     device_zeros,
 )
 from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.templates.test_kernels import (
+    get_broadcasted_scale_gemm_mxfp4,
+)
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
@@ -141,6 +144,8 @@ def torchScaledGemmMXFP8(x, w, x_scales, w_scales):
     [
         SchedulingType.NONE,
         SchedulingType.PREFETCH,
+        SchedulingType.MODULO,
+        SchedulingType.FOUR_STAGE,
     ],
 )
 def testScaledGemmMXFP4(
@@ -238,7 +243,13 @@ def testScaledGemmMXFP4(
         ScaledMMAType.F32_16x16x128_F8F6F4,
     ],
 )
-@pytest.mark.parametrize("enable_scheduling", [SchedulingType.PREFETCH])
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.PREFETCH,
+        SchedulingType.FOUR_STAGE,
+    ],
+)
 def testScaledBatchedGemmMXFP4(
     batch: int,
     shape: tuple[int],
@@ -318,6 +329,7 @@ def testScaledBatchedGemmMXFP4(
         canonicalize=True,
         schedule=enable_scheduling,
         use_buffer_ops=True,
+        linearize_shared_access=True,
         dynamic_symbols=dynamic_symbols,
     )
     options = set_default_run_config(options)
@@ -512,5 +524,49 @@ def testScaledGemmPrefetechMXFP4(
     w_t = w.T.contiguous()
     prefetch_gemm(x, x_scales, w_t, w_scales, out)
     torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    torch.testing.assert_close(torch_out, out, check_dtype=False)
+
+
+# This test can slowly updated to have fused dynamic quantization.
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize("shape", [(512, 512, 512)])
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [
+        ScaledMMAType.F32_16x16x128_F8F6F4,
+    ],
+)
+def testBroadcastedScaleGemmMXFP4(
+    shape: tuple[int],
+    mfma_variant: ScaledMMAType,
+):
+    broadcasted_scale_scaled_mma, hyperparams = get_broadcasted_scale_gemm_mxfp4(
+        shape, mfma_variant
+    )
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=SchedulingType.NONE,
+    )
+    options = set_default_run_config(options)
+    broadcasted_scale_scaled_mma = wave_compile(options, broadcasted_scale_scaled_mma)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    out = device_zeros(x.shape[0], w.shape[1], dtype=torch.float32)
+    # Taking only first value of scales to test broadcasting.
+    # [1024, 32] -> [1024]
+    compacted_x_scales = x_scales[:, 0].contiguous()
+
+    w_t = w.T.contiguous()
+    broadcasted_scale_scaled_mma(x, compacted_x_scales, w_t, w_scales, out)
+
+    # Re-broadcast/copy along old dimension
+    # [1024] -> [1024, 32]
+    broadcasted_compacted_x_scales = (
+        compacted_x_scales.view(-1, 1).repeat(1, x_scales.shape[-1]).contiguous()
+    )
+    torch_out = torchScaledGemmMXFP4(x, w, broadcasted_compacted_x_scales, w_scales)
 
     torch.testing.assert_close(torch_out, out, check_dtype=False)

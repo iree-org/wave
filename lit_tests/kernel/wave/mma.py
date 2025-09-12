@@ -378,3 +378,66 @@ def test_mma_16x16x32():
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
 
     # CHECK-COUNT-4:    vector.store
+
+
+@run_test
+def test_mma_with_linear_shared_access():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma_with_linear_shared_access(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        acc = tkw.mma(a_reg, b_reg, c_reg)
+        tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 128,
+            K: 16,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        linearize_shared_access=True,
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    mma_with_linear_shared_access = wave_compile(
+        compile_options, mma_with_linear_shared_access
+    )
+    print(mma_with_linear_shared_access.asm)
+
+    # CHECK-LABEL: test_mma_with_linear_shared_access
+    # CHECK:          func.func @mma_with_linear_shared_access
+    # CHECK-DAG:        %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    # CHECK-DAG:        %[[BASE_ALLOC:.+]] = memref.alloc() : memref<2560xi8, #gpu.address_space<workgroup>>
+    # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
+    # CHECK-DAG:        %[[C1280:.+]] = arith.constant 1280 : index
+    # CHECK-DAG:        %[[ALLOC:.+]] = memref.view %[[BASE_ALLOC]][%[[C0]]][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x20xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1280]]][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x20xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:        %[[LINEAR_ALLOC_0:.+]] = memref.reinterpret_cast %[[ALLOC_0]] to offset: [0], sizes: [640], strides: [1] : memref<32x20xf16, #gpu.address_space<workgroup>> to memref<640xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:        %[[LINEAR_ALLOC:.+]] = memref.reinterpret_cast %[[ALLOC]] to offset: [0], sizes: [640], strides: [1] : memref<32x20xf16, #gpu.address_space<workgroup>> to memref<640xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:        %[[D12:.+]] = vector.load %[[LINEAR_ALLOC]][{{.*}}] : memref<640xf16,
+    # CHECK-DAG:        %[[D20:.+]] = vector.load %[[LINEAR_ALLOC_0]][{{.*}}] : memref<640xf16,
+    # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 16 : i32, m = 16 :
+    # CHECK-SAME:         i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
