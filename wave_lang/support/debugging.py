@@ -137,7 +137,7 @@ def get_location_capture_config():
     """Get LocationCaptureConfig based on the current debug flags."""
     location_level_map = {level.name.lower(): level for level in LocationCaptureLevel}
     return LocationCaptureConfig(
-        level=(flags.location_level or LocationCaptureLevel.NONE)
+        level=(flags.location_level or LocationCaptureLevel.FILE_LINE_COL)
     )
 
 
