@@ -7,7 +7,7 @@ from typing import TypeVar
 
 import sympy
 
-from ..._support.indexing import IndexingContext
+from ..._support.indexing import IndexingContext, IndexSequence
 from ...lang.wave_types import IndexMapping
 from .general_utils import infer_dim
 from .symbol_utils import IndexExpr, IndexSymbol, subs_idxc
@@ -267,18 +267,17 @@ def check_is_mapping_contiguous(
 def transform_index_on_mapping(
     mapping: IndexMapping,
     symbolic_shape: tuple[IndexExpr, ...],
-    index: tuple[IndexExpr, ...],
-) -> tuple[IndexExpr, ...]:
+    index: IndexSequence,
+) -> IndexSequence:
     """ "Transforms the index according to the specified mapping"""
     input_index_mapping = mapping.map_input_indices(symbolic_shape)
     idxc = IndexingContext.current()
     index_mapping = tuple(i.subs(idxc.subs) for i in input_index_mapping)
     iters = mapping.iters
-    subs = [
-        (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())
-    ] + list(idxc.subs.items())
-    transformed_index = {
-        key: m.subs(subs) for key, m in zip(symbolic_shape, index_mapping)
-    }
+    subs2 = {sym: expr for sym, expr in zip(iters.keys(), index.values())}
+    # Handle cases where we get in a symbol or constant in which case
+    # we need to keep the symbol or constant as is.
+    subs2.update({k: k for k in index_mapping if k not in subs2})
+    transformed_index = {key: subs2[m] for key, m in zip(symbolic_shape, index_mapping)}
 
     return transformed_index
