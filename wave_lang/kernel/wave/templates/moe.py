@@ -21,6 +21,9 @@ from wave_lang.kernel.wave.utils.general_utils import (
 def get_moe_align_block_size_kernel(
     num_tokens: int,
     num_experts: int,
+    block_size: int,
+    numel: int,
+    max_num_blocks: int,
     top_k_value: int = 2,
     dtype: torch.dtype = torch.int32,
 ):
@@ -38,6 +41,10 @@ def get_moe_align_block_size_kernel(
     NUMEL = tkl.sym.NUMEL
     TOPK = tkl.sym.TOPK
     BLOCK_SIZE = tkl.sym.BLOCK_SIZE
+    MAX_NUM_BLOCKS = tkl.sym.MAX_NUM_BLOCKS
+
+    I = sympy.Symbol("I")
+    I_MAX = sympy.Symbol("I_MAX")
 
     # Workgroup tile sizes
     BLOCK_TOKENS = tkl.sym.BLOCK_TOKENS
@@ -52,16 +59,24 @@ def get_moe_align_block_size_kernel(
     # one workgroup to handle the worload
     constraints += [tkw.WorkgroupConstraint(NUMEL, NUMEL, 0)]
     constraints += [tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 1)]
+    constraints += [tkw.WorkgroupConstraint(MAX_NUM_BLOCKS, MAX_NUM_BLOCKS, 2)]
     # one wave to handle the workload
     constraints += [tkw.WaveConstraint(NUMEL, NUMEL)]
     constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
-    # constraints += [tkw.TilingConstraint(NUMEL, NUMEL)]
+
+    constraints += [tkw.TilingConstraint(I)]
 
     constraints += [
         tkw.HardwareConstraint(
             threads_per_wave=64,
             waves_per_block=(1, 1, 1),
-            vector_shapes={NUMEL: NUMEL, NUM_EXPERTS: NUM_EXPERTS},
+            vector_shapes={
+                NUMEL: NUMEL,
+                NUM_EXPERTS: NUM_EXPERTS,
+                MAX_NUM_BLOCKS: MAX_NUM_BLOCKS,
+                I: 0,
+                I_MAX: 0,
+            },
         )
     ]
 
@@ -82,11 +97,18 @@ def get_moe_align_block_size_kernel(
         dynamic_val_mappings={NUM_EXPERTS: i},
     )
 
-    shifted_read_map = tkw.IndexMapping(
+    expert_id_read_map = tkw.IndexMapping(
         num_iterators=1,
-        inputs={NUM_EXPERTS: d0},
-        outputs={NUM_EXPERTS: i},
-        dynamic_val_mappings={NUM_EXPERTS: i},
+        inputs={MAX_NUM_BLOCKS: d0},
+        outputs={MAX_NUM_BLOCKS: i},
+        dynamic_val_mappings={MAX_NUM_BLOCKS: i},
+    )
+
+    expert_id_write_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={MAX_NUM_BLOCKS: i},
+        outputs={MAX_NUM_BLOCKS: d0},
+        dynamic_val_mappings={MAX_NUM_BLOCKS: i},
     )
 
     shifted_write_map = tkw.IndexMapping(
@@ -96,21 +118,12 @@ def get_moe_align_block_size_kernel(
         dynamic_val_mappings={NUM_EXPERTS: i},
     )
 
-    simple_map = tkw.IndexMapping(
-        num_iterators=1,
-        inputs={NUM_EXPERTS: i},
-        outputs={NUM_EXPERTS: i},
-    )
-
-    printer_args = None
-
-    def printer(*args):
-        nonlocal printer_args
-        printer_args = args
-
     @tkw.wave(constraints)
     def moe_align_block_size(
         topk_ids: tkl.Memory[NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype],
+        expert_ids: tkl.Memory[
+            MAX_NUM_BLOCKS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
         expert_counts: tkl.Memory[
             NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
         ],
@@ -118,6 +131,9 @@ def get_moe_align_block_size_kernel(
             NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
         ],
         cumsum_buffer: tkl.Memory[
+            NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
+        cumsum_exclusive: tkl.Memory[
             NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
         ],
         num_blocks_buffer: tkl.Memory[
@@ -136,11 +152,11 @@ def get_moe_align_block_size_kernel(
             distributed_shape=(NUM_EXPERTS,),
             dtype=dtype,
         )
-        cumsum_exclusive = tkw.allocate(
-            shape=(NUM_EXPERTS,),
-            distributed_shape=(NUM_EXPERTS,),
-            dtype=dtype,
-        )
+        # cumsum_exclusive = tkw.allocate(
+        #     shape=(NUM_EXPERTS,),
+        #     distributed_shape=(NUM_EXPERTS,),
+        #     dtype=dtype,
+        # )
         s_total_tokens_post_pad = tkw.allocate(
             (1,), distributed_shape=(1,), dtype=dtype
         )
@@ -207,7 +223,7 @@ def get_moe_align_block_size_kernel(
         # write the exclusive scan results to the shared memory
         tkw.write(
             prefix_sums,
-            cumsum_buffer,
+            cumsum_exclusive,
             mapping=shifted_write_map,
             mapping_dynamic_vals=(tid,),
             elements_per_thread=1,
@@ -230,14 +246,58 @@ def get_moe_align_block_size_kernel(
             elements_per_thread=1,
         )
 
+        """
+        if (threadIdx.x < num_experts) {
+            for (int i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
+                expert_ids[i / block_size] = threadIdx.x - 1;
+            }
+        }
+        """
+
+        expert_start_pos = tkw.read(
+            cumsum_exclusive,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+
+        # Read the inclusive cumsum (end position for each expert)
+        expert_end_pos = tkw.read(
+            cumsum_buffer,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+        tkw.set_symbol(I_MAX, expert_end_pos)
+
+        # Calculate expert ID to write (threadIdx.x - 1)
+        condition = (I < I_MAX) & (THREAD_0 < NUM_EXPERTS)
+
+        @tkw.iterate(I, start=expert_start_pos, condition=condition, init_args=[])
+        def loop():
+            thread_id_x = tkw.Register[MAX_NUM_BLOCKS, tkl.i32](tkw.THREAD_0)
+            i_idx = tkw.self_index(I, tkl.i32)
+            expert_id_idx = i_idx / tkw.Register[I, tkl.i32](BLOCK_SIZE)
+            expert_id_val = thread_id_x - tkl.Register[MAX_NUM_BLOCKS, tkl.i32](1)
+            tkw.write(
+                expert_id_val,
+                expert_ids,
+                mapping=expert_id_write_map,
+                mapping_dynamic_vals=(expert_id_idx,),
+                elements_per_thread=1,
+            )
+            next_idx = i_idx + tkw.Register[I, tkl.i32](BLOCK_SIZE)
+            tkw.set_symbol(I, next_idx)
+
     hyperparams = {
         NUM_TOKENS: num_tokens,
         NUM_EXPERTS: num_experts,
-        NUMEL: num_tokens * top_k_value,
+        NUMEL: numel,
+        MAX_NUM_BLOCKS: max_num_blocks,
         BLOCK_TOKENS: min(64, num_tokens) if num_tokens > 0 else 1,
         BLOCK_EXPERTS: min(8, num_experts) if num_experts > 0 else 1,
         ELEMS_PER_THREAD: 4,
-        BLOCK_SIZE: 16,
+        BLOCK_SIZE: block_size,
         TOPK: top_k_value,
     }
     hyperparams.update(get_default_scheduling_params())
