@@ -6,9 +6,9 @@
 import functools
 import glob
 import os
+import warnings
 from collections import deque
 from typing import Any, Callable, Optional, Sequence
-import warnings
 
 import sympy
 import torch
@@ -31,9 +31,9 @@ from ...ops.wave_ops import (
 from ..assumptions import Assumption
 from ..constraints import (
     Constraint,
-    IteratorBindings,
     DistributionConstraint,
     HardwareConstraint,
+    IteratorBindings,
     TilingConstraint,
     WorkgroupConstraint,
 )

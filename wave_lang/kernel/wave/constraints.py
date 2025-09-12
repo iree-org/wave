@@ -4,10 +4,12 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from sympy import Integer, Piecewise, ceiling, floor
 
@@ -15,6 +17,9 @@ from .._support.dtype import DataType
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ..lang.global_symbols import *
 from .utils.symbol_utils import get_min_expr, subs_idxc
+
+if TYPE_CHECKING:
+    from .compile_options import WaveCompileOptions
 
 """
 Formatting for different target intrinsics:
@@ -34,6 +39,7 @@ Values: 0xABCD where:
     * 2 = CDNA3
     * 3 = CDNA4
     * 8 = RDNA3
+    * 9 = RDNA4
 * C = element type of A-matrix:
   * 0 = 64-bit float (e.g. IEEE754 double precision)
   * 1 = 32-bit float (e.g. IEEE754 single precision, and "xf32" fast variants)
@@ -67,6 +73,22 @@ class MMAType(Enum):
     F32_16x16x32_BF16 = 0x1321
     F32_32x32x16_F16 = 0x1322
     F32_16x16x32_F16 = 0x1323
+
+    RDNA4_WAVE32_F32_16x16x16_F16 = 0x1920
+    RDNA4_WAVE32_F32_16x16x16_BF16 = 0x1921
+    RDNA4_WAVE32_F16_16x16x16_F16 = 0x1922
+    RDNA4_WAVE32_BF16_16x16x16_BF16 = 0x1923
+    RDNA4_WAVE32_I32_16x16x16_I8 = 0x19C0
+    RDNA4_WAVE32_I32_16x16x16_I4 = 0x19C1
+    RDNA4_WAVE32_I32_16x16x32_I4 = 0x19C2
+
+    RDNA4_WAVE64_F32_16x16x16_F16 = 0x1924
+    RDNA4_WAVE64_F32_16x16x16_BF16 = 0x1925
+    RDNA4_WAVE64_F16_16x16x16_F16 = 0x1926
+    RDNA4_WAVE64_BF16_16x16x16_BF16 = 0x1927
+    RDNA4_WAVE64_I32_16x16x16_I8 = 0x19C3
+    RDNA4_WAVE64_I32_16x16x16_I4 = 0x19C4
+    RDNA4_WAVE64_I32_16x16x32_I4 = 0x19C5
 
 
 class ScaledMMAType(Enum):
@@ -219,6 +241,24 @@ class HardwareConstraint(Constraint):
 
     Both mma constraints and vector shapes can be specified, but
     the mapping from symbols to shapes should be injective.
+
+    Mappings usually correspond with the ISA's specification. For example,
+    check out the `CDNA 4 ISA spec`_. The `AMD Matrix Instruction Calculator`_)
+    is an additional resource for AMD ISAs.
+
+    However, a few layouts differ from the spec. For example, in RDNA 4 with
+    Wave32 the 16x16x16 MMA has a different layout but still behaves the
+    same assuming associative addition (which is kind-of true for floating
+    point):
+
+    In the spec layout, lane 0 takes A[0, 0..3] and
+    A[0, 8..11] and lane 16 takes indices A[0, 4..9] and A[0, 11..15]. In
+    order to have contiguous reads, Wave's layout specifies that lane 0 takes
+    A[0, 0..8] and lane 16 takes indices A[0, 8..15]. The outer products
+    computed internally by `wmma` will therefore use a different addition order.
+
+    .. _CDNA 4 ISA spec: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf#page=49
+    .. _AMD Matrix Instruction Calculator: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf#page=49&zoom=auto,-387,792
     """
 
     threads_per_wave: int
@@ -281,7 +321,11 @@ class HardwareConstraint(Constraint):
             case _:
                 raise ValueError(f"Unsupported MMA type: {mma_type}")
 
-    def mma_index_offset(self, mma_type: Optional[MMAType | ScaledMMAType]):
+    def mma_index_offset(
+        self,
+        mma_type: Optional[MMAType | ScaledMMAType],
+        options: WaveCompileOptions | None = None,
+    ):
         lane = self.linearized_thread_id % self.threads_per_wave
         if mma_type is None:
             mma_type = self.mma_type
@@ -290,6 +334,33 @@ class HardwareConstraint(Constraint):
             # (M x K, N x K) -> M x N
             case GenericDot():
                 offset = mma_type.get_index_offset(lane, self.threads_per_wave)
+            case (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16
+                | MMAType.RDNA4_WAVE32_F32_16x16x16_BF16
+            ):
+                offset = [
+                    Piecewise(
+                        (lane % 16, ~MMA_ACC),
+                        (8 * floor(lane / 16), MMA_ACC),
+                    ),  # M
+                    lane % 16,  # N,
+                    8 * floor(GPR_NUM / 2),  # K
+                ]
+            case (
+                MMAType.RDNA4_WAVE64_F32_16x16x16_F16
+                | MMAType.RDNA4_WAVE64_F32_16x16x16_BF16
+            ):
+                offset = [
+                    Piecewise(
+                        (lane % 16, ~MMA_ACC),
+                        (
+                            8 * (floor(lane / 16) % 2) + 4 * floor(lane / 32),
+                            MMA_ACC,
+                        ),
+                    ),  # M
+                    lane % 16,  # N,
+                    4 * floor(lane / 16),  # K
+                ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 offset = [
                     Piecewise(
@@ -463,27 +534,40 @@ class HardwareConstraint(Constraint):
         dim: IndexSymbol,
         constraint_index: int | MMAOperand,
         mma_type: MMAType | ScaledMMAType,
+        options: WaveCompileOptions,
     ) -> IndexSequence:
         if mma_type is None:
             mma_type = self.mma_type
 
-        offset = self.mma_index_offset(mma_type)
+        offset = self.mma_index_offset(mma_type, options)
         match mma_type:
             # (M x K, N x K) -> M x N
             case GenericDot():
                 size = mma_type.get_index_size(self.threads_per_wave)
                 stride = mma_type.get_index_stride(self.threads_per_wave)
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
-                size = [
-                    Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
-                    1,  # N
-                    4,  # K
-                ]
-                stride = [
-                    Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
-                    1,  # N
-                    1,  # K
-                ]
+                if options.target.startswith("gfx12"):
+                    size = [
+                        Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
+                        1,  # N
+                        8,  # K
+                    ]
+                    stride = [
+                        Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                        1,  # N
+                        1,  # K
+                    ]
+                else:
+                    size = [
+                        Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
+                        1,  # N
+                        4,  # K
+                    ]
+                    stride = [
+                        Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                        1,  # N
+                        1,  # K
+                    ]
             case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
                 size = [
                     Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M

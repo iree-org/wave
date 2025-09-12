@@ -33,6 +33,10 @@ require_cdna_3_or_4 = pytest.mark.skipif(
         get_default_arch()
     ),
 )
+require_rdna4 = pytest.mark.skipif(
+    not get_default_arch().startswith("gfx12"),
+    reason=f"Default architecture is not RDNA4, default architecture is {get_default_arch()}",
+)
 
 # Add test shapes for validation and performance testing.
 perf_test = lambda *a: pytest.param(*a, marks=pytest.mark.perf_only)

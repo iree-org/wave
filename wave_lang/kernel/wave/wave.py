@@ -48,20 +48,20 @@ from .codegen import WaveEmitter
 from .compile_options import WaveCompileOptions
 from .constraints import (
     Constraint,
+    DeviceConstraint,
     HardwareConstraint,
     ReorderingConstraint,
     TilingConstraint,
     WaveConstraint,
     WorkgroupConstraint,
-    DeviceConstraint,
-    get_grid_shape,
     get_device_layout,
+    get_grid_shape,
 )
 from .construct_index_mapping import construct_index_mapping
 from .debug_log_hoist import (
+    DebugArgInfo,
     debug_log_hoist,
     debug_log_write_replace,
-    DebugArgInfo,
 )
 from .decompose_dot_mma import decompose_dot_mma
 from .decompose_reduce_ops import decompose_reduce_ops
@@ -81,7 +81,7 @@ from .scheduling.schedule import schedule_graph
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
 from .symbolic_constraints import SymbolicAlias
 from .type_inference import infer_types
-from .utils.compile_utils import canonicalize_module, apply_transform
+from .utils.compile_utils import apply_transform, canonicalize_module
 from .utils.general_utils import (
     delinearize_index,
     get_hardware_constraint,
@@ -96,7 +96,7 @@ from .utils.graph_utils import (
 from .utils.print_utils import print_trace, try_apply_pass
 
 # Utils
-from .utils.symbol_utils import safe_subs, subs_idxc, get_induction_symbol
+from .utils.symbol_utils import get_induction_symbol, safe_subs, subs_idxc
 from .workgroup_reordering import reorder_workgroups
 
 logger = logging.getLogger(__name__)
@@ -630,6 +630,7 @@ class LaunchableWave(Launchable):
                 set_node_indices,
                 trace,
                 self.constraints,
+                options,
                 print_ir_before,
                 print_ir_after,
             ),
