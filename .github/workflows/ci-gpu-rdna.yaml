@@ -75,10 +75,10 @@ jobs:
           sudo apt-get update
           sudo apt install -y gfortran build-essential binutils
           python -m pip install \
-            --index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx950-dcgpu/ \
+            --index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx120X-all/ \
             rocm[libraries,devel]
           python -m pip install \
-            --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ \
+            --index-url https://rocm.nightlies.amd.com/v2/gfx120X-all/ \
             torch torchaudio torchvision
 
           # Set environment variables
