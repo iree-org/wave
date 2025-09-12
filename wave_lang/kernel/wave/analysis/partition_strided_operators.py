@@ -183,6 +183,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                 extract = ExtractSlice(custom.register_, [i], [1], [1]).add_to_graph(
                     custom.graph
                 )
+                extract.location = custom.location
 
                 offset = offsets[i]
                 write = Write(
@@ -191,6 +192,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                     mapping=custom.mapping,
                     elements_per_thread=1,
                 ).add_to_graph(custom.graph)
+                write.location = custom.location
                 write.index = {
                     dim: IndexSequence(
                         simplified_index[dim].start.subs({GPR_NUM: 0}) + offset[j], 1, 1
@@ -324,6 +326,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                             extract = ExtractSlice(
                                 dyn_val, [cur_gpr_start_id], [gpr_size], [1]
                             ).add_to_graph(custom.graph)
+                            extract.location = custom.location
                             new_dynamic_vals.append(extract)
                         else:
                             new_dynamic_vals.append(dyn_val)
@@ -333,6 +336,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                     extract = ExtractSlice(
                         custom.register_, [cur_gpr_start_id], [gpr_size], [1]
                     ).add_to_graph(custom.graph)
+                    extract.location = custom.location
                     extract.index = updated_index_with_gpr_offset
                     new_node = Write(
                         extract,
@@ -341,6 +345,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                         mapping_dynamic_vals=new_dynamic_vals,
                         elements_per_thread=gpr_size,
                     ).add_to_graph(custom.graph)
+                    new_node.location = custom.location
                 elif isinstance(custom, Read):
                     # TODO: Add support on how to handle strided reads.
                     new_node = Read(
@@ -350,6 +355,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                         mapping_dynamic_vals=new_dynamic_vals,
                         _write_dependency=custom._write_dependency,
                     ).add_to_graph(custom.graph)
+                    new_node.location = custom.location
                 elif isinstance(custom, SelfIndex):
                     # iff elements_per_thread is specified, we update
                     # elements_per_thread to chunk size, else return None.

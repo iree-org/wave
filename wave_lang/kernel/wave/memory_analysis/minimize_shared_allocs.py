@@ -165,6 +165,8 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
             address_space=SHARED_ADDRESS_SPACE,
         )
         parent.add_to_graph(trace.get_root_graph())
+        # Propagate location from the first allocation if available
+        parent.fx_node.location = get_custom(allocs[0]).location
 
     for alloc, offset in allocs_to_offsets.items():
         get_custom(alloc).update_arg("parent", parent)
