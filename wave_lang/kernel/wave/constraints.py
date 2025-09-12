@@ -39,6 +39,7 @@ Values: 0xABCD where:
     * 2 = CDNA3
     * 3 = CDNA4
     * 8 = RDNA3
+    * 9 = RDNA4
 * C = element type of A-matrix:
   * 0 = 64-bit float (e.g. IEEE754 double precision)
   * 1 = 32-bit float (e.g. IEEE754 single precision, and "xf32" fast variants)
@@ -72,6 +73,22 @@ class MMAType(Enum):
     F32_16x16x32_BF16 = 0x1321
     F32_32x32x16_F16 = 0x1322
     F32_16x16x32_F16 = 0x1323
+
+    RDNA4_WAVE32_F32_16x16x16_F16 = 0x1920
+    RDNA4_WAVE32_F32_16x16x16_BF16 = 0x1921
+    RDNA4_WAVE32_F16_16x16x16_F16 = 0x1922
+    RDNA4_WAVE32_BF16_16x16x16_BF16 = 0x1923
+    RDNA4_WAVE32_I32_16x16x16_I8 = 0x19C0
+    RDNA4_WAVE32_I32_16x16x16_I4 = 0x19C1
+    RDNA4_WAVE32_I32_16x16x32_I4 = 0x19C2
+
+    RDNA4_WAVE64_F32_16x16x16_F16 = 0x1924
+    RDNA4_WAVE64_F32_16x16x16_BF16 = 0x1925
+    RDNA4_WAVE64_F16_16x16x16_F16 = 0x1926
+    RDNA4_WAVE64_BF16_16x16x16_BF16 = 0x1927
+    RDNA4_WAVE64_I32_16x16x16_I8 = 0x19C3
+    RDNA4_WAVE64_I32_16x16x16_I4 = 0x19C4
+    RDNA4_WAVE64_I32_16x16x32_I4 = 0x19C5
 
 
 class ScaledMMAType(Enum):
@@ -224,6 +241,24 @@ class HardwareConstraint(Constraint):
 
     Both mma constraints and vector shapes can be specified, but
     the mapping from symbols to shapes should be injective.
+
+    Mappings usually correspond with the ISA's specification. For example,
+    check out the `CDNA 4 ISA spec`_. The `AMD Matrix Instruction Calculator`_)
+    is an additional resource for AMD ISAs.
+
+    However, a few layouts differ from the spec. For example, in RDNA 4 with
+    Wave32 the 16x16x16 MMA has a different layout but still behaves the
+    same assuming associative addition (which is kind-of true for floating
+    point):
+
+    In the spec layout, lane 0 takes A[0, 0..3] and
+    A[0, 8..11] and lane 16 takes indices A[0, 4..9] and A[0, 11..15]. In
+    order to have contiguous reads, Wave's layout specifies that lane 0 takes
+    A[0, 0..8] and lane 16 takes indices A[0, 8..15]. The outer products
+    computed internally by `wmma` will therefore use a different addition order.
+
+    .. _CDNA 4 ISA spec: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf#page=49
+    .. _AMD Matrix Instruction Calculator: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf#page=49&zoom=auto,-387,792
     """
 
     threads_per_wave: int
@@ -287,54 +322,54 @@ class HardwareConstraint(Constraint):
                 raise ValueError(f"Unsupported MMA type: {mma_type}")
 
     def mma_index_offset(
-        self, mma_type: Optional[MMAType | ScaledMMAType], options: WaveCompileOptions
+        self,
+        mma_type: Optional[MMAType | ScaledMMAType],
+        options: WaveCompileOptions | None = None,
     ):
         lane = self.linearized_thread_id % self.threads_per_wave
         if mma_type is None:
             mma_type = self.mma_type
 
-        # Offset calculations from the AMD Matrix Instruction Calculator
-        # (https://github.com/ROCm/amd_matrix_instruction_calculator)
         match mma_type:
             # (M x K, N x K) -> M x N
             case GenericDot():
                 offset = mma_type.get_index_offset(lane, self.threads_per_wave)
+            case (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16
+                | MMAType.RDNA4_WAVE32_F32_16x16x16_BF16
+            ):
+                offset = [
+                    Piecewise(
+                        (lane % 16, ~MMA_ACC),
+                        (8 * floor(lane / 16), MMA_ACC),
+                    ),  # M
+                    lane % 16,  # N,
+                    8 * floor(GPR_NUM / 2),  # K
+                ]
+            case (
+                MMAType.RDNA4_WAVE64_F32_16x16x16_F16
+                | MMAType.RDNA4_WAVE64_F32_16x16x16_BF16
+            ):
+                offset = [
+                    Piecewise(
+                        (lane % 16, ~MMA_ACC),
+                        (
+                            8 * (floor(lane / 16) % 2) + 4 * floor(lane / 32),
+                            MMA_ACC,
+                        ),
+                    ),  # M
+                    lane % 16,  # N,
+                    4 * floor(lane / 16),  # K
+                ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
-                if options.target.startswith("gfx12"):
-                    if self.threads_per_wave == 32:
-                        offset = [
-                            Piecewise(
-                                (lane % 16, ~MMA_ACC),
-                                (8 * floor(lane / 16), MMA_ACC),
-                            ),  # M
-                            lane % 16,  # N,
-                            # Frankly I'm not sure where this formula comes from, I arbitrarily
-                            # tried a bunch of different formulas before this one started working.
-                            # Unfortunately both `--register-layout` and `--detail-instruction` in
-                            # AMD's matrix_calculator.py appear to give wrong info.
-                            8 * floor(lane / 16),  # K
-                        ]
-                    else:
-                        offset = [
-                            Piecewise(
-                                (lane % 16, ~MMA_ACC),
-                                (
-                                    8 * (floor(lane / 16) % 2) + 4 * floor(lane / 32),
-                                    MMA_ACC,
-                                ),
-                            ),  # M
-                            lane % 16,  # N,
-                            4 * floor(lane / 16),  # K
-                        ]
-                else:
-                    offset = [
-                        Piecewise(
-                            (lane % 16, ~MMA_ACC),
-                            (4 * floor(lane / 16), MMA_ACC),
-                        ),  # M
-                        lane % 16,  # N
-                        4 * floor(lane / 16),  # K
-                    ]
+                offset = [
+                    Piecewise(
+                        (lane % 16, ~MMA_ACC),
+                        (4 * floor(lane / 16), MMA_ACC),
+                    ),  # M
+                    lane % 16,  # N
+                    4 * floor(lane / 16),  # K
+                ]
             case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
                 offset = [
                     Piecewise(

@@ -204,9 +204,7 @@ def testPureGemm(
 # the RDNA 4 ISA documentation
 @pytest.mark.parametrize(
     "mfma_variant",
-    [
-        MMAType.F32_16x16x16_F16,
-    ],
+    [MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_BF16],
 )
 @pytest.mark.parametrize("datatype", [torch.float16, torch.bfloat16])
 def test_rdna4_wmma(
