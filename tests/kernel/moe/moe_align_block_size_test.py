@@ -154,6 +154,9 @@ def test_moe_align_block_size(
         get_moe_align_block_size_kernel(
             num_tokens,
             num_experts,
+            block_size,
+            topk_ids.numel(),
+            max_num_m_blocks,
             topk,
         )
     )
@@ -177,14 +180,34 @@ def test_moe_align_block_size(
     cumsum_buffer = torch.randint(
         size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
     )
+    cumsum_exclusive = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+    num_blocks_buffer = torch.randint(
+        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
+    )
+
+    wave_expert_ids = torch.empty(
+        (max_num_m_blocks,), dtype=torch.int32, device=topk_ids.device
+    )
     flat_topk = topk_ids.view(-1).to(torch.int32)
     print(kernel.asm)
     print("Flat topk:", flat_topk)
-    print("Before:", expert_counts_buffer)
-    kernel(flat_topk, expert_counts_buffer, padded_counts_buffer, cumsum_buffer)
-    print("After:", expert_counts_buffer)
+    kernel(
+        flat_topk,
+        wave_expert_ids,
+        expert_counts_buffer,
+        padded_counts_buffer,
+        cumsum_buffer,
+        cumsum_exclusive,
+        num_blocks_buffer,
+    )
+    print("Histogram:", expert_counts_buffer)
     print("Padded:", padded_counts_buffer)
-    print("Cumsum:", cumsum_buffer)
+    print("Cumsum (i):", cumsum_buffer)
+    print("Cumsum (e):", cumsum_exclusive)
+    print("Num blocks:", num_blocks_buffer)
+    print("Expert IDs:", wave_expert_ids)
     # assert empty_topk is same as topk_ids
     # assert torch.all(empty_topk == flat_topk), "TopK IDs modified"
 
