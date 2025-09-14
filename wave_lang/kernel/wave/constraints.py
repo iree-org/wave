@@ -4,12 +4,10 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import Callable, Optional
 
 from sympy import Integer, Piecewise, ceiling, floor
 
@@ -17,9 +15,6 @@ from .._support.dtype import DataType
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from ..lang.global_symbols import *
 from .utils.symbol_utils import get_min_expr, subs_idxc
-
-if TYPE_CHECKING:
-    from .compile_options import WaveCompileOptions
 
 """
 Formatting for different target intrinsics:
@@ -324,7 +319,6 @@ class HardwareConstraint(Constraint):
     def mma_index_offset(
         self,
         mma_type: Optional[MMAType | ScaledMMAType],
-        options: WaveCompileOptions | None = None,
     ):
         lane = self.linearized_thread_id % self.threads_per_wave
         if mma_type is None:
@@ -534,12 +528,11 @@ class HardwareConstraint(Constraint):
         dim: IndexSymbol,
         constraint_index: int | MMAOperand,
         mma_type: MMAType | ScaledMMAType,
-        options: WaveCompileOptions,
     ) -> IndexSequence:
         if mma_type is None:
             mma_type = self.mma_type
 
-        offset = self.mma_index_offset(mma_type, options)
+        offset = self.mma_index_offset(mma_type)
         match mma_type:
             # (M x K, N x K) -> M x N
             case GenericDot():
@@ -640,9 +633,9 @@ class HardwareConstraint(Constraint):
             case _:
                 raise ValueError("Unsupported MMA type")
 
-        assert isinstance(
-            constraint_index, MMAOperand
-        ), f"Invalid MMA operand {constraint_index}"
+        assert isinstance(constraint_index, MMAOperand), (
+            f"Invalid MMA operand {constraint_index}"
+        )
         return IndexSequence(
             offset[constraint_index.value],
             size[constraint_index.value],
@@ -859,9 +852,9 @@ class WaveConstraint(DistributionConstraint):
         # all threads in a wave are handled in wg_dim_0.
         if workgroup_constraint.workgroup_dim == 0:
             self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
-        assert (
-            old_wave_id is None or self.wave_id == old_wave_id
-        ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
+        assert old_wave_id is None or self.wave_id == old_wave_id, (
+            f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
+        )
         self.wg_constraint = workgroup_constraint
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
