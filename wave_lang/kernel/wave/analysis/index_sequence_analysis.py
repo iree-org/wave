@@ -88,9 +88,9 @@ def combine_derived_index(
         if old_idx == new_idx:
             continue
 
-        assert old_idx.start == 0 or old_idx.start == old_idx.start, (
-            f"Index conflict: {old_idx} and {new_idx}"
-        )
+        assert (
+            old_idx.start == 0 or old_idx.start == old_idx.start
+        ), f"Index conflict: {old_idx} and {new_idx}"
         new_index[dim] = new_idx
 
     return new_index
@@ -172,12 +172,12 @@ def resolve_scaled_indices(trace):
             if scale_type == ScalingType.DIVIDE:
                 # Index can be shared between multiple users, so we copy before modifying.
                 dim_index = deepcopy(source.index[dim])
-                assert dim_index.size % scale_factor == 0, (
-                    f"Size({dim_index.size}) needs to be divisible by scale ({scale_factor})."
-                )
-                assert source.vector_shapes[dim] % scale_factor == 0, (
-                    "Expected vector_shape to be divisble by scale."
-                )
+                assert (
+                    dim_index.size % scale_factor == 0
+                ), f"Size({dim_index.size}) needs to be divisible by scale ({scale_factor})."
+                assert (
+                    source.vector_shapes[dim] % scale_factor == 0
+                ), "Expected vector_shape to be divisble by scale."
                 dim_index.start = dim_expr.subs({dim: dim_index.start})
                 dim_index.size = int(dim_expr.subs({dim: dim_index.size}))
                 source.index[dim] = dim_index
@@ -186,9 +186,9 @@ def resolve_scaled_indices(trace):
                 )
                 custom = get_custom(source)
                 if isinstance(custom, (Read, Write)):
-                    assert custom.elements_per_thread % scale_factor == 0, (
-                        "elem per thread needs to be divisble by scale."
-                    )
+                    assert (
+                        custom.elements_per_thread % scale_factor == 0
+                    ), "elem per thread needs to be divisble by scale."
                     scaled_elem_per_thread = int(
                         custom.elements_per_thread / scale_factor
                     )
@@ -222,9 +222,9 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
         if not custom.vector_shapes:
             # If vector_shapes is not set, see if it can be derived from the hardware constraints.
             hw_constraint = get_hardware_constraint(constraints)
-            assert hw_constraint.vector_shapes, (
-                f"Vector shapes for node {custom.fx_node} cannot be derived from hardware constraints: {custom}"
-            )
+            assert (
+                hw_constraint.vector_shapes
+            ), f"Vector shapes for node {custom.fx_node} cannot be derived from hardware constraints: {custom}"
 
             update_vector_shapes = [
                 dim for dim in custom.index if dim in hw_constraint.vector_shapes
@@ -233,9 +233,9 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
                 custom.vector_shapes = {}
                 for dim in update_vector_shapes:
                     custom.vector_shapes[dim] = hw_constraint.vector_shapes[dim]
-        assert custom.vector_shapes, (
-            f"Vector shapes not set for node {custom.fx_node}: {custom}"
-        )
+        assert (
+            custom.vector_shapes
+        ), f"Vector shapes not set for node {custom.fx_node}: {custom}"
 
 
 def set_node_indices(
@@ -833,9 +833,9 @@ def get_reduce_mapping(
         # threads per wave and the vector size.
         threads_per_wave = hardware_constraint.threads_per_wave
         vector_size = hardware_constraint.vector_shapes[dim]
-        assert vector_size % threads_per_wave == 0, (
-            f"Vector size {dim}={vector_size} must be divisible by threads per wave {threads_per_wave}"
-        )
+        assert (
+            vector_size % threads_per_wave == 0
+        ), f"Vector size {dim}={vector_size} must be divisible by threads per wave {threads_per_wave}"
         elements_per_thread = vector_size // threads_per_wave
         stride = compute_stride(
             custom.indexing_dims, hardware_constraint.vector_shapes, dim
@@ -850,9 +850,9 @@ def get_reduce_mapping(
                 custom.indexing_dims, hardware_constraint.vector_shapes, dim
             )
             wg_constraint = [x for x in workgroup_constraints if x.dim == dim]
-            assert len(wg_constraint) <= 1, (
-                f"Multiple workgroup constraints for dimension {dim}"
-            )
+            assert (
+                len(wg_constraint) <= 1
+            ), f"Multiple workgroup constraints for dimension {dim}"
             if wg_constraint:
                 workgroup_dim = wg_constraint[0].workgroup_dim
             else:

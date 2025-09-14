@@ -294,28 +294,28 @@ class LaunchableWave(Launchable):
             wave_size = wave_map[dim] if dim in wave_map else None
             workgroup_size = workgroup_map[dim] if dim in workgroup_map else None
 
-            assert workgroup_size is not None, (
-                f"expected non-empty tile size in `WorkgroupConstraint` for dimension {dim}"
-            )
+            assert (
+                workgroup_size is not None
+            ), f"expected non-empty tile size in `WorkgroupConstraint` for dimension {dim}"
 
             if wave_size is None:
                 continue
 
-            assert wave_size > 0, (
-                f"expected non-zero tile in `WaveConstraint` for dimension {dim}"
-            )
+            assert (
+                wave_size > 0
+            ), f"expected non-zero tile in `WaveConstraint` for dimension {dim}"
 
-            assert workgroup_size > 0, (
-                f"expected non-zero tile in `WorkgroupConstraint` for dimension {dim}"
-            )
+            assert (
+                workgroup_size > 0
+            ), f"expected non-zero tile in `WorkgroupConstraint` for dimension {dim}"
 
-            assert workgroup_size >= wave_size, (
-                f"expected workgroup tile size to be the same or larger than wavefront tile size for dimension {dim}"
-            )
+            assert (
+                workgroup_size >= wave_size
+            ), f"expected workgroup tile size to be the same or larger than wavefront tile size for dimension {dim}"
 
-            assert workgroup_size % wave_size == 0, (
-                f"expected workgroup tile size to be an integral multiple of wavefront tile size for dimension {dim}"
-            )
+            assert (
+                workgroup_size % wave_size == 0
+            ), f"expected workgroup tile size to be an integral multiple of wavefront tile size for dimension {dim}"
 
         workgroup_dims = set(
             [cons.workgroup_dim for cons in self.workgroup_constraints]
@@ -323,9 +323,9 @@ class LaunchableWave(Launchable):
 
         min_dim = min(workgroup_dims)
         max_dim = max(workgroup_dims)
-        assert max_dim - min_dim + 1 == len(workgroup_dims), (
-            "expected contiguous indices for `workgroup_dim` field in workgroup constraints"
-        )
+        assert max_dim - min_dim + 1 == len(
+            workgroup_dims
+        ), "expected contiguous indices for `workgroup_dim` field in workgroup constraints"
 
         return
 

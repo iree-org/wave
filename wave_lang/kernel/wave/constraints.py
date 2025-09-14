@@ -538,29 +538,36 @@ class HardwareConstraint(Constraint):
             case GenericDot():
                 size = mma_type.get_index_size(self.threads_per_wave)
                 stride = mma_type.get_index_stride(self.threads_per_wave)
-            case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
-                if options.target.startswith("gfx12"):
-                    size = [
-                        Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
-                        1,  # N
-                        8,  # K
-                    ]
-                    stride = [
-                        Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
-                        1,  # N
-                        1,  # K
-                    ]
-                else:
-                    size = [
-                        Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
-                        1,  # N
-                        4,  # K
-                    ]
-                    stride = [
-                        Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
-                        1,  # N
-                        1,  # K
-                    ]
+            case (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16
+                | MMAType.RDNA4_WAVE32_I32_16x16x16_I8
+            ):
+                size = [
+                    Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
+                    1,  # N
+                    8,  # K
+                ]
+                stride = [
+                    Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                    1,  # N
+                    1,  # K
+                ]
+            case (
+                MMAType.F32_16x16x16_F16
+                | MMAType.I32_16x16x16_I8
+                | MMAType.RDNA4_WAVE64_F32_16x16x16_F16
+                | MMAType.RDNA4_WAVE64_I32_16x16x16_I8
+            ):
+                size = [
+                    Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
+                    1,  # N
+                    4,  # K
+                ]
+                stride = [
+                    Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                    1,  # N
+                    1,  # K
+                ]
             case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
                 size = [
                     Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
@@ -633,9 +640,9 @@ class HardwareConstraint(Constraint):
             case _:
                 raise ValueError("Unsupported MMA type")
 
-        assert isinstance(constraint_index, MMAOperand), (
-            f"Invalid MMA operand {constraint_index}"
-        )
+        assert isinstance(
+            constraint_index, MMAOperand
+        ), f"Invalid MMA operand {constraint_index}"
         return IndexSequence(
             offset[constraint_index.value],
             size[constraint_index.value],
@@ -852,9 +859,9 @@ class WaveConstraint(DistributionConstraint):
         # all threads in a wave are handled in wg_dim_0.
         if workgroup_constraint.workgroup_dim == 0:
             self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
-        assert old_wave_id is None or self.wave_id == old_wave_id, (
-            f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
-        )
+        assert (
+            old_wave_id is None or self.wave_id == old_wave_id
+        ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
         self.wg_constraint = workgroup_constraint
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
