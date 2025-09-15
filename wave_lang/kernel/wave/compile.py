@@ -347,7 +347,8 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         mb.module_op.verify()
         asm = mb.module_op.get_asm(
             enable_debug_info=options.location_capture_config.level
-            != LocationCaptureLevel.NONE,
+            != LocationCaptureLevel.NONE
+            and not options.drop_debug_info_before_mlir,
             use_local_scope=options.use_local_scope,
         )
 

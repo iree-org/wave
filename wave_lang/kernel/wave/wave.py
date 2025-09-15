@@ -813,6 +813,16 @@ class LaunchableWave(Launchable):
             partial(generate_bounds_exprs, trace, self.constraints),
         ]
 
+        graph_passes.append(
+            partial(
+                location_check_pass,
+                trace,
+                "enforce-locations",
+                log=False,
+                enforce_100=options.enforce_locations,
+            )
+        )
+
         pass_times = {}
         for p in graph_passes:
             try_apply_pass(
