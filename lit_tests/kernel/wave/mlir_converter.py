@@ -59,8 +59,8 @@ def mlir_converter_matrix_add():
     """Test MLIR converter with matrix addition kernel."""
     # Set parameters for compilation
     subs: dict[str | IndexSymbol, Any] = {
-        ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE,
-        ADDRESS_SPACE_B: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
@@ -78,8 +78,8 @@ def mlir_converter_matrix_add():
     # Compile the kernel to get the trace
     compiled_kernel = wave_compile(options, matrix_add)
 
-    # Get the trace from the compiled kernel
-    trace = compiled_kernel.trace
+    # Get the compiled graph from the compiled kernel
+    trace = compiled_kernel.get_compiled_graph()
 
     # Use the mlir_converter to emit wave MLIR dialect
     mlir_output = emit_wave_dialect(trace, options)
@@ -89,15 +89,15 @@ def mlir_converter_matrix_add():
 
     # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
-    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f16>
+    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f16>
     # CHECK-SAME: BLOCK_M = 64 : i64
     # CHECK-SAME: BLOCK_N = 64 : i64
     # CHECK-SAME: M = 128 : i64
     # CHECK-SAME: N = 128 : i64
     # CHECK: %[[CONST:.*]] = arith.constant 0.000000e+00 : f16
     # CHECK: %[[REG:.*]] = wave.register %[[CONST]] : !wave.tensor<[@M, @N] of f16, <register>>
-    # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]] : (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@M, @N] of f16, <register>>
-    # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]] : (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@M, @N] of f16, <register>>
+    # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
+    # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]] : (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
     # TODO: The type below is incorrectly formatted
     # CHECK: wave.write %[[ADD]], %[[ARG2]] : <[@M, @N] of f16, <register>>, <[@M, @N] of f16>
