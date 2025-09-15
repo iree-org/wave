@@ -389,6 +389,85 @@ def test_atomic_add_return_value():
     print(c)
 
 
+def test_read_back_scalar():
+    ONE = tkl.sym.ONE
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={B: 0, M: 64, ONE: 1},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(ONE, ONE, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(ONE, ONE)]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    simple_read_mapping = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={M: i},
+        outputs={M: i},
+    )
+
+    dynamic_read_mapping = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={M: d0},
+        outputs={M: i},
+        dynamic_val_mappings={M: i},
+    )
+
+    @tkw.wave(constraints)
+    def iterated_gemm(
+        a: tkl.Memory[M, ADDRESS_SPACE, tkl.i32],
+        b: tkl.Memory[M, ADDRESS_SPACE, tkl.i32],
+        c: tkl.Memory[ONE, ADDRESS_SPACE, tkl.i32],
+    ):
+
+        tid = tkw.scalar(THREAD_0, tkl.i32)
+        one_reg = tkw.Register[M, tkl.i32](1)
+        res = tkw.atomic_add(
+            one_reg, a, mapping=dynamic_read_mapping, mapping_dynamic_vals=(tid,)
+        )
+        val = tkw.read(
+            res,
+            mapping=dynamic_read_mapping,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+        tkw.write(val, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            ONE: 1,
+            BLOCK_M: 64,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        print_ir_after="all",
+        print_ir_before="all",
+        minimize_shared_allocs=False,
+    )
+    iterated_gemm = wave_compile(options, iterated_gemm)
+    print(iterated_gemm.asm)
+
+    # generate random input tensors between -1 and 1
+    a = torch.randint(1, 2, (64,), dtype=torch.int32).cuda()
+    b = torch.zeros((64,), dtype=torch.int32).cuda()
+    c = torch.zeros((1,), dtype=torch.int32).cuda()
+
+    iterated_gemm(a, b, c)
+    print(a)
+    print(b)
+    print(c)
+
+
 if __name__ == "__main__":
     import sys
 
