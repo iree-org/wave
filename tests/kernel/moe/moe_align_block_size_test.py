@@ -22,6 +22,8 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     to_default_device,
 )
 
+import math
+
 torch.manual_seed(0)
 
 
@@ -157,6 +159,7 @@ def test_moe_align_block_size(
             block_size,
             topk_ids.numel(),
             max_num_m_blocks,
+            max_num_tokens_padded,
             topk,
         )
     )
@@ -190,6 +193,12 @@ def test_moe_align_block_size(
     wave_expert_ids = torch.empty(
         (max_num_m_blocks,), dtype=torch.int32, device=topk_ids.device
     )
+
+    wave_sorted_ids = torch.empty(
+        (max_num_tokens_padded,), dtype=torch.int32, device=topk_ids.device
+    )
+
+    num_tokens_post_pad = torch.empty((1), dtype=torch.int32, device=topk_ids.device)
     flat_topk = topk_ids.view(-1).to(torch.int32)
     print(kernel.asm)
     print("Flat topk:", flat_topk)
@@ -201,15 +210,37 @@ def test_moe_align_block_size(
         cumsum_buffer,
         cumsum_exclusive,
         num_blocks_buffer,
+        wave_sorted_ids,
     )
+
+    print("Block size:", block_size)
+    print("\n\n============Wave outputs================")
     print("Histogram:", expert_counts_buffer)
     print("Padded:", padded_counts_buffer)
     print("Cumsum (i):", cumsum_buffer)
     print("Cumsum (e):", cumsum_exclusive)
     print("Num blocks:", num_blocks_buffer)
     print("Expert IDs:", wave_expert_ids)
-    # assert empty_topk is same as topk_ids
-    # assert torch.all(empty_topk == flat_topk), "TopK IDs modified"
+
+    print("Sorted IDs:")
+    for i in range(math.ceil(max_num_tokens_padded / block_size)):
+        for j in range(block_size):
+            if i * block_size + j >= max_num_tokens_padded:
+                break
+            print(wave_sorted_ids[i * block_size + j].item(), end=" ")
+        print()
+
+    print("\n\n============Reference outputs================")
+    print("Sorted IDs:")
+    for i in range(math.ceil(max_num_tokens_padded / block_size)):
+        for j in range(block_size):
+            if i * block_size + j >= max_num_tokens_padded:
+                break
+            print(sorted_ids[i * block_size + j].item(), end=" ")
+        print()
+    print("Expert IDs:", expert_ids)
+
+    print("Num tokens post pad:", num_tokens_post_pad.item())
 
     return
     verify_moe_align_block_size_results(

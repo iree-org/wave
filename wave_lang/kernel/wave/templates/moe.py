@@ -24,6 +24,7 @@ def get_moe_align_block_size_kernel(
     block_size: int,
     numel: int,
     max_num_blocks: int,
+    max_num_tokens_padded: int,
     top_k_value: int = 2,
     dtype: torch.dtype = torch.int32,
 ):
@@ -42,6 +43,7 @@ def get_moe_align_block_size_kernel(
     TOPK = tkl.sym.TOPK
     BLOCK_SIZE = tkl.sym.BLOCK_SIZE
     MAX_NUM_BLOCKS = tkl.sym.MAX_NUM_BLOCKS
+    MAX_NUM_TOKENS_PADDED = tkl.sym.MAX_NUM_TOKENS_PADDED
 
     I = sympy.Symbol("I")
     I_MAX = sympy.Symbol("I_MAX")
@@ -59,10 +61,13 @@ def get_moe_align_block_size_kernel(
     # one workgroup to handle the worload
     constraints += [tkw.WorkgroupConstraint(NUMEL, NUMEL, 0)]
     constraints += [tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 1)]
-    constraints += [tkw.WorkgroupConstraint(MAX_NUM_BLOCKS, MAX_NUM_BLOCKS, 2)]
+    constraints += [
+        tkw.WorkgroupConstraint(MAX_NUM_TOKENS_PADDED, MAX_NUM_TOKENS_PADDED, 2)
+    ]
     # one wave to handle the workload
     constraints += [tkw.WaveConstraint(NUMEL, NUMEL)]
     constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
+    constraints += [tkw.WaveConstraint(MAX_NUM_TOKENS_PADDED, MAX_NUM_TOKENS_PADDED)]
 
     constraints += [tkw.TilingConstraint(I)]
 
@@ -74,6 +79,7 @@ def get_moe_align_block_size_kernel(
                 NUMEL: NUMEL,
                 NUM_EXPERTS: NUM_EXPERTS,
                 MAX_NUM_BLOCKS: MAX_NUM_BLOCKS,
+                MAX_NUM_TOKENS_PADDED: MAX_NUM_TOKENS_PADDED,
                 I: 0,
                 I_MAX: 0,
             },
@@ -118,6 +124,20 @@ def get_moe_align_block_size_kernel(
         dynamic_val_mappings={NUM_EXPERTS: i},
     )
 
+    topk_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUMEL: d0},
+        outputs={NUMEL: i},
+        dynamic_val_mappings={NUMEL: i},
+    )
+
+    sorted_token_ids_write_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={MAX_NUM_TOKENS_PADDED: i},
+        outputs={MAX_NUM_TOKENS_PADDED: d0},
+        dynamic_val_mappings={MAX_NUM_TOKENS_PADDED: i},
+    )
+
     @tkw.wave(constraints)
     def moe_align_block_size(
         topk_ids: tkl.Memory[NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype],
@@ -138,6 +158,9 @@ def get_moe_align_block_size_kernel(
         ],
         num_blocks_buffer: tkl.Memory[
             NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
+        sorted_token_ids: tkl.Memory[
+            MAX_NUM_TOKENS_PADDED, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
         ],
     ):
 
@@ -278,9 +301,8 @@ def get_moe_align_block_size_kernel(
             thread_id_x = tkw.Register[MAX_NUM_BLOCKS, tkl.i32](tkw.THREAD_0)
             i_idx = tkw.self_index(I, tkl.i32)
             expert_id_idx = i_idx / tkw.Register[I, tkl.i32](BLOCK_SIZE)
-            expert_id_val = thread_id_x - tkl.Register[MAX_NUM_BLOCKS, tkl.i32](1)
             tkw.write(
-                expert_id_val,
+                thread_id_x,
                 expert_ids,
                 mapping=expert_id_write_map,
                 mapping_dynamic_vals=(expert_id_idx,),
@@ -289,11 +311,47 @@ def get_moe_align_block_size_kernel(
             next_idx = i_idx + tkw.Register[I, tkl.i32](BLOCK_SIZE)
             tkw.set_symbol(I, next_idx)
 
+        # now write the sorted token ids to global memory
+        """
+        Reference implementation:
+        for (size_t i = tid; i < numel; i += stride) {
+            int32_t expert_id = topk_ids[i] + 1;
+            int32_t rank_post_pad = atomicAdd(&cumsum_buffer[expert_id], 1);
+            sorted_token_ids[rank_post_pad] = i;  // Store original token index
+        }
+        """
+
+        numel_value = tkw.Register[MAX_NUM_TOKENS_PADDED, tkl.i32](NUMEL)
+        tkw.write(numel_value, sorted_token_ids)
+
+        tid_reg = tkw.Register[MAX_NUM_TOKENS_PADDED, tkl.i32](tkw.THREAD_0)
+        expert_id = tkw.read(
+            topk_ids,
+            mapping=topk_read_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+        rank_post_pad = tkw.atomic_add(
+            one_reg,
+            cumsum_exclusive,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(expert_id,),
+            elements_per_thread=1,
+        )
+        tkw.write(
+            tid_reg,
+            sorted_token_ids,
+            mapping=sorted_token_ids_write_map,
+            mapping_dynamic_vals=(rank_post_pad,),
+            elements_per_thread=1,
+        )
+
     hyperparams = {
         NUM_TOKENS: num_tokens,
         NUM_EXPERTS: num_experts,
         NUMEL: numel,
         MAX_NUM_BLOCKS: max_num_blocks,
+        MAX_NUM_TOKENS_PADDED: max_num_tokens_padded,
         BLOCK_TOKENS: min(64, num_tokens) if num_tokens > 0 else 1,
         BLOCK_EXPERTS: min(8, num_experts) if num_experts > 0 else 1,
         ELEMS_PER_THREAD: 4,
