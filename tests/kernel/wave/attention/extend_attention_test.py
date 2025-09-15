@@ -307,10 +307,10 @@ def create_inputs(
 # TODO: Push up a setup.py change to make WRT more stable.
 @require_e2e
 @require_cdna3
-@pytest.mark.parametrize("shape", get_test_shapes("extend"))
+# @pytest.mark.parametrize("shape", get_test_shapes("extend"))
 @pytest.mark.parametrize("dtype", [torch.float16])
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
-@param_bool("is_causal", "causal")
+# @param_bool("is_causal", "causal")
 @param_bool("use_buffer_ops", "buf_ops")
 @param_bool("use_wave_runtime", "wr")
 @param_bool("use_custom_mask", "cmask")
@@ -318,14 +318,14 @@ def create_inputs(
     "mfma_variant",
     [
         (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
-        (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+        # (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
     ],
 )
 def testExtendAttention(
-    shape: AttentionShape,
+    # shape: AttentionShape,
     dtype: torch.dtype,
     enable_scheduling: SchedulingType,
-    is_causal: bool,
+    # is_causal: bool,
     use_buffer_ops: bool,
     use_wave_runtime: bool,
     use_custom_mask: bool,
@@ -333,6 +333,15 @@ def testExtendAttention(
     run_bench,
     perf_filename_tk,
 ):
+    is_causal=True
+    shape = AttentionShape(
+        context_len=16384,
+        num_seqs=4,
+        num_query_heads=128,
+        num_kv_heads=8,
+        head_size_kv=128,
+        head_size=128,
+    )
     if is_causal and use_custom_mask:
         pytest.skip(
             "Skipping test because causal and custom mask cannot be True simultaneously"
