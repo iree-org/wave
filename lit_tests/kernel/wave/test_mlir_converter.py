@@ -59,8 +59,8 @@ def test_mlir_converter_matrix_add():
     """Test MLIR converter with matrix addition kernel."""
     # Set parameters for compilation
     subs: dict[str | IndexSymbol, Any] = {
-        ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE,
-        ADDRESS_SPACE_B: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
@@ -72,14 +72,15 @@ def test_mlir_converter_matrix_add():
     options = WaveCompileOptions(
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
+        print_mlir=True,
     )
     options = set_default_run_config(options)
 
     # Compile the kernel to get the trace
     compiled_kernel = wave_compile(options, matrix_add)
 
-    # Get the trace from the compiled kernel
-    trace = compiled_kernel.trace
+    # Get the compiled graph from the compiled kernel
+    trace = compiled_kernel.get_compiled_graph()
 
     # Use the mlir_converter to emit wave MLIR dialect
     mlir_output = emit_wave_dialect(trace, options)
