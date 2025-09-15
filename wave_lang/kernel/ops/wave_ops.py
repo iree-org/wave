@@ -1854,6 +1854,7 @@ class Conditional(NestedRegionOp):
             node._add_proxy_to_graph(graph)
             node.fx_node.node.tkw_op = cls
             node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
 
@@ -1908,6 +1909,7 @@ class Iterate(NestedRegionOp):
             node._add_proxy_to_graph(graph)
             node.fx_node.node.tkw_op = cls
             node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
 
