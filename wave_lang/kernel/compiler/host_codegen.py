@@ -267,7 +267,7 @@ def isolated_test_call(
                     [dynamic_argument_map[dim] for dim in dynamic_symbols]
                     + scalars_args,
                     entrypoints,
-                    arguments,
+                    list(arguments) + list(dynamic_argument_map.values()),
                     [dynamic_argument_map[dim] for dim in argument_dims],
                     [dynamic_argument_map[dim] for dim in result_dims],
                     tied_operands=tied_operands,
