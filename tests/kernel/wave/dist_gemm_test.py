@@ -40,7 +40,7 @@ from torch.testing import assert_close
 
 
 @require_e2e
-@pytest.mark.parametrize("shape", [(128, 128, 64)])
+@pytest.mark.parametrize("shape", [(128, 128, 64), (512, 2048, 1024)])
 @pytest.mark.parametrize(
     "mfma_variant",
     [
