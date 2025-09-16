@@ -2,10 +2,17 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .._support.indexing import IndexSymbol
-from .._support.location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig
 from ..compiler.kernel_codegen import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
 from .utils.classes import KernelLaunchInfo
+
+
+def _get_location_capture_config():
+    """Wrapper to avoid circular import with debugging module."""
+    from ...support.debugging import get_location_capture_config
+
+    return get_location_capture_config()
 
 
 @dataclass
@@ -26,7 +33,7 @@ class WaveCompileOptions:
     # === Scheduling options ===
     schedule: bool = SchedulingType.NONE
     use_scheduling_barriers: bool = False
-    # None if no buffer count specified else 2 and up
+    # None for buffer count to be computed automatically
     multi_buffer_count: Optional[int] = None
 
     # === Runtime options ===
@@ -34,9 +41,10 @@ class WaveCompileOptions:
     kernel_usages: tuple[KernelBufferUsage] = None
 
     # === Backend options ===
-    backend: str = "rocm"
+    device: str = "hip"
     target: str = "gfx942"
     iree_preprocessing_pass_pipeline: str = None
+    num_devices: int = 1
 
     # === Benchmark options ===
     run_bench: bool = False
@@ -60,7 +68,7 @@ class WaveCompileOptions:
     dump_intermediates: str = False
     compile_to_mlir: bool = False
     location_capture_config: LocationCaptureConfig = field(
-        default_factory=LocationCaptureConfig
+        default_factory=_get_location_capture_config
     )
     use_local_scope: bool = False
     use_water_leak_check: bool | str = False  # If string, check the given IR instead.
@@ -74,6 +82,8 @@ class WaveCompileOptions:
     use_buffer_ops: bool = False
     use_fast_math: bool = False
     use_global_to_shared: bool = False
+    linearize_shared_access: bool = False
+    scalarize_packed_math: bool = False
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True

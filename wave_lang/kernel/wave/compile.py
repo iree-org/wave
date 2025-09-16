@@ -7,7 +7,7 @@ import torch
 from wave_lang.kernel.lang import IndexSymbol
 
 from .._support.indexing import IndexingContext
-from .._support.location_config import LocationCaptureLevel
+from ...support.location_config import LocationCaptureLevel
 from ..compiler import host_codegen, kernel_codegen
 from .cache import (
     get_cache_base_dir,
@@ -45,6 +45,7 @@ class WaveKernel:
         bound_scalar_symbols: dict[IndexSymbol, int],
         symbols_args_map: dict[IndexSymbol, tuple[int, int]],
         trace: Optional["CapturedTrace"] = None,
+        compiled_graph: Optional["CapturedTrace"] = None,
         debug_outputs: Optional[Sequence[DebugArgInfo]] = None,
         debug_handlers: Optional[Sequence[Any]] = None,
     ):
@@ -52,6 +53,7 @@ class WaveKernel:
         self.executable = executable
         self.asm = asm
         self.trace = trace
+        self.compiled_graph = compiled_graph
         if gpu_binary_path:
             import wave_runtime
 
@@ -89,6 +91,12 @@ class WaveKernel:
         If this is a cached kernel, the trace is not available.
         """
         return self.trace
+
+    def get_compiled_graph(self) -> Optional["CapturedTrace"]:
+        """Returns the graph produced after running all compilation passes.
+        Currently only needed when compile to MLIR.
+        """
+        return self.compiled_graph
 
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
@@ -313,6 +321,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             options,
             debug_arg_info,
             debug_handlers,
+            device_layout,
         ) = kernel._trace_and_get_kernel_signature(options)
         options.kernel_sig = kernel_sig
 
@@ -368,6 +377,8 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 None,
                 bound_scalar_symbols,
                 symbols_args_map,
+                trace,
+                graph,
                 debug_arg_info,
                 debug_handlers,
             )
@@ -400,6 +411,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         bound_scalar_symbols,
         symbols_args_map,
         trace,
+        graph,
         debug_arg_info,
         debug_handlers,
     )

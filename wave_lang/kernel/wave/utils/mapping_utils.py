@@ -4,13 +4,15 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from typing import TypeVar
-
+from copy import deepcopy
 import sympy
+import torch.fx as fx
 
 from ..._support.indexing import IndexingContext
 from ...lang.wave_types import IndexMapping
-from .general_utils import infer_dim
-from .symbol_utils import IndexExpr, IndexSymbol, subs_idxc
+from .general_utils import infer_dim, get_fastest_index
+from .symbol_utils import IndexExpr, IndexSequence, IndexSymbol, subs_idxc
+from ...compiler.utils import strides_from_symbolic_shape
 
 K = TypeVar("K")  # Key type
 V = TypeVar("V")  # Value type
@@ -217,9 +219,30 @@ def approximate_difference(
     return expr
 
 
+def _compute_offset(indices: list[IndexExpr], strides: list[IndexExpr]) -> IndexExpr:
+    return sum(i * s for i, s in zip(indices, strides))
+
+
+def check_is_dynamic_vals_broadcasted(nodes: list[fx.Node]) -> bool:
+    """
+    Check if dynamic values in a list of nodes are broadcasted.
+
+    A dynamic value is considered broadcasted if its index has size 1 in all dimensions.
+    This function checks all nodes in the list and returns True only if all dynamic values
+    are broadcasted (size 1 in all dims).
+    """
+    for node in nodes:
+        index = node.index
+        assert index is not None, f"Node {node} has no index"
+        if any(subs_idxc(i.size) > 1 for i in index.values()):
+            return False
+    return True
+
+
 def check_is_mapping_contiguous(
     mapping: IndexMapping,
     symbolic_shape: tuple[IndexExpr, ...],
+    array_shape: tuple[IndexExpr, ...],
     index: tuple[IndexExpr, ...],
     elements_per_thread: int | IndexExpr,
     is_read: bool,
@@ -228,10 +251,6 @@ def check_is_mapping_contiguous(
     elements_per_thread = subs_idxc(elements_per_thread)
     if elements_per_thread == 1:
         return True
-
-    # TODO: Better dyn vals analysis.
-    if mapping.num_dynamic_vals != 0:
-        return False
 
     if is_read:
         assert (
@@ -260,19 +279,62 @@ def check_is_mapping_contiguous(
 
     expected_diff = [0] * len(index_mapping)
     expected_diff[-1] = 1
+    if expected_diff == diff:
+        return True
 
-    return diff == expected_diff
+    # If the expected pattern is not found, check if the mapping still produces
+    # contiguous memory accesses by computing offsets for each element.
+    #
+    # The check works by:
+    # 1. Computing the linear memory offset symbolically for the first element
+    # 2. For each subsequent element:
+    #    - Updating the fastest dimension in the index for that element
+    #    - Transforming through the mapping
+    #    - Computing the new memory offset
+    #    - Verifying the offset increased by exactly 1
+    # 3. Returns True only if all elements are sequential
+    fastest_dim = list(index.keys())[get_fastest_index(index)]
+
+    idxc = IndexingContext.current()
+    strides = strides_from_symbolic_shape(idxc, array_shape, allow_mixed_shapes=True)
+    new_index = transform_index_on_mapping(
+        mapping, symbolic_shape, index, is_read=is_read
+    )
+    prev_offset = _compute_offset(
+        [new_index[infer_dim(d)] for d in symbolic_shape], strides
+    )
+    for i in range(1, elements_per_thread):
+        new_index = deepcopy(index)
+        new_index[fastest_dim].start += i
+        new_index = transform_index_on_mapping(
+            mapping, symbolic_shape, new_index, is_read=is_read
+        )
+        offset = _compute_offset(
+            [new_index[infer_dim(d)] for d in symbolic_shape], strides
+        )
+        if (offset - prev_offset) != 1:
+            return False
+
+        prev_offset = offset
+
+    return True
 
 
 def transform_index_on_mapping(
     mapping: IndexMapping,
     symbolic_shape: tuple[IndexExpr, ...],
-    index: tuple[IndexExpr, ...],
+    index: dict[IndexExpr, IndexSequence],
+    is_read: bool = True,
 ) -> tuple[IndexExpr, ...]:
-    """ "Transforms the index according to the specified mapping"""
-    input_index_mapping = mapping.map_input_indices(symbolic_shape)
+    """Transforms the index according to the specified mapping"""
+    symbolic_shape = tuple(infer_dim(d) for d in symbolic_shape)
+    if is_read:
+        index_mapping = mapping.map_input_indices(symbolic_shape)
+    else:
+        index_mapping = mapping.map_output_indices(symbolic_shape)
+
     idxc = IndexingContext.current()
-    index_mapping = tuple(i.subs(idxc.subs) for i in input_index_mapping)
+    index_mapping = tuple(i.subs(idxc.subs) for i in index_mapping)
     iters = mapping.iters
     subs = [
         (sym, expr.start) for sym, expr in zip(iters.keys(), index.values())

@@ -71,6 +71,27 @@ def get_default_scheduling_params() -> dict[IndexSymbol, Any]:
     }
 
 
+def linearize_index(
+    expr_list: dict[IndexExpr, IndexSequence], strides: list[int]
+) -> IndexExpr:
+    """
+    Linearizes N-d IndexSequence with int/static strides into a
+    single 1D linearized IndexExpr.
+    """
+    assert len(expr_list) == len(strides)
+    linear_expr = None
+    for expr, stride in zip(expr_list.values(), strides):
+        assert isinstance(
+            expr, IndexSequence
+        ), f"linearize index expects expr to be of type IndexSequence but got {type(expr)}"
+        current_expr = expr.start * stride
+        if linear_expr is None:
+            linear_expr = current_expr
+        else:
+            linear_expr += current_expr
+    return linear_expr
+
+
 def delinearize_index(
     index: IndexExpr, shape: list[int | IndexExpr]
 ) -> list[IndexExpr]:
@@ -331,24 +352,6 @@ def evaluate_with_assumptions(constraints: list[Constraint], expr: IndexExpr) ->
     if isinstance(result, sympy.logic.boolalg.BooleanAtom):
         return False
     return True if any(result.equals(x) for x in facts) else None
-
-
-def _get_start_index(i: IndexSequence | IndexExpr) -> IndexExpr:
-    if isinstance(i, IndexSequence):
-        i = i.start
-
-    return i
-
-
-def _get_start_indices(
-    src_indices: dict[IndexExpr, IndexSequence | IndexExpr],
-) -> list[IndexExpr]:
-    start_indices = []
-    for dim_indexing in src_indices:
-        i = _get_start_index(src_indices[dim_indexing])
-        start_indices.append(i)
-
-    return start_indices
 
 
 def get_fastest_index(indices: dict[IndexExpr, IndexSequence]):

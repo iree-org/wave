@@ -11,7 +11,7 @@ from typing import List, Optional, Union
 
 from iree.compiler.ir import Context, Location
 
-from .location_config import LocationCaptureConfig, LocationCaptureLevel
+from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
 
 
 @dataclass

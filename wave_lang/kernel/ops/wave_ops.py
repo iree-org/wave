@@ -191,6 +191,9 @@ def tanh(src: "Register") -> "Register": ...
 def cos(src: "Register") -> "Register": ...
 
 
+def round(src: "Register") -> "Register": ...
+
+
 def roundeven(src: "Register") -> "Register": ...
 
 
@@ -594,6 +597,8 @@ class CustomOp(ABC):
                 if attr_name == "index":
                     attr = copy.deepcopy(attr)
                 setattr(new_node, attr_name, attr)
+        for key, value in self.fx_node.meta.items():
+            new_node.meta[key] = value
 
     def copy(
         self,
@@ -944,6 +949,7 @@ class ComparisonPyOp(BinaryOpBase, ABC):
 @define_interface_op("log2")
 @define_interface_op("log10")
 @define_interface_op("reciprocal")
+@define_interface_op("round")
 @define_interface_op("roundeven")
 @define_interface_op("sin")
 @define_interface_op("sinh")
@@ -1173,7 +1179,8 @@ class Placeholder(CustomOp):
 class IterArg(Placeholder):
     """
     Represents a specific placeholder node in the graph that is an iter arg of
-    a reduction node.
+    a reduction node. IterArgs can be of type Register or Memory with
+    a Shared memory address space.
     """
 
     def parent_op(self):
@@ -1188,6 +1195,13 @@ class IterArg(Placeholder):
     @iter_idx.setter
     def iter_idx(self, value):
         self.fx_node.iter_idx = value
+
+    @property
+    def distributed_shape(self):
+        init_arg = self.parent_op().init_args[self.iter_idx]
+        allocate = get_custom(init_arg)
+        assert isinstance(allocate, Allocate)
+        return allocate.distributed_shape
 
     def infer_type(self, *args):
         parent_op = self.parent_op()
@@ -1751,15 +1765,29 @@ class Read(CustomOp):
         if self.has_identity_mapping():
             return True
 
+        if self.elements_per_thread == 1:
+            return True
+
+        from ..wave.utils.mapping_utils import (
+            check_is_mapping_contiguous,
+            check_is_dynamic_vals_broadcasted,
+        )
+
+        if not check_is_dynamic_vals_broadcasted(self.mapping_dynamic_vals):
+            return False
+
         mapping = self.mapping
 
-        mem_shape = get_custom(self.memory).type.symbolic_shape
-
-        from ..wave.utils.mapping_utils import check_is_mapping_contiguous
+        memory = get_custom(self.memory)
+        symbolic_shape = memory.type.symbolic_shape
+        array_shape = symbolic_shape
+        if memory.type.address_space == SHARED_ADDRESS_SPACE:
+            array_shape = memory.distributed_shape
 
         return check_is_mapping_contiguous(
             mapping=mapping,
-            symbolic_shape=mem_shape,
+            symbolic_shape=symbolic_shape,
+            array_shape=array_shape,
             index=self.index,
             elements_per_thread=self.elements_per_thread,
             is_read=True,
@@ -1840,6 +1868,7 @@ class Conditional(NestedRegionOp):
             node._add_proxy_to_graph(graph)
             node.fx_node.node.tkw_op = cls
             node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
 
@@ -1894,6 +1923,7 @@ class Iterate(NestedRegionOp):
             node._add_proxy_to_graph(graph)
             node.fx_node.node.tkw_op = cls
             node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
 
@@ -2087,15 +2117,30 @@ class Write(CustomOp):
         If False we will have to lower it to gather"""
         if self.has_identity_mapping():
             return True
+
+        if self.elements_per_thread == 1:
+            return True
+
+        from ..wave.utils.mapping_utils import (
+            check_is_mapping_contiguous,
+            check_is_dynamic_vals_broadcasted,
+        )
+
+        if not check_is_dynamic_vals_broadcasted(self.mapping_dynamic_vals):
+            return False
+
         mapping = self.mapping
 
-        mem_shape = get_custom(self.memory).type.symbolic_shape
-
-        from ..wave.utils.mapping_utils import check_is_mapping_contiguous
+        memory = get_custom(self.memory)
+        symbolic_shape = memory.type.symbolic_shape
+        array_shape = symbolic_shape
+        if memory.type.address_space == SHARED_ADDRESS_SPACE:
+            array_shape = memory.distributed_shape
 
         return check_is_mapping_contiguous(
             mapping=mapping,
-            symbolic_shape=mem_shape,
+            symbolic_shape=symbolic_shape,
+            array_shape=array_shape,
             index=self.index,
             elements_per_thread=self.elements_per_thread,
             is_read=False,
@@ -2266,6 +2311,13 @@ class GetResult(CustomOp):
     @index.setter
     def index(self, value: dict[IndexSymbol, IndexSequence]):
         CustomOp.index.fset(self, value)
+
+    @property
+    def distributed_shape(self):
+        iterate = get_custom(self.value)
+        allocate = get_custom(iterate.init_args[self.res_idx])
+        assert isinstance(allocate, Allocate)
+        return allocate.distributed_shape
 
 
 @define_op("extract")

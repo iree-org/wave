@@ -61,7 +61,7 @@ def schedule_reduction(
     use_scheduling_barriers: bool = False,
     scheduling_type: SchedulingType = SchedulingType.NONE,
     override_schedule_file: str = None,
-    dump_schedule_file: str = None,
+    dump_schedule_file: Optional[str] = None,
     multi_buffer_count: Optional[int] = None,
 ):
     """
@@ -158,6 +158,7 @@ def schedule_reduction(
             "cycle": cycle % initiation_interval,
             "stage": cycle // initiation_interval,
             "initiation_interval": initiation_interval,
+            "prefetch_stage": node.meta.get("prefetch_stage", None),
         }
         # Erase edges between outputs and iter args.
         if isinstance(get_custom(node), IterArg):
@@ -171,6 +172,7 @@ def schedule_reduction(
             "cycle": cycle % initiation_interval,
             "stage": cycle // initiation_interval,
             "initiation_interval": initiation_interval,
+            "prefetch_stage": custom.fx_node.meta.get("prefetch_stage", None),
         }
 
     erase_graph(graph)

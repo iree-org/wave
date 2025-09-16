@@ -9,7 +9,7 @@ from typing import (
 import torch.fx as fx
 import torch.utils._pytree as pytree
 
-from .location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig
 
 
 class RegionGraph:
