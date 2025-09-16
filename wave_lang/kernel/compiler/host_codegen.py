@@ -285,17 +285,21 @@ def isolated_test_call(
                     barrier = [barrier]
 
                 view_type = IrType.parse("!hal.buffer_view")
+
+                exported_tensors = []
                 for i, b in enumerate(host_sig.output_buffer_bindings):
                     shape = b.kernel_buffer_type.symbolic_shape
-
                     out_type = out_types[i]
                     source_dims = [
                         tensor_d.dim(out[i], arith_d.constant(IndexType.get(), d))
                         for d in range(len(shape))
                         if out_type.is_dynamic_dim(d)
                     ]
-                    out[i] = hal_d.tensor_export(
+                    exported_tensor = hal_d.tensor_export(
                         view_type, barrier[i], out_type, source_dims=source_dims
                     )
+                    exported_tensors.append(exported_tensor)
+
+                out = exported_tensors
 
             func_d.ReturnOp(out)
