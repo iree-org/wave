@@ -293,9 +293,8 @@ def split_input_tensors(
         slice_key = tuple(slice_signature)
 
         # check if we've already created this slice
-        if 0:
+        if slice_key in slice_cache:
             device_slice_result, cached_slice_info = slice_cache[slice_key]
-            print(f"Reusing slice for device {device_id} with signature {slice_key}")
         else:
             # check if the host_tensor and the slice dimensions match
             if host_type.shape != result_shape:
@@ -322,9 +321,6 @@ def split_input_tensors(
 
             # Cache the slice
             slice_cache[slice_key] = (device_slice_result, slice_info)
-            print(
-                f"Created new slice for device {device_id} with signature {slice_key}"
-            )
 
         # store device mapping
         if device_id not in device_map:
