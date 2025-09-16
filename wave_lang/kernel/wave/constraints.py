@@ -42,6 +42,7 @@ Values: 0xABCD where:
   * 3 = 8-bit float (incl. f8E5M2, f8E4M3, and "FNUZ" variants)
   * 4 = MX float (incl. F8E5M2, F8E4M3FN, F6E2M3FN, F6E3M2FN, F4E2M1FN variants)
   * C = 8-bit integer (any signedness)
+  * D = 4-bit integer (any signedness)
 * D enumerates intrinsics that share the same 0xABC* bits.
 """
 
@@ -74,16 +75,16 @@ class MMAType(Enum):
     RDNA4_WAVE32_F16_16x16x16_F16 = 0x1922
     RDNA4_WAVE32_BF16_16x16x16_BF16 = 0x1923
     RDNA4_WAVE32_I32_16x16x16_I8 = 0x19C0
-    RDNA4_WAVE32_I32_16x16x16_I4 = 0x19C1
-    RDNA4_WAVE32_I32_16x16x32_I4 = 0x19C2
+    RDNA4_WAVE32_I32_16x16x16_I4 = 0x19D0
+    RDNA4_WAVE32_I32_16x16x32_I4 = 0x19D1
 
     RDNA4_WAVE64_F32_16x16x16_F16 = 0x1924
     RDNA4_WAVE64_F32_16x16x16_BF16 = 0x1925
     RDNA4_WAVE64_F16_16x16x16_F16 = 0x1926
     RDNA4_WAVE64_BF16_16x16x16_BF16 = 0x1927
     RDNA4_WAVE64_I32_16x16x16_I8 = 0x19C3
-    RDNA4_WAVE64_I32_16x16x16_I4 = 0x19C4
-    RDNA4_WAVE64_I32_16x16x32_I4 = 0x19C5
+    RDNA4_WAVE64_I32_16x16x16_I4 = 0x19D0
+    RDNA4_WAVE64_I32_16x16x32_I4 = 0x19D1
 
 
 class ScaledMMAType(Enum):
@@ -640,9 +641,9 @@ class HardwareConstraint(Constraint):
             case _:
                 raise ValueError("Unsupported MMA type")
 
-        assert isinstance(
-            constraint_index, MMAOperand
-        ), f"Invalid MMA operand {constraint_index}"
+        assert isinstance(constraint_index, MMAOperand), (
+            f"Invalid MMA operand {constraint_index}"
+        )
         return IndexSequence(
             offset[constraint_index.value],
             size[constraint_index.value],
@@ -859,9 +860,9 @@ class WaveConstraint(DistributionConstraint):
         # all threads in a wave are handled in wg_dim_0.
         if workgroup_constraint.workgroup_dim == 0:
             self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
-        assert (
-            old_wave_id is None or self.wave_id == old_wave_id
-        ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
+        assert old_wave_id is None or self.wave_id == old_wave_id, (
+            f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
+        )
         self.wg_constraint = workgroup_constraint
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
