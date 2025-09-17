@@ -34,6 +34,7 @@ Values: 0xABCD where:
     * 2 = CDNA3
     * 3 = CDNA4
     * 8 = RDNA3
+    * 9 = RDNA4
 * C = element type of A-matrix:
   * 0 = 64-bit float (e.g. IEEE754 double precision)
   * 1 = 32-bit float (e.g. IEEE754 single precision, and "xf32" fast variants)
@@ -68,6 +69,8 @@ class MMAType(Enum):
     F32_32x32x16_F16 = 0x1322
     F32_16x16x32_F16 = 0x1323
 
+    # Intrinsics introduced in RDNA4
+    RDNA4_WAVE32_F32_16x16x16_F16 = 0x1920
 
 class ScaledMMAType(Enum):
     # Intrinsics introduced in CDNA4
@@ -252,6 +255,8 @@ class HardwareConstraint(Constraint):
             # M x N x K
             case GenericDot():
                 return mma_type.get_shape(self.threads_per_wave)
+            case MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+                return (16,16,16)
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 return (16, 16, 16)
             case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
@@ -290,6 +295,15 @@ class HardwareConstraint(Constraint):
             # (M x K, N x K) -> M x N
             case GenericDot():
                 offset = mma_type.get_index_offset(lane, self.threads_per_wave)
+            case MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+                offset = [
+                    Piecewise(
+                        (lane % 16, ~MMA_ACC),
+                        (8 * floor(lane / 16), MMA_ACC),
+                    ),  # M
+                    lane % 16,  # N
+                    8 * floor(GPR_NUM / 2) + 4 * floor(lane / 16),  # K
+                ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 offset = [
                     Piecewise(
@@ -473,6 +487,17 @@ class HardwareConstraint(Constraint):
             case GenericDot():
                 size = mma_type.get_index_size(self.threads_per_wave)
                 stride = mma_type.get_index_stride(self.threads_per_wave)
+            case MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+                size = [
+                    Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
+                    1,  # N
+                    8,  # K
+                ]
+                stride = [
+                    Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                    1,  # N
+                    1,  # K
+                ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 size = [
                     Piecewise((1, ~MMA_ACC), (4, MMA_ACC)),  # M
