@@ -13,6 +13,7 @@ import wave_lang.kernel.lang as tkl
 
 from .._support.indexing import IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
+from .._support.location import CapturedLocation
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     Add,
@@ -92,35 +93,47 @@ def determine_shuffle_config(
     return cluster_size, cluster_stride[0] if cluster_size > 1 else 1
 
 
-def get_graph_node(custom: CustomOp, graph: fx.Graph) -> fx.Node:
+def get_graph_node(
+    custom: CustomOp,
+    graph: fx.Graph,
+    location: CapturedLocation,
+) -> fx.Node:
     custom.add_to_graph(graph)
     custom = custom.fx_node
+    custom.location = location
     return custom
 
 
 def emit_sources_reduction(
-    binary_fn: Callable, src: list[fx.Node], graph: fx.Graph
+    binary_fn: Callable,
+    src: list[fx.Node],
+    graph: fx.Graph,
+    location: CapturedLocation,
 ) -> fx.Node:
     """
     Does reduction over a list of fx.Node variables by applying binary_fn on them.
     """
     init = src[0]
     for i in range(1, len(src)):
-        init = get_graph_node(binary_fn(init, src[i]), graph)
+        init = get_graph_node(binary_fn(init, src[i]), graph, location)
     init.index = src[0].index
     return init
 
 
 def emit_variable_reduction(
-    binary_fn: Callable, src: fx.Node, graph: fx.Graph, local_reduction_size: int
+    binary_fn: Callable,
+    src: fx.Node,
+    graph: fx.Graph,
+    local_reduction_size: int,
+    location: CapturedLocation,
 ) -> fx.Node:
     """
     Does reduction over a singular fx.Node variable.
     """
-    init = get_graph_node(Extract(src, [0]), graph)
+    init = get_graph_node(Extract(src, [0]), graph, location)
     for i in range(1, local_reduction_size):
-        cur_slice = get_graph_node(Extract(src, [i]), graph)
-        init = get_graph_node(binary_fn(init, cur_slice), graph)
+        cur_slice = get_graph_node(Extract(src, [i]), graph, location)
+        init = get_graph_node(binary_fn(init, cur_slice), graph, location)
     return init
 
 
@@ -129,15 +142,16 @@ def emit_local_reduction(
     reduction_src: list[fx.Node],
     graph: fx.Graph,
     local_reduction_size,
+    location: CapturedLocation,
 ) -> fx.Node:
     """
     Does reduction over all the element carried along by ReductionOp at local
     thread/SIMT level. This is done by reducing expanded sources combining them
     into single variable, and then reducing that variable into a scalar.
     """
-    src_reduction = emit_sources_reduction(binary_fn, reduction_src, graph)
+    src_reduction = emit_sources_reduction(binary_fn, reduction_src, graph, location)
     local_reduction = emit_variable_reduction(
-        binary_fn, src_reduction, graph, local_reduction_size
+        binary_fn, src_reduction, graph, local_reduction_size, location
     )
     return local_reduction
 
@@ -147,6 +161,7 @@ def emit_scalarized_local_reduction(
     reduction_src: list[fx.Node],
     graph: fx.Graph,
     local_reduction_size,
+    location: CapturedLocation,
 ) -> fx.Node:
     """
     Special case of local reduction wher we try to scalarize/get rid of most vector ops.
@@ -165,10 +180,12 @@ def emit_scalarized_local_reduction(
     %local_src_reduce = arith.maximumf %local_lhs_reduce, %local_rhs_reduce : f32
     """
     locally_reduced_sources = [
-        emit_variable_reduction(binary_fn, arg, graph, local_reduction_size)
+        emit_variable_reduction(binary_fn, arg, graph, local_reduction_size, location)
         for arg in reduction_src
     ]
-    local_reduction = emit_sources_reduction(binary_fn, locally_reduced_sources, graph)
+    local_reduction = emit_sources_reduction(
+        binary_fn, locally_reduced_sources, graph, location
+    )
     return local_reduction
 
 
@@ -179,6 +196,7 @@ def emit_intrawave_reduction(
     subgroup_size: int,
     cluster_size: int,
     cluster_stride: int,
+    location: CapturedLocation,
 ) -> fx.Node:
     """
     Reduce data across threads in a warp by doing butterfly shuffle.
@@ -187,8 +205,8 @@ def emit_intrawave_reduction(
     num_steps = int(math.log2(float(cluster_size)))
     for _ in range(num_steps):
         shuffle_val = ShuffleOp(init, cluster_stride, subgroup_size, ShuffleMode.XOR)
-        shuffle_node = get_graph_node(shuffle_val, graph)
-        init = get_graph_node(binary_fn(init, shuffle_node), graph)
+        shuffle_node = get_graph_node(shuffle_val, graph, location)
+        init = get_graph_node(binary_fn(init, shuffle_node), graph, location)
         cluster_stride <<= 1
     return init
 
@@ -202,7 +220,7 @@ def emit_interwave_reduction(
     num_reduction_waves,
     wg_constraint_map,
     hardware_constraint,
-    original_op_location=None,
+    original_op_location: CapturedLocation,
 ):
     """
     Reduces partial reduced data from individual wave across the block.
@@ -239,11 +257,13 @@ def emit_interwave_reduction(
     execute_on_lane0_graph = fx.Graph()
     subgraph_name = f"execute_on_lane0_{src.name}"
     placeholder_src = get_graph_node(
-        Placeholder.from_fx_node(src), execute_on_lane0_graph
+        Placeholder.from_fx_node(src), execute_on_lane0_graph, original_op_location
     )
     placeholder_src.type = src.type
     placeholder_allocate = get_graph_node(
-        Placeholder.from_fx_node(get_custom(allocate_node)), execute_on_lane0_graph
+        Placeholder.from_fx_node(get_custom(allocate_node)),
+        execute_on_lane0_graph,
+        original_op_location,
     )
     placeholder_allocate.type = get_custom(allocate_node).type
     placeholder_allocate.meta["lifted"] = allocate_node
@@ -252,14 +272,17 @@ def emit_interwave_reduction(
     write = Write(placeholder_src, placeholder_allocate, 1).add_to_graph(
         execute_on_lane0_graph
     )
+    write.location = original_op_location
     write.index = {reduction_dim: IndexSequence(reduction_wave_id, 1, 1)}
 
     # 3. Create if lane_id == 0 and insert subgraph into root graph.
     implicit_capture_src = get_outer_node(src)
 
-    lane_id_reg = get_graph_node(NewScalar(lane_id, tkl.i32), graph)
-    zero_reg = get_graph_node(NewScalar(0, tkl.i32), graph)
-    is_lane_0 = get_graph_node(Eq(lane_id_reg, zero_reg), graph)
+    lane_id_reg = get_graph_node(
+        NewScalar(lane_id, tkl.i32), graph, original_op_location
+    )
+    zero_reg = get_graph_node(NewScalar(0, tkl.i32), graph, original_op_location)
+    is_lane_0 = get_graph_node(Eq(lane_id_reg, zero_reg), graph, original_op_location)
     execute_on_lane0 = get_graph_node(
         Conditional(
             is_lane_0,
@@ -267,6 +290,7 @@ def emit_interwave_reduction(
             implicit_captures=[implicit_capture_src, allocate_node],
         ),
         graph,
+        original_op_location,
     )
     execute_on_lane0_graph.parent_op = execute_on_lane0
     trace.add_subgraph(subgraph_name, execute_on_lane0_graph)
@@ -279,9 +303,10 @@ def emit_interwave_reduction(
         elements_per_thread=num_reduction_waves,
         _write_dependency=[execute_on_lane0, write],
     ).add_to_graph(graph)
+    read.location = original_op_location
     read.index = {reduction_dim: IndexSequence(0, 1, 1)}
     interwave_reduction = emit_variable_reduction(
-        binary_fn, read, graph, num_reduction_waves
+        binary_fn, read, graph, num_reduction_waves, original_op_location
     )
     return interwave_reduction
 
@@ -369,11 +394,19 @@ def decompose_reduce_ops(
                 )
             if binary_fn == Maximum:
                 local_reduction = emit_scalarized_local_reduction(
-                    binary_fn, reduction_src, custom.graph, local_reduce_sizes[0]
+                    binary_fn,
+                    reduction_src,
+                    custom.graph,
+                    local_reduce_sizes[0],
+                    custom.location,
                 )
             else:
                 local_reduction = emit_local_reduction(
-                    binary_fn, reduction_src, custom.graph, local_reduce_sizes[0]
+                    binary_fn,
+                    reduction_src,
+                    custom.graph,
+                    local_reduce_sizes[0],
+                    custom.location,
                 )
 
             if (
@@ -404,13 +437,16 @@ def decompose_reduce_ops(
                 subgroup_size,
                 cluster_size,
                 cluster_stride,
+                custom.location,
             )
 
             # Local Accumulator Reduce
             final_reduction = global_reduction
             if reduction_acc is not None:
                 final_reduction = get_graph_node(
-                    binary_fn(reduction_acc, global_reduction), custom.graph
+                    binary_fn(reduction_acc, global_reduction),
+                    custom.graph,
+                    custom.location,
                 )
 
             if reduce_block:

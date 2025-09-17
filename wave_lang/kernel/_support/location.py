@@ -143,3 +143,6 @@ def capture_function_location(
         return StackTraceInfo(frames=[frame_info])
 
     return None
+
+# Define type alias to refer to this more easily.
+CapturedLocation = Optional[FileLineColInfo | StackTraceInfo]

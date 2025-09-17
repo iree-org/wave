@@ -98,7 +98,9 @@ def insert_barrier_if_needed(alloc: fx.Node, first_use: fx.Node, last_use: fx.No
             first_use = last_use.graph.parent_op
 
     with first_use.graph.inserting_before(first_use):
-        SharedMemoryBarrier().add_to_graph(first_use.graph)
+        barrier = SharedMemoryBarrier().add_to_graph(first_use.graph)
+        if hasattr(first_use, "location"):
+            barrier.location = first_use.location
 
 
 def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):

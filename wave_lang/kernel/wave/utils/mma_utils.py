@@ -161,6 +161,7 @@ def get_mma_dimensional_mapping(
                 reshape = Reshape(arg.fx_node, prev_mma.vector_shapes).add_to_graph(
                     mma.graph
                 )
+                reshape.location = mma.location
                 custom_reshape = get_custom(reshape)
                 custom_reshape.vector_shapes = mma.vector_shapes
                 mma.update_arg(arg_index, reshape)

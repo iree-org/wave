@@ -135,9 +135,11 @@ def decompose_vmma_ops(
                 slice_lhs = Reshape([mma_op.lhs], virtual_vector_shapes).add_to_graph(
                     mma_op.graph
                 )
+                slice_lhs.location = mma_op.location
                 slice_rhs = Reshape([mma_op.rhs], virtual_vector_shapes).add_to_graph(
                     mma_op.graph
                 )
+                slice_rhs.location = mma_op.location
 
             # Setting vector_shapes for num_partitions
             slice_lhs.vector_shapes = native_vector_shapes
@@ -154,6 +156,7 @@ def decompose_vmma_ops(
                 mma_acc = MMA(
                     slice_lhs, slice_rhs, mma_acc, native_mma_type
                 ).add_to_graph(mma_op.graph)
+                mma_acc.location = mma_op.location
                 mma_acc.index = copy.deepcopy(mma_op.index)
                 m_dim = get_m_dim(mma_op, vmma_expr[MMAOperand.M.value])
                 n_dim = get_n_dim(mma_op, vmma_expr[MMAOperand.N.value])

@@ -416,6 +416,7 @@ def add_get_results(trace: CapturedTrace):
             get_result = get_custom(
                 GetResult(iterate.fx_node, 0).add_to_graph(iterate.graph)
             )
+            get_result.location = iterate.location
             iterate.replace_all_uses_with_except(get_result, [get_result])
 
 
@@ -732,7 +733,9 @@ def fixup_iterate_nodes(
             )
             get_result.name = get_item.fx_node.name
             get_result.index = get_item.index
-            get_item.replace_all_uses_with(get_custom(get_result))
+            get_result = get_custom(get_result)
+            get_result.location = get_item.location
+            get_item.replace_all_uses_with(get_result)
             get_item.erase()
 
         remove_original_nodes(return_vals)
