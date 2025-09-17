@@ -363,6 +363,9 @@ def emit_mfma(m: int, n: int, k: int, acc: Value, values: list[Value]) -> Value:
     )
     return result
 
+def emit_wmma(acc: Value, values: list[Value]) -> Value:
+    source_a, source_b = values
+    return amdgpu_d.wmma(source_a, source_b, acc)
 
 @handle_op(mma)
 def handle_mma(emitter: WaveEmitter, node: fx.Node):
@@ -388,7 +391,7 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Dot product MMA was not decomposed.")
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
-    result = emit_mfma(m, n, k, acc, values)
+    result = emit_wmma(acc, values) if emitter.options.target.startswith("gfx12") else emit_mfma(m, n, k, acc, values)
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
 
