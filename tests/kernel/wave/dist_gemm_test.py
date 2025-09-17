@@ -57,9 +57,12 @@ default_test_shapes["test_gemm"] = [
         MMAType.F32_32x32x8_F16,
     ],
 )
-@pytest.mark.parametrize("devices", [(1, 1), (2, 1), (4, 1), (8, 1)])
+@pytest.mark.parametrize(
+    "devices",
+    [(1, 1), (2, 1), (4, 1), (8, 1), (1, 2), (1, 4), (1, 8), (2, 2), (2, 4), (4, 2)],
+)
 @pytest.mark.parametrize("datatype", [torch.float16])
-def testPureGemm(
+def testDistGemm(
     shape: tuple[int],
     mfma_variant: MMAType,
     datatype: torch.dtype,
