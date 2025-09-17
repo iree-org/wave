@@ -25,7 +25,6 @@ def get_dist_gemm_kernel(
     device_m: int = 1,
     device_n: int = 1,
 ):
-    assert device_m == 1 or device_n == 1, "Only one of device_m or device_n can be 1"
 
     if not isinstance(dynamic_dims, Sequence):
         dynamic_dims = (dynamic_dims,) * 3
@@ -47,10 +46,8 @@ def get_dist_gemm_kernel(
     # Expose user-constraints
     constraints: list[tkw.Constraint] = []
     # Only support distribution along outer dimension
-    if device_m > 1:
-        constraints += [tkw.DeviceConstraint(M, DEVICE_M, 0)]
-    if device_n > 1:
-        constraints += [tkw.DeviceConstraint(N, DEVICE_N, 0)]
+    constraints += [tkw.DeviceConstraint(M, DEVICE_M, 0)]
+    constraints += [tkw.DeviceConstraint(N, DEVICE_N, 1)]
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
