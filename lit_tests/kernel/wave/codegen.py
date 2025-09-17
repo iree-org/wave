@@ -2556,3 +2556,114 @@ def test_atomic_min():
     # CHECK:            %[[atm_3:.+]] = memref.atomic_rmw mins %{{.*}}, %[[alloc]][%[[C0]], %[[val_3]]]
     # CHECK:            amdgpu.lds_barrier
     # CHECK:            vector.load %[[alloc]][%[[C0]], %[[val_0]]]
+
+
+@run_test
+def test_atomic_add():
+    shape = (64, 4)
+    # Input sizes
+    NUMEL = tkl.sym.NUMEL
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+
+    constraints: list[tkw.Constraint] = []
+
+    # one workgroup to handle the worload
+    constraints += [tkw.WorkgroupConstraint(NUMEL, NUMEL, 0)]
+    constraints += [tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 1)]
+    # one wave to handle the workload
+    constraints += [tkw.WaveConstraint(NUMEL, NUMEL)]
+    constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={NUMEL: NUMEL, NUM_EXPERTS: NUM_EXPERTS},
+        )
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    histogram_read = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    dtype = tkl.i32
+
+    @tkw.wave(constraints)
+    def create_histogram(
+        indices: tkl.Memory[NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype],
+        experts: tkl.Memory[
+            NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
+    ):
+
+        # create a vector of zeros and ones
+        zero_vec = tkl.Register[NUM_EXPERTS, dtype](0)
+        one_vec = tkw.Register[NUM_EXPERTS, dtype](1)
+
+        # read the index in the range [0, NUM_EXPERTS)
+        idx = tkw.read(indices, elements_per_thread=1)
+
+        # allocate shared memory for the histogram
+        shmem = tkw.allocate(
+            shape=(NUM_EXPERTS,),
+            distributed_shape=(NUM_EXPERTS,),
+            dtype=dtype,
+        )
+
+        # initialize shared memory to zero
+        tkw.write(zero_vec, shmem)
+
+        # atomic add 1 to the index read
+        tkw.atomic_add(
+            one_vec,
+            shmem,
+            mapping=histogram_read,
+            mapping_dynamic_vals=(idx,),
+            elements_per_thread=1,
+        )
+
+        # write back the results to global memory
+        counts = tkw.read(shmem)
+        tkw.write(
+            counts,
+            experts,
+        )
+
+    num_indices = shape[0]
+    num_experts = shape[1]
+
+    hyperparams = {
+        NUMEL: num_indices,
+        NUM_EXPERTS: num_experts,
+    }
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        compile_to_mlir=True,
+        minimize_shared_allocs=False,
+    )
+    compiled_fn = wave_compile(options, create_histogram)
+    print(compiled_fn.asm)
+
+    # CHECK-LABEL: test_atomic_add
+    # CHECK:         func.func @create_histogram
+    # CHECK-DAG:        %[[C1_I32:.+]] = arith.constant 1 : i32
+    # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
+    # CHECK-DAG:        %[[ZERO_VEC:.+]] = arith.constant dense<0> : vector<{{.*}}xi32>
+    # CHECK-DAG:        %[[thread_id_x:.*]] = gpu.thread_id  x
+    # CHECK:            %[[INDICES:.+]] = stream.binding.subspan %arg0[%[[C0]]] : !stream.binding -> memref<{{.*}}xi32, strided<[1], offset: ?>>
+    # CHECK:            %[[IDX:.+]] = memref.load %[[INDICES]][%[[thread_id_x]]] : memref<{{.*}}xi32, strided<[1], offset: ?>>
+    # CHECK:            %[[alloc:.*]] = memref.alloc() : memref<{{.*}}xi32, #gpu.address_space<workgroup>>
+    # CHECK:            vector.store %[[ZERO_VEC]], %[[alloc]][%[[C0]]] : memref<{{.*}}xi32, #gpu.address_space<workgroup>>, vector<{{.*}}xi32>
+    # CHECK:            %[[IDX_CAST:.+]] = arith.index_cast %[[IDX]] : i32 to index
+    # CHECK:            %[[ATOMIC_ADD:.+]] = memref.atomic_rmw addi %[[C1_I32]], %[[alloc]][%[[IDX_CAST]]] : (i32, memref<{{.*}}xi32, #gpu.address_space<workgroup>>) -> i32
+    # CHECK:            amdgpu.lds_barrier
+    # CHECK:            %[[RESULT:.+]] = vector.load %[[alloc]][%[[C0]]] : memref<{{.*}}xi32, #gpu.address_space<workgroup>>, vector<{{.*}}xi32>
+    # CHECK:            %[[EXPERTS:.+]] = stream.binding.subspan %arg1[%[[C0]]] : !stream.binding -> memref<{{.*}}xi32, strided<[1], offset: ?>>
+    # CHECK:            vector.store %[[RESULT]], %[[EXPERTS]][%[[C0]]] : memref<{{.*}}xi32, strided<[1], offset: ?>>, vector<{{.*}}xi32>
