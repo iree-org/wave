@@ -302,7 +302,7 @@ class HardwareConstraint(Constraint):
                         (8 * floor(lane / 16), MMA_ACC),
                     ),  # M
                     lane % 16,  # N
-                    8 * floor(GPR_NUM / 2) + 4 * floor(lane / 16),  # K
+                    8 * floor(GPR_NUM / 2) + 4 * floor(lane / 16) + (GPR_NUM % 2),  # K
                 ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 offset = [
@@ -491,7 +491,7 @@ class HardwareConstraint(Constraint):
                 size = [
                     Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
                     1,  # N
-                    8,  # K
+                    1,  # K
                 ]
                 stride = [
                     Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
