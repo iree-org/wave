@@ -186,6 +186,14 @@ def debug_log(
 ): ...
 
 
+def bounds_check(
+    index_exprs: dict[IndexExpr, IndexSequence],
+    bounds: dict[IndexSymbol, IndexExpr],
+    mapping: Optional[IndexMapping] = None,
+    mask_bounds: Optional[dict[IndexSymbol, IndexExpr]] = None,
+): ...
+
+
 def apply_expr(
     value: "Register" | Sequence["Register"], expr: Callable
 ) -> "Register": ...
@@ -2332,6 +2340,23 @@ class DebugLog(CustomOp):
 
         self.type = type_expr
         self.fx_node.type = type_expr
+
+
+@define_op("bounds_check")
+@dataclass
+class BoundsCheck(CustomOp):
+    """
+    Checks if a dimension is within a bound.
+    """
+
+    index_exprs: dict[IndexExpr, IndexSequence]
+    bounds: dict[IndexSymbol, IndexExpr]
+    mapping: Optional[IndexMapping] = None
+    mask_bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("apply_expr")

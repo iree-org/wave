@@ -83,6 +83,7 @@ from .promotion import compute_shared_memory_usage, promote_placeholders
 from .schedule_reordering import schedule_reordering
 from .scheduling.schedule import schedule_graph
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
+from .generate_bound_checks import generate_bound_checks
 from .symbolic_constraints import SymbolicAlias
 from .type_inference import infer_types
 from .utils.compile_utils import canonicalize_module, apply_transform
@@ -817,6 +818,11 @@ class LaunchableWave(Launchable):
             partial(partition_gather_like_ops, trace, self.constraints),
             partial(generate_bounds_exprs, trace, self.constraints),
         ]
+
+        if options.use_bound_check:
+            graph_passes += [
+                partial(generate_bound_checks, trace),
+            ]
 
         graph_passes.append(
             partial(

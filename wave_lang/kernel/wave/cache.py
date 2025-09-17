@@ -210,6 +210,7 @@ class WaveCacheManager(object):
             options.minimize_shared_allocs,
             options.reorder_allocs,
             options.override_schedule,
+            options.use_bound_check,
         ]
 
         # Add kernel/helper function specific hashes.
