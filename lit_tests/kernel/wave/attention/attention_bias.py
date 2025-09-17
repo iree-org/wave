@@ -141,6 +141,7 @@ def test_attention_bias():
         schedule=SchedulingType.NONE,
         use_scheduling_barriers=False,
         compile_to_mlir=True,
+        enforce_locations=True,
     )
     base_attention_bias = wave_compile(options, base_attention_bias)
     print(base_attention_bias.asm)

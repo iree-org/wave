@@ -40,7 +40,10 @@ def get_wave_compile_options(canonicalize: bool = False, dynamic_symbols=[]):
             del bindings[sym]
 
     return WaveCompileOptions(
-        bindings, canonicalize=canonicalize, dynamic_symbols=dynamic_symbols
+        bindings,
+        canonicalize=canonicalize,
+        dynamic_symbols=dynamic_symbols,
+        enforce_locations=True,
     )
 
 

@@ -168,7 +168,10 @@ def test_read_mapped_buffer():
         use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
-        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.FILE_LINE_COL),
+        location_capture_config=LocationCaptureConfig(
+            level=LocationCaptureLevel.FILE_LINE_COL
+        ),
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     read_mapped_buffer = wave_compile(options, read_mapped_buffer)
@@ -211,6 +214,7 @@ def test_read_dynamic_3d_buffer():
         use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     read_dynamic_buffer = wave_compile(options, read_dynamic_buffer)
@@ -338,6 +342,7 @@ def test_read_write_masked():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     read_write_masked = wave_compile(options, read_write_masked)
@@ -391,6 +396,7 @@ def test_read_write_masked_shared():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     read_write_masked_shared = wave_compile(options, read_write_masked_shared)
@@ -1091,6 +1097,7 @@ def test_reduce_sum():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1167,6 +1174,7 @@ def test_mutliple_local_reduce_sum():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1239,6 +1247,7 @@ def test_reduction_and_elemwise():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1328,6 +1337,7 @@ def test_tiled_reduce_max():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1419,6 +1429,7 @@ def test_tiled_reduce_min():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1510,6 +1521,7 @@ def test_tiled_reduce_min_unaligned():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1591,6 +1603,7 @@ def test_multiple_reduction_iv():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1691,6 +1704,7 @@ def test_reduce_propagate_broadcast():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1765,6 +1779,7 @@ def test_block_reduce_sum():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1842,6 +1857,7 @@ def test_explicit_broadcast():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -1966,6 +1982,7 @@ def test_broadcast_add():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -2014,6 +2031,7 @@ def test_broadcast_scaled_add():
         canonicalize=True,
         use_buffer_ops=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
@@ -2273,6 +2291,7 @@ def test_register_codegen_i32():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     register_codegen_i32 = wave_compile(options, register_codegen_i32)
@@ -2326,6 +2345,7 @@ def test_scalar_codegen_f32():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     scalar_codegen_f32 = wave_compile(options, scalar_codegen_f32)
@@ -2385,6 +2405,7 @@ def test_scalar_codegen_i32():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     scalar_codegen_i32 = wave_compile(options, scalar_codegen_i32)
@@ -2464,6 +2485,7 @@ def test_scalar_cond_copy():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     scalar_cond_copy = wave_compile(options, scalar_cond_copy)
@@ -2524,6 +2546,7 @@ def test_scanop_cumsum():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     scanop_cumsum = wave_compile(options, scanop_cumsum)
@@ -2614,6 +2637,7 @@ def test_atomic_min():
         use_buffer_ops=False,
         compile_to_mlir=True,
         minimize_shared_allocs=False,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
 

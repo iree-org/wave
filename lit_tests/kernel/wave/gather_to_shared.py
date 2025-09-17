@@ -70,6 +70,7 @@ def test_gather_to_shared():
         compile_to_mlir=True,
         use_global_to_shared=True,
         target="gfx950",
+        enforce_locations=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
@@ -143,6 +144,7 @@ def test_gather_to_shared_cant_k():
         compile_to_mlir=True,
         use_global_to_shared=True,
         target="gfx950",
+        enforce_locations=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
@@ -261,6 +263,7 @@ def test_gather_to_shared_scaled_dims():
         compile_to_mlir=True,
         use_global_to_shared=True,
         target="gfx950",
+        enforce_locations=True,
     )
     scaled_gemm = wave_compile(options, scaled_gemm)
     print(scaled_gemm.asm)
