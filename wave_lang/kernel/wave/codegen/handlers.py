@@ -2014,5 +2014,5 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
             args += [gen(arg) for arg in start_indices]
             args += [gen(bounds[dim]) for dim in index.keys()]
             gpu_d.printf(format=fmt, args=args)
-            res = llvm_d.call_intrinsic(None, "llvm.trap", [], [], [])
+            llvm_d.intr_trap()
             scf_d.YieldOp([])
