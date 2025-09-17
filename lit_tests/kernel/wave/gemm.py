@@ -46,6 +46,8 @@ def get_wave_compile_options(canonicalize: bool = False, dynamic_symbols=[]):
         canonicalize=canonicalize,
         dynamic_symbols=dynamic_symbols,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
+        enforce_locations=True,
     )
 
 
@@ -94,6 +96,7 @@ def test_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
@@ -175,6 +178,7 @@ def test_non_transposed_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
@@ -259,6 +263,7 @@ def test_reordered_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
@@ -331,6 +336,7 @@ def test_gemm_small_tile_size():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
@@ -403,6 +409,7 @@ def test_gemm_dot():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm_dot = wave_compile(options, gemm_dot)
     print(gemm_dot.asm)
@@ -467,6 +474,7 @@ def test_cdna2_int_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     cdna2_int_gemm = wave_compile(options, cdna2_int_gemm)
     print(cdna2_int_gemm.asm)
@@ -541,6 +549,7 @@ def test_cdna3_int_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     cdna3_int_gemm = wave_compile(options, cdna3_int_gemm)
     print(cdna3_int_gemm.asm)
@@ -616,6 +625,7 @@ def test_packed_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     packed_gemm = wave_compile(options, packed_gemm)
     print(packed_gemm.asm)
@@ -714,6 +724,7 @@ def test_batched_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     batched_gemm = wave_compile(options, batched_gemm)
     print(batched_gemm.asm)
@@ -806,6 +817,7 @@ def test_chained_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     chained_gemm = wave_compile(options, chained_gemm)
     print(chained_gemm.asm)
@@ -888,6 +900,7 @@ def test_chained_gemm_32x32x8():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
 
     chained_gemm_32x32x8 = wave_compile(options, chained_gemm_32x32x8)
@@ -974,6 +987,7 @@ def test_chained_gemm_32x32x16():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
 
     chained_gemm_32x32x16 = wave_compile(options, chained_gemm_32x32x16)
@@ -1065,6 +1079,7 @@ def test_chained_gemm_16x16x32():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     chained_gemm_16x16x32 = wave_compile(options, chained_gemm_16x16x32)
     print(chained_gemm_16x16x32.asm)
@@ -1148,6 +1163,7 @@ def test_gemm_pipelined():
         schedule=SchedulingType.MODULO,
         use_scheduling_barriers=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
 
     gemm_pipelined = wave_compile(options, gemm_pipelined)
@@ -1238,6 +1254,7 @@ def test_gemm_prefetch():
         schedule=SchedulingType.PREFETCH,
         use_scheduling_barriers=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
 
     gemm_prefetch = wave_compile(options, gemm_prefetch)
@@ -1332,6 +1349,7 @@ def test_gemm_four_stage():
         schedule=SchedulingType.FOUR_STAGE,
         use_scheduling_barriers=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
 
     gemm_four_stage = wave_compile(options, gemm_four_stage)
@@ -1430,6 +1448,7 @@ def test_dynamic_gemm_pipelined():
         use_scheduling_barriers=True,
         dynamic_symbols=(M, N, K),
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     dynamic_gemm_pipelined = wave_compile(options, dynamic_gemm_pipelined)
     print(dynamic_gemm_pipelined.asm)
@@ -1521,6 +1540,7 @@ def test_gemm_two_cluster_pingpong():
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
 
     gemm_two_cluster_pingpong = wave_compile(options, gemm_two_cluster_pingpong)
@@ -1657,6 +1677,7 @@ def test_gemm_with_gpr_offsets():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm_with_interleave_gpr = wave_compile(options, gemm_with_interleave_gpr)
     print(gemm_with_interleave_gpr.asm)
@@ -1739,6 +1760,7 @@ def test_gemm_and_reduce():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)
@@ -1824,6 +1846,7 @@ def test_gemm_with_maximized_shared_read_32x32x16():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     gemm_with_maximized_shared_read_32x32x16 = wave_compile(
         options, gemm_with_maximized_shared_read_32x32x16
@@ -1910,6 +1933,7 @@ def test_gemm_with_maximized_shared_read_16x16x32():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
 
     gemm_with_maximized_shared_read_16x16x32 = wave_compile(
@@ -2000,6 +2024,7 @@ def test_broadcast_batched_gemm_with_vmma():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        drop_debug_info_before_mlir=True,
     )
     broadcast_batched_gemm_with_vmma = wave_compile(
         options, broadcast_batched_gemm_with_vmma
@@ -2077,6 +2102,7 @@ def test_batched_gemm_with_permute():
         canonicalize=True,
         compile_to_mlir=True,
         print_ir_after=["all"],
+        drop_debug_info_before_mlir=True,
     )
     batched_gemm_with_permute = wave_compile(options, batched_gemm_with_permute)
     print(batched_gemm_with_permute.asm)

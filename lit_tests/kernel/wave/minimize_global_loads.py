@@ -327,6 +327,7 @@ def test_materialized_shape_padding():
         subs=hyperparams,
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
     )
     gemm = wave_compile(options, gemm)
     print(gemm.asm)

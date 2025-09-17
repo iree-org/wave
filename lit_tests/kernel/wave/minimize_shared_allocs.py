@@ -37,6 +37,7 @@ def test_attention():
         func_name="test_vanilla_attention",
         minimize_shared_allocs=True,
         reorder_allocs=False,
+        enforce_locations=True,
     )
     # In this example, by not reordering the allocs, we end up with a 2x
     # saving in total shared memory usage (from 17408 to 8704).
