@@ -370,6 +370,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                     new_node = SelfIndex(
                         custom.dim, custom.dtype, self_index_size
                     ).add_to_graph(custom.graph)
+                    new_node.location = custom.location
 
                 # Update new_node information
                 new_node.index = updated_index_with_gpr_offset
@@ -384,6 +385,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                 reshape = Reshape(ops_to_combine, custom.vector_shapes).add_to_graph(
                     custom.graph
                 )
+                reshape.location = custom.location
                 reshape.expanded_dims = custom.expanded_dims
                 reshape.vector_shapes = custom.vector_shapes
 

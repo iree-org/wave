@@ -107,3 +107,7 @@ def capture_location(
         return StackTraceInfo.capture_current_location()
     if location_capture_config.level == LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM:
         return StackTraceInfo.capture_current_location(preserve_system_frames=True)
+
+
+# Define type alias to refer to this more easily.
+CapturedLocation = Optional[FileLineColInfo | StackTraceInfo]

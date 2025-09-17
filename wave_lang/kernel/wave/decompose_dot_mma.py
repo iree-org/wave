@@ -54,15 +54,20 @@ def decompose_dot_mma(trace: CapturedTrace, constraints: list[Constraint]):
             lhs_index = copy(lhs.index)
             rhs_index = copy(rhs.index)
             lhs = CastOp(lhs, dtype).add_to_graph(mma_op.graph)
+            lhs.location = mma_op.location
             rhs = CastOp(rhs, dtype).add_to_graph(mma_op.graph)
+            rhs.location = mma_op.location
             lhs.index = copy(lhs_index)
             rhs.index = copy(rhs_index)
 
             k_sym = get_custom(lhs).type.symbolic_shape[-1]
 
             mul = Mul(lhs, rhs).add_to_graph(mma_op.graph)
+            mul.location = mma_op.location
             sum = Sum(mul, None, k_sym).add_to_graph(mma_op.graph)
+            sum.location = mma_op.location
             red = Add(sum, acc).add_to_graph(mma_op.graph)
+            red.location = mma_op.location
 
             mul.index = lhs_index | rhs_index
             del lhs_index[k_sym]
