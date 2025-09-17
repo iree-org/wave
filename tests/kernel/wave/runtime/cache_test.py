@@ -674,6 +674,7 @@ def testDifferentSignatureSameCore(tmp_path):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @require_cache
 def testChangeFreeVarOfNestedFunction(tmp_path):
     reset_cache_manager(tmp_path)
