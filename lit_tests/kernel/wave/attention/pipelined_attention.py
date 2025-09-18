@@ -152,7 +152,6 @@ def test_dynamic_attention_pipelined():
         use_scheduling_barriers=False,
         dynamic_symbols=(B, M, N, K2),
         compile_to_mlir=True,
-        enforce_locations=True,
     )
     dynamic_attention_pipelined = wave_compile(options, dynamic_attention_pipelined)
     print(dynamic_attention_pipelined.asm)

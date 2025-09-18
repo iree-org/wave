@@ -40,7 +40,6 @@ def get_wave_compile_options(canonicalize: bool = False, dynamic_symbols=[]):
         subs=bindings,
         canonicalize=canonicalize,
         compile_to_mlir=True,
-        enforce_locations=True,
     )
 
     return compile_options

@@ -114,7 +114,6 @@ def test_iteration():
         canonicalize=True,
         compile_to_mlir=True,
         drop_debug_info_before_mlir=True,
-        enforce_locations=True,
     )
     iterated_gemm_kernel = wave_compile(options, iterated_gemm)
     print(iterated_gemm_kernel.asm)
@@ -203,7 +202,6 @@ def test_iteration_with_condition():
         canonicalize=True,
         compile_to_mlir=True,
         drop_debug_info_before_mlir=True,
-        enforce_locations=True,
     )
     iterated_gemm = wave_compile(options, iterated_gemm)
     print(iterated_gemm.asm)
@@ -307,7 +305,6 @@ def test_iteration_with_condition_and_init_value():
         canonicalize=True,
         compile_to_mlir=True,
         drop_debug_info_before_mlir=True,
-        enforce_locations=True,
     )
     iterated_gemm = wave_compile(options, iterated_gemm)
     print(iterated_gemm.asm)
