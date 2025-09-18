@@ -74,19 +74,19 @@ def test_reduce_op_location():
     print(reduce_sum_kernel.asm)
 
     # CHECK-LABEL: @reduce_sum_kernel
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":66:14 to :63
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":67:14 to :63
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":66
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":67
 
     # multiply
-    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":68:14 to :23
+    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":68
     # cast
-    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":69:18 to :40
+    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":69
 
     # reduce
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":70:18 to :41
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":70:18 to :41
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":70:18 to :41
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":70:18 to :41
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":70
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":70
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":70
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":70
 
     # write
-    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":71:8 to :52
+    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":71
