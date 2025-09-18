@@ -641,13 +641,12 @@ class CustomOp(ABC):
     ):
         """Set the new_node location if it doesn't have one."""
         if isinstance(new_node, CustomOp):
-            new_node = new_node.fx_node
+            new_node.location = self.location
         if isinstance(new_node, list):
             for node in new_node:
-                self.replacement_location_propagate(node)
+                get_custom(node).location = self.location
         else:
-            if not getattr(new_node, "location", None):
-                setattr(new_node, "location", self.location)
+            get_custom(new_node).location = self.location
 
     def replace_all_uses_with(self, new_node: CustomOp | fx.Node):
         """Replace all uses of the current node with the new node."""
