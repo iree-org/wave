@@ -1,8 +1,10 @@
 import torch
+from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.utils.torch_utils import (
         device_randn,
         device_randint,
         device_zeros,
+        device_ones,
 
 )
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
@@ -31,9 +33,12 @@ options = WaveCompileOptions(subs=hp, canonicalize=True, dynamic_symbols=symbols
 
 gemm = wave_compile(options, gemm_kernel)
 
-a = device_randn(shape[0], shape[2], dtype=torch.float16)
-b = device_randn(shape[1], shape[2], dtype=torch.float16)
+a = device_ones(shape[0], shape[2], dtype=torch.float16)
+b = device_ones(shape[1], shape[2], dtype=torch.float16)
 c = device_zeros(shape[0], shape[1], dtype=torch.float32)
 gemm(a, b, c)
+
+iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+generate_iree_ref("mmt", [a, b], [iree_ref], options)
 
 print("finish")
