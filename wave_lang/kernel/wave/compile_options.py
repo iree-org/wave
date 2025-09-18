@@ -72,7 +72,7 @@ class WaveCompileOptions:
     )
     use_local_scope: bool = False
     use_water_leak_check: bool | str = False  # If string, check the given IR instead.
-    enforce_locations: bool = False
+    enforce_locations: bool = True
     drop_debug_info_before_mlir: bool = False
 
     # === Performance options ===
