@@ -22,7 +22,8 @@ def get_gemm_kernel(
     dynamic_dims: bool | tuple[bool, bool, bool],
     mfma_variant: MMAType,
     dtype: torch.dtype = torch.float16,
-    TPW: int = 64
+    TPW: int = 64,
+    per_wave_process_shape: tuple[int, int, int] = (64, 64, 32) # (m, n, k)
 ):
     if not isinstance(dynamic_dims, Sequence):
         dynamic_dims = (dynamic_dims,) * 3
@@ -81,11 +82,12 @@ def get_gemm_kernel(
         # repeat represents the results of the loop
         tkw.write(repeat, c)
 
+    m, n, k = per_wave_process_shape
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-        BLOCK_K: 32,
+        BLOCK_M: m,
+        BLOCK_N: n,
+        BLOCK_K: k,
         M: shape[0],
         N: shape[1],
         K: shape[2],
