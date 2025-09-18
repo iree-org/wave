@@ -69,7 +69,7 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
 
 
 @require_e2e
-@pytest.mark.parametrize("shape", [(32, 32, 32)] ) #+ get_test_shapes("test_gemm"))
+@pytest.mark.parametrize("shape", [(32, 32, 32)] + get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
     [
@@ -153,9 +153,9 @@ def testGemmSmallTiles(
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 8,
-        BLOCK_N: 8,
-        BLOCK_K: 8,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_K: 16,
         M: shape[0],
         N: shape[1],
         K: shape[2],
