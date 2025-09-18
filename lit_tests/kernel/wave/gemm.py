@@ -96,6 +96,7 @@ def test_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
@@ -178,6 +179,7 @@ def test_non_transposed_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
@@ -263,6 +265,7 @@ def test_reordered_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
@@ -336,6 +339,7 @@ def test_gemm_small_tile_size():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
@@ -409,6 +413,7 @@ def test_gemm_dot():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm_dot = wave_compile(options, gemm_dot)
@@ -474,6 +479,7 @@ def test_cdna2_int_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     cdna2_int_gemm = wave_compile(options, cdna2_int_gemm)
@@ -549,6 +555,7 @@ def test_cdna3_int_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     cdna3_int_gemm = wave_compile(options, cdna3_int_gemm)
@@ -625,6 +632,7 @@ def test_packed_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     packed_gemm = wave_compile(options, packed_gemm)
@@ -724,6 +732,7 @@ def test_batched_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     batched_gemm = wave_compile(options, batched_gemm)
@@ -817,6 +826,7 @@ def test_chained_gemm():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     chained_gemm = wave_compile(options, chained_gemm)
@@ -900,6 +910,7 @@ def test_chained_gemm_32x32x8():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
 
@@ -987,6 +998,7 @@ def test_chained_gemm_32x32x16():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
 
@@ -1079,6 +1091,7 @@ def test_chained_gemm_16x16x32():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     chained_gemm_16x16x32 = wave_compile(options, chained_gemm_16x16x32)
@@ -1677,6 +1690,7 @@ def test_gemm_with_gpr_offsets():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm_with_interleave_gpr = wave_compile(options, gemm_with_interleave_gpr)
@@ -1760,6 +1774,7 @@ def test_gemm_and_reduce():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm = wave_compile(options, gemm)
@@ -1846,6 +1861,7 @@ def test_gemm_with_maximized_shared_read_32x32x16():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm_with_maximized_shared_read_32x32x16 = wave_compile(
@@ -1933,6 +1949,7 @@ def test_gemm_with_maximized_shared_read_16x16x32():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
 
@@ -2024,6 +2041,7 @@ def test_broadcast_batched_gemm_with_vmma():
         },
         canonicalize=True,
         compile_to_mlir=True,
+        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     broadcast_batched_gemm_with_vmma = wave_compile(
