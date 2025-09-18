@@ -87,7 +87,6 @@ def test_scaled_gemm_mxfp4():
         device="hip",
         target="gfx950",
         compile_to_mlir=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
 
@@ -188,7 +187,6 @@ def test_scaled_gemm_mxfp8():
         device="hip",
         target="gfx950",
         compile_to_mlir=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
 
@@ -311,7 +309,6 @@ def packed_mxfp4_test():
         schedule=SchedulingType.PREFETCH,
         compile_to_mlir=True,
         drop_debug_info_before_mlir=True,
-        enforce_locations=True,
     )
     gemm_mxfp4_prefetch = wave_compile(options, gemm_mxfp4_prefetch)
     print(gemm_mxfp4_prefetch.asm)
@@ -453,7 +450,6 @@ def packed_mxfp4_global_to_lds_test():
         schedule=SchedulingType.PREFETCH,
         compile_to_mlir=True,
         use_global_to_shared=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     gemm_mxfp4_global_to_lds_prefetch = wave_compile(
@@ -577,7 +573,6 @@ def batched_prefetch_mxfp4_test():
         use_buffer_ops=True,
         linearize_shared_access=True,
         compile_to_mlir=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     batched_gemm_mxfp4_prefetch = wave_compile(options, batched_gemm_mxfp4_prefetch)
@@ -719,7 +714,6 @@ def test_unaligned_scaled_gemm_mxfp4():
         device="hip",
         target="gfx950",
         compile_to_mlir=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
 
@@ -835,7 +829,6 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
         schedule=enable_scheduling,
         use_buffer_ops=True,
         dynamic_symbols=dynamic_symbols,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     from wave_lang.kernel.wave.utils.run_utils import (
@@ -906,7 +899,6 @@ def test_mxfp4_broadcasted_scale_scaled_mma_16x16x128():
         device="hip",
         target="gfx950",
         compile_to_mlir=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     broadcasted_scale_scaled_mma = wave_compile(options, broadcasted_scale_scaled_mma)

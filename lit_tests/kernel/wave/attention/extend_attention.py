@@ -58,7 +58,6 @@ def test_extend_attention():
         use_scheduling_barriers=False,
         dynamic_symbols=dynamic_symbols,
         compile_to_mlir=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     extend_attention = wave_compile(options, extend_attention)
@@ -162,7 +161,6 @@ def test_causal_extend_attention():
         use_scheduling_barriers=False,
         dynamic_symbols=dynamic_symbols,
         compile_to_mlir=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     extend_attention = wave_compile(options, extend_attention)
@@ -310,7 +308,6 @@ def test_causal_extend_attention_32x32x8():
         dynamic_symbols=dynamic_symbols,
         compile_to_mlir=True,
         minimize_shared_allocs=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     extend_attention = wave_compile(options, extend_attention)
@@ -448,7 +445,6 @@ def test_extend_attention_custom_mask():
         dynamic_symbols=dynamic_symbols,
         compile_to_mlir=True,
         minimize_shared_allocs=True,
-        enforce_locations=True,
         drop_debug_info_before_mlir=True,
     )
     extend_attention = wave_compile(options, extend_attention)

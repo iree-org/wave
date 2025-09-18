@@ -58,7 +58,6 @@ def test_mma():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        enforce_locations=True,
     )
     mma = wave_compile(compile_options, mma)
     print(mma.asm)
