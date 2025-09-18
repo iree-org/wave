@@ -4,10 +4,9 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import List
 from wave_lang.support.logging import get_logger
 from .._support.tracing import CapturedTrace
-from ..ops.wave_ops import get_custom, CustomOp
+from ..ops.wave_ops import get_custom
 from typing import Optional
 
 logger = get_logger("wave.ops_location_check")
@@ -43,35 +42,34 @@ def location_check_pass(
     if not log and not enforce_100:
         return trace
 
-    ops_with_location: List[CustomOp] = []
-    ops_without_location: List[CustomOp] = []
+    ops_with_location = 0
+    ops_without_location = 0
     log_messages = []
 
     for node in trace.get_root_graph().nodes:
-        custom_op = get_custom(node)
-        location = getattr(custom_op, "location", None)
+        location = get_custom(node).location
         if print_locations == "all":
             log_messages.append(f"  op: {node} location: {location}")
         if location is not None:
-            ops_with_location.append(custom_op)
+            ops_with_location += 1
         else:
-            ops_without_location.append(custom_op)
+            ops_without_location += 1
             if print_locations == "missing":
                 log_messages.append(f"  Missing loc: {node}")
 
-    total_ops = len(ops_with_location) + len(ops_without_location)
-    location_percentage = (len(ops_with_location) / total_ops) * 100
+    total_ops = ops_with_location + ops_without_location
+    location_percentage = (ops_with_location / total_ops) * 100
 
     if log or (enforce_100 and ops_without_location):
         logger.info(
-            f"[{pass_name}] Location summary: {len(ops_with_location)}/{total_ops}: {location_percentage:.0f}%"
+            f"[{pass_name}] Location summary: {ops_with_location}/{total_ops}: {location_percentage:.0f}%"
         )
         for message in log_messages:
             logger.info(message)
 
     if enforce_100 and ops_without_location:
         raise RuntimeError(
-            f"[{pass_name}] {len(ops_without_location)} operations are missing locations, "
+            f"[{pass_name}] {ops_without_location} operations are missing locations, "
             f"but enforce_100=True requires all operations to have locations"
         )
 
