@@ -105,6 +105,12 @@ def pytest_addoption(parser):
         default=None,
         help="save mlir files into provided directory, filename based on current test name",
     )
+    parser.addoption(
+        "--run-distributed",
+        action="store_true",
+        default=False,
+        help="require multiple GPUs to run",
+    )
 
 
 def pytest_configure(config):
@@ -117,6 +123,13 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "validate_only: validation test, never runs with '--runperf'"
+    )
+    config.addinivalue_line(
+        "markers", "require_gpus(n): test requires at least n GPUs to run"
+    )
+    config.addinivalue_line(
+        "markers",
+        "require_multiple_gpus: distributed test, runs with '--run-distributed'",
     )
 
 
@@ -181,6 +194,27 @@ def _has_marker(item, marker):
     return next(item.iter_markers(marker), None) is not None
 
 
+def _get_available_gpu_count():
+    """
+    Returns the number of available GPUs on the system.
+    Returns 0 if no GPUs are available or if torch is not available.
+    """
+    try:
+        import torch
+
+        return torch.cuda.device_count()
+    except (ImportError, Exception):
+        return 0
+
+
+def _get_required_gpu_count(item):
+    """
+    Returns the required gpu count
+    """
+    require_gpus_markers = next(item.iter_markers("require_gpus"))
+    return require_gpus_markers.args[0]
+
+
 def pytest_collection_modifyitems(config, items):
     _set_default_device(config)
     _disable_cache(config)
@@ -188,12 +222,24 @@ def pytest_collection_modifyitems(config, items):
     run_e2e = config.getoption("--run-e2e")
     run_expensive = config.getoption("--run-expensive-tests")
     run_perf = config.getoption("--runperf")
+    run_distributed = config.getoption("--run-distributed")
+    num_gpus = _get_available_gpu_count()
+
     for item in items:
+        if run_distributed:
+            if not _has_marker(item, "require_multiple_gpus"):
+                item.add_marker(pytest.mark.skip("only distributed tests are enabled"))
+
         if _has_marker(item, "require_e2e") and not run_e2e:
             item.add_marker(pytest.mark.skip("e2e tests are disabled"))
-
         if _has_marker(item, "expensive_test") and not run_expensive:
             item.add_marker(pytest.mark.skip("expensive tests are disabled"))
+
+        if _has_marker(item, "require_gpus"):
+            required_gpu_count = _get_required_gpu_count(item)
+            if num_gpus < required_gpu_count:
+                msg = f"distributed test disabled, requires {required_gpu_count} GPUs but only {num_gpus} available"
+                item.add_marker(pytest.mark.skip(msg))
 
         is_validate_only = _has_marker(item, "validate_only")
         is_perf_only = _has_marker(item, "perf_only")

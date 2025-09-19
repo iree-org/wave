@@ -30,6 +30,8 @@ from .common.utils import (
     require_cdna_3_or_4,
     perf_test,
     param_bool,
+    require_gpus,
+    require_multiple_gpus,
 )
 from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
 from wave_lang.kernel.wave.templates.dist_gemm import get_dist_gemm_kernel
@@ -47,6 +49,7 @@ default_test_shapes["test_gemm"] = [
 
 
 @require_e2e
+@require_multiple_gpus
 @pytest.mark.parametrize("shape", default_test_shapes["test_gemm"])
 @pytest.mark.parametrize(
     "mfma_variant",
@@ -57,7 +60,22 @@ default_test_shapes["test_gemm"] = [
 )
 @pytest.mark.parametrize(
     "devices",
-    [(1, 1), (2, 1), (4, 1), (8, 1), (1, 2), (1, 4), (1, 8), (2, 2), (2, 4), (4, 2)],
+    [
+        # Single GPU tests
+        pytest.param((1, 1), marks=require_gpus(1)),
+        # 2 GPU tests
+        pytest.param((2, 1), marks=require_gpus(2)),
+        pytest.param((1, 2), marks=require_gpus(2)),
+        # 4 GPU tests
+        pytest.param((4, 1), marks=require_gpus(4)),
+        pytest.param((1, 4), marks=require_gpus(4)),
+        pytest.param((2, 2), marks=require_gpus(4)),
+        # 8 GPU tests
+        pytest.param((8, 1), marks=require_gpus(8)),
+        pytest.param((1, 8), marks=require_gpus(8)),
+        pytest.param((2, 4), marks=require_gpus(8)),
+        pytest.param((4, 2), marks=require_gpus(8)),
+    ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
 def testDistGemm(
