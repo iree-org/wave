@@ -442,6 +442,7 @@ def test_mma_with_linear_shared_access():
     # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 16 : i32, m = 16 :
     # CHECK-SAME:         i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
 
+
 @run_test
 def test_wmma_f32_16x16x16_f16():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
@@ -451,8 +452,7 @@ def test_wmma_f32_16x16x16_f16():
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=32,
-            mma_type=tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16
+            threads_per_wave=32, mma_type=tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16
         )
     ]
 
@@ -482,7 +482,7 @@ def test_wmma_f32_16x16x16_f16():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        target="gfx1201"
+        target="gfx1201",
     )
     mma = wave_compile(compile_options, mma)
     print(mma.asm)
@@ -511,7 +511,6 @@ def test_wmma_f32_16x16x16_f16():
     # CHECK-DAG:        %[[V6:.+]] = affine.apply #map3()[%[[TID_X]]]
     # CHECK-DAG:        vector.store %[[R1]], %[[VIEW1]][%[[V6]], %[[V2]]] {{.*}} vector<4xf16>
     # CHECK-DAG:        vector.store %[[R2]], %[[VIEW1]][%[[V6]], %[[V4]]] {{.*}} vector<4xf16>
-
 
     # CHECK-DAG:        %[[V7:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref
 

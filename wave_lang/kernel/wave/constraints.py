@@ -72,6 +72,7 @@ class MMAType(Enum):
     # Intrinsics introduced in RDNA4
     RDNA4_WAVE32_F32_16x16x16_F16 = 0x1920
 
+
 class ScaledMMAType(Enum):
     # Intrinsics introduced in CDNA4
     F32_16x16x128_F8F6F4 = 0x1340

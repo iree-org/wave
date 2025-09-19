@@ -23,7 +23,7 @@ def get_gemm_kernel(
     mfma_variant: MMAType,
     dtype: torch.dtype = torch.float16,
     TPW: int = 64,
-    per_wave_process_shape: tuple[int, int, int] = (64, 64, 32) # (m, n, k)
+    per_wave_process_shape: tuple[int, int, int] = (64, 64, 32),  # (m, n, k)
 ):
     if not isinstance(dynamic_dims, Sequence):
         dynamic_dims = (dynamic_dims,) * 3
