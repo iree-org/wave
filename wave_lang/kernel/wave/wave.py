@@ -17,7 +17,7 @@ import sympy
 import torch.fx as fx
 from sympy.utilities.lambdify import lambdastr
 
-from wave_lang.support.ir_imports import Context, Module, Operation
+from wave_lang.support.ir_imports import Context, Module, Operation, InsertionPoint, stream_d, IndexType, IntegerAttr, arith_d
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
 from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
@@ -587,6 +587,7 @@ class LaunchableWave(Launchable):
         entrypoint_name = self._name
         root_graph = trace.get_root_graph()
 
+        print(module_op)
         # pass device constraint to kernel signature
         # so that we can set the dimensions of the tensors per device
         kernel_sig = kernel_codegen.KernelSignature(self.device_constraints)
@@ -597,7 +598,7 @@ class LaunchableWave(Launchable):
         if options.print_signature:
             print(kernel_sig)
 
-        mb = builder.ModuleBuilder(context=context, module_op=module_op)
+        mb = builder.ModuleBuilder(context=context, module_op=None)
         exe = dispatch_codegen.StreamExecutable(mb, name=entrypoint_name)
         workgroup_size = self.hardware_constraints[0].threads_per_block
         subgroup_size = self.hardware_constraints[0].threads_per_wave
@@ -610,6 +611,7 @@ class LaunchableWave(Launchable):
         if options.waves_per_eu:
             llvm_func_config["amdgpu-waves-per-eu"] = options.waves_per_eu
 
+        print("BEFORE ", mb.module_op.get_asm())
         dispatch_entrypoint = exe.define_entrypoint(
             entrypoint_name,
             kernel_sig,
@@ -621,18 +623,64 @@ class LaunchableWave(Launchable):
             trace.location,
         )
 
-        emitter = WaveEmitter(
-            dispatch_entrypoint, trace, self.constraints, options, self.grid_type
-        )
-        try:
-            emitter.emit(trace.get_root_graph())
-        except:
-            logger.info("Error in emitter")
-            asm = mb.module_op.get_asm()
-            logger.info(asm)
-            raise
-        emitter.finish()
+        print("AFTER ", mb.module_op.get_asm())
+        if not module_op:
+            emitter = WaveEmitter(
+                dispatch_entrypoint, trace, self.constraints, options, self.grid_type
+            )
+            try:
+                emitter.emit(trace.get_root_graph())
+            except:
+                logger.info("Error in emitter")
+                asm = mb.module_op.get_asm()
+                logger.info(asm)
+                raise
+            emitter.finish()
+        else:
+            with exe._loc, InsertionPoint.at_block_begin(dispatch_entrypoint.entry_block):
+                target_block = dispatch_entrypoint.entry_block
+                source_func_op = list(module_op.operation.regions[0].blocks[0])[0]
+                source_block = source_func_op.regions[0].blocks[0]
 
+                source_args = list(source_block.arguments)
+                target_args = list(target_block.arguments)
+
+                def convert_memref_to_stream_binding(target_block, old_arg, new_arg, index):
+                    """Convert a memref argument to stream.binding + subspan extraction."""
+                    # Create zero constant
+                    result_type = IndexType.get()
+                    zero_value = arith_d.constant(result_type, IntegerAttr.get(result_type, 0))
+
+                    # Create subspan operation
+                    subspan_op = stream_d.binding_subspan(
+                        old_arg.type,  # The original memref type
+                        new_arg,       # The stream.binding argument
+                        byte_offset=zero_value,
+                      # dynamic_dims=dispatch_entrypoint.get_dynamic_dims(binding),
+                        dynamic_dims=[], # TODO: get dynamic dims
+                    )
+
+                    return subspan_op
+
+                # Create argument mapping
+                arg_mapping = {}
+                for i, old_arg in enumerate(source_args):
+                    if i < len(target_args) and "memref" in str(old_arg.type):
+                        new_subspan = convert_memref_to_stream_binding(target_block, old_arg, target_args[i], i)
+                        arg_mapping[old_arg] = new_subspan
+
+                # Move operations
+                ops_to_move = list(source_block)
+                for op in ops_to_move:
+                    op.detach_from_parent()
+                    target_block.append(op)
+
+                # Replace all uses of old arguments with new subspan results
+                for old_arg, new_value in arg_mapping.items():
+                    old_arg.replace_all_uses_with(new_value)
+
+
+        print("FINAL ", mb.module_op.get_asm())
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
 

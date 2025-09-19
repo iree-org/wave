@@ -5,6 +5,7 @@ from typing import Any, Optional, Callable, Sequence
 import torch
 
 from wave_lang.kernel.lang import IndexSymbol
+from wave_lang.support.ir_imports import Module
 
 from .._support.indexing import IndexingContext
 from ...support.location_config import LocationCaptureLevel
@@ -24,7 +25,7 @@ from .utils.run_utils import (
     invoke_with_wave_runtime,
     get_benchmark_flags,
 )
-from .water import water_leak_in_bounds_check
+from .water import water_leak_in_bounds_check, _deiree
 from wave_lang.runtime.launch import Launchable
 from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
 from .profiling import benchmark_module
@@ -341,6 +342,16 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             debug_handlers,
             device_layout,
         ) = kernel._trace_and_get_kernel_signature(options)
+
+        module_op = Module.parse(_deiree(mb.module_op), context=mb.module_op.context)
+        (
+            mb,
+            _,
+            exe,
+            kernel_sig,
+            entrypoint_name,
+        ) = kernel.compile_to_mlir(trace=graph, context=None, module_op=module_op, options=options)
+
         options.kernel_sig = kernel_sig
 
         # calculate the number of devices based on the device layout
