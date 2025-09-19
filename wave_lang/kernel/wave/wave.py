@@ -21,6 +21,7 @@ from wave_lang.support.ir_imports import Context, Module, Operation
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
 from ...support.location_config import LocationCaptureConfig
+from .._support.location import add_placeholder_locations
 from .._support.tracing import (
     CapturedTrace,
     CompiledContext,
@@ -351,6 +352,7 @@ class LaunchableWave(Launchable):
             with region_graph.subtracer() as subtracer:
                 root_name, _ = subtracer.trace(self._f)
                 trace = CapturedTrace(region_graph, root_name)
+                trace = add_placeholder_locations(trace, self._f)
 
         return trace
 
