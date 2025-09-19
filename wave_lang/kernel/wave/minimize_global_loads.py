@@ -95,9 +95,14 @@ def materialize_shape(
                 subs_idxc(dim_expr.subs(dim, constraint_tile_size[dim]))
             )
         else:
-            materialized_shape.append(
-                subs_idxc(sympy.ceiling(dim / vector_shapes[dim]) * vector_shapes[dim])
-            )
+            if vector_shapes is None:
+                materialized_shape.append(subs_idxc(dim))
+            else:
+                materialized_shape.append(
+                    subs_idxc(
+                        sympy.ceiling(dim / vector_shapes[dim]) * vector_shapes[dim]
+                    )
+                )
 
     return materialized_shape
 

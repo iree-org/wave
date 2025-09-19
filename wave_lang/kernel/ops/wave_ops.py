@@ -44,6 +44,27 @@ PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
 # This is currently hand-written and should in future be generated from the custom ops
 
 
+def read_meets_hw_transpose_requirements(read: Read) -> bool:
+    if read.has_identity_mapping():
+        return False
+
+    if len(list(read.index.keys())) != 2:
+        return False
+
+    bitwidth = read.type.dtype.bitwidth()
+    if bitwidth != 8 and bitwidth != 16:
+        return False
+
+    bits = read.elements_per_thread * bitwidth
+    if bits == 0 or bits % 64 != 0:
+        return False
+
+    if read.memory_type.address_space != SHARED_ADDRESS_SPACE:
+        return False
+
+    return not read.mapping_dynamic_vals
+
+
 def allocate(
     shape: tuple[IndexExpr],
     distributed_shape: tuple[IndexExpr],
@@ -1697,7 +1718,7 @@ class Read(CustomOp):
 
     @write_dependency.setter
     def write_dependency(self, value: fx.Node):
-        self.update_arg(len(self.fx_node.args) - 1, value)
+        self.update_arg("_write_dependency", value)
 
     def transform_index_backwards(
         self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
@@ -1762,6 +1783,9 @@ class Read(CustomOp):
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
+        if read_meets_hw_transpose_requirements(self):
+            return True
+
         if self.has_identity_mapping():
             return True
 
