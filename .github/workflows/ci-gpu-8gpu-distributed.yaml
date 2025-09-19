@@ -1,0 +1,221 @@
+# Copyright 2024 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: "Wave GPU CI (8-GPU)"
+
+on:
+  workflow_dispatch:
+  pull_request:
+      types: [opened, synchronize, ready, ready_for_review, converted_to_draft]
+  push:
+    branches:
+      - main
+
+concurrency:
+  # A PR number if a pull request and otherwise the commit hash. This cancels
+  # queued and in-progress runs for the same PR (presubmit) or commit
+  # (postsubmit). The workflow name is prepended to avoid conflicts between
+  # different workflows.
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  LLVM_SHA_FILE: llvm-sha.txt
+  LLVM_CACHE_NUMBER: 1  # Increase to reset cache
+
+  # Git ref from https://github.com/ftynse/water to checkout
+  WATER_REF: a04ed201cbad8927d86749f386e03a1cc847c867
+
+jobs:
+  # Water uses its own LLVM version independent of the one used by IREE and
+  # potentially can have different compilation flags/enabled features.
+  # We build and cache it here to avoid rebuilding it for every PR.
+  # Water links LLVM statically, so it won't conflict with IREE's one.
+  build_llvm_linux:
+    name: Builds Linux LLVM/MLIR
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on: [linux-mi325-8gpu-ossci-nod-ai]
+    runs-on: ${{matrix.runs-on}}
+    timeout-minutes: 240 # Building LLVM can take multiple hours on public GH runners
+    steps:
+      - name: Checkout Water
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: ftynse/water
+          ref: ${{ env.WATER_REF }}
+          path: water
+          fetch-depth: 0
+
+      - name: Setup Cache Vars
+        run: |
+          echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
+
+      - name: Cache LLVM-MLIR
+        id: cache-llvm-mlir
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: llvm-mlir/_mlir_install/**
+          key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
+
+      - name: Setup env
+        if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
+        run: |
+          sudo apt update
+          sudo apt install -y ninja-build cmake clang lld
+
+      - name: Checkout LLVM
+        if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ env.LLVM_SHA }}
+          path: llvm-mlir/llvm-project
+          fetch-depth: 0
+
+      - name: Build LLVM-MLIR
+        if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
+        run: |
+          pushd ${GITHUB_WORKSPACE}/llvm-mlir
+          echo "INFO: Need to rebuild LLVM-MLIR. Previous installation for MLIR not found"
+          np=`nproc`
+          echo "INFO: nproc $np"
+          mkdir _build
+          cd _build
+          export CC=clang
+          export CXX=clang++
+          cmake ../llvm-project/llvm                                           \
+            -GNinja                                                            \
+            -DCMAKE_BUILD_TYPE=Release                                         \
+            -DLLVM_ENABLE_PROJECTS="mlir"                                      \
+            -DLLVM_ENABLE_ASSERTIONS=ON                                        \
+            -DLLVM_INSTALL_UTILS=ON                                            \
+            -DLLVM_TARGETS_TO_BUILD="X86;AMDGPU"                               \
+            -DLLVM_ENABLE_BINDINGS=OFF                                         \
+            -DLLVM_ENABLE_ZSTD=OFF                                             \
+            -DMLIR_INCLUDE_TESTS=OFF                                           \
+            -DLLVM_USE_LINKER=lld                                              \
+            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen" \
+            -DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
+          ninja install-distribution-stripped
+          popd
+
+  test_distributed:
+    name: "8-GPU Distributed Tests :: ${{ matrix.version }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [3.11]
+        os: [linux-mi325-8gpu-ossci-nod-ai]
+    runs-on: ${{matrix.os}}
+    timeout-minutes: 120
+    needs: build_llvm_linux
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    env:
+      VENV_DIR: ${{ github.workspace }}/.wave-venv
+      HAS_8GPU: true
+    steps:
+      - name: Set environment variables
+        run: |
+          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' ]]; then
+            echo "IS_MI325=true" >> $GITHUB_ENV
+          else
+            echo "IS_MI325=false" >> $GITHUB_ENV
+          fi
+
+          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' ]]; then
+            echo "HAS_GPU=true" >> $GITHUB_ENV
+            echo "HAS_NO_GPU=false" >> $GITHUB_ENV
+          else
+            echo "HAS_GPU=false" >> $GITHUB_ENV
+            echo "HAS_NO_GPU=true" >> $GITHUB_ENV
+          fi
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Checkout Water
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        with:
+          repository: ftynse/water
+          ref: ${{ env.WATER_REF }}
+          path: water
+          fetch-depth: 0
+
+      - name: Setup Cache Vars
+        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        run: |
+          echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
+          echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
+
+      - name: Setup env
+        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        run: |
+          sudo apt update
+          sudo apt install -y ninja-build cmake clang lld
+
+      - name: Cache LLVM-MLIR
+        id: cache-llvm-mlir
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        with:
+          path: llvm-mlir/_mlir_install/**
+          key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
+
+      - name: "Setting up Python"
+        id: setup_python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: ${{matrix.version}}
+
+      - name: Create Python venv
+        run: |
+          python -m venv ${VENV_DIR}
+          source ${VENV_DIR}/bin/activate
+          echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
+          echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Build water
+        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        run: |
+          cd ${GITHUB_WORKSPACE}/water/build_tools/wheel
+          WATER_MLIR_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install/lib/cmake/mlir python -m pip wheel .
+
+      - name: Install water
+        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        run: |
+          cd ${GITHUB_WORKSPACE}/water/build_tools/wheel
+          pip install --force-reinstall *.whl
+
+      - name: "Setting up Rust"
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install pip deps
+        if: ${{ env.HAS_NO_GPU == 'true' && !cancelled() }}
+        run: |
+          python -m pip install --no-compile --upgrade pip
+          # Note: We install in three steps in order to satisfy requirements
+          # from non default locations first. Installing the PyTorch CPU
+          # wheels saves multiple minutes and a lot of bandwidth on runner setup.
+          pip install --no-compile -r pytorch-cpu-requirements.txt
+          pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
+          pip install -r requirements.txt -e .
+
+      - name: Install pip deps (mi250/mi325)
+        if: ${{ env.HAS_GPU == 'true' && !cancelled() }}
+        run: |
+          python -m pip install --no-compile --upgrade pip
+          pip install --no-compile -r pytorch-rocm-requirements.txt
+          pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
+          pip install -r requirements.txt -e .
+
+      - name: Run distributed tests on AMD GPU
+        if: ${{ env.HAS_GPU == 'true' && (github.event_name == 'pull_request') && !cancelled() }}
+        run: |
+          WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --run-distributed --durations=100 ./tests/kernel/wave/
