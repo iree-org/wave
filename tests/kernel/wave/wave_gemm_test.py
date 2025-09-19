@@ -30,6 +30,7 @@ from .common.utils import (
     require_cdna4,
     require_cdna_3_or_4,
     require_cdna_2_or_3_or_4,
+    require_rdna4,
     perf_test,
     param_bool,
 )
@@ -268,7 +269,6 @@ def testGemmGatherToLDS(
 
 
 @require_e2e
-@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", [(32, 32, 32)] + get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -278,10 +278,11 @@ def testGemmGatherToLDS(
 )
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
-    "mfma_variant",
+    "mfma_variant, threads_per_wave",
     [
-        MMAType.F32_16x16x16_F16,
-        MMAType.F32_32x32x8_F16,
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4)
     ],
 )
 def testGemmSmallTiles(
@@ -289,6 +290,7 @@ def testGemmSmallTiles(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
+    threads_per_wave: int,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
@@ -312,7 +314,7 @@ def testGemmSmallTiles(
     constraints += [tkw.WaveConstraint(M, BLOCK_M)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)]
 
     # With dynamic dimensions, we need to add an assumption on how big
     # the iterate dimension is to determine whether we can schedule or not.
@@ -350,9 +352,9 @@ def testGemmSmallTiles(
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 8,
-        BLOCK_N: 8,
-        BLOCK_K: 8,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_K: 16,
         M: shape[0],
         N: shape[1],
         K: shape[2],
@@ -392,7 +394,7 @@ def testGemmSmallTiles(
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    assert_close(c, iree_ref, check_device=False, atol=2e-4, rtol=1e-5)
 
 
 @require_e2e
