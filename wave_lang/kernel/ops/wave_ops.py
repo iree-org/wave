@@ -23,7 +23,7 @@ from typing_extensions import Self
 
 from .._support.dtype import DataType, i1
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
-from .._support.location import FileLineColInfo, StackTraceInfo, capture_location
+from .._support.location import capture_location, CapturedLocation
 from .._support.regions import RegionGraph
 from ..lang.global_symbols import *
 from ..lang.kernel_buffer import AddressSpace
@@ -481,8 +481,12 @@ class CustomOp(ABC):
     _tracing_function: Optional[Callable[..., Any]] = field(default=None, init=False)
 
     @property
-    def location(self) -> Optional[FileLineColInfo | StackTraceInfo]:
+    def location(self) -> CapturedLocation:
         return getattr(self.fx_node, "location", None)
+
+    @location.setter
+    def location(self, value: CapturedLocation):
+        setattr(self.fx_node, "location", value)
 
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:

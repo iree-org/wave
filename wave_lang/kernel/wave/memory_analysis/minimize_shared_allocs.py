@@ -98,7 +98,9 @@ def insert_barrier_if_needed(alloc: fx.Node, first_use: fx.Node, last_use: fx.No
             first_use = last_use.graph.parent_op
 
     with first_use.graph.inserting_before(first_use):
-        SharedMemoryBarrier().add_to_graph(first_use.graph)
+        barrier = SharedMemoryBarrier().add_to_graph(first_use.graph)
+        if hasattr(first_use, "location"):
+            barrier.location = first_use.location
 
 
 def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
@@ -165,6 +167,8 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
             address_space=SHARED_ADDRESS_SPACE,
         )
         parent.add_to_graph(trace.get_root_graph())
+        # Propagate location from the first allocation if available
+        parent.fx_node.location = get_custom(allocs[0]).location
 
     for alloc, offset in allocs_to_offsets.items():
         get_custom(alloc).update_arg("parent", parent)

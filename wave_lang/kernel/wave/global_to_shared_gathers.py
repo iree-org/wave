@@ -198,6 +198,7 @@ def update_read_mapping_dynamic_values(read: Read):
                 custom.mapping,
                 custom.mapping_dynamic_vals,
             ).add_to_graph(custom.graph)
+            new_read.location = custom.location
             new_dyn_vals.append(new_read)
 
             new_read.index = deepcopy(custom.index)
@@ -240,6 +241,7 @@ def add_optimized_nodes(
                     custom.mapping,
                     custom.mapping_dynamic_vals,
                 ).add_to_graph(custom.graph)
+                read.location = custom.location
                 global_offset = (
                     hardware_constraint.linearized_thread_id * load_elems_per_thread
                     + i * max_elements_per_load
@@ -270,6 +272,7 @@ def add_optimized_nodes(
                         write = Write(
                             read, custom_user.memory, load_elems_per_thread
                         ).add_to_graph(custom.graph)
+                        write.location = custom.location
                         write.index = read.index
                         optimized_writes[custom_user.memory].append(write)
                         write.vector_shapes = custom.vector_shapes
