@@ -30,7 +30,9 @@ def _make_constraints() -> list[tkw.Constraint]:
 
 
 def _make_options(
-    *, loc_level: LocationCaptureLevel, use_local_scope: bool = False
+    *,
+    loc_level: LocationCaptureLevel,
+    use_local_scope: bool = False,
 ) -> WaveCompileOptions:
     subs = {
         M: 16,
@@ -43,6 +45,7 @@ def _make_options(
         subs=subs,
         compile_to_mlir=True,
         location_capture_config=LocationCaptureConfig(loc_level),
+        enforce_locations=enforce_locations,
         use_local_scope=use_local_scope,
         canonicalize=False,
     )
@@ -106,7 +109,9 @@ def test_location_global_scope():
 @run_test
 def test_no_location():
     constraints = _make_constraints()
-    options = _make_options(loc_level=LocationCaptureLevel.NONE)
+    options = _make_options(
+        loc_level=LocationCaptureLevel.NONE, enforce_locations=False
+    )
 
     @tkw.wave(constraints)
     def add_no_loc_info(
