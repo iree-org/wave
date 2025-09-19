@@ -27,7 +27,7 @@ with open(write_files, "w") as fh: fh.write(attention.asm)
 
 shape = (64,64,64)
 mfma_variant_1 = tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16
-gemm_kernel, hp, symbols = get_gemm_kernel(shape, False, mfma_variant_1, torch.float16, TPW=32, per_wave_process_shape = (16, 16, 16))
+gemm_kernel, hp, symbols = get_gemm_kernel(shape, False, mfma_variant_1, torch.float16, TPW=32, per_wave_process_shape = (32, 32, 32))
 
 options = WaveCompileOptions(subs=hp, canonicalize=True, dynamic_symbols=symbols, run_bench=False, schedule=SchedulingType.NONE, use_scheduling_barriers=False,func_name="test", target="gfx1201")
 
