@@ -67,6 +67,9 @@ def _dtype_to_mlir_scalar_type(t: dtype.Datatype) -> ir.Type:
 
     An active MLIR context is required for this."""
 
+    # TODO: Move this into a decorator
+    assert ir.Context.current is not None
+
     if str(t) in DATATYPE_MAP:
         return DATATYPE_MAP[str(t)]()
 
@@ -94,6 +97,8 @@ def _type_to_wave_mlir(
     ctx: ir.Context, type_: type[Register] | type[Memory]
 ) -> ir.Type:
     # TODO: Use WaveTensorType bindings when they exist
+    # TODO: Properly importing this unconditionally at top of the file still
+    #       clashes with IREE bindings.
     from wave_lang.kernel.lang.wave_types import Memory, Register
 
     # Map Python Wave types to MLIR types
@@ -147,11 +152,10 @@ def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
     if not isinstance(trace, CapturedTrace) or not isinstance(
         options, WaveCompileOptions
     ):
-        print(
-            f"FATAL: unpickled objects are not CapturedTrace and WaveCompileOptions (got {type(trace)} and {type(options)})",
-            file=sys.stderr,
+        raise SystemExit(
+            f"FATAL: unpickled objects are not CapturedTrace and WaveCompileOptions (got {type(trace)} and {type(options)})"
         )
-        sys.exit(1)
+
     # Restore supplemental node fields captured in the meta field
     trace.restore_node_state()
     return trace, options
@@ -231,6 +235,11 @@ def _emit_from_captured_trace(
 
                     mlir_op = None
                     if node.tkw_op_name in WAVE_OP_CONSTRUCTORS:
+                        # The general case is to pass `result_type` followed by
+                        # the unpacked operands. MLIR constructors that do not
+                        # follow this structure need special casing.
+                        # (e.g. operations like Write, which do not have results
+                        # and thus don't take `result_type` as argument)
                         op_builder = WAVE_OP_CONSTRUCTORS[node.tkw_op_name]
                         # TODO: Add special handling for Iterate node
                         if isinstance(node, Write):
@@ -247,8 +256,6 @@ def _emit_from_captured_trace(
                             )
                             mlir_op = op_builder(result_type, constant_op.results[0])
                         else:
-                            # TODO: See if there is a way to check the expected
-                            # number of operands for the MLIR constructor
                             try:
                                 mlir_op = op_builder(result_type, *operands)
                             except Exception:
@@ -271,7 +278,10 @@ def _emit_from_captured_trace(
 
         # Verify the module before printing
         # TODO: Report back diagnostics emitted by the verification
-        module.operation.verify()
+        try:
+            module.operation.verify()
+        except ir.MLIRError as e:
+            raise RuntimeError(f"Emitted MLIR module does not verify") from e
         sys.stdout.write(str(module))
         sys.stdout.flush()
     return 0

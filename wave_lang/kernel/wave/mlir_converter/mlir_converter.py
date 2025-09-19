@@ -12,7 +12,7 @@ using the Wave dialect. It serializes the trace data and spawns a separate water
 process that uses Water Python bindings to generate the MLIR output.
 
 The converter handles:
-- Serialization of Wave kernel traces to JSON format
+- Serialization of Wave kernel traces using the dill library
 - Spawning the water emitter as a subprocess
 - Triggering operation type inference and some simple wave type mapping
 """
