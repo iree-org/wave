@@ -138,6 +138,9 @@ class Register(metaclass=KernelBufferMeta):
             raise TypeError(f"Expected at least 2 arguments, got: {shape_and_dtype}")
 
         shape = shape_and_dtype[:-1]
+        # allow shape to be provided as a tuple instead of as individual elements, to work around lack of unpacking in subscripts for Python 3.10
+        if len(shape) == 1 and isinstance(shape[0], tuple):
+            shape = shape[0]
         dtype = shape_and_dtype[-1]
 
         # Allow constant int expressions in shape

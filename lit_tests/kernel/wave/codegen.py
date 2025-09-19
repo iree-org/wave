@@ -1853,6 +1853,55 @@ def test_explicit_broadcast():
 
 
 @run_test
+def test_select_with_broadcast():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: M, N: N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, N, 0)]
+    constraints += [tkw.WaveConstraint(M, M)]
+    constraints += [tkw.WaveConstraint(N, N)]
+
+    @tkw.wave(constraints)
+    def select_with_broadcast(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
+    ):
+        a_reg = tkw.read(a, elements_per_thread=4)
+        zero_scalar = tkw.scalar(0.0, tkl.f32)
+        is_negative = a_reg < zero_scalar
+        result = tkw.select(is_negative, zero_scalar, a_reg)
+        tkw.write(result, b, elements_per_thread=4)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 1,
+            N: 16,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    select_with_broadcast = wave_compile(options, select_with_broadcast)
+    print(select_with_broadcast.asm)
+
+    # CHECK-LABEL: test_select_with_broadcast
+    # CHECK: %[[ZERO:[a-zA-Z0-9_]+]] = arith.constant dense<0.000000e+00>
+    # CHECK: %[[CONDITION:[a-zA-Z0-9_]+]] = arith.cmpf olt, {{.*}}, %[[ZERO]]
+    # CHECK: arith.select %[[CONDITION]], {{.*}} : vector<4xi1>, vector<4xf32>
+    # CHECK: vector.store
+
+
+@run_test
 def test_broadcast_add():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(

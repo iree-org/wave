@@ -19,7 +19,6 @@ from wave_lang.aot.support.ir_utils import (
     _is_signed_or_signless_type,
     get_conversion_op,
 )
-from wave_lang.kernel._support.shaped_type import ShapedType
 
 # TK infrastructure imports.
 from wave_lang.kernel.lang.global_symbols import *
@@ -562,11 +561,12 @@ def _near_mma(node: fx.Node) -> bool:
 
 
 def get_rank(mlir_type):
-    if not isinstance(mlir_type, ShapedType):
+    if hasattr(mlir_type, "rank"):
+        return mlir_type.rank
+    else:
         # Not 0 because vector<f32> is rank 0, and in theory,
         # is broadcastable from pure scalar.
         return -1
-    return mlir_type.rank
 
 
 _ops_to_scalarize = [
