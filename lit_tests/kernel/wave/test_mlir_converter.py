@@ -2,6 +2,8 @@
 # RUN: python %s | FileCheck %s
 
 
+from typing import Any
+from wave_lang.kernel._support.indexing import IndexSymbol
 import wave_lang.kernel.wave as wave
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -9,7 +11,7 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
-from wave_lang.kernel.wave.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.general_utils import run_test
 
 M = tkl.sym.M
@@ -31,7 +33,6 @@ constraints = [
 ]
 
 
-# The kernel
 @wave.wave(constraints)
 def matrix_add(
     # defines matrix in memory of req dimension with specific data types
@@ -56,8 +57,8 @@ def matrix_add(
 @run_test
 def test_mlir_converter_matrix_add():
     """Test MLIR converter with matrix addition kernel."""
-    # Set hyperparameters for compilation
-    hyperparams = {
+    # Set parameters for compilation
+    subs: dict[str | IndexSymbol, Any] = {
         ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE,
         ADDRESS_SPACE_B: SHARED_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
@@ -69,7 +70,7 @@ def test_mlir_converter_matrix_add():
 
     # Compile the kernel to get the trace
     options = WaveCompileOptions(
-        subs=hyperparams,
+        subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
     )
     options = set_default_run_config(options)
@@ -81,7 +82,7 @@ def test_mlir_converter_matrix_add():
     trace = compiled_kernel.trace
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output = emit_wave_dialect(trace)
+    mlir_output = emit_wave_dialect(trace, options)
 
     # Print to stdout for FileCheck
     print(mlir_output)
