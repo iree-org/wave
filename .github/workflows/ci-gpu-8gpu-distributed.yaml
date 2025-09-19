@@ -104,13 +104,13 @@ jobs:
           ninja install-distribution-stripped
           popd
 
-  test_distributed:
-    name: "8-GPU Distributed Tests :: ${{ matrix.version }}"
+  test:
+    name: "Distributed Tests on AMD GPU :: ${{ matrix.version }}"
     strategy:
       fail-fast: false
       matrix:
         version: [3.11]
-        os: [linux-mi325-8gpu-ossci-nod-ai]
+        os: [ubuntu-22.04, linux-mi325-8gpu-ossci-nod-ai]
     runs-on: ${{matrix.os}}
     timeout-minutes: 120
     needs: build_llvm_linux
