@@ -9,63 +9,21 @@ import copy
 import sympy
 import torch.fx as fx
 
-from .minimize_global_loads import is_transposed_read, materialize_shape
+from .minimize_global_loads import is_transposed_read
 from .utils.general_utils import get_hardware_constraint
 from .utils.symbol_utils import safe_subs
 
 from .global_to_shared_gathers import update_read_mapping_dynamic_values
-from ..lang.global_symbols import THREAD_0, SHARED_ADDRESS_SPACE
+from ..lang.global_symbols import THREAD_0
 from .._support.tracing import CapturedTrace
-from ..ops.wave_ops import Read, Reshape, get_custom
-from ..wave.constraints import (
-    Constraint,
-    TilingConstraint,
-    WorkgroupConstraint,
+from ..ops.wave_ops import (
+    Read,
+    Reshape,
+    get_custom,
+    read_meets_hw_transpose_requirements,
 )
-from ..wave.utils.run_utils import get_default_arch
-
-
-def meets_hw_transpose_requirements(read: Read, constraints: list[Constraint]):
-    if not get_default_arch() == "gfx950":
-        return False
-
-    if read.has_identity_mapping():
-        return False
-
-    if len(list(read.index.keys())) != 2:
-        return False
-
-    bitwidth = read.type.dtype.bitwidth()
-    if bitwidth != 8 and bitwidth != 16:
-        return False
-
-    bits = read.elements_per_thread * bitwidth
-    if bits == 0 or bits % 64 != 0:
-        return False
-
-    if read.memory_type.address_space != SHARED_ADDRESS_SPACE:
-        return False
-
-    if read.mapping_dynamic_vals:
-        return False
-
-    constraint_tile_size = {
-        c.dim: c.tile_size
-        for c in constraints
-        if isinstance(c, (TilingConstraint, WorkgroupConstraint))
-    }
-
-    materialized_shape = materialize_shape(
-        constraint_tile_size, read.type.symbolic_shape, read.vector_shapes
-    )
-
-    if any(s > 1 for s in materialized_shape[:-2]) or any(
-        s <= 1 for s in materialized_shape[-2:]
-    ):
-        return False
-
-    hardware_constraint = get_hardware_constraint(constraints)
-    return hardware_constraint.threads_per_wave >= 16
+from ..wave.constraints import Constraint
+from .compile_options import WaveCompileOptions
 
 
 def fetch_delinearized_indices(shape, dtype_width, thread_id):
@@ -128,7 +86,6 @@ def rewrite_node(read, custom_node, elems_per_thread, delinearized):
     # If a single transpose operation will suffice, then just modify the index
     if bits == 64:
         custom_node.index = modify_index(read.index, elems_per_thread, delinearized)
-        custom_node.update_arg("transpose", True)
         return
 
     # Otherwise, generate smaller read operations, each of which will read 64 bits
@@ -163,17 +120,25 @@ def rewrite_node(read, custom_node, elems_per_thread, delinearized):
         custom_op.infer_type()
         if custom_node.mapping_dynamic_vals:
             update_read_mapping_dynamic_values(custom_op)
-
         custom_op.index = modify_index(op.index, elems_per_thread, delinearized)
-        custom_op.update_arg("transpose", True)
 
     concat = Reshape(read_ops, read.vector_shapes).add_to_graph(custom_node.graph)
     custom_node.replace_all_uses_with(concat)
 
 
 def mark_hardware_transpose_candidates(
-    trace: CapturedTrace, constraints: list[Constraint]
+    trace: CapturedTrace, constraints: list[Constraint], options: WaveCompileOptions
 ):
+    """
+    This pass attempts to rewrite transposed read operations on MI350 machines.
+    It first detects whether the operation satisfies the prerequisites, before
+    rewriting the index field to the form that can work with the native
+    transposed load operation.
+    """
+
+    if "gfx95" not in options.target:
+        return
+
     hardware_constraint = get_hardware_constraint(constraints)
     thread_id = hardware_constraint.linearized_thread_id
 
@@ -188,14 +153,16 @@ def mark_hardware_transpose_candidates(
 
     for read in trace.walk(transpose_wrapper):
         custom_node = get_custom(read)
-        if meets_hw_transpose_requirements(custom_node, constraints):
-            mem_type = custom_node.memory_type
-            width = mem_type.dtype.bitwidth()
-            concrete_shape = tuple(map(sub, custom_node.memory_type.symbolic_shape))
-            maybe_indices = fetch_delinearized_indices(concrete_shape, width, thread_id)
-            if maybe_indices:
-                with custom_node.graph.inserting_before(read):
-                    elems_per_thread = hardware_constraint.max_elems_per_load(
-                        mem_type.dtype
-                    )
-                    rewrite_node(read, custom_node, elems_per_thread, maybe_indices)
+        if not read_meets_hw_transpose_requirements(custom_node):
+            continue
+
+        mem_type = custom_node.memory_type
+        width = mem_type.dtype.bitwidth()
+        concrete_shape = tuple(map(sub, custom_node.memory_type.symbolic_shape))
+        maybe_indices = fetch_delinearized_indices(concrete_shape, width, thread_id)
+        if not maybe_indices:
+            continue
+
+        with custom_node.graph.inserting_before(read):
+            elems_per_thread = hardware_constraint.max_elems_per_load(mem_type.dtype)
+            rewrite_node(read, custom_node, elems_per_thread, maybe_indices)

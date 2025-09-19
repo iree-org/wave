@@ -44,6 +44,27 @@ PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
 # This is currently hand-written and should in future be generated from the custom ops
 
 
+def read_meets_hw_transpose_requirements(read: Read) -> bool:
+    if read.has_identity_mapping():
+        return False
+
+    if len(list(read.index.keys())) != 2:
+        return False
+
+    bitwidth = read.type.dtype.bitwidth()
+    if bitwidth != 8 and bitwidth != 16:
+        return False
+
+    bits = read.elements_per_thread * bitwidth
+    if bits == 0 or bits % 64 != 0:
+        return False
+
+    if read.memory_type.address_space != SHARED_ADDRESS_SPACE:
+        return False
+
+    return not read.mapping_dynamic_vals
+
+
 def allocate(
     shape: tuple[IndexExpr],
     distributed_shape: tuple[IndexExpr],
@@ -1657,7 +1678,6 @@ class Read(CustomOp):
     source: Optional[tuple[IndexExpr]] = None
     target: Optional[tuple[IndexExpr]] = None
     _write_dependency: Optional[list[fx.Node]] = None
-    transpose: bool = False
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1763,6 +1783,9 @@ class Read(CustomOp):
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
+        if read_meets_hw_transpose_requirements(self):
+            return True
+
         if self.has_identity_mapping():
             return True
 

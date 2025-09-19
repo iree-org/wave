@@ -713,7 +713,9 @@ class LaunchableWave(Launchable):
                 partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
-                partial(mark_hardware_transpose_candidates, trace, self.constraints),
+                partial(
+                    mark_hardware_transpose_candidates, trace, self.constraints, options
+                ),
             ]
         graph_passes += [
             partial(apply_shared_memory_indexing_corrections, trace, self.constraints),
