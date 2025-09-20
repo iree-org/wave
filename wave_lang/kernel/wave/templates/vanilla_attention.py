@@ -56,13 +56,19 @@ def get_vanilla_attention_kernel(
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
+        TPW = 64
     if mfma_variant[1] == MMAType.F32_32x32x8_F16:
         Mvec = 32
         Nvec = 32
+        TPW = 64
+    if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 32
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=TPW,
             mma_type=mfma_variant[1],
             vector_shapes={B: 0, M: Mvec, N: Nvec},
         )
