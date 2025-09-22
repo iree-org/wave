@@ -1003,8 +1003,6 @@ def resolve_broadcasting_for_op(
             )
 
         sizes = [operand["size"] for operand in operands]
-        if len(set(sizes)) <= 1 or all(size == 1 for size in sizes):
-            continue
 
         target = max(operands, key=lambda x: x["size"])
 
@@ -1031,6 +1029,9 @@ def resolve_broadcasting_for_op(
                     )
 
                 if operand["dim"] != target["dim"]:
+                    # If the dimensions don't agree, we can still do this broadcast only if
+                    # the two nodes differ in shape along the broadcasting dimension and the
+                    # broadcasting dimension is the innermost dimension.
                     missing_dims = set(target["custom"].type.symbolic_shape).difference(
                         set(operand["custom"].type.symbolic_shape)
                     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import builtins
 import copy
 import operator
 import sys
@@ -1027,11 +1028,7 @@ class SelectOp(CustomOp):
                 f"Got condition: {c_shape}, if_true: {t_shape}, if_false: {f_shape}"
             )
 
-        most_general_shape = ()
-        for s in [c_shape, t_shape, f_shape]:
-            if len(s) >= len(most_general_shape):
-                most_general_shape = s
-        return most_general_shape
+        return builtins.max(non_empty_shapes, key=len, default=())
 
     def infer_type(self, *args):
         cond_type = get_custom(self.cond).type
