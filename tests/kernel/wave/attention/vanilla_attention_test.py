@@ -32,6 +32,7 @@ from ..common.utils import (
     require_e2e,
     require_cdna4,
     require_cdna_2_or_3_or_4,
+    require_rdna4
 )
 from ..common.shapes import get_test_shapes
 from wave_lang.kernel.wave.templates.vanilla_attention import (
@@ -48,7 +49,6 @@ from wave_lang.kernel.wave.utils.reference_kernel_utils import (
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("input_shape", get_test_shapes("attention"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -56,12 +56,13 @@ from wave_lang.kernel.wave.utils.reference_kernel_utils import (
 )
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
-    "mfma_variant",
+    "mfma_variant, threads_per_wave",
     [
-        (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
-        (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
-        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
-        (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+        pytest.param((MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16), 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param((MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16), 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param((MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16), 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param((MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16), 64, marks=require_cdna_2_or_3_or_4),
+        # pytest.param((MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_F16), 32, marks=require_rdna4)
     ],
 )
 def testTransposedVAttentionPure(
@@ -69,6 +70,7 @@ def testTransposedVAttentionPure(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
+    threads_per_wave: int,
     run_bench,
     perf_filename_tk,
 ):
@@ -121,17 +123,17 @@ def testTransposedVAttentionPure(
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("input_shape", get_test_shapes("attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("dynamic_dims", "dyn", [False])
 @pytest.mark.parametrize(
-    "mfma_variant",
+    "mfma_variant, threads_per_wave",
     [
-        (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
-        (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
-        (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
-        (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+        pytest.param((MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16), 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param((MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16), 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param((MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16), 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param((MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16), 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param((MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_F16), 32, marks=require_rdna4)
     ],
 )
 def testAttentionPure(
@@ -139,6 +141,7 @@ def testAttentionPure(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
+    threads_per_wave: int,
     run_bench,
     perf_filename_tk,
 ):
