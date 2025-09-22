@@ -400,7 +400,6 @@ def testGemmSmallTiles(
 
 
 @require_e2e
-@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -413,10 +412,11 @@ def testGemmSmallTiles(
 )
 @param_bool("dynamic_dims", "dyn")
 @pytest.mark.parametrize(
-    "mfma_variant",
+    "mfma_variant, threads_per_wave",
     [
-        MMAType.F32_16x16x16_F16,
-        MMAType.F32_32x32x8_F16,
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
     ],
 )
 def testNonTransposeGemm(
@@ -424,6 +424,7 @@ def testNonTransposeGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
+    threads_per_wave: int,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
@@ -446,7 +447,7 @@ def testNonTransposeGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)]
 
     if dynamic_dims:
         constraints += [tkw.Assumption(K > BLOCK_K * 4)]
@@ -1285,7 +1286,6 @@ def testF8Gemm(
 
 
 @require_e2e
-@require_cdna_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
 @pytest.mark.parametrize(
     "enable_scheduling",
@@ -1295,10 +1295,11 @@ def testF8Gemm(
 )
 @param_bool("dynamic_dims", "dyn", [False])
 @pytest.mark.parametrize(
-    "mfma_variant",
+    "mfma_variant, threads_per_wave",
     [
-        MMAType.F32_16x16x16_F16,
-        MMAType.F32_32x32x8_F16,
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
     ],
 )
 def testPackedGemm(
@@ -1306,12 +1307,14 @@ def testPackedGemm(
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
+    threads_per_wave: int,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
 ):
     # TODO: Convert this to i8 -> bitcast f16 gemm
     # Input sizes
+    B = tkl.sym.B
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
@@ -1329,7 +1332,8 @@ def testPackedGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
+    vector_shapes={B: 0, M: 16, N: 16},
+    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant, vector_shapes=vector_shapes)]
 
     # With dynamic dimensions, we need to add an assumption on how big
     # the iterate dimension is to determine whether we can schedule or not.
@@ -1339,8 +1343,8 @@ def testPackedGemm(
     # Wave-level micro-kernel.
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i32],
-        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i32],
+        a: tkl.Memory[M, K // 2, ADDRESS_SPACE, tkl.i32],
+        b: tkl.Memory[N, K // 2, ADDRESS_SPACE, tkl.i32],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
