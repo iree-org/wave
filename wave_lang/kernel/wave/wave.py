@@ -20,8 +20,8 @@ from sympy.utilities.lambdify import lambdastr
 from wave_lang.support.ir_imports import Context, Module, Operation
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
-from ...support.location_config import LocationCaptureConfig
-from .._support.location import add_placeholder_locations
+from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
+from .._support.location import capture_function_location
 from .._support.tracing import (
     CapturedTrace,
     CompiledContext,
@@ -32,7 +32,7 @@ from ..compiler import builder, dispatch_codegen, kernel_codegen
 from ..lang import Grid, Memory, SymbolBind
 from ..lang.global_symbols import *
 from ..ops import wave_ops
-from ..ops.wave_ops import CustomOp, Iterate, get_custom
+from ..ops.wave_ops import CustomOp, Iterate, get_custom, Placeholder, Output
 
 # Passes
 from .analysis.index_sequence_analysis import (
@@ -180,6 +180,51 @@ def _is_symbol_bind(a: Any) -> bool:
 
 def _is_memory_arg(a: Any) -> bool:
     return inspect.isclass(a) and issubclass(a, Memory)
+
+
+def add_placeholder_locations(
+    trace: "CapturedTrace", kernel_func: Callable
+) -> "CapturedTrace":
+    """
+    Add location info to placeholder nodes.
+    The location used is the kernel function definition location.
+    Also adds the location to the output node of the graph, which is maybe
+    unnecessary, but it's convenient to have a location for the output as well
+    so that 100% of nodes have locations at the beginning of the pipeline.
+
+    Args:
+        trace: The captured trace to analyze
+        kernel_func:
+            The original kernel function being traced -- IE the function
+            definition with the @tkw.wave annotation.
+
+    Returns:
+        The modified trace with location information added
+    """
+
+    root_graph = trace.get_root_graph()
+    region_graph = getattr(trace, "region_graph", None)
+    location_capture_config = getattr(region_graph, "location_capture_config", None)
+
+    if (
+        location_capture_config is None
+        or location_capture_config.level == LocationCaptureLevel.NONE
+    ):
+        return trace
+
+    kernel_location = capture_function_location(kernel_func, location_capture_config)
+    if kernel_location is None:
+        return trace
+
+    for node in root_graph.nodes:
+        custom_op = get_custom(node)
+        if hasattr(custom_op, "location") and custom_op.location is not None:
+            continue
+
+        if isinstance(custom_op, (Placeholder, Output)):
+            custom_op.fx_node.location = kernel_location
+
+    return trace
 
 
 class LaunchableWave(Launchable):
