@@ -1,10 +1,5 @@
 # Wave: Python Domain-Specific Language for High Performance Machine Learning
 
-> [!IMPORTANT]
-> This repository is a fork of https://github.com/iree-org/iree-turbine. Code is
-> currently being migrated from the
-> [`iree/turbine/kernel/wave/`](./iree/turbine/kernel/wave/) directory.
-
 ## Motivation
 
 Wave is a high-level programming language designed to accelerate the development and optimization of machine learning kernels. It aims to dramatically improve kernel author velocity in two critical dimensions:
