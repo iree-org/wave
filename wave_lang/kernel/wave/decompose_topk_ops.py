@@ -15,20 +15,18 @@ from .._support.tracing import CapturedTrace
 from .._support.indexing import IndexSequence, IndexingContext
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
-    Allocate,
+    Broadcast,
+    Eq,
     Extract,
     GetResult,
     Gt,
     Maximum,
     NewScalar,
-    Read,
+    Reshape,
     SelectOp,
     SelfIndex,
-    TopkOp,
     ShuffleOp,
-    Write,
-    Eq,
-    Broadcast,
+    TopkOp,
     get_custom,
 )
 import wave_lang.kernel.lang as tkl
@@ -44,12 +42,9 @@ from .utils.general_utils import all_equal
 from .utils.graph_utils import (
     DCE,
     get_graph_node,
-    prepare_subgraph_for_conditional,
-    finish_conditional_subgraph,
 )
 from .utils.symbol_utils import subs_idxc
 from .decompose_reduce_ops import determine_shuffle_config
-from ..lang.kernel_buffer import AddressSpace
 from .analysis.index_sequence_analysis import resolve_broadcasting_for_op
 
 
@@ -224,14 +219,13 @@ def decompose_topk_ops(
     """
     The lowering for topk operations:
       1. Generate initial indices using SelfIndex for each source.
-      2. Allocate shared memory buffers to store K top values and K top indices.
-      3. For each k from 0 to K-1:
+      2. For each k from 0 to K-1:
          a. Local TopK: Each thread finds the local maximum and its index.
          b. Intrawave TopK: Each thread finds the global maximum across threads
             using butterfly shuffle, tracking both values and indices.
-         c. Store the top value and index in shared memory at position k.
+         c. Keep track of the top value and index register nodes.
          d. Mask out the value at the found index to exclude it from future iterations.
-      4. Read and return vectors of K top values and K top indices from shared memory.
+      3. Pack the collected register nodes into vector registers of K elements.
     """
     topk_nodes = trace.walk(lambda node: isinstance(get_custom(node), TopkOp))
     if not topk_nodes:
@@ -328,24 +322,9 @@ def decompose_topk_ops(
 
             dtype = get_custom(topk_src[0]).type.dtype
 
-            top_values_alloc = Allocate(
-                shape=(k_size,),
-                distributed_shape=(k_size,),
-                dtype=dtype,
-                address_space=AddressSpace.SHARED_MEMORY,
-            )
-            top_values_alloc.add_to_graph(custom.graph)
-
-            top_indices_alloc = Allocate(
-                shape=(k_size,),
-                distributed_shape=(k_size,),
-                dtype=tkl.i32,
-                address_space=AddressSpace.SHARED_MEMORY,
-            )
-            top_indices_alloc.add_to_graph(custom.graph)
-
-            # Track all conditional writes for final read dependency
-            all_conditional_writes = []
+            # Collect the top values and registers for later packing.
+            top_value_registers = []
+            top_index_registers = []
 
             cluster_size, cluster_stride = (None, None)
 
@@ -379,49 +358,8 @@ def decompose_topk_ops(
                     cluster_stride,
                 )
 
-                # We need to write the final answer for the top element into shared memory, but just one lane needs to do it.
-                subgraph_name = f"execute_on_lane0_topk_write_{k}"
-
-                # 1. Prepare subgraph with placeholders
-                execute_on_lane0_graph, implicit_captures, placeholders = (
-                    prepare_subgraph_for_conditional(
-                        subgraph_name,
-                        [
-                            global_val,
-                            global_idx,
-                            top_values_alloc.fx_node,
-                            top_indices_alloc.fx_node,
-                        ],
-                        memory_nodes=[
-                            top_values_alloc.fx_node,
-                            top_indices_alloc.fx_node,
-                        ],
-                    )
-                )
-
-                # 2. Add operations to subgraph
-                write_val = Write(
-                    placeholders[global_val], placeholders[top_values_alloc.fx_node], 1
-                ).add_to_graph(execute_on_lane0_graph)
-                get_custom(write_val).index = {custom.k_dim: IndexSequence(k, 1, 1)}
-
-                write_idx = Write(
-                    placeholders[global_idx], placeholders[top_indices_alloc.fx_node], 1
-                ).add_to_graph(execute_on_lane0_graph)
-                get_custom(write_idx).index = {custom.k_dim: IndexSequence(k, 1, 1)}
-
-                # 3. Create condition and finish subgraph
-                lane_id_reg = get_graph_node(NewScalar(lane_id, tkl.i32), custom.graph)
-                zero_reg = get_graph_node(NewScalar(0, tkl.i32), custom.graph)
-                condition = get_graph_node(Eq(lane_id_reg, zero_reg), custom.graph)
-                execute_on_lane0 = finish_conditional_subgraph(
-                    trace,
-                    custom.graph,
-                    condition,
-                    execute_on_lane0_graph,
-                    implicit_captures,
-                )
-                all_conditional_writes.extend([execute_on_lane0, write_val, write_idx])
+                top_value_registers.append(global_val)
+                top_index_registers.append(global_idx)
 
                 # Masking: set the found maximum value to negative infinity for next iteration
                 if k < k_size - 1:
@@ -452,29 +390,27 @@ def decompose_topk_ops(
 
                         working_src[i] = src
 
-            # Read the final results from shared memory with write dependencies
+            # Pack the collected register nodes into vector registers of K elements
+            target_shape = {custom.k_dim: k_size}
             final_values = get_graph_node(
-                Read(
-                    top_values_alloc.fx_node,
-                    elements_per_thread=k_size,
-                    _write_dependency=all_conditional_writes,
-                ),
-                custom.graph,
+                Reshape(top_value_registers, target_shape), custom.graph
             )
-            get_custom(final_values).index = {custom.k_dim: IndexSequence(0, 1, 1)}
             final_indices = get_graph_node(
-                Read(
-                    top_indices_alloc.fx_node,
-                    elements_per_thread=k_size,
-                    _write_dependency=all_conditional_writes,
-                ),
-                custom.graph,
+                Reshape(top_index_registers, target_shape), custom.graph
             )
-            get_custom(final_indices).index = {custom.k_dim: IndexSequence(0, 1, 1)}
 
-            final_values_type = get_custom(final_values).type
-            final_indices_type = get_custom(final_indices).type
-            custom.type = [final_values_type, final_indices_type]
+            # Create index using same keys as original input topk_src
+            original_index = get_custom(topk_src[0]).index
+            final_values_index = {}
+            for dim in original_index.keys():
+                final_values_index[dim] = IndexSequence(0, 1, 1)
+            get_custom(final_values).index = final_values_index
+            get_custom(final_indices).index = final_values_index.copy()
+
+            custom.type = [
+                get_custom(final_values).type,
+                get_custom(final_indices).type,
+            ]
 
             # Store the computed results on the fx node for handle_topk_get_results
             custom.fx_node.decomposed_values = final_values
