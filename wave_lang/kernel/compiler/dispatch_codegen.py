@@ -37,6 +37,7 @@ from .kernel_codegen import (
     BindingType,
     BoundKernelSignature,
     KernelSignature,
+    create_argument_locations,
 )
 
 
@@ -149,7 +150,8 @@ class StreamExecutable:
             )
             with InsertionPoint(self.def_module.body_block):
                 def_func_op = func_d.FuncOp(name, def_ftype)
-                def_func_block = def_func_op.add_entry_block()
+                arg_locs = create_argument_locations(linear_bindings)
+                def_func_block = def_func_op.add_entry_block(arg_locs)
                 def_func_args = list(def_func_block.arguments)
                 if workgroup_size is not None and subgroup_size is not None:
                     pipeline_attr = iree_codegen_d.DispatchLoweringPassPipelineAttr.get(

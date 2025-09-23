@@ -24,13 +24,16 @@ from wave_lang.support.ir_imports import (
 )
 
 from .._support.indexing import IndexSymbol
-from .._support.location import capture_location
 from ...support.location_config import LocationCaptureConfig
 from .builder import (
     ModuleBuilder,
 )
 from .dispatch_codegen import StreamExecutable
-from .kernel_codegen import BindingDesc, KernelSignature
+from .kernel_codegen import (
+    BindingDesc,
+    KernelSignature,
+    create_argument_locations,
+)
 
 
 def memref_to_tensor(memrefs: list[IrType], use_views: bool = False):
@@ -117,13 +120,10 @@ def isolated_test_call(
 
         ftype = FunctionType.get(input_tensors, output_tensors)
         func_op = func_d.FuncOp(func_name, ftype)
-        captured_loc = capture_location(location_capture_config)
-        actual_loc = captured_loc.to_mlir() if captured_loc else Location.unknown()
         scalar_bindings = sig.scalar_bindings
-        arg_locs = [
-            (Location.name(b.name, actual_loc) if b.name is not None else actual_loc)
-            for b in sig.kernel_buffer_bindings + scalar_bindings
-        ]
+        arg_locs = create_argument_locations(
+            sig.kernel_buffer_bindings + scalar_bindings
+        )
 
         if async_dispatch:
             arg_locs += [Location.unknown()] * 2

@@ -56,6 +56,35 @@ from .builder import (
 from .utils import strides_from_symbolic_shape
 
 
+def create_argument_locations(bindings: list["BindingDesc"]) -> list[Location]:
+    """
+    Create location information for function arguments based on binding information.
+
+    For kernel buffer bindings with placeholder nodes, attempts to use the node's location.
+    Otherwise uses the binding name or falls back to unknown location.
+
+    Args:
+        bindings: List of binding descriptors for function arguments
+
+    Returns:
+        List of MLIR locations for the function arguments
+    """
+    arg_locs = []
+    for binding in bindings:
+        if (
+            binding.binding_type == BindingType.KERNEL_BUFFER
+            and binding.reference[0] == "node"
+        ):
+            node = binding.reference[1]
+            if hasattr(node, "location") and node.location:
+                arg_locs.append(Location.name(binding.name, node.location.to_mlir()))
+            else:
+                arg_locs.append(Location.name(binding.name, Location.unknown()))
+        else:
+            arg_locs.append(Location.unknown())
+    return arg_locs
+
+
 # Filter function to check for placeholder nodes.
 def is_placeholder(node: fx.Node):
     custom = get_custom(node)
@@ -487,9 +516,6 @@ class FunctionalKernelSignature(BoundKernelSignature):
             input_types = [b.as_mlir_type() for b in sig.bindings]
             ftype = FunctionType.get(input_types, [])
             func_op = func_d.FuncOp(name, ftype)
-            arg_locs = [
-                (Location.name(b.name) if b.name is not None else Location.unknown())
-                for b in sig.bindings
-            ]
+            arg_locs = create_argument_locations(sig.bindings)
             entry_block = func_op.add_entry_block(arg_locs)
         return FunctionalKernelSignature(sig, entry_block), func_op.operation
