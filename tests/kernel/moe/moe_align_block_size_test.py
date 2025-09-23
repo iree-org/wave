@@ -198,10 +198,10 @@ def test_moe_align_block_size(
         (max_num_tokens_padded,), dtype=torch.int32, device=topk_ids.device
     )
 
-    num_tokens_post_pad = torch.empty((1), dtype=torch.int32, device=topk_ids.device)
+    wave_num_tokens_post_pad = torch.empty(
+        (1), dtype=torch.int32, device=topk_ids.device
+    )
     flat_topk = topk_ids.view(-1).to(torch.int32)
-    print(kernel.asm)
-    print("Flat topk:", flat_topk)
     kernel(
         flat_topk,
         wave_expert_ids,
@@ -213,36 +213,40 @@ def test_moe_align_block_size(
         wave_sorted_ids,
     )
 
-    print("Block size:", block_size)
-    print("\n\n============Wave outputs================")
-    print("Histogram:", expert_counts_buffer)
-    print("Padded:", padded_counts_buffer)
-    print("Cumsum (i):", cumsum_buffer)
-    print("Cumsum (e):", cumsum_exclusive)
-    print("Num blocks:", num_blocks_buffer)
-    print("Expert IDs:", wave_expert_ids)
+    # print("Block size:", block_size)
+    # print("\n\n============Wave outputs================")
+    # print("Histogram:", expert_counts_buffer)
+    # print("Padded:", padded_counts_buffer)
+    # print("Cumsum (i):", cumsum_buffer)
+    # print("Cumsum (e):", cumsum_exclusive)
+    # print("Num blocks:", num_blocks_buffer)
+    # print("Expert IDs:", wave_expert_ids)
 
-    print("Sorted IDs:")
-    for i in range(math.ceil(max_num_tokens_padded / block_size)):
-        for j in range(block_size):
-            if i * block_size + j >= max_num_tokens_padded:
-                break
-            print(wave_sorted_ids[i * block_size + j].item(), end=" ")
-        print()
+    # print("Sorted IDs:")
+    # for i in range(math.ceil(max_num_tokens_padded / block_size)):
+    #     for j in range(block_size):
+    #         if i * block_size + j >= max_num_tokens_padded:
+    #             break
+    #         print(wave_sorted_ids[i * block_size + j].item(), end=" ")
+    #     print()
 
-    print("\n\n============Reference outputs================")
-    print("Sorted IDs:")
-    for i in range(math.ceil(max_num_tokens_padded / block_size)):
-        for j in range(block_size):
-            if i * block_size + j >= max_num_tokens_padded:
-                break
-            print(sorted_ids[i * block_size + j].item(), end=" ")
-        print()
-    print("Expert IDs:", expert_ids)
+    # print("\n\n============Reference outputs================")
+    # print("Sorted IDs:")
+    # for i in range(math.ceil(max_num_tokens_padded / block_size)):
+    #     for j in range(block_size):
+    #         if i * block_size + j >= max_num_tokens_padded:
+    #             break
+    #         print(sorted_ids[i * block_size + j].item(), end=" ")
+    #     print()
+    # print("Expert IDs:", expert_ids)
 
-    print("Num tokens post pad:", num_tokens_post_pad.item())
+    # print("Num tokens post pad:", num_tokens_post_pad.item())
 
-    return
     verify_moe_align_block_size_results(
-        topk_ids, sorted_ids, expert_ids, num_tokens_post_pad, block_size, num_experts
+        topk_ids,
+        wave_sorted_ids,
+        wave_expert_ids,
+        cumsum_buffer[-1],
+        block_size,
+        num_experts,
     )
