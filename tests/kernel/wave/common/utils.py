@@ -5,10 +5,12 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import pytest
+import torch
 from wave_lang.kernel.wave.utils.run_utils import get_default_arch
 
 require_e2e = pytest.mark.require_e2e
 expensive_test = pytest.mark.expensive_test
+require_multiple_gpus = pytest.mark.require_multiple_gpus
 require_cdna2 = pytest.mark.skipif(
     "gfx90" not in get_default_arch(),
     reason="Default architecture is not CDNA2, default architecture is '{}'".format(
@@ -46,6 +48,9 @@ require_cdna_2_or_3_or_4 = pytest.mark.skipif(
 # Add test shapes for validation and performance testing.
 perf_test = lambda *a: pytest.param(*a, marks=pytest.mark.perf_only)
 expensive_test_param = lambda *a: pytest.param(*a, marks=pytest.mark.expensive_test)
+
+# GPU requirement markers
+require_gpus = lambda n: pytest.mark.require_gpus(n)
 
 
 def param_bool(name, shortname=None, values=None):
