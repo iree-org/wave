@@ -18,14 +18,11 @@ from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     Add,
     Allocate,
-    Conditional,
-    CustomOp,
     Eq,
     Extract,
     Maximum,
     Minimum,
     NewScalar,
-    Placeholder,
     Read,
     ReduceOp,
     ShuffleOp,
@@ -41,7 +38,12 @@ from ..wave.constraints import (
 )
 from .utils.classes import ShuffleMode
 from .utils.general_utils import all_equal, delinearize_index
-from .utils.graph_utils import DCE, get_outer_node
+from .utils.graph_utils import (
+    DCE,
+    get_graph_node,
+    prepare_subgraph_for_conditional,
+    finish_conditional_subgraph,
+)
 from .utils.symbol_utils import safe_subs, subs_idxc
 
 TKW_COMBINER = {"sum": Add, "max": Maximum, "min": Minimum}
@@ -91,17 +93,6 @@ def determine_shuffle_config(
     cluster_stride = [x - y for x, y in zip(thread_ids[1:], thread_ids[:-1])]
     assert all_equal(cluster_stride), f"Cluster stride must be equal across threads."
     return cluster_size, cluster_stride[0] if cluster_size > 1 else 1
-
-
-def get_graph_node(
-    custom: CustomOp,
-    graph: fx.Graph,
-    location: Optional[CapturedLocation],
-) -> fx.Node:
-    custom.add_to_graph(graph)
-    custom = custom.fx_node
-    custom.location = location
-    return custom
 
 
 def emit_sources_reduction(
@@ -253,48 +244,36 @@ def emit_interwave_reduction(
     allocate_node.location = original_op_location
 
     # Write individual wave result into shared_memory[wave_id]
-    # 1. Create subgraph to store condition
-    execute_on_lane0_graph = fx.Graph()
     subgraph_name = f"execute_on_lane0_{src.name}"
-    placeholder_src = get_graph_node(
-        Placeholder.from_fx_node(src), execute_on_lane0_graph, original_op_location
+
+    # 1. Prepare subgraph with placeholders
+    execute_on_lane0_graph, implicit_captures, placeholders = (
+        prepare_subgraph_for_conditional(
+            subgraph_name, [src, allocate_node], memory_nodes=[allocate_node]
+        )
     )
-    placeholder_src.type = src.type
-    placeholder_allocate = get_graph_node(
-        Placeholder.from_fx_node(get_custom(allocate_node)),
-        execute_on_lane0_graph,
-        original_op_location,
-    )
-    placeholder_allocate.type = get_custom(allocate_node).type
-    placeholder_allocate.meta["lifted"] = allocate_node
 
     # 2. Create write into shared memory
-    write = Write(placeholder_src, placeholder_allocate, 1).add_to_graph(
+    write = Write(placeholders[src], placeholders[allocate_node], 1).add_to_graph(
         execute_on_lane0_graph
     )
     write.location = original_op_location
     write.index = {reduction_dim: IndexSequence(reduction_wave_id, 1, 1)}
 
-    # 3. Create if lane_id == 0 and insert subgraph into root graph.
-    implicit_capture_src = get_outer_node(src)
-
+    # 3. Create condition and finish subgraph
     lane_id_reg = get_graph_node(
         NewScalar(lane_id, tkl.i32), graph, original_op_location
     )
     zero_reg = get_graph_node(NewScalar(0, tkl.i32), graph, original_op_location)
-    is_lane_0 = get_graph_node(Eq(lane_id_reg, zero_reg), graph, original_op_location)
-    execute_on_lane0 = get_graph_node(
-        Conditional(
-            is_lane_0,
-            subgraph_name=subgraph_name,
-            implicit_captures=[implicit_capture_src, allocate_node],
-        ),
+    condition = get_graph_node(Eq(lane_id_reg, zero_reg), graph, original_op_location)
+    execute_on_lane0 = finish_conditional_subgraph(
+        trace,
         graph,
+        condition,
+        execute_on_lane0_graph,
+        implicit_captures,
         original_op_location,
     )
-    execute_on_lane0_graph.parent_op = execute_on_lane0
-    trace.add_subgraph(subgraph_name, execute_on_lane0_graph)
-    trace.get_root_graph().subgraphs[subgraph_name] = execute_on_lane0_graph
 
     # Read shared_memory[:num_waves] and locally reduce.
     # write_dependency on both execute_on_lane0 and write to prevent DCE.
@@ -302,8 +281,7 @@ def emit_interwave_reduction(
         allocate_node,
         elements_per_thread=num_reduction_waves,
         _write_dependency=[execute_on_lane0, write],
-    ).add_to_graph(graph)
-    read.location = original_op_location
+    ).add_to_graph(graph, loc=original_op_location)
     read.index = {reduction_dim: IndexSequence(0, 1, 1)}
     interwave_reduction = emit_variable_reduction(
         binary_fn, read, graph, num_reduction_waves, original_op_location
