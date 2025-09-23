@@ -10,6 +10,7 @@ import torch.fx as fx
 import wave_lang.kernel.lang as tkl
 
 from ..._support.indexing import IndexSymbol
+from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import *
 from ...ops.wave_ops import (
@@ -523,3 +524,108 @@ def update_sort_keys(
                 trace.region_graph.subgraphs[custom.subgraph_name],
                 node._sort_key,
             )
+
+
+def get_graph_node(
+    custom: CustomOp,
+    graph: fx.Graph,
+    location: Optional[CapturedLocation] = None,
+) -> fx.Node:
+    """Add a CustomOp to a graph and return its fx_node."""
+    custom.add_to_graph(graph, loc=location)
+    return custom.fx_node
+
+
+def prepare_subgraph_for_conditional(
+    subgraph_name: str,
+    captured_nodes: list[fx.Node],
+    memory_nodes: list[fx.Node] = None,
+) -> tuple[fx.Graph, list[fx.Node], dict[fx.Node, fx.Node]]:
+    """
+    Prepare a subgraph with placeholders for captured nodes.
+    Intended for use with finish_conditional_subgraph.
+    When creating a subgraph, the nodes within the subgraph can't just refer to nodes in the outer graph.
+    So to allow communication, we create placeholder nodes in the subgraph to represent the outer nodes.
+    The captured_nodes argument specifies which outer nodes the inner graph needs to represent.
+
+    This returns the subgraph, the captures list (to pass to
+    finish_conditional_subgraph, the output list is not the same as the input
+    capture captured_nodes list), and a dictionary for placeholders.
+    When adding nodes to the subgraph, you can use the dictionary to map from outer nodes to their placeholders.
+    Eg.
+
+    ```
+        subgraph, captures, placeholders = prepare_subgraph_for_conditional(name, [arg1, arg2], [arg2])
+        write_val = Write(placeholders[arg1], placeholders[arg2], 1).add_to_graph(subgraph)
+        finish_conditional_subgraph(trace, graph, condition, subgraph, captures)
+    ```
+
+
+    Args:
+        subgraph_name: Name for the subgraph
+        captured_nodes: Nodes from outer graph that need to be accessible in subgraph
+        memory_nodes: Subset of captured_nodes that are memory allocations (get "lifted" metadata)
+
+    Returns:
+        (subgraph, implicit_captures, placeholders_map)
+    """
+    subgraph = fx.Graph()
+    subgraph._name = subgraph_name
+
+    memory_nodes = set(memory_nodes or [])
+    placeholders = {}
+    implicit_captures = []
+
+    for node in captured_nodes:
+        # Create placeholder in subgraph
+        custom = get_custom(node) if hasattr(node, "tkw_op") else node
+        placeholder = get_graph_node(Placeholder.from_fx_node(custom), subgraph)
+        placeholder.type = custom.type
+
+        # Mark memory allocations with "lifted" metadata
+        if node in memory_nodes:
+            placeholder.meta["lifted"] = node
+
+        placeholders[node] = placeholder
+        implicit_captures.append(get_outer_node(node))
+
+    return subgraph, implicit_captures, placeholders
+
+
+def finish_conditional_subgraph(
+    trace: CapturedTrace,
+    main_graph: fx.Graph,
+    condition_node: fx.Node,
+    subgraph: fx.Graph,
+    implicit_captures: list[fx.Node],
+    location: Optional[CapturedLocation] = None,
+) -> fx.Node:
+    """Create conditional node and register subgraph with trace.
+
+    Args:
+        trace: Trace to register subgraph with
+        main_graph: Main graph to add conditional to
+        condition_node: Boolean condition for the conditional
+        subgraph: The prepared subgraph
+        subgraph_name: Name for the subgraph
+        implicit_captures: List of captured nodes
+
+    Returns:
+        The conditional node
+    """
+    conditional = get_graph_node(
+        Conditional(
+            condition_node,
+            subgraph_name=subgraph._name,
+            implicit_captures=implicit_captures,
+        ),
+        main_graph,
+        location,
+    )
+
+    # Register subgraph with trace
+    subgraph.parent_op = conditional
+    trace.add_subgraph(subgraph._name, subgraph)
+    trace.get_root_graph().subgraphs[subgraph._name] = subgraph
+
+    return conditional
