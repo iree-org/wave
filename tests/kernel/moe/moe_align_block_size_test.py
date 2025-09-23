@@ -29,7 +29,7 @@ torch.manual_seed(0)
 
 num_tokens_values = [32]
 topk_values = [2]
-block_size_values = [16]
+block_size_values = [16, 32, 64]
 num_experts_values = [4]
 
 
