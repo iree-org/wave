@@ -2455,8 +2455,6 @@ def test_no_map_atomic_add():
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
         },
         canonicalize=True,
-        print_ir_after="all",
-        print_ir_before="all",
     )
     iterated_gemm = wave_compile(options, iterated_gemm)
 
