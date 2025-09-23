@@ -16,14 +16,11 @@ from .._support.indexing import IndexSequence, IndexingContext
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     Allocate,
-    Conditional,
-    CustomOp,
     Extract,
     GetResult,
     Gt,
     Maximum,
     NewScalar,
-    Placeholder,
     Read,
     SelectOp,
     SelfIndex,
@@ -44,18 +41,16 @@ from ..wave.constraints import (
 )
 from .utils.classes import ShuffleMode
 from .utils.general_utils import all_equal
-from .utils.graph_utils import DCE
+from .utils.graph_utils import (
+    DCE,
+    get_graph_node,
+    prepare_subgraph_for_conditional,
+    finish_conditional_subgraph,
+)
 from .utils.symbol_utils import subs_idxc
-from .utils.graph_utils import get_outer_node
 from .decompose_reduce_ops import determine_shuffle_config
 from ..lang.kernel_buffer import AddressSpace
 from .analysis.index_sequence_analysis import resolve_broadcasting_for_op
-
-
-def get_graph_node(custom: CustomOp, graph: fx.Graph) -> fx.Node:
-    custom.add_to_graph(graph)
-    custom = custom.fx_node
-    return custom
 
 
 def construct_self_index_index_sequence(
@@ -385,70 +380,47 @@ def decompose_topk_ops(
                 )
 
                 # We need to write the final answer for the top element into shared memory, but just one lane needs to do it.
-                execute_on_lane0_graph = fx.Graph()
                 subgraph_name = f"execute_on_lane0_topk_write_{k}"
 
-                # TODO - this is all cargo-culted.  Why is this placeholder stuff necessary?
-                placeholder_val = get_graph_node(
-                    Placeholder.from_fx_node(global_val), execute_on_lane0_graph
+                # 1. Prepare subgraph with placeholders
+                execute_on_lane0_graph, implicit_captures, placeholders = (
+                    prepare_subgraph_for_conditional(
+                        subgraph_name,
+                        [
+                            global_val,
+                            global_idx,
+                            top_values_alloc.fx_node,
+                            top_indices_alloc.fx_node,
+                        ],
+                        memory_nodes=[
+                            top_values_alloc.fx_node,
+                            top_indices_alloc.fx_node,
+                        ],
+                    )
                 )
-                placeholder_val.type = get_custom(global_val).type
 
-                placeholder_idx = get_graph_node(
-                    Placeholder.from_fx_node(global_idx), execute_on_lane0_graph
-                )
-                placeholder_idx.type = get_custom(global_idx).type
-
-                placeholder_values_alloc = get_graph_node(
-                    Placeholder.from_fx_node(get_custom(top_values_alloc.fx_node)),
-                    execute_on_lane0_graph,
-                )
-                placeholder_values_alloc.type = get_custom(
-                    top_values_alloc.fx_node
-                ).type
-                placeholder_values_alloc.meta["lifted"] = top_values_alloc.fx_node
-
-                placeholder_indices_alloc = get_graph_node(
-                    Placeholder.from_fx_node(get_custom(top_indices_alloc.fx_node)),
-                    execute_on_lane0_graph,
-                )
-                placeholder_indices_alloc.type = get_custom(
-                    top_indices_alloc.fx_node
-                ).type
-                placeholder_indices_alloc.meta["lifted"] = top_indices_alloc.fx_node
-
+                # 2. Add operations to subgraph
                 write_val = Write(
-                    placeholder_val, placeholder_values_alloc, 1
+                    placeholders[global_val], placeholders[top_values_alloc.fx_node], 1
                 ).add_to_graph(execute_on_lane0_graph)
                 get_custom(write_val).index = {custom.k_dim: IndexSequence(k, 1, 1)}
 
                 write_idx = Write(
-                    placeholder_idx, placeholder_indices_alloc, 1
+                    placeholders[global_idx], placeholders[top_indices_alloc.fx_node], 1
                 ).add_to_graph(execute_on_lane0_graph)
                 get_custom(write_idx).index = {custom.k_dim: IndexSequence(k, 1, 1)}
 
-                implicit_capture_val = get_outer_node(global_val)
-                implicit_capture_idx = get_outer_node(global_idx)
+                # 3. Create condition and finish subgraph
                 lane_id_reg = get_graph_node(NewScalar(lane_id, tkl.i32), custom.graph)
                 zero_reg = get_graph_node(NewScalar(0, tkl.i32), custom.graph)
-                is_lane_0 = get_graph_node(Eq(lane_id_reg, zero_reg), custom.graph)
-
-                execute_on_lane0 = get_graph_node(
-                    Conditional(
-                        is_lane_0,
-                        subgraph_name=subgraph_name,
-                        implicit_captures=[
-                            implicit_capture_val,
-                            implicit_capture_idx,
-                            top_values_alloc.fx_node,
-                            top_indices_alloc.fx_node,
-                        ],
-                    ),
+                condition = get_graph_node(Eq(lane_id_reg, zero_reg), custom.graph)
+                execute_on_lane0 = finish_conditional_subgraph(
+                    trace,
                     custom.graph,
+                    condition,
+                    execute_on_lane0_graph,
+                    implicit_captures,
                 )
-                execute_on_lane0_graph.parent_op = execute_on_lane0
-                trace.add_subgraph(subgraph_name, execute_on_lane0_graph)
-                trace.get_root_graph().subgraphs[subgraph_name] = execute_on_lane0_graph
                 all_conditional_writes.extend([execute_on_lane0, write_val, write_idx])
 
                 # Masking: set the found maximum value to negative infinity for next iteration
