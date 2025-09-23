@@ -2408,7 +2408,8 @@ def test_debug_log_iteration_dims():
 
 @require_e2e
 @pytest.mark.parametrize("shape,k", [((32, 64), 2), ((64, 128), 4), ((128, 256), 8)])
-def test_topk(shape, k, run_bench):
+@param_bool("allow_duplicates", "duplicates")
+def test_topk(shape, k, allow_duplicates, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
@@ -2440,7 +2441,20 @@ def test_topk(shape, k, run_bench):
         tkw.write(topk_indices, indices, elements_per_thread=K)
 
     torch.manual_seed(1)
-    a = device_randn(shape, dtype=torch.float16)
+
+    if allow_duplicates:
+        a = device_randn(shape, dtype=torch.float16)
+    else:
+        # Generate input with no duplicates per row.
+        # Each row contains unique values by using a shuffled range.
+        a = device_zeros(shape, dtype=torch.float16)
+        for i in range(shape[0]):
+            perm = device_randperm(shape[1], dtype=torch.int32)
+            unique_values = (perm.float() + device_randn(shape[1]) * 0.1).to(
+                torch.float16
+            )
+            a[i, :] = unique_values
+
     values_out = device_zeros((shape[0], k), dtype=torch.float16)
     indices_out = device_zeros((shape[0], k), dtype=torch.int32)
 
@@ -2463,5 +2477,8 @@ def test_topk(shape, k, run_bench):
 
     assert values_out.shape == ref_values.shape
     assert indices_out.shape == ref_indices.shape
-    # Explicitly don't assert that indices are equal, because in case of duplicate values within a row, either index is valid.  As long as the values are equal, it's correct.
     assert_close(ref_values, values_out, atol=0.1, rtol=1e-05)
+    # When there are duplicate values, the indices may be different due to
+    # difference in tie breaking during sort.
+    if not allow_duplicates:
+        assert torch.equal(ref_indices, indices_out)
