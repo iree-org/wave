@@ -833,7 +833,7 @@ def get_reduce_mapping(
         custom = get_custom(source)
         index = {}
 
-        dim = custom.dim
+        dim = custom.dim_to_reduce
 
         # Compute the index sequence for the reduction dimension based on the
         # threads per wave and the vector size.
@@ -892,7 +892,7 @@ def populate_reduce_source_indices(
     # Reduce args must contain index for the reduction dimension,
     # but init and the reduction itself does not.
     res_index = copy(index)
-    del res_index[node.dim]
+    del res_index[node.dim_to_reduce]
 
     if node.init:
         ret += [(get_custom(node.init), res_index, vector_shapes)]
