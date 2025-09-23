@@ -528,6 +528,10 @@ def handle_atomic_op(op):
                 start_index = transform_index_on_mapping(
                     mapping, symbolic_shape, start_index
                 )
+            else:
+                start_index = {
+                    dim: _get_start_index(v) for dim, v in start_index.items()
+                }
 
             # convert registers in dyn_vals to vectors of index type
             dynamic_vals = tuple(
@@ -543,10 +547,16 @@ def handle_atomic_op(op):
                 )
 
             # create the dictionary of dynamic symbol and corresponding scalar value
-            dynamic_vals = {
-                sym: extract0(val)
-                for sym, val in zip(mapping.dynamic_val_indices.keys(), dynamic_vals)
-            }
+            dynamic_vals = (
+                {
+                    sym: extract0(val)
+                    for sym, val in zip(
+                        mapping.dynamic_val_indices.keys(), dynamic_vals
+                    )
+                }
+                if mapping
+                else {}
+            )
 
             # Get start indices for every element in thread and unroll the op
             atomic_results = []
