@@ -264,9 +264,9 @@ def decompose_topk_ops(
     for node in topk_nodes:
         custom = get_custom(node)
         with custom.graph.inserting_before(custom.fx_node):
-            topk_src = node.args[0]
+            topk_src = custom.arg
             k_size = subs_idxc(custom.k_dim)
-            reduction_dim = custom.dim
+            reduction_dim = custom.dim_to_reduce
             # TODO - can add arg for max/min
             binary_fn = Maximum
 
