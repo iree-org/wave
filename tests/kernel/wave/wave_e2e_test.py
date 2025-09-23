@@ -2408,8 +2408,72 @@ def test_debug_log_iteration_dims():
 
 
 @require_e2e
+def test_no_map_atomic_add():
+    M = tkl.sym.M
+    B = tkl.sym.B
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_B = tkl.sym.BLOCK_B
+    LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
+    STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+    LIMIT_VAL = tkl.sym.LIMIT_VAL
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={B: 0, M: 64, LIMIT_VAL: 0},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    # B is iterated over and so we define a tiling constraint on it.
+    # However, there is no notion of tile size for the iteration as
+    # it is an unstructured loop.
+    constraints += [tkw.TilingConstraint(B)]
+
+    @tkw.wave(constraints)
+    def iterated_gemm(
+        a: tkl.Memory[M, ADDRESS_SPACE, tkl.i32],
+        c: tkl.Memory[M, ADDRESS_SPACE_0, tkl.i32],
+    ):
+
+        one_reg = tkw.Register[M, tkl.i32](1)
+        res = tkw.atomic_add(one_reg, a)
+        tkw.write(res, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            B: 10,
+            BLOCK_M: 64,
+            BLOCK_B: 1,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        print_ir_after="all",
+        print_ir_before="all",
+    )
+    iterated_gemm = wave_compile(options, iterated_gemm)
+
+    # generate random input tensors between -1 and 1
+    a = torch.randint(0, 10, (64,), dtype=torch.int32).cuda()
+    c = torch.zeros((64,), dtype=torch.int32).cuda()
+    a_expected = a.clone() + 1
+    a_original = a.clone()
+    iterated_gemm(a, c)
+
+    assert torch.equal(c, a_original)
+    assert torch.equal(a, a_expected)
+
+
+@require_e2e
 @pytest.mark.parametrize("shape", [(64, 4)])
-def test_atomic_add(shape):
+def test_dyn_atomic_add(shape):
     # Input sizes
     NUMEL = tkl.sym.NUMEL
     NUM_EXPERTS = tkl.sym.NUM_EXPERTS
