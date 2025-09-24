@@ -272,8 +272,7 @@ def create_transpose_reads(
                 load_elems_per_thread,
                 mapping=mapping,
                 mapping_dynamic_vals=read.mapping_dynamic_vals,
-            ).add_to_graph(read.graph)
-            new_read.location = read.location
+            ).add_to_graph(read.graph, loc=read.location)
             new_read.index = read_index
             new_read.vector_shapes = read.vector_shapes
             new_read_custom = get_custom(new_read)
@@ -309,12 +308,14 @@ def create_transpose_writes(
         with write.graph.inserting_before(write.fx_node):
             values = []
             for j in range(store_elems_per_thread):
-                value = Extract(new_reads[j], [i]).add_to_graph(write.graph)
-                value.location = write.location
+                value = Extract(new_reads[j], [i]).add_to_graph(
+                    write.graph, loc=write.location
+                )
                 values.append(value)
 
-            value = Reshape(values, store_elems_per_thread).add_to_graph(write.graph)
-            value.location = write.location
+            value = Reshape(values, store_elems_per_thread).add_to_graph(
+                write.graph, loc=write.location
+            )
             repacked.append(value)
 
     new_writes = defaultdict(list)
@@ -349,8 +350,7 @@ def create_transpose_writes(
                 store_elems_per_thread,
                 mapping=write.mapping,
                 mapping_dynamic_vals=write.mapping_dynamic_vals,
-            ).add_to_graph(write.graph)
-            new_write.location = write.location
+            ).add_to_graph(write.graph, loc=write.location)
             new_write.index = store_index
             new_write.vector_shapes = write.vector_shapes
             new_writes[write.memory].append(new_write)

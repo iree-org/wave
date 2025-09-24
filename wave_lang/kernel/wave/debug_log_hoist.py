@@ -51,8 +51,9 @@ def debug_log_hoist(trace: CapturedTrace, debug_handlers: list[Any]):
                 debug_handlers.append(custom.handler)
             placeholder_name = custom.label or f"debug_log_output_{index}"
             type_expr = None
-            placeholder = Placeholder(placeholder_name, type_expr).add_to_graph(root)
-            placeholder.location = debug_op.location
+            placeholder = Placeholder(placeholder_name, type_expr).add_to_graph(
+                root, loc=debug_op.location
+            )
             custom.fx_node.memory = placeholder
             placeholder.meta["debug_output_arg_id"] = index
             placeholder.meta["symbol_name"] = placeholder_name
@@ -130,8 +131,7 @@ def debug_log_write_replace(
                 doc.memory,
                 mapping=mapping,
                 mapping_dynamic_vals=doc.mapping_dynamic_vals,
-            ).add_to_graph(graph)
-            new_write.location = debug_op.location
+            ).add_to_graph(graph, loc=debug_op.location)
             get_custom(new_write).infer_type()
         doc.erase()
 

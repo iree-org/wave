@@ -211,9 +211,8 @@ def add_nodes_by_schedule(
 
         if pipelining_stage == PipelineStage.KERNEL and use_scheduling_barriers:
             barrier_node = SchedulingGroupBarrier(instructions, 0).add_to_graph(
-                reduction_graph
+                reduction_graph, loc=reduction.location
             )
-            barrier_node.location = reduction.location
 
 
 def push_placeholders(
@@ -250,8 +249,7 @@ def add_missing_registers(graph: fx.Graph):
                 with custom.graph.inserting_before(node):
                     register = NewRegister(
                         acc.shape, acc.dtype, acc.value
-                    ).add_to_graph(custom.graph)
-                    register.location = custom.location
+                    ).add_to_graph(custom.graph, loc=custom.location)
                     register.index = acc.index
                     custom.update_arg("acc", register)
 
@@ -283,9 +281,8 @@ def populate_kernel_outer_vars(
         for node in new_nodes:
             custom = get_custom(node)
             iter_arg = IterArg(f"outer_rotating_reg_{counter}").add_to_graph(
-                pipelined_reduction_graph
+                pipelined_reduction_graph, loc=get_custom(orig_node).location
             )
-            iter_arg.location = get_custom(orig_node).location
             iter_arg.type = custom.type
             iter_arg.index = custom.index
             iter_arg.iter_idx = counter
@@ -316,8 +313,8 @@ def populate_epilogue_outer_vars(
             result = GetResult(pipelined_reduction.fx_node, counter).add_to_graph(
                 pipelined_reduction.graph,
                 type=custom.type,
+                loc=pipelined_reduction.location,
             )
-            result.location = pipelined_reduction.location
             counter += 1
             new_results.append(result)
 
@@ -474,8 +471,9 @@ def push_rotating_registers(
             if create_new_nodes:
                 mapped_stage = stage + len(registers) - i
                 mapped_iteration = arg_context.get_kernel_iteration(mapped_stage)
-                iter_arg = IterArg(f"rotating_reg_{count}").add_to_graph(graph)
-                iter_arg.location = get_custom(node).location
+                iter_arg = IterArg(f"rotating_reg_{count}").add_to_graph(
+                    graph, loc=get_custom(node).location
+                )
                 iter_arg.type = get_custom(node).type
                 iter_arg.index = get_custom(node).index
                 iter_arg.iter_idx = iter_arg_count
@@ -535,8 +533,7 @@ def construct_kernel(
             step=reduction.step,
             subgraph_name="pipelined_iterate",
             implicit_captures=reduction.implicit_captures,
-        ).add_to_graph(reduction.graph, type=reduction.type)
-        pipelined_reduction.location = reduction.location
+        ).add_to_graph(reduction.graph, type=reduction.type, loc=reduction.location)
         pipelined_reduction.index = reduction.index
         pipelined_reduction_graph = fx.Graph()
         reduction.graph.subgraphs["pipelined_iterate"] = pipelined_reduction_graph
@@ -554,8 +551,9 @@ def construct_kernel(
         # Do this for all stages, since the original iter args are "dummy" nodes
         # during scheduling.
         for node in arg_context.iter_args:
-            iter_arg = IterArg(node.name).add_to_graph(pipelined_reduction_graph)
-            iter_arg.location = get_custom(node).location
+            iter_arg = IterArg(node.name).add_to_graph(
+                pipelined_reduction_graph, loc=get_custom(node).location
+            )
             iter_arg.type = get_custom(node).type
             iter_arg.index = get_custom(node).index
             iter_arg.iter_idx = get_custom(node).iter_idx
@@ -596,8 +594,9 @@ def construct_kernel(
 
         return_vals.extend(outer_results)
 
-        output_node = Output(return_vals).add_to_graph(pipelined_reduction_graph)
-        output_node.location = reduction.location
+        output_node = Output(return_vals).add_to_graph(
+            pipelined_reduction_graph, loc=reduction.location
+        )
         reduction.replace_all_uses_with(pipelined_reduction)
 
         if visualize:
@@ -673,9 +672,10 @@ def construct_epilogue(
             existing_get_results[-1].fx_node.next
         ):
             result = GetResult(pipelined_reduction.fx_node, i).add_to_graph(
-                pipelined_reduction.graph, type=iter_args[i].type
+                pipelined_reduction.graph,
+                type=iter_args[i].type,
+                loc=pipelined_reduction.location,
             )
-            result.location = pipelined_reduction.location
             existing_get_results.append(get_custom(result))
             last_get_result = result
 
@@ -695,8 +695,8 @@ def construct_epilogue(
             result = GetResult(pipelined_reduction.fx_node, i + offset).add_to_graph(
                 pipelined_reduction.graph,
                 type=flattened_rotating_registers[i].type,
+                loc=pipelined_reduction.location,
             )
-            result.location = pipelined_reduction.location
             rotating_registers_get_results.append(result)
         rotating_registers = unflatten_dict_values(
             num_rotating_registers, rotating_registers_get_results

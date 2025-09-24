@@ -264,8 +264,7 @@ def emit_global_to_lds(
                 read.mapping,
                 write.mapping,
                 bounds,
-            ).add_to_graph(write.graph)
-            new_write.location = write.location
+            ).add_to_graph(write.graph, loc=write.location)
 
         if i == 0:
             commmon_id = id(new_write)

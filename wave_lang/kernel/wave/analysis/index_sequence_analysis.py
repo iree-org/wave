@@ -973,7 +973,7 @@ def create_broadcast(
     with op.graph.inserting_before(op.fx_node):
         broadcasted = Broadcast(
             to_broadcast.fx_node, target_node.type.symbolic_shape
-        ).add_to_graph(op.graph)
+        ).add_to_graph(op.graph, loc=op.location)
         broadcasted.location = op.location
         custom = get_custom(broadcasted)
         custom.vector_shapes = op.vector_shapes

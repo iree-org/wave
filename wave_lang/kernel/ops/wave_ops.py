@@ -530,7 +530,12 @@ class CustomOp(ABC):
         vars_str = ", ".join(vars_list)
         return f"{self.tkw_op_name}({vars_str}) type({self.fx_node.type})"
 
-    def add_to_graph(self, region_graph: RegionGraph, type: Any = None) -> fx.Node:
+    def add_to_graph(
+        self,
+        region_graph: RegionGraph,
+        type: Any = None,
+        loc: Optional[CapturedLocation] = None,
+    ) -> fx.Node:
         arg_list = tuple([value for _, value in vars(self).items()])
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
@@ -542,6 +547,8 @@ class CustomOp(ABC):
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
         self.fx_node.index = None
+        if loc is not None:
+            self.fx_node.location = loc
         if type is None:
             get_custom(self.fx_node).infer_type()
         else:
@@ -1099,7 +1106,9 @@ class Output(CustomOp):
         instance.graph = node.graph
         return instance
 
-    def add_to_graph(self, region_graph: RegionGraph) -> fx.Node:
+    def add_to_graph(
+        self, region_graph: RegionGraph, loc: Optional[CapturedLocation] = None
+    ) -> fx.Node:
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
             "output",
@@ -1109,6 +1118,8 @@ class Output(CustomOp):
         )
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
+        if loc is not None:
+            self.fx_node.location = loc
         return self.fx_node
 
     @property
@@ -1133,11 +1144,15 @@ class Placeholder(CustomOp):
         instance.graph = node.graph
         return instance
 
-    def add_to_graph(self, region_graph: RegionGraph) -> fx.Node:
+    def add_to_graph(
+        self, region_graph: RegionGraph, loc: Optional[CapturedLocation] = None
+    ) -> fx.Node:
         self.graph = region_graph
         self.fx_node = region_graph.create_node("placeholder", target=self._name)
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
+        if loc is not None:
+            self.fx_node.location = loc
         return self.fx_node
 
     def custom_string(self, value_map: dict[str, str]) -> str:

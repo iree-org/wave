@@ -234,9 +234,8 @@ def add_optimized_nodes(
         for i in range(expected_number_of_loads):
             with custom.graph.inserting_before(custom.fx_node):
                 read = Read(memory, load_elems_per_thread, custom.mapping).add_to_graph(
-                    custom.graph
+                    custom.graph, loc=custom.location
                 )
-                read.location = custom.location
                 global_offset = (
                     hardware_constraint.linearized_thread_id * load_elems_per_thread
                     + i * max_elements_per_load
@@ -266,8 +265,7 @@ def add_optimized_nodes(
                     ):
                         write = Write(
                             read, custom_user.memory, load_elems_per_thread
-                        ).add_to_graph(custom.graph)
-                        write.location = custom.location
+                        ).add_to_graph(custom.graph, loc=custom.location)
                         write.index = read.index
                         optimized_writes[custom_user.memory].append(write)
                         write.vector_shapes = custom.vector_shapes

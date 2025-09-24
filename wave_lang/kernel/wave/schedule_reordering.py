@@ -425,13 +425,13 @@ def insert_prefetch_loop_barriers(custom_iterate, cluster_graph, clusters):
     """
     graph = custom_iterate.graph
     with graph.inserting_before(custom_iterate.fx_node):
-        barrier = SharedMemoryBarrier().add_to_graph(graph)
-        barrier.location = custom_iterate.location
+        barrier = SharedMemoryBarrier().add_to_graph(graph, loc=custom_iterate.location)
     # TODO: Replace this with just lgmkcnt or change lowering of
     # SharedMemoryBarrier to only do lgmkcnt w/os sbarrier
     with cluster_graph.inserting_before(cluster_graph.output_node()):
-        barrier = SharedMemoryBarrier().add_to_graph(cluster_graph)
-        barrier.location = custom_iterate.location
+        barrier = SharedMemoryBarrier().add_to_graph(
+            cluster_graph, loc=custom_iterate.location
+        )
         clusters.append(barrier)
     return
 
@@ -891,8 +891,8 @@ def _create_qk_softmax_cluster(
     """Create cluster for QK computation and softmax1."""
     clusters = []
 
-    context_location = (mma0_nodes and mma0_nodes[0].location) or (
-        softmax1_nodes and softmax1_nodes[0].location
+    context_location = (mma0_nodes and get_custom(mma0_nodes[0]).location) or (
+        softmax1_nodes and get_custom(softmax1_nodes[0]).location
     )
 
     # Set wave priority for QK computation
@@ -926,9 +926,9 @@ def _create_k_data_movement_cluster(
     clusters = []
 
     context_location = (
-        (global_load_k and global_load_k[0].location)
-        or (local_write_k and local_write_k[0].location)
-        or (local_load_v and local_load_v[0].location)
+        (global_load_k and get_custom(global_load_k[0]).location)
+        or (local_write_k and get_custom(local_write_k[0]).location)
+        or (local_load_v and get_custom(local_load_v[0]).location)
     )
 
     # Global load K, local write K
@@ -953,8 +953,8 @@ def _create_pv_softmax_cluster(
     """Create cluster for PV computation and softmax0."""
     clusters = []
 
-    context_location = (mma1_nodes and mma1_nodes[0].location) or (
-        softmax0_nodes and softmax0_nodes[0].location
+    context_location = (mma1_nodes and get_custom(mma1_nodes[0]).location) or (
+        softmax0_nodes and get_custom(softmax0_nodes[0]).location
     )
 
     # Set wave priority for PV computation
@@ -988,9 +988,9 @@ def _create_v_data_movement_cluster(
     clusters = []
 
     context_location = (
-        (global_load_v and global_load_v[0].location)
-        or (local_write_v and local_write_v[0].location)
-        or (local_load_k and local_load_k[0].location)
+        (global_load_v and get_custom(global_load_v[0]).location)
+        or (local_write_v and get_custom(local_write_v[0]).location)
+        or (local_load_k and get_custom(local_load_k[0]).location)
     )
 
     # Global load V, local write V
