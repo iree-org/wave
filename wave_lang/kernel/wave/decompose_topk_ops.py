@@ -12,7 +12,7 @@ import torch.fx as fx
 import wave_lang.kernel.lang as tkl
 
 from .._support.tracing import CapturedTrace
-from .._support.indexing import IndexSequence, IndexingContext
+from .._support.indexing import IndexSequence, IndexingContext, IndexExpr
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     Broadcast,
@@ -34,8 +34,6 @@ from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
     TilingConstraint,
-    WaveConstraint,
-    WorkgroupConstraint,
 )
 from .utils.classes import ShuffleMode
 from .utils.general_utils import all_equal
@@ -212,20 +210,313 @@ def emit_intrawave_topk_reduction(
     return init_val, final_idx_broadcast_node
 
 
+def validate_topk_sources(
+    topk_src: list[fx.Node],
+    reduction_dim,
+) -> int:
+    """
+    Validation checks for topk sources.
+
+    Args:
+        topk_src: List of topk source nodes
+        reduction_dim: The dimension to reduce over
+
+    Returns:
+        local_reduce_size: The size of local reduction
+    """
+    if not get_custom(topk_src[0]).type.symbolic_shape:
+        raise ValueError(f"No symbolic shape found for topk source {topk_src[0]}")
+    src_fastest_dims = [get_custom(arg).type.symbolic_shape[-1] for arg in topk_src]
+    if not all_equal(src_fastest_dims):
+        raise NotImplementedError("NYI: Expect all topk_src to have same fastest dim.")
+    if reduction_dim is not src_fastest_dims[0]:
+        raise NotImplementedError(
+            f"Only implemented topk on fastest dimension. Got {reduction_dim} and {src_fastest_dims}."
+        )
+
+    get_thread_shape = lambda index: max(subs_idxc(x.size) for x in index.values())
+    local_reduce_sizes = []
+    for arg in topk_src:
+        try:
+            op = get_custom(arg)
+            thread_shape = get_thread_shape(op.index)
+            local_reduce_sizes.append(thread_shape)
+        except Exception as e:
+            index_str = "\n".join(f"{k}: {v}" for k, v in op.index.items())
+            raise RuntimeError(
+                f"Error in decompose_topk_ops: {arg} with index\n"
+                f"{index_str}\n{topk_src=}\n{reduction_dim=}"
+            ) from e
+
+    if not all_equal(local_reduce_sizes):
+        raise NotImplementedError(
+            "NYI: Expect all topk_src to have same local reduce size."
+        )
+
+    return local_reduce_sizes[0]
+
+
+def generate_initial_indices(
+    topk_src: list[fx.Node],
+    reduction_dim,
+    local_reduce_size: int,
+    constraints: list[Constraint],
+    graph: fx.Graph,
+) -> list[fx.Node]:
+    """
+    Generate initial indices using SelfIndex.
+
+    Args:
+        topk_src: List of topk source nodes
+        reduction_dim: The dimension to reduce over
+        local_reduce_size: Size of local reduction
+        constraints: List of constraints from the trace
+        graph: FX graph to add nodes to
+
+    Returns:
+        List of self index nodes
+    """
+    self_indices = []
+    for register_idx, src in enumerate(topk_src):
+        src_custom = get_custom(src)
+        self_index = SelfIndex(dim=reduction_dim, dtype=tkl.i32)
+        index_node = get_graph_node(self_index, graph)
+        src_register_size = subs_idxc(src_custom.index[reduction_dim].size)
+        get_custom(index_node).index = construct_self_index_index_sequence(
+            reduction_dim,
+            local_reduce_size,
+            constraints,
+            register_idx,
+            src_register_size,
+        )
+        self_indices.append(index_node)
+    return self_indices
+
+
+def perform_topk_reductions(
+    working_src: list[fx.Node],
+    self_indices: list[fx.Node],
+    k_size: int,
+    reduction_dim,
+    local_reduce_size: int,
+    binary_fn: Callable,
+    graph: fx.Graph,
+    node: fx.Node,
+    subgroup_size: int,
+    induction_vars: list,
+) -> tuple[list[fx.Node], list[fx.Node]]:
+    """
+    For each k from 0 to K-1:
+      a. Local TopK: Each thread finds the local maximum and its index.
+      b. Intrawave TopK: Each thread finds the global maximum across threads
+         using butterfly shuffle, tracking both values and indices.
+      c. Keep track of the top value and index register nodes.
+      d. Mask out the value at the found index to exclude it from future iterations.
+
+    Args:
+        working_src: Working copy of source nodes (will be modified)
+        self_indices: Self index nodes
+        k_size: Number of top-k elements to find
+        reduction_dim: The dimension to reduce over
+        local_reduce_size: Size of local reduction
+        binary_fn: Binary function for comparison
+        graph: FX graph to add nodes to
+        node: Original topk node (for vector_shapes)
+        subgroup_size: Number of threads per wave
+        induction_vars: Induction variables from tiling constraints
+
+    Returns:
+        Tuple of (top_value_registers, top_index_registers)
+    """
+    # Collect the top values and registers for later packing.
+    top_value_registers = []
+    top_index_registers = []
+
+    cluster_size, cluster_stride = (None, None)
+
+    # We emit the reduction K times to get the top K elements.  This
+    # requires a static K.  A better next approach would be to emit a
+    # loop.
+    for k in range(k_size):
+        local_val, local_idx = emit_local_topk_reduction(
+            binary_fn,
+            working_src,
+            self_indices,
+            graph,
+            local_reduce_size,
+        )
+
+        if not cluster_size:
+            cluster_size, cluster_stride = determine_shuffle_config(
+                working_src[0].index,
+                reduction_dim,
+                node.vector_shapes,
+                subgroup_size,
+                induction_vars,
+            )
+        global_val, global_idx = emit_intrawave_topk_reduction(
+            binary_fn,
+            local_val,
+            local_idx,
+            graph,
+            subgroup_size,
+            cluster_size,
+            cluster_stride,
+        )
+
+        top_value_registers.append(global_val)
+        top_index_registers.append(global_idx)
+
+        # Masking: set the found maximum value to negative infinity for next iteration
+        if k < k_size - 1:
+            dtype = get_custom(working_src[0]).type.dtype
+            neg_inf_constant = NewScalar(dtype=dtype, value=float("-inf"))
+            neg_inf_node = get_graph_node(neg_inf_constant, graph)
+
+            for i, src in enumerate(working_src):
+                src_custom = get_custom(src)
+                global_idx_broadcast = get_graph_node(
+                    Broadcast(global_idx, (reduction_dim,)), graph
+                )
+                get_custom(global_idx_broadcast).index = get_custom(
+                    self_indices[i]
+                ).index
+                is_at_max_index = get_graph_node(
+                    Eq(self_indices[i], global_idx_broadcast), graph
+                )
+                is_at_max_index.index = self_indices[i].index
+
+                src = get_graph_node(
+                    SelectOp(is_at_max_index, neg_inf_node, src), graph
+                )
+                get_custom(src).index = get_custom(working_src[i]).index
+                resolve_broadcasting_for_op(
+                    get_custom(src), ["cond", "if_true", "if_false"]
+                )
+
+                working_src[i] = src
+
+    return top_value_registers, top_index_registers
+
+
+def pack_topk_results(
+    top_value_registers: list[fx.Node],
+    top_index_registers: list[fx.Node],
+    topk_src: list[fx.Node],
+    custom,
+    k_size: int,
+    graph: fx.Graph,
+) -> tuple[fx.Node, fx.Node]:
+    """
+    Pack the collected register nodes into vector registers of K elements.
+
+    Args:
+        top_value_registers: List of top value nodes
+        top_index_registers: List of top index nodes
+        topk_src: Original topk source nodes
+        custom: Custom op for the topk node
+        k_size: Number of top-k elements
+        graph: FX graph to add nodes to
+
+    Returns:
+        Tuple of (final_values, final_indices)
+    """
+    # Pack the collected register nodes into vector registers of K elements
+    target_shape = {custom.k_dim: k_size}
+    final_values = get_graph_node(Reshape(top_value_registers, target_shape), graph)
+    final_indices = get_graph_node(Reshape(top_index_registers, target_shape), graph)
+
+    # Create index using same keys as original input topk_src
+    original_index = get_custom(topk_src[0]).index
+    final_values_index = {}
+    for dim in original_index.keys():
+        final_values_index[dim] = IndexSequence(0, 1, 1)
+    get_custom(final_values).index = final_values_index
+    get_custom(final_indices).index = final_values_index.copy()
+
+    custom.type = [
+        get_custom(final_values).type,
+        get_custom(final_indices).type,
+    ]
+
+    # Store the computed results on the fx node for handle_topk_get_results
+    custom.fx_node.decomposed_values = final_values
+    custom.fx_node.decomposed_indices = final_indices
+
+    return final_values, final_indices
+
+
+def decompose_topk_op(
+    node: fx.Node,
+    constraints: list[Constraint],
+    subgroup_size: int,
+    induction_vars: list[IndexExpr | None],
+) -> None:
+    """
+    Decompose a single topk operation.
+
+      1. Validation checks.
+      2. Generate initial indices using SelfIndex.
+      3. Do topk reduction to a lists of single-element registers for indices and values.
+      4. Pack the collected register nodes into vector registers of K elements.
+
+    Args:
+        node: The topk node to decompose
+        constraints: List of constraints from the trace
+        subgroup_size: Number of threads per wave
+        induction_vars: Induction variables from tiling constraints
+    """
+    custom = get_custom(node)
+    with custom.graph.inserting_before(custom.fx_node):
+        topk_src = custom.arg
+        k_size = subs_idxc(custom.k_dim)
+        reduction_dim = custom.dim_to_reduce
+        # TODO - can add arg for max/min
+        binary_fn = Maximum
+
+        if not isinstance(topk_src, (list, tuple)):
+            topk_src = [topk_src]
+
+        working_src = list(topk_src)
+
+        local_reduce_size = validate_topk_sources(topk_src, reduction_dim)
+
+        self_indices = generate_initial_indices(
+            topk_src, reduction_dim, local_reduce_size, constraints, custom.graph
+        )
+
+        top_value_registers, top_index_registers = perform_topk_reductions(
+            working_src,
+            self_indices,
+            k_size,
+            reduction_dim,
+            local_reduce_size,
+            binary_fn,
+            custom.graph,
+            node,
+            subgroup_size,
+            induction_vars,
+        )
+
+        pack_topk_results(
+            top_value_registers,
+            top_index_registers,
+            topk_src,
+            custom,
+            k_size,
+            custom.graph,
+        )
+
+        # Don't delete the TopkOp yet - instead we handle the GetResult ops
+        # that target them, and remove them together.
+
+
 def decompose_topk_ops(
     trace: CapturedTrace,
     constraints: list[Constraint],
 ):
     """
-    The lowering for topk operations:
-      1. Generate initial indices using SelfIndex for each source.
-      2. For each k from 0 to K-1:
-         a. Local TopK: Each thread finds the local maximum and its index.
-         b. Intrawave TopK: Each thread finds the global maximum across threads
-            using butterfly shuffle, tracking both values and indices.
-         c. Keep track of the top value and index register nodes.
-         d. Mask out the value at the found index to exclude it from future iterations.
-      3. Pack the collected register nodes into vector registers of K elements.
+    The lowering for topk operations.  The meat is in `decompose_topk_op`.
     """
     topk_nodes = trace.walk(lambda node: isinstance(get_custom(node), TopkOp))
     if not topk_nodes:
@@ -238,186 +529,10 @@ def decompose_topk_ops(
         c.induction_var for c in constraints if isinstance(c, TilingConstraint)
     ]
 
-    wave_constraint_map = {
-        c.dim: c for c in constraints if isinstance(c, WaveConstraint)
-    }
-    workgroup_constraint_map = {
-        c.dim: c for c in constraints if isinstance(c, WorkgroupConstraint)
-    }
     subgroup_size = hardware_constraint.threads_per_wave
 
-    lane_id = (
-        hardware_constraint.linearized_thread_id % hardware_constraint.threads_per_wave
-    )
-
     for node in topk_nodes:
-        custom = get_custom(node)
-        with custom.graph.inserting_before(custom.fx_node):
-            topk_src = custom.arg
-            k_size = subs_idxc(custom.k_dim)
-            reduction_dim = custom.dim_to_reduce
-            # TODO - can add arg for max/min
-            binary_fn = Maximum
-
-            if not isinstance(topk_src, (list, tuple)):
-                topk_src = [topk_src]
-
-            working_src = list(topk_src)
-
-            # Will generate initial indices for each source using SelfIndex after calculating local_reduce_sizes
-            self_indices = []
-
-            if not get_custom(topk_src[0]).type.symbolic_shape:
-                raise ValueError(
-                    f"No symbolic shape found for topk source {topk_src[0]}"
-                )
-            src_fastest_dims = [
-                get_custom(arg).type.symbolic_shape[-1] for arg in topk_src
-            ]
-            if not all_equal(src_fastest_dims):
-                raise NotImplementedError(
-                    "NYI: Expect all topk_src to have same fastest dim."
-                )
-            if reduction_dim is not src_fastest_dims[0]:
-                raise NotImplementedError(
-                    f"Only implemented topk on fastest dimension. Got {reduction_dim} and {src_fastest_dims}."
-                    f"\n{custom}"
-                )
-
-            get_thread_shape = lambda index: max(
-                subs_idxc(x.size) for x in index.values()
-            )
-            local_reduce_sizes = []
-            for arg in topk_src:
-                try:
-                    op = get_custom(arg)
-
-                    thread_shape = get_thread_shape(op.index)
-                    local_reduce_sizes.append(thread_shape)
-                except Exception as e:
-                    index_str = "\n".join(f"{k}: {v}" for k, v in op.index.items())
-                    raise RuntimeError(
-                        f"Error in decompose_topk_ops: {arg} with index\n"
-                        f"{index_str}\n{topk_src=}\n{reduction_dim=}"
-                    ) from e
-
-            if not all_equal(local_reduce_sizes):
-                raise NotImplementedError(
-                    "NYI: Expect all topk_src to have same local reduce size."
-                )
-
-            for register_idx, src in enumerate(topk_src):
-                src_custom = get_custom(src)
-                self_index = SelfIndex(dim=reduction_dim, dtype=tkl.i32)
-                index_node = get_graph_node(self_index, custom.graph)
-                src_register_size = subs_idxc(src_custom.index[reduction_dim].size)
-                get_custom(index_node).index = construct_self_index_index_sequence(
-                    reduction_dim,
-                    local_reduce_sizes[0],
-                    constraints,
-                    register_idx,
-                    src_register_size,
-                )
-                self_indices.append(index_node)
-
-            dtype = get_custom(topk_src[0]).type.dtype
-
-            # Collect the top values and registers for later packing.
-            top_value_registers = []
-            top_index_registers = []
-
-            cluster_size, cluster_stride = (None, None)
-
-            # We emit the reduction K times to get the top K elements.  This
-            # requires a static K.  A better next approach would be to emit a
-            # loop.
-            for k in range(k_size):
-                local_val, local_idx = emit_local_topk_reduction(
-                    binary_fn,
-                    working_src,
-                    self_indices,
-                    custom.graph,
-                    local_reduce_sizes[0],
-                )
-
-                if not cluster_size:
-                    cluster_size, cluster_stride = determine_shuffle_config(
-                        working_src[0].index,
-                        reduction_dim,
-                        node.vector_shapes,
-                        subgroup_size,
-                        induction_vars,
-                    )
-                global_val, global_idx = emit_intrawave_topk_reduction(
-                    binary_fn,
-                    local_val,
-                    local_idx,
-                    custom.graph,
-                    subgroup_size,
-                    cluster_size,
-                    cluster_stride,
-                )
-
-                top_value_registers.append(global_val)
-                top_index_registers.append(global_idx)
-
-                # Masking: set the found maximum value to negative infinity for next iteration
-                if k < k_size - 1:
-                    dtype = get_custom(working_src[0]).type.dtype
-                    neg_inf_constant = NewScalar(dtype=dtype, value=float("-inf"))
-                    neg_inf_node = get_graph_node(neg_inf_constant, custom.graph)
-
-                    for i, src in enumerate(working_src):
-                        src_custom = get_custom(src)
-                        global_idx_broadcast = get_graph_node(
-                            Broadcast(global_idx, (reduction_dim,)), custom.graph
-                        )
-                        get_custom(global_idx_broadcast).index = get_custom(
-                            self_indices[i]
-                        ).index
-                        is_at_max_index = get_graph_node(
-                            Eq(self_indices[i], global_idx_broadcast), custom.graph
-                        )
-                        is_at_max_index.index = self_indices[i].index
-
-                        src = get_graph_node(
-                            SelectOp(is_at_max_index, neg_inf_node, src), custom.graph
-                        )
-                        get_custom(src).index = get_custom(working_src[i]).index
-                        resolve_broadcasting_for_op(
-                            get_custom(src), ["cond", "if_true", "if_false"]
-                        )
-
-                        working_src[i] = src
-
-            # Pack the collected register nodes into vector registers of K elements
-            target_shape = {custom.k_dim: k_size}
-            final_values = get_graph_node(
-                Reshape(top_value_registers, target_shape), custom.graph
-            )
-            final_indices = get_graph_node(
-                Reshape(top_index_registers, target_shape), custom.graph
-            )
-
-            # Create index using same keys as original input topk_src
-            original_index = get_custom(topk_src[0]).index
-            final_values_index = {}
-            for dim in original_index.keys():
-                final_values_index[dim] = IndexSequence(0, 1, 1)
-            get_custom(final_values).index = final_values_index
-            get_custom(final_indices).index = final_values_index.copy()
-
-            custom.type = [
-                get_custom(final_values).type,
-                get_custom(final_indices).type,
-            ]
-
-            # Store the computed results on the fx node for handle_topk_get_results
-            custom.fx_node.decomposed_values = final_values
-            custom.fx_node.decomposed_indices = final_indices
-
-            # Don't delete the TopkOp yet - instead we handle the GetResult ops
-            # that target them, and remove them together.
+        decompose_topk_op(node, constraints, subgroup_size, induction_vars)
 
     # After decomposing topk ops, handle GetResult operations
     handle_topk_get_results(trace)
