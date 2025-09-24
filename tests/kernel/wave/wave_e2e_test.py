@@ -2408,6 +2408,7 @@ def test_debug_log_iteration_dims():
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 def test_no_map_atomic_add():
     M = tkl.sym.M
     B = tkl.sym.B
@@ -2470,6 +2471,7 @@ def test_no_map_atomic_add():
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", [(64, 4)])
 def test_dyn_atomic_add(shape):
     # Input sizes
