@@ -960,6 +960,7 @@ def get_index(custom: CustomOp):
 
 def create_broadcast(
     op: CustomOp,
+    to_broadcast: CustomOp,
     to_broadcast_arg_name: str,
     broadcast_dim: IndexSymbol,
     broadcast_size: int,
@@ -968,7 +969,6 @@ def create_broadcast(
     """
     Create a broadcast node for any multi-operand operator.
     """
-    to_broadcast = get_custom(getattr(op, to_broadcast_arg_name))
 
     with op.graph.inserting_before(op.fx_node):
         broadcasted = Broadcast(
@@ -1048,6 +1048,7 @@ def resolve_broadcasting_for_op(
 
                 create_broadcast(
                     custom,
+                    operand["custom"],
                     operand["id"],
                     target["dim"],
                     target["size"],
