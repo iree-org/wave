@@ -5,7 +5,7 @@ from typing import Any, Optional, Callable, Sequence
 import torch
 
 from wave_lang.kernel.lang import IndexSymbol
-from wave_lang.support.ir_imports import Module
+from wave_lang.support.ir_imports import Module, stream_d
 
 from .._support.indexing import IndexingContext
 from ...support.location_config import LocationCaptureLevel
@@ -25,7 +25,7 @@ from .utils.run_utils import (
     invoke_with_wave_runtime,
     get_benchmark_flags,
 )
-from .water import water_leak_in_bounds_check, _deiree
+from .water import water_leak_in_bounds_check
 from wave_lang.runtime.launch import Launchable
 from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
 from .profiling import benchmark_module
@@ -296,7 +296,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
 
         bound_scalar_symbols = kernel.bound_scalar_symbols
         symbols_args_map = kernel.symbols_args_map
-        if is_cache_enabled():
+        if is_cache_enabled() and not options.override_mlir:
             cache_manager = get_cache_manager()
             options.kernel_hash = cache_manager.get_hash(
                 kernel.constraints,
@@ -343,14 +343,26 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             device_layout,
         ) = kernel._trace_and_get_kernel_signature(options)
 
-        module_op = Module.parse(_deiree(mb.module_op), context=mb.module_op.context)
-        (
-            mb,
-            _,
-            exe,
-            kernel_sig,
-            entrypoint_name,
-        ) = kernel.compile_to_mlir(trace=graph, context=None, module_op=module_op, options=options)
+        if options.override_mlir:
+            overriding_module_op = Module.parse(
+                options.override_mlir, context=mb.module_op.context
+            )
+            if not isinstance(
+                overriding_module_op.operation.regions[0].blocks[0].operations[0],
+                stream_d.ExecutableOp,
+            ):
+                (
+                    mb,
+                    _,
+                    exe,
+                    kernel_sig,
+                    entrypoint_name,
+                ) = kernel.compile_to_mlir(
+                    trace=graph,
+                    context=None,
+                    module_op=overriding_module_op,
+                    options=options,
+                )
 
         options.kernel_sig = kernel_sig
 
@@ -403,8 +415,8 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 ),
             )
 
-        if options.override_mlir:
-            asm = options.override_mlir
+        # if options.override_mlir:
+        #     asm = options.override_mlir
 
         if options.compile_to_mlir:
             return cls(

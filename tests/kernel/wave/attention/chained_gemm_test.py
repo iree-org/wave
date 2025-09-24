@@ -126,7 +126,7 @@ def testChainedGemm(
 
     batch, q_seq_len, v_head_dim, qk_head_dim, kv_seq_len = shape
     hyperparams = {
-        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         LOAD_ELEMS_PER_THREAD: get_mfma_load_elems_per_thread(mfma_variant),
         STORE_ELEMS_PER_THREAD: get_mfma_store_elems_per_thread(mfma_variant),
         BLOCK_B: 1,
