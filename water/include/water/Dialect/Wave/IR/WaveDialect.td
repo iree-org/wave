@@ -51,16 +51,19 @@ def WaveDialect : Dialect {
   let hasOperationAttrVerify = 1;
 
   let extraClassDeclaration = [{
-    // The name of a hyperparameter attribute.
+    // Name of a hyperparameter attribute.
     const static constexpr ::llvm::StringLiteral kHyperparameterAttrName =
         "wave.hyperparameters";
 
-    // The name of the normal form attribute.
+    // Name of the normal form attribute.
     const static constexpr ::llvm::StringLiteral kNormalFormAttrName =
         "wave.normal_form";
 
-    // The name of the inherent attribute for op index expressions;
+    // Name of the inherent attribute for op index expressions;
     const static constexpr ::llvm::StringLiteral kIndexExprAttrName = "index";
+
+    // Name of the attribute specifying the number of elements per thread.
+    const static constexpr ::llvm::StringLiteral kElementsPerThreadAttrName = "wave.elements_per_thread";
 
     // Registration functions. The bodies of these must be placed in the file
     // containing private implementations of attributes and types, respectively.

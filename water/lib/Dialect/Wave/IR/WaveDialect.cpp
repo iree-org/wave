@@ -142,6 +142,12 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
 
     return llvm::success();
   }
+  if (attr.getName() == kElementsPerThreadAttrName) {
+    if (!llvm::isa<mlir::IntegerAttr>(attr.getValue())) {
+      return op->emitError() << attr.getName() << " expects an IntegerAttr";
+    }
+    return llvm::success();
+  }
   return op->emitError() << "unexpected wave dialect attribute "
                          << attr.getName() << " = " << attr.getValue();
 }
