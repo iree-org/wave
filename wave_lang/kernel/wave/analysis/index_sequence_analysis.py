@@ -34,6 +34,7 @@ from ...ops.wave_ops import (
     Placeholder,
     Read,
     ReduceOp,
+    TopkOp,
     ScaledMMA,
     SelectOp,
     SetWavePrio,
@@ -647,6 +648,11 @@ def should_update_index(
     # Get symbolic shape without any aliased variables.
     aliased_dims = [x.source for x in symbolic_constraints]
 
+    if isinstance(source, TopkOp):
+        # TopkOp's type is a tuple, so it would not work with upcoming logic.
+        # But it does require updating indices.
+        return True
+
     source_dims = [infer_dim(dim) for dim in source.type.symbolic_shape]
     if source.type:
         symbolic_shape = set(source_dims).difference(aliased_dims)
@@ -796,7 +802,7 @@ def set_thread_dependent_index_from_read_write(
 
 def get_reduce_mapping(
     trace: CapturedTrace, constraints: list[Constraint]
-) -> dict[ReduceOp, dict[IndexSymbol, IndexSequence]]:
+) -> dict[ReduceOp | TopkOp, dict[IndexSymbol, IndexSequence]]:
     """
     Get the mapping of the reduce ops to the index sequence.
 
@@ -818,7 +824,7 @@ def get_reduce_mapping(
     ```
 
     """
-    sources = trace.walk(lambda node: isinstance(get_custom(node), ReduceOp))
+    sources = trace.walk(lambda node: isinstance(get_custom(node), (ReduceOp, TopkOp)))
     hardware_constraint = get_hardware_constraint(constraints)
     workgroup_constraints = get_workgroup_constraints(constraints)
 
@@ -899,13 +905,13 @@ def populate_reduce_source_indices(
 def set_thread_dependent_index_from_reduce(
     constraints: Sequence[Constraint],
     trace: CapturedTrace,
-    reduce_mapping: dict[ReduceOp, dict[IndexSymbol, IndexSequence]],
+    reduce_mapping: dict[ReduceOp | TopkOp, dict[IndexSymbol, IndexSequence]],
 ):
     """
     Set the thread dependent index, rooting on reduce ops.
     """
     hardware_constraint = get_hardware_constraint(constraints)
-    sources = trace.walk(lambda node: isinstance(get_custom(node), ReduceOp))
+    sources = trace.walk(lambda node: isinstance(get_custom(node), (ReduceOp, TopkOp)))
     sources = [get_custom(x) for x in sources]
     assert sources, "No reduce nodes found in the graph."
 
