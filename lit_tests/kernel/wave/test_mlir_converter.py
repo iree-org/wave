@@ -72,7 +72,7 @@ def test_mlir_converter_matrix_add():
     options = WaveCompileOptions(
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
-        print_mlir=True,
+        print_mlir=False,
     )
     options = set_default_run_config(options)
 
