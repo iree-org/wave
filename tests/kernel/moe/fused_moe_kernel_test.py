@@ -53,6 +53,7 @@ def fused_moe_pytorch_reference(
     expert_ids,
     num_tokens_post_padded,
     # Matrix dimensions
+    M,
     N,
     K,
     EM,
@@ -71,7 +72,7 @@ def fused_moe_pytorch_reference(
     dtype = a.dtype
 
     # Initialize output tensor
-    c = torch.zeros(EM, top_k, N, dtype=dtype, device=device)
+    c = torch.zeros(M, top_k, N, dtype=dtype, device=device)
 
     # Process tokens in blocks
     num_blocks = (EM + BLOCK_SIZE_M - 1) // BLOCK_SIZE_M
@@ -113,7 +114,7 @@ def fused_moe_pytorch_reference(
         assert torch.all(original_token_indices < len(a))
 
         # Get input tokens for this block
-        block_a = a[original_token_indices]  # [valid_tokens_in_block, K]
+        block_a = a[original_token_indices, :]  # [valid_tokens_in_block, K]
 
         # Get expert weights and bias
         expert_weights = b[expert_id]  # [K, N]
@@ -201,6 +202,7 @@ def create_test_data(
         "sorted_token_ids": sorted_token_ids,
         "expert_ids": expert_ids,
         "num_tokens_post_padded": num_tokens_post_pad.item(),
+        "M": num_tokens,
         "N": N,
         "K": K,
         "EM": num_tokens_post_pad.item(),
@@ -261,6 +263,7 @@ def test_fused_moe_kernel_reference(
         sorted_token_ids=test_data["sorted_token_ids"],
         expert_ids=test_data["expert_ids"],
         num_tokens_post_padded=test_data["num_tokens_post_padded"],
+        M=test_data["M"],
         N=test_data["N"],
         K=test_data["K"],
         EM=test_data["EM"],
