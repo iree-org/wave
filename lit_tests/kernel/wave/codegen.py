@@ -170,7 +170,6 @@ def test_read_mapped_buffer():
         location_capture_config=LocationCaptureConfig(
             level=LocationCaptureLevel.FILE_LINE_COL
         ),
-        drop_debug_info_before_mlir=True,
     )
     read_mapped_buffer = wave_compile(options, read_mapped_buffer)
     print(read_mapped_buffer.asm)
@@ -212,7 +211,6 @@ def test_read_dynamic_3d_buffer():
         use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
-        drop_debug_info_before_mlir=True,
     )
     read_dynamic_buffer = wave_compile(options, read_dynamic_buffer)
     print(read_dynamic_buffer.asm)
@@ -339,7 +337,6 @@ def test_read_write_masked():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     read_write_masked = wave_compile(options, read_write_masked)
     print(read_write_masked.asm)
@@ -392,7 +389,6 @@ def test_read_write_masked_shared():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     read_write_masked_shared = wave_compile(options, read_write_masked_shared)
     print(read_write_masked_shared.asm)
@@ -1092,7 +1088,6 @@ def test_reduce_sum():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, test)
@@ -1168,7 +1163,6 @@ def test_mutliple_local_reduce_sum():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, test)
@@ -1240,7 +1234,6 @@ def test_reduction_and_elemwise():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, test)
@@ -1329,7 +1322,6 @@ def test_tiled_reduce_max():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, test)
@@ -1420,7 +1412,6 @@ def test_tiled_reduce_min():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, tiled_reduce_min)
@@ -1511,7 +1502,6 @@ def test_tiled_reduce_min_unaligned():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, tiled_reduce_min_unaligned)
@@ -1592,7 +1582,6 @@ def test_multiple_reduction_iv():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, test)
@@ -1692,7 +1681,6 @@ def test_reduce_propagate_broadcast():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test = wave_compile(options, test)
@@ -1766,7 +1754,6 @@ def test_block_reduce_sum():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     test_block_reduce_sum = wave_compile(options, test_block_reduce_sum)
@@ -1843,7 +1830,6 @@ def test_explicit_broadcast():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     explicit_broadcast = wave_compile(options, explicit_broadcast)
@@ -1967,7 +1953,6 @@ def test_broadcast_add():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     broadcast_add = wave_compile(options, broadcast_add)
@@ -2015,7 +2000,6 @@ def test_broadcast_scaled_add():
         canonicalize=True,
         use_buffer_ops=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     options = set_default_compile_config(options)
     broadcast_scaled_add = wave_compile(options, broadcast_scaled_add)
@@ -2274,7 +2258,6 @@ def test_register_codegen_i32():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     register_codegen_i32 = wave_compile(options, register_codegen_i32)
     print(register_codegen_i32.asm)
@@ -2327,7 +2310,6 @@ def test_scalar_codegen_f32():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scalar_codegen_f32 = wave_compile(options, scalar_codegen_f32)
     print(scalar_codegen_f32.asm)
@@ -2386,7 +2368,6 @@ def test_scalar_codegen_i32():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scalar_codegen_i32 = wave_compile(options, scalar_codegen_i32)
     print(scalar_codegen_i32.asm)
@@ -2465,7 +2446,6 @@ def test_scalar_cond_copy():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scalar_cond_copy = wave_compile(options, scalar_cond_copy)
     print(scalar_cond_copy.asm)
@@ -2525,7 +2505,6 @@ def test_scanop_cumsum():
         },
         canonicalize=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scanop_cumsum = wave_compile(options, scanop_cumsum)
     print(scanop_cumsum.asm)
@@ -2615,7 +2594,6 @@ def test_atomic_min():
         use_buffer_ops=False,
         compile_to_mlir=True,
         minimize_shared_allocs=False,
-        drop_debug_info_before_mlir=True,
     )
 
     atomic_min_codegen = wave_compile(options, atomic_min_codegen)

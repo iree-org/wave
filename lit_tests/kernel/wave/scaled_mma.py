@@ -73,7 +73,6 @@ def test_mxfp4_scaled_mma_16x16x128():
         device="hip",
         target="gfx950",
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scaled_mma = wave_compile(options, scaled_mma)
     print(scaled_mma.asm)
@@ -197,7 +196,6 @@ def test_mxfp8_scaled_mma_16x16x128():
         device="hip",
         target="gfx950",
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scaled_mma = wave_compile(options, scaled_mma)
     print(scaled_mma.asm)
@@ -348,7 +346,6 @@ def test_mxfp4_scaled_mma_256x256x256():
         device="hip",
         target="gfx950",
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scaled_mma = wave_compile(options, scaled_mma)
     print(scaled_mma.asm)
@@ -437,7 +434,6 @@ def test_mxfp4_scaled_mma_linearize_shrared_access():
         target="gfx950",
         linearize_shared_access=True,
         compile_to_mlir=True,
-        drop_debug_info_before_mlir=True,
     )
     scaled_mma = wave_compile(options, scaled_mma)
     print(scaled_mma.asm)
