@@ -259,6 +259,9 @@ def atan2(lhs: "Register", rhs: "Register") -> "Register": ...
 def powf(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
+def mod(lhs: "Register", rhs: "Register") -> "Register": ...
+
+
 def cbrt(src: "Register") -> "Register": ...
 
 
@@ -976,6 +979,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_py_op(operator.and_)
 @define_py_op(operator.or_)
 @define_py_op(operator.truediv)
+@define_py_op(operator.mod)
 @define_interface_op("maximum")
 @define_interface_op("minimum")
 @define_interface_op("atan2")

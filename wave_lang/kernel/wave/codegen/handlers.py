@@ -727,6 +727,18 @@ def handle_div(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
+@handle_binary_op(operator.mod)
+def handle_mod(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(lhs.type)
+    if _is_float_type(element_type):
+        result = arith_d.remf(lhs, rhs, fastmath=get_fast_math_flags(options))
+    elif _is_integer_like_type(element_type):
+        result = arith_d.remsi(lhs, rhs)
+    else:
+        raise ValidationError(f"Found unhandled operand type for mod: {element_type}")
+    return result
+
+
 @handle_binary_op(operator.and_)
 def handle_and(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)

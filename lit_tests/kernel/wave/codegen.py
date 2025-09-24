@@ -899,6 +899,52 @@ def test_add_integer():
 
 
 @run_test
+def test_mod_float():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16]):
+        a_reg = tkw.read(a)
+        res = a_reg % a_reg
+
+    test = wave_compile(get_wave_compile_options(), test)
+    print(test.asm)
+    # CHECK-LABEL: test_mod_float
+    # CHECK:       func.func @test
+    # CHECK:       %[[SLICE:.+]] = vector.load
+    # CHECK:       arith.remf %[[SLICE]], %[[SLICE]] : vector<16xf16>
+
+
+@run_test
+def test_mod_integer():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.i32]):
+        a_reg = tkw.read(a)
+        res = a_reg % a_reg
+
+    test = wave_compile(get_wave_compile_options(), test)
+    print(test.asm)
+    # CHECK-LABEL: test_mod_integer
+    # CHECK:       func.func @test
+    # CHECK:       %[[SLICE:.+]] = vector.load
+    # CHECK:       arith.remsi %[[SLICE]], %[[SLICE]] : vector<16xi32>
+
+
+@run_test
 def test_unary_lowerings():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
@@ -2036,6 +2082,7 @@ def test_binary_lowerings():
         res = a_reg - b_reg
         res = res * a_reg
         res = res / b_reg
+        res = res % b_reg
         res = tkw.minimum(a_reg, b_reg)
         res = tkw.atan2(res, a_reg)
         res = tkw.powf(res, a_reg)
@@ -2048,6 +2095,7 @@ def test_binary_lowerings():
     # CHECK: %[[SUB:.+]] = arith.subf
     # CHECK: %[[MUL:.+]] = arith.mulf %[[SUB]]
     # CHECK: %[[DIV:.+]] = arith.divf %[[MUL]]
+    # CHECK: %[[MOD:.+]] = arith.remf %[[DIV]]
     # CHECK: %[[MINIMUM:.+]] = arith.minimumf
     # CHECK: %[[ATAN2:.+]] = math.atan2 %[[MINIMUM]]
     # CHECK: %[[POWF:.+]] = math.powf %[[ATAN2]]
