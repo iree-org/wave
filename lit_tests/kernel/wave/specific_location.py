@@ -22,7 +22,6 @@ ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 @run_test
 def test_reduce_op_location():
     K = tkl.sym.K
-    ELEMS_PER_THREAD = tkl.sym.ELEMS_PER_THREAD
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
             threads_per_wave=64,
@@ -36,7 +35,6 @@ def test_reduce_op_location():
         M: 256,
         K: 128,
         BLOCK_M: 1,
-        ELEMS_PER_THREAD: 2,
         ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
     }
     options = WaveCompileOptions(
@@ -72,22 +70,22 @@ def test_reduce_op_location():
     # CHECK-LABEL: @reduce_sum_kernel
 
     # Test that placeholder locations are placed on function arguments.
-    # CHECK: @reduce_sum_kernel(%{{.*}} loc("a"("{{.*}}specific_location.py":56{{.*}})))
+    # CHECK: @reduce_sum_kernel(%{{.*}} loc("a"("{{.*}}specific_location.py":54{{.*}})))
 
     # load
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":62
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":63
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":60
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":61
 
     # multiply
-    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":64
+    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":62
     # cast
-    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":63
 
     # reduce
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":66
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":66
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":66
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":66
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":64
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":64
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":64
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":64
 
     # write
-    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":67
+    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":65
