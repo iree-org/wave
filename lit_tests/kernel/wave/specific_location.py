@@ -15,9 +15,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
 )
 
 M = tkl.sym.M
-N = tkl.sym.N
 BLOCK_M = tkl.sym.BLOCK_M
-BLOCK_N = tkl.sym.BLOCK_N
 ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
 
@@ -32,15 +30,12 @@ def test_reduce_op_location():
         )
     ]
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
-    constraints += [tkw.WorkgroupConstraint(K, BLOCK_N, 0)]
     constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(K, BLOCK_N)]
 
     subs = {
         M: 256,
         K: 128,
         BLOCK_M: 1,
-        BLOCK_N: 128,
         ELEMS_PER_THREAD: 2,
         ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
     }
@@ -63,30 +58,30 @@ def test_reduce_op_location():
         b: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
         c: tkl.Memory[M, ADDRESS_SPACE, tkl.f32],
     ):
-        lhs = tkw.read(a, elements_per_thread=ELEMS_PER_THREAD)
-        rhs = tkw.read(b, elements_per_thread=ELEMS_PER_THREAD)
+        lhs = tkw.read(a)
+        rhs = tkw.read(b)
         res = lhs * rhs
         res_f32 = tkw.cast(res, tkl.f32)
         reduced = tkw.sum(res_f32, dim=K)
-        tkw.write(reduced, c, elements_per_thread=1)
+        tkw.write(reduced, c)
 
     reduce_sum_kernel = wave_compile(options, reduce_sum_kernel)
     print(reduce_sum_kernel.asm)
 
     # CHECK-LABEL: @reduce_sum_kernel
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":66
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":67
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":61
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":62
 
     # multiply
-    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":68
+    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":63
     # cast
-    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":69
+    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":64
 
     # reduce
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":70
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":70
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":70
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":70
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":65
 
     # write
-    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":71
+    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":66
