@@ -297,13 +297,18 @@ class HardwareConstraint(Constraint):
             case GenericDot():
                 offset = mma_type.get_index_offset(lane, self.threads_per_wave)
             case MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+                # Note: The K-dimension offset does not exactly follow the ISA manual.
+                # Because reduction along K is associative (mathematically), we may relax the ISA K-offset rule provided M and N indexing meet the ISA requirements.
+                # Example of valid K access pattern:
+                # K = 8 * floor(GPR_NUM / 4) + 4 * floor(lane / 16) + (GPR_NUM % 4)
+                # But this would fail for attention due to chained GEMMs.
                 offset = [
                     Piecewise(
                         (lane % 16, ~MMA_ACC),
                         (8 * floor(lane / 16), MMA_ACC),
                     ),  # M
                     lane % 16,  # N
-                    8 * floor(lane / 16) # 8 * floor(GPR_NUM / 4) + 4 * floor(lane / 16) + (GPR_NUM % 4),  # K
+                    8 * floor(lane / 16)
                 ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 offset = [
@@ -429,7 +434,7 @@ class HardwareConstraint(Constraint):
 
     @property
     def threads_per_block(self) -> tuple[int]:
-        assert len(self.waves_per_block) != 0, "hardware constraints require to set waves_per_block if for read_write to compute elements_per_thread"
+        # threads_per_block is set in initialize_wave_constraints method
         return (
             self.waves_per_block[0] * self.threads_per_wave,
         ) + self.waves_per_block[1:]
@@ -470,12 +475,8 @@ class HardwareConstraint(Constraint):
         # TODO: Change threads_per_wave to specify all 3 dimensions as opposed to just first.
         threads_per_dim = self.threads_per_wave if workgroup_dim == 0 else 1
 
-        # for $T0 -> thread_id = $T0 / TPW
-        # for $T1, $T2 -> thread_id = 1
         thread_id = thread_id % threads_per_dim
 
-        # elements_per_thread is set to 1 if dim is a non-contiguous dimension
-        # e.g., M
         return IndexSequence(
             thread_id * elements_per_thread, elements_per_thread, stride
         )
