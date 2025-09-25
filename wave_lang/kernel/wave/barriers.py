@@ -126,10 +126,7 @@ def add_shared_memory_barriers(
                     with graph.inserting_before(node):
                         barrier_node = SharedMemoryBarrier(
                             wait_async_ops=state.is_async,
-                        ).add_to_graph(
-                            graph,
-                            loc=node.location if hasattr(node, "location") else None,
-                        )
+                        ).add_to_graph(graph, loc=node.location)
 
                 state.is_async = False
 
