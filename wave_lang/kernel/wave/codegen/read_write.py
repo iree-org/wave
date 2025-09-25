@@ -793,6 +793,10 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         transfer_type=store_type,
     )
 
+    # return dummy value
+    val = arith_d.constant(IndexType.get(), 0)
+    emitter.bind_node_proxy(node, IRProxyValue(val))
+
 
 def _handle_scatter_op(
     emitter: WaveEmitter,

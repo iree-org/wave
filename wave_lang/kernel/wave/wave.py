@@ -43,7 +43,7 @@ from .analysis.partition_strided_operators import (
     partition_ops_with_gpr_offsets,
     partition_strided_operators,
 )
-from .barriers import add_shared_memory_barriers
+from .barriers import add_shared_memory_barriers, populate_bariers_counters
 from .cache import get_temp_binary_dir
 from .codegen import WaveEmitter
 from .compile_options import WaveCompileOptions
@@ -147,7 +147,7 @@ def _warn_iree_is_too_old():
 
     # Increment only when IREE has breaking changes.
     # We don't want to enforce it on package level or make it a hard error just yet.
-    min_iree_version = Version("3.6.0rc20250721")
+    min_iree_version = Version("3.7.0rc20250725")
     if iree_compiler_ver < min_iree_version:
         warnings.warn(
             f"IREE version is too old: {iree_compiler_ver}, min version: {min_iree_version}"
@@ -761,6 +761,7 @@ class LaunchableWave(Launchable):
             ]
         graph_passes += [
             partial(add_shared_memory_barriers, trace),
+            partial(populate_bariers_counters, trace),
             partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
             partial(partition_gather_like_ops, trace, self.constraints),
             partial(generate_bounds_exprs, trace, self.constraints),

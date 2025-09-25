@@ -78,6 +78,9 @@ def extract_slice(
 def set_wave_prio(priority: int): ...
 
 
+def null_async_dep(): ...
+
+
 def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
@@ -1317,6 +1320,17 @@ class SetWavePrio(CustomOp):
         return True
 
 
+@define_op("null_async_dep")
+@dataclass
+class NullAsyncDep(CustomOp):
+    """
+    Represents a null async dependency in the graph.
+
+    It is used to represent a dependency that is not a real dependency, but
+    required to satisfy control flow.
+    """
+
+
 @define_op("shared_memory_barrier")
 @dataclass
 class SharedMemoryBarrier(CustomOp):
@@ -1324,7 +1338,9 @@ class SharedMemoryBarrier(CustomOp):
     Represents a shared memory barrier in the graph.
     """
 
-    wait_async_ops: bool = False
+    async_deps: list[fx.Node] = field(default_factory=list)
+    read_counter: Optional[int] = None
+    write_counter: Optional[int] = None
 
     @property
     def has_side_effects(self) -> bool:
