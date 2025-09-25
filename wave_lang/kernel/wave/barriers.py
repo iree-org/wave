@@ -47,16 +47,24 @@ class MemoryAccessType(Enum):
     READ_WRITE = auto()
 
 
-def is_shared_memory_op(node: CustomOp, depth: int) -> Optional[fx.Node]:
+def get_all_sources(node: fx.Node) -> list[fx.Node]:
+    source1 = propagate_loop_carried_vars(node, 0)
+    source2 = propagate_loop_carried_vars(node, 1)
+    if source1 != source2:
+        return [source1, source2]
+    return [source1]
+
+
+def is_shared_memory_op(node: CustomOp) -> list[fx.Node]:
     if (
         isinstance(node, (Read, Write, AtomicOp))
         and node.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
-        return propagate_loop_carried_vars(node.memory, depth)
+        return get_all_sources(node.memory)
     elif isinstance(node, GatherToLDS):
-        return propagate_loop_carried_vars(node.dst, depth)
+        return get_all_sources(node.dst)
 
-    return None
+    return []
 
 
 def get_memory_access_type(node: CustomOp) -> MemoryAccessType:
@@ -133,8 +141,8 @@ def add_shared_memory_barriers(
 
     for node in graph.nodes:
         custom = get_custom(node)
-        depth = 1 if checking_next_iter else 0
-        if mem := is_shared_memory_op(custom, depth):
+        mems = is_shared_memory_op(custom)
+        for mem in mems:
             state = info[mem]
             if state.last_node and need_barrier(custom, state.last_node):
                 if barrier := is_barrier_between(state.last_node.fx_node, node):
