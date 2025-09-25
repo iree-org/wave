@@ -38,6 +38,10 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     to_default_device,
 )
 
+from wave_lang.kernel.wave.templates.moe import (
+    get_fused_moe_gemm,
+)
+
 import math
 
 torch.manual_seed(0)
@@ -286,3 +290,138 @@ def test_fused_moe_kernel_reference(
         f"Test passed for num_tokens={num_tokens}, num_experts={num_experts}, "
         f"K={K}, N={N}, top_k={top_k}, block_size={block_size}, dtype={dtype}"
     )
+
+
+def nit_torch_ref_moe(a, w1, w2, score, topk):
+    m, k = a.shape
+    a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
+    out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
+    score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    topk_weight, topk_ids = torch.topk(score, topk)
+    topk_weight = topk_weight.view(-1)
+    topk_ids = topk_ids.view(-1)
+    out = torch.matmul(a, w1[0].t())
+    return out
+
+
+def get_wave_moe_fused_gemm_kernel(
+    m: int,
+    k: int,
+    n: int,
+    e,
+    topk,
+    mfma_variant: MMAType,
+    datatype: DataType,
+):
+    gemm, symbols = get_fused_moe_gemm(
+        m,
+        k,
+        n,
+        e,
+        topk,
+        mfma_variant,
+        datatype,
+    )
+    symbols.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=symbols,
+        canonicalize=True,
+        run_bench=False,
+        waves_per_eu=2,
+        denorm_fp_math_f32="preserve-sign",
+        schedule=SchedulingType.NONE,
+        wave_runtime=False,
+        use_scheduling_barriers=enable_scheduling_barriers,
+        minimize_shared_allocs=False,
+    )
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm)
+    print("--------------------------------")
+    print(gemm.asm)
+    print("--------------------------------")
+    return gemm
+
+
+def nit_tkw(a, w1, w2, score, topk):
+    m, k = a.shape
+    a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
+    out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
+    score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    topk_weight, topk_ids = torch.topk(score, topk)
+    topk_weight = topk_weight.view(-1)
+    topk_ids = topk_ids.view(-1)
+    # convert topk_ids to f16
+    topk_ids = topk_ids.to(torch.float16)
+
+    gemm = get_wave_moe_fused_gemm_kernel(
+        m * topk,
+        w1.shape[1],
+        k,
+        w1.shape[0],
+        topk,
+        MMAType.F32_16x16x16_F16,
+        torch.float16,
+    )
+    gemm(a, w1, topk_ids, out)
+
+    return out
+
+
+num_experts = [8]
+top_ks = [2]
+m_values = [32]
+n_values = [64]
+k_values = [128]
+dtypes = [torch.float16]
+rtol, atol = 1e-1, 1e-2
+
+
+@pytest.mark.parametrize("m", m_values)
+@pytest.mark.parametrize("n", n_values)
+@pytest.mark.parametrize("k", k_values)
+@pytest.mark.parametrize("e", num_experts)
+@pytest.mark.parametrize("topk", top_ks)
+@pytest.mark.parametrize("dtype", dtypes)
+def testnittestReferenceMoe(
+    m: int,
+    n: int,
+    k: int,
+    e: int,
+    topk: int,
+    dtype: DataType,
+):
+    device = "cuda"
+
+    if dtype == torch.float16 and k == 1024:
+        pytest.skip("This combination generates NaNs and INFs")
+
+    # TODO: investigate why using torch.randn would have precision issue in silu computation
+    a = torch.rand((m, k), dtype=dtype, device=device)
+    w1 = torch.rand((e, n, k), dtype=dtype, device=device)
+    w2 = torch.rand((e, k, n), dtype=dtype, device=device)
+    score = torch.rand((m, e), dtype=dtype, device=device)
+
+    ref_output = nit_torch_ref_moe(a, w1, w2, score, topk)
+    nit_tkw_output = nit_tkw(a, w1, w2, score, topk)
+
+    print(nit_tkw_output)
+    print(ref_output)
+    torch.testing.assert_close(
+        nit_tkw_output.to(torch.float16), ref_output, rtol=rtol, atol=atol
+    )
+
+    # # TODO: remove manual splitting
+    # # We need to manually split w1 into 2 halves, since this is
+    # # required by `silu_and_mul` kernel, and currently we can't
+    # # do this in Wave.
+    # w1_gate = w1[:, :n, :]  # First half for gate
+    # w1_up = w1[:, n:, :]  # Second half for up projection
+
+    # # Make sure the algorithm with w1 splitting works in PyTorch.
+    # ref_split_output = torch_ref_moe_split_w1(a, w1_gate, w1_up, w2, score, topk)
+    # torch.testing.assert_close(ref_split_output, ref_output, rtol=rtol, atol=atol)
+
+    # # The implementation in Wave should also work.
+    # tkw_output = tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk)
+    # torch.testing.assert_close(tkw_output, ref_output, rtol=rtol, atol=atol)
