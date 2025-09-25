@@ -81,6 +81,20 @@ try:
         else:
             assert False, "Expected to fail with ValueError."
 
+        # CHECK: #wave.address_space<shared>
+        addr_attr = wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Shared)
+        print(addr_attr)
+
+        # CHECK: WaveAddressSpace.Shared
+        print(addr_attr.value())
+
+        try:
+            wave.WaveAddressSpaceAttr.get(5)
+        except TypeError as e:
+            assert "incompatible function arguments" in str(e)
+        else:
+            assert False, "Expected to fail with TypeError."
+
     # CHECK: wave_ok
     print("wave_ok")
 except Exception as e:

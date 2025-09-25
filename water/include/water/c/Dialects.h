@@ -65,6 +65,25 @@ mlirWaveHyperparameterAttrGet(MlirAttribute mapping);
 /// Returns the typeID of a WaveHyperparameterAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveHyperparameterAttrGetTypeID();
 
+//===---------------------------------------------------------------------===//
+// WaveAddressSpaceAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveAddressSpaceAttr(MlirAttribute attr);
+
+/// Creates a new WaveAddressSpaceAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveAddressSpaceAttrGet(MlirContext mlirCtx, uint32_t value);
+
+// Get the value from a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
+
 #ifdef __cplusplus
 }
 #endif

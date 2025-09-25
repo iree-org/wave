@@ -95,3 +95,25 @@ MlirAttribute mlirWaveHyperparameterAttrGet(MlirAttribute mapping) {
 MlirTypeID mlirWaveHyperparameterAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveHyperparameterAttr>());
 }
+
+//===---------------------------------------------------------------------===//
+// WaveAddressSpaceAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveAddressSpaceAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveAddressSpaceAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveAddressSpaceAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveAddressSpaceAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveAddressSpace>(value)));
+}
+
+uint32_t mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveAddressSpaceAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveAddressSpaceAttr>());
+}

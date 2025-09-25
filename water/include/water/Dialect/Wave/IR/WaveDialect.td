@@ -63,7 +63,8 @@ def WaveDialect : Dialect {
     const static constexpr ::llvm::StringLiteral kIndexExprAttrName = "index";
 
     // Name of the attribute specifying the number of elements per thread.
-    const static constexpr ::llvm::StringLiteral kElementsPerThreadAttrName = "wave.elements_per_thread";
+    const static constexpr ::llvm::StringLiteral kElementsPerThreadAttrName =
+        "wave.elements_per_thread";
 
     // Registration functions. The bodies of these must be placed in the file
     // containing private implementations of attributes and types, respectively.
