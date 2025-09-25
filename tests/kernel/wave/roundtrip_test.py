@@ -165,12 +165,14 @@ def testChainedGemm(
     with Context() as ctx:
         options.override_mlir = _deiree(Module.parse(chained_gemm_ref.asm))
 
+    # Inject module that contains upstream dialects only, wave_compile() will take care of iree-fying it.
     chained_gemm_deiree = wave_compile(options, chained_gemm)
     output_deiree = device_zeros(batch, v_head_dim, q_seq_len, dtype=torch.float32)
     chained_gemm_deiree(q, k, v, output_deiree)
     output_for_cmp = output_deiree.transpose(-1, -2).to(torch.float16)
     assert_close(output_for_cmp, torch_ref, atol=5e-2, rtol=5e-3)
 
+    # Inject module that is already iree-fied, wave_compile() will just compile to vmfb without any extra transformations.
     options.override_mlir = chained_gemm_ref.asm
     chained_gemm_override = wave_compile(options, chained_gemm)
     output_override = device_zeros(batch, v_head_dim, q_seq_len, dtype=torch.float32)
