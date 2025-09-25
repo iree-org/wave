@@ -498,7 +498,6 @@ def get_bhsd_attention_kernel(
         Nvec = 16
         TPW = 32
 
-
     constraints += [
         tkw.HardwareConstraint(
             threads_per_wave=TPW,

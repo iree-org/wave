@@ -308,7 +308,7 @@ class HardwareConstraint(Constraint):
                         (8 * floor(lane / 16), MMA_ACC),
                     ),  # M
                     lane % 16,  # N
-                    8 * floor(lane / 16)
+                    8 * floor(lane / 16),
                 ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 offset = [

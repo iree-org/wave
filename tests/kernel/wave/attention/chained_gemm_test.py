@@ -45,7 +45,7 @@ from ..common.shapes import get_test_shapes
     [
         pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_2_or_3_or_4),
         pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_2_or_3_or_4),
-        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4)
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
     ],
 )
 def testChainedGemm(

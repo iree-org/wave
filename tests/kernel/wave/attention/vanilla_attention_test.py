@@ -32,7 +32,7 @@ from ..common.utils import (
     require_e2e,
     require_cdna4,
     require_cdna_2_or_3_or_4,
-    require_rdna4
+    require_rdna4,
 )
 from ..common.shapes import get_test_shapes
 from wave_lang.kernel.wave.templates.vanilla_attention import (
@@ -58,11 +58,29 @@ from wave_lang.kernel.wave.utils.reference_kernel_utils import (
 @pytest.mark.parametrize(
     "mfma_variant",
     [
-        pytest.param((MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_F16), marks=require_rdna4)
+        pytest.param(
+            (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+            ),
+            marks=require_rdna4,
+        ),
     ],
 )
 def testTransposedVAttentionPure(
@@ -128,11 +146,29 @@ def testTransposedVAttentionPure(
 @pytest.mark.parametrize(
     "mfma_variant",
     [
-        pytest.param((MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_F16), marks=require_rdna4)
+        pytest.param(
+            (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+            ),
+            marks=require_rdna4,
+        ),
     ],
 )
 def testAttentionPure(
@@ -197,11 +233,29 @@ def testAttentionPure(
 @pytest.mark.parametrize(
     "mfma_variant",
     [
-        pytest.param((MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_F16), marks=require_rdna4)
+        pytest.param(
+            (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+            ),
+            marks=require_rdna4,
+        ),
     ],
 )
 def testAttentionCausal(
@@ -285,11 +339,29 @@ def testAttentionCausal(
 @pytest.mark.parametrize(
     "mfma_variant",
     [
-        pytest.param((MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_F16), marks=require_rdna4)
+        pytest.param(
+            (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+            ),
+            marks=require_rdna4,
+        ),
     ],
 )
 def testAttentionBSHD(
@@ -395,11 +467,29 @@ def testAttentionBSHD(
 @pytest.mark.parametrize(
     "mfma_variant",
     [
-        pytest.param((MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16), marks=require_cdna_2_or_3_or_4),
-        pytest.param((MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.RDNA4_WAVE32_F32_16x16x16_F16), marks=require_rdna4)
+        pytest.param(
+            (MMAType.F32_32x32x16_K8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x32_K8_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (MMAType.F32_32x32x8_F16, MMAType.F32_32x32x8_F16),
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+            ),
+            marks=require_rdna4,
+        ),
     ],
 )
 def testAttentionBHSDCausal(
@@ -528,7 +618,7 @@ def testAttentionBHSDCausal(
     [
         pytest.param(MMAType.F32_16x16x16_F16, marks=require_cdna_2_or_3_or_4),
         pytest.param(MMAType.F32_32x32x8_F16, marks=require_cdna_2_or_3_or_4),
-        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, marks=require_rdna4)
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, marks=require_rdna4),
     ],
 )
 def testAttentionBias(
@@ -716,7 +806,7 @@ def testAttentionBias(
     [
         pytest.param(MMAType.F32_16x16x16_F16, marks=require_cdna_2_or_3_or_4),
         pytest.param(MMAType.F32_32x32x8_F16, marks=require_cdna_2_or_3_or_4),
-        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, marks=require_rdna4)
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, marks=require_rdna4),
     ],
 )
 def testAttentionSoftCap(

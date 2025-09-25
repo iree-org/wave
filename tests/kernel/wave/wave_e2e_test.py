@@ -2298,7 +2298,6 @@ def test_debug_log_core(dynamic_dims: bool):
         pytest.param(tkw.MMAType.F32_16x16x16_F16, 64),
         pytest.param(tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32),
     ],
-
 )
 def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
     iterations = 4
