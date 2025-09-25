@@ -141,7 +141,7 @@ def get_vanilla_attention_kernel(
             else:
                 v_reg = tkw.read(v, mapping=v_mapping)
             new_acc = acc * e_delta_max
-            acc = tkw.mma(v_reg, imm_f16, new_acc)
+            acc = tkw.mma(v_reg, imm_f16, new_acc, mfma_variant[1])
             return m_j, d_j, acc
 
         # repeat represents the results of the loop
@@ -171,9 +171,9 @@ def get_vanilla_attention_kernel(
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         BLOCK_B: 1,
-        BLOCK_M: 16,
-        BLOCK_N: 16,
-        BLOCK_K2: 16,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K2: 32,
         B: shape.num_query_heads,
         M: shape.query_seq_len,
         N: shape.head_size_kv,

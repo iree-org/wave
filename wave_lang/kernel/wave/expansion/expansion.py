@@ -536,6 +536,8 @@ def store_fixup_data(
             if metadata.last_mma_node:
                 first_node = get_node(get_dim_query(0), node, expansion_context)
                 second_node = get_node(get_dim_query(1), node, expansion_context)
+                # read the following code like this:
+                # replace all uses of the first node with new_node except for the second_node
                 expansion_context.mma_nodes.append((first_node, new_node, second_node))
 
 
