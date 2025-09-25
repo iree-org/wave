@@ -31,26 +31,28 @@ from ..common.utils import (
     require_e2e,
     require_cdna_2_or_3_or_4,
     require_cdna3,
+    require_rdna4,
     param_bool,
 )
 from ..common.shapes import get_test_shapes
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("chained_gemm"))
 @param_bool("enable_scheduling", "sched", [False])
 @pytest.mark.parametrize(
-    "mfma_variant",
+    "mfma_variant, threads_per_wave",
     [
-        MMAType.F32_16x16x16_F16,
-        MMAType.F32_32x32x8_F16,
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4)
     ],
 )
 def testChainedGemm(
     shape: tuple[int],
     enable_scheduling: bool,
     mfma_variant: MMAType,
+    threads_per_wave: int,
     run_bench,
     perf_filename_tk,
 ):
@@ -81,7 +83,7 @@ def testChainedGemm(
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             mma_type=mfma_variant,
             vector_shapes={B: 0},
         )
