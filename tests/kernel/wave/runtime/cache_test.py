@@ -47,7 +47,8 @@ from wave_lang.kernel.wave.templates.vanilla_attention import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from ..common.utils import (
-    require_cdna_2_or_3_or_4,
+    require_cdna_3_or_4,
+    require_rdna4,
     require_e2e,
 )
 
@@ -131,9 +132,15 @@ def generate_attention_kernel(constraints: list[Constraint], head_dim: int):
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @require_cache
-def testSameConfig(tmp_path):
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+    ],
+)
+def testSameConfig(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
     reset_cache_manager(tmp_path)
     shape = (8, 128, 128, 64, 256)
     # Input sizes
@@ -161,13 +168,11 @@ def testSameConfig(tmp_path):
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
-    mfma_variant = MMAType.F32_32x32x8_F16
-
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             mma_type=mfma_variant,
-            vector_shapes={B: 0, M: 32, N: 32},
+            vector_shapes={B: 0},
         )
     ]
 
@@ -238,9 +243,17 @@ def testSameConfig(tmp_path):
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @require_cache
-def testDifferentDynamicSameBlock(tmp_path):
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+    ],
+)
+def testDifferentDynamicSameBlock(
+    tmp_path, mfma_variant: MMAType, threads_per_wave: int
+):
     reset_cache_manager(tmp_path)
     # Input sizes
     B = tkl.sym.B
@@ -268,13 +281,11 @@ def testDifferentDynamicSameBlock(tmp_path):
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
     constraints += [tkw.Assumption(K2 > BLOCK_K2 * 4)]
 
-    mfma_variant = MMAType.F32_32x32x8_F16
-
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             mma_type=mfma_variant,
-            vector_shapes={B: 0, M: 32, N: 32},
+            vector_shapes={B: 0},
         )
     ]
 
@@ -374,9 +385,15 @@ def testDifferentDynamicSameBlock(tmp_path):
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @require_cache
-def testSameSizeDifferentBlock(tmp_path):
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+    ],
+)
+def testSameSizeDifferentBlock(tmp_path, mfma_variant, threads_per_wave):
     reset_cache_manager(tmp_path)
     shape = (8, 128, 128, 64, 256)
     # Input sizes
@@ -404,13 +421,11 @@ def testSameSizeDifferentBlock(tmp_path):
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
-    mfma_variant = MMAType.F32_32x32x8_F16
-
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             mma_type=mfma_variant,
-            vector_shapes={B: 0, M: 32, N: 32},
+            vector_shapes={B: 0},
         )
     ]
 
@@ -497,11 +512,25 @@ def testSameSizeDifferentBlock(tmp_path):
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @require_cache
-def testSameConfigDifferentFreeVar(tmp_path):
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [
+        pytest.param(
+            (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
+            marks=require_cdna_3_or_4,
+        ),
+        pytest.param(
+            (
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+            ),
+            marks=require_rdna4,
+        ),
+    ],
+)
+def testSameConfigDifferentFreeVar(tmp_path, mfma_variant):
     reset_cache_manager(tmp_path)
-    mfma_variant = (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16)
     # Order of shapes: (B, M, N, K1, K2)
     input_shape = (8, 128, 128, 64, 256)
     dynamic_dims = False
@@ -588,7 +617,6 @@ def testSameConfigDifferentFreeVar(tmp_path):
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @require_cache
 def testDifferentSignatureSameCore(tmp_path):
     reset_cache_manager(tmp_path)
@@ -674,7 +702,6 @@ def testDifferentSignatureSameCore(tmp_path):
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @require_cache
 def testChangeFreeVarOfNestedFunction(tmp_path):
     reset_cache_manager(tmp_path)
