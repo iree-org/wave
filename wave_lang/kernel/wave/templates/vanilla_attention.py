@@ -50,8 +50,8 @@ def get_vanilla_attention_kernel(
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
     constraints += [tkw.TilingConstraint(K2, BLOCK_K2)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
@@ -171,9 +171,9 @@ def get_vanilla_attention_kernel(
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
         BLOCK_B: 1,
-        BLOCK_M: 64,
+        BLOCK_M: 128,
         BLOCK_N: 64,
-        BLOCK_K2: 32,
+        BLOCK_K2: 64,
         B: shape.num_query_heads,
         M: shape.query_seq_len,
         N: shape.head_size_kv,
