@@ -633,6 +633,7 @@ class LaunchableWave(Launchable):
             trace.location,
         )
 
+        # Only emit MLIR if we don't have the module yet.
         if not module_op:
             emitter = WaveEmitter(
                 dispatch_entrypoint, trace, self.constraints, options, self.grid_type
@@ -645,6 +646,11 @@ class LaunchableWave(Launchable):
                 logger.info(asm)
                 raise
             emitter.finish()
+        # Otherwise we only want to iree-fy the existing module.
+        # `dispatch_entrypoint` already has most of the setup, we'll just need
+        # to move the ops from existing module to inside `dispatch_entrypoint`.
+        # Also we'll need to update the uses of the memref arguments (from the
+        # existing module) to be compatible with the new stream.binding arguments.
         else:
             with exe._loc, InsertionPoint.at_block_begin(
                 dispatch_entrypoint.entry_block
