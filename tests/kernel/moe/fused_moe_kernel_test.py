@@ -333,7 +333,6 @@ def get_wave_moe_fused_gemm_kernel(
         schedule=SchedulingType.NONE,
         wave_runtime=False,
         use_scheduling_barriers=enable_scheduling_barriers,
-        minimize_shared_allocs=False,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -368,7 +367,7 @@ def nit_tkw(a, w1, w2, score, topk):
     return out
 
 
-num_experts = [8]
+num_experts = [4]
 top_ks = [2]
 m_values = [32]
 n_values = [64]
