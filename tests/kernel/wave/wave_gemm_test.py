@@ -22,7 +22,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 )
 from wave_lang.kernel.wave.utils.mma_utils import (
     get_mfma_load_elems_per_thread,
-    get_mfma_store_elems_per_thread
+    get_mfma_store_elems_per_thread,
 )
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
@@ -89,7 +89,11 @@ def testGemmBench(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
     dynamic_dims = False
     mfma_variant = mfma_variant
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant, torch.float16, threads_per_wave=threads_per_wave
+        shape,
+        dynamic_dims,
+        mfma_variant,
+        torch.float16,
+        threads_per_wave=threads_per_wave,
     )
 
     assert not perf_filename_tk.exists()
@@ -458,7 +462,9 @@ def testNonTransposeGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)]
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+    ]
 
     if dynamic_dims:
         constraints += [tkw.Assumption(K > BLOCK_K * 4)]
@@ -572,7 +578,9 @@ def testPingPongGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)]
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+    ]
 
     # Wave-level micro-kernel.
     # Since warps are not directly addressable, there is no
@@ -1468,7 +1476,9 @@ def testPackedNonTransposeGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)]
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+    ]
 
     # With dynamic dimensions, we need to add an assumption on how big
     # the iterate dimension is to determine whether we can schedule or not.
@@ -1599,7 +1609,13 @@ def testBatchedGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(mma_type = mfma_variant, threads_per_wave=threads_per_wave, vector_shapes={B: 0})]
+    constraints += [
+        tkw.HardwareConstraint(
+            mma_type=mfma_variant,
+            threads_per_wave=threads_per_wave,
+            vector_shapes={B: 0},
+        )
+    ]
 
     @tkw.wave(constraints)
     def batched_gemm(
@@ -1704,7 +1720,13 @@ def testSequentialBatchedGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(mma_type=mfma_variant, threads_per_wave=threads_per_wave, vector_shapes={B: 0})]
+    constraints += [
+        tkw.HardwareConstraint(
+            mma_type=mfma_variant,
+            threads_per_wave=threads_per_wave,
+            vector_shapes={B: 0},
+        )
+    ]
 
     @tkw.wave(constraints)
     def batched_gemm(
@@ -2020,7 +2042,13 @@ def testBatchedGemmWithPermute(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(mma_type=mfma_variant, threads_per_wave=threads_per_wave, vector_shapes={B: 0})]
+    constraints += [
+        tkw.HardwareConstraint(
+            mma_type=mfma_variant,
+            threads_per_wave=threads_per_wave,
+            vector_shapes={B: 0},
+        )
+    ]
 
     @tkw.wave(constraints)
     def batched_gemm_with_permute(
