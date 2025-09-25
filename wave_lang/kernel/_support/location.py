@@ -93,9 +93,13 @@ class StackTraceInfo:
         return StackTraceInfo(frames)
 
 
+# Define type alias to refer to this more easily.
+CapturedLocation = FileLineColInfo | StackTraceInfo
+
+
 def capture_location(
     location_capture_config: Optional[LocationCaptureConfig],
-) -> Optional[FileLineColInfo | StackTraceInfo]:
+) -> Optional[CapturedLocation]:
     if (
         not location_capture_config
         or location_capture_config.level == LocationCaptureLevel.NONE
@@ -143,6 +147,3 @@ def capture_function_location(
         return StackTraceInfo(frames=[frame_info])
 
     return None
-
-# Define type alias to refer to this more easily.
-CapturedLocation = Optional[FileLineColInfo | StackTraceInfo]

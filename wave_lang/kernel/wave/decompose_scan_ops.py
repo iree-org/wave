@@ -1,6 +1,6 @@
 import math
 from operator import ge
-from typing import Callable
+from typing import Callable, Optional
 
 import torch.fx as fx
 
@@ -29,7 +29,7 @@ from .utils.graph_utils import DCE
 
 
 def get_graph_node(
-    custom: CustomOp, graph: fx.Graph, location: CapturedLocation
+    custom: CustomOp, graph: fx.Graph, location: Optional[CapturedLocation]
 ) -> fx.Node:
     custom.add_to_graph(graph)
     custom.location = location
@@ -41,7 +41,7 @@ def emit_local_inclusive_scan(
     scan_src: list[fx.Node],
     graph: fx.Graph,
     elements_per_thread: int,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> list[list[fx.Node]]:
     """
     Perform local inclusive scan for `n` elements per thread.
@@ -69,7 +69,7 @@ def emit_variable_scan(
     src: list[list[fx.Node]],
     graph: fx.Graph,
     elements_per_thread: int,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> list[list[fx.Node]]:
     result: list[list[fx.Node]] = []
     result.append(src[0])
@@ -98,7 +98,7 @@ def emit_global_scan(
     hardware_constraint: HardwareConstraint,
     local_scan_size: int,
     scan_dim: IndexSymbol,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> list[fx.Node]:
     """
     Emit an intra-warp inclusive scan using butterfly pattern scan and masking.

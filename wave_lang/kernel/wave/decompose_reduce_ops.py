@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import math
-from typing import Callable
+from typing import Callable, Optional
 
 import torch.fx as fx
 
@@ -96,7 +96,7 @@ def determine_shuffle_config(
 def get_graph_node(
     custom: CustomOp,
     graph: fx.Graph,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> fx.Node:
     custom.add_to_graph(graph)
     custom = custom.fx_node
@@ -108,7 +108,7 @@ def emit_sources_reduction(
     binary_fn: Callable,
     src: list[fx.Node],
     graph: fx.Graph,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> fx.Node:
     """
     Does reduction over a list of fx.Node variables by applying binary_fn on them.
@@ -125,7 +125,7 @@ def emit_variable_reduction(
     src: fx.Node,
     graph: fx.Graph,
     local_reduction_size: int,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> fx.Node:
     """
     Does reduction over a singular fx.Node variable.
@@ -142,7 +142,7 @@ def emit_local_reduction(
     reduction_src: list[fx.Node],
     graph: fx.Graph,
     local_reduction_size,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> fx.Node:
     """
     Does reduction over all the element carried along by ReductionOp at local
@@ -161,7 +161,7 @@ def emit_scalarized_local_reduction(
     reduction_src: list[fx.Node],
     graph: fx.Graph,
     local_reduction_size,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> fx.Node:
     """
     Special case of local reduction wher we try to scalarize/get rid of most vector ops.
@@ -196,7 +196,7 @@ def emit_intrawave_reduction(
     subgroup_size: int,
     cluster_size: int,
     cluster_stride: int,
-    location: CapturedLocation,
+    location: Optional[CapturedLocation],
 ) -> fx.Node:
     """
     Reduce data across threads in a warp by doing butterfly shuffle.
@@ -220,7 +220,7 @@ def emit_interwave_reduction(
     num_reduction_waves,
     wg_constraint_map,
     hardware_constraint,
-    original_op_location: CapturedLocation,
+    original_op_location: Optional[CapturedLocation],
 ):
     """
     Reduces partial reduced data from individual wave across the block.

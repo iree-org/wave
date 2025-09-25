@@ -8,7 +8,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Dict, List
+from typing import Iterable, Dict, List, Optional
 
 import torch.fx as fx
 from torch.utils import _pytree as pytree
@@ -150,7 +150,7 @@ def insert_op_before(op, anchor_op):
 
 
 def get_graph_node(
-    custom: CustomOp, graph: fx.Graph, location: CapturedLocation
+    custom: CustomOp, graph: fx.Graph, location: Optional[CapturedLocation]
 ) -> fx.Node:
     custom.add_to_graph(graph)
     custom.location = location
@@ -361,7 +361,7 @@ def slice_scale_mma(
     )
 
 
-def insert_cond_barrier(cond_reg, trace, graph, location: CapturedLocation):
+def insert_cond_barrier(cond_reg, trace, graph, location: Optional[CapturedLocation]):
     barrier_graph = fx.Graph()
     barrier_graph_name = f"barrier_graph_{cond_reg.name}"
     barrier_node = WorkgroupBarrier().add_to_graph(barrier_graph)

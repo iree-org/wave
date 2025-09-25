@@ -483,12 +483,13 @@ class CustomOp(ABC):
     _tracing_function: Optional[Callable[..., Any]] = field(default=None, init=False)
 
     @property
-    def location(self) -> CapturedLocation:
+    def location(self) -> Optional[CapturedLocation]:
         return getattr(self.fx_node, "location", None)
 
     @location.setter
-    def location(self, value: CapturedLocation):
-        setattr(self.fx_node, "location", value)
+    def location(self, value: Optional[CapturedLocation]):
+        if value:
+            setattr(self.fx_node, "location", value)
 
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
