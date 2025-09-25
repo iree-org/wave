@@ -328,7 +328,7 @@ def min(
 def topk(
     src: "Register",
     k_dim: IndexExpr,
-    dim_to_reduce: IndexExpr,
+    dim: IndexExpr,
 ) -> tuple["Register", "Register"]: ...
 
 
@@ -2666,7 +2666,7 @@ class ReduceOp(CustomOp, ABC):
 
     arg: fx.Node | list[fx.Node]
     init: fx.Node = None
-    dim_to_reduce: Optional[Any] = None
+    dim: Optional[Any] = None
     block: Optional[bool] = False
 
     @property
@@ -2683,7 +2683,7 @@ class ReduceOp(CustomOp, ABC):
             src_indexing = src_indexings[0]
         else:
             src_indexing = get_custom(self.arg).indexing_dims
-        dst_indexing = [dim for dim in src_indexing if dim != self.dim_to_reduce]
+        dst_indexing = [dim for dim in src_indexing if dim != self.dim]
         return dst_indexing
 
     def infer_type(self, *args):
@@ -2702,9 +2702,7 @@ class ReduceOp(CustomOp, ABC):
         else:
             src_type = get_custom(self.arg).type
         dtype = src_type.dtype
-        reduced_dims = [
-            dims for dims in src_type.symbolic_shape if dims != self.dim_to_reduce
-        ]
+        reduced_dims = [dims for dims in src_type.symbolic_shape if dims != self.dim]
         self.type = Register[(*reduced_dims, dtype)] if reduced_dims else dtype
         if (
             self.init is not None
@@ -2718,7 +2716,7 @@ class ReduceOp(CustomOp, ABC):
 
     @property
     def reduction_dim(self) -> IndexSymbol:
-        return self.dim_to_reduce
+        return self.dim
 
 
 # TODO: Add support for more shuffle types.
@@ -2754,12 +2752,12 @@ class TopkOp(CustomOp):
 
     arg: Source tensor Register value to find top-k from
     k_dim: Dimension symbol representing the K size (number of top elements to select)
-    dim_to_reduce: which symbolic dim to perform topk on.  This dimension will be replaced by k_dim in the output.
+    dim: which symbolic dim to perform topk on.  This dimension will be replaced by k_dim in the output.
     """
 
     arg: fx.Node
     k_dim: IndexSymbol
-    dim_to_reduce: IndexSymbol
+    dim: IndexSymbol
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2776,10 +2774,10 @@ class TopkOp(CustomOp):
             src_indexing = get_custom(self.arg).indexing_dims
 
         # TopK replaces the reduction dimension with the K dimension
-        if self.dim_to_reduce in src_indexing:
+        if self.dim in src_indexing:
             result_dims = []
             for dim in src_indexing:
-                if dim == self.dim_to_reduce:
+                if dim == self.dim:
                     result_dims.append(self.k_dim)
                 else:
                     result_dims.append(dim)
@@ -2793,7 +2791,7 @@ class TopkOp(CustomOp):
 
         new_symbolic_shape = []
         for i, dim_size in enumerate(src_type.symbolic_shape):
-            if i < len(src_indexing) and src_indexing[i] == self.dim_to_reduce:
+            if i < len(src_indexing) and src_indexing[i] == self.dim:
                 new_symbolic_shape.append(self.k_dim)
             else:
                 new_symbolic_shape.append(dim_size)
@@ -2806,7 +2804,7 @@ class TopkOp(CustomOp):
 
     @property
     def reduction_dim(self) -> IndexSymbol:
-        return self.dim_to_reduce
+        return self.dim
 
     # Provide init field to be compatible with ReduceOp interface.
     # This allows some code in the expand_graph pass to be generic over the two.
