@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import math
-from typing import Callable
+from typing import Callable, Optional
 
 import torch.fx as fx
 
 import wave_lang.kernel.lang as tkl
 
+from .._support.location import CapturedLocation
 from .._support.tracing import CapturedTrace
 from .._support.indexing import IndexSequence, IndexingContext, IndexExpr
 from ..lang.global_symbols import *
@@ -71,6 +72,7 @@ def emit_sources_topk_reduction(
     src_values: list[fx.Node],
     src_indices: list[fx.Node],
     graph: fx.Graph,
+    location: Optional[CapturedLocation],
 ) -> tuple[fx.Node, fx.Node]:
     """
     Does topk reduction over lists of values and indices, returning both the reduced value and its index.
@@ -79,9 +81,13 @@ def emit_sources_topk_reduction(
     init_idx = src_indices[0]
 
     for i in range(1, len(src_values)):
-        cmp_result = get_graph_node(Gt(src_values[i], init_val), graph)
-        init_val = get_graph_node(SelectOp(cmp_result, src_values[i], init_val), graph)
-        init_idx = get_graph_node(SelectOp(cmp_result, src_indices[i], init_idx), graph)
+        cmp_result = get_graph_node(Gt(src_values[i], init_val), graph, location)
+        init_val = get_graph_node(
+            SelectOp(cmp_result, src_values[i], init_val), graph, location
+        )
+        init_idx = get_graph_node(
+            SelectOp(cmp_result, src_indices[i], init_idx), graph, location
+        )
         get_custom(init_val).index = src_values[0].index
         get_custom(init_idx).index = src_indices[0].index
         resolve_broadcasting_for_op(
@@ -99,12 +105,13 @@ def emit_variable_topk_reduction(
     src_idx: fx.Node,
     graph: fx.Graph,
     local_reduction_size: int,
+    location: Optional[CapturedLocation],
 ) -> tuple[fx.Node, fx.Node]:
     """
     Does topk reduction over singular value and index variables.
     """
-    init_val = get_graph_node(Extract(src_val, [0]), graph)
-    init_idx = get_graph_node(Extract(src_idx, [0]), graph)
+    init_val = get_graph_node(Extract(src_val, [0]), graph, location)
+    init_idx = get_graph_node(Extract(src_idx, [0]), graph, location)
     get_custom(init_val).index = get_custom(src_val).index
     get_custom(init_idx).index = get_custom(src_idx).index
     # From here on out we are dealing with scalar values
@@ -112,14 +119,18 @@ def emit_variable_topk_reduction(
     init_idx.type.symbolic_shape = ()
 
     for i in range(1, local_reduction_size):
-        cur_val = get_graph_node(Extract(src_val, [i]), graph)
-        cur_idx = get_graph_node(Extract(src_idx, [i]), graph)
+        cur_val = get_graph_node(Extract(src_val, [i]), graph, location)
+        cur_idx = get_graph_node(Extract(src_idx, [i]), graph, location)
         cur_val.type.symbolic_shape = ()
         cur_idx.type.symbolic_shape = ()
 
-        cmp_result = get_graph_node(Gt(cur_val, init_val), graph)
-        init_val = get_graph_node(SelectOp(cmp_result, cur_val, init_val), graph)
-        init_idx = get_graph_node(SelectOp(cmp_result, cur_idx, init_idx), graph)
+        cmp_result = get_graph_node(Gt(cur_val, init_val), graph, location)
+        init_val = get_graph_node(
+            SelectOp(cmp_result, cur_val, init_val), graph, location
+        )
+        init_idx = get_graph_node(
+            SelectOp(cmp_result, cur_idx, init_idx), graph, location
+        )
         get_custom(init_val).index = get_custom(cur_val).index
         get_custom(init_idx).index = get_custom(cur_idx).index
 
@@ -132,17 +143,18 @@ def emit_local_topk_reduction(
     reduction_indices: list[fx.Node],
     graph: fx.Graph,
     local_reduction_size,
+    location: Optional[CapturedLocation],
 ) -> tuple[fx.Node, fx.Node]:
     """
     Does topk reduction over all elements carried along by TopkOp at local
     thread level. This returns both the top value and its index.
     """
     src_val, src_idx = emit_sources_topk_reduction(
-        binary_fn, reduction_src, reduction_indices, graph
+        binary_fn, reduction_src, reduction_indices, graph, location
     )
 
     local_val, local_idx = emit_variable_topk_reduction(
-        binary_fn, src_val, src_idx, graph, local_reduction_size
+        binary_fn, src_val, src_idx, graph, local_reduction_size, location
     )
     return local_val, local_idx
 
@@ -155,6 +167,7 @@ def emit_intrawave_topk_reduction(
     subgroup_size: int,
     cluster_size: int,
     cluster_stride: int,
+    location: Optional[CapturedLocation],
 ) -> tuple[fx.Node, fx.Node]:
     """
     Reduce data across threads in a wave by doing butterfly shuffle for topk.
@@ -168,24 +181,26 @@ def emit_intrawave_topk_reduction(
         shuffle_val = ShuffleOp(
             init_val, cluster_stride, subgroup_size, ShuffleMode.XOR
         )
-        shuffle_val_node = get_graph_node(shuffle_val, graph)
+        shuffle_val_node = get_graph_node(shuffle_val, graph, location)
         shuffle_idx = ShuffleOp(
             init_idx, cluster_stride, subgroup_size, ShuffleMode.XOR
         )
-        shuffle_idx_node = get_graph_node(shuffle_idx, graph)
+        shuffle_idx_node = get_graph_node(shuffle_idx, graph, location)
 
         get_custom(shuffle_val_node).index = get_custom(init_val).index
         get_custom(shuffle_idx_node).index = get_custom(init_idx).index
 
-        val_greater = get_graph_node(Gt(shuffle_val_node, init_val), graph)
+        val_greater = get_graph_node(Gt(shuffle_val_node, init_val), graph, location)
 
         init_val = get_graph_node(
             SelectOp(val_greater, shuffle_val_node, init_val),
             graph,
+            location,
         )
         init_idx = get_graph_node(
             SelectOp(val_greater, shuffle_idx_node, init_idx),
             graph,
+            location,
         )
         get_custom(init_val).index = get_custom(shuffle_val_node).index
         get_custom(init_idx).index = get_custom(shuffle_idx_node).index
@@ -204,7 +219,7 @@ def emit_intrawave_topk_reduction(
     # maximum index, and multiple elements will be masked for the next iteration
     # if we don't communicate a canonical answer.
     final_idx_broadcast = ShuffleOp(init_idx, 0, subgroup_size, ShuffleMode.IDX)
-    final_idx_broadcast_node = get_graph_node(final_idx_broadcast, graph)
+    final_idx_broadcast_node = get_graph_node(final_idx_broadcast, graph, location)
     get_custom(final_idx_broadcast_node).index = get_custom(init_idx).index
 
     return init_val, final_idx_broadcast_node
@@ -262,6 +277,7 @@ def generate_initial_indices(
     local_reduce_size: int,
     constraints: list[Constraint],
     graph: fx.Graph,
+    location: Optional[CapturedLocation],
 ) -> list[fx.Node]:
     """
     Generate initial indices using SelfIndex.
@@ -280,7 +296,7 @@ def generate_initial_indices(
     for register_idx, src in enumerate(topk_src):
         src_custom = get_custom(src)
         self_index = SelfIndex(dim=reduction_dim, dtype=tkl.i32)
-        index_node = get_graph_node(self_index, graph)
+        index_node = get_graph_node(self_index, graph, location)
         src_register_size = subs_idxc(src_custom.index[reduction_dim].size)
         get_custom(index_node).index = construct_self_index_index_sequence(
             reduction_dim,
@@ -304,6 +320,7 @@ def perform_topk_reductions(
     node: fx.Node,
     subgroup_size: int,
     induction_vars: list,
+    location: Optional[CapturedLocation],
 ) -> tuple[list[fx.Node], list[fx.Node]]:
     """
     For each k from 0 to K-1:
@@ -344,6 +361,7 @@ def perform_topk_reductions(
             self_indices,
             graph,
             local_reduce_size,
+            location,
         )
 
         if not cluster_size:
@@ -353,6 +371,7 @@ def perform_topk_reductions(
                 node.vector_shapes,
                 subgroup_size,
                 induction_vars,
+                location,
             )
         global_val, global_idx = emit_intrawave_topk_reduction(
             binary_fn,
@@ -362,6 +381,7 @@ def perform_topk_reductions(
             subgroup_size,
             cluster_size,
             cluster_stride,
+            location,
         )
 
         top_value_registers.append(global_val)
@@ -371,23 +391,23 @@ def perform_topk_reductions(
         if k < k_size - 1:
             dtype = get_custom(working_src[0]).type.dtype
             neg_inf_constant = NewScalar(dtype=dtype, value=float("-inf"))
-            neg_inf_node = get_graph_node(neg_inf_constant, graph)
+            neg_inf_node = get_graph_node(neg_inf_constant, graph, location)
 
             for i, src in enumerate(working_src):
                 src_custom = get_custom(src)
                 global_idx_broadcast = get_graph_node(
-                    Broadcast(global_idx, (reduction_dim,)), graph
+                    Broadcast(global_idx, (reduction_dim,)), graph, location
                 )
                 get_custom(global_idx_broadcast).index = get_custom(
                     self_indices[i]
                 ).index
                 is_at_max_index = get_graph_node(
-                    Eq(self_indices[i], global_idx_broadcast), graph
+                    Eq(self_indices[i], global_idx_broadcast), graph, location
                 )
                 is_at_max_index.index = self_indices[i].index
 
                 src = get_graph_node(
-                    SelectOp(is_at_max_index, neg_inf_node, src), graph
+                    SelectOp(is_at_max_index, neg_inf_node, src), graph, location
                 )
                 get_custom(src).index = get_custom(working_src[i]).index
                 resolve_broadcasting_for_op(
@@ -406,6 +426,7 @@ def pack_topk_results(
     custom,
     k_size: int,
     graph: fx.Graph,
+    location: Optional[CapturedLocation],
 ) -> tuple[fx.Node, fx.Node]:
     """
     Pack the collected register nodes into vector registers of K elements.
@@ -423,8 +444,12 @@ def pack_topk_results(
     """
     # Pack the collected register nodes into vector registers of K elements
     target_shape = {custom.k_dim: k_size}
-    final_values = get_graph_node(Reshape(top_value_registers, target_shape), graph)
-    final_indices = get_graph_node(Reshape(top_index_registers, target_shape), graph)
+    final_values = get_graph_node(
+        Reshape(top_value_registers, target_shape), graph, location
+    )
+    final_indices = get_graph_node(
+        Reshape(top_index_registers, target_shape), graph, location
+    )
 
     # Create index using same keys as original input topk_src
     original_index = get_custom(topk_src[0]).index
@@ -482,7 +507,12 @@ def decompose_topk_op(
         local_reduce_size = validate_topk_sources(topk_src, reduction_dim)
 
         self_indices = generate_initial_indices(
-            topk_src, reduction_dim, local_reduce_size, constraints, custom.graph
+            topk_src,
+            reduction_dim,
+            local_reduce_size,
+            constraints,
+            custom.graph,
+            location,
         )
 
         top_value_registers, top_index_registers = perform_topk_reductions(
@@ -496,6 +526,7 @@ def decompose_topk_op(
             node,
             subgroup_size,
             induction_vars,
+            custom.location,
         )
 
         pack_topk_results(
@@ -505,6 +536,7 @@ def decompose_topk_op(
             custom,
             k_size,
             custom.graph,
+            custom.location,
         )
 
         # Don't delete the TopkOp yet - instead we handle the GetResult ops
