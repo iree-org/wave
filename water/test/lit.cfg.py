@@ -50,6 +50,8 @@ py_pkg_root = os.path.join(config.water_obj_root, "python_packages")
 py_pkg_root = os.environ.get("WATER_PYTHON_PACKAGE_ROOT", py_pkg_root)
 
 config.substitutions.append(("%py_pkg_root", py_pkg_root))
+if config.python_exe:
+    config.substitutions.append(("%python", config.python_exe))
 
 if os.path.isdir(os.path.join(py_pkg_root, "water_mlir")):
     config.available_features.add("water_python")

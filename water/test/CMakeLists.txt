@@ -9,12 +9,16 @@ set(WATER_TEST_DEPENDS
         FileCheck count not
         water-opt
         )
+if(WATER_ENABLE_PYTHON)
+  list(APPEND WATER_TEST_DEPENDS
+       WaterPythonModules
+)
+endif()
+
 add_lit_testsuite(check-water "Running the water regression tests"
         ${CMAKE_CURRENT_BINARY_DIR}
         DEPENDS ${WATER_TEST_DEPENDS}
         )
 set_target_properties(check-water PROPERTIES FOLDER "Tests")
-
-add_lit_testsuites(WATER ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${WATER_TEST_DEPENDS})
 
 add_subdirectory(lib)

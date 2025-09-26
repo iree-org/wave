@@ -5,6 +5,7 @@ add_public_tablegen_target(MLIRWaterTestTransformsIncGen)
 add_mlir_library(MLIRWaterTestTransforms
   Passes.cpp
   TestInUseAnalysis.cpp
+  TestWaveDialectConstructors.cpp
 
   EXCLUDE_FROM_LIBMLIR
 
@@ -15,6 +16,7 @@ add_mlir_library(MLIRWaterTestTransforms
   MLIRIR
   MLIRPass
   MLIRWaterAnalysis
+  MLIRWaveDialect
 )
 target_include_directories(MLIRWaterTestTransforms
   PRIVATE

@@ -11,6 +11,8 @@
 #include "llvm/Support/Compiler.h"
 #include <memory>
 
+#include "water/Dialect/Wave/IR/WaveDialect.h"
+
 namespace mlir {
 namespace water::test {
 #define GEN_PASS_DECL

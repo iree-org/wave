@@ -10,6 +10,7 @@ import os
 import shutil
 from setuptools.command.build_ext import build_ext
 from pathlib import Path
+import sys
 
 
 class CMakeExtension(Extension):
@@ -94,6 +95,7 @@ class CMakeBuild(build_ext):
                 "-G Ninja",
                 "-DLLVM_TARGETS_TO_BUILD=host;AMDGPU",
                 "-DLLVM_ENABLE_PROJECTS=mlir",
+                "-DMLIR_ENABLE_BINDINGS_PYTHON=ON",
                 "-DBUILD_SHARED_LIBS=OFF",
                 "-DLLVM_ENABLE_ASSERTIONS=ON",
                 "-DLLVM_ENABLE_ZSTD=OFF",
@@ -101,6 +103,8 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON",
                 f"-DCMAKE_INSTALL_PREFIX={llvm_install_dir}{os.sep}",
                 f"-DCMAKE_BUILD_TYPE={build_type}",
+                f"-DPython3_EXECUTABLE={sys.executable}",
+                "-DWATER_ENABLE_PYTHON=ON",
             ]
 
             invoke_cmake(llvm_dir / "llvm", *cmake_args, cwd=llvm_build_dir)
@@ -114,6 +118,9 @@ class CMakeBuild(build_ext):
             "-DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON",
             f"-DCMAKE_INSTALL_PREFIX={extdir}{os.sep}",
             f"-DCMAKE_BUILD_TYPE={build_type}",
+            "-DMLIR_ENABLE_BINDINGS_PYTHON=ON",
+            f"-DPython3_EXECUTABLE={sys.executable}",
+            "-DWATER_ENABLE_PYTHON=ON",
         ]
         # Configure CMake
         invoke_cmake(source_dir, *cmake_args, cwd=build_dir)
@@ -122,12 +129,15 @@ class CMakeBuild(build_ext):
         invoke_cmake(
             "--build", ".", "--target", "tools/water-opt/install", cwd=build_dir
         )
+        invoke_cmake(
+            "--build", ".", "--target", "install-WaterPythonModules", cwd=build_dir
+        )
 
 
 setup(
     name="water_mlir",
     version="0.1.0",
-    packages=find_packages(include=["water_mlir"]),
+    packages=find_packages(include=["water_mlir", "water_mlir.*"]),
     ext_modules=[CMakeExtension("water_mlir")],
     cmdclass={"build_ext": CMakeBuild},
 )

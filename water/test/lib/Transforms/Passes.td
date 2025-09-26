@@ -14,3 +14,13 @@ def TestInUseAnalysisPass : Pass<"water-test-in-use-analysis"> {
     regions are identified as in-use, not-in-use or unknown.
   }];
 }
+
+def TestWaveDialectConstructorsPass : Pass<"water-test-wave-dialect-constructors"> {
+  let summary = "Test error messages from Wave dialect constructors";
+  let description = [{
+    Construct attributes and types from primitive elements using `getChecked` to
+    trigger error emission instead of assertions.
+  }];
+
+  let dependentDialects = ["::wave::WaveDialect"];
+}

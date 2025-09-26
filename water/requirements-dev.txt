@@ -6,3 +6,4 @@ lit
 pytest
 pytest-xdist
 pytest-timeout
+sympy
