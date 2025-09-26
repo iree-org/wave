@@ -366,14 +366,14 @@ def _get_constant_value(candidate: Value):
 def _cast_buffer_and_encode_stride(
     ptr: Value, strides: tuple[Value], elem_type: IrType, emitter: WaveEmitter
 ) -> Value:
-    uint32 = IntegerType.get_signless(32)
+    uint64 = IntegerType.get_signless(64)
     uint14 = IntegerType.get_signless(14)
 
     valid_bytes = _valid_bytes_buffer(
         elem_type
     )  # max bytes that are in range to be addressed from a buffer
-    valid_bytes_constant = get_constant_attr(valid_bytes, uint32)
-    valid_bytes_constant = arith_d.constant(uint32, valid_bytes_constant)
+    valid_bytes_constant = get_constant_attr(valid_bytes, uint64)
+    valid_bytes_constant = arith_d.constant(uint64, valid_bytes_constant)
     stride_rank = len(strides)
     swizzle_stride = None
 

@@ -344,6 +344,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             location_capture_config=options.location_capture_config,
             async_dispatch=is_async,
         )
+        mb.module_op.verify()
         asm = mb.module_op.get_asm(
             enable_debug_info=options.location_capture_config.level
             != LocationCaptureLevel.NONE,
