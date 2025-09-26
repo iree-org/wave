@@ -2435,7 +2435,7 @@ def test_no_map_atomic_add():
     constraints += [tkw.TilingConstraint(B)]
 
     @tkw.wave(constraints)
-    def iterated_gemm(
+    def atomic_add_one(
         a: tkl.Memory[M, ADDRESS_SPACE, tkl.i32],
         c: tkl.Memory[M, ADDRESS_SPACE_0, tkl.i32],
     ):
@@ -2457,14 +2457,15 @@ def test_no_map_atomic_add():
         },
         canonicalize=True,
     )
-    iterated_gemm = wave_compile(options, iterated_gemm)
+    options = set_default_run_config(options)
+    atomic_add_one = wave_compile(options, atomic_add_one)
 
     # generate random input tensors between -1 and 1
     a = torch.randint(0, 10, (64,), dtype=torch.int32).cuda()
     c = torch.zeros((64,), dtype=torch.int32).cuda()
     a_expected = a.clone() + 1
     a_original = a.clone()
-    iterated_gemm(a, c)
+    atomic_add_one(a, c)
 
     assert torch.equal(c, a_original)
     assert torch.equal(a, a_expected)
