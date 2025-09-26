@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import sys
 from collections import namedtuple
 from dataclasses import dataclass
 from os import environ
@@ -22,6 +21,7 @@ from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.lang import Memory
 from wave_lang.kernel.lang.kernel_buffer import KernelBuffer
 from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.support.logging import get_logger
 from wave_lang.support.ir_imports import (
     AffineExpr,
     AffineMap,
@@ -56,6 +56,8 @@ from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint, HardwareConstraint, TilingConstraint
 from ..utils.general_utils import get_hardware_constraint
 from ..utils.symbol_utils import subs_idxc, is_literal
+
+logger = get_logger("wave.ops_location_check")
 
 
 def _get_upper_bound(expr: Any) -> Optional[Attribute]:
@@ -160,9 +162,9 @@ class WaveEmitter:
                 ir_location = location.to_mlir() if location else Location.unknown()
                 with ir_location:
                     handler(self, node)
-        except:
-            print(f"Error handling {node}", file=sys.stderr)
-            raise
+        except e:
+            logger.error(f"Error handling {node}")
+            raise e
 
     def lookup_node_values(self, node: fx.Node) -> List[Value]:
         assert NDEBUG or isinstance(node, fx.Node)
