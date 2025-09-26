@@ -39,7 +39,8 @@ jobs:
       image: 'ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:405945a40deaff9db90b9839c0f41d4cba4a383c1a7459b28627047bf6302a26'
       options: >-
         --ipc host
-        --group-add video
+        --group-add 44
+        --group-add 992
         --device /dev/kfd
         --device /dev/dri
         -v "/opt/rocm":"/opt/rocm":ro
@@ -65,7 +66,7 @@ jobs:
           python-version: ${{matrix.version}}
       - name: Create Python venv
         run: |
-           python -m venv ${VENV_DIR}
+           python3 -m venv ${VENV_DIR}
            source ${VENV_DIR}/bin/activate
            echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
            echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
@@ -79,14 +80,15 @@ jobs:
       - name: Install pip deps
         if: ${{ !cancelled() }}
         run: |
-          # Install TheRock
+          # Install User libraries
           sudo apt-get update
-          sudo apt install -y gfortran build-essential binutils
-          sudo apt install -y libdrm2 libice6 libsm6
+          sudo apt install -y libnuma1 numactl gfortran build-essential binutils
+
+          # Install torch+rocm6.4
+          python -m pip install --no-compile --upgrade pip
+          pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
 
           # Install wave deps
-          python -m pip install --no-compile --upgrade pip
-          pip install --no-compile -r pytorch-rocm-requirements.txt
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -r requirements.txt -e .
 
