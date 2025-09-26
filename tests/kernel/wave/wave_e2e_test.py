@@ -45,6 +45,7 @@ from .common.utils import (
     require_cdna3,
     require_e2e,
     require_cdna_2_or_3_or_4,
+    require_rdna4,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
 
@@ -953,7 +954,16 @@ def test_offset_write_one(shape, use_buffer_ops, run_bench):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_reduce_sum"))
-def test_reduce_sum(shape, run_bench):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        # Enabling wave64 mode on RDNA generates intrinsic %llvm.amdgcn.permlane32.swap,
+        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_reduce_sum(shape, run_bench, threads_per_wave):
     M = tkl.sym.M
     N = tkl.sym.N
     wave_size = 64
@@ -963,7 +973,7 @@ def test_reduce_sum(shape, run_bench):
 
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             vector_shapes={M: 1, N: BLOCK_N},
         )
     ]
@@ -1007,11 +1017,20 @@ def test_reduce_sum(shape, run_bench):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_common_test_shape("test_block_reduce"))
-def test_block_reduce_sum(shape, run_bench):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        # Enabling wave64 mode on RDNA generates %llvm.amdgcn.permlane32.swap,
+        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_block_reduce_sum(shape, run_bench, threads_per_wave):
     round_to_divisible = lambda src, denom: sympy.ceiling(src / denom) * denom
     M = tkl.sym.M
     N = tkl.sym.N
-    wave_size = 64
+    wave_size = threads_per_wave
     num_waves = 4
     BLOCK_M = 1
 
@@ -1068,17 +1087,25 @@ def test_block_reduce_sum(shape, run_bench):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_tiled_reduce_max"))
-def test_toy_online_softmax(shape):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        # Enabling wave64 mode on RDNA generates intrinsic %llvm.amdgcn.permlane32.swap,
+        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_toy_online_softmax(shape, threads_per_wave):
     M = tkl.sym.M
     N = tkl.sym.N
-    wave_size = 64
     BLOCK_M = 1
     BLOCK_N = tkl.sym.BLOCK_N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
-            threads_per_wave=wave_size,
+            threads_per_wave=threads_per_wave,
             vector_shapes={M: 1, N: BLOCK_N},
         )
     ]
@@ -1122,7 +1149,7 @@ def test_toy_online_softmax(shape):
         subs={
             M: shape[0],
             N: shape[1],
-            BLOCK_N: max(min(128, shape[1]), wave_size),
+            BLOCK_N: max(min(128, shape[1]), threads_per_wave),
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
         },
         canonicalize=True,
@@ -1883,17 +1910,25 @@ def test_broadcast_scaled_add(shape, run_bench):
 @require_e2e
 @pytest.mark.parametrize("shape", [(2, 128), (256, 1024)])
 @param_bool("use_buffer_ops", "buf_ops")
-def test_fused_softmax(shape, use_buffer_ops):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        # Enabling wave64 mode on RDNA generates intrinsic %llvm.amdgcn.permlane32.swap,
+        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_fused_softmax(shape, use_buffer_ops, threads_per_wave):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
-    wave_size = 64
     BLOCK_M = 1
 
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
-            threads_per_wave=wave_size,
+            threads_per_wave=threads_per_wave,
             vector_shapes={M: BLOCK_M, N: N},
         )
     ]
@@ -2021,13 +2056,22 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
 
 @require_e2e
 @pytest.mark.parametrize("shape", [(48, 4, 128)])
-def test_self_index(shape, run_bench):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        # Enabling wave64 mode on RDNA generates %llvm.amdgcn.permlane32.swap,
+        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_self_index(shape, run_bench, threads_per_wave):
     M = tkl.sym.M
     K = tkl.sym.K
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
-    wave_size = 64
+    wave_size = threads_per_wave
     BLOCK_M = shape[0]
     BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
 
