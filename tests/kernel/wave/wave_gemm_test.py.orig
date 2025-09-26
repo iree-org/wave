@@ -1352,9 +1352,14 @@ def testPackedGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
+<<<<<<< HEAD
+    vector_shapes={B: 0, M: 16, N: 16},
+    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant, vector_shapes=vector_shapes)]
+=======
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
     ]
+>>>>>>> 8c86920 (pre-commit formatting)
 
     # With dynamic dimensions, we need to add an assumption on how big
     # the iterate dimension is to determine whether we can schedule or not.
@@ -1364,8 +1369,8 @@ def testPackedGemm(
     # Wave-level micro-kernel.
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K / 2, ADDRESS_SPACE, tkl.i32],
-        b: tkl.Memory[N, K / 2, ADDRESS_SPACE, tkl.i32],
+        a: tkl.Memory[M, K // 2, ADDRESS_SPACE, tkl.i32],
+        b: tkl.Memory[N, K // 2, ADDRESS_SPACE, tkl.i32],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
@@ -2148,6 +2153,7 @@ def test_cdna4_mfma(shape: tuple[int], datatype: torch.dtype, mfma_variant: MMAT
     assert_close(c, iree_ref, check_device=False)
 
 
+<<<<<<< HEAD
 @require_e2e
 @require_cdna4
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
@@ -2323,8 +2329,10 @@ def testFloatHwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
         c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
     )
 
-
+#TODO(megan.kuo) Add parameters when more MMA types are supported.
+=======
 # TODO(megan.kuo) Add parameters when more MMA types are supported.
+>>>>>>> 8c86920 (pre-commit formatting)
 @require_e2e
 @require_rdna4
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])

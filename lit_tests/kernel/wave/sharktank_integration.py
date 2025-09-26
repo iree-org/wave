@@ -1,4 +1,4 @@
-# RUN: python %s | FileCheck %s
+# RUN: python %s | FileCheck %s --check-prefix=CHECK,CHECK-%target
 
 import textwrap
 from typing import Optional
@@ -33,6 +33,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
 from wave_lang.kernel.wave.utils.run_utils import (
+    get_arch_family,
     set_default_run_config,
 )
 from wave_lang.runtime.op_reg.base import (
@@ -139,7 +140,18 @@ class WaveBhsdFlashAttentionSharktankOp(CustomOp):
             kv_seq_len=v_s,
         )
 
-        mfma_variant = (tkw.MMAType.F32_32x32x8_F16, tkw.MMAType.F32_32x32x8_F16)
+        match get_arch_family():
+            case "RDNA":
+                mfma_variant = (
+                    tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                    tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                )
+            case "CDNA":
+                mfma_variant = (
+                    tkw.MMAType.F32_32x32x8_F16,
+                    tkw.MMAType.F32_32x32x8_F16,
+                )
+
         dynamic_dims = False
         is_causal = True
         is_custom_mask = False
@@ -286,19 +298,41 @@ def test_aot_wave_integration_to_sharktank():
     # CHECK-LABEL:       stream.executable.export public @base_attention
 
     # CHECK-LABEL:       func.func @base_attention
-    # CHECK:                %[[ZERO_1:.+]] = arith.constant dense<0.000000e+00> : vector<16xf32>
-    # CHECK:                %[[ZERO_2:.+]] = arith.constant dense<0.000000e+00> : vector<16xf32>
-    # CHECK:                %[[ZERO_3:.+]] = arith.constant dense<0.000000e+00> : vector<16xf32>
-    # CHECK:                %[[NEG_INF:.+]] = arith.constant dense<-1.000000e+06> : vector<16xf32>
+    # CHECK-CDNA:           %[[ZERO_1:.+]] = arith.constant dense<0.000000e+00> : vector<16xf32>
+    # CHECK-RDNA:           %[[ZERO_1:.+]] = arith.constant dense<0.000000e+00> : vector<8xf32>
+
+    # CHECK-CDNA:           %[[ZERO_2:.+]] = arith.constant dense<0.000000e+00> : vector<16xf32>
+    # CHECK-RDNA:           %[[ZERO_2:.+]] = arith.constant dense<0.000000e+00> : vector<8xf32>
+
+    # CHECK-CDNA:           %[[ZERO_3:.+]] = arith.constant dense<0.000000e+00> : vector<16xf32>
+    # CHECK-RDNA:           %[[ZERO_3:.+]] = arith.constant dense<0.000000e+00> : vector<8xf32>
+
+    # CHECK-CDNA:           %[[NEG_INF:.+]] = arith.constant dense<-1.000000e+06> : vector<16xf32>
+    # CHECK-RDNA:           %[[NEG_INF:.+]] = arith.constant dense<-1.000000e+06> : vector<8xf32>
+
     # CHECK:                {{.*}} = scf.for
-    # CHECK-COUNT-32:           {{.*}} = amdgpu.mfma
-    # CHECK-COUNT-2:            {{.*}} = arith.cmpi slt, {{.*}} : vector<16xindex>
-    # CHECK-COUNT-2:            {{.*}} = arith.cmpi sge, {{.*}} : vector<16xi32>
-    # CHECK-COUNT-2:            {{.*}} = arith.andi {{.*}} : vector<16xi1>
-    # CHECK-COUNT-2:            {{.*}} = arith.select %{{.*}}, %[[ZERO_3]], %[[NEG_INF]] : vector<16xi1>, vector<16xf32>
-    # CHECK-COUNT-2:            {{.*}} = arith.addf %{{.*}}, %{{.*}} : vector<16xf32>
+    # CHECK-CDNA-COUNT-32:      {{.*}} = amdgpu.mfma
+    # CHECK-RDNA-COUNT-64:      {{.*}} = amdgpu.wmma
+
+    # CHECK-CDNA-COUNT-2:       {{.*}} = arith.cmpi slt, {{.*}} : vector<16xindex>
+    # CHECK-RDNA-COUNT-2:       {{.*}} = arith.cmpi slt, {{.*}} : vector<8xindex>
+
+    # CHECK-CDNA-COUNT-2:       {{.*}} = arith.cmpi sge, {{.*}} : vector<16xi32>
+    # CHECK-RDNA-COUNT-2:       {{.*}} = arith.cmpi sge, {{.*}} : vector<8xi32>
+
+    # CHECK-CDNA-COUNT-2:       {{.*}} = arith.andi {{.*}} : vector<16xi1>
+    # CHECK-RDNA-COUNT-2:       {{.*}} = arith.andi {{.*}} : vector<8xi1>
+
+    # CHECK-CDNA-COUNT-2:       {{.*}} = arith.select %{{.*}}, %[[ZERO_3]], %[[NEG_INF]] : vector<16xi1>, vector<16xf32>
+    # CHECK-RDNA-COUNT-2:       {{.*}} = arith.select %{{.*}}, %{{.*}}, %[[NEG_INF]] : vector<8xi1>, vector<8xf32>
+
+    # CHECK-CDNA-COUNT-2:       {{.*}} = arith.addf %{{.*}}, %{{.*}} : vector<16xf32>
+    # CHECK-RDNA-COUNT-2:       {{.*}} = arith.addf %{{.*}}, %{{.*}} : vector<8xf32>
+
     # CHECK-COUNT-2:            {{.*}} = gpu.shuffle xor {{.*}}
-    # CHECK-COUNT-16:            {{.*}} = amdgpu.mfma
+
+    # CHECK-CDNA-COUNT-16:            {{.*}} = amdgpu.mfma
+    # CHECK-RDNA-COUNT-32:            {{.*}} = amdgpu.wmma
 
     # CHECK-LABEL:       func.func private @wave_flash_attention_4_32_128_128_f16_f32
 

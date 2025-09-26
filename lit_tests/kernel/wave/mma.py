@@ -441,3 +441,120 @@ def test_mma_with_linear_shared_access():
     # CHECK-DAG:        %[[D20:.+]] = vector.load %[[LINEAR_ALLOC_0]][{{.*}}] : memref<640xf16,
     # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 16 : i32, m = 16 :
     # CHECK-SAME:         i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+
+@run_test
+def test_wmma_f32_16x16x16_f16_w32():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32, mma_type=tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        acc = tkw.mma(a_reg, b_reg, c_reg)
+        tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 128,
+            K: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            LOAD_ELEMS_PER_THREAD: 8,
+            STORE_ELEMS_PER_THREAD: 8,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx1201",
+    )
+    mma = wave_compile(compile_options, mma)
+    print(mma.asm)
+
+    # CHECK-LABEL: test_wmma_f32_16x16x16_f16_w32
+    # CHECK:          func.func @mma
+    # CHECK-DAG:        %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<8xf32>
+
+    # CHECK-DAG:        %[[BID_X:.+]] = gpu.block_id  x upper_bound 4
+    # CHECK-DAG:        %[[BID_Y:.+]] = gpu.block_id  y upper_bound 8
+    # CHECK-DAG:        %[[TID_X:.+]] = gpu.thread_id  x upper_bound 32
+
+    # CHECK-DAG:        %[[BASE_ALLOC:.+]] = memref.alloc() : memref
+    # CHECK-DAG:        %[[VIEW0:.+]] = memref.view %[[BASE_ALLOC]]
+    # CHECK-DAG:        %[[VIEW1:.+]] = memref.view %[[BASE_ALLOC]]
+
+    # CHECK-DAG:        %[[V0:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref
+
+    # CHECK-DAG:        %[[V1:.+]] = affine.apply #map()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        %[[V2:.+]] = affine.apply #map1()[%[[TID_X]]]
+    # CHECK-DAG:        %[[R1:.+]] = vector.load %[[V0]][%[[V1]], %[[V2]]] {{.*}} vector<8xf16>
+
+    # CHECK-DAG:        %[[V4:.+]] = affine.apply #map2()[%[[TID_X]]]
+    # CHECK-DAG:        vector.store %[[R1]], %[[VIEW1]][%[[V4]], %[[V2]]] {{.*}} vector<8xf16>
+
+    # CHECK-DAG:        %[[V5:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref
+
+    # CHECK-DAG:        %[[V6:.+]] = affine.apply #map3()[%[[TID_X]], %[[BID_Y]]]
+    # CHECK-DAG:        %[[R2:.+]] = vector.load %[[V5]][%[[V6]], %[[V2]]] {{.*}} vector<8xf16>
+
+    # CHECK-DAG:        %[[V8:.+]] = affine.apply #map4()[%[[TID_X]]]
+    # CHECK-DAG:        vector.store %[[R2]], %[[VIEW0]][%[[V8]], %[[V2]]] {{.*}} vector<8xf16>
+
+    # CHECK-DAG:        amdgpu.lds_barrier
+
+    # CHECK-DAG:        %[[R3:.+]] = vector.load %[[VIEW0]][%[[V8]], %[[V2]]] {{.*}} vector<8xf16>
+    # CHECK-DAG:        %[[R4:.+]] = vector.load %[[VIEW1]][%[[V4]], %[[V2]]] {{.*}} vector<8xf16>
+
+    # CHECK-DAG:        %[[V11:.+]] = amdgpu.wmma %[[R4]] * %[[R3]] + %[[CST]] : vector<8xf16>, vector<8xf16>, vector<8xf32>
+
+    # CHECK-DAG:        %[[E1:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [0], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+
+    # CHECK-DAG:        %[[V13:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref
+    # CHECK-DAG:        %[[V14:.*]] = affine.apply #map5()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E1]], %[[V13]][%[[V14]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK-DAG:        %[[E2:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [1], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+    # CHECK-DAG:        %[[V16:.*]] = affine.apply #map6()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E2]], %[[V13]][%[[V16]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK-DAG:        %[[E3:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [2], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+    # CHECK-DAG:        %[[V18:.*]] = affine.apply #map7()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E3]], %[[V13]][%[[V18]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK-DAG:        %[[E4:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [3], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+    # CHECK-DAG:        %[[V20:.*]] = affine.apply #map8()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E4]], %[[V13]][%[[V20]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK-DAG:        %[[E5:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [4], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+    # CHECK-DAG:        %[[V22:.*]] = affine.apply #map9()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E5]], %[[V13]][%[[V22]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK-DAG:        %[[E6:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [5], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+    # CHECK-DAG:        %[[V24:.*]] = affine.apply #map10()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E6]], %[[V13]][%[[V24]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK-DAG:        %[[E7:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [6], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+    # CHECK-DAG:        %[[V26:.*]] = affine.apply #map11()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E7]], %[[V13]][%[[V26]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK-DAG:        %[[E8:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [7], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
+    # CHECK-DAG:        %[[V28:.*]] = affine.apply #map12()[%[[TID_X]], %[[BID_X]]]
+    # CHECK-DAG:        vector.store %[[E8]], %[[V13]][%[[V28]], %[[V6]]] {{.*}} vector<1xf32>
+
+    # CHECK:            return

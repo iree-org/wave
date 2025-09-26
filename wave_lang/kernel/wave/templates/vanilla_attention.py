@@ -56,13 +56,19 @@ def get_vanilla_attention_kernel(
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
+        TPW = 64
     if mfma_variant[1] == MMAType.F32_32x32x8_F16:
         Mvec = 32
         Nvec = 32
+        TPW = 64
+    if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 32
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=TPW,
             mma_type=mfma_variant[1],
             vector_shapes={B: 0, M: Mvec, N: Nvec},
         )
@@ -135,7 +141,7 @@ def get_vanilla_attention_kernel(
             else:
                 v_reg = tkw.read(v, mapping=v_mapping)
             new_acc = acc * e_delta_max
-            acc = tkw.mma(v_reg, imm_f16, new_acc)
+            acc = tkw.mma(v_reg, imm_f16, new_acc, mfma_variant[1])
             return m_j, d_j, acc
 
         # repeat represents the results of the loop
@@ -229,13 +235,19 @@ def get_bshd_attention_kernel(
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
+        TPW = 64
     if mfma_variant[1] == MMAType.F32_32x32x8_F16:
         Mvec = 32
         Nvec = 32
+        TPW = 64
+    if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 32
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=TPW,
             mma_type=mfma_variant[1],
             vector_shapes={B: 0, H: 0, M: Mvec, N: Nvec},
         )
@@ -476,13 +488,19 @@ def get_bhsd_attention_kernel(
     if mfma_variant[1] == MMAType.F32_16x16x16_F16:
         Mvec = 16
         Nvec = 16
+        TPW = 64
     if mfma_variant[1] == MMAType.F32_32x32x8_F16:
         Mvec = 32
         Nvec = 32
+        TPW = 64
+    if mfma_variant[1] == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+        Mvec = 16
+        Nvec = 16
+        TPW = 32
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=TPW,
             mma_type=mfma_variant[1],
             vector_shapes={B: 0, H: 0, M: Mvec, N: Nvec},
         )
