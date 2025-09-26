@@ -142,9 +142,15 @@ class WaveBhsdFlashAttentionSharktankOp(CustomOp):
 
         match get_arch_family():
             case "RDNA":
-                mfma_variant = (tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16)
+                mfma_variant = (
+                    tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                    tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+                )
             case "CDNA":
-                mfma_variant = (tkw.MMAType.F32_32x32x8_F16, tkw.MMAType.F32_32x32x8_F16)
+                mfma_variant = (
+                    tkw.MMAType.F32_32x32x8_F16,
+                    tkw.MMAType.F32_32x32x8_F16,
+                )
 
         dynamic_dims = False
         is_causal = True

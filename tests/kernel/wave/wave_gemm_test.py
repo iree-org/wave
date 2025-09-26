@@ -1352,7 +1352,9 @@ def testPackedGemm(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
-    constraints += [tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)]
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+    ]
 
     # With dynamic dimensions, we need to add an assumption on how big
     # the iterate dimension is to determine whether we can schedule or not.
@@ -2321,18 +2323,22 @@ def testFloatHwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
         c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
     )
 
-#TODO(megan.kuo) Add parameters when more MMA types are supported.
+
+# TODO(megan.kuo) Add parameters when more MMA types are supported.
 @require_e2e
 @require_rdna4
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
 @pytest.mark.parametrize("datatype", [torch.float16])
 @pytest.mark.parametrize(
     "mfma_variant, threads_per_wave",
-    [
-        (MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32)
-    ],
+    [(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32)],
 )
-def test_rdna4_wmma(shape: tuple[int], datatype: torch.dtype, mfma_variant: MMAType, threads_per_wave: int):
+def test_rdna4_wmma(
+    shape: tuple[int],
+    datatype: torch.dtype,
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, False, mfma_variant, datatype, threads_per_wave=threads_per_wave
     )
