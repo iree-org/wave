@@ -7,6 +7,7 @@ import lit.llvm
 import lit.util
 
 from wave_lang.support.logging import get_logger
+from wave_lang.kernel.wave.utils.run_utils import get_arch_family
 
 logger = get_logger("wave.lit_tests")
 
@@ -33,6 +34,7 @@ config.excludes = ["__init__.py", "lit.cfg.py", "lit.site.cfg.py"]
 config.substitutions.extend(
     [
         ("%PYTHON", sys.executable),
+        ("%target", get_arch_family()),
     ]
 )
 
