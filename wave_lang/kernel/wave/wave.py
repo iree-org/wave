@@ -820,7 +820,7 @@ class LaunchableWave(Launchable):
                 trace,
                 "enforce-locations",
                 log=False,
-                enforce_100=options.enforce_locations,
+                enforce_locations=options.enforce_locations,
             )
         )
 

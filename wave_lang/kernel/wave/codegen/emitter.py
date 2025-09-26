@@ -152,21 +152,17 @@ class WaveEmitter:
             node, "location", None
         )  # type: Optional[FileLineColInfo | StackTraceInfo]
 
-        if self.options.drop_debug_info_before_mlir:
-            # Don't use any location context to avoid printing locations in MLIR
-            try:
+        try:
+            if self.options.drop_debug_info_before_mlir:
+                # Don't use any location context to avoid printing locations in MLIR
                 handler(self, node)
-            except:
-                print(f"Error handling {node}", file=sys.stderr)
-                raise
-        else:
-            ir_location = location.to_mlir() if location else Location.unknown()
-            with ir_location:
-                try:
+            else:
+                ir_location = location.to_mlir() if location else Location.unknown()
+                with ir_location:
                     handler(self, node)
-                except:
-                    print(f"Error handling {node}", file=sys.stderr)
-                    raise
+        except:
+            print(f"Error handling {node}", file=sys.stderr)
+            raise
 
     def lookup_node_values(self, node: fx.Node) -> List[Value]:
         assert NDEBUG or isinstance(node, fx.Node)
