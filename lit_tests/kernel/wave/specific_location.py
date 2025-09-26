@@ -47,6 +47,7 @@ def test_reduce_op_location():
         ),
         use_local_scope=True,
         canonicalize=False,
+        drop_debug_info_before_mlir=False,
     )
     from wave_lang.kernel.wave.utils.compile_utils import set_default_compile_config
 
@@ -69,19 +70,19 @@ def test_reduce_op_location():
     print(reduce_sum_kernel.asm)
 
     # CHECK-LABEL: @reduce_sum_kernel
-    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":61
     # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":62
+    # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":63
 
     # multiply
-    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":63
+    # CHECK: arith.mulf {{.*}} loc("{{.*}}specific_location.py":64
     # cast
-    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":64
+    # CHECK: arith.extf {{.*}} loc("{{.*}}specific_location.py":65
 
     # reduce
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":65
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":65
-    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":65
-    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":65
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":66
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":66
+    # CHECK: arith.addf {{.*}} loc("{{.*}}specific_location.py":66
+    # CHECK: gpu.shuffle {{.*}} loc("{{.*}}specific_location.py":66
 
     # write
-    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":66
+    # CHECK: vector.store {{.*}} loc("{{.*}}specific_location.py":67
