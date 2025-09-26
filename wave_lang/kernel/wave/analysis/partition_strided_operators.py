@@ -450,7 +450,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
 
                     # Otherwise, we need to extract the dynamic value for the current vector element.
                     extract = ExtractSlice(dynamic_val, [i], [1], [1]).add_to_graph(
-                        custom.graph
+                        custom.graph, loc=custom.location
                     )
                     extract.index = new_index
                     new_dynamic_vals.append(extract)
@@ -458,7 +458,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                 if isinstance(custom, Write):
                     extract = ExtractSlice(
                         custom.register_, [i], [1], [1]
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                     extract.index = new_index
                     new_node = Write(
                         extract,
@@ -466,7 +466,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         elements_per_thread=1,
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                 elif isinstance(custom, Read):
                     new_node = Read(
                         custom.memory,
@@ -474,7 +474,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         _write_dependency=custom._write_dependency,
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                 else:
                     raise NotImplementedError(f"Unsupported op type: {custom}")
 
