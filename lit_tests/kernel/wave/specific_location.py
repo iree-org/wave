@@ -70,6 +70,11 @@ def test_reduce_op_location():
     print(reduce_sum_kernel.asm)
 
     # CHECK-LABEL: @reduce_sum_kernel
+
+    # Test that placeholder locations are placed on function arguments.
+    # CHECK: @reduce_sum_kernel(%{{.*}} loc("a"("{{.*}}specific_location.py":56{{.*}})))
+
+    # load
     # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":62
     # CHECK: vector.load {{.*}} loc("{{.*}}specific_location.py":63
 

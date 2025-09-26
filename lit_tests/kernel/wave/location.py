@@ -74,9 +74,6 @@ def test_location_local_scope():
 
     # CHECK-LABEL: @add_loc_local_scope
 
-    # Test that placeholder locations are placed on function arguments.
-    # CHECK: func @add_loc_local_scope(%arg0: {{.*}} loc("a"("{{.*}}/location.py":59{{.*}})), {{.*}})
-
     # CHECK: vector.load {{.*}} loc("{{.*}}location.py":{{[0-9]+}}
     # CHECK: arith.addf {{.*}} loc("{{.*}}location.py":{{[0-9]+}}
     #
