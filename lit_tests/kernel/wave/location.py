@@ -33,6 +33,7 @@ def _make_options(
     *,
     loc_level: LocationCaptureLevel,
     use_local_scope: bool = False,
+    enforce_locations: bool = True,
 ) -> WaveCompileOptions:
     subs = {
         M: 16,
