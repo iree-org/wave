@@ -118,6 +118,7 @@ def get_default_arch() -> str:
         return gcnArch[0:colon_pos]
     return gcnArch
 
+
 def get_arch_family() -> str:
     """Returns the microarch name of the default architecture"""
     match get_default_arch():
@@ -125,6 +126,7 @@ def get_arch_family() -> str:
             return "RDNA"
         case _:
             return "CDNA"
+
 
 # Whether to dump the generated MLIR module.
 dump_generated_mlir = int(os.environ.get("WAVE_DUMP_MLIR", 0))
