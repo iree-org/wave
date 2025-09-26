@@ -32,6 +32,7 @@ from .indexing import (
 )
 from ...support.location_config import LocationCaptureConfig
 from .regions import RegionGraph, SubgraphTracer
+from ..wave.mlir_converter.utility import snapshot_node_fields, restore_node_fields
 
 try:
     from typing import assert_type
@@ -187,6 +188,16 @@ class CapturedTrace:
                 if filter is None or filter(node):
                     nodes.append(node)
         return nodes
+
+    def snapshot_node_state(self) -> None:
+        # Snapshot supplemental node fields for pickling
+        for node in self.walk():
+            snapshot_node_fields(node)
+
+    def restore_node_state(self) -> None:
+        # Restore supplemental node fields after unpickling
+        for node in self.walk():
+            restore_node_fields(node)
 
 
 ###############################################################################
