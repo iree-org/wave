@@ -6,6 +6,8 @@
 from typing import Dict, List, Optional, Any
 import re
 
+import torch
+
 from iree.compiler import compile_str
 from iree.compiler.dialects import (
     _structured_transform_ops_gen as structured_transform_ops,
@@ -47,6 +49,9 @@ def compile_to_vmfb(
     # TODO: More targets/backends support.
     if options.device == "hip":
         flags.append(f"--iree-hip-target={options.target}")
+
+    if options.device == "cuda":
+        flags.append(f"--iree-cuda-target={options.target}")
 
     if options.mlir_print_ir_after_all:
         flags.append("--mlir-print-ir-after-all")
@@ -150,9 +155,19 @@ def canonicalize_module(module: Operation):
 
 def set_default_compile_config(options: WaveCompileOptions) -> WaveCompileOptions:
     """Return default config for compilation."""
-    options.device = "hip"
-    options.target = "gfx942"
-    return options
+    if not torch.cuda.is_available():
+        options.device = "hip"
+        options.target = "gfx942"
+        return options
+    else:
+        props = torch.cuda.get_device_properties(torch.device)
+        if hasattr(props, "gcnArchName") and "NVIDIA" not in props.name:
+            options.device = "hip"
+            options.target = "gfx942"
+        else:
+            options.device = "cuda"
+            options.target = "sm_86"
+        return options
 
 
 def get_wave_module_body_asm(module: Module) -> str:

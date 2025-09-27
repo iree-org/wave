@@ -45,6 +45,7 @@ from .common.utils import (
     require_cdna3,
     require_e2e,
     require_cdna_2_or_3_or_4,
+    require_nvidia,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
 
@@ -2212,6 +2213,63 @@ def test_scatter_add(shape, elems_per_thread, request):
 
     torch_output = scatter_add_baseline(input, index)
     assert_close(output, torch_output)
+
+
+@require_e2e
+@require_nvidia
+@pytest.mark.parametrize("shape", [(128), (256), (1024), (2048)])
+def test_elementwise_add(shape):
+    M = tkl.sym.M
+    BLOCK_M = tkl.sym.BLOCK_M
+
+    ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
+    ADDRESS_SPACE_B = tkl.sym.ADDRESS_SPACE_B
+    ADDRESS_SPACE_C = tkl.sym.ADDRESS_SPACE_C
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M}),
+    ]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, ADDRESS_SPACE_A, tkl.f32],
+        b: tkl.Memory[M, ADDRESS_SPACE_B, tkl.f32],
+        c: tkl.Memory[M, ADDRESS_SPACE_C, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, tkl.f32](0.0)
+        a_reg = tkw.read(a)
+        b_reg = tkw.read(b)
+        c_reg = a_reg + b_reg
+        tkw.write(c_reg, c)
+
+    m = shape
+
+    torch.manual_seed(0)
+    a = torch.randn(m, dtype=torch.float32, device="cuda")
+    b = torch.zeros(m, dtype=torch.float32, device="cuda")
+    c = torch.zeros(m, dtype=torch.float32, device="cuda")
+
+    hyperparams = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        M: m,
+    }
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+    )
+    options = set_default_run_config(options)
+    compiled_kernel = wave_compile(options, test)
+
+    compiled_kernel(a, b, c)
+
+    expected = a + b
+
+    assert_close(c, expected)
 
 
 @require_e2e

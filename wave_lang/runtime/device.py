@@ -683,7 +683,7 @@ def _create_device_from_torch(torch_device: torch.device) -> Optional[Device]:
     elif torch_type == "cuda":
         # Fork based on HIP or real CUDA.
         props = torch.cuda.get_device_properties(torch_device)
-        if not hasattr(props, "gcnArchName"):
+        if "NVIDIA" in props.gcnArchName:
             # Real CUDA.
             return _create_cuda_device(torch_device, props)
         else:
@@ -695,7 +695,7 @@ def _create_device_from_torch(torch_device: torch.device) -> Optional[Device]:
 
 def _create_cuda_device(torch_device: torch.device, props) -> Optional[Device]:
     # Note that the dlpack device type code for real CUDA ROCM is 2.
-    device = _create_cuda_like_device(torch_device, props, "hip", 2, None)
+    device = _create_cuda_like_device(torch_device, props, "cuda", 2, None)
     if device:
         device.compile_target_flags = device.compile_target_flags + (
             f"--iree-hal-cuda-llvm-target-arch=sm_{props.major}{props.minor}",

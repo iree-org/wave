@@ -106,17 +106,18 @@ def get_default_arch() -> str:
 
     if not torch.cuda.is_available():
         return "cpu"
+    else:
+        device = torch.device("cuda")
+        props = torch.cuda.get_device_properties(device)
 
-    device = torch.device("cuda")
-    gcnArch = torch.cuda.get_device_properties(device).gcnArchName
-    if "gfx" not in gcnArch:
-        return "cpu"
-
-    # The gcnArchName comes back like gfx90a:sramecc+:xnack.
-    colon_pos = gcnArch.find(":")
-    if colon_pos > 0:
-        return gcnArch[0:colon_pos]
-    return gcnArch
+        if "gfx" not in props.gcnArchName:
+            return "sm_86"
+        else:
+            # The gcnArchName comes back like gfx90a:sramecc+:xnack.
+            colon_pos = props.gcnArchName.find(":")
+            if colon_pos > 0:
+                return props.gcnArchName[0:colon_pos]
+            return props.gcnArchName
 
 
 # Whether to dump the generated MLIR module.
@@ -145,6 +146,17 @@ def set_default_run_config(options: WaveCompileOptions) -> WaveCompileOptions:
     if enable_scheduling_barriers is not None:
         options.use_scheduling_barriers = bool(int(enable_scheduling_barriers))
 
-    options.device = "hip"
-    options.target = get_default_arch()
-    return options
+    if not torch.cuda.is_available():
+        options.device = "hip"
+        options.target = get_default_arch()
+        return options
+    else:
+        props = torch.cuda.get_device_properties(torch.device)
+
+        if hasattr(props, "gcnArchName") and "NVIDIA" not in props.name:
+            options.device = "hip"
+        else:
+            options.device = "cuda"
+
+        options.target = get_default_arch()
+        return options
