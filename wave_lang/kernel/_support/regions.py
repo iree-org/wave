@@ -163,3 +163,23 @@ class SubgraphTracer(fx.Tracer):
         )
 
         return rv
+
+
+class ScheduleRegionGraph(RegionGraph):
+    def __init__(
+        self, *, location_capture_config: Optional[LocationCaptureConfig] = None
+    ):
+        super().__init__(location_capture_config=location_capture_config)
+        self.tracers: List["ScheduleTracer"] = []
+        self.location_capture_config: LocationCaptureConfig = (
+            location_capture_config
+            if location_capture_config is not None
+            else LocationCaptureConfig()
+        )
+
+    def new_subtracer(
+        self, region_graph: "RegionGraph", parent: Optional["ScheduleTracer"] = None
+    ) -> "ScheduleTracer":
+        from .tracing import ScheduleTracer
+
+        return ScheduleTracer(region_graph, parent=parent)
