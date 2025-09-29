@@ -14,6 +14,13 @@ from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
     enable_scheduling_barriers,
 )
+from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.lang.global_symbols import *
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+)
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 
@@ -27,6 +34,83 @@ num_experts_values = [8, 64]
 k_values = [128, 511]
 n_values = [128, 256, 512, 1024]
 dtype_values = [torch.float16, torch.bfloat16]
+
+
+def get_moe_gemm_kernel(
+    num_tokens: int,
+    topk: int,
+    block_size: int,
+    num_experts: int,
+    k: int,
+    n: int,
+    max_num_tokens_padded: int,
+    max_num_m_blocks: int,
+    mfma_variant: MMAType,
+    datatype: DataType,
+):
+    assert datatype in [tkl.f16, tkl.bf16], f"Unsupported datatype: {datatype}"
+
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    E = tkl.sym.E
+    EM = tkl.sym.EM
+    TOPK = tkl.sym.TOPK
+    MAX_M_BLOCKS = tkl.sym.MAX_M_BLOCKS
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    NUM_TOKENS_BUF_SIZE = tkl.sym.NUM_TOKENS_BUF_SIZE
+
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            vector_shapes={M: 0, TOPK: 0, N: 32},
+            mma_type=mfma_variant,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def moe_gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, datatype],
+        b: tkl.Memory[E, N, K, ADDRESS_SPACE, datatype],
+        sorted_token_ids: tkl.Memory[EM, ADDRESS_SPACE, tkl.i32],
+        expert_ids: tkl.Memory[MAX_M_BLOCKS, ADDRESS_SPACE, tkl.i32],
+        num_tokens_post_padded: tkl.Memory[NUM_TOKENS_BUF_SIZE, ADDRESS_SPACE, tkl.i32],
+        c: tkl.Memory[M, TOPK, N, GLOBAL_ADDRESS_SPACE, datatype],
+    ):
+        c_reg = tkl.Register[M, TOPK, N, datatype](0.0)
+
+        tkw.write(c_reg, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: block_size,
+        BLOCK_N: block_size,
+        BLOCK_K: 32,
+        M: num_tokens,
+        N: n,
+        K: k,
+        E: num_experts,
+        EM: max_num_tokens_padded,
+        TOPK: topk,
+        MAX_M_BLOCKS: max_num_m_blocks,
+        NUM_TOKENS_BUF_SIZE: 1,
+    }
+
+    return moe_gemm, hyperparams
 
 
 def moe_gemm_pytorch(
@@ -211,255 +295,246 @@ def test_moe_gemm(
     )
 
     mlir_c = torch.zeros(num_tokens, topk, n, dtype=dtype)
-    asm = (
-    """
-#translation = #iree_codegen.translation_info<pipeline = None workgroup_size = [64, 1, 1] subgroup_size = 64>
-module attributes {transform.with_named_sequence} {
-  stream.executable private @fused_moe_kernel {
-    stream.executable.export public @fused_moe_kernel workgroups() -> (index, index, index) {
-      %c1 = arith.constant 1 : index
-      stream.return %c1, %c1, %c1 : index, index, index
-    }
-    builtin.module {
-      func.func @fused_moe_kernel(
-          // Input memrefs
-       // %a_ptr: memref<33x128xf16>,
-       // %b_ptr: memref<8x256x128xf16>,
-       // %c_ptr: memref<33x2x256xf16>,
-       // %sorted_token_ids_ptr: memref<633xi32>,
-       // %expert_ids_ptr: memref<10xi32>,
-       // %num_tokens_post_padded_ptr: memref<1xi32>
-          %arg0: !stream.binding,
-          %arg1: !stream.binding,
-          %arg2: !stream.binding,
-          %arg3: !stream.binding,
-          %arg4: !stream.binding,
-          %arg5: !stream.binding
-      ) attributes {translation_info = #translation} {
-        // N = 256
-        // K = 128
-        // EM = 8
-        // top_k = 2
-        // num_valid_tokens = 66
-        // GROUP_SIZE_M = 8
-        // BLOCK_SIZE_M = BLOCK_SIZE_N = 64
-        // BLOCK_SIZE_K = 32
-        %N = arith.constant 256 : index
-        %K = arith.constant 128 : index
-        %EM = arith.constant 8 : index
-        %top_k = arith.constant 2 : index
-        %num_valid_tokens = arith.constant 66 : index
-        %GROUP_SIZE_M = arith.constant 8 : index
-        %BLOCK_SIZE_M = arith.constant 64 : index
-        %BLOCK_SIZE_N = arith.constant 64 : index
-        %BLOCK_SIZE_K = arith.constant 32 : index
-
-        %c0 = arith.constant 0 : index
-        %c1 = arith.constant 1 : index
-        %f0 = arith.constant 0.0 : f32
-        %f0_f16 = arith.constant 0.0 : f16
-        %passthru_a = vector.broadcast %f0_f16 : f16 to vector<64x32xf16>
-        %true_mask = arith.constant dense<true> : vector<64xi1>
-        %zeroes_64 = arith.constant dense<0> : vector<64xi32>
-
-        %a_ptr = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<33x128xf16>
-        %b_ptr = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<8x256x128xf16>
-        %c_ptr = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<33x2x256xf16>
-        %sorted_token_ids_ptr = stream.binding.subspan %arg3[%c0] : !stream.binding -> memref<633xi32>
-        %expert_ids_ptr = stream.binding.subspan %arg4[%c0] : !stream.binding -> memref<10xi32>
-        %num_tokens_post_padded_ptr = stream.binding.subspan %arg5[%c0] : !stream.binding -> memref<1xi32>
-
-        // Program ID mapping
-        %pid = gpu.block_id x
-        %num_pid_m = arith.ceildivui %EM, %BLOCK_SIZE_M : index
-        %num_pid_n = arith.ceildivui %N, %BLOCK_SIZE_N : index
-        %num_pid_in_group = arith.muli %GROUP_SIZE_M, %num_pid_n : index
-        %group_id = arith.divui %pid, %num_pid_in_group : index
-        %first_pid_m = arith.muli %group_id, %GROUP_SIZE_M : index
-        %min_group_size_m = arith.subi %num_pid_m, %first_pid_m : index
-        %group_size_m = arith.minui %GROUP_SIZE_M, %min_group_size_m : index
-        %0 = arith.remsi %pid, %num_pid_in_group : index
-        %1 = arith.remsi %0, %group_size_m : index
-        %pid_m = arith.addi %first_pid_m, %1 : index
-        %pid_n = arith.divui %0, %group_size_m : index
-
-        // Early exit check
-        %2 = memref.load %num_tokens_post_padded_ptr[%c0] : memref<1xi32>
-        %num_tokens_post_padded = arith.index_cast %2 : i32 to index
-        %pid_m_offset = arith.muli %pid_m, %BLOCK_SIZE_M : index
-        %should_exit = arith.cmpi sge, %pid_m_offset, %num_tokens_post_padded : index
-        scf.if %should_exit {
-          scf.yield
-        } else {
-          // Compute token mask
-          %offs_token_id_base = arith.muli %pid_m, %BLOCK_SIZE_M : index
-          %range_m = vector.step : vector<64xindex>
-          %3 = vector.broadcast %offs_token_id_base : index to vector<64xindex>
-          %offs_token_id = arith.addi %3, %range_m : vector<64xindex>
-
-          // Load token IDs
-          %4 = vector.gather %sorted_token_ids_ptr[%c0] [%offs_token_id],
-          	%true_mask, %zeroes_64 : memref<633xi32>, vector<64xindex>, vector<64xi1>, vector<64xi32> into vector<64xi32>
-          %offs_token = arith.index_cast %4 : vector<64xi32> to vector<64xindex>
-
-          // Create token mask
-          %5 = vector.broadcast %num_valid_tokens : index to vector<64xindex>
-          %token_mask = arith.cmpi slt, %offs_token, %5 : vector<64xindex>
-
-          // Load expert ID
-          %6 = memref.load %expert_ids_ptr[%pid_m] : memref<10xi32>
-          %off_experts = arith.index_cast %6 : i32 to index
-
-          // Setup B matrix pointers
-          %offs_bn_base = arith.muli %pid_n, %BLOCK_SIZE_N : index
-          %range_n = vector.step : vector<64xindex>
-          %7 = vector.broadcast %offs_bn_base : index to vector<64xindex>
-          %offs_cn = arith.addi %7, %range_n : vector<64xindex>
-          %N_splat = vector.broadcast %N : index to vector<64xindex>
-          %offs_bn = arith.remsi %offs_cn, %N_splat : vector<64xindex>
-          %off_bn = arith.remsi %offs_bn_base, %N : index
-
-          // Setup K range
-          %offs_k = vector.step : vector<32xindex>
-
-          // -----------------------------------------------------------
-          // Compute A matrix indices (equivalent to a_ptrs computation)
-          // Expand dims: offs_token[:, None] -> 64x1
-          %offs_token_2d = vector.shape_cast %offs_token : vector<64xindex> to vector<64x1xindex>
-
-          // Broadcast top_k to 64x1
-          %top_k_2d = vector.broadcast %top_k : index to vector<64x1xindex>
-
-          // Compute offs_token[:, None] // top_k
-          %token_div_topk = arith.divsi %offs_token_2d, %top_k_2d : vector<64x1xindex>
-
-          // Broadcast K to 64x1
-          %K_splat = vector.broadcast %K : index to vector<64x1xindex>
-
-          // Compute first term: (offs_token // top_k) * K
-          %a_row_offsets = arith.muli %token_div_topk, %K_splat : vector<64x1xindex>
-
-          // Broadcast both terms to 64x32 and add
-          %first_broadcast_a = vector.broadcast %a_row_offsets : vector<64x1xindex> to vector<64x32xindex>
-          %second_broadcast_a = vector.broadcast %offs_k : vector<32xindex> to vector<64x32xindex>
-          %indices_a = arith.addi %first_broadcast_a, %second_broadcast_a : vector<64x32xindex>
-
-          // -----------------------------------------------------------
-          // Initialize accumulator
-          %accumulator = vector.broadcast %f0 : f32 to vector<64x64xf32>
-
-          // Main K loop
-          %num_blocks = arith.ceildivui %K, %BLOCK_SIZE_K : index
-          %8 = vector.shape_cast %token_mask : vector<64xi1> to vector<64x1xi1>
-          %a_mask_base = vector.broadcast %8 : vector<64x1xi1> to vector<64x32xi1>
-
-          %a_flat = memref.collapse_shape %a_ptr [[0, 1]] : memref<33x128xf16> into memref<4224xf16>
-          %b_view =  memref.subview %b_ptr[%off_experts, 0, 0] [1, 256, 128] [1, 1, 1] :
-        	memref<8x256x128xf16> to memref<1x256x128xf16, strided<[32768, 128, 1], offset: ?>>
-          %b_block = memref.collapse_shape %b_view [[0, 1], [2]] : memref<1x256x128xf16, strided<[32768, 128, 1], offset: ?>> into memref<256x128xf16, strided<[128, 1], offset: ?>>
-          %c_flat = memref.collapse_shape %c_ptr [[0, 1, 2]] : memref<33x2x256xf16> into memref<16896xf16>
-
-          %result = scf.for %k_block = %c0 to %num_blocks step %c1 iter_args(%acc = %accumulator) -> vector<64x64xf32> {
-            // Compute current K offset
-            %k_offset = arith.muli %k_block, %BLOCK_SIZE_K : index
-
-            %a = vector.gather %a_flat[%k_offset][%indices_a], %a_mask_base, %passthru_a :
-                memref<4224xf16>, vector<64x32xindex>, vector<64x32xi1>, vector<64x32xf16> into vector<64x32xf16>
-
-            %b = vector.transfer_read %b_block[%off_bn, %k_offset], %f0_f16
-      	  {permutation_map = affine_map<(d0, d1) -> (d1, d0)>} : memref<256x128xf16, strided<[128, 1], offset: ?>>, vector<32x64xf16>
-
-            // Matrix multiplication: f16 x f16 -> f32 accumulation
-            %dot_result = vector.contract {
-                indexing_maps = [affine_map<(m,n,k) -> (m,k)>,
-                               affine_map<(m,n,k) -> (k,n)>,
-                               affine_map<(m,n,k) -> (m,n)>],
-                iterator_types = ["parallel", "parallel", "reduction"]
-            } %a, %b, %acc : vector<64x32xf16>, vector<32x64xf16> into vector<64x64xf32>
-
-            scf.yield %dot_result : vector<64x64xf32>
-          }
-
-          // Convert accumulator to output precision
-          %result_f16 = arith.truncf %result : vector<64x64xf32> to vector<64x64xf16>
-
-	      // TODO: use vector.scatter once we have
-	      // vector::populateVectorScatterLoweringPatterns to handle multi
-	      // dimensional scatter lowering.
-
-     //   // Compute output indices
-     //   %offs_cn_2d = vector.shape_cast %offs_cn : vector<64xindex> to vector<1x64xindex>
-
-     //   %N_2d = vector.broadcast %N : index to vector<64x1xindex>
-     //   %c_row_offsets = arith.muli %offs_token_2d, %N_2d : vector<64x1xindex>
-
-     //   %first_broadcast_c = vector.broadcast %c_row_offsets : vector<64x1xindex> to vector<64x64xindex>
-     //   %second_broadcast_c = vector.broadcast %offs_cn_2d : vector<1x64xindex> to vector<64x64xindex>
-     //   %c_indices = arith.addi %first_broadcast_c, %second_broadcast_c : vector<64x64xindex>
-
-     //   // Create output mask
-     //   %offs_cn_mask = arith.cmpi slt, %offs_cn, %N_splat : vector<64xindex>
-
-     //   %c_mask_base = vector.broadcast %8 : vector<64x1xi1> to vector<64x64xi1>
-     //   %cn_mask_broadcast = vector.broadcast %offs_cn_mask : vector<64xi1> to vector<64x64xi1>
-     //   %output_mask = arith.andi %c_mask_base, %cn_mask_broadcast : vector<64x64xi1>
-
-     //   // Store results
-     //   vector.scatter %c_flat[%c0][%c_indices], %output_mask, %result_f16 :
-     //       memref<16896xf16>, vector<64x64xindex>, vector<64x64xi1>, vector<64x64xf16>
-
-          // TODO: use this when vector.extract for 2d vector can be lowered to LLVM.
-          // Compute output indices
-
-          %top_k_splat = vector.broadcast %top_k : index to vector<64xindex>
-          %orig_token_ids = arith.divsi %offs_token, %top_k_splat : vector<64xindex>
-          %expert_slots = arith.remsi %offs_token, %top_k_splat : vector<64xindex>
-
-          // Create output mask
-          %offs_cn_mask = arith.cmpi slt, %offs_cn, %N_splat : vector<64xindex>
-          %output_mask = arith.andi %offs_cn_mask, %token_mask : vector<64xi1>
-
-          // Store results
-          scf.for %row = %c0 to %BLOCK_SIZE_M step %c1 {
-	        %row_token_mask = vector.extract %token_mask[%row] : i1 from vector<64xi1>
-            scf.if %row_token_mask {
-              %vec = vector.extract %result_f16[%row] : vector<64xf16> from vector<64x64xf16>
-              %orig_token_id = vector.extract %orig_token_ids[%row] : index from vector<64xindex>
-              %expert_slot = vector.extract %expert_slots[%row] : index from vector<64xindex>
-              vector.transfer_write %vec, %c_ptr[%orig_token_id, %expert_slot, %offs_bn_base], %output_mask : vector<64xf16>, memref<33x2x256xf16>
-              scf.yield
-            }
-          }
-        }
-
-        return
-      }
-    }
-  }
-  func.func @isolated_benchmark$async(%arg0: !hal.buffer_view, %arg1: !hal.buffer_view, %arg2: !hal.buffer_view, %arg3: !hal.buffer_view, %arg4: !hal.buffer_view, %arg5: !hal.buffer_view, %arg6: !hal.fence, %arg7: !hal.fence) -> !hal.buffer_view {
-    %0 = hal.tensor.import wait(%arg6) => %arg0 : !hal.buffer_view -> tensor<33x128xf16>
-    %1 = hal.tensor.import wait(%arg6) => %arg1 : !hal.buffer_view -> tensor<8x256x128xf16>
-    %2 = hal.tensor.import wait(%arg6) => %arg2 : !hal.buffer_view -> tensor<33x2x256xf16>
-    %3 = hal.tensor.import wait(%arg6) => %arg3 : !hal.buffer_view -> tensor<633xi32>
-    %4 = hal.tensor.import wait(%arg6) => %arg4 : !hal.buffer_view -> tensor<10xi32>
-    %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<1xi32>
-    %6 = flow.dispatch @fused_moe_kernel::@fused_moe_kernel(%0, %1, %2, %3, %4, %5) : (tensor<33x128xf16>, tensor<8x256x128xf16>, tensor<33x2x256xf16>, tensor<633xi32>, tensor<10xi32>, tensor<1xi32>) -> %2
-    %7 = hal.tensor.barrier join(%6 : tensor<33x2x256xf16>) => %arg7 : !hal.fence
-    %8 = hal.tensor.export %7 : tensor<33x2x256xf16> -> !hal.buffer_view
-    return %8 : !hal.buffer_view
-  }
-}
-    """
-)
-    from wave_lang.kernel.wave.templates.moe import (
-        get_gemm_kernel,
-        get_silu_and_mul_kernel,
-    )
-    from wave_lang.kernel.wave.constraints import MMAType
-    import wave_lang.kernel.lang as tkl
-    from wave_lang.kernel.wave.utils.general_utils import (
-        get_default_scheduling_params,
-    )
+#    asm = (
+#    """
+##translation = #iree_codegen.translation_info<pipeline = None workgroup_size = [64, 1, 1] subgroup_size = 64>
+#module attributes {transform.with_named_sequence} {
+#  stream.executable private @fused_moe_kernel {
+#    stream.executable.export public @fused_moe_kernel workgroups() -> (index, index, index) {
+#      %c1 = arith.constant 1 : index
+#      stream.return %c1, %c1, %c1 : index, index, index
+#    }
+#    builtin.module {
+#      func.func @fused_moe_kernel(
+#          // Input memrefs
+#       // %a_ptr: memref<33x128xf16>,
+#       // %b_ptr: memref<8x256x128xf16>,
+#       // %c_ptr: memref<33x2x256xf16>,
+#       // %sorted_token_ids_ptr: memref<633xi32>,
+#       // %expert_ids_ptr: memref<10xi32>,
+#       // %num_tokens_post_padded_ptr: memref<1xi32>
+#          %arg0: !stream.binding,
+#          %arg1: !stream.binding,
+#          %arg2: !stream.binding,
+#          %arg3: !stream.binding,
+#          %arg4: !stream.binding,
+#          %arg5: !stream.binding
+#      ) attributes {translation_info = #translation} {
+#        // N = 256
+#        // K = 128
+#        // EM = 633
+#        // top_k = 2
+#        // num_valid_tokens = 66
+#        // GROUP_SIZE_M = 8
+#        // BLOCK_SIZE_M = BLOCK_SIZE_N = 64
+#        // BLOCK_SIZE_K = 32
+#        %N = arith.constant 256 : index
+#        %K = arith.constant 128 : index
+#        %EM = arith.constant 633 : index
+#        %top_k = arith.constant 2 : index
+#        %num_valid_tokens = arith.constant 66 : index
+#        %GROUP_SIZE_M = arith.constant 8 : index
+#        %BLOCK_SIZE_M = arith.constant 64 : index
+#        %BLOCK_SIZE_N = arith.constant 64 : index
+#        %BLOCK_SIZE_K = arith.constant 32 : index
+#
+#        %c0 = arith.constant 0 : index
+#        %c1 = arith.constant 1 : index
+#        %f0 = arith.constant 0.0 : f32
+#        %f0_f16 = arith.constant 0.0 : f16
+#        %passthru_a = vector.broadcast %f0_f16 : f16 to vector<64x32xf16>
+#        %true_mask = arith.constant dense<true> : vector<64xi1>
+#        %zeroes_64 = arith.constant dense<0> : vector<64xi32>
+#
+#        %a_ptr = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<33x128xf16>
+#        %b_ptr = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<8x256x128xf16>
+#        %c_ptr = stream.binding.subspan %arg5[%c0] : !stream.binding -> memref<33x2x256xf16>
+#        %sorted_token_ids_ptr = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<633xi32>
+#        %expert_ids_ptr = stream.binding.subspan %arg3[%c0] : !stream.binding -> memref<10xi32>
+#        %num_tokens_post_padded_ptr = stream.binding.subspan %arg4[%c0] : !stream.binding -> memref<1xi32>
+#
+#        // Program ID mapping
+#        %pid = gpu.block_id x
+#        %num_pid_m = arith.ceildivui %EM, %BLOCK_SIZE_M : index
+#        %num_pid_n = arith.ceildivui %N, %BLOCK_SIZE_N : index
+#        %num_pid_in_group = arith.muli %GROUP_SIZE_M, %num_pid_n : index
+#        %group_id = arith.divui %pid, %num_pid_in_group : index
+#        %first_pid_m = arith.muli %group_id, %GROUP_SIZE_M : index
+#        %min_group_size_m = arith.subi %num_pid_m, %first_pid_m : index
+#        %group_size_m = arith.minui %GROUP_SIZE_M, %min_group_size_m : index
+#        %0 = arith.remsi %pid, %num_pid_in_group : index
+#        %1 = arith.remsi %0, %group_size_m : index
+#        %pid_m = arith.addi %first_pid_m, %1 : index
+#        %pid_n = arith.divui %0, %group_size_m : index
+#
+#        // Early exit check
+#        %2 = memref.load %num_tokens_post_padded_ptr[%c0] : memref<1xi32>
+#        %num_tokens_post_padded = arith.index_cast %2 : i32 to index
+#        %pid_m_offset = arith.muli %pid_m, %BLOCK_SIZE_M : index
+#        %should_exit = arith.cmpi sge, %pid_m_offset, %num_tokens_post_padded : index
+#        scf.if %should_exit {
+#          scf.yield
+#        } else {
+#          // Compute token mask
+#          %offs_token_id_base = arith.muli %pid_m, %BLOCK_SIZE_M : index
+#          %range_m = vector.step : vector<64xindex>
+#          %3 = vector.broadcast %offs_token_id_base : index to vector<64xindex>
+#          %offs_token_id = arith.addi %3, %range_m : vector<64xindex>
+#
+#          // Load token IDs
+#          %4 = vector.gather %sorted_token_ids_ptr[%c0] [%offs_token_id],
+#          	%true_mask, %zeroes_64 : memref<633xi32>, vector<64xindex>, vector<64xi1>, vector<64xi32> into vector<64xi32>
+#          %offs_token = arith.index_cast %4 : vector<64xi32> to vector<64xindex>
+#
+#          // Create token mask
+#          %5 = vector.broadcast %num_valid_tokens : index to vector<64xindex>
+#          %token_mask = arith.cmpi slt, %offs_token, %5 : vector<64xindex>
+#
+#          // Load expert ID
+#          %6 = memref.load %expert_ids_ptr[%pid_m] : memref<10xi32>
+#          %off_experts = arith.index_cast %6 : i32 to index
+#
+#          // Setup B matrix pointers
+#          %offs_bn_base = arith.muli %pid_n, %BLOCK_SIZE_N : index
+#          %range_n = vector.step : vector<64xindex>
+#          %7 = vector.broadcast %offs_bn_base : index to vector<64xindex>
+#          %offs_cn = arith.addi %7, %range_n : vector<64xindex>
+#          %N_splat = vector.broadcast %N : index to vector<64xindex>
+#          %offs_bn = arith.remsi %offs_cn, %N_splat : vector<64xindex>
+#          %off_bn = arith.remsi %offs_bn_base, %N : index
+#
+#          // Setup K range
+#          %offs_k = vector.step : vector<32xindex>
+#
+#          // -----------------------------------------------------------
+#          // Compute A matrix indices (equivalent to a_ptrs computation)
+#          // Expand dims: offs_token[:, None] -> 64x1
+#          %offs_token_2d = vector.shape_cast %offs_token : vector<64xindex> to vector<64x1xindex>
+#
+#          // Broadcast top_k to 64x1
+#          %top_k_2d = vector.broadcast %top_k : index to vector<64x1xindex>
+#
+#          // Compute offs_token[:, None] // top_k
+#          %token_div_topk = arith.divsi %offs_token_2d, %top_k_2d : vector<64x1xindex>
+#
+#          // Broadcast K to 64x1
+#          %K_splat = vector.broadcast %K : index to vector<64x1xindex>
+#
+#          // Compute first term: (offs_token // top_k) * K
+#          %a_row_offsets = arith.muli %token_div_topk, %K_splat : vector<64x1xindex>
+#
+#          // Broadcast both terms to 64x32 and add
+#          %first_broadcast_a = vector.broadcast %a_row_offsets : vector<64x1xindex> to vector<64x32xindex>
+#          %second_broadcast_a = vector.broadcast %offs_k : vector<32xindex> to vector<64x32xindex>
+#          %indices_a = arith.addi %first_broadcast_a, %second_broadcast_a : vector<64x32xindex>
+#
+#          // -----------------------------------------------------------
+#          // Initialize accumulator
+#          %accumulator = vector.broadcast %f0 : f32 to vector<64x64xf32>
+#
+#          // Main K loop
+#          %num_blocks = arith.ceildivui %K, %BLOCK_SIZE_K : index
+#          %8 = vector.shape_cast %token_mask : vector<64xi1> to vector<64x1xi1>
+#          %a_mask_base = vector.broadcast %8 : vector<64x1xi1> to vector<64x32xi1>
+#
+#          %a_flat = memref.collapse_shape %a_ptr [[0, 1]] : memref<33x128xf16> into memref<4224xf16>
+#          %b_view =  memref.subview %b_ptr[%off_experts, 0, 0] [1, 256, 128] [1, 1, 1] :
+#        	memref<8x256x128xf16> to memref<1x256x128xf16, strided<[32768, 128, 1], offset: ?>>
+#          %b_block = memref.collapse_shape %b_view [[0, 1], [2]] : memref<1x256x128xf16, strided<[32768, 128, 1], offset: ?>> into memref<256x128xf16, strided<[128, 1], offset: ?>>
+#          %c_flat = memref.collapse_shape %c_ptr [[0, 1, 2]] : memref<33x2x256xf16> into memref<16896xf16>
+#
+#          %result = scf.for %k_block = %c0 to %num_blocks step %c1 iter_args(%acc = %accumulator) -> vector<64x64xf32> {
+#            // Compute current K offset
+#            %k_offset = arith.muli %k_block, %BLOCK_SIZE_K : index
+#
+#            %a = vector.gather %a_flat[%k_offset][%indices_a], %a_mask_base, %passthru_a :
+#                memref<4224xf16>, vector<64x32xindex>, vector<64x32xi1>, vector<64x32xf16> into vector<64x32xf16>
+#
+#            %b = vector.transfer_read %b_block[%off_bn, %k_offset], %f0_f16
+#      	  {permutation_map = affine_map<(d0, d1) -> (d1, d0)>} : memref<256x128xf16, strided<[128, 1], offset: ?>>, vector<32x64xf16>
+#
+#            // Matrix multiplication: f16 x f16 -> f32 accumulation
+#            %dot_result = vector.contract {
+#                indexing_maps = [affine_map<(m,n,k) -> (m,k)>,
+#                               affine_map<(m,n,k) -> (k,n)>,
+#                               affine_map<(m,n,k) -> (m,n)>],
+#                iterator_types = ["parallel", "parallel", "reduction"]
+#            } %a, %b, %acc : vector<64x32xf16>, vector<32x64xf16> into vector<64x64xf32>
+#
+#            scf.yield %dot_result : vector<64x64xf32>
+#          }
+#
+#          // Convert accumulator to output precision
+#          %result_f16 = arith.truncf %result : vector<64x64xf32> to vector<64x64xf16>
+#
+#	      // TODO: use vector.scatter once we have
+#	      // vector::populateVectorScatterLoweringPatterns to handle multi
+#	      // dimensional scatter lowering.
+#
+#          // Compute output indices
+#          %offs_cn_2d = vector.shape_cast %offs_cn : vector<64xindex> to vector<1x64xindex>
+#
+#          %N_2d = vector.broadcast %N : index to vector<64x1xindex>
+#          %c_row_offsets = arith.muli %offs_token_2d, %N_2d : vector<64x1xindex>
+#
+#          %first_broadcast_c = vector.broadcast %c_row_offsets : vector<64x1xindex> to vector<64x64xindex>
+#          %second_broadcast_c = vector.broadcast %offs_cn_2d : vector<1x64xindex> to vector<64x64xindex>
+#          %c_indices = arith.addi %first_broadcast_c, %second_broadcast_c : vector<64x64xindex>
+#
+#          // Create output mask
+#          %offs_cn_mask = arith.cmpi slt, %offs_cn, %N_splat : vector<64xindex>
+#
+#          %c_mask_base = vector.broadcast %8 : vector<64x1xi1> to vector<64x64xi1>
+#          %cn_mask_broadcast = vector.broadcast %offs_cn_mask : vector<64xi1> to vector<64x64xi1>
+#          %output_mask = arith.andi %c_mask_base, %cn_mask_broadcast : vector<64x64xi1>
+#
+#          // Store results
+#          vector.scatter %c_flat[%c0][%c_indices], %output_mask, %result_f16 :
+#              memref<16896xf16>, vector<64x64xindex>, vector<64x64xi1>, vector<64x64xf16>
+#
+#          // TODO: use this when vector.extract for 2d vector can be lowered to LLVM.
+#          // Compute output indices
+#
+#     //   %top_k_splat = vector.broadcast %top_k : index to vector<64xindex>
+#     //   %orig_token_ids = arith.divsi %offs_token, %top_k_splat : vector<64xindex>
+#     //   %expert_slots = arith.remsi %offs_token, %top_k_splat : vector<64xindex>
+#
+#     //   // Create output mask
+#     //   %offs_cn_mask = arith.cmpi slt, %offs_cn, %N_splat : vector<64xindex>
+#     //   %output_mask = arith.andi %offs_cn_mask, %token_mask : vector<64xi1>
+#
+#     //   // Store results
+#     //   scf.for %row = %c0 to %BLOCK_SIZE_M step %c1 {
+#	 //     %row_token_mask = vector.extract %token_mask[%row] : i1 from vector<64xi1>
+#     //     scf.if %row_token_mask {
+#     //       %vec = vector.extract %result_f16[%row] : vector<64xf16> from vector<64x64xf16>
+#     //       %orig_token_id = vector.extract %orig_token_ids[%row] : index from vector<64xindex>
+#     //       %expert_slot = vector.extract %expert_slots[%row] : index from vector<64xindex>
+#     //       vector.transfer_write %vec, %c_ptr[%orig_token_id, %expert_slot, %offs_bn_base], %output_mask : vector<64xf16>, memref<33x2x256xf16>
+#     //       scf.yield
+#     //     }
+#     //   }
+#        }
+#
+#        return
+#      }
+#    }
+#  }
+#  func.func @isolated_benchmark$async(%arg0: !hal.buffer_view, %arg1: !hal.buffer_view, %arg2: !hal.buffer_view, %arg3: !hal.buffer_view, %arg4: !hal.buffer_view, %arg5: !hal.buffer_view, %arg6: !hal.fence, %arg7: !hal.fence) -> !hal.buffer_view {
+#    %0 = hal.tensor.import wait(%arg6) => %arg0 : !hal.buffer_view -> tensor<33x128xf16>
+#    %1 = hal.tensor.import wait(%arg6) => %arg1 : !hal.buffer_view -> tensor<8x256x128xf16>
+#    %2 = hal.tensor.import wait(%arg6) => %arg2 : !hal.buffer_view -> tensor<633xi32>
+#    %3 = hal.tensor.import wait(%arg6) => %arg3 : !hal.buffer_view -> tensor<10xi32>
+#    %4 = hal.tensor.import wait(%arg6) => %arg4 : !hal.buffer_view -> tensor<1xi32>
+#    %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<33x2x256xf16>
+#    %6 = flow.dispatch @fused_moe_kernel::@fused_moe_kernel(%0, %1, %2, %3, %4, %5) : (tensor<33x128xf16>, tensor<8x256x128xf16>, tensor<633xi32>, tensor<10xi32>, tensor<1xi32>, tensor<33x2x256xf16>) -> %5
+#    %7 = hal.tensor.barrier join(%6 : tensor<33x2x256xf16>) => %arg7 : !hal.fence
+#    %8 = hal.tensor.export %7 : tensor<33x2x256xf16> -> !hal.buffer_view
+#    return %8 : !hal.buffer_view
+#  }
+#}
+#    """
+#)
 #    asm = (
 #    """
 ##map = affine_map<()[s0, s1] -> ((s1 * 32 + s0 floordiv 4) mod 64)>
@@ -568,10 +643,15 @@ module attributes {transform.with_named_sequence} {
 #}
 #    """
 #)
-    gemm_kernel, symbols = get_gemm_kernel(
-        64,
-        64,
-        64,
+    gemm_kernel, symbols = get_moe_gemm_kernel(
+        num_tokens,
+        topk,
+        block_size,
+        num_experts,
+        k,
+        n,
+        max_num_tokens_padded,
+        max_num_m_blocks,
         MMAType.F32_16x16x16_F16,
         tkl.f16,
     )
@@ -593,6 +673,9 @@ module attributes {transform.with_named_sequence} {
     gemm = wave_compile(options, gemm_kernel)
   # generate_iree_ref("", [a, b, mlir_c, sorted_ids, expert_ids, num_tokens_post_pad], [], options, asm=asm)
   # generate_iree_ref("", [a, b, mlir_c], [], options, asm=asm)
+    print(gemm.asm)
+    gemm(a, b, mlir_c)
+  # gemm(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
     torch.testing.assert_close(
         c,
         mlir_c,
