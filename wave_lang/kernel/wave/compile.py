@@ -263,7 +263,11 @@ class WaveKernelWithProfile(WaveKernel):
         return invoke_with_profile(self.options, self.invoke, *args, **kwargs)
 
 
-def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveKernel:
+def wave_compile(
+    options: WaveCompileOptions,
+    kernel: "LaunchableWave",
+    schedule: Optional["WaveSchedule"] = None,
+) -> WaveKernel:
     """
     Compiles the wave kernel to an executable.
     """
@@ -342,7 +346,7 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             debug_arg_info,
             debug_handlers,
             device_layout,
-        ) = kernel._trace_and_get_kernel_signature(options)
+        ) = kernel._trace_and_get_kernel_signature(options, schedule)
 
         ireefy_overriding_module = False
         if options.override_mlir:

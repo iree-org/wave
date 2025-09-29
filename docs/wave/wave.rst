@@ -73,3 +73,4 @@ For more detailed information about Wave's architecture and optimization passes,
    gather_to_shared
    trace
    debugging
+   wave_schedule
