@@ -122,7 +122,7 @@ def get_default_arch() -> str:
 def get_arch_family() -> str:
     """Returns the microarch name of the default architecture"""
     match get_default_arch():
-        case "gfx1200" | "gfx1201":
+        case str() as t if t.startswith("gfx12"):
             return "RDNA"
         case _:
             return "CDNA"

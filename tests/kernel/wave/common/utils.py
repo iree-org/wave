@@ -43,7 +43,7 @@ require_cdna_2_or_3_or_4 = pytest.mark.skipif(
     ),
 )
 require_rdna4 = pytest.mark.skipif(
-    "gfx120" not in get_default_arch(),
+    "gfx12" not in get_default_arch(),
     reason="Default architecture is not RDNA4, default architecture is '{}'".format(
         get_default_arch()
     ),
