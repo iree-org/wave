@@ -26,8 +26,9 @@ def get_fused_moe_gemm(
     K = tkl.sym.K
     E = tkl.sym.E
     TOPK = tkl.sym.topk
-    EXPERT_ID = tkl.sym.EXPERT_ID
-
+    NUM_BLOCKS = tkl.sym.NUM_BLOCKS
+    BLOCK_STRIDE = tkl.sym.BLOCK_STRIDE
+    BLOCK_IDX = tkl.sym.BLOCK_IDX
     BLOCK_M = tkl.sym.BLOCK_M
     BLOCK_N = tkl.sym.BLOCK_N
     BLOCK_K = tkl.sym.BLOCK_K
@@ -47,16 +48,18 @@ def get_fused_moe_gemm(
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.TilingConstraint(NUM_BLOCKS, BLOCK_STRIDE)]
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
     d0 = tkw.IndexMapping.dynamic_val(0)
-    mapping = tkw.IndexMapping(
+
+    expert_select_map = tkw.IndexMapping(
         num_iterators=2,
         inputs={
-            E: sympy.Integer(0),
+            E: BLOCK_IDX,
             N: i,
             K: j,
         },  # This is correct for reading expert 0
@@ -72,26 +75,35 @@ def get_fused_moe_gemm(
 
     @tkw.wave(constraints)
     def fused_moe_gemm(
-        input_tokens: tkl.Memory[M, K, SHARED_ADDRESS, dtype],
-        expert_weights: tkl.Memory[E, N, K, SHARED_ADDRESS, dtype],
+        a_ptr: tkl.Memory[M, K, SHARED_ADDRESS, dtype],
+        b_ptr: tkl.Memory[E, N, K, SHARED_ADDRESS, dtype],
+        expert_ids: tkl.Memory[NUM_BLOCKS, GLOBAL_ADDRESS_SPACE, tkl.i32],
         topk_ids: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, dtype],
         reordered_idx: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, tkl.i32],
-        output: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        c_ptr: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        zeros = tkw.Register[NUM_BLOCKS, tkl.i32](0)
 
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            idx = tkw.read(reordered_idx, elements_per_thread=1)
-            a_reg = tkw.read(
-                input_tokens, mapping=a_read_map, mapping_dynamic_vals=(idx,)
-            )
-            b_reg = tkw.read(expert_weights, mapping=mapping)
+        tkw.set_symbol(BLOCK_IDX, zeros)
 
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
+        @tkw.iterate(NUM_BLOCKS, init_args=[])
+        def iterate_num_blocks():
+            i_idx = tkw.self_index(NUM_BLOCKS, tkl.i32)
+            tkw.set_symbol(BLOCK_IDX, i_idx)
 
-        tkw.write(repeat, output)
+            @tkw.iterate(K, init_args=[c_reg])
+            def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+                idx = tkw.read(reordered_idx, elements_per_thread=1)
+                a_reg = tkw.read(a_ptr, mapping=a_read_map, mapping_dynamic_vals=(idx,))
+                b_reg = tkw.read(b_ptr, mapping=expert_select_map)
+
+                acc = tkw.mma(a_reg, b_reg, acc)
+                return acc
+
+            tkw.write(repeat, c_ptr)
+            next_idx = i_idx + tkw.Register[NUM_BLOCKS, tkl.i32](BLOCK_STRIDE)
+            tkw.set_symbol(NUM_BLOCKS, next_idx)
 
     hyperparams = {
         SHARED_ADDRESS: SHARED_ADDRESS_SPACE,
@@ -105,6 +117,8 @@ def get_fused_moe_gemm(
         N: n,
         K: k,
         E: e,
+        NUM_BLOCKS: 2,
+        BLOCK_STRIDE: 1,
     }
 
     hyperparams.update(get_default_scheduling_params())
