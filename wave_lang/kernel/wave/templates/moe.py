@@ -52,6 +52,7 @@ def get_fused_moe_gemm(
 
     i = tkw.IndexMapping.iterator(0)
     j = tkw.IndexMapping.iterator(1)
+    d0 = tkw.IndexMapping.dynamic_val(0)
     mapping = tkw.IndexMapping(
         num_iterators=2,
         inputs={
@@ -62,18 +63,29 @@ def get_fused_moe_gemm(
         outputs={N: i, K: j},
     )
 
+    a_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: d0, K: j},
+        outputs={M: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
     @tkw.wave(constraints)
     def fused_moe_gemm(
         input_tokens: tkl.Memory[M, K, SHARED_ADDRESS, dtype],
         expert_weights: tkl.Memory[E, N, K, SHARED_ADDRESS, dtype],
         topk_ids: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, dtype],
+        reordered_idx: tkl.Memory[M, GLOBAL_ADDRESS_SPACE, tkl.i32],
         output: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(input_tokens)
+            idx = tkw.read(reordered_idx, elements_per_thread=1)
+            a_reg = tkw.read(
+                input_tokens, mapping=a_read_map, mapping_dynamic_vals=(idx,)
+            )
             b_reg = tkw.read(expert_weights, mapping=mapping)
 
             acc = tkw.mma(a_reg, b_reg, acc)

@@ -292,9 +292,10 @@ def test_fused_moe_kernel_reference(
     )
 
 
-def nit_torch_ref_moe(a, w1, w2, score, topk):
+def nit_torch_ref_moe(a, w1, w2, score, topk, reordered_idx):
     m, k = a.shape
     a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
+    a = a[reordered_idx]
     out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
     score = torch.softmax(score, dim=-1, dtype=torch.float32)
     topk_weight, topk_ids = torch.topk(score, topk)
@@ -342,7 +343,7 @@ def get_wave_moe_fused_gemm_kernel(
     return gemm
 
 
-def nit_tkw(a, w1, w2, score, topk):
+def nit_tkw(a, w1, w2, score, topk, reordered_idx):
     m, k = a.shape
     a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
     out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
@@ -362,7 +363,7 @@ def nit_tkw(a, w1, w2, score, topk):
         MMAType.F32_16x16x16_F16,
         torch.float16,
     )
-    gemm(a, w1, topk_ids, out)
+    gemm(a, w1, topk_ids, reordered_idx, out)
 
     return out
 
@@ -401,8 +402,11 @@ def testnittestReferenceMoe(
     w2 = torch.rand((e, k, n), dtype=dtype, device=device)
     score = torch.rand((m, e), dtype=dtype, device=device)
 
-    ref_output = nit_torch_ref_moe(a, w1, w2, score, topk)
-    nit_tkw_output = nit_tkw(a, w1, w2, score, topk)
+    # permute m * topk to a vector
+    reordered_idx = torch.randperm(m * topk).to(torch.int32).to(device="cuda")
+
+    ref_output = nit_torch_ref_moe(a, w1, w2, score, topk, reordered_idx)
+    nit_tkw_output = nit_tkw(a, w1, w2, score, topk, reordered_idx)
 
     print(nit_tkw_output)
     print(ref_output)
