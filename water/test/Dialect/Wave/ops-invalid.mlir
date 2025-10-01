@@ -207,3 +207,33 @@ module attributes { wave.hyperparameters = #wave.hyperparameters<{A = 42, C = 43
     return
   }
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+  func.func @index_key_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128}>}  {
+    // expected-error @below {{attribute "index" uses symbolic value "N" not provided as a hyperparameter}}
+    // expected-note @below {{BLOCK_M, BLOCK_N, M}}
+    %0 = wave.read %mem index {
+        M : [BLOCK_M, WG0, T0] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
+        N : [T1, WG1, BLOCK_N] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}
+      : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+
+    return
+  }
+}
+
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+  func.func @index_value_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 256}>}  {
+    // expected-error @below {{attribute "index" uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
+    // expected-note @below {{available symbols: M, N}}
+    %0 = wave.read %mem index {
+        M : [BLOCK_M, WG0, T0] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
+        N : [T1, WG1, BLOCK_N] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}
+      : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+
+    return
+  }
+}

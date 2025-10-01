@@ -24,6 +24,20 @@ void wave::WaveDialect::initialize() {
   registerTypes();
 }
 
+// Attach a note to the diagnostic listing the symbol names available in the
+// hyperparameter set.
+static void
+attachAvailableSymbolsNote(mlir::InFlightDiagnostic &diag,
+                           wave::WaveHyperparameterAttr hyperparam) {
+  std::string availableSymbols =
+      llvm::join(llvm::map_range(hyperparam.getMapping(),
+                                 [](const mlir::NamedAttribute namedAttr) {
+                                   return namedAttr.getName().getValue();
+                                 }),
+                 ", ");
+  diag.attachNote() << "available symbols: " << availableSymbols;
+}
+
 // Verify whether all types from the given range exclusively use symbols
 // defined in the hyperparameter attribute, report errors otherwise using the
 // provided callback. Collect used symbols into the given set for future checks.
@@ -45,13 +59,7 @@ static llvm::LogicalResult verifyTypeRangeHyperparamUses(
       mlir::InFlightDiagnostic diag =
           emitError() << "type #" << i << " uses symbolic value " << symbol
                       << " not provided as a hyperparameter";
-      std::string availableSymbols =
-          llvm::join(llvm::map_range(hyperparam.getMapping(),
-                                     [](const mlir::NamedAttribute namedAttr) {
-                                       return namedAttr.getName().getValue();
-                                     }),
-                     ", ");
-      diag.attachNote() << "available symbols: " << availableSymbols;
+      attachAvailableSymbolsNote(diag, hyperparam);
 
       // TODO: we will want a special value of the hyperparameter that indicates
       // whether we want to turn the symbol into a dynamic value accepted by the
@@ -63,9 +71,66 @@ static llvm::LogicalResult verifyTypeRangeHyperparamUses(
   return llvm::success();
 }
 
+// Verify whether occurrence of Wave symbols, either as attributes or as string
+// names in relevant dictionaries, reference symbols listed as hyperparameters.
+// Report errors otherwise using the provided callback. Collect used symbols
+// into the given set for future checks.
+static llvm::LogicalResult verifyAttributeHyperparamUses(
+    wave::WaveHyperparameterAttr hyperparam,
+    const mlir::NamedAttribute &namedAttr, llvm::StringSet<> &usedSymbols,
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError) {
+
+  // TODO: we need a first-class attribute for this mapping, at which point this
+  // special-casing will disappear as the walker below would also visit symbols
+  // used as dictionary keys.
+  if (namedAttr.getName().strref() == wave::WaveDialect::kIndexExprAttrName) {
+    auto dictionary =
+        llvm::dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
+    // Skip verification if not a dictionary, op-level verifiers will detect
+    // this and complain.
+    if (dictionary) {
+      for (const mlir::NamedAttribute &entry : dictionary) {
+        usedSymbols.insert(entry.getName().strref());
+
+        if (hyperparam.getMapping().contains(entry.getName().strref()))
+          continue;
+
+        mlir::InFlightDiagnostic diag =
+            emitError() << "uses symbolic value " << entry.getName()
+                        << " not provided as a hyperparameter";
+        attachAvailableSymbolsNote(diag, hyperparam);
+        return llvm::failure();
+      }
+    }
+  }
+
+  // TODO: somehow get rid of these hardcoded magic names.
+  static llvm::SmallVector<llvm::StringRef> fixmeMagicNames = {
+      "T0", "T1", "T2", "WG0", "WG1", "WG2"};
+
+  mlir::WalkResult walkResult =
+      namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
+        usedSymbols.insert(symbolAttr.getName());
+
+        if (hyperparam.getMapping().contains(symbolAttr.getName()) ||
+            llvm::is_contained(fixmeMagicNames, symbolAttr.getName()))
+          return mlir::WalkResult::advance();
+
+        mlir::InFlightDiagnostic diag = emitError()
+                                        << "uses symbolic value " << symbolAttr
+                                        << " not provided as a hyperparameter";
+        attachAvailableSymbolsNote(diag, hyperparam);
+        return mlir::WalkResult::interrupt();
+      });
+  return mlir::failure(walkResult.wasInterrupted());
+}
+
 llvm::LogicalResult
 wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
                                             mlir::NamedAttribute attr) {
+  // IMPORTANT NOTE: this verifier runs before nested ops have been verified, so
+  // it should not assume anything but generic IR well-formedness.
+
   if (attr.getName() == kNormalFormAttrName) {
     if (auto enumAttr = llvm::dyn_cast<WaveNormalFormAttr>(attr.getValue())) {
       return detail::verifyNormalFormAttr(op, enumAttr.getValue(),
@@ -116,6 +181,16 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
             return mlir::WalkResult::interrupt();
           }
           ++blockNo;
+        }
+      }
+
+      for (const mlir::NamedAttribute &namedAttr : op->getAttrs()) {
+        if (llvm::failed(verifyAttributeHyperparamUses(
+                hyperparams, namedAttr, usedSymbols, [&]() {
+                  return op->emitOpError()
+                         << "attribute " << namedAttr.getName() << " ";
+                }))) {
+          return mlir::WalkResult::interrupt();
         }
       }
 

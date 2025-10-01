@@ -133,3 +133,18 @@ func.func @allocate() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
 
   return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
 }
+
+// CHECK-LABEL: @index_magic_symbols
+func.func @index_magic_symbols(%mem: !wave.tensor<[@M] of f16, <global>>)
+attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N = 32, M = 128, N = 256}>}  {
+  // CHECK: wave.read
+  // CHECK: index
+  // CHECK: WG0
+  // CHECK: T0
+  %0 = wave.read %mem index {
+      M : [BLOCK_M, WG0, T0] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
+      N : [T1, WG1, BLOCK_N] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}
+    : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+
+  return
+}
