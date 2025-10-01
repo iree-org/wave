@@ -78,7 +78,7 @@ def simple_gemm_test():
         tkw.write(repeat, c)
 
     # Create test matrices
-    m, n, k = 64, 64, 128  # Small dimensions for testing
+    m, n, k = 64, 64, 64  # Small dimensions for testing
 
     # Initialize input matrices with random values
     torch.manual_seed(0)
@@ -88,8 +88,8 @@ def simple_gemm_test():
 
     # Set hyperparameters for compilation
     hyperparams = {
-        ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE,
-        ADDRESS_SPACE_B: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
@@ -102,12 +102,17 @@ def simple_gemm_test():
     # Compile the kernel
     options = WaveCompileOptions(
         subs=hyperparams,
+        print_ir_after="all",
+        print_ir_before="all",
     )
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
 
     # Run the GEMM kernel
     compiled_gemm(a, b, c)
+
+    with open("gemm.mlir", "w") as f:
+        f.write(compiled_gemm.asm)
 
     # Verify the result using PyTorch's matmul
     expected = torch.matmul(a, b.t())
@@ -702,6 +707,7 @@ def scatter_gemm_test():
 
 def scatter_a():
     M_DIV_2 = sym.M_DIV_2
+    I = sym.I
     # Define constraints for the kernel
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
@@ -818,17 +824,20 @@ def scatter_a():
 
 def scatter_a_simple_gemm_test():
     M_DIV_2 = sym.M_DIV_2
+    SHARED_MEM = sym.SHARED_MEM
+    I = sym.I
     # Define constraints for the kernel
     constraints = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
         tkw.TilingConstraint(K, BLOCK_K),
+        tkw.TilingConstraint(I),
         tkw.WaveConstraint(M, BLOCK_M / 2),
         tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=tkw.MMAType.F32_16x16x16_F16,
-            vector_shapes={M_DIV_2: M_DIV_2, M: M, K: BLOCK_K},
+            vector_shapes={M_DIV_2: M_DIV_2, M: M, K: BLOCK_K, I: 0},
         ),
     ]
 
@@ -836,6 +845,7 @@ def scatter_a_simple_gemm_test():
     j = tkw.IndexMapping.iterator(1)
     k = tkw.IndexMapping.iterator(2)
     d0 = tkw.IndexMapping.dynamic_val(0)
+    d1 = tkw.IndexMapping.dynamic_val(1)
 
     a_read_map = tkw.IndexMapping(
         num_iterators=2,
@@ -858,6 +868,12 @@ def scatter_a_simple_gemm_test():
         dynamic_val_mappings={M_DIV_2: i},
     )
 
+    a_simple_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, K: j},
+        outputs={M: i, K: j},
+    )
+
     @tkw.wave(constraints)
     def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
@@ -867,38 +883,46 @@ def scatter_a_simple_gemm_test():
         c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
     ):
         # Initialize the accumulator register with zeros
-        a_mock = tkw.read(a_back)
+        # a_shared = tkw.allocate(
+        #     shape=(M, K),
+        #     distributed_shape=(M, K),
+        #     dtype=f16,
+        # )
 
-        @tkw.conditional(tkw.scalar(THREAD_1, i32) == tkw.scalar(0, i32))
-        def then():
-            valid_threads = THREAD_0 < M_DIV_2
+        zero_reg = tkw.Register[M, K, f16](0.0)
+        tkw.write(zero_reg, a_back)
 
-            @tkw.conditional(valid_threads)
-            def scatter_op():
-                tid = tkw.Register[M_DIV_2, i32](THREAD_0)
-                reordered_idx = tkw.read(
-                    reorder_a,
-                    mapping=dyn_reorder_a_read_map,
-                    mapping_dynamic_vals=(tid,),
+        # @tkw.conditional(tkw.scalar(THREAD_1, i32) == tkw.scalar(0, i32))
+        # def then():
+        valid_threads = THREAD_0 < M_DIV_2
+
+        @tkw.conditional(valid_threads)
+        def scatter_op():
+            tid = tkw.Register[M_DIV_2, i32](THREAD_0)
+            reordered_idx = tkw.read(
+                reorder_a,
+                mapping=dyn_reorder_a_read_map,
+                mapping_dynamic_vals=(tid,),
+            )
+
+            @tkw.iterate(K, init_args=[])
+            def copy_row():
+                a_row_data = tkw.read(
+                    a,
+                    mapping=a_read_map,
+                    mapping_dynamic_vals=(reordered_idx,),
+                    elements_per_thread=BLOCK_K,
                 )
 
-                @tkw.iterate(K, init_args=[])
-                def copy_row():
-                    a_row_data = tkw.read(
-                        a,
-                        mapping=a_read_map,
-                        mapping_dynamic_vals=(reordered_idx,),
-                        elements_per_thread=BLOCK_K,
-                    )
+                tkw.write(
+                    a_row_data,
+                    a_back,
+                    mapping=a_write_map,
+                    mapping_dynamic_vals=(tid,),
+                    elements_per_thread=BLOCK_K,
+                )
 
-                    tkw.write(
-                        a_row_data,
-                        a_back,
-                        mapping=a_write_map,
-                        mapping_dynamic_vals=(tid,),
-                        elements_per_thread=BLOCK_K,
-                    )
-
+        tkw.workgroup_barrier()
         c_reg = Register[M, N, f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
@@ -915,13 +939,13 @@ def scatter_a_simple_gemm_test():
         tkw.write(repeat, c)
 
     # Create test matrices
-    m, n, k = 64, 64, 128
+    m, n, k = 64, 64, 64
 
     # Initialize input matrices with random values
     torch.manual_seed(0)
     a = torch.randn(m, k, dtype=torch.float16, device="cuda")
     a_back = torch.zeros(m, k, dtype=torch.float16, device="cuda")
-    b = torch.randn(n, k, dtype=torch.float16, device="cuda")
+    b = torch.eye(k, dtype=torch.float16, device="cuda")
     c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
 
     # Set hyperparameters for compilation
@@ -929,6 +953,7 @@ def scatter_a_simple_gemm_test():
         ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
         ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        SHARED_MEM: SHARED_ADDRESS_SPACE,
         BLOCK_M: 64,
         BLOCK_N: 64,
         BLOCK_K: 32,
@@ -960,16 +985,20 @@ def scatter_a_simple_gemm_test():
     for i in range(m // 2):
         reordered_a[i] = a[reorder_a[i]]
 
-    print("Reorder idx: ", reorder_a)
-    print("A back: ", a_back[0])
-    print("A: ", a[reorder_a[0]])
-    print("Reordered A: ", reordered_a[0])
+    # print("Reorder idx: ", reorder_a)
+    # print("A back: ", a_back[0])
+    # print("A: ", a[reorder_a[0]])
+    # print("Reordered A: ", reordered_a[0])
 
     assert torch.allclose(
         a_back, reordered_a, rtol=1e-2, atol=1e-2
     ), f"A back doesn't match expected output\nMax difference: {(a_back - reordered_a).abs().max()}"
 
     expected = torch.matmul(reordered_a, b.t())
+
+    breakpoint()
+    print("Expected: ", expected[0])
+    print("C: ", c[0])
 
     assert torch.allclose(
         c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
