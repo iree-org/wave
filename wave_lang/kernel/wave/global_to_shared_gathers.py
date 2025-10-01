@@ -202,6 +202,8 @@ def update_read_mapping_dynamic_values(read: Read):
             new_dyn_vals.append(new_read)
 
             new_read.index = deepcopy(custom.index)
+            new_read.pre_expansion_id = custom.pre_expansion_id
+            new_read.vector_shapes = custom.vector_shapes
             for dim in custom.index:
                 if dim in read.index:
                     new_read.index[dim] = read.index[dim]
@@ -333,6 +335,8 @@ def add_optimized_nodes(
                     custom.mapping,
                     custom.mapping_dynamic_vals,
                 ).add_to_graph(custom.graph, loc=custom.location)
+                read.pre_expansion_id = custom.pre_expansion_id
+                read.vector_shapes = custom.vector_shapes
                 global_offset = (
                     hardware_constraint.linearized_thread_id * load_elems_per_thread
                     + i * max_elements_per_load
@@ -364,6 +368,7 @@ def add_optimized_nodes(
                             read, custom_user.memory, load_elems_per_thread
                         ).add_to_graph(custom.graph, loc=custom.location)
                         write.index = read.index
+                        write.pre_expansion_id = custom.pre_expansion_id
                         optimized_writes[custom_user.memory].append(write)
                         write.vector_shapes = custom.vector_shapes
                         shared_read_metadata[write] = SharedReadMetadata(

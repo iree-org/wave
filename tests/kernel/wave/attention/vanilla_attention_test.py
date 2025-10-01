@@ -171,11 +171,13 @@ def testTransposedVAttentionPure(
         ),
     ],
 )
+@param_bool("use_global_to_shared", "g2s")
 def testAttentionPure(
     input_shape: tuple[int],
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
+    use_global_to_shared: bool,
     run_bench,
     perf_filename_tk,
 ):
@@ -208,6 +210,7 @@ def testAttentionPure(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_global_to_shared=use_global_to_shared,
     )
 
     options = set_default_run_config(options)
@@ -364,11 +367,13 @@ def testAttentionCausal(
         ),
     ],
 )
+@param_bool("use_global_to_shared", "g2s")
 def testAttentionBSHD(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
+    use_global_to_shared: bool,
     run_bench,
     perf_filename_tk,
 ):
@@ -414,8 +419,14 @@ def testAttentionBSHD(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_global_to_shared=use_global_to_shared,
     )
     options = set_default_run_config(options)
+
+    # Only supported on gfx95, so skip the test on other architectures.
+    if use_global_to_shared and "gfx95" not in options.target:
+        return
+
     base_attention = wave_compile(options, base_attention_func)
 
     torch.manual_seed(1)
