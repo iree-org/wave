@@ -337,15 +337,12 @@ def update_write_dependencies(
                 return True
             return False
 
-        replaceable_writes = trace.walk(is_replaceable_write)
-        for replaceable_write in replaceable_writes:
-            for user in replaceable_write.users:
-                idx = user.args.index([replaceable_write])
+        for replaceable_write in trace.walk(is_replaceable_write):
+            for user in list(replaceable_write.users):
                 custom_user = get_custom(user)
-                custom_user.update_arg(idx, writes)
+                custom_user.update_arg("_write_dependency", writes)
                 if is_shared_read(custom_user) and shared_read_metadata:
                     update_shared_memory_read(writes, shared_read_metadata, custom_user)
-                break
 
     DCE(trace)
 
