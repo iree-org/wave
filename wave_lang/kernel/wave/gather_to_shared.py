@@ -44,6 +44,7 @@ from .utils.general_utils import (
     remove_thread_indexing,
     remove_global_indexing,
 )
+from .utils.general_utils import is_gather
 from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
 
@@ -395,8 +396,8 @@ def gather_to_shared(
         read, write = reads_writes[0]
         logger.info(f"processing read={read}, write={write}")
 
-        if not read.has_identity_mapping():
-            logger.info("non-identity read mapping is not supported yet")
+        if not read.has_identity_mapping() and is_gather(read):
+            logger.info("non-identity read mapping and gather is not supported yet")
             continue
 
         assert read.index == write.index

@@ -241,6 +241,8 @@ def add_optimized_nodes(
                 read = Read(memory, load_elems_per_thread, custom.mapping).add_to_graph(
                     custom.graph, loc=custom.location
                 )
+                read.pre_expansion_id = custom.pre_expansion_id
+                read.vector_shapes = custom.vector_shapes
                 global_offset = (
                     hardware_constraint.linearized_thread_id * load_elems_per_thread
                     + i * max_elements_per_load
@@ -272,6 +274,7 @@ def add_optimized_nodes(
                             read, custom_user.memory, load_elems_per_thread
                         ).add_to_graph(custom.graph, loc=custom.location)
                         write.index = read.index
+                        write.pre_expansion_id = custom.pre_expansion_id
                         optimized_writes[custom_user.memory].append(write)
                         write.vector_shapes = custom.vector_shapes
                         break
@@ -340,7 +343,17 @@ def update_write_dependencies(
         for replaceable_write in trace.walk(is_replaceable_write):
             for user in list(replaceable_write.users):
                 custom_user = get_custom(user)
-                custom_user.update_arg("_write_dependency", writes)
+                assert isinstance(custom_user, Read), f"Expected write user to be Read"
+
+                assert (
+                    custom_user._write_dependency is not None
+                ), "Expected _write_dependency to not be None"
+                write_dependency = [x for x in custom_user._write_dependency]
+
+                write_dependency.remove(replaceable_write)
+                write_dependency += writes
+                custom_user.update_arg("_write_dependency", write_dependency)
+
                 if is_shared_read(custom_user) and shared_read_metadata:
                     update_shared_memory_read(writes, shared_read_metadata, custom_user)
 
