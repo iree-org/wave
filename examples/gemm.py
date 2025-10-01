@@ -50,7 +50,9 @@ def simple_gemm_test():
         tkw.WaveConstraint(M, BLOCK_M / 2),
         tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.HardwareConstraint(
-            threads_per_wave=64, mma_type=tkw.MMAType.F32_16x16x16_F16
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
         ),
     ]
 
@@ -837,7 +839,7 @@ def scatter_a_simple_gemm_test():
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=tkw.MMAType.F32_16x16x16_F16,
-            vector_shapes={M_DIV_2: M_DIV_2, M: M, K: BLOCK_K, I: 0},
+            vector_shapes={M_DIV_2: M_DIV_2, M: 16, N: 16, K: 16, I: 0},
         ),
     ]
 
@@ -911,7 +913,7 @@ def scatter_a_simple_gemm_test():
                     a,
                     mapping=a_read_map,
                     mapping_dynamic_vals=(reordered_idx,),
-                    elements_per_thread=BLOCK_K,
+                    elements_per_thread=16,
                 )
 
                 tkw.write(
@@ -919,7 +921,7 @@ def scatter_a_simple_gemm_test():
                     a_back,
                     mapping=a_write_map,
                     mapping_dynamic_vals=(tid,),
-                    elements_per_thread=BLOCK_K,
+                    elements_per_thread=16,
                 )
 
         tkw.workgroup_barrier()
@@ -939,13 +941,13 @@ def scatter_a_simple_gemm_test():
         tkw.write(repeat, c)
 
     # Create test matrices
-    m, n, k = 64, 64, 64
+    m, n, k = 128, 128, 128
 
     # Initialize input matrices with random values
     torch.manual_seed(0)
     a = torch.randn(m, k, dtype=torch.float16, device="cuda")
     a_back = torch.zeros(m, k, dtype=torch.float16, device="cuda")
-    b = torch.eye(k, dtype=torch.float16, device="cuda")
+    b = torch.randn(n, k, dtype=torch.float16, device="cuda")
     c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
 
     # Set hyperparameters for compilation
@@ -996,7 +998,6 @@ def scatter_a_simple_gemm_test():
 
     expected = torch.matmul(reordered_a, b.t())
 
-    breakpoint()
     print("Expected: ", expected[0])
     print("C: ", c[0])
 
