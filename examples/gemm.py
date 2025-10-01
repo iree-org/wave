@@ -701,6 +701,132 @@ def scatter_gemm_test():
     print("GEMM test passed!")
 
 
+def scatter_a():
+    M_DIV_2 = sym.M_DIV_2
+    # Define constraints for the kernel
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M_DIV_2: M_DIV_2, M: M, K: BLOCK_K},
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    a_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: d0, K: j},
+        outputs={M: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    a_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, K: j},
+        outputs={M: i, K: j},
+    )
+
+    dyn_reorder_a_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={M_DIV_2: d0},
+        outputs={M_DIV_2: i},
+        dynamic_val_mappings={M_DIV_2: i},
+    )
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
+        reorder_a: Memory[M_DIV_2, ADDRESS_SPACE_A, i32],  # Input matrix A
+        a_back: Memory[M, K, ADDRESS_SPACE_A, f16],  # Output matrix A
+    ):
+        # Initialize the accumulator register with zeros
+        @tkw.conditional(THREAD_0 < M_DIV_2)
+        def scatter_op():
+            tid = tkw.scalar(THREAD_0, i32)
+            reordered_idx = tkw.read(
+                reorder_a,
+                mapping=dyn_reorder_a_read_map,
+                mapping_dynamic_vals=(tid,),
+            )
+
+            @tkw.iterate(K, init_args=[])
+            def copy_row():
+                a_row_data = tkw.read(
+                    a,
+                    mapping=a_read_map,
+                    mapping_dynamic_vals=(reordered_idx,),
+                    elements_per_thread=BLOCK_K,
+                )
+                tkw.write(
+                    a_row_data,
+                    a_back,
+                    mapping=a_write_map,
+                    elements_per_thread=BLOCK_K,
+                )
+
+    # Create test matrices
+    m, k = 64, 128  # Small dimensions for testing
+
+    # Initialize input matrices with random values
+    torch.manual_seed(0)
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    a_back = torch.zeros(m, k, dtype=torch.float16, device="cuda")
+
+    # Set hyperparameters for compilation
+    hyperparams = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_K: 32,
+        M: m,
+        K: k,
+        M_DIV_2: m // 2,
+    }
+
+    # Compile the kernel
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        print_ir_after="all",
+        print_ir_before="all",
+    )
+    options = set_default_run_config(options)
+    compiled_gemm = wave_compile(options, gemm)
+
+    with open("scatter_a.mlir", "w") as f:
+        f.write(compiled_gemm.asm)
+
+    # create reorder_a such that it is a permutation of the rows of a
+    reorder_a = torch.randperm(m // 2).to(torch.int32).to(device="cuda")
+    reorder_a_clone = reorder_a.clone().to(device="cuda")
+    compiled_gemm(a, reorder_a_clone, a_back)
+    reordered_a = torch.zeros((m, k), dtype=torch.float16).to(device="cuda")
+
+    # read rows of a in reorder_a order
+    for i in range(m // 2):
+        reordered_a[i] = a[reorder_a[i]]
+
+    print("Reorder idx: ", reorder_a)
+    print("A back: ", a_back[0])
+    print("A: ", a[reorder_a[0]])
+    print("Reordered A: ", reordered_a[0])
+
+    for i in range(m // 2):
+        print(f"checking index {i} ...")
+        try:
+            assert torch.allclose(a_back[i], reordered_a[i], rtol=1e-2, atol=1e-2)
+            print(f"PASSED")
+        except AssertionError:
+            print(f"A back: {a_back[i]}")
+            print(f"Reordered A: {reordered_a[i]}")
+            raise AssertionError(f"A back doesn't match expected output at index {i}")
+
+    print("scatter_a test passed!")
+
+
 if __name__ == "__main__":
     args = parse_args()
     if args.list_tests:
