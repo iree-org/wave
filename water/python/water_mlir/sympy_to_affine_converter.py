@@ -81,20 +81,20 @@ class AffineFraction:
 
 
 def _convert_expr_to_fraction(
-    sympy_expr: sympy.core.expr.Expr, symbols: List[sympy.core.symbol.Symbol]
+    sympy_expr: sympy.core.expr.Expr, symbols: List[str]
 ) -> AffineFraction:
     """Recursively convert sympy expression to AffineFraction"""
     if sympy_expr.is_Integer:
         return AffineFraction.from_integer(sympy_expr.p)
 
     elif sympy_expr.is_Symbol:
-        if sympy_expr in symbols:
-            symbol_idx = symbols.index(sympy_expr)
+        name = str(sympy_expr)
+        if name in symbols:
+            symbol_idx = symbols.index(name)
             return AffineFraction.from_affine_expr(ir.AffineExpr.get_symbol(symbol_idx))
         else:
-            available_symbols = [str(s) for s in symbols]
             raise AffineConversionError(
-                f"Unknown symbol '{sympy_expr}'. Available symbols: {available_symbols}"
+                f"Unknown symbol '{sympy_expr}'. Available symbols: {symbols}"
             )
 
     elif sympy_expr.is_Rational:
@@ -187,7 +187,7 @@ def _convert_expr_to_fraction(
 
 
 def convert_sympy_to_affine_map(
-    expr: sympy.core.expr.Expr, symbols: List[sympy.core.symbol.Symbol]
+    expr: sympy.core.expr.Expr, symbols: List[str]
 ) -> ir.AffineMap:
     """
     Convert a sympy expression to an MLIR AffineMap using fractional algebra.
