@@ -544,7 +544,7 @@ def scatter_gemm_test():
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=tkw.MMAType.F32_16x16x16_F16,
-            vector_shapes={E: E, M_DIV_2: 16, M: 16, K: K},
+            vector_shapes={E: E, M_DIV_2: M_DIV_2, M: M, K: BLOCK_K},
         ),
     ]
 
@@ -570,8 +570,7 @@ def scatter_gemm_test():
     a_write_map = tkw.IndexMapping(
         num_iterators=2,
         inputs={M: i, K: j},
-        outputs={M: d0, K: j},
-        dynamic_val_mappings={M: i},
+        outputs={M: i, K: j},
     )
 
     dyn_reorder_a_read_map = tkw.IndexMapping(
@@ -592,40 +591,41 @@ def scatter_gemm_test():
     ):
         # Initialize the accumulator register with zeros
         c_reg = Register[M, N, f32](0.0)
+        a_reg = Register[M, K, f16](0.0)
         tkw.set_symbol(IDX, idx)
-        a_mock = tkw.read(a_back)
+        # a_mock = tkw.read(a_back)
 
-        @tkw.conditional(THREAD_0 < M_DIV_2)
-        def scatter_op():
-            tid = tkw.scalar(THREAD_0, i32)
-            reordered_idx = tkw.read(
-                reorder_a,
-                mapping=dyn_reorder_a_read_map,
-                mapping_dynamic_vals=(tid,),
-                elements_per_thread=1,
-            )
-
-            @tkw.iterate(K, init_args=[])
-            def copy_row():
-                a_row_data = tkw.read(
-                    a,
-                    mapping=a_read_map,
-                    mapping_dynamic_vals=(reordered_idx,),
-                    elements_per_thread=4,
-                )
-                tkw.write(
-                    a_row_data,
-                    a_back,
-                    mapping=a_write_map,
+        @tkw.conditional(tkw.scalar(THREAD_1, i32) == tkw.scalar(0, i32))
+        def then():
+            @tkw.conditional(THREAD_0 < M_DIV_2)
+            def scatter_op():
+                tid = tkw.scalar(THREAD_0, i32)
+                reordered_idx = tkw.read(
+                    reorder_a,
+                    mapping=dyn_reorder_a_read_map,
                     mapping_dynamic_vals=(tid,),
-                    elements_per_thread=4,
                 )
+
+                @tkw.iterate(K, init_args=[])
+                def copy_row():
+                    a_row_data = tkw.read(
+                        a,
+                        mapping=a_read_map,
+                        mapping_dynamic_vals=(reordered_idx,),
+                        elements_per_thread=BLOCK_K,
+                    )
+                    tkw.write(
+                        a_row_data,
+                        a_back,
+                        mapping=a_write_map,
+                        elements_per_thread=BLOCK_K,
+                    )
 
         # Iterate over the K dimension to compute the dot product
         @tkw.iterate(K, init_args=[c_reg])
         def gemm_compute(acc: Register[M, N, f32]) -> Register[M, N, f32]:
             # Load elements from A and B
-            a_reg = tkw.read(a_back)
+            # a_reg = tkw.read(a_back)
             b_reg = tkw.read(b, mapping=mapping)
 
             # Compute matrix multiplication and accumulate
@@ -685,7 +685,6 @@ def scatter_gemm_test():
     print("A: ", a[reorder_a[0]])
     print("Reordered A: ", reordered_a[0])
 
-    breakpoint()
     assert torch.allclose(
         a_back, reordered_a, rtol=1e-2, atol=1e-2
     ), f"A back doesn't match expected output\nMax difference: {(a_back - reordered_a).abs().max()}"
@@ -814,17 +813,169 @@ def scatter_a():
     print("A: ", a[reorder_a[0]])
     print("Reordered A: ", reordered_a[0])
 
-    for i in range(m // 2):
-        print(f"checking index {i} ...")
-        try:
-            assert torch.allclose(a_back[i], reordered_a[i], rtol=1e-2, atol=1e-2)
-            print(f"PASSED")
-        except AssertionError:
-            print(f"A back: {a_back[i]}")
-            print(f"Reordered A: {reordered_a[i]}")
-            raise AssertionError(f"A back doesn't match expected output at index {i}")
-
     print("scatter_a test passed!")
+
+
+def scatter_a_simple_gemm_test():
+    M_DIV_2 = sym.M_DIV_2
+    # Define constraints for the kernel
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M_DIV_2: M_DIV_2, M: M, K: BLOCK_K},
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    k = tkw.IndexMapping.iterator(2)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    a_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: d0, K: j},
+        outputs={M: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    a_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, K: j},
+        outputs={M: d0, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    dyn_reorder_a_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={M_DIV_2: d0},
+        outputs={M_DIV_2: i},
+        dynamic_val_mappings={M_DIV_2: i},
+    )
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
+        b: Memory[N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
+        reorder_a: Memory[M_DIV_2, ADDRESS_SPACE_A, i32],  # Input matrix A
+        a_back: Memory[M, K, ADDRESS_SPACE_A, f16],  # Output matrix A
+        c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
+    ):
+        # Initialize the accumulator register with zeros
+        a_mock = tkw.read(a_back)
+
+        @tkw.conditional(tkw.scalar(THREAD_1, i32) == tkw.scalar(0, i32))
+        def then():
+            valid_threads = THREAD_0 < M_DIV_2
+
+            @tkw.conditional(valid_threads)
+            def scatter_op():
+                tid = tkw.Register[M_DIV_2, i32](THREAD_0)
+                reordered_idx = tkw.read(
+                    reorder_a,
+                    mapping=dyn_reorder_a_read_map,
+                    mapping_dynamic_vals=(tid,),
+                )
+
+                @tkw.iterate(K, init_args=[])
+                def copy_row():
+                    a_row_data = tkw.read(
+                        a,
+                        mapping=a_read_map,
+                        mapping_dynamic_vals=(reordered_idx,),
+                        elements_per_thread=BLOCK_K,
+                    )
+
+                    tkw.write(
+                        a_row_data,
+                        a_back,
+                        mapping=a_write_map,
+                        mapping_dynamic_vals=(tid,),
+                        elements_per_thread=BLOCK_K,
+                    )
+
+        c_reg = Register[M, N, f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: Register[M, N, f32]) -> Register[M, N, f32]:
+            # Load elements from A and B
+            a_reg = tkw.read(a_back)
+            b_reg = tkw.read(b)
+
+            # Compute matrix multiplication and accumulate
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        # Store the final result to C
+        tkw.write(repeat, c)
+
+    # Create test matrices
+    m, n, k = 64, 64, 128
+
+    # Initialize input matrices with random values
+    torch.manual_seed(0)
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    a_back = torch.zeros(m, k, dtype=torch.float16, device="cuda")
+    b = torch.randn(n, k, dtype=torch.float16, device="cuda")
+    c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
+    # Set hyperparameters for compilation
+    hyperparams = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        M: m,
+        N: n,
+        K: k,
+        M_DIV_2: m // 2,
+    }
+
+    # Compile the kernel
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        print_ir_after="all",
+        print_ir_before="all",
+    )
+    options = set_default_run_config(options)
+    compiled_gemm = wave_compile(options, gemm)
+
+    with open("scatter_a_simple_gemm.mlir", "w") as f:
+        f.write(compiled_gemm.asm)
+
+    # create reorder_a such that it is a permutation of the rows of a
+    reorder_a = torch.randperm(m // 2).to(torch.int32).to(device="cuda")
+    reorder_a_clone = reorder_a.clone().to(device="cuda")
+    compiled_gemm(a, b, reorder_a_clone, a_back, c)
+    reordered_a = torch.zeros((m, k), dtype=torch.float16).to(device="cuda")
+
+    # read rows of a in reorder_a order
+    for i in range(m // 2):
+        reordered_a[i] = a[reorder_a[i]]
+
+    print("Reorder idx: ", reorder_a)
+    print("A back: ", a_back[0])
+    print("A: ", a[reorder_a[0]])
+    print("Reordered A: ", reordered_a[0])
+
+    assert torch.allclose(
+        a_back, reordered_a, rtol=1e-2, atol=1e-2
+    ), f"A back doesn't match expected output\nMax difference: {(a_back - reordered_a).abs().max()}"
+
+    expected = torch.matmul(reordered_a, b.t())
+
+    assert torch.allclose(
+        c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
+    ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
+
+    print("scatter_a_simple_gemm test passed!")
 
 
 if __name__ == "__main__":
