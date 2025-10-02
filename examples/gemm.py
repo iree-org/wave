@@ -1030,7 +1030,7 @@ def scatter_gemm_test(is_debug=False):
 
 def scatter_gemm_w_padding_test(is_debug=False):
     E = sym.E
-    M_DIV_2 = sym.M_DIV_2
+    BLOCK_SHAPE = sym.BLOCK_SHAPE
     PAD_VALUE = sym.PAD_VALUE
 
     IDX = sym.IDX
@@ -1046,7 +1046,7 @@ def scatter_gemm_w_padding_test(is_debug=False):
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=tkw.MMAType.F32_16x16x16_F16,
-            vector_shapes={E: E, M_DIV_2: M_DIV_2, M: 16, N: 16, K: 16},
+            vector_shapes={E: E, BLOCK_SHAPE: BLOCK_SHAPE, M: 16, N: 16, K: 16},
         ),
     ]
 
@@ -1075,33 +1075,51 @@ def scatter_gemm_w_padding_test(is_debug=False):
         dynamic_val_mappings={M: i},
     )
 
+    c_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: d0, N: j},
+        outputs={M: i, N: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    c_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, N: j},
+        outputs={M: d0, N: j},
+        dynamic_val_mappings={M: i},
+    )
+
     dyn_reorder_a_read_map = tkw.IndexMapping(
         num_iterators=1,
-        inputs={M_DIV_2: d0},
-        outputs={M_DIV_2: i},
-        dynamic_val_mappings={M_DIV_2: i},
+        inputs={BLOCK_SHAPE: d0},
+        outputs={BLOCK_SHAPE: i},
+        dynamic_val_mappings={BLOCK_SHAPE: i},
     )
 
     @tkw.wave(constraints)
     def gemm(
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
-        reorder_a: Memory[M_DIV_2, ADDRESS_SPACE_A, i32],  # Input matrix A
+        reorder_a: Memory[BLOCK_SHAPE, ADDRESS_SPACE_A, i32],  # Input matrix A
         a_back: Memory[M, K, ADDRESS_SPACE_A, f16],  # Output matrix A
         c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
+        c_back: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
         idx: i32,
     ):
         # Initialize the accumulator register with zeros
         zero_reg = Register[M, K, f16](0.0)
+        zero_reg_mn = Register[M, N, f32](0.0)
         tkw.write(zero_reg, a_back)
+        tkw.write(zero_reg_mn, c_back)
+        mock_reg = tkw.read(reorder_a)
 
         tkw.set_symbol(IDX, idx)
 
-        condition = THREAD_0 < M_DIV_2
+        condition = THREAD_0 < BLOCK_SHAPE
 
         @tkw.conditional(condition)
         def scatter_op():
-            tid = tkw.Register[M_DIV_2, i32](THREAD_0)
+            tid = tkw.Register[BLOCK_SHAPE, i32](THREAD_0)
             reordered_idx = tkw.read(
                 reorder_a,
                 mapping=dyn_reorder_a_read_map,
@@ -1144,11 +1162,40 @@ def scatter_gemm_w_padding_test(is_debug=False):
             return acc
 
         # Store the final result to C
-        tkw.write(gemm_compute, c)
+        tkw.write(gemm_compute, c_back)
+
+        @tkw.conditional(condition)
+        def scatter_op():
+            tid = tkw.Register[BLOCK_SHAPE, i32](THREAD_0)
+            reordered_idx = tkw.read(
+                reorder_a,
+                mapping=dyn_reorder_a_read_map,
+                mapping_dynamic_vals=(tid,),
+            )
+
+            tkw.set_symbol(SCATTER_IDX, reordered_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
+
+            @tkw.conditional(is_not_padding)
+            def then():
+                c_row_data = tkw.read(
+                    c_back,
+                    mapping=c_read_map,
+                    mapping_dynamic_vals=(tid,),
+                    elements_per_thread=16,
+                )
+                tkw.write(
+                    c_row_data,
+                    c,
+                    mapping=c_write_map,
+                    mapping_dynamic_vals=(reordered_idx,),
+                    elements_per_thread=16,
+                )
 
     # Create test matrices
     m, n, k = 64, 64, 128  # Small dimensions for testing
     e = 8
+    block_shape = 16
 
     # Initialize input matrices with random values
     torch.manual_seed(0)
@@ -1156,6 +1203,7 @@ def scatter_gemm_w_padding_test(is_debug=False):
     a_back = torch.zeros(m, k, dtype=torch.float16, device="cuda")
     b = torch.randn(e, n, k, dtype=torch.float16, device="cuda")
     c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    c_back = torch.zeros(m, n, dtype=torch.float32, device="cuda")
 
     # Set hyperparameters for compilation
     hyperparams = {
@@ -1169,8 +1217,8 @@ def scatter_gemm_w_padding_test(is_debug=False):
         N: n,
         K: k,
         E: e,
-        M_DIV_2: m // 2,
-        PAD_VALUE: 30,
+        BLOCK_SHAPE: block_shape,
+        PAD_VALUE: m,
     }
 
     # Compile the kernel
@@ -1193,13 +1241,18 @@ def scatter_gemm_w_padding_test(is_debug=False):
             f.write(compiled_gemm.asm)
 
     # create reorder_a such that it is a permutation of the rows of a
-    reorder_a = torch.randperm(m // 2).to(torch.int32).to(device="cuda")
-    compiled_gemm(a, b, reorder_a, a_back, c, 1)
+    reorder_a = torch.randperm(m).to(torch.int32).to(device="cuda")
+    reorder_a = reorder_a[:block_shape]
+    # make last two values of reorder_a m
+    reorder_a[-2] = m
+    reorder_a[-1] = m
+
+    compiled_gemm(a, b, reorder_a, a_back, c, c_back, 1)
     reordered_a = torch.zeros((m, k), dtype=torch.float16).to(device="cuda")
 
     # read rows of a in reorder_a order
-    for i in range(m // 2):
-        if reorder_a[i] < 30:
+    for i in range(block_shape):
+        if reorder_a[i] < m:
             reordered_a[i] = a[reorder_a[i]]
 
     print("Reorder idx: ", reorder_a)
@@ -1212,13 +1265,19 @@ def scatter_gemm_w_padding_test(is_debug=False):
     ), f"A back doesn't match expected output\nMax difference: {(a_back - reordered_a).abs().max()}"
 
     # Verify the result using PyTorch's matmul
-    expected = torch.matmul(reordered_a, b[1].t())
+    expected_int = torch.matmul(reordered_a, b[1].t())
+    expected = torch.zeros((m, n), dtype=torch.float32).to(device="cuda")
 
-    breakpoint()
+    for i in range(block_shape):
+        if reorder_a[i] < m:
+            expected[reorder_a[i]] = expected_int[i]
 
-    # Check if results are close (accounting for floating-point precision)
     assert torch.allclose(
-        c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
+        c_back.to(torch.float16), expected_int, rtol=1e-2, atol=1e-2
+    ), f"C back doesn't match expected output\nMax difference: {(c_back.to(torch.float16) - expected_int).abs().max()}"
+
+    assert torch.allclose(
+        c, expected, rtol=1e-2, atol=1e-2
     ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
 
     print("GEMM test passed!")
