@@ -558,3 +558,51 @@ def test_wmma_f32_16x16x16_f16_w32():
     # CHECK-DAG:        vector.store %[[E8]], %[[V13]][%[[V28]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK:            return
+
+
+@run_test
+def test_wmma_f32_16x16x32_f16():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32, mma_type=tkw.MMAType.GFX1250_F32_16x16x32_F16
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a)
+        b_reg = tkw.read(b)
+        acc = tkw.mma(a_reg, b_reg, c_reg)
+        tkw.write(acc, c)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 128,
+            K: 32,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx1250",
+    )
+    mma = wave_compile(compile_options, mma)
+    print(mma.asm)
+
+    # CHECK-LABEL: test_wmma_f32_16x16x32_f16
+    # CHECK:          func.func @mma
+
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16"({{.*}}) : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
