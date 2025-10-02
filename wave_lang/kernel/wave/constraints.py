@@ -71,6 +71,7 @@ class MMAType(Enum):
 
     # Intrinsics introduced in RDNA4
     RDNA4_WAVE32_F32_16x16x16_F16 = 0x1920
+    WMMA_F32_16x16x32_F16 = 0x1921
 
 
 class ScaledMMAType(Enum):
@@ -258,6 +259,8 @@ class HardwareConstraint(Constraint):
                 return mma_type.get_shape(self.threads_per_wave)
             case MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
                 return (16, 16, 16)
+            case MMAType.WMMA_F32_16x16x32_F16:
+                return (16, 16, 32)
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 return (16, 16, 16)
             case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
@@ -309,6 +312,15 @@ class HardwareConstraint(Constraint):
                     ),  # M
                     lane % 16,  # N
                     8 * floor(lane / 16),
+                ]
+            case MMAType.WMMA_F32_16x16x32_F16:
+                offset = [
+                    Piecewise(
+                        (lane % 16, ~MMA_ACC),
+                        (8 * floor(lane / 16), MMA_ACC),
+                    ),  # M
+                    lane % 16,  # N
+                    16 * floor(lane / 16),
                 ]
             case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
                 offset = [
@@ -501,6 +513,17 @@ class HardwareConstraint(Constraint):
                     Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
                     1,  # N
                     8,  # K
+                ]
+                stride = [
+                    Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M
+                    1,  # N
+                    1,  # K
+                ]
+            case MMAType.WMMA_F32_16x16x32_F16:
+                size = [
+                    Piecewise((1, ~MMA_ACC), (8, MMA_ACC)),  # M
+                    1,  # N
+                    16,  # K
                 ]
                 stride = [
                     Piecewise((1, ~MMA_ACC), (16, MMA_ACC)),  # M

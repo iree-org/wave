@@ -367,7 +367,17 @@ def emit_mfma(m: int, n: int, k: int, acc: Value, values: list[Value]) -> Value:
 
 def emit_wmma(acc: Value, values: list[Value]) -> Value:
     source_a, source_b = values
-    return amdgpu_d.wmma(source_a, source_b, acc)
+    # return amdgpu_d.wmma(source_a, source_b, acc)
+    f = arith_d.constant(IntegerType.get_signless(1), 0)
+    t = arith_d.constant(IntegerType.get_signless(1), 1)
+    i16 = arith_d.constant(IntegerType.get_signless(16), 0)
+    return llvm_d.call_intrinsic(
+        acc.type,
+        "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16",
+        [f, source_a, f, source_b, i16, acc, f, t],
+        [],
+        [],
+    )
 
 
 @handle_op(mma)

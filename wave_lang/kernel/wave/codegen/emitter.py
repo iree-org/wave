@@ -162,7 +162,7 @@ class WaveEmitter:
                 ir_location = location.to_mlir() if location else Location.unknown()
                 with ir_location:
                     handler(self, node)
-        except e:
+        except Exception as e:
             logger.error(f"Error handling {node}")
             raise e
 

@@ -145,6 +145,7 @@ def testGemmBench(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
         pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
         pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
         pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+        pytest.param(MMAType.WMMA_F32_16x16x32_F16, 32, marks=require_rdna4),
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
