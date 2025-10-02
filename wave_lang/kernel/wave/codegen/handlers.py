@@ -109,7 +109,7 @@ from ...ops.wave_ops import (
     workgroup_barrier,
 )
 from ..compile_options import WaveCompileOptions
-from ..constraints import GenericDot, HardwareConstraint
+from ..constraints import GenericDot, HardwareConstraint, MMAType
 from ..scheduling.resources import get_scheduling_mask
 from ..utils.classes import ShuffleMode
 from ..utils.general_utils import get_fastest_index
@@ -365,19 +365,21 @@ def emit_mfma(m: int, n: int, k: int, acc: Value, values: list[Value]) -> Value:
     return result
 
 
-def emit_wmma(acc: Value, values: list[Value]) -> Value:
+def emit_wmma(intr: MMAType, acc: Value, values: list[Value]) -> Value:
     source_a, source_b = values
-    # return amdgpu_d.wmma(source_a, source_b, acc)
-    f = arith_d.constant(IntegerType.get_signless(1), 0)
-    t = arith_d.constant(IntegerType.get_signless(1), 1)
-    i16 = arith_d.constant(IntegerType.get_signless(16), 0)
-    return llvm_d.call_intrinsic(
-        acc.type,
-        "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16",
-        [f, source_a, f, source_b, i16, acc, f, t],
-        [],
-        [],
-    )
+    if intr == MMAType.GFX1250_F32_16x16x32_F16:
+        # TODO: Use amdgpu intrinsic when it is supported
+        f = arith_d.constant(IntegerType.get_signless(1), 0)
+        t = arith_d.constant(IntegerType.get_signless(1), 1)
+        i16 = arith_d.constant(IntegerType.get_signless(16), 0)
+        return llvm_d.call_intrinsic(
+            acc.type,
+            "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16",
+            [f, source_a, f, source_b, i16, acc, f, t],
+            [],
+            [],
+        )
+    return amdgpu_d.wmma(source_a, source_b, acc)
 
 
 @handle_op(mma)
@@ -405,8 +407,9 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
     result = (
-        emit_wmma(acc, values)
-        if emitter.options.target.startswith("gfx12")
+        emit_wmma(mma_type, acc, values)
+        if mma_type
+        in [MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.GFX1250_F32_16x16x32_F16]
         else emit_mfma(m, n, k, acc, values)
     )
     emitter.bind_node_proxy(node, IRProxyValue(result))

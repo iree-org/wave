@@ -20,23 +20,20 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     device_randint,
     device_zeros,
 )
-from wave_lang.kernel.wave.utils.mma_utils import (
-    get_mfma_load_elems_per_thread,
-    get_mfma_store_elems_per_thread,
-)
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from .common.utils import (
-    require_e2e,
+    param_bool,
+    perf_test,
     require_cdna2,
     require_cdna3,
     require_cdna4,
-    require_cdna_3_or_4,
     require_cdna_2_or_3_or_4,
+    require_cdna_3_or_4,
+    require_e2e,
+    require_gfx1250,
     require_rdna4,
-    perf_test,
-    param_bool,
 )
 from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
@@ -145,7 +142,7 @@ def testGemmBench(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
         pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
         pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
         pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
-        pytest.param(MMAType.WMMA_F32_16x16x32_F16, 32, marks=require_rdna4),
+        pytest.param(MMAType.GFX1250_F32_16x16x32_F16, 32, marks=require_gfx1250),
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
