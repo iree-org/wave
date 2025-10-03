@@ -9,6 +9,7 @@
 #include "mlir-c/BuiltinTypes.h"
 #include "mlir/Bindings/Python/Nanobind.h"
 #include "mlir/Bindings/Python/NanobindAdaptors.h"
+#include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/c/Dialects.h"
 
 #include "nanobind/nanobind.h"
@@ -148,4 +149,70 @@ NB_MODULE(_waterDialects, m) {
           nb::arg("cls"), nb::arg("symbol_dict"),
           nb::arg("context") = nb::none(),
           "Gets a wave.WaveHyperparameterAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // WaveAddressSpaceAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveAddressSpaceAttr", mlirAttributeIsAWaveAddressSpaceAttr,
+      mlirWaveAddressSpaceAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, wave::WaveAddressSpace value,
+             MlirContext context) {
+            return cls(mlirWaveAddressSpaceAttrGet(
+                context, static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveAddressSpaceAttr from an address space enum value.")
+      .def(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<wave::WaveAddressSpace>(
+                mlirWaveAddressSpaceAttrGetValue(self));
+          },
+          "Returns the address space enum value.");
+
+  nb::enum_<wave::WaveAddressSpace>(d, "WaveAddressSpace")
+      .value("Unspecified", wave::WaveAddressSpace::Unspecified)
+      .value("Global", wave::WaveAddressSpace::Global)
+      .value("Shared", wave::WaveAddressSpace::Shared)
+      .value("Register", wave::WaveAddressSpace::Register);
+
+  //===---------------------------------------------------------------------===//
+  // WaveDistributedShapeAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveDistributedShapeAttr", mlirAttributeIsAWaveDistributedShapeAttr,
+      mlirWaveDistributedShapeAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, const std::vector<std::string> &symbolNames,
+             MlirAffineMap map) {
+            std::vector<MlirAttribute> symbolAttrs;
+            intptr_t numSymbols = symbolNames.size();
+            symbolAttrs.reserve(numSymbols);
+
+            for (const std::string &symbolName : symbolNames) {
+              MlirStringRef symbolNameStrRef =
+                  mlirStringRefCreate(symbolName.data(), symbolName.size());
+              MlirAttribute symbolAttr = mlirWaveSymbolAttrGet(
+                  mlirAffineMapGetContext(map), symbolNameStrRef);
+              symbolAttrs.push_back(symbolAttr);
+            }
+
+            if (numSymbols != mlirAffineMapGetNumSymbols(map)) {
+              throw nb::value_error("Expected symbol_names to have as many "
+                                    "entries as map have symbols.");
+            }
+            if (mlirAffineMapGetNumDims(map) != 0) {
+              throw nb::value_error("Maps should not involve dimensions.");
+            }
+            return cls(
+                mlirWaveDistributedShapeAttrGet(symbolAttrs.data(), map));
+          },
+          nb::arg("cls"), nb::arg("symbol_names"), nb::arg("map"),
+          "Gets a wave.WaveDistributedShapeAttr from parameters.");
 }

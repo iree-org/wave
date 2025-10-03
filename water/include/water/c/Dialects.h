@@ -41,7 +41,7 @@ mlirAttributeIsAWaveIndexMappingAttr(MlirAttribute attr);
 /// maps that are interpreted as accepting the symbols provided in the
 /// `symbolNames` list. The list must have as many entries as maps have symbols,
 /// and all maps must have the same number of symbols and zero dimensions. The
-/// list is expected to only contain WaveIndexAttr instances.
+/// list is expected to only contain WaveSymbolAttr instances.
 MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGet(
     MlirContext mlirCtx, MlirAttribute *symbolNames, MlirAffineMap start,
     MlirAffineMap step, MlirAffineMap stride);
@@ -64,6 +64,44 @@ mlirWaveHyperparameterAttrGet(MlirAttribute mapping);
 
 /// Returns the typeID of a WaveHyperparameterAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveHyperparameterAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveAddressSpaceAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveAddressSpaceAttr(MlirAttribute attr);
+
+/// Creates a new WaveAddressSpaceAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveAddressSpaceAttrGet(MlirContext mlirCtx, uint32_t value);
+
+// Get the value from a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveDistributedShapeAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveDistributedShapeAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveDistributedShapeAttr(MlirAttribute attr);
+
+/// Creates a new WaveDistributedShapeAttr with the given map that is
+/// interpreted as accepting the symbols provided in the
+/// `symbolNames` list. The list must have as many entries as maps have symbols,
+/// and all maps must have the same number of symbols and zero dimensions. The
+/// list is expected to only contain WaveSymbolAttr instances.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveDistributedShapeAttrGet(MlirAttribute *symbolNames, MlirAffineMap map);
+
+/// Returns the typeID of a WaveDistributedShapeAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveDistributedShapeAttrGetTypeID();
 
 #ifdef __cplusplus
 }
