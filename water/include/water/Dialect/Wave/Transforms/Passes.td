@@ -45,4 +45,31 @@ def WaterWaveInferTypesPass : Pass<"water-wave-infer-types"> {
   ];
 }
 
+def WaterWavePropagateElementsPerThreadPass
+    : Pass<"water-wave-propagate-elements-per-thread"> {
+  let summary = "Replace register-resident tensor types with vector types";
+  let description = [{
+    Performs forward and backward sparse dataflow analysis propagating
+    information necessary to deduce the number of elements that each operation
+    processes per thread. This information comes from either:
+
+      * TODO: specialized operations that have constraints on elements owned by
+        each thread, such as MMA;
+      * memory access operations with dedicated attributes;
+      * TODO: compilation options.
+
+    All operations using register-resident Wave dialect tensor types are
+    expected to implement WaveElementsPerThreadOpInterface or have the
+    NoOpElementsPerThreadOpTrait to propagate this information. Other traits
+    provide implementations for common cases.
+
+    Reports errors if a conflict is detected, for example, if a value is read
+    with 4 elements per thread and then written with 8 elements per thread or
+    used in a context where a different number is expected.
+
+    Rewrites the IR to replace register-resident tensor types with vector types
+    indicating the number of elements processed by each thread.
+  }];
+}
+
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_PASSES

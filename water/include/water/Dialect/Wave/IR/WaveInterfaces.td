@@ -18,6 +18,68 @@ def HasWaveIndexMapping : NativeOpTrait<"HasWaveIndexMapping"> {
 }
 
 //-----------------------------------------------------------------------------
+// Elements-per-thread propagation interface and implementation traits
+//-----------------------------------------------------------------------------
+
+def WaveElementsPerThreadOpInterface
+    : OpInterface<"WaveElementsPerThreadOpInterface"> {
+  let description = [{
+    Interface capturing op-specific rules for inferring and propagating the
+    number of elements processed by each work item (thread) in the workgroup
+    when lowering the Wave dialect programming model to the SIMT programming
+    model. Each operation may indicate how to infer the elements per threads for
+    its results based on the operation itself and the elements per thread values
+    of its operands, and vice versa.
+
+    Several common implementations are provided via traits.
+  }];
+  let methods = [
+    InterfaceMethod<[{
+      Propagate elements per threads information from operands to results.
+      Expected to return failure when a conflict is detected after printing
+      a descriptive error message to the error stream provided.
+      }],
+      "::llvm::FailureOr<mlir::ChangeResult>",
+      "propagateElementsPerThreadForward",
+      (ins "::llvm::ArrayRef<::wave::ElementsPerThreadLatticeValue>"
+               :$operandElements,
+           "::llvm::MutableArrayRef<::wave::ElementsPerThreadLatticeValue>"
+               :$resultElements,
+           "::llvm::raw_ostream &":$errs)
+    >,
+    InterfaceMethod<[{
+      Propagate elements per threads information from results to operands.
+      Expected to return failure when a conflict is detected after printing
+      a descriptive error message to the error stream provided.
+      }],
+      "::llvm::FailureOr<mlir::ChangeResult>",
+      "propagateElementsPerThreadBackward",
+      (ins "::llvm::MutableArrayRef<::wave::ElementsPerThreadLatticeValue>"
+               :$operandElements,
+           "::llvm::ArrayRef<::wave::ElementsPerThreadLatticeValue>"
+               :$resultElements,
+           "::llvm::raw_ostream &":$errs)
+    >,
+  ];
+  let cppNamespace = "::wave";
+}
+
+def AttrBasedElementsPerThreadOpTrait
+    : NativeOpTrait<"AttrBasedElementsPerThreadOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
+def NoOpElementsPerThreadOpTrait
+    : NativeOpTrait<"NoOpElementsPerThreadOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
+def IdentityElementsPerThreadOpTrait
+    : NativeOpTrait<"IdentityElementsPerThreadOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
+//-----------------------------------------------------------------------------
 // WaveInferTypeOpInterface and implementation traits
 //-----------------------------------------------------------------------------
 

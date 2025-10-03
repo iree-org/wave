@@ -47,6 +47,7 @@ class WaveArithmeticOpDoc {
 class UnaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+          WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
           CompatibleOperandsAndResultsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
@@ -64,6 +65,7 @@ class UnaryWaveOp<string mnemonic>
 class BinaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+          WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
           CompatibleOperandsAndResultsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
@@ -215,6 +217,7 @@ def AllocateOp : WaveOp<"allocate"> {
 
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+    WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
   let summary = "Reads from memory";
   let description = [{
@@ -223,7 +226,9 @@ def ReadOp : WaveOp<"read", [
   }];
 
   let arguments = !con((ins
-    Arg<WaveTensorInMemory, "Tensor representing memory to read from">:$memory
+    Arg<WaveTensorInMemory, "Tensor representing memory to read from">:$memory,
+    Arg<OptionalAttr<I64Attr>,
+        "Number of elements processed by each thread">:$elements_per_thread
   ), commonArguments);
 
   let results = (outs
@@ -232,10 +237,13 @@ def ReadOp : WaveOp<"read", [
 
   let assemblyFormat = "$memory " # commonArgumentsSyntax # "attr-dict `:` "
                        "functional-type(operands, results)";
+
+  let hasVerifier = 1;
 }
 
 def RegisterOp : WaveOp<"register", [
-    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait]> {
+    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
+    NoOpElementsPerThreadOpTrait]> {
   let summary = "Defines a tensor value known to be placed in a register";
   let description = [{
     Defines a new register-resident tensor initialized with the given scalar
@@ -260,6 +268,7 @@ def RegisterOp : WaveOp<"register", [
 
 def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
+    WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
   let summary = "Writes into memory";
   let description = [{
@@ -269,12 +278,16 @@ def WriteOp : WaveOp<"write", [
 
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Value to write">:$value_to_store,
-    Arg<WaveTensorInMemory, "Tensor representing memory to write into">:$memory
+    Arg<WaveTensorInMemory, "Tensor representing memory to write into">:$memory,
+    Arg<OptionalAttr<I64Attr>,
+        "Number of elements processed by each thread">:$elements_per_thread
   ), commonArguments);
 
   let assemblyFormat =
     "$value_to_store `,` $memory " # commonArgumentsSyntax # "attr-dict `:`"
-    "type($value_to_store) `,` type($memory)";
+    "qualified(type($value_to_store)) `,` qualified(type($memory))";
+
+   let hasVerifier = 1;
 }
 
 #endif // WATER_DIALECT_WAVE_WAVEOPS

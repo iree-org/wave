@@ -33,6 +33,17 @@ wave::WaveTypeConverter::WaveTypeConverter(
                                        tensorType.getAddressSpaceValue());
   });
 
+  addConversion([this](VectorType vectorType) -> Type {
+    if (vectorType.isScalable() || vectorType.getRank() != 1)
+      return nullptr;
+
+    Type elementType = convertType(vectorType.getElementType());
+    if (elementType == vectorType.getElementType())
+      return vectorType;
+
+    return VectorType::get(vectorType.getShape(), elementType);
+  });
+
   addSourceMaterialization([](OpBuilder &builder, wave::WaveTensorType waveType,
                               ValueRange inputs, Location loc) -> Value {
     if (inputs.size() != 1)
@@ -93,8 +104,7 @@ mlir::Type wave::WaveTypeConverter::convertTensorFromComponents(
   }
 
   case wave::WaveAddressSpace::Register:
-    // For register space, use vector type (registers are handled by LLVM)
-    return VectorType::get(*staticShape, elementType);
+    return nullptr;
   }
 
   llvm_unreachable("unsupported address space");

@@ -15,6 +15,8 @@
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 //-----------------------------------------------------------------------------
 // Custom parsing and printing hooks. These must be defined before including the
@@ -31,21 +33,29 @@ static mlir::ParseResult parseRegisterOpTypes(mlir::OpAsmParser &parser,
   if (mlir::failed(parser.parseType(resultType)))
     return mlir::failure();
 
-  auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(resultType);
-  if (!tensorType)
-    return parser.emitError(loc)
-           << "expected wave tensor type, got " << resultType;
+  initType =
+      llvm::TypeSwitch<mlir::Type, mlir::Type>(resultType)
+          .Case<wave::WaveTensorType, mlir::VectorType>(
+              [](auto containerType) { return containerType.getElementType(); })
+          .Default([](mlir::Type) { return nullptr; });
 
-  initType = tensorType.getElementType();
+  if (!initType)
+    return parser.emitError(loc)
+           << "expected wave tensor or vector type, got " << resultType;
+
   return mlir::success();
 }
 
 // Print types of the `wave.register` operation.
 static void printRegisterOpTypes(mlir::OpAsmPrinter &printer, mlir::Operation *,
                                  mlir::Type initType, mlir::Type resultType) {
-  assert(initType ==
-             llvm::cast<wave::WaveTensorType>(resultType).getElementType() &&
-         "expected equal types");
+#ifndef NDEBUG
+  auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(resultType);
+  mlir::Type elementType =
+      tensorType ? tensorType.getElementType()
+                 : llvm::cast<mlir::VectorType>(resultType).getElementType();
+  assert(initType == elementType && "expected equal types");
+#endif // NDEBUG
   (void)initType;
   printer.printType(resultType);
 }
@@ -264,10 +274,22 @@ static mlir::LogicalResult checkMmaTypeCompatibility(mlir::Location loc,
 //===----------------------------------------------------------------------===//
 
 LogicalResult MmaOp::verify() {
-  WaveTensorType lhsType = getLhs().getType();
-  WaveTensorType rhsType = getRhs().getType();
-  WaveTensorType accumulatorType = getAccumulator().getType();
-  WaveTensorType resultType = getResult().getType();
+  Type lhsTypeGeneric = getLhs().getType();
+  Type rhsTypeGeneric = getRhs().getType();
+  Type accumulatorTypeGeneric = getAccumulator().getType();
+  Type resultTypeGeneric = getResult().getType();
+
+  WaveTensorType lhsType = dyn_cast<wave::WaveTensorType>(lhsTypeGeneric);
+  WaveTensorType rhsType = dyn_cast<wave::WaveTensorType>(rhsTypeGeneric);
+  WaveTensorType accumulatorType =
+      dyn_cast<wave::WaveTensorType>(accumulatorTypeGeneric);
+  WaveTensorType resultType = dyn_cast<wave::WaveTensorType>(resultTypeGeneric);
+
+  // TODO: need to verify vector types, but for that, we need to know what they
+  // must look like based on the MMA enum.
+  if (!lhsType || !rhsType || !accumulatorType || !resultType) {
+    return success();
+  }
 
   if (failed(detail::verifyElementTypesMatch(getLoc(), "LHS", lhsType, "RHS",
                                              rhsType)) ||
@@ -293,20 +315,62 @@ LogicalResult MmaOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// ReadOp
+//-----------------------------------------------------------------------------
+
+// Check that if the given operation uses a vector type, its size is equal to
+// the elements-per-thread attribute value.
+template <typename OpTy>
+static LogicalResult verifyElementsPerThread(OpTy op, Type type) {
+  auto vectorType = dyn_cast<VectorType>(type);
+  if (!vectorType)
+    return success();
+
+  std::optional<int64_t> elementsPerThread = op.getElementsPerThread();
+  if (!elementsPerThread)
+    return success();
+
+  if (*elementsPerThread == vectorType.getDimSize(0))
+    return success();
+  return op.emitOpError()
+         << "expected result vector type to have the "
+            "number of elements per thread matching the attribute ("
+         << *elementsPerThread << "), got " << vectorType.getDimSize(0);
+}
+
+LogicalResult ReadOp::verify() {
+  return verifyElementsPerThread(*this, getResult().getType());
+}
+
+//-----------------------------------------------------------------------------
 // RegisterOp
 //-----------------------------------------------------------------------------
 
 mlir::LogicalResult wave::RegisterOp::verify() {
-  WaveTensorType tensorType = getResult().getType();
+  Type type = getResult().getType();
+  auto tensorType = dyn_cast<WaveTensorType>(type);
+  auto elementType = tensorType ? tensorType.getElementType()
+                                : cast<VectorType>(type).getElementType();
   mlir::Type initType = getInit().getType();
-  if (tensorType.getElementType() != initType) {
+  if (elementType != initType) {
     return emitOpError() << "expected the type of the init value to match the "
-                            "elemental type of the tensor";
+                            "elemental type of the result";
   }
+  if (!tensorType)
+    return success();
+
   if (!tensorType.getFullySpecified()) {
     return emitOpError() << "expected fully-specified tensor type";
   }
   return mlir::success();
+}
+
+//-----------------------------------------------------------------------------
+// WriteOp
+//-----------------------------------------------------------------------------
+
+LogicalResult WriteOp::verify() {
+  return verifyElementsPerThread(*this, getValueToStore().getType());
 }
 
 //-----------------------------------------------------------------------------

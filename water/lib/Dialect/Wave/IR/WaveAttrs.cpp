@@ -291,6 +291,53 @@ verifyTypesFullySpecified(std::optional<mlir::Location> loc,
   return llvm::success();
 }
 
+// Verify that wave tensor types in the given range have memory-related address
+// spaces, i.e., no unspecified and no register space.
+static llvm::LogicalResult
+verifyMemoryOnlyAddressSpaces(std::optional<mlir::Location> loc,
+                              mlir::TypeRange types, llvm::StringRef message) {
+  for (mlir::Type type : types) {
+    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(type);
+    if (!tensorType || llvm::is_contained({wave::WaveAddressSpace::Global,
+                                           wave::WaveAddressSpace::Shared},
+                                          tensorType.getAddressSpaceValue()))
+      continue;
+
+    if (loc)
+      mlir::emitError(*loc) << message;
+    return llvm::failure();
+  }
+  return llvm::success();
+}
+
+// Type of a callback visiting and verifying types of operation operands,
+// results and block argument lists. The callback is expected to emit a
+// diagnostic with the given message if the location is provided, and return
+// failure in any case if verification fails.
+using OpTypeRangeVisitor = llvm::function_ref<llvm::LogicalResult(
+    std::optional<mlir::Location>, mlir::TypeRange, llvm::StringRef)>;
+
+// Call `visitor` to verify type ranges of operation operands, results and block
+// argument lists in immediately nested regions.
+static llvm::LogicalResult visitOpRelatedTypes(mlir::Operation *op,
+                                               OpTypeRangeVisitor visitor,
+                                               llvm::StringRef message,
+                                               bool emitDiagnostics) {
+  std::optional<mlir::Location> optionalLoc =
+      emitDiagnostics ? std::optional(op->getLoc()) : std::nullopt;
+  if (llvm::failed(visitor(optionalLoc, op->getOperandTypes(), message)))
+    return llvm::failure();
+  if (llvm::failed(visitor(optionalLoc, op->getResultTypes(), message)))
+    return llvm::failure();
+  for (mlir::Region &region : op->getRegions()) {
+    for (mlir::Block &block : region) {
+      if (llvm::failed(visitor(optionalLoc, block.getArgumentTypes(), message)))
+        return llvm::failure();
+    }
+  }
+  return llvm::success();
+}
+
 llvm::LogicalResult wave::detail::verifyNormalFormAttr(
     mlir::Operation *root, wave::WaveNormalForm form, bool emitDiagnostics) {
   // No normal form required.
@@ -322,20 +369,22 @@ llvm::LogicalResult wave::detail::verifyNormalFormAttr(
 
         if (wave::bitEnumContainsAll(form,
                                      wave::WaveNormalForm::OpTypesSpecified)) {
-          const llvm::StringLiteral kMessage =
-              "normal form requires tensor types to be fully specified";
-          if (llvm::failed(verifyTypesFullySpecified(
-                  optionalLoc, op->getOperandTypes(), kMessage)))
+          if (llvm::failed(visitOpRelatedTypes(
+                  op, verifyTypesFullySpecified,
+                  "normal form requires tensor types to be fully specified",
+                  emitDiagnostics))) {
             return mlir::WalkResult::interrupt();
-          if (llvm::failed(verifyTypesFullySpecified(
-                  optionalLoc, op->getResultTypes(), kMessage)))
+          }
+        }
+
+        if (wave::bitEnumContainsAll(form,
+                                     wave::WaveNormalForm::MemoryOnlyTypes)) {
+          if (llvm::failed(visitOpRelatedTypes(
+                  op, verifyMemoryOnlyAddressSpaces,
+                  "normal form requires tensor types to have only memory "
+                  "address spaces (elements per thread propagation missing?)",
+                  emitDiagnostics))) {
             return mlir::WalkResult::interrupt();
-          for (mlir::Region &region : op->getRegions()) {
-            for (mlir::Block &block : region) {
-              if (llvm::failed(verifyTypesFullySpecified(
-                      optionalLoc, block.getArgumentTypes(), kMessage)))
-                return mlir::WalkResult::interrupt();
-            }
           }
         }
 
