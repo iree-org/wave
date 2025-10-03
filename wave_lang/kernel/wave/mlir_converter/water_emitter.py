@@ -9,8 +9,12 @@ mlir operations of wave and other dialects.
 from __future__ import annotations
 import dill
 import torch.fx as fx
+import re
 import sys
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, List, Union
+import sympy
+from sympy import Symbol, Q, simplify
+from sympy.assumptions import assuming
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
@@ -21,7 +25,7 @@ if TYPE_CHECKING:
 
 try:
     from water_mlir import ir
-    from water_mlir.water_mlir.dialects.wave import (
+    from water_mlir.dialects.wave import (
         AddOp,
         DivOp,
         Exp2Op,
@@ -30,9 +34,13 @@ try:
         RegisterOp,
         WriteOp,
     )
-    from water_mlir.water_mlir.dialects import arith
-    from water_mlir.water_mlir.dialects import func
-    from water_mlir.water_mlir.dialects import wave
+    from water_mlir.sympy_to_affine_converter import (
+        convert_sympy_to_affine_map,
+        AffineConversionError,
+    )
+    from water_mlir.dialects import arith
+    from water_mlir.dialects import func
+    from water_mlir.dialects import wave
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -161,11 +169,53 @@ def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
     return trace, options
 
 
+def _convert_sympy_expr_to_affine_map(expr: Union[sympy.Expr, int], symbols: List[sympy.Symbol]) -> ir.AffineMap:
+    if isinstance(expr, int):
+        return ir.AffineMap.get(0, len(symbols), [ir.AffineExpr.get_constant(expr)])
+
+    # Simplify the expression with the assumption that all symbols are positive. This allows for rewriting, for instance,
+    # `Max(1, ceiling(x/2))` into `ceiling(x/2)`.
+    symbol_mapping = {}
+    for symbol in symbols:
+        symbol_mapping[symbol] = sympy.Symbol(str(symbol), positive=True)
+    expr = expr.subs(symbol_mapping)
+    expr = sympy.simplify(expr)
+
+    return convert_sympy_to_affine_map(expr, [str(s) for s in symbols])
+
+
+def _attach_attributes(node: CustomOp, op: ir.Operation):
+    if getattr(node, "index", None):
+        index_mappings = {}
+        for dim, exprs in node.index.items():
+            all_symbols = list(set().union(*[expr.free_symbols for expr in [exprs.start, exprs.size, exprs.stride] if isinstance(expr, sympy.Expr)]))
+            start = _convert_sympy_expr_to_affine_map(exprs.start, all_symbols)
+            size = _convert_sympy_expr_to_affine_map(exprs.size, all_symbols)
+            stride = _convert_sympy_expr_to_affine_map(exprs.stride, all_symbols)
+            index_mappings[str(dim)] = wave.WaveIndexMappingAttr.get([str(sym) for sym in all_symbols], start, size, stride)
+        print(index_mappings)
+        op.attributes["index"] = ir.DictAttr.get(index_mappings)
+
+    if getattr(node, "elements_per_thread", None):
+        op.attributes["wave.elements_per_thread"] = (
+            ir.IntegerAttr.get(ir.IntegerType.get_signless(32), node.elements_per_thread)
+        )
+
+    if getattr(node, "bounds", None):
+        bounds = {}
+        for dim, expr in node.bounds.items():
+            symbols = list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
+            result = _convert_sympy_expr_to_affine_map(expr, symbols)
+            bounds[str(dim)] = wave.WaveDistributedShapeAttr.get([str(sym) for sym in symbols], result)
+        print(bounds)
+        op.attributes["wave.read_write_bounds"] = ir.DictAttr.get(bounds)
+
+
 def _emit_from_captured_trace(
     trace: "CapturedTrace", options: WaveCompileOptions
 ) -> int:
     # Import wave types locally to avoid clashing with iree bindings
-    from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder, Output, Write, NewRegister  # type: ignore
+    from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder, Output, Read, Write, NewRegister  # type: ignore
 
     # keep track of which emitted value stems from what node to wire
     # arguments correctly
@@ -267,6 +317,8 @@ def _emit_from_captured_trace(
                         raise RuntimeError(
                             f"Missing support for '{node.tkw_op_name}' operation"
                         )
+
+                    _attach_attributes(node, mlir_op.operation)
 
                     # Add results to the value map in case they are used as
                     # operands later
