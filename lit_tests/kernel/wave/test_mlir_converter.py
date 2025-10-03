@@ -13,6 +13,7 @@ from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.general_utils import run_test
+import sympy
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -27,8 +28,8 @@ constraints = [
     # specifies how computation is tiled
     tkw.WorkgroupConstraint(M, BLOCK_M, 0),
     tkw.WorkgroupConstraint(N, BLOCK_N, 1),
-    tkw.WaveConstraint(M, BLOCK_M / 2),
-    tkw.WaveConstraint(N, BLOCK_N / 2),
+    tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+    tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
     tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}),
 ]
 
