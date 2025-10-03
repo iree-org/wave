@@ -4,12 +4,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from __future__ import annotations
 import inspect
 import sys
 from dataclasses import dataclass
 from typing import List, Optional, Union, Callable
-
-from iree.compiler.ir import Context, Location
 
 from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
 
@@ -25,6 +24,9 @@ class FileLineColInfo:
     col: Union[int, tuple[int, int]]
 
     def to_mlir(self):
+        # Lazy import to avoid IREE dependency on module import
+        from iree.compiler.ir import Context, Location
+
         assert Context.current is not None, "Must be called under MLIR context manager."
 
         line_is_range = isinstance(self.line, tuple)
@@ -71,6 +73,9 @@ class StackTraceInfo:
     frames: List[FileLineColInfo]
 
     def to_mlir(self) -> Location:
+        # Lazy import to avoid IREE dependency on module import
+        from iree.compiler.ir import Context, Location
+
         assert Context.current is not None, "Must be called under MLIR context manager."
         if not self.frames:
             return Location.unknown()
