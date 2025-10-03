@@ -208,7 +208,6 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
   }];
 }
 
-
 def WaveDistributedShapeAttr : AttrDef<WaveDialect, "DistributedShape"> {
   let mnemonic = "distributed_shape";
   let description = [{
@@ -236,6 +235,33 @@ def WaveDistributedShapeAttr : AttrDef<WaveDialect, "DistributedShape"> {
 
     std::optional<llvm::SmallVector<int64_t>>
     getResolvedShape(::wave::WaveHyperparameterAttr hyper) const;
+  }];
+}
+
+def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
+  let mnemonic = "read_write_bounds";
+  let description = [{
+    This attribute contains a dictionary mapping from symbolic dimension (strings)
+    to a WaveDistributedShapeAttr specifying the bounds of the read/write operations
+    this is attached to.
+
+    Example:
+    ```
+    #wave.read_write_bounds<{M = #wave.distributed_shape<[BLOCK_M] -> BLOCK_M * 2>}>
+    ```
+  }];
+
+  let parameters = (ins "::mlir::DictionaryAttr":$mapping);
+  let assemblyFormat = "`<` $mapping `>`";
+
+  let extraClassDeclaration = [{
+    /// Check if a symbolic dimension exists in the mapping
+    bool hasSymbol(::llvm::StringRef symbolicDim) const {
+      return getMapping().get(symbolicDim) != nullptr;
+    }
+
+    /// Get the number of symbols in the mapping
+    size_t getNumSymbols() const { return getMapping().size(); }
   }];
 }
 

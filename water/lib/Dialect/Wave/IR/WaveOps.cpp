@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
-#include "water/Dialect/Wave/IR/WaveAttrs.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -338,8 +337,44 @@ static LogicalResult verifyElementsPerThread(OpTy op, Type type) {
          << *elementsPerThread << "), got " << vectorType.getDimSize(0);
 }
 
+// Check that if the given read/write operation has bound expressions specified,
+// each symbolic dimension of the WaveTensorType has exactly one bound
+// expression.
+template <typename OpTy>
+static LogicalResult verifyBounds(OpTy op, WaveTensorType tensorType) {
+  std::optional<WaveReadWriteBoundsAttr> maybeBounds = op.getBounds();
+  if (maybeBounds == std::nullopt)
+    return success();
+
+  if (maybeBounds->getNumSymbols() != tensorType.getRank()) {
+    return op->emitOpError() << "expected as many bound expressions ("
+                             << maybeBounds->getNumSymbols()
+                             << ") as op tensor type has symbolic dimensions ("
+                             << tensorType.getRank() << ")";
+  }
+
+  if (auto failedSym =
+          llvm::find_if_not(tensorType.getShape(),
+                            [&maybeBounds](WaveSymbolAttr sym) {
+                              return maybeBounds->hasSymbol(sym.getName());
+                            });
+      failedSym != tensorType.getShape().end()) {
+    return op->emitOpError()
+           << "expected symbolic dimension " << failedSym->getName()
+           << " to have a bound expression";
+  }
+
+  return success();
+}
+
 LogicalResult ReadOp::verify() {
-  return verifyElementsPerThread(*this, getResult().getType());
+  Type type = getResult().getType();
+  auto tensorType = dyn_cast<WaveTensorType>(type);
+  if (tensorType && failed(verifyBounds(*this, tensorType))) {
+    return failure();
+  }
+
+  return verifyElementsPerThread(*this, type);
 }
 
 //-----------------------------------------------------------------------------
@@ -370,7 +405,13 @@ mlir::LogicalResult wave::RegisterOp::verify() {
 //-----------------------------------------------------------------------------
 
 LogicalResult WriteOp::verify() {
-  return verifyElementsPerThread(*this, getValueToStore().getType());
+  Type type = getValueToStore().getType();
+  auto tensorType = dyn_cast<WaveTensorType>(type);
+  if (tensorType && failed(verifyBounds(*this, tensorType))) {
+    return failure();
+  }
+
+  return verifyElementsPerThread(*this, type);
 }
 
 //-----------------------------------------------------------------------------

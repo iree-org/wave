@@ -85,7 +85,6 @@ func.func @register_with_symbols() {
   return
 }
 
-
 // CHECK-LABEL: @register_with_symbols_complex_index
 func.func @register_with_symbols_complex_index() {
   %0 = arith.constant 0.0 : f32
@@ -100,7 +99,6 @@ func.func @register_with_symbols_complex_index() {
   return
 }
 
-
 // CHECK-LABEL: @register_with_symbols_empty_symbol_list
 func.func @register_with_symbols_empty_symbol_list() {
   %0 = arith.constant 0.0 : f32
@@ -109,7 +107,6 @@ func.func @register_with_symbols_empty_symbol_list() {
     : !wave.tensor<[@B] of f32, <register>>
   return
 }
-
 
 // CHECK-LABEL: @register_with_hyperparameter
 // CHECK-SAME:  wave.hyperparameters<{A = 100 : i64, B = 10 : i64}>
@@ -145,6 +142,12 @@ attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N 
       M : [BLOCK_M, WG0, T0] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
       N : [T1, WG1, BLOCK_N] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}
     : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
+  return
+}
 
+// CHECK-LABEL: @write_with_bounds
+func.func @write_with_bounds(%memo: !wave.tensor<[@M] of f32>, %val: !wave.tensor<[@M] of f32, <register>>) {
+  // CHECK:       wave.read_write_bounds
+  wave.write %val, %memo { bounds = #wave.read_write_bounds<{ M = #wave.distributed_shape<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32>
   return
 }

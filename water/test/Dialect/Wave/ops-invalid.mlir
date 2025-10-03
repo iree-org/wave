@@ -219,10 +219,11 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
         M : [BLOCK_M, WG0, T0] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
         N : [T1, WG1, BLOCK_N] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 2) * T1, BLOCK_N ceildiv 2, 1)}
       : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
-
     return
   }
 }
+
+// -----
 
 module attributes {wave.normal_form = #wave.normal_form<full_types>} {
   func.func @index_value_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
@@ -244,6 +245,26 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
     // expected-error @below {{expected result vector type to have the number of elements per thread matching the attribute (4), got 42}}
     %0 = wave.read %mem {elements_per_thread=4}: (!wave.tensor<[@M] of f16, <global>>) -> vector<42xf16>
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @read_write_bounds_number_of_sym_mismatch(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.tensor<[@M, @N] of f32, <register>>) {
+    // expected-error @below {{expected as many bound expressions (1) as op tensor type has symbolic dimensions (2)}}
+    wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.distributed_shape<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+module {
+  func.func @read_write_bounds_sym_dim_not_found(%mem: !wave.tensor<[@N] of f32>, %val: !wave.tensor<[@N] of f32, <register>>) {
+    // expected-error @below {{expected symbolic dimension N to have a bound expression}}
+    wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.distributed_shape<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
     return
   }
 }

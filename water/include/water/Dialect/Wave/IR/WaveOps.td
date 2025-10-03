@@ -228,7 +228,9 @@ def ReadOp : WaveOp<"read", [
   let arguments = !con((ins
     Arg<WaveTensorInMemory, "Tensor representing memory to read from">:$memory,
     Arg<OptionalAttr<I64Attr>,
-        "Number of elements processed by each thread">:$elements_per_thread
+        "Number of elements processed by each thread">:$elements_per_thread,
+    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
+        "Bound expressions for each symbolic dimension">:$bounds
   ), commonArguments);
 
   let results = (outs
@@ -280,7 +282,9 @@ def WriteOp : WaveOp<"write", [
     Arg<WaveTensorInRegister, "Value to write">:$value_to_store,
     Arg<WaveTensorInMemory, "Tensor representing memory to write into">:$memory,
     Arg<OptionalAttr<I64Attr>,
-        "Number of elements processed by each thread">:$elements_per_thread
+        "Number of elements processed by each thread">:$elements_per_thread,
+    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
+        "Bound expressions for each symbolic dimension">:$bounds
   ), commonArguments);
 
   let assemblyFormat =
