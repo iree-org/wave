@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument("--test", type=str, required=False)
     parser.add_argument("--list_tests", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--repeat", type=int, default=1)
     return parser.parse_args()
 
 
@@ -1283,9 +1284,346 @@ def scatter_gemm_w_padding_test(is_debug=False):
     print("GEMM test passed!")
 
 
+def scatter_gemm_fused_test(is_debug=False):
+    E = sym.E
+    TOTAL_ELEMS = sym.TOTAL_ELEMS
+    NUM_BLOCKS = sym.NUM_BLOCKS
+    BLOCK_SHAPE = sym.BLOCK_SHAPE
+    PAD_VALUE = sym.PAD_VALUE
+
+    IDX = sym.IDX
+    SCATTER_IDX = sym.SCATTER_IDX
+    # Define constraints for the kernel
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WorkgroupConstraint(TOTAL_ELEMS, BLOCK_SHAPE, 2),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.WaveConstraint(TOTAL_ELEMS, BLOCK_SHAPE),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={
+                E: E,
+                TOTAL_ELEMS: TOTAL_ELEMS,
+                BLOCK_SHAPE: BLOCK_SHAPE,
+                M: 16,
+                N: 16,
+                K: 16,
+                NUM_BLOCKS: NUM_BLOCKS,
+            },
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    e = tkw.IndexMapping.iterator(2)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    b_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={E: IDX, N: i, K: j},
+        outputs={N: i, K: j},
+    )
+
+    a_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: d0, K: j},
+        outputs={M: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    a_back_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, K: j},
+        outputs={NUM_BLOCKS: WORKGROUP_2, M: d0, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    a_back_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={NUM_BLOCKS: WORKGROUP_2, M: i, K: j},
+        outputs={M: i, K: j},
+    )
+
+    c_back_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, N: j},
+        outputs={NUM_BLOCKS: WORKGROUP_2, M: i, N: j},
+    )
+
+    c_back_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={NUM_BLOCKS: WORKGROUP_2, M: d0, N: j},
+        outputs={M: i, N: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    c_write_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, N: j},
+        outputs={M: d0, N: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    dyn_reorder_a_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={TOTAL_ELEMS: d0},
+        outputs={TOTAL_ELEMS: i},
+        dynamic_val_mappings={TOTAL_ELEMS: i},
+    )
+
+    expert_id_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_BLOCKS: d0},
+        outputs={NUM_BLOCKS: i},
+        dynamic_val_mappings={NUM_BLOCKS: i},
+    )
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
+        b: Memory[E, N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
+        reorder_a: Memory[TOTAL_ELEMS, ADDRESS_SPACE_A, i32],  # Input matrix A
+        expert_ids: Memory[NUM_BLOCKS, ADDRESS_SPACE_A, i32],  # Input matrix A
+        a_back: Memory[NUM_BLOCKS, M, K, ADDRESS_SPACE_A, f16],  # Output matrix A
+        c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
+        c_back: Memory[NUM_BLOCKS, M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
+    ):
+        # Initialize the accumulator register with zeros
+        zero_reg = Register[M, K, f16](0.0)
+        zero_reg_mn = Register[M, N, f32](0.0)
+        tkw.write(zero_reg, a_back)
+        tkw.write(zero_reg_mn, c_back)
+        mock_reg = tkw.read(reorder_a)
+
+        wid = tkw.scalar(WORKGROUP_2, i32)
+        expert_id = tkw.read(
+            expert_ids, mapping=expert_id_read_map, mapping_dynamic_vals=(wid,)
+        )
+        tkw.set_symbol(IDX, expert_id)
+        condition = THREAD_0 < BLOCK_SHAPE
+
+        @tkw.conditional(condition)
+        def scatter_op():
+            tid = tkw.Register[TOTAL_ELEMS, i32](THREAD_0)
+            wid = tkw.Register[TOTAL_ELEMS, i32](WORKGROUP_2)
+            tid_offset = tkw.Register[TOTAL_ELEMS, i32](BLOCK_SHAPE) * wid + tid
+            reordered_idx = tkw.read(
+                reorder_a,
+                mapping=dyn_reorder_a_read_map,
+                mapping_dynamic_vals=(tid_offset,),
+            )
+
+            tkw.set_symbol(SCATTER_IDX, reordered_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
+
+            @tkw.conditional(is_not_padding)
+            def then():
+                @tkw.iterate(K, init_args=[])
+                def copy_row():
+                    a_row_data = tkw.read(
+                        a,
+                        mapping=a_read_map,
+                        mapping_dynamic_vals=(reordered_idx,),
+                        elements_per_thread=16,
+                    )
+
+                    tkw.write(
+                        a_row_data,
+                        a_back,
+                        mapping=a_back_write_map,
+                        mapping_dynamic_vals=(tid,),
+                        elements_per_thread=16,
+                    )
+
+        tkw.workgroup_barrier()
+        c_reg = Register[M, N, f32](0.0)
+
+        # Iterate over the K dimension to compute the dot product
+        @tkw.iterate(K, init_args=[c_reg])
+        def gemm_compute(acc: Register[M, N, f32]) -> Register[M, N, f32]:
+            # Load elements from A and B
+            a_reg = tkw.read(a_back, mapping=a_back_read_map)
+            b_reg = tkw.read(b, mapping=b_read_map)
+
+            # Compute matrix multiplication and accumulate
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(gemm_compute, c_back, mapping=c_back_write_map)
+
+        @tkw.conditional(condition)
+        def scatter_op():
+            tid = tkw.Register[TOTAL_ELEMS, i32](THREAD_0)
+            wid = tkw.Register[TOTAL_ELEMS, i32](WORKGROUP_2)
+            tid_offset = tkw.Register[TOTAL_ELEMS, i32](BLOCK_SHAPE) * wid + tid
+            reordered_idx = tkw.read(
+                reorder_a,
+                mapping=dyn_reorder_a_read_map,
+                mapping_dynamic_vals=(tid_offset,),
+            )
+
+            tkw.set_symbol(SCATTER_IDX, reordered_idx)
+            is_not_padding = SCATTER_IDX < PAD_VALUE
+
+            @tkw.conditional(is_not_padding)
+            def then():
+                c_row_data = tkw.read(
+                    c_back,
+                    mapping=c_back_read_map,
+                    mapping_dynamic_vals=(tid,),
+                    elements_per_thread=16,
+                )
+                tkw.write(
+                    c_row_data,
+                    c,
+                    mapping=c_write_map,
+                    mapping_dynamic_vals=(reordered_idx,),
+                    elements_per_thread=16,
+                )
+
+    # Create test matrices
+    m, n, k = 64, 64, 128  # Small dimensions for testing
+    block_shape = 6
+    total_elems = 30
+    num_blocks = total_elems // block_shape
+    num_experts = 4
+
+    # Initialize input matrices with random values
+    torch.manual_seed(0)
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    a_back = torch.zeros(num_blocks, m, k, dtype=torch.float16, device="cuda")
+    b = torch.randn(num_experts, n, k, dtype=torch.float16, device="cuda")
+    c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    c_back = torch.zeros(num_blocks, m, n, dtype=torch.float32, device="cuda")
+
+    # create an expert_id list which is num_blocks long, each element is a random integer between 0 and num_experts - 1
+    expert_ids = torch.randint(
+        0, num_experts, (num_blocks,), dtype=torch.int32, device="cuda"
+    )
+
+    # Set hyperparameters for compilation
+    hyperparams = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        M: m,
+        N: n,
+        K: k,
+        E: num_experts,
+        BLOCK_SHAPE: block_shape,
+        TOTAL_ELEMS: total_elems,
+        NUM_BLOCKS: num_blocks,
+        PAD_VALUE: m,
+    }
+
+    # Compile the kernel
+    if is_debug:
+        options = WaveCompileOptions(
+            subs=hyperparams,
+            print_ir_after="all",
+            print_ir_before="all",
+        )
+    else:
+        options = WaveCompileOptions(
+            subs=hyperparams,
+        )
+
+    options = set_default_run_config(options)
+    compiled_gemm = wave_compile(options, gemm)
+
+    if is_debug:
+        with open("scatter_gemm_fused.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
+
+    # create reorder_a such that it is a permutation of the rows of a
+    reorder_a = torch.randperm(total_elems).to(torch.int32).to(device="cuda")
+
+    # make reorder 2d where each row is total_elemns/block_shape, block_shape times
+    reorder_a = reorder_a.view(total_elems // block_shape, block_shape)
+
+    # for each row, make last 0, 1, or 2 elements m randomly
+    for i in range(total_elems // block_shape):
+        reorder_a[i, -2] = m
+        reorder_a[i, -1] = m
+
+    reorder_a = reorder_a.view(-1)
+
+    compiled_gemm(a, b, reorder_a, expert_ids, a_back, c, c_back)
+    reordered_a = torch.zeros((num_blocks, m, k), dtype=torch.float16).to(device="cuda")
+
+    # Verify the result using PyTorch's matmul
+    expected = torch.zeros((m, n), dtype=torch.float32).to(device="cuda")
+    expected_int = torch.zeros((num_blocks, m, n), dtype=torch.float32).to(
+        device="cuda"
+    )
+
+    for block_idx in range(num_blocks):
+        expert_id = expert_ids[block_idx].item()
+        for i in range(block_shape):
+            idx = block_idx * block_shape + i
+            if reorder_a[idx] < m:
+                reordered_a[block_idx][i] = a[reorder_a[idx]]
+
+        expected_int[block_idx] = torch.matmul(reordered_a[block_idx], b[expert_id].t())
+
+        for i in range(block_shape):
+            idx = block_idx * block_shape + i
+            if reorder_a[idx] < m:
+                expected[reorder_a[idx]] = expected_int[block_idx][i]
+
+    # print exactly which indices are not matching
+    # for i in range(num_blocks):
+    #     for j in range(m):
+    #         for k in range(k):
+    #             if not torch.allclose(a_back[i][j][k], reordered_a[i][j][k], rtol=1e-2, atol=1e-2):
+    #                 print(f"A back doesn't match expected output at index {i}, {j}, {k}")
+
+    # for i in range(m):
+    #     for j in range(n):
+    #         if not torch.allclose(expected[i][j], c[i][j], rtol=1e-2, atol=1e-2):
+    #             print(f"C doesn't match expected output at index {i}, {j}")
+
+    # for i in range(num_blocks):
+    #     print("EXPERT ID: ", i)
+    #     try:
+    #         assert torch.allclose(
+    #             a_back[i], reordered_a[i], rtol=1e-2, atol=1e-2
+    #         ), f"A back doesn't match expected output\nMax difference: {(a_back[i] - reordered_a[i]).abs().max()}"
+    #     except Exception as e:
+    #         breakpoint()
+    # assert torch.allclose(
+    #     a_back, reordered_a, rtol=1e-2, atol=1e-2
+    # ), f"A back doesn't match expected output\nMax difference: {(a_back - reordered_a).abs().max()}"
+
+    # assert torch.allclose(
+    #     c_back.to(torch.float16), expected_int, rtol=1e-2, atol=1e-2
+    # ), f"C back doesn't match expected output\nMax difference: {(c_back.to(torch.float16) - expected_int).abs().max()}"
+
+    assert torch.allclose(
+        c, expected, rtol=1e-2, atol=1e-2
+    ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
+
+    print("GEMM test passed!")
+
+
 if __name__ == "__main__":
     args = parse_args()
     if args.list_tests:
         list_tests()
     else:
-        globals()[args.test](args.debug)
+        # run the test 10 times and collect how many times it passes
+        for i in range(args.repeat):
+            try:
+                globals()[args.test](args.debug)
+                print(f"Test {i} passed")
+            except Exception as e:
+                print(f"Error: {e}")
+                print(f"Test {i} failed")
+                exit(1)
