@@ -126,7 +126,10 @@ def capture_function_location(
     Returns:
         Location information for the function, or None if capture is disabled
     """
-    if location_capture_config.level == LocationCaptureLevel.NONE:
+    if (
+        location_capture_config is None
+        or location_capture_config.level == LocationCaptureLevel.NONE
+    ):
         return None
 
     source_file = inspect.getfile(func)

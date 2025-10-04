@@ -398,7 +398,10 @@ class LaunchableWave(Launchable):
 
             with region_graph.subtracer() as subtracer:
                 root_name, _ = subtracer.trace(self._f)
-                trace = CapturedTrace(region_graph, root_name)
+                kernel_location = capture_function_location(
+                    self._f, location_capture_config
+                )
+                trace = CapturedTrace(region_graph, root_name, kernel_location)
                 trace = add_placeholder_locations(trace, self._f)
 
         return trace
@@ -614,6 +617,7 @@ class LaunchableWave(Launchable):
             subgroup_size,
             options.dynamic_symbols,
             llvm_func_config,
+            trace.location,
         )
 
         emitter = WaveEmitter(

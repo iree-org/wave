@@ -39,6 +39,8 @@ from .kernel_codegen import (
     KernelSignature,
     create_argument_locations,
 )
+from .debug_attrs import create_debug_info_for_kernel
+from .._support.location import CapturedLocation
 
 
 class StreamExecutable:
@@ -94,6 +96,7 @@ class StreamExecutable:
         subgroup_size: int = None,
         dynamic_symbols: list[IndexSymbol] = [],
         llvm_configs: dict[str, str] = {},
+        kernel_location: Optional[CapturedLocation] = None,
     ) -> "DispatchEntrypoint":
         """Defines a dispatch function with a signature like:
 
@@ -148,8 +151,17 @@ class StreamExecutable:
                 [abi_type(b) for b in linear_bindings],
                 [],
             )
+
+            if kernel_location is not None:
+                func_location_with_di = create_debug_info_for_kernel(
+                    name, kernel_location
+                )
+            else:
+                func_location_with_di = Location.unknown()
+
             with InsertionPoint(self.def_module.body_block):
-                def_func_op = func_d.FuncOp(name, def_ftype)
+                with func_location_with_di:
+                    def_func_op = func_d.FuncOp(name, def_ftype)
                 arg_locs = create_argument_locations(linear_bindings)
                 def_func_block = def_func_op.add_entry_block(arg_locs)
                 def_func_args = list(def_func_block.arguments)

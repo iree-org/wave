@@ -31,6 +31,7 @@ from .indexing import (
     backed_sym_index_type,
 )
 from ...support.location_config import LocationCaptureConfig
+from .location import CapturedLocation
 from .regions import RegionGraph, SubgraphTracer
 
 try:
@@ -163,9 +164,15 @@ class KernelTracer(SubgraphTracer):
 
 
 class CapturedTrace:
-    def __init__(self, region_graph: RegionGraph, root_graph: str):
+    def __init__(
+        self,
+        region_graph: RegionGraph,
+        root_graph: str,
+        location: Optional[CapturedLocation],
+    ):
         self.region_graph = region_graph
         self.root_graph = root_graph
+        self.location = location
         self.region_graph.subgraphs[root_graph].subgraphs = {}
         for name, subgraph in self.region_graph.subgraphs.items():
             if name != root_graph:
