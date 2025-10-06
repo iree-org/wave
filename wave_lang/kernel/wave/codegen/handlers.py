@@ -99,6 +99,8 @@ from ...ops.wave_ops import (
     set_symbol,
     set_wave_prio,
     shared_memory_barrier,
+    shared_memory_barrier_signal,
+    shared_memory_barrier_wait,
     shuffle,
     sin,
     sinh,
@@ -1606,6 +1608,26 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
         waitcnt(0)
 
     amdgpu_d.lds_barrier()
+
+
+@handle_op(shared_memory_barrier_signal)
+def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
+    try:
+       barId = node.args[0]
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    rocdl_d.s_barrier_signal(barId)
+
+
+@handle_op(shared_memory_barrier_wait)
+def handle_shared_memory_barrier_wait(emitter: WaveEmitter, node: fx.Node):
+    try:
+       barId = node.args[0]
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    rocdl_d.s_barrier_wait(barId)
 
 
 @handle_op(scheduling_barrier)
