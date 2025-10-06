@@ -446,7 +446,7 @@ def insert_prefetch_loop_barriers_for_gfx12(custom_iterate, cluster_graph, clust
     """
     graph = custom_iterate.graph
     with graph.inserting_before(custom_iterate.fx_node):
-        barrier = SharedMemoryBarrierWait().add_to_graph(graph, loc=custom_iterate.location)
+        barrier = SharedMemoryBarrierWait(1).add_to_graph(graph, loc=custom_iterate.location)
     with cluster_graph.inserting_before(cluster_graph.output_node()):
         barrier = SharedMemoryBarrier().add_to_graph(
             cluster_graph, loc=custom_iterate.location
@@ -640,7 +640,7 @@ def transform_PP_for_gfx12(
     clusters.append(local_write_lhs)
     clusters.append(local_write_rhs)
     # barrier_op = WorkgroupBarrier().add_to_graph(tmp_graph)
-    barrier_op = SharedMemoryBarrierSignal().add_to_graph(tmp_graph)
+    barrier_op = SharedMemoryBarrierSignal(1).add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, local_write_rhs))
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
