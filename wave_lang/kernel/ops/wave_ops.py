@@ -1430,7 +1430,11 @@ class SharedMemoryBarrier(CustomOp):
 class SharedMemoryBarrierSignal(CustomOp):
     """
     Represents a shared memory barrier signal in the graph. (gfx12)
-    Argument specifies which barrier to signal. (-1 for WG barrier; -2 for trap barrier)
+    Argument specifies which barrier to signal.
+    [1:7]:  named barriers
+     0:     NOOP
+    -1:     works as s_barrier
+    -2:     trap barrier
     """
 
     barId: int = 0
@@ -1445,7 +1449,11 @@ class SharedMemoryBarrierWait(CustomOp):
     """
     Wait for all waves in a WG to signal the barrier before proceeding. (gfx12)
     synchronize waves within a WG.
-    Argument specifies which barrier to signal. (-1 for WG barrier; -2 for trap barrier)
+    Argument specifies which barrier to signal.
+    [1:7]:  named barriers
+     0:     NOOP
+    -1:     works as s_barrier
+    -2:     trap barrier
     """
 
     barId: int = 0
