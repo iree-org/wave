@@ -42,6 +42,10 @@ from wave_lang.kernel.wave.templates.moe import (
     get_fused_moe_gemm,
 )
 
+from tests.kernel.wave.moe.moe_align_block_size_test import (
+    moe_align_block_size_pytorch,
+)
+
 import math
 
 torch.manual_seed(0)
@@ -292,34 +296,65 @@ def test_fused_moe_kernel_reference(
     )
 
 
-def nit_torch_ref_moe(a, w1, w2, score, topk, reordered_idx):
-    m, k = a.shape
-    a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
-    a = a[reordered_idx]
-    out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
-    score = torch.softmax(score, dim=-1, dtype=torch.float32)
-    topk_weight, topk_ids = torch.topk(score, topk)
-    topk_weight = topk_weight.view(-1)
+def torch_ref_moe(
+    a,
+    w1,
+    w2,
+    topk_ids,
+    topk,
+    w1_scale=None,
+    w2_scale=None,
+    a1_scale=None,
+    a2_scale=None,
+):
+    B, D = a.shape
+    a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
+    out = torch.zeros(B * topk, w1.shape[1], dtype=a.dtype, device=a.device)
     topk_ids = topk_ids.view(-1)
-    out = torch.matmul(a, w1[0].t())
+
+    if w1.dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
+        w1_compute = w1.to(a.dtype)
+        w2_compute = w2.to(a.dtype)
+
+        if w1_scale is not None:
+            w1_compute = (w1_compute * w1_scale.view(-1, 1, 1)).to(a.dtype)
+        if w2_scale is not None:
+            w2_compute = (w2_compute * w2_scale.view(-1, 1, 1)).to(a.dtype)
+        if a1_scale is not None:
+            a = (a * a1_scale).to(a.dtype)
+        if a2_scale is not None:
+            a = (a * a2_scale).to(a.dtype)
+    else:
+        w1_compute = w1
+        w2_compute = w2
+
+    for i in range(w1_compute.shape[0]):
+        mask = topk_ids == i
+        if mask.sum():
+            out[mask] = a[mask] @ (w1_compute[i].transpose(0, 1))
+
     return out
 
 
 def get_wave_moe_fused_gemm_kernel(
     m: int,
-    k: int,
     n: int,
+    k: int,
     e,
-    topk,
+    block_shape: int,
+    total_elems: int,
+    num_experts: int,
     mfma_variant: MMAType,
     datatype: DataType,
 ):
     gemm, symbols = get_fused_moe_gemm(
         m,
-        k,
         n,
+        k,
         e,
-        topk,
+        block_shape,
+        total_elems,
+        num_experts,
         mfma_variant,
         datatype,
     )
@@ -327,15 +362,8 @@ def get_wave_moe_fused_gemm_kernel(
 
     options = WaveCompileOptions(
         subs=symbols,
-        canonicalize=True,
-        run_bench=False,
-        waves_per_eu=2,
-        denorm_fp_math_f32="preserve-sign",
-        schedule=SchedulingType.NONE,
-        wave_runtime=False,
-        use_scheduling_barriers=enable_scheduling_barriers,
     )
-    options = set_default_run_config(options)
+    optons = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
     print("--------------------------------")
     print(gemm.asm)
@@ -343,53 +371,70 @@ def get_wave_moe_fused_gemm_kernel(
     return gemm
 
 
-def nit_tkw(a, w1, w2, score, topk, reordered_idx):
+def nit_tkw(
+    a, w1, w2, topk, sorted_ids, expert_ids, num_experts, block_size, num_blocks
+):
     m, k = a.shape
     a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
     out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
-    score = torch.softmax(score, dim=-1, dtype=torch.float32)
-    topk_weight, topk_ids = torch.topk(score, topk)
-    topk_weight = topk_weight.view(-1)
-    topk_ids = topk_ids.view(-1)
     # convert topk_ids to f16
-    topk_ids = topk_ids.to(torch.float16)
+
+    a_scratch = torch.zeros(
+        num_blocks, a.shape[0], k, dtype=torch.float16, device=a.device
+    )
+    c_scratch = torch.zeros(
+        num_blocks, a.shape[0], w1.shape[1], dtype=torch.float32, device=a.device
+    )
 
     gemm = get_wave_moe_fused_gemm_kernel(
         m * topk,
         w1.shape[1],
         k,
         w1.shape[0],
-        topk,
+        block_size,
+        sorted_ids.shape[0],
+        num_experts,
         MMAType.F32_16x16x16_F16,
         torch.float16,
     )
-    gemm(a, w1, topk_ids, reordered_idx, out)
+
+    breakpoint()
+    # # create an expert_id list which is num_blocks long, each element is a random integer between 0 and num_experts - 1
+    # expert_ids = torch.randint(
+    #     0, num_experts, (num_blocks,), dtype=torch.int32, device="cuda"
+    # )
+    breakpoint()
+
+    gemm(a, w1, sorted_ids, expert_ids, a_scratch, out, c_scratch)
 
     return out
 
 
-num_experts = [4]
-top_ks = [2]
-m_values = [32]
+num_tokens_values = [32]
 n_values = [64]
 k_values = [128]
+num_experts = [4]
+top_ks = [2]
 dtypes = [torch.float16]
 rtol, atol = 1e-1, 1e-2
+block_size_values = [4]
 
 
-@pytest.mark.parametrize("m", m_values)
+@pytest.mark.parametrize("num_tokens", num_tokens_values)
 @pytest.mark.parametrize("n", n_values)
 @pytest.mark.parametrize("k", k_values)
-@pytest.mark.parametrize("e", num_experts)
+@pytest.mark.parametrize("num_experts", num_experts)
 @pytest.mark.parametrize("topk", top_ks)
 @pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize("block_size", block_size_values)
 def testnittestReferenceMoe(
-    m: int,
+    num_tokens: int,
     n: int,
     k: int,
-    e: int,
+    num_experts: int,
     topk: int,
     dtype: DataType,
+    block_size: int,
 ):
     device = "cuda"
 
@@ -397,16 +442,33 @@ def testnittestReferenceMoe(
         pytest.skip("This combination generates NaNs and INFs")
 
     # TODO: investigate why using torch.randn would have precision issue in silu computation
-    a = torch.rand((m, k), dtype=dtype, device=device)
-    w1 = torch.rand((e, n, k), dtype=dtype, device=device)
-    w2 = torch.rand((e, k, n), dtype=dtype, device=device)
-    score = torch.rand((m, e), dtype=dtype, device=device)
+    a = torch.rand((num_tokens, k), dtype=dtype, device=device)
+    w1 = torch.rand((num_experts, n, k), dtype=dtype, device=device)
+    w2 = torch.rand((num_experts, k, n), dtype=dtype, device=device)
 
-    # permute m * topk to a vector
-    reordered_idx = torch.randperm(m * topk).to(torch.int32).to(device="cuda")
+    score = torch.rand((num_tokens, num_experts), dtype=dtype, device=device)
+    topk_ids = torch.topk(score, topk, dim=1)[1]
 
-    ref_output = nit_torch_ref_moe(a, w1, w2, score, topk, reordered_idx)
-    nit_tkw_output = nit_tkw(a, w1, w2, score, topk, reordered_idx)
+    max_num_tokens_padded = topk_ids.numel() + num_experts * (block_size - 1)
+    sorted_ids = torch.empty(
+        (max_num_tokens_padded,), dtype=torch.int32, device=topk_ids.device
+    )
+
+    max_num_m_blocks = -(max_num_tokens_padded // -block_size)
+    expert_ids = torch.zeros(
+        (max_num_m_blocks,), dtype=torch.int32, device=topk_ids.device
+    )
+    num_tokens_post_pad = torch.full((1,), num_tokens, dtype=torch.int32, device=device)
+
+    moe_align_block_size_pytorch(
+        topk_ids, num_experts, block_size, sorted_ids, expert_ids, num_tokens_post_pad
+    )
+
+    num_blocks = expert_ids.shape[0]
+    ref_output = torch_ref_moe(a, w1, w2, topk_ids, topk)
+    nit_tkw_output = nit_tkw(
+        a, w1, w2, topk, sorted_ids, expert_ids, num_experts, block_size, num_blocks
+    )
 
     print(nit_tkw_output)
     print(ref_output)
