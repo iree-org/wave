@@ -42,8 +42,8 @@ def get_gemm_kernel(
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 8)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 1)]
 
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
@@ -85,9 +85,9 @@ def get_gemm_kernel(
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-        BLOCK_K: 32,
+        BLOCK_M: 128,
+        BLOCK_N: 256,
+        BLOCK_K: 64,
         M: shape[0],
         N: shape[1],
         K: shape[2],
