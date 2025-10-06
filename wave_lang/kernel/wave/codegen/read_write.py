@@ -166,6 +166,7 @@ def _build_mask(
     index: dict[IndexExpr, IndexExpr],
     elements_per_thread: int,
     bounds: Optional[dict[IndexSymbol, IndexExpr]],
+    dynamic_values: dict[IndexExpr, Any] = {},
 ) -> Optional[OpResult]:
     if not bounds:
         return None
@@ -181,7 +182,7 @@ def _build_mask(
         lambda a, b: sympy.And(a, b),
         (new_index[dim] < bound for dim, bound in bounds.items()),
     )
-    mask = gen_sympy_index(add_emitter_subs(emitter), mask_expr)
+    mask = gen_sympy_index(add_emitter_subs(emitter, dynamic_values), mask_expr)
 
     mask_vec_type = VectorType.get([elements_per_thread], IntegerType.get_signless(1))
     if mask.type != mask_vec_type:
@@ -628,9 +629,15 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
 @handle_op(write)
 def handle_write(emitter: WaveEmitter, node: fx.Node):
     try:
-        register, memory, elements_per_thread, mapping, dyn_vals, bounds, *rest = (
-            node.args
-        )
+        (
+            register,
+            memory,
+            elements_per_thread,
+            mapping,
+            dyn_vals,
+            bounds,
+            *rest,
+        ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -706,6 +713,8 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             src_mapping,
             dst_mapping,
             src_bounds,
+            src_mapping_dyn_vals,
+            dst_mapping_dyn_vals,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
@@ -742,15 +751,28 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     src = src.ir_value
     dst = dst.ir_value
+    dynamic_vals_map_start = {}
 
     if src_mapping:
+        dyn_vals = tuple(
+            cast_vector(emitter, reg, element_type=IndexType.get())
+            for reg in src_mapping_dyn_vals
+        )
         src_idx = transform_index_on_mapping(src_mapping, src_symbolic_shape, src_idx)
+        dynamic_vals_map_start = _build_dyn_vals_map(src_mapping, dyn_vals)
     if dst_mapping:
+        dyn_vals = tuple(
+            cast_vector(emitter, reg, element_type=IndexType.get())
+            for reg in dst_mapping_dyn_vals
+        )
         dst_idx = transform_index_on_mapping(dst_mapping, dst_symbolic_shape, dst_idx)
+        dynamic_vals_map_start = _build_dyn_vals_map(dst_mapping, dyn_vals)
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
-    src_index, src_index_wg, src_index_th = _build_start_indices(emitter, src_idx)
+    src_index, src_index_wg, src_index_th = _build_start_indices(
+        emitter, src_idx, dynamic_vals_map_start
+    )
 
     ip = InsertionPoint.current
 
@@ -765,7 +787,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             ip = InsertionPoint(ip.block.owner)
 
     with ip:
-        dst_index, _, _ = _build_start_indices(emitter, dst_idx)
+        dst_index, _, _ = _build_start_indices(emitter, dst_idx, dynamic_vals_map_start)
         # We are indexing shared mem so i32 is enough.
         i32 = IntegerType.get_signless(32)
         dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
@@ -780,7 +802,13 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # We previously checked mask is same for all elements, so we can use
     # elements_per_thread=1 to build the mask.
-    mask = _build_mask(emitter, src_idx, elements_per_thread=1, bounds=src_bounds)
+    mask = _build_mask(
+        emitter,
+        src_idx,
+        elements_per_thread=1,
+        bounds=src_bounds,
+        dynamic_values=dynamic_vals_map_start,
+    )
     if mask:
         mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
         oob_index_value = _get_out_of_bounds_index(element_type)

@@ -375,6 +375,8 @@ def gather_to_lds(
     elements_per_thread: Optional[IndexExpr | int] = None,
     src_mapping: Optional[IndexMapping] = None,
     dst_mapping: Optional[IndexMapping] = None,
+    src_mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    dst_mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ): ...
 
 
@@ -2861,6 +2863,8 @@ class GatherToLDS(CustomOp):
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
     src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
+    src_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+    dst_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
 
 
 @define_op("scatter_add")

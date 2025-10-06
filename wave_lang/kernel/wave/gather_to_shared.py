@@ -265,6 +265,8 @@ def emit_global_to_lds(
                 read.mapping,
                 write.mapping,
                 bounds,
+                read.mapping_dynamic_vals,
+                write.mapping_dynamic_vals,
             ).add_to_graph(write.graph, loc=write.location)
 
         if i == 0:
