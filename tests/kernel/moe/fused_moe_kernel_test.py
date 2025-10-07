@@ -41,6 +41,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 from wave_lang.kernel.wave.templates.moe import (
     get_fused_moe_gemm,
     get_silu_and_mul_kernel,
+    get_moe_reduce_sum_kernel,
 )
 
 from tests.kernel.wave.moe.moe_align_block_size_test import (
@@ -315,7 +316,7 @@ def torch_ref_moe(
 ):
     B, D = a.shape
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
-    out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
+    out = torch.zeros(B * topk, w2.shape[1], dtype=torch.float32, device=a.device)
     topk_ids = topk_ids.view(-1)
 
     if w1.dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
@@ -337,10 +338,11 @@ def torch_ref_moe(
     for i in range(w1_compute.shape[0]):
         mask = topk_ids == i
         if mask.sum():
-            out[mask] = SiluAndMul_ref(
-                a[mask] @ w1_compute[i].transpose(0, 1)
-            ) @ w2_compute[i].transpose(0, 1)
-    return out
+            gemm1_result = a[mask].float() @ w1_compute[i].transpose(0, 1).float()
+            silu_mul_result = SiluAndMul_ref(gemm1_result)
+            out[mask] = silu_mul_result @ w2_compute[i].transpose(0, 1).float()
+
+    return out.sum(dim=1)
 
 
 def get_wave_moe_fused_gemm_kernel(
@@ -388,7 +390,7 @@ def nit_tkw(
         m * topk, w1.shape[1] // 2, dtype=torch.float32, device=a.device
     )
     # Final output tensor - matches w2.shape[1] (final output dimension)
-    final_out = torch.zeros(m * topk, w2.shape[1], dtype=torch.float32, device=a.device)
+    gemm2_out = torch.zeros(m * topk, w2.shape[1], dtype=torch.float32, device=a.device)
 
     # Scratch tensors for GEMM1
     a_scratch = torch.zeros(
@@ -470,9 +472,26 @@ def nit_tkw(
         sorted_ids,
         expert_ids,
         a2_scratch,
-        final_out,
+        gemm2_out,
         c2_scratch,
     )
+
+    final_out = torch.zeros(m * topk, dtype=torch.float32, device=a.device)
+
+    reduce_sum, symbols = get_moe_reduce_sum_kernel(
+        m * topk,
+        w2.shape[1],
+        tkl.f32,
+    )
+    symbols.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=symbols,
+    )
+    options = set_default_run_config(options)
+
+    reduce_sum = wave_compile(options, reduce_sum)
+
+    reduce_sum(gemm2_out, final_out)
 
     return final_out
 
@@ -539,9 +558,9 @@ def testnittestReferenceMoe(
 
     print(nit_tkw_output)
     print(ref_output)
-    torch.testing.assert_close(
-        nit_tkw_output.to(torch.float16), ref_output, rtol=rtol, atol=atol
-    )
+
+    breakpoint()
+    torch.testing.assert_close(nit_tkw_output, ref_output, rtol=rtol, atol=atol)
 
     # # TODO: remove manual splitting
     # # We need to manually split w1 into 2 halves, since this is
