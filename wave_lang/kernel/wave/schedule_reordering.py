@@ -935,7 +935,7 @@ def schedule_reordering(
         if reorder_strategy == SchedReorderStrategy.NONE:
             continue
         elif reorder_strategy == SchedReorderStrategy.TWO_PP_CLUSTER:
-            if mma_type == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+            if hardware_constraint.mma_type == MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
                 clusters = transform_PP_for_gfx12(
                     mma_nodes,
                     local_load_lhs,
