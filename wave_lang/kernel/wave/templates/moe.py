@@ -743,3 +743,45 @@ def get_silu_and_mul_kernel(
     }
 
     return silu_and_mul, hyperparams
+
+
+def get_moe_reduce_sum_kernel(
+    m: int,
+    n: int,
+    datatype: DataType,
+):
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 1, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def moe_reduce_sum(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, datatype],
+        c: tkl.Memory[M, ADDRESS_SPACE, datatype],
+    ):
+        res = tkw.read(a)
+        res = tkw.sum(res, dim=N)
+        tkw.write(res, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        M: m,
+        N: n,
+    }
+
+    return moe_reduce_sum, hyperparams
