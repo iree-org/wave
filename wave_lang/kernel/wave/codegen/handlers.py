@@ -1980,9 +1980,10 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
 
     bounds_fmt = ", ".join(["%lld"] * len(bounds))
 
-    fmt = f"Index {src_index_dims} [{src_index_fmt}] -> {dst_index_dims} [{dst_index_fmt}] is out of bounds [{bounds_fmt}]\n"
+    fmt = f"Index {src_index_dims} [{src_index_fmt}] -> "
+    fmt += f"{dst_index_dims} [{dst_index_fmt}] is out of bounds [{bounds_fmt}]\n"
     if location := node.location:
-        fmt = f"{sanitize_string(location.filename)}: {location.line[0]}\n" + fmt
+        fmt = f"{sanitize_string(location.filename)}: {location.line}\n" + fmt
 
     for i in range(size):
         # Generate individual checks for each vector element.
