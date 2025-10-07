@@ -18,7 +18,7 @@ def generate_bound_checks(trace: CapturedTrace):
     """
     Generate bound checks for read and write ops.
 
-    We are generated based on tensor memory shape.
+    They are generated based on tensor memory shape.
     """
     logger.info("Generating bound checks")
 
@@ -42,7 +42,7 @@ def generate_bound_checks(trace: CapturedTrace):
             )
 
         # TODO: It may not work in all cases, as we still don't have a proper
-        # separation between iterations shape and physical shape.
+        # separation between iteration shape and physical shape.
         mem_shape = node.memory_type.symbolic_shape
         bounds = {b: b for b in mem_shape}
 
