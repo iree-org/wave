@@ -446,7 +446,9 @@ def insert_prefetch_loop_barriers_for_gfx12(custom_iterate, cluster_graph, clust
     """
     graph = custom_iterate.graph
     with graph.inserting_before(custom_iterate.fx_node):
-        barrier = SharedMemoryBarrierWait(1).add_to_graph(graph, loc=custom_iterate.location)
+        barrier = SharedMemoryBarrierSignal(1).add_to_graph(graph, loc=custom_iterate.location)
+    # TODO: Replace this with just lgmkcnt or change lowering of
+    # SharedMemoryBarrier to only do lgmkcnt w/os sbarrier
     with cluster_graph.inserting_before(cluster_graph.output_node()):
         barrier = SharedMemoryBarrier().add_to_graph(
             cluster_graph, loc=custom_iterate.location
@@ -582,6 +584,16 @@ def transform_PP_for_gfx12(
     local_write_lhs,
     local_write_rhs,
 ):
+    '''
+    GR: global read
+    GW: global write
+    LR: local read
+    LW: local write
+    LO: lower half
+    HI: another half
+    barrier LO: 1
+    barrier HI: 2
+    '''
     num_slices = 2
     sliced_mma_nodes, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
         mma_nodes, local_load_lhs, local_load_rhs, num_slice=num_slices
@@ -595,69 +607,77 @@ def transform_PP_for_gfx12(
 
     clusters = []
     tmp_graph = fx.Graph()
-    # 1st cluster interleaved local and global reads.
+
+    # LR LO: barrier wait(1) -> local read -> sched
     clusters.append(sliced_local_load_lhs[0])
     clusters.append(sliced_local_load_rhs[0])
+    # before LR LO -> wait(1)
+    barrier_op = SharedMemoryBarrierWait(1).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_before(barrier_op, sliced_local_load_lhs[0]))
+    # after LR LO -> sched
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, sliced_local_load_rhs[0]))
 
-    clusters.append(global_load_lhs)
+    # MMA[0]: prior(1) -> mma -> prior(0) -> sched
+    # prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
+    # prio_op.location = context_location
+    # clusters.append(insert_op_before(prio_op, sliced_mma_nodes[0]))
+    clusters.append(sliced_mma_nodes[0])
+    # prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
+    # prio_op.location = context_location
+    # clusters.append(insert_op_after(prio_op, sliced_mma_nodes[0]))
+
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
     barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, global_load_lhs))
+    clusters.append(insert_op_after(barrier_op, clusters[-1]))
 
+    # GR next tile: global read -> sched
+    clusters.append(global_load_lhs)
+    clusters.append(global_load_rhs)
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, global_load_rhs))
+
+    # LW: local write -> signal(1)(2)
+    clusters.append(local_write_lhs)
+    clusters.append(local_write_rhs)
+
+    barrier_op_LO = SharedMemoryBarrierSignal(1).add_to_graph(tmp_graph)
+    barrier_op_LO.location = context_location
+    clusters.append(insert_op_after(barrier_op_LO, local_write_rhs))
+    barrier_op_HI = SharedMemoryBarrierSignal(2).add_to_graph(tmp_graph)
+    barrier_op_HI.location = context_location
+    clusters.append(insert_op_after(barrier_op_HI, clusters[-1].op))
+
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+
+    # LR HI: barrier wait(2) -> local read -> sched
     clusters.append(sliced_local_load_lhs[1])
     clusters.append(sliced_local_load_rhs[1])
+    # before LR HI -> wait(2)
+    barrier_op = SharedMemoryBarrierWait(2).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_before(barrier_op, sliced_local_load_lhs[1]))
+    # after LR HI -> sched
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, sliced_local_load_rhs[1]))
 
-    clusters.append(global_load_rhs)
-    barrier_op = WorkgroupBarrier().add_to_graph(tmp_graph)
-    barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, global_load_rhs))
-    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
-    barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
-
-    # 2nd cluster mma_slice[0].
-    prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
-    prio_op.location = context_location
-    clusters.append(insert_op_before(prio_op, sliced_mma_nodes[0]))
-    clusters.append(sliced_mma_nodes[0])
-    prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
-    prio_op.location = context_location
-    clusters.append(insert_op_after(prio_op, sliced_mma_nodes[0]))
-    barrier_op = SharedMemoryBarrier().add_to_graph(tmp_graph)
-    barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
-    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
-    barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
-
-    # 3rd cluster local writes.
-    clusters.append(local_write_lhs)
-    clusters.append(local_write_rhs)
-    # barrier_op = WorkgroupBarrier().add_to_graph(tmp_graph)
-    barrier_op = SharedMemoryBarrierSignal(1).add_to_graph(tmp_graph)
-    barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, local_write_rhs))
-    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
-    barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
-
     # 4th cluster mma_slice[1].
-    prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
-    prio_op.location = context_location
-    clusters.append(insert_op_before(prio_op, sliced_mma_nodes[1]))
+    # prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
+    # prio_op.location = context_location
+    # clusters.append(insert_op_before(prio_op, sliced_mma_nodes[1]))
     clusters.append(sliced_mma_nodes[1])
-    prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
-    prio_op.location = context_location
-    clusters.append(insert_op_after(prio_op, sliced_mma_nodes[1]))
+    # prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
+    # prio_op.location = context_location
+    # clusters.append(insert_op_after(prio_op, sliced_mma_nodes[1]))
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
     barrier_op.location = context_location
-    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+    clusters.append(insert_op_after(barrier_op, clusters[-1]))
 
     return clusters
 
