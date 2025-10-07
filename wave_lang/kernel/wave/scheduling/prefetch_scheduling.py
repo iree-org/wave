@@ -302,8 +302,15 @@ class PrefetchAttentionScheduler(BaseScheduler):
         mma0_group.annotate("0")
         mma1_group.annotate("1")
 
+        rocm_arch = get_default_arch()
+
         # Cycle 0, 1: Global loads and shared writes for GEMM0
-        if "gfx95" in get_default_arch() and mma0_group.gather_to_lds_ops:
+        if rocm_arch.startswith("gfx95") and mma0_group.gather_to_lds_ops:
+            if mma0_group.shared_writes:
+                logger.error(
+                    "Unsupported: Received both gather to LDS and shared writes in MMA 0"
+                )
+                raise Exception("Failed to schedule the graph.")
             schedule = _set_cycle(mma0_group.gather_to_lds_ops, 0, schedule)
         else:
             schedule = _set_cycle(mma0_group.global_reads, 0, schedule)
@@ -311,7 +318,12 @@ class PrefetchAttentionScheduler(BaseScheduler):
 
         # Cycle 2, 3: Shared reads for GEMM0, global loads for GEMM1, shared writes for GEMM1
         schedule = _set_cycle(mma0_group.shared_reads, 2, schedule)
-        if "gfx95" in get_default_arch() and mma1_group.gather_to_lds_ops:
+        if rocm_arch.startswith("gfx95") and mma1_group.gather_to_lds_ops:
+            if mma1_group.shared_writes:
+                logger.error(
+                    "Unsupported: Received both gather to LDS and shared writes in MMA 1"
+                )
+                raise Exception("Failed to schedule the graph.")
             schedule = _set_cycle(mma1_group.gather_to_lds_ops, 2, schedule)
         else:
             schedule = _set_cycle(mma1_group.global_reads, 2, schedule)
