@@ -7,7 +7,6 @@
 import copy
 import math
 import operator
-import functools
 from typing import Any, Callable, Sequence
 
 import sympy
@@ -1994,9 +1993,8 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
 
         if mask_bounds:
             # If read/write op has mask bounds only check index which is outside of mask bounds.
-            bound_expr = functools.reduce(
-                lambda a, b: sympy.And(a, b),
-                (index[dim].start < bound for dim, bound in mask_bounds.items()),
+            bound_expr = sympy.And(
+                *(index[dim].start < bound for dim, bound in mask_bounds.items())
             )
         else:
             bound_expr = True
@@ -2006,12 +2004,11 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
             index = transform_index_on_mapping(mapping, symbolic_shape, index)
 
         start_indices = _get_start_indices(index)
-        oob = functools.reduce(
-            lambda a, b: sympy.Or(a, b),
-            (
+        oob = sympy.Or(
+            *(
                 sympy.Or(start_index < 0, start_index >= bounds[dim])
                 for dim, start_index in zip(index.keys(), start_indices)
-            ),
+            )
         )
         oob = sympy.And(oob, bound_expr)
 
