@@ -1613,7 +1613,7 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
 @handle_op(shared_memory_barrier_signal)
 def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
     try:
-       barId = node.args[0]
+        barId = node.args[0]
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -1623,7 +1623,7 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
 @handle_op(shared_memory_barrier_wait)
 def handle_shared_memory_barrier_wait(emitter: WaveEmitter, node: fx.Node):
     try:
-       barId = node.args[0]
+        barId = node.args[0]
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 

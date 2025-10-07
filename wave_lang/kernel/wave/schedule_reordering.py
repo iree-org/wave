@@ -438,6 +438,7 @@ def insert_prefetch_loop_barriers(custom_iterate, cluster_graph, clusters):
         clusters.append(barrier)
     return
 
+
 def insert_prefetch_loop_barriers_for_gfx12(custom_iterate, cluster_graph, clusters):
     """
     This function manually inserts first barrier right before for loop, and
@@ -575,6 +576,7 @@ def transform_two_PP_clusters(
 
     return clusters
 
+
 def transform_PP_for_gfx12(
     mma_nodes,
     local_load_lhs,
@@ -584,7 +586,7 @@ def transform_PP_for_gfx12(
     local_write_lhs,
     local_write_rhs,
 ):
-    '''
+    """
     GR: global read
     GW: global write
     LR: local read
@@ -593,7 +595,7 @@ def transform_PP_for_gfx12(
     HI: another half
     WAR barrier: 1
     RAW barrier: 2
-    '''
+    """
     num_slices = 2
     sliced_mma_nodes, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
         mma_nodes, local_load_lhs, local_load_rhs, num_slice=num_slices
@@ -610,36 +612,44 @@ def transform_PP_for_gfx12(
     # 1st cluster interleaved local and global reads.
     clusters.append(sliced_local_load_lhs[0])
     clusters.append(sliced_local_load_rhs[0])
-    clusters.append(insert_op_after(
-        SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
-        sliced_local_load_rhs[0]
-    ))
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
+            sliced_local_load_rhs[0],
+        )
+    )
 
     clusters.append(sliced_local_load_lhs[1])
     clusters.append(sliced_local_load_rhs[1])
     # signal(1)
-    clusters.append(insert_op_after(
-        SharedMemoryBarrierSignal(1).add_to_graph(tmp_graph, loc=context_location),
-        sliced_local_load_rhs[1]
-    ))
-    clusters.append(insert_op_after(
-        SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
-        clusters[-1].op
-    ))
-
+    clusters.append(
+        insert_op_after(
+            SharedMemoryBarrierSignal(1).add_to_graph(tmp_graph, loc=context_location),
+            sliced_local_load_rhs[1],
+        )
+    )
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
+            clusters[-1].op,
+        )
+    )
 
     clusters.append(global_load_lhs)
-    clusters.append(insert_op_after(
-        SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
-        global_load_lhs
-    ))
-
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
+            global_load_lhs,
+        )
+    )
 
     clusters.append(global_load_rhs)
-    clusters.append(insert_op_after(
-        WorkgroupBarrier().add_to_graph(tmp_graph, loc=context_location),
-        global_load_rhs
-    ))
+    clusters.append(
+        insert_op_after(
+            WorkgroupBarrier().add_to_graph(tmp_graph, loc=context_location),
+            global_load_rhs,
+        )
+    )
 
     # 2nd cluster mma_slice[0].
     # prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
@@ -650,31 +660,41 @@ def transform_PP_for_gfx12(
     # prio_op.location = context_location
     # clusters.append(insert_op_after(prio_op, sliced_mma_nodes[0]))
     # removed SMB
-    clusters.append(insert_op_after(
-        SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
-        clusters[-1]
-    ))
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
+            clusters[-1],
+        )
+    )
 
     # 3rd cluster local writes.
     clusters.append(local_write_lhs)
     clusters.append(local_write_rhs)
     # wait(1) before write
-    clusters.append(insert_op_before(
-        SharedMemoryBarrierWait(1).add_to_graph(tmp_graph, loc=context_location),
-        local_write_lhs
-    ))
-    clusters.append(insert_op_after(
-        SharedMemoryBarrierSignal(2).add_to_graph(tmp_graph, loc=context_location),
-        local_write_rhs
-    ))
-    clusters.append(insert_op_after(
-        WorkgroupBarrier().add_to_graph(tmp_graph, loc=context_location),
-        clusters[-1].op
-    ))
-    clusters.append(insert_op_after(
-        SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
-        clusters[-1].op
-    ))
+    clusters.append(
+        insert_op_before(
+            SharedMemoryBarrierWait(1).add_to_graph(tmp_graph, loc=context_location),
+            local_write_lhs,
+        )
+    )
+    clusters.append(
+        insert_op_after(
+            SharedMemoryBarrierSignal(2).add_to_graph(tmp_graph, loc=context_location),
+            local_write_rhs,
+        )
+    )
+    clusters.append(
+        insert_op_after(
+            WorkgroupBarrier().add_to_graph(tmp_graph, loc=context_location),
+            clusters[-1].op,
+        )
+    )
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
+            clusters[-1].op,
+        )
+    )
 
     # 4th cluster mma_slice[1].
     # prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
@@ -684,12 +704,15 @@ def transform_PP_for_gfx12(
     # prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
     # prio_op.location = context_location
     # clusters.append(insert_op_after(prio_op, sliced_mma_nodes[1]))
-    clusters.append(insert_op_after(
-        SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
-        clusters[-1]
-    ))
+    clusters.append(
+        insert_op_after(
+            SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
+            clusters[-1],
+        )
+    )
 
     return clusters
+
 
 def transform_MXFP4_PP_clusters(
     mma_nodes,
