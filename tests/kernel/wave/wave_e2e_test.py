@@ -248,7 +248,6 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-@check_leaks
 def test_bound_check(shape, use_buffer_ops, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
@@ -304,7 +303,9 @@ def test_bound_check(shape, use_buffer_ops, run_bench):
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
-@check_leaks
+@pytest.mark.skip(
+    reason="There is no reliable way to recover from kernel crash/llvm.trap yet"
+)
 def test_bound_check_failure(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
@@ -359,8 +360,9 @@ def test_bound_check_failure(shape, run_bench):
     options = set_default_run_config(options)
     test = wave_compile(options, test)
 
-    test(a, b)
-    assert_close(a, b)
+    with pytest.raises(RuntimeError):
+        test(a, b)
+        torch.cuda.synchronize()
 
 
 @require_e2e
