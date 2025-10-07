@@ -15,16 +15,9 @@ from wave_lang.support.location_config import (
 
 M = tkl.sym.M
 N = tkl.sym.N
-K = tkl.sym.K
-B = tkl.sym.B
 BLOCK_M = tkl.sym.BLOCK_M
 BLOCK_N = tkl.sym.BLOCK_N
-BLOCK_K = tkl.sym.BLOCK_K
-BLOCK_B = tkl.sym.BLOCK_B
-LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
-STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
 ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
 
 
 def get_wave_compile_options(
