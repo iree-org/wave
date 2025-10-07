@@ -315,7 +315,7 @@ def torch_ref_moe(
 ):
     B, D = a.shape
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
-    out = torch.zeros(B * topk, w1.shape[1] // 2, dtype=a.dtype, device=a.device)
+    out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
     topk_ids = topk_ids.view(-1)
 
     if w1.dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
@@ -337,9 +337,9 @@ def torch_ref_moe(
     for i in range(w1_compute.shape[0]):
         mask = topk_ids == i
         if mask.sum():
-            temp = a[mask] @ (w1_compute[i].transpose(0, 1))
-            out[mask] = SiluAndMul_ref(temp)
-
+            out[mask] = SiluAndMul_ref(
+                a[mask] @ w1_compute[i].transpose(0, 1)
+            ) @ w2_compute[i].transpose(0, 1)
     return out
 
 
@@ -387,8 +387,10 @@ def nit_tkw(
     silu_and_mul_out = torch.zeros(
         m * topk, w1.shape[1] // 2, dtype=torch.float32, device=a.device
     )
-    # convert topk_ids to f16
+    # Final output tensor - matches w2.shape[1] (final output dimension)
+    final_out = torch.zeros(m * topk, w2.shape[1], dtype=torch.float32, device=a.device)
 
+    # Scratch tensors for GEMM1
     a_scratch = torch.zeros(
         num_blocks, a.shape[0], k, dtype=torch.float16, device=a.device
     )
@@ -396,6 +398,7 @@ def nit_tkw(
         num_blocks, a.shape[0], w1.shape[1], dtype=torch.float32, device=a.device
     )
 
+    # GEMM1: a @ w1 -> gemm1_out [tokens, 2*n]
     gemm1 = get_wave_moe_fused_gemm_kernel(
         m * topk,
         w1.shape[1],
@@ -410,8 +413,7 @@ def nit_tkw(
 
     gemm1(a, w1, sorted_ids, expert_ids, a_scratch, gemm1_out, c_scratch)
 
-    # Silu and mul the output
-
+    # SiluAndMul: split gemm1_out and apply activation
     d = gemm1_out.shape[-1] // 2
     gate = gemm1_out[..., :d].contiguous()
     up = gemm1_out[..., d:].contiguous()
@@ -430,7 +432,49 @@ def nit_tkw(
     silu_and_mul = wave_compile(options, silu_and_mul)
     silu_and_mul(gate, up, silu_and_mul_out)
 
-    return silu_and_mul_out
+    # GEMM2: silu_and_mul_out @ w2 -> final_out [tokens, final_dim]
+    # We need scratch tensors for GEMM2
+    a2_scratch = torch.zeros(
+        num_blocks,
+        silu_and_mul_out.shape[0],
+        silu_and_mul_out.shape[1],
+        dtype=torch.float16,
+        device=a.device,
+    )
+    c2_scratch = torch.zeros(
+        num_blocks,
+        silu_and_mul_out.shape[0],
+        w2.shape[1],
+        dtype=torch.float32,
+        device=a.device,
+    )
+
+    gemm2 = get_wave_moe_fused_gemm_kernel(
+        m * topk,  # M: number of tokens
+        w2.shape[1],  # N: final output dimension
+        silu_and_mul_out.shape[1],  # K: intermediate dimension (w1.shape[1] // 2)
+        w2.shape[0],  # E: number of experts
+        block_size,
+        sorted_ids.shape[0],  # total elements
+        num_experts,
+        MMAType.F32_16x16x16_F16,
+        torch.float16,
+    )
+
+    # Convert silu_and_mul_out to f16 for GEMM2 input
+    silu_and_mul_out_f16 = silu_and_mul_out.to(torch.float16)
+
+    gemm2(
+        silu_and_mul_out_f16,
+        w2,
+        sorted_ids,
+        expert_ids,
+        a2_scratch,
+        final_out,
+        c2_scratch,
+    )
+
+    return final_out
 
 
 num_tokens_values = [32]
