@@ -1609,6 +1609,150 @@ def test_gemm_two_cluster_pingpong():
 # Hence for this example, we'd need two reads of vector<4xf16> and insert_slices to
 # combine it to a single vector<8xf16>.
 
+@run_test
+def test_gemm_two_cluster_pingpong_gfx12():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            mma_type=tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_two_cluster_pingpong_gfx12(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 4096,
+            N: 4096,
+            K: 4096,
+            BLOCK_M: 128,
+            BLOCK_N: 256,
+            BLOCK_K: 64,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            READ_SHARED_DELAY: 1,
+            WRITE_SHARED_DELAY: 1,
+            READ_GLOBAL_DELAY: 2,
+            WRITE_GLOBAL_DELAY: 2,
+            MMA_DELAY: 1,
+            VALU_DELAY: 1,
+            SHUFFLE_DELAY: 1,
+            SHARED_MEMORY_UNITS: 4,
+            GLOBAL_MEMORY_UNITS: 4,
+            MMA_UNITS: 4,
+            VALU_UNITS: 8,
+            SHUFFLE_UNITS: 8,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.PREFETCH,
+        compile_to_mlir=True,
+    )
+
+    gemm_two_cluster_pingpong = wave_compile(options, gemm_two_cluster_pingpong_gfx12)
+    print(gemm_two_cluster_pingpong.asm)
+
+    # CHECK-LABEL:    func.func @gemm_two_cluster_pingpong
+    # Prologue
+    # CHECK-COUNT-11:  vector.load
+    # CHECK-COUNT-11:  vector.store
+    # CHECK:          amdgpu.lds_barrier
+
+    # wave High and wave Lo computation
+    # CHECK:         %[[FLAT_WAVE_ID:.+]] = affine.apply #{{.*}}()[%thread_id_x, %thread_id_y]
+    # CHECK:         %[[FLAT_WAVE_ID_I32:.+]] = arith.index_cast %[[FLAT_WAVE_ID]] : index to i32
+    # CHECK:         %[[WAVE_HI:.+]] = arith.cmpi sge, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
+    # CHECK:         %[[WAVE_LO:.+]] = arith.cmpi slt, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
+
+    # cond_barrier on wave hi to brings assymetry between 2 wave in same SIMD and Block.
+    # CHECK:          scf.if %[[WAVE_HI]] {
+    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK-NEXT:     }
+
+    # Steady State
+    # CHECK:          scf.for
+
+    # 1st group: issued barrier signal as soon as local read is completed.
+
+    # $C1: First slice of Local read lhs and rhs
+    # CHECK-COUNT-4:    vector.load %view_0{{.*}} : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<8xf16>
+    # CHECK-COUNT-16:   vector.load %view{{.*}} : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<8xf16>
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+
+    # $C1: Second slice of Local read lhs and rhs
+    # CHECK-COUNT-4:    vector.load %view_0{{.*}} : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<8xf16>
+    # CHECK-COUNT-16:   vector.load %view{{.*}} : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<8xf16>
+
+    # $C1: Issue Barrier signal: 1 -> WAR and a scheduling barrier
+    # CHECK:            rocdl.s.barrier.signal 1
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+
+    # $C1: Global load LHS
+    # CHECK-COUNT-4:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1], offset: ?>>, vector<8xf16>
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+
+    # $C1: Global load RHS
+    # CHECK-COUNT-8:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1], offset: ?>>, vector<8xf16>
+    # CHECK:            rocdl.s.barrier
+
+    # 2nd group: compute
+
+    # $C2: wmma
+    # CHECK-COUNT-32:   amdgpu.wmma
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # 3rd group: local writes,
+    # wait if local reads have not already not completed (wait for singal 1)
+    # signal as soon as data is written.
+
+    # $C3: Wait for barrier signal: 1
+    # CHECK:            rocdl.s.barrier.wait 1
+    # CHECK-COUNT-12:   vector.store
+
+    # $C3: Issue Barrier signal: 2 -> RAW and a scheduling barrier
+    # $C3: Release WAVE_HI blocked in $C1
+    # CHECK:            rocdl.s.barrier.signal 2
+    # CHECK:            rocdl.s.barrier
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # 4th group: compute
+
+    # $C4: wmma
+    # CHECK-COUNT-32:   amdgpu.wmma
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # $C4: Wait for barrier signal: 2
+    # CHECK:            rocdl.s.barrier.wait 2
+
+    # cond_barrier on wave low to even out assymetry between 2 wave in same SIMD and Block.
+    # CHECK:          scf.if %[[WAVE_LO]] {
+    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK-NEXT:     }
+
+    # CHECK-COUNT-32: vector.load %view
+    # CHECK-COUNT-8:  vector.load %view_0
+    # CHECK-COUNT-64: amdgpu.wmma
+
 
 @run_test
 def test_gemm_with_gpr_offsets():
