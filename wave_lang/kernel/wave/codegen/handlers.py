@@ -2022,6 +2022,10 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
             args += [gen(arg) for arg in start_indices_orig]
             args += [gen(arg) for arg in start_indices]
             args += [gen(bounds[dim]) for dim in index.keys()]
+
+            # Print index info
             gpu_d.printf(format=fmt, args=args)
+
+            # Kill the wave.
             llvm_d.intr_trap()
             scf_d.YieldOp([])
