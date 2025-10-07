@@ -726,8 +726,8 @@ def get_silu_and_mul_kernel(
     ):
         x1_reg = tkw.read(x1)
         cst_m1 = tkl.Register[M, N, datatype](-1.0)
-        cst_1 = tkl.Register[M, N, datatype](-1.0)
-        exp_out = tkw.exp2(x1_reg * cst_m1)
+        cst_1 = tkl.Register[M, N, datatype](1.0)
+        exp_out = tkw.exp(x1_reg * cst_m1)
         sigmoid = cst_1 / (cst_1 + exp_out)
         silu = sigmoid * x1_reg
 
