@@ -468,6 +468,54 @@ def test_read_back_scalar():
     print(c)
 
 
+def test_reduce_sum():
+    shape = (64, 128)
+    M = tkl.sym.M
+    N = tkl.sym.N
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: 1, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a)
+        res = tkw.sum(res, dim=N)
+        tkw.write(res, c)
+
+    torch.manual_seed(1)
+    a = torch.randn(shape, dtype=torch.float16, device="cuda")
+    c = torch.zeros((shape[0],), dtype=torch.float16, device="cuda")
+    ref = torch.sum(a, dim=-1)
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+    )
+    test = wave_compile(options, test)
+
+    test(a, c)
+    torch.testing.assert_close(ref, c, atol=0.1, rtol=1e-05)
+    print("Test passed")
+
+
 if __name__ == "__main__":
     import sys
 
