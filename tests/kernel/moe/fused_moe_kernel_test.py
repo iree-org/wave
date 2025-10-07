@@ -337,14 +337,28 @@ def torch_ref_moe(
         w1_compute = w1
         w2_compute = w2
 
+    gemm1_result = torch.zeros(
+        B * topk, w1.shape[1], dtype=torch.float32, device=a.device
+    )
+    silu_mul_result = torch.zeros(
+        B * topk, w1.shape[1] // 2, dtype=torch.float32, device=a.device
+    )
+    silu_mul_result_f16 = torch.zeros(
+        B * topk, w1.shape[1] // 2, dtype=torch.float16, device=a.device
+    )
+
     for i in range(w1_compute.shape[0]):
         mask = topk_ids == i
         if mask.sum():
-            gemm1_result = a[mask].float() @ w1_compute[i].transpose(0, 1).float()
-            silu_mul_result = SiluAndMul_ref(gemm1_result)
-            out[mask] = silu_mul_result @ w2_compute[i].transpose(0, 1).float()
+            gemm1_result[mask] = a[mask].float() @ w1_compute[i].transpose(0, 1).float()
+            silu_mul_result[mask] = SiluAndMul_ref(gemm1_result[mask])
+            silu_mul_result_f16[mask] = silu_mul_result[mask].to(torch.float16)
+            out[mask] = (
+                silu_mul_result_f16[mask].float()
+                @ w2_compute[i].transpose(0, 1).float()
+            )
 
-    return out.sum(dim=1)
+    return gemm1_result, silu_mul_result, out, out.sum(dim=1)
 
 
 def get_wave_moe_fused_gemm_kernel(
@@ -382,7 +396,7 @@ def get_wave_moe_fused_gemm_kernel(
     return gemm
 
 
-def nit_tkw(
+def tkw_moe(
     a, w1, w2, topk, sorted_ids, expert_ids, num_experts, block_size, num_blocks
 ):
     m, k = a.shape
@@ -495,7 +509,7 @@ def nit_tkw(
 
     reduce_sum(gemm2_out, final_out)
 
-    return final_out
+    return gemm1_out, silu_and_mul_out, gemm2_out, final_out
 
 
 num_tokens_values = [32]
@@ -530,9 +544,9 @@ def testnittestReferenceMoe(
         pytest.skip("This combination generates NaNs and INFs")
 
     # TODO: investigate why using torch.randn would have precision issue in silu computation
-    a = torch.rand((num_tokens, k), dtype=dtype, device=device)
-    w1 = torch.rand((num_experts, 2 * n, k), dtype=dtype, device=device)
-    w2 = torch.rand((num_experts, k, n), dtype=dtype, device=device)
+    a = torch.randn(num_tokens, k, dtype=dtype, device=device)
+    w1 = torch.randn(num_experts, 2 * n, k, dtype=dtype, device=device)
+    w2 = torch.randn(num_experts, k, n, dtype=dtype, device=device)
 
     score = torch.rand((num_tokens, num_experts), dtype=dtype, device=device)
     topk_ids = torch.topk(score, topk, dim=1)[1]
@@ -553,16 +567,32 @@ def testnittestReferenceMoe(
     )
 
     num_blocks = expert_ids.shape[0]
-    ref_output = torch_ref_moe(a, w1, w2, score, topk)
-    nit_tkw_output = nit_tkw(
+    [ref_gemm1_out, ref_silu_and_mul_out, ref_gemm2_out, ref_output] = torch_ref_moe(
+        a, w1, w2, score, topk
+    )
+    [tkw_gemm1_out, tkw_silu_and_mul_out, tkw_gemm2_out, tkw_output] = tkw_moe(
         a, w1, w2, topk, sorted_ids, expert_ids, num_experts, block_size, num_blocks
     )
 
-    print(nit_tkw_output)
+    print(tkw_output)
     print(ref_output)
 
-    breakpoint()
-    torch.testing.assert_close(nit_tkw_output, ref_output, rtol=rtol, atol=atol)
+    torch.testing.assert_close(
+        tkw_gemm1_out, ref_gemm1_out, rtol=rtol, atol=atol, msg="GEMM1 output mismatch"
+    )
+    torch.testing.assert_close(
+        tkw_silu_and_mul_out,
+        ref_silu_and_mul_out,
+        rtol=rtol,
+        atol=atol,
+        msg="SiLU and Mul output mismatch",
+    )
+    torch.testing.assert_close(
+        tkw_gemm2_out, ref_gemm2_out, rtol=rtol, atol=atol, msg="GEMM2 output mismatch"
+    )
+    torch.testing.assert_close(
+        tkw_output, ref_output, rtol=rtol, atol=atol, msg="Final output mismatch"
+    )
 
     # # TODO: remove manual splitting
     # # We need to manually split w1 into 2 halves, since this is
