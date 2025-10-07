@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 def generate_bound_checks(trace: CapturedTrace):
+    """
+    Generate bound checks for read and write ops.
+
+    We are generated based on tensor memory shape.
+    """
     logger.info("Generating bound checks")
 
     def is_read_write(node: fx.Node):
@@ -36,6 +41,8 @@ def generate_bound_checks(trace: CapturedTrace):
                 mapping.input_mapping,
             )
 
+        # TODO: It may not work in all cases, as we still don't have a proper
+        # separation between iterations shape and physical shape.
         mem_shape = node.memory_type.symbolic_shape
         bounds = {b: b for b in mem_shape}
 

@@ -1986,12 +1986,14 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
         fmt = f"{sanitize_string(location.filename)}: {location.line[0]}\n" + fmt
 
     for i in range(size):
+        # Generate individual checks for each vector element.
         index = copy.deepcopy(index_exprs)
         index[fast_dim].start = index[fast_dim].start + i
 
         start_indices_orig = _get_start_indices(index)
 
         if mask_bounds:
+            # If read/write op has mask bounds only check index which is outside of mask bounds.
             bound_expr = functools.reduce(
                 lambda a, b: sympy.And(a, b),
                 (index[dim].start < bound for dim, bound in mask_bounds.items()),
