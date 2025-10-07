@@ -652,13 +652,7 @@ def transform_PP_for_gfx12(
     )
 
     # 2nd cluster mma_slice[0].
-    # prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
-    # prio_op.location = context_location
-    # clusters.append(insert_op_before(prio_op, sliced_mma_nodes[0]))
     clusters.append(sliced_mma_nodes[0])
-    # prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
-    # prio_op.location = context_location
-    # clusters.append(insert_op_after(prio_op, sliced_mma_nodes[0]))
     # removed SMB
     clusters.append(
         insert_op_after(
@@ -697,13 +691,8 @@ def transform_PP_for_gfx12(
     )
 
     # 4th cluster mma_slice[1].
-    # prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
-    # prio_op.location = context_location
     # clusters.append(insert_op_before(prio_op, sliced_mma_nodes[1]))
     clusters.append(sliced_mma_nodes[1])
-    # prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
-    # prio_op.location = context_location
-    # clusters.append(insert_op_after(prio_op, sliced_mma_nodes[1]))
     clusters.append(
         insert_op_after(
             SchedulingBarrier([]).add_to_graph(tmp_graph, loc=context_location),
