@@ -307,7 +307,7 @@ def torch_ref_moe(
     a,
     w1,
     w2,
-    topk_ids,
+    score,
     topk,
     w1_scale=None,
     w2_scale=None,
@@ -317,6 +317,8 @@ def torch_ref_moe(
     B, D = a.shape
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
     out = torch.zeros(B * topk, w2.shape[1], dtype=torch.float32, device=a.device)
+    score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    topk_ids = torch.topk(score, topk)[1]
     topk_ids = topk_ids.view(-1)
 
     if w1.dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
@@ -551,7 +553,7 @@ def testnittestReferenceMoe(
     )
 
     num_blocks = expert_ids.shape[0]
-    ref_output = torch_ref_moe(a, w1, w2, topk_ids, topk)
+    ref_output = torch_ref_moe(a, w1, w2, score, topk)
     nit_tkw_output = nit_tkw(
         a, w1, w2, topk, sorted_ids, expert_ids, num_experts, block_size, num_blocks
     )
