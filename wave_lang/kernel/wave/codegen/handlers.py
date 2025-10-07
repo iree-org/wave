@@ -2000,7 +2000,8 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
             bound_expr = True
 
         if mapping:
-            index = transform_index_on_mapping(mapping, index)
+            symbolic_shape = list(bounds.keys())
+            index = transform_index_on_mapping(mapping, symbolic_shape, index)
 
         start_indices = _get_start_indices(index)
         oob = functools.reduce(
