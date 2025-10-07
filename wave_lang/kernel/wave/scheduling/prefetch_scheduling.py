@@ -13,6 +13,7 @@ from .graph_utils import Edge, sort_graph_by_edge_weight
 from .resources import Operation
 from .scheduler_utils import get_scheduling_stage, BaseScheduler
 from ...ops.wave_ops import (
+    GatherToLDS,
     get_custom,
     Read,
     Write,
@@ -23,6 +24,7 @@ from ...ops.wave_ops import (
     Extract,
 )
 from ..utils.graph_utils import capture_backward_slice
+from ..utils.run_utils import get_default_arch
 from ..utils.classes import AttentionOperationType
 
 import logging
@@ -146,11 +148,28 @@ class MMAGroup:
     """Groups MMA operations and their dependencies for prefetch scheduling."""
 
     VALID_SUFFIXES = {"0", "1"}
+    OPERATION_MAPPING = {
+        "0": {
+            "global_reads": AttentionOperationType.GLOBAL_LOAD_0,
+            "shared_reads": AttentionOperationType.LOCAL_LOAD_0,
+            "shared_writes": AttentionOperationType.LOCAL_STORE_0,
+            "mma_ops": AttentionOperationType.MMA_0,
+            "gather_to_lds_ops": AttentionOperationType.GATHER_TO_LDS_0,
+        },
+        "1": {
+            "global_reads": AttentionOperationType.GLOBAL_LOAD_1,
+            "shared_reads": AttentionOperationType.LOCAL_LOAD_1,
+            "shared_writes": AttentionOperationType.LOCAL_STORE_1,
+            "mma_ops": AttentionOperationType.MMA_1,
+            "gather_to_lds_ops": AttentionOperationType.GATHER_TO_LDS_1,
+        },
+    }
 
     def __init__(self, mma_ops: list[fx.Node]):
         self.global_reads = set()
         self.shared_reads = set()
         self.shared_writes = set()
+        self.gather_to_lds_ops = set()
         self.mma_ops = set(mma_ops)
 
     def add_nodes(self, nodes: list[fx.Node]):
@@ -163,59 +182,32 @@ class MMAGroup:
                     self.shared_reads.add(node)
             elif isinstance(custom, Write):
                 self.shared_writes.add(node)
+            elif isinstance(custom, GatherToLDS):
+                self.gather_to_lds_ops.add(node)
 
     def _get_operation_type(
         self, suffix: str, operation_category: str
     ) -> AttentionOperationType:
         """Get the appropriate operation type enum for a given suffix and category."""
-        operation_mapping = {
-            "0": {
-                "global_reads": AttentionOperationType.GLOBAL_LOAD_0,
-                "shared_reads": AttentionOperationType.LOCAL_LOAD_0,
-                "shared_writes": AttentionOperationType.LOCAL_STORE_0,
-                "mma_ops": AttentionOperationType.MMA_0,
-            },
-            "1": {
-                "global_reads": AttentionOperationType.GLOBAL_LOAD_1,
-                "shared_reads": AttentionOperationType.LOCAL_LOAD_1,
-                "shared_writes": AttentionOperationType.LOCAL_STORE_1,
-                "mma_ops": AttentionOperationType.MMA_1,
-            },
-        }
 
         if suffix not in self.VALID_SUFFIXES:
             raise ValueError(
                 f"Invalid suffix: {suffix}. Must be one of {self.VALID_SUFFIXES}."
             )
 
-        if operation_category not in operation_mapping[suffix]:
+        if operation_category not in self.OPERATION_MAPPING[suffix]:
             raise ValueError(f"Invalid operation category: {operation_category}")
 
-        return operation_mapping[suffix][operation_category]
+        return self.OPERATION_MAPPING[suffix][operation_category]
 
     def get_all_operation_types(self, suffix: str) -> dict[str, AttentionOperationType]:
         """Get all operation types for a given suffix."""
-        operation_mapping = {
-            "0": {
-                "global_reads": AttentionOperationType.GLOBAL_LOAD_0,
-                "shared_reads": AttentionOperationType.LOCAL_LOAD_0,
-                "shared_writes": AttentionOperationType.LOCAL_STORE_0,
-                "mma_ops": AttentionOperationType.MMA_0,
-            },
-            "1": {
-                "global_reads": AttentionOperationType.GLOBAL_LOAD_1,
-                "shared_reads": AttentionOperationType.LOCAL_LOAD_1,
-                "shared_writes": AttentionOperationType.LOCAL_STORE_1,
-                "mma_ops": AttentionOperationType.MMA_1,
-            },
-        }
-
         if suffix not in self.VALID_SUFFIXES:
             raise ValueError(
                 f"Invalid suffix: {suffix}. Must be one of {self.VALID_SUFFIXES}."
             )
 
-        return operation_mapping[suffix]
+        return self.OPERATION_MAPPING[suffix]
 
     def annotate(self, suffix: str):
         """Annotate nodes with prefetch stage using enum values."""
@@ -230,6 +222,10 @@ class MMAGroup:
         for node in self.shared_writes:
             node.meta["prefetch_stage"] = self._get_operation_type(
                 suffix, "shared_writes"
+            ).value
+        for node in self.gather_to_lds_ops:
+            node.meta["prefetch_stage"] = self._get_operation_type(
+                suffix, "gather_to_lds_ops"
             ).value
         for node in self.mma_ops:
             node.meta["prefetch_stage"] = self._get_operation_type(
@@ -307,13 +303,19 @@ class PrefetchAttentionScheduler(BaseScheduler):
         mma1_group.annotate("1")
 
         # Cycle 0, 1: Global loads and shared writes for GEMM0
-        schedule = _set_cycle(mma0_group.global_reads, 0, schedule)
-        schedule = _set_cycle(mma0_group.shared_writes, 1, schedule)
+        if "gfx95" in get_default_arch() and mma0_group.gather_to_lds_ops:
+            schedule = _set_cycle(mma0_group.gather_to_lds_ops, 0, schedule)
+        else:
+            schedule = _set_cycle(mma0_group.global_reads, 0, schedule)
+            schedule = _set_cycle(mma0_group.shared_writes, 1, schedule)
 
         # Cycle 2, 3: Shared reads for GEMM0, global loads for GEMM1, shared writes for GEMM1
         schedule = _set_cycle(mma0_group.shared_reads, 2, schedule)
-        schedule = _set_cycle(mma1_group.global_reads, 2, schedule)
-        schedule = _set_cycle(mma1_group.shared_writes, 3, schedule)
+        if "gfx95" in get_default_arch() and mma1_group.gather_to_lds_ops:
+            schedule = _set_cycle(mma1_group.gather_to_lds_ops, 2, schedule)
+        else:
+            schedule = _set_cycle(mma1_group.global_reads, 2, schedule)
+            schedule = _set_cycle(mma1_group.shared_writes, 3, schedule)
 
         # Cycle 2: QK and softmax0 operations
         schedule = _set_cycle(mma0_group.mma_ops, 4, schedule)
@@ -448,7 +450,7 @@ class PrefetchAttentionScheduler(BaseScheduler):
                 backward_slice = capture_backward_slice(
                     lhs,
                     lambda x: isinstance(
-                        get_custom(x), (Read, Write, Reshape, Extract)
+                        get_custom(x), (Read, Write, Reshape, Extract, GatherToLDS)
                     ),
                 )
                 mma_group.add_nodes(backward_slice)
@@ -457,7 +459,7 @@ class PrefetchAttentionScheduler(BaseScheduler):
                 backward_slice = capture_backward_slice(
                     rhs,
                     lambda x: isinstance(
-                        get_custom(x), (Read, Write, Reshape, Extract)
+                        get_custom(x), (Read, Write, Reshape, Extract, GatherToLDS)
                     ),
                 )
                 mma_group.add_nodes(backward_slice)
