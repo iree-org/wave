@@ -41,9 +41,10 @@ def generate_bound_checks(trace: CapturedTrace):
 
         graph = node.graph
         with graph.inserting_before(node.fx_node):
-            BoundsCheck(
+            op = BoundsCheck(
                 index,
                 bounds,
                 mapping,
                 node.bounds,
             ).add_to_graph(graph)
+            op.location = node.location

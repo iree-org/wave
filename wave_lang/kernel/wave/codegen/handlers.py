@@ -1948,6 +1948,10 @@ def handle_reshape(emitter: WaveEmitter, node: fx.Node):
     emitter.bind_node_proxy(node, IRProxyValue(slice))
 
 
+def sanitize_string(s: str) -> str:
+    return s.replace("%", "%%").replace("\\", "\\\\")
+
+
 @handle_op(bounds_check)
 def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -1978,6 +1982,8 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
     bounds_fmt = ", ".join(["%lld"] * len(bounds))
 
     fmt = f"Index {src_index_dims} [{src_index_fmt}] -> {dst_index_dims} [{dst_index_fmt}] is out of bounds [{bounds_fmt}]\n"
+    if location := node.location:
+        fmt = f"{sanitize_string(location.filename)}: {location.line[0]}\n" + fmt
 
     for i in range(size):
         index = copy.deepcopy(index_exprs)
