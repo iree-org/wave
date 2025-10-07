@@ -40,6 +40,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 
 from wave_lang.kernel.wave.templates.moe import (
     get_fused_moe_gemm,
+    get_silu_and_mul_kernel,
 )
 
 from tests.kernel.wave.moe.moe_align_block_size_test import (
@@ -296,6 +297,11 @@ def test_fused_moe_kernel_reference(
     )
 
 
+def SiluAndMul_ref(x: torch.Tensor) -> torch.Tensor:
+    d = x.shape[-1] // 2
+    return F.silu(x[..., :d]) * x[..., d:]
+
+
 def torch_ref_moe(
     a,
     w1,
@@ -309,7 +315,7 @@ def torch_ref_moe(
 ):
     B, D = a.shape
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
-    out = torch.zeros(B * topk, w1.shape[1], dtype=a.dtype, device=a.device)
+    out = torch.zeros(B * topk, w1.shape[1] // 2, dtype=a.dtype, device=a.device)
     topk_ids = topk_ids.view(-1)
 
     if w1.dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
@@ -331,7 +337,8 @@ def torch_ref_moe(
     for i in range(w1_compute.shape[0]):
         mask = topk_ids == i
         if mask.sum():
-            out[mask] = a[mask] @ (w1_compute[i].transpose(0, 1))
+            temp = a[mask] @ (w1_compute[i].transpose(0, 1))
+            out[mask] = SiluAndMul_ref(temp)
 
     return out
 
@@ -376,7 +383,10 @@ def nit_tkw(
 ):
     m, k = a.shape
     a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
-    out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
+    gemm1_out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
+    silu_and_mul_out = torch.zeros(
+        m * topk, w1.shape[1] // 2, dtype=torch.float32, device=a.device
+    )
     # convert topk_ids to f16
 
     a_scratch = torch.zeros(
@@ -386,7 +396,7 @@ def nit_tkw(
         num_blocks, a.shape[0], w1.shape[1], dtype=torch.float32, device=a.device
     )
 
-    gemm = get_wave_moe_fused_gemm_kernel(
+    gemm1 = get_wave_moe_fused_gemm_kernel(
         m * topk,
         w1.shape[1],
         k,
@@ -398,16 +408,29 @@ def nit_tkw(
         torch.float16,
     )
 
-    breakpoint()
-    # # create an expert_id list which is num_blocks long, each element is a random integer between 0 and num_experts - 1
-    # expert_ids = torch.randint(
-    #     0, num_experts, (num_blocks,), dtype=torch.int32, device="cuda"
-    # )
-    breakpoint()
+    gemm1(a, w1, sorted_ids, expert_ids, a_scratch, gemm1_out, c_scratch)
 
-    gemm(a, w1, sorted_ids, expert_ids, a_scratch, out, c_scratch)
+    # Silu and mul the output
 
-    return out
+    d = gemm1_out.shape[-1] // 2
+    gate = gemm1_out[..., :d].contiguous()
+    up = gemm1_out[..., d:].contiguous()
+
+    silu_and_mul, symbols = get_silu_and_mul_kernel(
+        gate.shape[0],
+        gate.shape[1],
+        tkl.f32,
+    )
+
+    symbols.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=symbols,
+    )
+    options = set_default_run_config(options)
+    silu_and_mul = wave_compile(options, silu_and_mul)
+    silu_and_mul(gate, up, silu_and_mul_out)
+
+    return silu_and_mul_out
 
 
 num_tokens_values = [32]
@@ -443,7 +466,7 @@ def testnittestReferenceMoe(
 
     # TODO: investigate why using torch.randn would have precision issue in silu computation
     a = torch.rand((num_tokens, k), dtype=dtype, device=device)
-    w1 = torch.rand((num_experts, n, k), dtype=dtype, device=device)
+    w1 = torch.rand((num_experts, 2 * n, k), dtype=dtype, device=device)
     w2 = torch.rand((num_experts, k, n), dtype=dtype, device=device)
 
     score = torch.rand((num_tokens, num_experts), dtype=dtype, device=device)
