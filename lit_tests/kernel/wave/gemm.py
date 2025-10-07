@@ -1609,6 +1609,7 @@ def test_gemm_two_cluster_pingpong():
 # Hence for this example, we'd need two reads of vector<4xf16> and insert_slices to
 # combine it to a single vector<8xf16>.
 
+
 @run_test
 def test_gemm_two_cluster_pingpong_gfx12():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
