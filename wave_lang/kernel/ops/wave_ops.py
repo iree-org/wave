@@ -190,6 +190,7 @@ def bounds_check(
     index_exprs: dict[IndexExpr, IndexSequence],
     bounds: dict[IndexSymbol, IndexExpr],
     mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: tuple["Register", ...] = (),
     mask_bounds: Optional[dict[IndexSymbol, IndexExpr]] = None,
 ): ...
 
@@ -2352,6 +2353,7 @@ class BoundsCheck(CustomOp):
     index_exprs: dict[IndexExpr, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
     mapping: Optional[IndexMapping] = None
+    mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     mask_bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
 
     @property

@@ -1947,21 +1947,39 @@ def handle_reshape(emitter: WaveEmitter, node: fx.Node):
     emitter.bind_node_proxy(node, IRProxyValue(slice))
 
 
-def sanitize_string(s: str) -> str:
-    return s.replace("%", "%%").replace("\\", "\\\\")
-
-
 @handle_op(bounds_check)
 def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
     try:
-        index_exprs, bounds, mapping, mask_bounds = node.args
+        index_exprs, bounds, mapping, dyn_vals, mask_bounds = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
     fast_dim, size = get_largest_index_and_size(index_exprs)
 
-    subs = add_emitter_subs(emitter)
     i64_type = IntegerType.get_signless(64)
+
+    dynamic_vals = tuple(
+        cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
+    )
+
+    # helper function to extract the scalar (index) from the vector <1xindex>
+    def extract0(src):
+        static_pos = [0] * src.type.rank
+        return vector_d.extract(src, static_position=static_pos, dynamic_position=[])
+
+    # create the dictionary of dynamic symbol and corresponding scalar value
+    dynamic_vals = (
+        {
+            sym: extract0(val)
+            for sym, val in zip(mapping.dynamic_val_indices.keys(), dynamic_vals)
+        }
+        if mapping
+        else {}
+    )
+    subs = add_emitter_subs(emitter, dynamic_vals)
+
+    def sanitize_string(s: str) -> str:
+        return s.replace("%", "%%").replace("\\", "\\\\")
 
     def gen(expr: IndexExpr) -> Value:
         ret = gen_sympy_index(subs, expr)

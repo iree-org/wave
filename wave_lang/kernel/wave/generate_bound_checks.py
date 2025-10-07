@@ -52,6 +52,7 @@ def generate_bound_checks(trace: CapturedTrace):
                 index,
                 bounds,
                 mapping,
+                node.mapping_dynamic_vals,
                 node.bounds,
             ).add_to_graph(graph)
             op.location = node.location

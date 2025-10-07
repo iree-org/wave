@@ -117,3 +117,45 @@ def test_bounds_check_mapping():
     # CHECK:            scf.if
     # CHECK:              gpu.printf
     # CHECK:              llvm.intr.trap
+
+
+@run_test
+def test_bounds_check_mapping_dynamic_vals():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    k = tkw.IndexMapping.dynamic_val(0)
+    mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i + k, N: j},
+        outputs={M: i, N: j},
+        dynamic_val_mappings={M: i, N: j},
+    )
+
+    @tkw.wave(constraints)
+    def read_write(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        off: tkl.Memory[M, N, ADDRESS_SPACE, tkl.i32],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        off = tkw.read(off)
+        res = tkw.read(a, mapping=mapping, mapping_dynamic_vals=(off,))
+        tkw.write(res, b)
+
+    options = get_wave_compile_options(canonicalize=True)
+    options.use_bound_check = True
+    read_write = wave_compile(options, read_write)
+    print(read_write.asm)
+
+    # CHECK-LABEL:    test_bounds_check_mapping
+    # CHECK:          func.func @read_write
+    # CHECK:            scf.if
+    # CHECK:              gpu.printf
+    # CHECK:              llvm.intr.trap
