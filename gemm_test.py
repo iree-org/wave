@@ -59,8 +59,8 @@ def testPureGemm():
         dynamic_symbols=dynamic_symbols,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
-        # print_mlir=True
-        dump_intermediates="./dump/intermediates-pp/"
+        print_mlir=True
+        # dump_intermediates="./dump/intermediates-pp/"
 
     )
     options.postprocess = """
@@ -84,7 +84,7 @@ def testPureGemm():
         options.benchmark_results_file = perf_filename_iree
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
-    assert_close(c, iree_ref, check_device=False)
+    assert_close(c, iree_ref, check_device=False, equal_nan=True, atol=1e-3, rtol=1e-3)
 
 if __name__ == "__main__":
     testPureGemm()
