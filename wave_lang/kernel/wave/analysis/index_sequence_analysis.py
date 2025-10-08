@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from copy import copy, deepcopy
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional, Sequence
 
@@ -1002,6 +1003,14 @@ def resolve_broadcasting_for_op_type(
         resolve_broadcasting_for_op(custom, operand_identifiers)
 
 
+@dataclass
+class BroadcastOperand:
+    custom: CustomOp
+    dim: IndexSymbol
+    size: int
+    id: str
+
+
 def resolve_broadcasting_for_op(custom: CustomOp, operand_identifiers: list[str]):
     """Resolve broadcasting for a single operation instance.
     The operand_identifiers argument is a list of field names for the arguments that need broadcast support.
@@ -1013,43 +1022,43 @@ def resolve_broadcasting_for_op(custom: CustomOp, operand_identifiers: list[str]
         index = get_index(operand_custom)
         dim, size = get_largest_index_and_size(index, operand_custom)
         operands.append(
-            {"custom": operand_custom, "dim": dim, "size": size, "id": identifier}
+            BroadcastOperand(custom=operand_custom, dim=dim, size=size, id=identifier)
         )
 
-    target = max(operands, key=lambda x: x["size"])
+    target = max(operands, key=lambda x: x.size)
 
     def generate_error_context():
         context_lines = [f"\n{type(custom).__name__.lower()}={custom}"]
         for op in operands:
             context_lines.extend(
                 [
-                    f"\n{op['id']}: {op['custom']}",
-                    f"\n{op['id']}_index: {get_index(op['custom'])}",
-                    f"\n{op['id']}_dim: {op['dim']}",
-                    f"\n{op['id']}_size: {op['size']}",
-                    f"\n{op['id']}.type.symbolic_shape: {op['custom'].type.symbolic_shape}",
+                    f"\n{op.id}: {op.custom}",
+                    f"\n{op.id}_index: {get_index(op.custom)}",
+                    f"\n{op.id}_dim: {op.dim}",
+                    f"\n{op.id}_size: {op.size}",
+                    f"\n{op.id}.type.symbolic_shape: {op.custom.type.symbolic_shape}",
                 ]
             )
         return "".join(context_lines)
 
     for operand in operands:
-        if operand["size"] < target["size"]:
-            if operand["size"] > 1 and target["size"] > 1:
+        if operand.size < target.size:
+            if operand.size > 1 and target.size > 1:
                 raise NotImplementedError(
                     f"Currently only support resolving discrepancies when one of the shapes is 1."
                     f"{generate_error_context()}"
                 )
 
-            if operand["dim"] != target["dim"]:
+            if operand.dim != target.dim:
                 # If the dimensions don't agree, we can still do this broadcast only if
                 # the two nodes differ in shape along the broadcasting dimension and the
                 # broadcasting dimension is the innermost dimension.
-                missing_dims = set(target["custom"].type.symbolic_shape).difference(
-                    set(operand["custom"].type.symbolic_shape)
+                missing_dims = set(target.custom.type.symbolic_shape).difference(
+                    set(operand.custom.type.symbolic_shape)
                 )
-                is_only_missing_dim = missing_dims == {target["dim"]}
+                is_only_missing_dim = missing_dims == {target.dim}
                 is_innermost_dim = (
-                    target["dim"] == target["custom"].type.symbolic_shape[-1]
+                    target.dim == target.custom.type.symbolic_shape[-1]
                 )
 
                 if not is_only_missing_dim and not is_innermost_dim:
@@ -1060,11 +1069,11 @@ def resolve_broadcasting_for_op(custom: CustomOp, operand_identifiers: list[str]
 
             create_broadcast(
                 custom,
-                operand["custom"],
-                operand["id"],
-                target["dim"],
-                target["size"],
-                target["custom"],
+                operand.custom,
+                operand.id,
+                target.dim,
+                target.size,
+                target.custom,
             )
 
 
