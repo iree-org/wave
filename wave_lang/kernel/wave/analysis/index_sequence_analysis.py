@@ -1016,8 +1016,6 @@ def resolve_broadcasting_for_op(custom: CustomOp, operand_identifiers: list[str]
             {"custom": operand_custom, "dim": dim, "size": size, "id": identifier}
         )
 
-    sizes = [operand["size"] for operand in operands]
-
     target = max(operands, key=lambda x: x["size"])
 
     def generate_error_context():
