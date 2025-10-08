@@ -129,7 +129,7 @@ def simple_gemm_test():
     print("GEMM test passed!")
 
 
-def downcast_gemm_test():
+def downcast_gemm_test(is_debug=False):
     E = sym.E
     # Define constraints for the kernel
     constraints = [
@@ -303,7 +303,7 @@ def downcast_gemm_test():
     print("GEMM test passed!")
 
 
-def dyn_downcast_gemm_test():
+def dyn_downcast_gemm_test(is_debug=False):
     E = sym.E
     # Define constraints for the kernel
     constraints = [
@@ -390,15 +390,16 @@ def dyn_downcast_gemm_test():
     # Compile the kernel
     options = WaveCompileOptions(
         subs=hyperparams,
-        print_ir_after="all",
-        print_ir_before="all",
+        print_ir_after="all" if is_debug else [],
+        print_ir_before="all" if is_debug else [],
     )
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
 
     # Run the GEMM kernel
     compiled_gemm(a, b, 1, c)
-    print(compiled_gemm.asm)
+    if is_debug:
+        print(compiled_gemm.asm)
 
     # Verify the result using PyTorch's matmul
     expected = torch.matmul(a, b[1].t())
@@ -411,7 +412,7 @@ def dyn_downcast_gemm_test():
     print("GEMM test passed!")
 
 
-def reorder_a_gemm_test():
+def reorder_a_gemm_test(is_debug=False):
     E = sym.E
     # Define constraints for the kernel
     constraints = [
@@ -510,6 +511,8 @@ def reorder_a_gemm_test():
     # Compile the kernel
     options = WaveCompileOptions(
         subs=hyperparams,
+        print_ir_after="all" if is_debug else [],
+        print_ir_before="all" if is_debug else [],
     )
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
@@ -1128,7 +1131,7 @@ def scatter_gemm_w_padding_test(is_debug=False):
             )
 
             tkw.set_symbol(SCATTER_IDX, reordered_idx)
-            is_not_padding = SCATTER_IDX < PAD_VALUE
+            is_not_padding = reordered_idx < tkw.scalar(PAD_VALUE, i32)
 
             @tkw.conditional(is_not_padding)
             def then():
