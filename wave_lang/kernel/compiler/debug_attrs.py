@@ -28,10 +28,9 @@ def create_di_compile_unit(
     get_next_distinct_id: Callable[[], int], di_file: Attribute
 ) -> Attribute:
     distinct_id = get_next_distinct_id()
-    # The sourceLanguage field has an enum that doesn't have a blank or default
-    # value.  Let's just use C for now, as it seems that it is used as a default
-    # for DSLs sometimes.
-    # We use LineTablesOnly emission since we only support locations, not variable tracking.
+    # The sourceLanguage field requires a non-blank value from a fixed enum.
+    # We choose DW_LANG_C here because C is commonly used as a default for DSLs
+    # and is widely supported by debuggers and tooling.
     di_cu_str = (
         f"#llvm.di_compile_unit<"
         f"id = distinct[{distinct_id}]<>, "
