@@ -1964,7 +1964,11 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
 
     # helper function to extract the scalar (index) from the vector <1xindex>
     def extract0(src):
-        static_pos = [0] * src.type.rank
+        src_type = src.type
+        assert all(
+            s == 1 for s in src_type.shape
+        ), f"Expected number of elements in vector to be 1, got {src_type}"
+        static_pos = [0] * src_type.rank
         return vector_d.extract(src, static_position=static_pos, dynamic_position=[])
 
     # create the dictionary of dynamic symbol and corresponding scalar value
@@ -1979,7 +1983,7 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
     subs = add_emitter_subs(emitter, dynamic_vals)
 
     def sanitize_string(s: str) -> str:
-        return s.replace("%", "%%").replace("\\", "\\\\")
+        return s.replace("%", "%%")
 
     def gen(expr: IndexExpr) -> Value:
         ret = gen_sympy_index(subs, expr)
