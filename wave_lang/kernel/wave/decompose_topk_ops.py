@@ -253,16 +253,8 @@ def validate_topk_sources(
     get_thread_shape = lambda index: max(subs_idxc(x.size) for x in index.values())
     local_reduce_sizes = []
     for arg in topk_src:
-        try:
-            op = get_custom(arg)
-            thread_shape = get_thread_shape(op.index)
-            local_reduce_sizes.append(thread_shape)
-        except Exception as e:
-            index_str = "\n".join(f"{k}: {v}" for k, v in op.index.items())
-            raise RuntimeError(
-                f"Error in decompose_topk_ops: {arg} with index\n"
-                f"{index_str}\n{topk_src=}\n{reduction_dim=}"
-            ) from e
+        thread_shape = get_thread_shape(get_custom(arg).index)
+        local_reduce_sizes.append(thread_shape)
 
     if not all_equal(local_reduce_sizes):
         raise NotImplementedError(
