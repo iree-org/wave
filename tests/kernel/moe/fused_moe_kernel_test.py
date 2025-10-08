@@ -6,49 +6,20 @@
 
 import pytest
 import torch
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import *
-from wave_lang.kernel.wave.utils.run_utils import (
-    set_default_run_config,
-    enable_scheduling_barriers,
-    dump_generated_mlir,
-    check_individual_kernels,
-)
+from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.utils.general_utils import (
-    get_default_scheduling_params,
-)
-from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-from wave_lang.kernel.wave.templates.moe import (
-    get_moe_align_block_size_kernel,
-)
+from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.lang import DataType
-import torch.nn.functional as F
-
-from wave_lang.kernel.wave.utils.torch_utils import (
-    device_arange,
-    device_full,
-    device_ones,
-    device_randint,
-    device_randn,
-    device_randperm,
-    device_zeros,
-    to_default_device,
-)
-
 from wave_lang.kernel.wave.templates.moe import (
     get_fused_moe_gemm,
-    get_silu_and_mul_kernel,
+    get_moe_align_block_size_kernel,
     get_moe_reduce_sum_kernel,
+    get_silu_and_mul_kernel,
 )
-
-from tests.kernel.wave.moe.moe_align_block_size_test import (
-    moe_align_block_size_pytorch,
-)
-
-import math
+import torch.nn.functional as F
 
 torch.manual_seed(0)
 
@@ -78,8 +49,7 @@ def torch_ref_moe(
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
     out = torch.zeros(B * topk, w2.shape[1], dtype=torch.float32, device=a.device)
     score = torch.softmax(score, dim=-1, dtype=torch.float32)
-    topk_weight, topk_ids = torch.topk(score, topk)
-    topk_weight = topk_weight.view(-1)
+    _, topk_ids = torch.topk(score, topk)
     topk_ids = topk_ids.view(-1)
 
     if w1.dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
@@ -149,69 +119,89 @@ def get_wave_moe_fused_gemm_kernel(
     options = WaveCompileOptions(
         subs=symbols,
     )
-    optons = set_default_run_config(options)
-    gemm = wave_compile(options, gemm)
-    print("--------------------------------")
-    print(gemm.asm)
-    print("--------------------------------")
-    return gemm
+    options = set_default_run_config(options)
+    return wave_compile(options, gemm)
 
 
-def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
-    # based on the score, create sorted_ids and expert_ids for each aligned block
-    max_num_tokens_padded = score.numel() + num_experts * (block_size - 1)
-    max_num_m_blocks = -(max_num_tokens_padded // -block_size)
-
-    # TODO: replace with topk kernel implemented in Wave
-    score = torch.softmax(score, dim=-1, dtype=torch.float32)
-    topk_weight, topk_ids = torch.topk(score, topk)
-    topk_weight = topk_weight.view(-1)
-    topk_ids = topk_ids.view(-1)
-
-    moe_align_block_size, hyperparams, dynamic_symbols = (
-        get_moe_align_block_size_kernel(
-            num_tokens,
-            num_experts,
-            block_size,
-            topk_ids.numel(),
-            max_num_m_blocks,
-            max_num_tokens_padded,
-            topk,
-        )
+def get_wave_moe_align_block_size_kernel(
+    num_tokens: int,
+    num_experts: int,
+    block_size: int,
+    num_topk_ids: int,
+    max_num_m_blocks: int,
+    max_num_tokens_padded: int,
+    topk: int,
+):
+    kernel, hyperparams, dynamic_symbols = get_moe_align_block_size_kernel(
+        num_tokens,
+        num_experts,
+        block_size,
+        num_topk_ids,
+        max_num_m_blocks,
+        max_num_tokens_padded,
+        topk,
     )
-
     options = WaveCompileOptions(
         subs=hyperparams,
         minimize_shared_allocs=False,
     )
+    return wave_compile(options, kernel)
 
-    moe_align_block_size = wave_compile(
-        options,
-        moe_align_block_size,
+
+def get_wave_silu_and_mul_kernel(m: int, n: int, dtype: DataType):
+    kernel, symbols = get_silu_and_mul_kernel(m, n, dtype)
+    symbols.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=symbols,
+    )
+    options = set_default_run_config(options)
+    return wave_compile(options, kernel)
+
+
+def get_wave_reduce_sum_kernel(m: int, n: int, dtype: DataType):
+    kernel, symbols = get_moe_reduce_sum_kernel(m, n, dtype)
+    symbols.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=symbols,
+    )
+    options = set_default_run_config(options)
+    return wave_compile(options, kernel)
+
+
+def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
+    # Calculate buffer sizes for block-aligned computation
+    max_num_tokens_padded = score.numel() + num_experts * (block_size - 1)
+    max_num_m_blocks = -(max_num_tokens_padded // -block_size)
+
+    # Router: Select top-k experts for each token
+    # TODO: replace with topk kernel implemented in Wave
+    score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    _, topk_ids = torch.topk(score, topk)
+    topk_ids = topk_ids.view(-1)
+
+    # Compile and run block alignment kernel to sort tokens by expert
+    moe_align_block_size = get_wave_moe_align_block_size_kernel(
+        num_tokens,
+        num_experts,
+        block_size,
+        topk_ids.numel(),
+        max_num_m_blocks,
+        max_num_tokens_padded,
+        topk,
     )
 
-    expert_counts_buffer = torch.randint(
-        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
-    )
-    padded_counts_buffer = torch.randint(
-        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
-    )
-    cumsum_buffer = torch.randint(
-        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
-    )
-    cumsum_exclusive = torch.randint(
-        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
-    )
-    num_blocks_buffer = torch.randint(
-        size=(num_experts,), dtype=torch.int32, device="cuda", low=0, high=1
-    )
+    # Output buffers for moe_align_block_size kernel
+    expert_counts_buffer = torch.empty(num_experts, dtype=torch.int32, device="cuda")
+    padded_counts_buffer = torch.empty(num_experts, dtype=torch.int32, device="cuda")
+    cumsum_buffer = torch.empty(num_experts, dtype=torch.int32, device="cuda")
+    cumsum_exclusive = torch.zeros(num_experts, dtype=torch.int32, device="cuda")
+    num_blocks_buffer = torch.empty(num_experts, dtype=torch.int32, device="cuda")
 
     expert_ids = torch.zeros(
-        (max_num_m_blocks,), dtype=torch.int32, device=topk_ids.device
+        max_num_m_blocks, dtype=torch.int32, device=topk_ids.device
     )
-
     sorted_ids = torch.empty(
-        (max_num_tokens_padded,), dtype=torch.int32, device=topk_ids.device
+        max_num_tokens_padded, dtype=torch.int32, device=topk_ids.device
     )
 
     moe_align_block_size(
@@ -226,19 +216,19 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     )
 
     num_blocks = expert_ids.shape[0]
-    num_tokens_post_pad = cumsum_buffer[-1]
 
-    # now do the gemm
+    # Replicate input activations for each selected expert
     m, k = a.shape
     a = a.view(m, -1, k).repeat(1, topk, 1).reshape(-1, k)
+
+    # Allocate output tensors
     gemm1_out = torch.zeros(m * topk, w1.shape[1], dtype=torch.float32, device=a.device)
     silu_and_mul_out = torch.zeros(
         m * topk, w1.shape[1] // 2, dtype=torch.float32, device=a.device
     )
-    # Final output tensor - matches w2.shape[1] (final output dimension)
     gemm2_out = torch.zeros(m * topk, w2.shape[1], dtype=torch.float32, device=a.device)
 
-    # Scratch tensors for GEMM1
+    # GEMM1: Compute gate and up projections (a @ w1.T)
     a_scratch = torch.zeros(
         num_blocks, a.shape[0], k, dtype=torch.float16, device=a.device
     )
@@ -246,7 +236,6 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
         num_blocks, a.shape[0], w1.shape[1], dtype=torch.float32, device=a.device
     )
 
-    # GEMM1: a @ w1 -> gemm1_out [tokens, 2*n]
     gemm1 = get_wave_moe_fused_gemm_kernel(
         m * topk,
         w1.shape[1],
@@ -261,27 +250,19 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
 
     gemm1(a, w1, sorted_ids, expert_ids, a_scratch, gemm1_out, c_scratch)
 
-    # SiluAndMul: split gemm1_out and apply activation
+    # Apply SiLU activation: SiLU(gate) * up
     d = gemm1_out.shape[-1] // 2
     gate = gemm1_out[..., :d].contiguous()
     up = gemm1_out[..., d:].contiguous()
 
-    silu_and_mul, symbols = get_silu_and_mul_kernel(
+    silu_and_mul = get_wave_silu_and_mul_kernel(
         gate.shape[0],
         gate.shape[1],
         tkl.f32,
     )
-
-    symbols.update(get_default_scheduling_params())
-    options = WaveCompileOptions(
-        subs=symbols,
-    )
-    options = set_default_run_config(options)
-    silu_and_mul = wave_compile(options, silu_and_mul)
     silu_and_mul(gate, up, silu_and_mul_out)
 
-    # GEMM2: silu_and_mul_out @ w2 -> final_out [tokens, final_dim]
-    # We need scratch tensors for GEMM2
+    # GEMM2: Down projection (silu_and_mul_out @ w2.T)
     a2_scratch = torch.zeros(
         num_blocks,
         silu_and_mul_out.shape[0],
@@ -322,21 +303,14 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
         c2_scratch,
     )
 
+    # Reduce: Sum across output dimension
     final_out = torch.zeros(m * topk, dtype=torch.float32, device=a.device)
 
-    reduce_sum, symbols = get_moe_reduce_sum_kernel(
+    reduce_sum = get_wave_reduce_sum_kernel(
         m * topk,
         w2.shape[1],
         tkl.f32,
     )
-    symbols.update(get_default_scheduling_params())
-    options = WaveCompileOptions(
-        subs=symbols,
-    )
-    options = set_default_run_config(options)
-
-    reduce_sum = wave_compile(options, reduce_sum)
-
     reduce_sum(gemm2_out, final_out)
 
     return gemm1_out, silu_and_mul_out, gemm2_out, final_out
@@ -359,7 +333,7 @@ block_size_values = [4]
 @pytest.mark.parametrize("topk", top_ks)
 @pytest.mark.parametrize("dtype", dtypes)
 @pytest.mark.parametrize("block_size", block_size_values)
-def testnittestReferenceMoe(
+def test_fused_moe(
     num_tokens: int,
     n: int,
     k: int,
@@ -386,9 +360,6 @@ def testnittestReferenceMoe(
         a, w1, w2, score.clone(), topk, num_experts, block_size, num_tokens
     )
 
-    print(tkw_output)
-    print(ref_output)
-
     torch.testing.assert_close(
         tkw_gemm1_out, ref_gemm1_out, rtol=rtol, atol=atol, msg="GEMM1 output mismatch"
     )
@@ -405,18 +376,3 @@ def testnittestReferenceMoe(
     torch.testing.assert_close(
         tkw_output, ref_output, rtol=rtol, atol=atol, msg="Final output mismatch"
     )
-
-    # # TODO: remove manual splitting
-    # # We need to manually split w1 into 2 halves, since this is
-    # # required by `silu_and_mul` kernel, and currently we can't
-    # # do this in Wave.
-    # w1_gate = w1[:, :n, :]  # First half for gate
-    # w1_up = w1[:, n:, :]  # Second half for up projection
-
-    # # Make sure the algorithm with w1 splitting works in PyTorch.
-    # ref_split_output = torch_ref_moe_split_w1(a, w1_gate, w1_up, w2, score, topk)
-    # torch.testing.assert_close(ref_split_output, ref_output, rtol=rtol, atol=atol)
-
-    # # The implementation in Wave should also work.
-    # tkw_output = tkw_moe_split_w1(a, w1_gate, w1_up, w2, score, topk)
-    # torch.testing.assert_close(tkw_output, ref_output, rtol=rtol, atol=atol)
