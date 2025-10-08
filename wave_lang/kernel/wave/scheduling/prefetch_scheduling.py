@@ -148,22 +148,6 @@ class MMAGroup:
     """Groups MMA operations and their dependencies for prefetch scheduling."""
 
     VALID_SUFFIXES = {"0", "1"}
-    OPERATION_MAPPING = {
-        "0": {
-            "global_reads": AttentionOperationType.GLOBAL_LOAD_0,
-            "shared_reads": AttentionOperationType.LOCAL_LOAD_0,
-            "shared_writes": AttentionOperationType.LOCAL_STORE_0,
-            "mma_ops": AttentionOperationType.MMA_0,
-            "gather_to_lds_ops": AttentionOperationType.GATHER_TO_LDS_0,
-        },
-        "1": {
-            "global_reads": AttentionOperationType.GLOBAL_LOAD_1,
-            "shared_reads": AttentionOperationType.LOCAL_LOAD_1,
-            "shared_writes": AttentionOperationType.LOCAL_STORE_1,
-            "mma_ops": AttentionOperationType.MMA_1,
-            "gather_to_lds_ops": AttentionOperationType.GATHER_TO_LDS_1,
-        },
-    }
 
     def __init__(self, mma_ops: list[fx.Node]):
         self.global_reads = set()
@@ -185,29 +169,42 @@ class MMAGroup:
             elif isinstance(custom, GatherToLDS):
                 self.gather_to_lds_ops.add(node)
 
+    def has_g2s_and_shared_writes(self) -> bool:
+        """
+        Checks if the MMA group contains both gather to LDS and shared write operations.
+        """
+        return len(self.gather_to_lds_ops) > 0 and len(self.shared_writes) > 0
+
     def _get_operation_type(
         self, suffix: str, operation_category: str
     ) -> AttentionOperationType:
         """Get the appropriate operation type enum for a given suffix and category."""
+        operation_mapping = {
+            "0": {
+                "global_reads": AttentionOperationType.GLOBAL_LOAD_0,
+                "shared_reads": AttentionOperationType.LOCAL_LOAD_0,
+                "shared_writes": AttentionOperationType.LOCAL_STORE_0,
+                "mma_ops": AttentionOperationType.MMA_0,
+                "gather_to_lds_ops": AttentionOperationType.GATHER_TO_LDS_0,
+            },
+            "1": {
+                "global_reads": AttentionOperationType.GLOBAL_LOAD_1,
+                "shared_reads": AttentionOperationType.LOCAL_LOAD_1,
+                "shared_writes": AttentionOperationType.LOCAL_STORE_1,
+                "mma_ops": AttentionOperationType.MMA_1,
+                "gather_to_lds_ops": AttentionOperationType.GATHER_TO_LDS_1,
+            },
+        }
 
         if suffix not in self.VALID_SUFFIXES:
             raise ValueError(
                 f"Invalid suffix: {suffix}. Must be one of {self.VALID_SUFFIXES}."
             )
 
-        if operation_category not in self.OPERATION_MAPPING[suffix]:
+        if operation_category not in operation_mapping[suffix]:
             raise ValueError(f"Invalid operation category: {operation_category}")
 
-        return self.OPERATION_MAPPING[suffix][operation_category]
-
-    def get_all_operation_types(self, suffix: str) -> dict[str, AttentionOperationType]:
-        """Get all operation types for a given suffix."""
-        if suffix not in self.VALID_SUFFIXES:
-            raise ValueError(
-                f"Invalid suffix: {suffix}. Must be one of {self.VALID_SUFFIXES}."
-            )
-
-        return self.OPERATION_MAPPING[suffix]
+        return operation_mapping[suffix][operation_category]
 
     def annotate(self, suffix: str):
         """Annotate nodes with prefetch stage using enum values."""
@@ -302,15 +299,20 @@ class PrefetchAttentionScheduler(BaseScheduler):
         mma0_group.annotate("0")
         mma1_group.annotate("1")
 
+        # Ensure we have either G2S -> SR or GR -> SW -> SR but not both
+        if (
+            mma0_group.has_g2s_and_shared_writes()
+            or mma1_group.has_g2s_and_shared_writes()
+        ):
+            logger.error(
+                "Unsupported: Received both gather to LDS and shared writes in MMA"
+            )
+            raise Exception("Failed to schedule the graph.")
+
         rocm_arch = get_default_arch()
 
         # Cycle 0, 1: Global loads and shared writes for GEMM0
         if rocm_arch.startswith("gfx95") and mma0_group.gather_to_lds_ops:
-            if mma0_group.shared_writes:
-                logger.error(
-                    "Unsupported: Received both gather to LDS and shared writes in MMA 0"
-                )
-                raise Exception("Failed to schedule the graph.")
             schedule = _set_cycle(mma0_group.gather_to_lds_ops, 0, schedule)
         else:
             schedule = _set_cycle(mma0_group.global_reads, 0, schedule)
@@ -319,11 +321,6 @@ class PrefetchAttentionScheduler(BaseScheduler):
         # Cycle 2, 3: Shared reads for GEMM0, global loads for GEMM1, shared writes for GEMM1
         schedule = _set_cycle(mma0_group.shared_reads, 2, schedule)
         if rocm_arch.startswith("gfx95") and mma1_group.gather_to_lds_ops:
-            if mma1_group.shared_writes:
-                logger.error(
-                    "Unsupported: Received both gather to LDS and shared writes in MMA 1"
-                )
-                raise Exception("Failed to schedule the graph.")
             schedule = _set_cycle(mma1_group.gather_to_lds_ops, 2, schedule)
         else:
             schedule = _set_cycle(mma1_group.global_reads, 2, schedule)
