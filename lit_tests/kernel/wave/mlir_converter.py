@@ -55,7 +55,7 @@ def matrix_add(
 
 
 @run_test
-def test_mlir_converter_matrix_add():
+def mlir_converter_matrix_add():
     """Test MLIR converter with matrix addition kernel."""
     # Set parameters for compilation
     subs: dict[str | IndexSymbol, Any] = {
@@ -87,9 +87,13 @@ def test_mlir_converter_matrix_add():
     # Print to stdout for FileCheck
     print(mlir_output)
 
-    # CHECK-LABEL: test_mlir_converter_matrix_add
+    # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
-    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f16>) {
+    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f16>
+    # CHECK-SAME: BLOCK_M = 64 : i64
+    # CHECK-SAME: BLOCK_N = 64 : i64
+    # CHECK-SAME: M = 128 : i64
+    # CHECK-SAME: N = 128 : i64
     # CHECK: %[[CONST:.*]] = arith.constant 0.000000e+00 : f16
     # CHECK: %[[REG:.*]] = wave.register %[[CONST]] : !wave.tensor<[@M, @N] of f16, <register>>
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]] : (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@M, @N] of f16, <register>>
