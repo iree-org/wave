@@ -4,25 +4,17 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+# Third-party imports
 import pytest
 import torch
-from .torch_kernels import moe_align_block_size_pytorch
-import torch.nn.functional as F
+import math
 
+# Local imports
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.templates.moe import get_moe_align_block_size_kernel
 
-from wave_lang.kernel.wave.utils.torch_utils import (
-    device_arange,
-    device_full,
-    device_ones,
-    device_randint,
-    device_randn,
-    device_randperm,
-    device_zeros,
-    to_default_device,
-)
+from .torch_kernels import moe_align_block_size_pytorch
 
-import math
 
 torch.manual_seed(0)
 
