@@ -178,6 +178,7 @@ def emit_intrawave_topk_reduction(
 
     for _ in range(num_steps):
         # Shuffle both values and indices
+        # TODO - if the values and indices are small types, we could pack them together and do a single shuffle.
         shuffle_val = ShuffleOp(
             init_val, cluster_stride, subgroup_size, ShuffleMode.XOR
         )
