@@ -173,7 +173,7 @@ def test_bounds_check_mapping_dynamic_vals():
     read_write = wave_compile(options, read_write)
     print(read_write.asm)
 
-    # CHECK-LABEL:    test_bounds_check_mapping
+    # CHECK-LABEL:    test_bounds_check_mapping_dynamic_vals
     # CHECK:          func.func @read_write
     # CHECK:            scf.if
     # CHECK:              gpu.printf
