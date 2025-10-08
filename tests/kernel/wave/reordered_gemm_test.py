@@ -1,7 +1,13 @@
 import pytest
 import torch
+from torch.testing import assert_close
+
 from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.templates.reordered_gemm import get_reordered_matmul
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
@@ -9,20 +15,22 @@ from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
 )
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.constraints import MMAType
-from wave_lang.kernel.wave.templates.reordered_gemm import get_reordered_matmul
-from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-import os
-from torch.testing import assert_close
 
 from .common.utils import (
+    require_cdna_2_or_3_or_4,
     require_e2e,
 )
 
+reordered_gemm_test_shapes = [
+    (8192, 8192, 8192),
+    (256, 256, 256),
+    (2048, 1280, 5120),
+]
+
 
 @require_e2e
-@pytest.mark.parametrize("shape", [(8192, 8192, 8192)])
+@require_cdna_2_or_3_or_4
+@pytest.mark.parametrize("shape", reordered_gemm_test_shapes)
 @pytest.mark.parametrize(
     "enable_scheduling",
     [SchedulingType.PREFETCH],

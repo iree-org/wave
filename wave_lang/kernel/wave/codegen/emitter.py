@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import sys
 from collections import namedtuple
 from dataclasses import dataclass
 from os import environ
@@ -22,6 +21,7 @@ from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.lang import Memory
 from wave_lang.kernel.lang.kernel_buffer import KernelBuffer
 from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.support.logging import get_logger
 from wave_lang.support.ir_imports import (
     AffineExpr,
     AffineMap,
@@ -56,6 +56,8 @@ from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint, HardwareConstraint, TilingConstraint
 from ..utils.general_utils import get_hardware_constraint
 from ..utils.symbol_utils import subs_idxc, is_literal
+
+logger = get_logger("wave.ops_location_check")
 
 
 def _get_upper_bound(expr: Any) -> Optional[Attribute]:
@@ -151,13 +153,18 @@ class WaveEmitter:
         location = getattr(
             node, "location", None
         )  # type: Optional[FileLineColInfo | StackTraceInfo]
-        ir_location = location.to_mlir() if location else Location.unknown()
-        with ir_location:
-            try:
+
+        try:
+            if self.options.drop_debug_info_before_mlir:
+                # Don't use any location context to avoid printing locations in MLIR
                 handler(self, node)
-            except:
-                print(f"Error handling {node}", file=sys.stderr)
-                raise
+            else:
+                ir_location = location.to_mlir() if location else Location.unknown()
+                with ir_location:
+                    handler(self, node)
+        except Exception as e:
+            logger.error(f"Error handling {node}")
+            raise e
 
     def lookup_node_values(self, node: fx.Node) -> List[Value]:
         assert NDEBUG or isinstance(node, fx.Node)
@@ -235,10 +242,28 @@ def add_emitter_subs(
     induction_vars, induction_var_syms = emitter.get_induction_vars_and_syms()
 
     # TODO: factor this out
-    all_symbols = emitter.thread_ids + emitter.workgroup_ids + induction_vars
+    # Add device dimension constants (always zero for now)
+    device_zeros = [
+        arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_0
+        arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_1
+        arith_d.constant(IndexType.get(), 0),  # DEVICE_DIM_2
+    ]
+    all_symbols = (
+        emitter.thread_ids + emitter.workgroup_ids + device_zeros + induction_vars
+    )
     dynamics = dict(
         zip(
-            [THREAD_0, THREAD_1, THREAD_2, WORKGROUP_0, WORKGROUP_1, WORKGROUP_2]
+            [
+                THREAD_0,
+                THREAD_1,
+                THREAD_2,
+                WORKGROUP_0,
+                WORKGROUP_1,
+                WORKGROUP_2,
+                DEVICE_DIM_0,
+                DEVICE_DIM_1,
+                DEVICE_DIM_2,
+            ]
             + induction_var_syms,
             all_symbols,
         )

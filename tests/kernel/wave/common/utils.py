@@ -9,6 +9,7 @@ from wave_lang.kernel.wave.utils.run_utils import get_default_arch
 
 require_e2e = pytest.mark.require_e2e
 expensive_test = pytest.mark.expensive_test
+require_gpus = pytest.mark.require_gpus
 require_cdna2 = pytest.mark.skipif(
     "gfx90" not in get_default_arch(),
     reason="Default architecture is not CDNA2, default architecture is '{}'".format(
@@ -30,6 +31,27 @@ require_cdna4 = pytest.mark.skipif(
 require_cdna_3_or_4 = pytest.mark.skipif(
     "gfx94" not in get_default_arch() and "gfx95" not in get_default_arch(),
     reason="Default architecture is not CDNA3 or CDNA4, default architecture is '{}'".format(
+        get_default_arch()
+    ),
+)
+# ISAs = ["gfx90", "gfx94", "gfx95"]
+require_cdna_2_or_3_or_4 = pytest.mark.skipif(
+    "gfx90" not in get_default_arch()
+    and "gfx94" not in get_default_arch()
+    and "gfx95" not in get_default_arch(),
+    reason="Default architecture is not CDNA2 or CDNA3 or CDNA4, default architecture is '{}'".format(
+        get_default_arch()
+    ),
+)
+require_rdna4 = pytest.mark.skipif(
+    "gfx120" not in get_default_arch(),
+    reason="Default architecture is not RDNA4, default architecture is '{}'".format(
+        get_default_arch()
+    ),
+)
+require_gfx1250 = pytest.mark.skipif(
+    "gfx125" not in get_default_arch(),
+    reason="Default architecture is not GFX1250, default architecture is '{}'".format(
         get_default_arch()
     ),
 )

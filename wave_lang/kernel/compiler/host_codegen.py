@@ -24,13 +24,20 @@ from wave_lang.support.ir_imports import (
 )
 
 from .._support.indexing import IndexSymbol
-from .._support.location import capture_location
 from ...support.location_config import LocationCaptureConfig
 from .builder import (
     ModuleBuilder,
 )
 from .dispatch_codegen import StreamExecutable
-from .kernel_codegen import BindingDesc, KernelSignature
+from .kernel_codegen import (
+    BindingDesc,
+    KernelSignature,
+    create_argument_locations,
+)
+from ..wave.constraints import DeviceConstraint
+from .host_utils import HostSignature, split_input_tensors, merge_output_slices
+
+from ..lang import Grid
 
 
 def memref_to_tensor(memrefs: list[IrType], use_views: bool = False):
@@ -85,18 +92,25 @@ def isolated_test_call(
     *,
     location_capture_config: Optional[LocationCaptureConfig] = None,
     async_dispatch: bool = False,
+    device_layout: Optional[Grid] = None,
+    device_constraints: Optional[list[DeviceConstraint]] = None,
 ):
     with InsertionPoint(mb.body_block), Location.unknown():
-        input_types = [b.as_mlir_type() for b in sig.kernel_buffer_bindings] + [
-            b.as_mlir_type() for b in sig.scalar_bindings
+
+        # Given kernel signature, create a host signature.
+        # This will be the same if no device constraints are provided.
+        host_sig = HostSignature(sig, device_constraints)
+
+        input_types = [b.as_mlir_type() for b in host_sig.buffer_bindings] + [
+            b.as_mlir_type() for b in host_sig.scalar_buffer_bindings
         ]
 
         input_tensors = memref_to_tensor(input_types, use_views=async_dispatch)
-        argument_dims = get_dynamic_dims(sig.kernel_buffer_bindings, dynamic_symbols)
+        argument_dims = get_dynamic_dims(host_sig.buffer_bindings, dynamic_symbols)
 
         # Map dynamic symbols to buffer argument indices and dimensions.
         arg_dim_mapping: dict[IndexSymbol, tuple[int, int]] = {}
-        for arg_idx, b in enumerate(sig.kernel_buffer_bindings):
+        for arg_idx, b in enumerate(host_sig.buffer_bindings):
             shape = b.kernel_buffer_type.symbolic_shape
             for dim_idx, dim_symbol in enumerate(shape):
                 if dim_symbol in arg_dim_mapping:
@@ -109,27 +123,22 @@ def isolated_test_call(
             input_tensors += [fence_type] * 2
             func_name = func_name + "$async"
 
-        output_types = [b.as_mlir_type() for b in sig.kernel_buffer_output_bindings]
+        output_types = [b.as_mlir_type() for b in host_sig.output_buffer_bindings]
         output_tensors = memref_to_tensor(output_types, use_views=async_dispatch)
-        result_dims = get_dynamic_dims(
-            sig.kernel_buffer_output_bindings, dynamic_symbols
-        )
+        result_dims = get_dynamic_dims(host_sig.output_buffer_bindings, dynamic_symbols)
 
         ftype = FunctionType.get(input_tensors, output_tensors)
         func_op = func_d.FuncOp(func_name, ftype)
-        captured_loc = capture_location(location_capture_config)
-        actual_loc = captured_loc.to_mlir() if captured_loc else Location.unknown()
         scalar_bindings = sig.scalar_bindings
-        arg_locs = [
-            (Location.name(b.name, actual_loc) if b.name is not None else actual_loc)
-            for b in sig.kernel_buffer_bindings + scalar_bindings
-        ]
+        arg_locs = create_argument_locations(
+            sig.kernel_buffer_bindings + scalar_bindings
+        )
 
         if async_dispatch:
             arg_locs += [Location.unknown()] * 2
 
         entry_block = func_op.add_entry_block(arg_locs)
-        scalars_offset = len(sig.kernel_buffer_bindings)
+        scalars_offset = len(host_sig.buffer_bindings)
         scalars_count = len(scalar_bindings)
         dynamic_offset = scalars_offset + scalars_count
 
@@ -140,7 +149,7 @@ def isolated_test_call(
                 out_fence = arguments[-1]
                 arguments = list(arguments[:-2])
 
-                for i, b in enumerate(sig.kernel_buffer_bindings):
+                for i, b in enumerate(host_sig.buffer_bindings):
                     shape = b.kernel_buffer_type.symbolic_shape
 
                     arg = arguments[i]
@@ -178,8 +187,8 @@ def isolated_test_call(
             dispatch = SymbolRefAttr.get([exe.sym_name.value, entrypoint])
             entrypoints = ArrayAttr.get([dispatch])
 
-            buffer_binding_count = len(sig.kernel_buffer_bindings)
-            input_binding_count = len(sig.kernel_buffer_input_bindings)
+            buffer_binding_count = len(host_sig.buffer_bindings)
+            input_binding_count = len(host_sig.input_buffer_bindings)
             tied_operands = ArrayAttr.get(
                 [
                     IntegerAttr.get(IndexType.get(), out_idx)
@@ -187,37 +196,110 @@ def isolated_test_call(
                 ]
             )
 
-            out = flow_d.DispatchOp(
-                memref_to_tensor(output_types),  # output_tensors,
-                [dynamic_argument_map[dim] for dim in dynamic_symbols] + scalars_args,
-                entrypoints,
-                list(arguments) + list(dynamic_argument_map.values()),
-                [dynamic_argument_map[dim] for dim in argument_dims],
-                [dynamic_argument_map[dim] for dim in result_dims],
-                tied_operands=tied_operands,
-            )
+            out = None
+            if device_constraints and device_layout:
+                device_tensor_map = {}  # Store all device maps
+                constant_map = {}
+                # If device constraints are provided, we need to split the input tensors
+                # into device-specific tensors.
+                for i, binding in enumerate(host_sig.buffer_bindings):
+                    host_tensor = arguments[i]
+                    device_tensor_map, constant_map = split_input_tensors(
+                        host_tensor,
+                        binding,
+                        device_layout,
+                        device_constraints,
+                        dynamic_argument_map,
+                        device_tensor_map,
+                        constant_map,
+                    )
+
+                # flow dispatch to each device and collect the results
+                output_list = []
+                for i in range(0, len(device_tensor_map.keys())):
+                    block_argument_list = []
+                    output_slices = []
+                    # for each device where the kernel is dispatched
+                    # collect the arguments from the device tensor map
+                    # and append inputs to block_arugment_list
+                    # and outputs to output_slices
+                    for arg in device_tensor_map[i]:
+                        block_argument_list.append(arg["slice"])
+                        if arg["binding_name"] in [
+                            b.name for b in host_sig.output_buffer_bindings
+                        ]:
+                            # Get the slice shape from the device mapping
+                            slice_shape = arg["result_shape"]
+                            element_type = arg["slice"].type.element_type
+                            output_slices.append(
+                                RankedTensorType.get(slice_shape, element_type)
+                            )
+
+                    out = flow_d.DispatchOp(
+                        output_slices,
+                        [dynamic_argument_map[dim] for dim in dynamic_symbols]
+                        + scalars_args,
+                        entrypoints,
+                        block_argument_list,
+                        [dynamic_argument_map[dim] for dim in argument_dims],
+                        [dynamic_argument_map[dim] for dim in result_dims],
+                        tied_operands=tied_operands,
+                    )
+
+                    output_list.append(out)
+
+                # Now collect all the results back into the original tensor shape
+                if len(output_list) > 1:
+                    out = merge_output_slices(
+                        arguments,
+                        host_sig,
+                        output_list,
+                        constant_map,
+                        device_tensor_map,
+                    )
+                else:
+                    out = output_list[0]
+            else:
+                # If no device constraints, just dispatch the kernel directly
+                # with the provided host signature arguments.
+                out = flow_d.DispatchOp(
+                    memref_to_tensor(output_types),
+                    [dynamic_argument_map[dim] for dim in dynamic_symbols]
+                    + scalars_args,
+                    entrypoints,
+                    list(arguments) + list(dynamic_argument_map.values()),
+                    [dynamic_argument_map[dim] for dim in argument_dims],
+                    [dynamic_argument_map[dim] for dim in result_dims],
+                    tied_operands=tied_operands,
+                )
+
+                if async_dispatch:
+                    out = list(out.results)
 
             if async_dispatch:
-                out = list(out.results)
                 out_types = memref_to_tensor(
-                    [b.as_mlir_type() for b in sig.kernel_buffer_output_bindings]
+                    [b.as_mlir_type() for b in host_sig.output_buffer_bindings]
                 )
                 barrier = hal_d.tensor_barrier(out_types, out, signal_fence=out_fence)
                 if len(out_types) == 1:
                     barrier = [barrier]
 
                 view_type = IrType.parse("!hal.buffer_view")
-                for i, b in enumerate(sig.kernel_buffer_output_bindings):
-                    shape = b.kernel_buffer_type.symbolic_shape
 
+                exported_tensors = []
+                for i, b in enumerate(host_sig.output_buffer_bindings):
+                    shape = b.kernel_buffer_type.symbolic_shape
                     out_type = out_types[i]
                     source_dims = [
                         tensor_d.dim(out[i], arith_d.constant(IndexType.get(), d))
                         for d in range(len(shape))
                         if out_type.is_dynamic_dim(d)
                     ]
-                    out[i] = hal_d.tensor_export(
+                    exported_tensor = hal_d.tensor_export(
                         view_type, barrier[i], out_type, source_dims=source_dims
                     )
+                    exported_tensors.append(exported_tensor)
+
+                out = exported_tensors
 
             func_d.ReturnOp(out)

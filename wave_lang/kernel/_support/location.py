@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import sys
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Callable
 
 from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
 
@@ -98,9 +98,13 @@ class StackTraceInfo:
         return StackTraceInfo(frames)
 
 
+# Define type alias to refer to this more easily.
+CapturedLocation = FileLineColInfo | StackTraceInfo
+
+
 def capture_location(
     location_capture_config: Optional[LocationCaptureConfig],
-) -> Optional[FileLineColInfo | StackTraceInfo]:
+) -> Optional[CapturedLocation]:
     if (
         not location_capture_config
         or location_capture_config.level == LocationCaptureLevel.NONE
@@ -112,3 +116,39 @@ def capture_location(
         return StackTraceInfo.capture_current_location()
     if location_capture_config.level == LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM:
         return StackTraceInfo.capture_current_location(preserve_system_frames=True)
+
+
+def capture_function_location(
+    func: Callable, location_capture_config: LocationCaptureConfig
+) -> Optional[FileLineColInfo | StackTraceInfo]:
+    """
+    Capture location information for a specific function.
+
+    Args:
+        func: The function to capture location for
+        location_capture_config: Location capture configuration
+
+    Returns:
+        Location information for the function, or None if capture is disabled
+    """
+    if location_capture_config.level == LocationCaptureLevel.NONE:
+        return None
+
+    source_file = inspect.getfile(func)
+    source_lines, start_line = inspect.getsourcelines(func)
+
+    if location_capture_config.level == LocationCaptureLevel.FILE_LINE_COL:
+        return FileLineColInfo(
+            filename=source_file,
+            line=start_line,
+            col=0,  # Column info not easily available for function definitions
+        )
+    elif location_capture_config.level in [
+        LocationCaptureLevel.STACK_TRACE,
+        LocationCaptureLevel.STACK_TRACE_WITH_SYSTEM,
+    ]:
+        # Create a single-frame stack trace for the function
+        frame_info = FileLineColInfo(filename=source_file, line=start_line, col=0)
+        return StackTraceInfo(frames=[frame_info])
+
+    return None

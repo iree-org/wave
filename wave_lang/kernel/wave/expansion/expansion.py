@@ -414,7 +414,9 @@ def add_get_results(trace: CapturedTrace):
         if len(iterate.init_args) == 1:
             iterate.graph.inserting_after(iterate.fx_node)
             get_result = get_custom(
-                GetResult(iterate.fx_node, 0).add_to_graph(iterate.graph)
+                GetResult(iterate.fx_node, 0).add_to_graph(
+                    iterate.graph, loc=iterate.location
+                )
             )
             iterate.replace_all_uses_with_except(get_result, [get_result])
 
@@ -534,6 +536,8 @@ def store_fixup_data(
             if metadata.last_mma_node:
                 first_node = get_node(get_dim_query(0), node, expansion_context)
                 second_node = get_node(get_dim_query(1), node, expansion_context)
+                # read the following code like this:
+                # replace all uses of the first node with new_node except for the second_node
                 expansion_context.mma_nodes.append((first_node, new_node, second_node))
 
 
@@ -728,11 +732,12 @@ def fixup_iterate_nodes(
         for result_index, get_item in iterate_info.get_results.items():
             get_item.graph.inserting_before(get_item.fx_node)
             get_result = GetResult(get_item.value, result_index).add_to_graph(
-                get_item.graph, get_item.type
+                get_item.graph, get_item.type, loc=get_item.location
             )
             get_result.name = get_item.fx_node.name
             get_result.index = get_item.index
-            get_item.replace_all_uses_with(get_custom(get_result))
+            get_result = get_custom(get_result)
+            get_item.replace_all_uses_with(get_result)
             get_item.erase()
 
         remove_original_nodes(return_vals)

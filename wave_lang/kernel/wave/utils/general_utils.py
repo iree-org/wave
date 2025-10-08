@@ -361,7 +361,7 @@ def get_fastest_index(indices: dict[IndexExpr, IndexSequence]):
     there are multipled max_vals we pick the fastest/most minor one.
     """
 
-    index_sizes = [subs_idxc(i.size) for i in indices.values()]
+    index_sizes = [subs_idxc(getattr(i, "size", 1)) for i in indices.values()]
     # Find the maximum value
     max_size = max(index_sizes)
     # Find the fastest/most minor index of the maximum value.
@@ -409,6 +409,7 @@ TORCH_DTYPE_TO_WAVE = {
     torch.float16: tkl.f16,
     torch.float32: tkl.f32,
     torch.float64: tkl.f64,
+    torch.int8: tkl.i8,
     torch.int16: tkl.i16,
     torch.int32: tkl.i32,
     torch.int64: tkl.i64,
@@ -426,6 +427,7 @@ TORCH_DTYPE_RANGE = {
     torch.float16: [-65504.0, 65504.0],
     torch.float32: [-3.4028234663852886e38, 3.4028234663852886e38],
     torch.float64: [-1.7976931348623157e308, 1.7976931348623157e308],
+    torch.int8: [-128, 127],
     torch.int16: [-32768, 32767],
     torch.int32: [-2147483648, 2147483647],
     torch.int64: [-9223372036854775808, 9223372036854775807],

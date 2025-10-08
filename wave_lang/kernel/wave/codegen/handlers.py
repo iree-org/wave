@@ -19,7 +19,6 @@ from wave_lang.aot.support.ir_utils import (
     _is_signed_or_signless_type,
     get_conversion_op,
 )
-from wave_lang.kernel._support.shaped_type import ShapedType
 
 # TK infrastructure imports.
 from wave_lang.kernel.lang.global_symbols import *
@@ -58,6 +57,7 @@ from ...ops.wave_ops import (
     apply_expr,
     atan2,
     atomic_min,
+    atomic_add,
     bitcast,
     broadcast,
     cast,
@@ -109,7 +109,7 @@ from ...ops.wave_ops import (
     workgroup_barrier,
 )
 from ..compile_options import WaveCompileOptions
-from ..constraints import GenericDot, HardwareConstraint
+from ..constraints import GenericDot, HardwareConstraint, MMAType
 from ..scheduling.resources import get_scheduling_mask
 from ..utils.classes import ShuffleMode
 from ..utils.general_utils import get_fastest_index
@@ -365,6 +365,23 @@ def emit_mfma(m: int, n: int, k: int, acc: Value, values: list[Value]) -> Value:
     return result
 
 
+def emit_wmma(intr: MMAType, acc: Value, values: list[Value]) -> Value:
+    source_a, source_b = values
+    if intr == MMAType.GFX1250_F32_16x16x32_F16:
+        # TODO: Use amdgpu intrinsic when it is supported
+        f = arith_d.constant(IntegerType.get_signless(1), 0)
+        t = arith_d.constant(IntegerType.get_signless(1), 1)
+        i16 = arith_d.constant(IntegerType.get_signless(16), 0)
+        return llvm_d.call_intrinsic(
+            acc.type,
+            "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16",
+            [f, source_a, f, source_b, i16, acc, f, t],
+            [],
+            [],
+        )
+    return amdgpu_d.wmma(source_a, source_b, acc)
+
+
 @handle_op(mma)
 def handle_mma(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -389,7 +406,12 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Dot product MMA was not decomposed.")
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
-    result = emit_mfma(m, n, k, acc, values)
+    result = (
+        emit_wmma(mma_type, acc, values)
+        if mma_type
+        in [MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.GFX1250_F32_16x16x32_F16]
+        else emit_mfma(m, n, k, acc, values)
+    )
     emitter.bind_node_proxy(node, IRProxyValue(result))
 
 
@@ -487,7 +509,7 @@ def handle_atomic_op(op):
         @handle_op(op)
         def handle_generic_atomic(emitter: WaveEmitter, node: fx.Node):
             try:
-                lhs, rhs, elements_per_thread, mapping = node.args
+                (lhs, rhs, elements_per_thread, mapping, dyn_vals, *rest) = node.args
             except ValueError as e:
                 raise ValidationError("Malformed arguments") from e
             lhs = cast_py_value(emitter, lhs)
@@ -528,16 +550,46 @@ def handle_atomic_op(op):
                 start_index = transform_index_on_mapping(
                     mapping, symbolic_shape, start_index
                 )
+            else:
+                start_index = {
+                    dim: _get_start_index(v) for dim, v in start_index.items()
+                }
+
+            # convert registers in dyn_vals to vectors of index type
+            dynamic_vals = tuple(
+                cast_vector(emitter, reg, element_type=IndexType.get())
+                for reg in dyn_vals
+            )
+
+            # helper function to extract the scalar (index) from the vector <1xindex>
+            def extract0(src):
+                static_pos = [0] * src.type.rank
+                return vector_d.extract(
+                    src, static_position=static_pos, dynamic_position=[]
+                )
+
+            # create the dictionary of dynamic symbol and corresponding scalar value
+            dynamic_vals = (
+                {
+                    sym: extract0(val)
+                    for sym, val in zip(
+                        mapping.dynamic_val_indices.keys(), dynamic_vals
+                    )
+                }
+                if mapping
+                else {}
+            )
 
             # Get start indices for every element in thread and unroll the op
             atomic_results = []
             keys = list(start_index.keys())
             fastest_dim = get_fastest_index(node.index)
+
             for i in range(elements_per_thread):
                 new_index = copy.deepcopy(start_index)
                 key = keys[fastest_dim]
                 new_index[key] += i
-                start_idx = _build_start_indices(emitter, new_index)
+                start_idx = _build_start_indices(emitter, new_index, dynamic_vals)
                 lhs_val = vector_d.extract(
                     lhs, static_position=[i], dynamic_position=[]
                 )
@@ -562,11 +614,12 @@ def _near_mma(node: fx.Node) -> bool:
 
 
 def get_rank(mlir_type):
-    if not isinstance(mlir_type, ShapedType):
+    if hasattr(mlir_type, "rank"):
+        return mlir_type.rank
+    else:
         # Not 0 because vector<f32> is rank 0, and in theory,
         # is broadcastable from pure scalar.
         return -1
-    return mlir_type.rank
 
 
 _ops_to_scalarize = [
@@ -727,6 +780,18 @@ def handle_div(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
+@handle_binary_op(operator.mod)
+def handle_mod(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(lhs.type)
+    if _is_float_type(element_type):
+        result = arith_d.remf(lhs, rhs, fastmath=get_fast_math_flags(options))
+    elif _is_integer_like_type(element_type):
+        result = arith_d.remsi(lhs, rhs)
+    else:
+        raise ValidationError(f"Found unhandled operand type for mod: {element_type}")
+    return result
+
+
 @handle_binary_op(operator.and_)
 def handle_and(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
@@ -884,6 +949,27 @@ def handle_atomic_min(
         value_element_type
     ):
         atomic_kind = arith_d.AtomicRMWKind.mins
+    else:
+        raise ValidationError(
+            f"Found unsupported type in atomic min: {value_element_type}"
+        )
+    result = memref_d.atomic_rmw(atomic_kind, val, buffer, idx)
+    return result
+
+
+@handle_atomic_op(atomic_add)
+def handle_atomic_add(
+    val: Value, buffer: Value, idx: list[Value], options: WaveCompileOptions
+) -> OpResult:
+    value_element_type = get_type_or_element_type(val.type)
+    atomic_kind = None
+    # Only scalars are supported currently
+    if _is_float_type(value_element_type):
+        atomic_kind = arith_d.AtomicRMWKind.addf
+    elif _is_integer_like_type(value_element_type) and _is_signed_or_signless_type(
+        value_element_type
+    ):
+        atomic_kind = arith_d.AtomicRMWKind.addi
     else:
         raise ValidationError(
             f"Found unsupported type in atomic min: {value_element_type}"

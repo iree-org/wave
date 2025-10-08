@@ -186,7 +186,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                 # Non-contiguous access patterns can have varying offsets. We
                 # handle that here.
                 extract = ExtractSlice(custom.register_, [i], [1], [1]).add_to_graph(
-                    custom.graph
+                    custom.graph, loc=custom.location
                 )
 
                 offset = offsets[i]
@@ -195,7 +195,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                     custom.memory,
                     mapping=custom.mapping,
                     elements_per_thread=1,
-                ).add_to_graph(custom.graph)
+                ).add_to_graph(custom.graph, loc=custom.location)
                 write.index = {
                     dim: IndexSequence(
                         simplified_index[dim].start.subs({GPR_NUM: 0}) + offset[j], 1, 1
@@ -329,7 +329,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                         ):
                             extract = ExtractSlice(
                                 dyn_val, [cur_gpr_start_id], [gpr_size], [1]
-                            ).add_to_graph(custom.graph)
+                            ).add_to_graph(custom.graph, loc=custom.location)
                             extract.index = updated_index_with_gpr_offset
                             new_dynamic_vals.append(extract)
                         else:
@@ -339,7 +339,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                 if isinstance(custom, Write):
                     extract = ExtractSlice(
                         custom.register_, [cur_gpr_start_id], [gpr_size], [1]
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                     extract.index = updated_index_with_gpr_offset
                     new_node = Write(
                         extract,
@@ -347,7 +347,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         elements_per_thread=gpr_size,
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                 elif isinstance(custom, Read):
                     # TODO: Add support on how to handle strided reads.
                     new_node = Read(
@@ -356,14 +356,14 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         _write_dependency=custom._write_dependency,
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                 elif isinstance(custom, SelfIndex):
                     # iff elements_per_thread is specified, we update
                     # elements_per_thread to chunk size, else return None.
                     self_index_size = gpr_size if custom.elements_per_thread else None
                     new_node = SelfIndex(
                         custom.dim, custom.dtype, self_index_size
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
 
                 # Update new_node information
                 new_node.index = updated_index_with_gpr_offset
@@ -376,7 +376,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                 custom.replace_all_uses_with(ops_to_combine)
             elif isinstance(custom, (Read, SelfIndex)):
                 reshape = Reshape(ops_to_combine, custom.vector_shapes).add_to_graph(
-                    custom.graph
+                    custom.graph, loc=custom.location
                 )
                 reshape.expanded_dims = custom.expanded_dims
                 reshape.vector_shapes = custom.vector_shapes
@@ -413,7 +413,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
         """
         custom = get_custom(node)
         if isinstance(custom, (Read, Write)):
-            return not custom.is_contiguous_vec()
+            return not custom.is_contiguous_vec(constraints)
 
         return False
 
@@ -450,7 +450,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
 
                     # Otherwise, we need to extract the dynamic value for the current vector element.
                     extract = ExtractSlice(dynamic_val, [i], [1], [1]).add_to_graph(
-                        custom.graph
+                        custom.graph, loc=custom.location
                     )
                     extract.index = new_index
                     new_dynamic_vals.append(extract)
@@ -458,7 +458,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                 if isinstance(custom, Write):
                     extract = ExtractSlice(
                         custom.register_, [i], [1], [1]
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                     extract.index = new_index
                     new_node = Write(
                         extract,
@@ -466,7 +466,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         elements_per_thread=1,
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                 elif isinstance(custom, Read):
                     new_node = Read(
                         custom.memory,
@@ -474,7 +474,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         _write_dependency=custom._write_dependency,
-                    ).add_to_graph(custom.graph)
+                    ).add_to_graph(custom.graph, loc=custom.location)
                 else:
                     raise NotImplementedError(f"Unsupported op type: {custom}")
 

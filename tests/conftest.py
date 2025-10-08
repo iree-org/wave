@@ -7,6 +7,7 @@
 import os
 import pytest
 import sys
+import torch
 
 # Add the project root to Python path to ensure aplp_lib can be found
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,8 +17,6 @@ if project_root not in sys.path:
 
 @pytest.fixture(scope="function", autouse=True)
 def seed_torch():
-    import torch
-
     torch.manual_seed(0)
 
 
@@ -118,6 +117,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "validate_only: validation test, never runs with '--runperf'"
     )
+    config.addinivalue_line(
+        "markers", "require_gpus: test requires specified number of GPUs"
+    )
 
 
 def _get_worker_id(config):
@@ -181,6 +183,10 @@ def _has_marker(item, marker):
     return next(item.iter_markers(marker), None) is not None
 
 
+def _get_num_gpus(config):
+    return torch.cuda.device_count()
+
+
 def pytest_collection_modifyitems(config, items):
     _set_default_device(config)
     _disable_cache(config)
@@ -189,6 +195,19 @@ def pytest_collection_modifyitems(config, items):
     run_expensive = config.getoption("--run-expensive-tests")
     run_perf = config.getoption("--runperf")
     for item in items:
+
+        # if the test has require_gpus(N) marker, then it needs N GPUs
+        if _has_marker(item, "require_gpus"):
+            num_gpus = _get_num_gpus(config)
+            if num_gpus < item.get_closest_marker("require_gpus").args[0]:
+                item.add_marker(
+                    pytest.mark.skip(
+                        "requires {} GPUs, but only {} GPUs are available".format(
+                            item.get_closest_marker("require_gpus").args[0], num_gpus
+                        )
+                    )
+                )
+
         if _has_marker(item, "require_e2e") and not run_e2e:
             item.add_marker(pytest.mark.skip("e2e tests are disabled"))
 

@@ -28,6 +28,8 @@ from .common.utils import (
     require_cdna2,
     require_cdna3,
     require_cdna_3_or_4,
+    require_cdna_2_or_3_or_4,
+    require_gpus,
     perf_test,
     param_bool,
 )
@@ -38,10 +40,17 @@ import os
 import json
 from torch.testing import assert_close
 
+default_test_shapes = {}
+default_test_shapes["test_gemm"] = [
+    (1024, 5120, 640),
+    (2048, 10240, 1280),
+    (4096, 20480, 2560),
+]
+
 
 @require_e2e
-@pytest.mark.skip(reason="Test not ready - will be enabled in follow-up PR")
-@pytest.mark.parametrize("shape", [(128, 128, 64)])
+@require_cdna_2_or_3_or_4
+@pytest.mark.parametrize("shape", default_test_shapes["test_gemm"])
 @pytest.mark.parametrize(
     "mfma_variant",
     [
@@ -49,22 +58,39 @@ from torch.testing import assert_close
         MMAType.F32_32x32x8_F16,
     ],
 )
+@pytest.mark.parametrize(
+    "devices",
+    [
+        pytest.param((1, 1), marks=require_gpus(1)),
+        pytest.param((2, 1), marks=require_gpus(2)),
+        pytest.param((4, 1), marks=require_gpus(4)),
+        pytest.param((8, 1), marks=require_gpus(8)),
+        pytest.param((1, 2), marks=require_gpus(2)),
+        pytest.param((1, 4), marks=require_gpus(4)),
+        pytest.param((1, 8), marks=require_gpus(8)),
+        pytest.param((2, 2), marks=require_gpus(4)),
+        pytest.param((2, 4), marks=require_gpus(8)),
+        pytest.param((4, 2), marks=require_gpus(8)),
+    ],
+)
 @pytest.mark.parametrize("datatype", [torch.float16])
-def testPureGemm(
+def testDistGemm(
     shape: tuple[int],
     mfma_variant: MMAType,
     datatype: torch.dtype,
+    devices: tuple[int, int],
 ):
+    device_m, device_n = devices
     gemm, hyperparams, dynamic_symbols = get_dist_gemm_kernel(
-        shape, False, mfma_variant, datatype
+        shape, False, mfma_variant, datatype, device_m, device_n
     )
 
     options = WaveCompileOptions(
         subs=hyperparams,
+        iree_launch_async=False,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
-
     a = device_randn(shape[0], shape[2], dtype=datatype)
     b = device_randn(shape[1], shape[2], dtype=datatype)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)

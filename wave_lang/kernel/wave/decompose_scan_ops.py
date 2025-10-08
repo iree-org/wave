@@ -1,6 +1,6 @@
 import math
 from operator import ge
-from typing import Callable
+from typing import Callable, Optional
 
 import torch.fx as fx
 
@@ -10,6 +10,7 @@ from wave_lang.kernel.wave.utils.symbol_utils import subs_idxc
 
 from .._support.dtype import i1
 from .._support.tracing import CapturedTrace
+from .._support.location import CapturedLocation
 from ..ops.wave_ops import (
     Add,
     Cumsum,
@@ -27,8 +28,11 @@ from .utils.classes import ShuffleMode
 from .utils.graph_utils import DCE
 
 
-def get_graph_node(custom: CustomOp, graph: fx.Graph) -> fx.Node:
+def get_graph_node(
+    custom: CustomOp, graph: fx.Graph, location: Optional[CapturedLocation]
+) -> fx.Node:
     custom.add_to_graph(graph)
+    custom.location = location
     return custom.fx_node
 
 
@@ -37,6 +41,7 @@ def emit_local_inclusive_scan(
     scan_src: list[fx.Node],
     graph: fx.Graph,
     elements_per_thread: int,
+    location: Optional[CapturedLocation],
 ) -> list[list[fx.Node]]:
     """
     Perform local inclusive scan for `n` elements per thread.
@@ -44,13 +49,15 @@ def emit_local_inclusive_scan(
     result = []
     for node in scan_src:
         values = [
-            get_graph_node(Extract(node, [i]), graph)
+            get_graph_node(Extract(node, [i]), graph, location)
             for i in range(elements_per_thread)
         ]
         values[0].index = node.index
 
         for i in range(1, elements_per_thread):
-            values[i] = get_graph_node(binary_fn(values[i], values[i - 1]), graph)
+            values[i] = get_graph_node(
+                binary_fn(values[i], values[i - 1]), graph, location
+            )
             values[i].index = node.index
 
         result.append(values)
@@ -62,6 +69,7 @@ def emit_variable_scan(
     src: list[list[fx.Node]],
     graph: fx.Graph,
     elements_per_thread: int,
+    location: Optional[CapturedLocation],
 ) -> list[list[fx.Node]]:
     result: list[list[fx.Node]] = []
     result.append(src[0])
@@ -71,7 +79,9 @@ def emit_variable_scan(
         temp: list[fx.Node] = []
         for i in range(elements_per_thread):
             cur_val = src[scan_src_idx][i]
-            offset_val = get_graph_node(binary_fn(prev_thread_last_val, cur_val), graph)
+            offset_val = get_graph_node(
+                binary_fn(prev_thread_last_val, cur_val), graph, location
+            )
             offset_val.index = get_custom(src[scan_src_idx][i]).index
             temp.append(offset_val)
         result.append(temp)
@@ -88,6 +98,7 @@ def emit_global_scan(
     hardware_constraint: HardwareConstraint,
     local_scan_size: int,
     scan_dim: IndexSymbol,
+    location: Optional[CapturedLocation],
 ) -> list[fx.Node]:
     """
     Emit an intra-warp inclusive scan using butterfly pattern scan and masking.
@@ -116,7 +127,7 @@ def emit_global_scan(
 
         # shuffle operation to get value from another thread
         shuffle = ShuffleOp(scanop_result, offset_val, subgroup_size, ShuffleMode.UP)
-        shuffle_val_node = get_graph_node(shuffle, graph)
+        shuffle_val_node = get_graph_node(shuffle, graph, location)
 
         # we are explicitly adding index because this pass is being
         # applied after the indexing phase
@@ -129,6 +140,7 @@ def emit_global_scan(
                 0.0,
             ),
             graph,
+            location,
         )
         zero_vec.index = last_local_scan_node.index
 
@@ -137,22 +149,27 @@ def emit_global_scan(
         cond_node = get_graph_node(
             NewRegister(get_custom(scanop_result).type.symbolic_shape, i1, cond_expr),
             graph,
+            location,
         )
         cond_node.index = last_local_scan_node.index
 
         # apply shuffle_val only if condition is true; else use 0
         masked = get_graph_node(
-            SelectOp(cond=cond_node, if_true=shuffle_val_node, if_false=zero_vec), graph
+            SelectOp(cond=cond_node, if_true=shuffle_val_node, if_false=zero_vec),
+            graph,
+            location,
         )
 
         # perform binary scan op
-        scanop_result = get_graph_node(binary_fn(scanop_result, masked), graph)
+        scanop_result = get_graph_node(
+            binary_fn(scanop_result, masked), graph, location
+        )
         final_scanop_result = [scanop_result]
 
     if local_scan_size > 1:
         # Phase 2 to calculate exclusive offset from previous lane id.
         scan_offset = ShuffleOp(scanop_result, 1, subgroup_size, ShuffleMode.UP)
-        scan_offset_node = get_graph_node(scan_offset, graph)
+        scan_offset_node = get_graph_node(scan_offset, graph, location)
 
         lane_id_ge_one = ge(lane_id, 1)
         lane_id_ge_one_node = get_graph_node(
@@ -160,6 +177,7 @@ def emit_global_scan(
                 get_custom(scanop_result).type.symbolic_shape, i1, lane_id_ge_one
             ),
             graph,
+            location,
         )
         # TODO: debug why last_local_scan_node.index is setting to None if assigned outside.
         lane_id_ge_one_node.index = last_local_scan_node.index
@@ -171,6 +189,7 @@ def emit_global_scan(
                 0.0,
             ),
             graph,
+            location,
         )
         identity_vec_node.index = last_local_scan_node.index
 
@@ -181,6 +200,7 @@ def emit_global_scan(
                 if_false=identity_vec_node,
             ),
             graph,
+            location,
         )
 
         # Update the prefix sum for each locally scanned element based on the updated offset
@@ -189,7 +209,7 @@ def emit_global_scan(
             custom = get_custom(loc_scan[0])
 
             final_scalars = [
-                get_graph_node(binary_fn(lane_elem, excl_offset), graph)
+                get_graph_node(binary_fn(lane_elem, excl_offset), graph, location)
                 for lane_elem in loc_scan
             ]
 
@@ -198,6 +218,7 @@ def emit_global_scan(
                 args=final_scalars,
                 target_vector_shape={scan_dim: local_scan_size},
             ).add_to_graph(graph)
+            scanop_result.location = location
 
             # assign attributes
             scanop_result.index = custom.index
@@ -288,12 +309,20 @@ def decompose_scan_ops(
 
             # Phase 1: Local scan
             local_scan = emit_local_inclusive_scan(
-                binary_fn, scan_src, custom.graph, local_scan_sizes[0]
+                binary_fn,
+                scan_src,
+                custom.graph,
+                local_scan_sizes[0],
+                custom.location,
             )
 
             # Phase 2: Src wide local scan
             local_scan = emit_variable_scan(
-                binary_fn, local_scan, custom.graph, local_scan_sizes[0]
+                binary_fn,
+                local_scan,
+                custom.graph,
+                local_scan_sizes[0],
+                custom.location,
             )
 
             global_scan = emit_global_scan(
@@ -305,6 +334,7 @@ def decompose_scan_ops(
                 hardware_constraint,
                 local_scan_sizes[0],
                 scan_dim,
+                custom.location,
             )
 
             # Update the users based on the global scan `reshape` results.

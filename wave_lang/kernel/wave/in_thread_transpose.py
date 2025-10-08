@@ -35,6 +35,7 @@ from .utils.general_utils import (
     remove_thread_indexing,
 )
 from .utils.symbol_utils import safe_subs
+from .compile_options import WaveCompileOptions
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +273,7 @@ def create_transpose_reads(
                 load_elems_per_thread,
                 mapping=mapping,
                 mapping_dynamic_vals=read.mapping_dynamic_vals,
-            ).add_to_graph(read.graph)
+            ).add_to_graph(read.graph, loc=read.location)
             new_read.index = read_index
             new_read.vector_shapes = read.vector_shapes
             new_read_custom = get_custom(new_read)
@@ -308,10 +309,14 @@ def create_transpose_writes(
         with write.graph.inserting_before(write.fx_node):
             values = []
             for j in range(store_elems_per_thread):
-                value = Extract(new_reads[j], [i]).add_to_graph(write.graph)
+                value = Extract(new_reads[j], [i]).add_to_graph(
+                    write.graph, loc=write.location
+                )
                 values.append(value)
 
-            value = Reshape(values, store_elems_per_thread).add_to_graph(write.graph)
+            value = Reshape(values, store_elems_per_thread).add_to_graph(
+                write.graph, loc=write.location
+            )
             repacked.append(value)
 
     new_writes = defaultdict(list)
@@ -346,7 +351,7 @@ def create_transpose_writes(
                 store_elems_per_thread,
                 mapping=write.mapping,
                 mapping_dynamic_vals=write.mapping_dynamic_vals,
-            ).add_to_graph(write.graph)
+            ).add_to_graph(write.graph, loc=write.location)
             new_write.index = store_index
             new_write.vector_shapes = write.vector_shapes
             new_writes[write.memory].append(new_write)
@@ -354,7 +359,9 @@ def create_transpose_writes(
     return new_writes
 
 
-def in_thread_transpose(trace: CapturedTrace, constraints: list[Constraint]):
+def in_thread_transpose(
+    trace: CapturedTrace, constraints: list[Constraint], options: WaveCompileOptions
+):
     """
     This pass is detecting when read-write pair is doing transpose and tries to
     combine it with minimize_global_loads optimization.
@@ -363,6 +370,12 @@ def in_thread_transpose(trace: CapturedTrace, constraints: list[Constraint]):
     memory, we can do 8 x vector<4xf16> loads from global memory and do transpose
     in each thread registers, using sequence of vector.extract_strided_slice/insert_strided_slice.
     """
+    if "gfx95" in options.target:
+        logger.info(
+            "in_thread_transpose not preferred on this architecture because of transposed load instruction"
+        )
+        return
+
     logger.info("in_thread_transpose")
     candidates = trace.walk(is_transpose_read_candidate)
 

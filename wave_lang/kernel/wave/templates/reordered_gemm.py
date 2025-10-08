@@ -1,4 +1,4 @@
-from sympy import ceiling, Min
+from sympy import Max, Min, ceiling
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -62,7 +62,13 @@ def get_reordered_matmul(
     num_wg_group = GROUP_SIZE_M * num_wg_1
     group_id = xcd_wg_index // num_wg_group
     first_wg_id_0 = group_id * GROUP_SIZE_M
-    group_size_m = Min(num_wg_0 - first_wg_id_0, GROUP_SIZE_M)
+
+    # Clamping group_size_m to be >= 1 to prevent empty groups, or, groups of size 0.
+    # This ensures that every division or mod has a valid, nonzero divisor and stays within bounds.
+    # (we were seeing OOB accesses otherwise for certain test cases)
+    # Resolved Issue: https://github.com/iree-org/wave/issues/315 contains the list of failed TC.
+    group_size_m = Max(1, Min(num_wg_0 - first_wg_id_0, GROUP_SIZE_M))
+
     new_wg0 = first_wg_id_0 + ((xcd_wg_index % num_wg_group) % group_size_m)
     new_wg1 = (xcd_wg_index % num_wg_group) // group_size_m
 

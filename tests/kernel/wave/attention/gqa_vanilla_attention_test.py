@@ -25,6 +25,7 @@ from ..common.utils import (
     param_bool,
     require_e2e,
     require_cdna3,
+    require_cdna_2_or_3_or_4,
 )
 from ..common.shapes import get_test_shapes
 from wave_lang.kernel.wave.templates.gqa_vanilla_attention import (
@@ -32,13 +33,13 @@ from wave_lang.kernel.wave.templates.gqa_vanilla_attention import (
 )
 from wave_lang.kernel.wave.templates.attention_common import AttentionShape
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-from wave_lang.kernel.wave.compile import wave_compile, WaveCompileOptions
 from wave_lang.kernel.wave.utils.reference_kernel_utils import (
     scaled_dot_product_attention_bhsd,
 )
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("gqa_bshd_attention"))
 @pytest.mark.parametrize("enable_scheduling", [SchedulingType.NONE])
 @param_bool("causal", "causal")

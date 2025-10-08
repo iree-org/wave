@@ -20,7 +20,8 @@ from sympy.utilities.lambdify import lambdastr
 from wave_lang.support.ir_imports import Context, Module, Operation
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
-from ...support.location_config import LocationCaptureConfig
+from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
+from .._support.location import capture_function_location
 from .._support.tracing import (
     CapturedTrace,
     CompiledContext,
@@ -31,7 +32,7 @@ from ..compiler import builder, dispatch_codegen, kernel_codegen
 from ..lang import Grid, Memory, SymbolBind
 from ..lang.global_symbols import *
 from ..ops import wave_ops
-from ..ops.wave_ops import CustomOp, Iterate, get_custom
+from ..ops.wave_ops import CustomOp, Iterate, get_custom, Placeholder, Output
 
 # Passes
 from .analysis.index_sequence_analysis import (
@@ -72,8 +73,10 @@ from .expansion.expansion import add_get_results, expand_graph
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
+from .hardware_transpose import mark_hardware_transpose_candidates
 from .hoisting import hoist_loop_invariant_ops
 from .in_thread_transpose import in_thread_transpose
+from .location_check_pass import location_check_pass
 from .memory_analysis.minimize_shared_allocs import minimize_shared_allocs
 from .minimize_global_loads import minimize_global_loads
 from .promotion import compute_shared_memory_usage, promote_placeholders
@@ -179,6 +182,51 @@ def _is_symbol_bind(a: Any) -> bool:
 
 def _is_memory_arg(a: Any) -> bool:
     return inspect.isclass(a) and issubclass(a, Memory)
+
+
+def add_placeholder_locations(
+    trace: "CapturedTrace", kernel_func: Callable
+) -> "CapturedTrace":
+    """
+    Add location info to placeholder nodes.
+    The location used is the kernel function definition location.
+    Also adds the location to the output node of the graph, which is maybe
+    unnecessary, but it's convenient to have a location for the output as well
+    so that 100% of nodes have locations at the beginning of the pipeline.
+
+    Args:
+        trace: The captured trace to analyze
+        kernel_func:
+            The original kernel function being traced -- IE the function
+            definition with the @tkw.wave annotation.
+
+    Returns:
+        The modified trace with location information added
+    """
+
+    root_graph = trace.get_root_graph()
+    region_graph = getattr(trace, "region_graph", None)
+    location_capture_config = getattr(region_graph, "location_capture_config", None)
+
+    if (
+        location_capture_config is None
+        or location_capture_config.level == LocationCaptureLevel.NONE
+    ):
+        return trace
+
+    kernel_location = capture_function_location(kernel_func, location_capture_config)
+    if kernel_location is None:
+        return trace
+
+    for node in root_graph.nodes:
+        custom_op = get_custom(node)
+        if hasattr(custom_op, "location") and custom_op.location is not None:
+            continue
+
+        if isinstance(custom_op, (Placeholder, Output)):
+            custom_op.fx_node.location = kernel_location
+
+    return trace
 
 
 class LaunchableWave(Launchable):
@@ -351,6 +399,7 @@ class LaunchableWave(Launchable):
             with region_graph.subtracer() as subtracer:
                 root_name, _ = subtracer.trace(self._f)
                 trace = CapturedTrace(region_graph, root_name)
+                trace = add_placeholder_locations(trace, self._f)
 
         return trace
 
@@ -709,9 +758,12 @@ class LaunchableWave(Launchable):
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(gather_to_shared, trace, self.constraints, options),
                 partial(gather_to_shared_swizzling, trace, self.constraints, options),
-                partial(in_thread_transpose, trace, self.constraints),
+                partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
+                partial(
+                    mark_hardware_transpose_candidates, trace, self.constraints, options
+                ),
             ]
         graph_passes += [
             partial(apply_shared_memory_indexing_corrections, trace, self.constraints),
@@ -765,6 +817,16 @@ class LaunchableWave(Launchable):
             partial(partition_gather_like_ops, trace, self.constraints),
             partial(generate_bounds_exprs, trace, self.constraints),
         ]
+
+        graph_passes.append(
+            partial(
+                location_check_pass,
+                trace,
+                "enforce-locations",
+                log=False,
+                enforce_locations=options.enforce_locations,
+            )
+        )
 
         pass_times = {}
         for p in graph_passes:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import builtins
 import copy
 import operator
 import sys
@@ -20,24 +21,67 @@ from typing import (
 import numpy as np
 import torch.fx as fx
 from typing_extensions import Self
+from itertools import combinations
 
 from .._support.dtype import DataType, i1
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
-from .._support.location import FileLineColInfo, StackTraceInfo, capture_location
+from .._support.location import capture_location, CapturedLocation
 from .._support.regions import RegionGraph
 from ..lang.global_symbols import *
 from ..lang.kernel_buffer import AddressSpace
 from ..lang.wave_types import IndexMapping, Memory, Register
 from .base import OpDispatcher
+from ..wave.constraints import Constraint
 
 if TYPE_CHECKING:
-    from ..wave.constraints import Constraint
     from ..wave.scheduling.resources import Operation
 
 T = TypeVar("T", bound=Type[Any])
 AccT = TypeVar("AccT")
 CustomOpT = TypeVar("CustomOpT", bound="CustomOp")
 PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
+
+
+def read_meets_hw_transpose_requirements(
+    read: Read, constraints: list[Constraint]
+) -> bool:
+    from ..wave.minimize_global_loads import is_transposed_read
+    from ..wave.utils.general_utils import find_index_bounds
+
+    if read.bounds is not None:
+        return False
+
+    if len(read.type.symbolic_shape) <= 1:
+        return False
+
+    if not is_transposed_read(read):
+        return False
+
+    bounds = find_index_bounds(
+        constraints, read.index, read.vector_shapes, read.type.symbolic_shape
+    )
+
+    if bounds is not None:
+        return False
+
+    if read.has_identity_mapping():
+        return False
+
+    if len(list(read.index.keys())) != 2:
+        return False
+
+    bitwidth = read.type.dtype.bitwidth()
+    if bitwidth != 8 and bitwidth != 16:
+        return False
+
+    bits = read.elements_per_thread * bitwidth
+    if bits == 0 or bits % 64 != 0:
+        return False
+
+    if read.memory_type.address_space != SHARED_ADDRESS_SPACE:
+        return False
+
+    return not read.mapping_dynamic_vals
 
 
 # Stubs to enable type checking of the custom ops:
@@ -215,6 +259,9 @@ def atan2(lhs: "Register", rhs: "Register") -> "Register": ...
 def powf(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
+def mod(lhs: "Register", rhs: "Register") -> "Register": ...
+
+
 def cbrt(src: "Register") -> "Register": ...
 
 
@@ -223,6 +270,16 @@ def atomic_min(
     rhs: "Memory",
     elements_per_thread: Optional[IndexExpr | int] = None,
     mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+) -> "Register": ...
+
+
+def atomic_add(
+    lhs: "Register",
+    rhs: "Memory",
+    elements_per_thread: Optional[IndexExpr | int] = None,
+    mapping: Optional[IndexMapping] = None,
+    mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ) -> "Register": ...
 
 
@@ -318,6 +375,8 @@ def gather_to_lds(
     elements_per_thread: Optional[IndexExpr | int] = None,
     src_mapping: Optional[IndexMapping] = None,
     dst_mapping: Optional[IndexMapping] = None,
+    src_mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    dst_mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
 ): ...
 
 
@@ -481,8 +540,13 @@ class CustomOp(ABC):
     _tracing_function: Optional[Callable[..., Any]] = field(default=None, init=False)
 
     @property
-    def location(self) -> Optional[FileLineColInfo | StackTraceInfo]:
+    def location(self) -> Optional[CapturedLocation]:
         return getattr(self.fx_node, "location", None)
+
+    @location.setter
+    def location(self, value: Optional[CapturedLocation]):
+        if value:
+            setattr(self.fx_node, "location", value)
 
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
@@ -524,7 +588,12 @@ class CustomOp(ABC):
         vars_str = ", ".join(vars_list)
         return f"{self.tkw_op_name}({vars_str}) type({self.fx_node.type})"
 
-    def add_to_graph(self, region_graph: RegionGraph, type: Any = None) -> fx.Node:
+    def add_to_graph(
+        self,
+        region_graph: RegionGraph,
+        type: Any = None,
+        loc: Optional[CapturedLocation] = None,
+    ) -> fx.Node:
         arg_list = tuple([value for _, value in vars(self).items()])
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
@@ -536,6 +605,8 @@ class CustomOp(ABC):
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
         self.fx_node.index = None
+        if loc is not None:
+            self.fx_node.location = loc
         if type is None:
             get_custom(self.fx_node).infer_type()
         else:
@@ -622,16 +693,31 @@ class CustomOp(ABC):
             new_node.name = new_name
         return get_custom(new_node)
 
+    def replacement_location_propagate(
+        self, new_node: CustomOp | fx.Node | list[fx.Node]
+    ):
+        """Set the new_node location if it doesn't have one."""
+        if isinstance(new_node, fx.Node):
+            get_custom(new_node).location = self.location
+        if isinstance(new_node, list):
+            for node in new_node:
+                custom = get_custom(node) if isinstance(node, fx.Node) else node
+                custom.location = self.location
+        else:
+            new_node.location = self.location
+
     def replace_all_uses_with(self, new_node: CustomOp | fx.Node):
         """Replace all uses of the current node with the new node."""
         if isinstance(new_node, CustomOp):
             new_node = new_node.fx_node
+        self.replacement_location_propagate(new_node)
         self.fx_node.replace_all_uses_with(new_node)
 
     def replace_all_uses_with_except(
         self, new_node: CustomOp | fx.Node, except_nodes: list[CustomOp]
     ):
         """Replace all uses of the current node with the new node except for the nodes in except_nodes."""
+        self.replacement_location_propagate(new_node)
         for user in self.users:
             if user in except_nodes:
                 continue
@@ -887,7 +973,7 @@ class BinaryOpBase(CustomOp, ABC):
 
         lhs_dim_set = set(lhs_type.symbolic_shape)
         rhs_dim_set = set(rhs_type.symbolic_shape)
-        if lhs_dim_set.isdisjoint(rhs_dim_set):
+        if lhs_dim_set and rhs_dim_set and lhs_dim_set.isdisjoint(rhs_dim_set):
             raise ValueError(
                 "BinaryPyOp requires lhs and rhs shape to be at least broadcastable."
                 f" got {lhs_type.symbolic_shape} vs {rhs_type.symbolic_shape}"
@@ -905,6 +991,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_py_op(operator.and_)
 @define_py_op(operator.or_)
 @define_py_op(operator.truediv)
+@define_py_op(operator.mod)
 @define_interface_op("maximum")
 @define_interface_op("minimum")
 @define_interface_op("atan2")
@@ -1012,6 +1099,26 @@ class SelectOp(CustomOp):
         combined_dims += get_custom(self.if_false).indexing_dims
         return list(dict.fromkeys(combined_dims))
 
+    def infer_broadcast_shape(
+        self, cond_type: Register, t_type: Register, f_type: Register
+    ):
+        c_shape = getattr(cond_type, "symbolic_shape", ())
+        t_shape = getattr(t_type, "symbolic_shape", ())
+        f_shape = getattr(f_type, "symbolic_shape", ())
+
+        # Check if shapes are broadcastable - they should not be disjoint
+        non_empty_shapes = [s for s in [c_shape, t_shape, f_shape] if s]
+        if any(
+            set(i_shape).isdisjoint(set(j_shape))
+            for i_shape, j_shape in combinations(non_empty_shapes, 2)
+        ):
+            raise ValueError(
+                f"SelectOp requires operand shapes to be broadcastable. "
+                f"Got condition: {c_shape}, if_true: {t_shape}, if_false: {f_shape}"
+            )
+
+        return builtins.max(non_empty_shapes, key=len, default=())
+
     def infer_type(self, *args):
         cond_type = get_custom(self.cond).type
         if_true_type = get_custom(self.if_true).type
@@ -1023,14 +1130,13 @@ class SelectOp(CustomOp):
         if if_true_type.dtype != if_false_type.dtype:
             raise ValueError("SelectOp expects lhs and rhs dtype to match.")
 
-        # TODO: support broadcasting behavior.
-        if (
-            cond_type.symbolic_shape != if_true_type.symbolic_shape
-            or cond_type.symbolic_shape != if_false_type.symbolic_shape
-        ):
-            raise ValueError("SelectOp doesn't support broadcasting. (yet?)")
+        broadcasted_shape = self.infer_broadcast_shape(
+            cond_type, if_true_type, if_false_type
+        )
 
-        self.type = if_true_type
+        result_type = Register[broadcasted_shape, if_true_type.dtype]
+
+        self.type = result_type
 
 
 @final
@@ -1074,7 +1180,9 @@ class Output(CustomOp):
         instance.graph = node.graph
         return instance
 
-    def add_to_graph(self, region_graph: RegionGraph) -> fx.Node:
+    def add_to_graph(
+        self, region_graph: RegionGraph, loc: Optional[CapturedLocation] = None
+    ) -> fx.Node:
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
             "output",
@@ -1084,6 +1192,8 @@ class Output(CustomOp):
         )
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
+        if loc is not None:
+            self.fx_node.location = loc
         return self.fx_node
 
     @property
@@ -1108,11 +1218,15 @@ class Placeholder(CustomOp):
         instance.graph = node.graph
         return instance
 
-    def add_to_graph(self, region_graph: RegionGraph) -> fx.Node:
+    def add_to_graph(
+        self, region_graph: RegionGraph, loc: Optional[CapturedLocation] = None
+    ) -> fx.Node:
         self.graph = region_graph
         self.fx_node = region_graph.create_node("placeholder", target=self._name)
         self.fx_node.tkw_op = self.__class__
         self.fx_node.tkw_op_name = self.tkw_op_name
+        if loc is not None:
+            self.fx_node.location = loc
         return self.fx_node
 
     def custom_string(self, value_map: dict[str, str]) -> str:
@@ -1324,7 +1438,7 @@ class SchedulingBarrier(CustomOp):
 
 @define_op("atomic_min")
 @dataclass
-class AtomicOp(BinaryOpBase, ABC):
+class AtomicOp(BinaryOpBase):
     """
     Represents an atomic operation in the graph. Takes in Register and
     Memory as inputs and writes the modified value back on to the buffer.
@@ -1334,6 +1448,7 @@ class AtomicOp(BinaryOpBase, ABC):
 
     elements_per_thread: Optional[Any] = None
     mapping: Optional[IndexMapping] = None
+    mapping_dynamic_vals: tuple[fx.Node, ...] = ()
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -1347,6 +1462,12 @@ class AtomicOp(BinaryOpBase, ABC):
     @property
     def memory_type(self) -> "Memory":
         return get_custom(self.lhs).type
+
+
+@define_op("atomic_add")
+@dataclass
+class AtomicAddOp(AtomicOp):
+    pass
 
 
 @define_op("scheduling_group_barrier")
@@ -1697,7 +1818,7 @@ class Read(CustomOp):
 
     @write_dependency.setter
     def write_dependency(self, value: fx.Node):
-        self.update_arg(len(self.fx_node.args) - 1, value)
+        self.update_arg("_write_dependency", value)
 
     def transform_index_backwards(
         self, index: dict[IndexSymbol, IndexSequence], arg: fx.Node
@@ -1758,10 +1879,13 @@ class Read(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self) -> bool:
+    def is_contiguous_vec(self, constraints) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
+        if read_meets_hw_transpose_requirements(self, constraints):
+            return True
+
         if self.has_identity_mapping():
             return True
 
@@ -2111,7 +2235,7 @@ class Write(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self) -> bool:
+    def is_contiguous_vec(self, constraints) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
@@ -2739,6 +2863,8 @@ class GatherToLDS(CustomOp):
     src_mapping: Optional[IndexMapping]
     dst_mapping: Optional[IndexMapping]
     src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
+    src_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+    dst_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
 
 
 @define_op("scatter_add")

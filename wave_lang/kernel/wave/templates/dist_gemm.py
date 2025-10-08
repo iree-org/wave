@@ -22,12 +22,12 @@ def get_dist_gemm_kernel(
     dynamic_dims: bool | tuple[bool, bool, bool],
     mfma_variant: MMAType,
     dtype: torch.dtype = torch.float16,
+    device_m: int = 1,
+    device_n: int = 1,
 ):
+
     if not isinstance(dynamic_dims, Sequence):
         dynamic_dims = (dynamic_dims,) * 3
-
-    # Number of devices in the system
-    NUM_DEVICES = tkl.sym.NUM_DEVICES
 
     # Input sizes
     M = tkl.sym.M
@@ -48,11 +48,11 @@ def get_dist_gemm_kernel(
     # Only support distribution along outer dimension
     constraints += [tkw.DeviceConstraint(M, DEVICE_M, 0)]
     constraints += [tkw.DeviceConstraint(N, DEVICE_N, 1)]
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M / 2, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N / 2, 1)]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 4)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
     constraints += [tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant)]
 
@@ -92,8 +92,8 @@ def get_dist_gemm_kernel(
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        DEVICE_M: 64,
-        DEVICE_N: 64,
+        DEVICE_M: shape[0] // device_m,
+        DEVICE_N: shape[1] // device_n,
         BLOCK_M: 64,
         BLOCK_N: 64,
         BLOCK_K: 32,

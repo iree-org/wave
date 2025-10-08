@@ -11,6 +11,7 @@ import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import *
 from .common.utils import (
     require_e2e,
+    require_cdna_2_or_3_or_4,
 )
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
@@ -258,6 +259,7 @@ rtol, atol = 1e-1, 1e-2
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("m", m_values)
 @pytest.mark.parametrize("n", n_values)
 @pytest.mark.parametrize("k", k_values)

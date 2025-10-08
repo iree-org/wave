@@ -159,7 +159,7 @@ def get_mma_dimensional_mapping(
             arg = get_custom(arg)
             if is_reshape_needed(arg, mma.vector_shapes, prev_mma.vector_shapes):
                 reshape = Reshape(arg.fx_node, prev_mma.vector_shapes).add_to_graph(
-                    mma.graph
+                    mma.graph, loc=mma.location
                 )
                 custom_reshape = get_custom(reshape)
                 custom_reshape.vector_shapes = mma.vector_shapes
@@ -193,6 +193,8 @@ def get_mma_dimensional_mapping(
 
 def get_mfma_load_elems_per_thread(mfma_variant: MMAType | ScaledMMAType) -> int:
     match mfma_variant:
+        case MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+            return 8
         case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
             return 4
         case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:
@@ -223,6 +225,8 @@ def get_mfma_load_elems_per_thread(mfma_variant: MMAType | ScaledMMAType) -> int
 
 def get_mfma_store_elems_per_thread(mfma_variant: MMAType | ScaledMMAType) -> int:
     match mfma_variant:
+        case MMAType.RDNA4_WAVE32_F32_16x16x16_F16:
+            return 8
         case MMAType.F32_16x16x16_F16 | MMAType.I32_16x16x16_I8:
             return 4
         case MMAType.F32_32x32x8_F16 | MMAType.I32_32x32x8_I8:

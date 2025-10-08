@@ -7,6 +7,7 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.templates.test_kernels import get_broadcast_scaled_add
 from wave_lang.kernel.wave.utils.compile_utils import (
     set_default_compile_config,
@@ -14,6 +15,11 @@ from wave_lang.kernel.wave.utils.compile_utils import (
 from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
+from wave_lang.support.location_config import (
+    LocationCaptureConfig,
+    LocationCaptureLevel,
+)
+from wave_lang.kernel.wave.constraints import MMAType, DeviceConstraint
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -30,7 +36,13 @@ ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
 
 
 def get_wave_compile_options(
-    canonicalize: bool = False, dynamic_symbols=[], additional_symbols={}
+    canonicalize: bool = False,
+    dynamic_symbols=[],
+    additional_symbols={},
+    location_capture_config=LocationCaptureConfig(
+        level=LocationCaptureLevel.FILE_LINE_COL
+    ),
+    drop_debug_info_before_mlir=True,
 ):
     bindings = {
         M: 16,
@@ -53,6 +65,8 @@ def get_wave_compile_options(
         canonicalize=canonicalize,
         dynamic_symbols=dynamic_symbols,
         compile_to_mlir=True,
+        location_capture_config=location_capture_config,
+        drop_debug_info_before_mlir=drop_debug_info_before_mlir,
     )
 
 
@@ -155,6 +169,9 @@ def test_read_mapped_buffer():
         use_buffer_ops=True,
         compile_to_mlir=True,
         canonicalize=False,
+        location_capture_config=LocationCaptureConfig(
+            level=LocationCaptureLevel.FILE_LINE_COL
+        ),
     )
     read_mapped_buffer = wave_compile(options, read_mapped_buffer)
     print(read_mapped_buffer.asm)
@@ -880,6 +897,52 @@ def test_add_integer():
     # CHECK:       func.func @test
     # CHECK:       %[[SLICE:.+]] = vector.load
     # CHECK:       arith.addi %[[SLICE]], %[[SLICE]] : vector<16xi32>
+
+
+@run_test
+def test_mod_float():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16]):
+        a_reg = tkw.read(a)
+        res = a_reg % a_reg
+
+    test = wave_compile(get_wave_compile_options(), test)
+    print(test.asm)
+    # CHECK-LABEL: test_mod_float
+    # CHECK:       func.func @test
+    # CHECK:       %[[SLICE:.+]] = vector.load
+    # CHECK:       arith.remf %[[SLICE]], %[[SLICE]] : vector<16xf16>
+
+
+@run_test
+def test_mod_integer():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.i32]):
+        a_reg = tkw.read(a)
+        res = a_reg % a_reg
+
+    test = wave_compile(get_wave_compile_options(), test)
+    print(test.asm)
+    # CHECK-LABEL: test_mod_integer
+    # CHECK:       func.func @test
+    # CHECK:       %[[SLICE:.+]] = vector.load
+    # CHECK:       arith.remsi %[[SLICE]], %[[SLICE]] : vector<16xi32>
 
 
 @run_test
@@ -1853,6 +1916,55 @@ def test_explicit_broadcast():
 
 
 @run_test
+def test_select_with_broadcast():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={M: M, N: N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, N, 0)]
+    constraints += [tkw.WaveConstraint(M, M)]
+    constraints += [tkw.WaveConstraint(N, N)]
+
+    @tkw.wave(constraints)
+    def select_with_broadcast(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f32],
+    ):
+        a_reg = tkw.read(a, elements_per_thread=4)
+        zero_scalar = tkw.scalar(0.0, tkl.f32)
+        is_negative = a_reg < zero_scalar
+        result = tkw.select(is_negative, zero_scalar, a_reg)
+        tkw.write(result, b, elements_per_thread=4)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 1,
+            N: 16,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    select_with_broadcast = wave_compile(options, select_with_broadcast)
+    print(select_with_broadcast.asm)
+
+    # CHECK-LABEL: test_select_with_broadcast
+    # CHECK: %[[ZERO:[a-zA-Z0-9_]+]] = arith.constant dense<0.000000e+00>
+    # CHECK: %[[CONDITION:[a-zA-Z0-9_]+]] = arith.cmpf olt, {{.*}}, %[[ZERO]]
+    # CHECK: arith.select %[[CONDITION]], {{.*}} : vector<4xi1>, vector<4xf32>
+    # CHECK: vector.store
+
+
+@run_test
 def test_broadcast_add():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
@@ -1971,6 +2083,7 @@ def test_binary_lowerings():
         res = a_reg - b_reg
         res = res * a_reg
         res = res / b_reg
+        res = res % b_reg
         res = tkw.minimum(a_reg, b_reg)
         res = tkw.atan2(res, a_reg)
         res = tkw.powf(res, a_reg)
@@ -1983,6 +2096,7 @@ def test_binary_lowerings():
     # CHECK: %[[SUB:.+]] = arith.subf
     # CHECK: %[[MUL:.+]] = arith.mulf %[[SUB]]
     # CHECK: %[[DIV:.+]] = arith.divf %[[MUL]]
+    # CHECK: %[[MOD:.+]] = arith.remf %[[DIV]]
     # CHECK: %[[MINIMUM:.+]] = arith.minimumf
     # CHECK: %[[ATAN2:.+]] = math.atan2 %[[MINIMUM]]
     # CHECK: %[[POWF:.+]] = math.powf %[[ATAN2]]
@@ -2556,3 +2670,293 @@ def test_atomic_min():
     # CHECK:            %[[atm_3:.+]] = memref.atomic_rmw mins %{{.*}}, %[[alloc]][%[[C0]], %[[val_3]]]
     # CHECK:            amdgpu.lds_barrier
     # CHECK:            vector.load %[[alloc]][%[[C0]], %[[val_0]]]
+
+
+@run_test
+def test_transposed_load():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=64, mma_type=MMAType.F32_16x16x16_F16)
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    b_mapping = tkw.IndexMapping(
+        num_iterators=2, inputs={N: i, K: j}, outputs={N: i, K: j}
+    )
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[K, N, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b, mapping=b_mapping)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        M: 16,
+        N: 16,
+        K: 16,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        BLOCK_K: 16,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+    }
+
+    options = WaveCompileOptions(
+        subs=hyperparams, compile_to_mlir=True, target="gfx950"
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+
+    # CHECK-LABEL:    test_transposed_load
+    # CHECK:          func.func @gemm
+    # CHECK:            %[[TRANSPOSE:.*]] = amdgpu.transpose_load {{.*}} : memref<16x20xf16, #gpu.address_space<workgroup>> -> vector<4xf16>
+    #                   amdgpu.mfma %{{.*}} * %[[TRANSPOSE]] + %{{.*}} {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+
+@run_test
+def test_atomic_add():
+    shape = (64, 4)
+    # Input sizes
+    NUMEL = tkl.sym.NUMEL
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+
+    constraints: list[tkw.Constraint] = []
+
+    # one workgroup to handle the worload
+    constraints += [tkw.WorkgroupConstraint(NUMEL, NUMEL, 0)]
+    constraints += [tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 1)]
+    # one wave to handle the workload
+    constraints += [tkw.WaveConstraint(NUMEL, NUMEL)]
+    constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={NUMEL: NUMEL, NUM_EXPERTS: NUM_EXPERTS},
+        )
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    histogram_read = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    dtype = tkl.i32
+
+    @tkw.wave(constraints)
+    def create_histogram(
+        indices: tkl.Memory[NUMEL, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype],
+        experts: tkl.Memory[
+            NUM_EXPERTS, tkl.global_symbols.GLOBAL_ADDRESS_SPACE, dtype
+        ],
+    ):
+
+        # create a vector of zeros and ones
+        zero_vec = tkl.Register[NUM_EXPERTS, dtype](0)
+        one_vec = tkw.Register[NUM_EXPERTS, dtype](1)
+
+        # read the index in the range [0, NUM_EXPERTS)
+        idx = tkw.read(indices, elements_per_thread=1)
+
+        # allocate shared memory for the histogram
+        shmem = tkw.allocate(
+            shape=(NUM_EXPERTS,),
+            distributed_shape=(NUM_EXPERTS,),
+            dtype=dtype,
+        )
+
+        # initialize shared memory to zero
+        tkw.write(zero_vec, shmem)
+
+        # atomic add 1 to the index read
+        tkw.atomic_add(
+            one_vec,
+            shmem,
+            mapping=histogram_read,
+            mapping_dynamic_vals=(idx,),
+            elements_per_thread=1,
+        )
+
+        # write back the results to global memory
+        counts = tkw.read(shmem)
+        tkw.write(
+            counts,
+            experts,
+        )
+
+    num_indices = shape[0]
+    num_experts = shape[1]
+
+    hyperparams = {
+        NUMEL: num_indices,
+        NUM_EXPERTS: num_experts,
+    }
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        compile_to_mlir=True,
+        minimize_shared_allocs=False,
+    )
+    compiled_fn = wave_compile(options, create_histogram)
+    print(compiled_fn.asm)
+
+    # CHECK-LABEL: test_atomic_add
+    # CHECK:         func.func @create_histogram
+    # CHECK-DAG:        %[[C1_I32:.+]] = arith.constant 1 : i32
+    # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
+    # CHECK-DAG:        %[[ZERO_VEC:.+]] = arith.constant dense<0> : vector<{{.*}}xi32>
+    # CHECK-DAG:        %[[thread_id_x:.*]] = gpu.thread_id  x
+    # CHECK:            %[[INDICES:.+]] = stream.binding.subspan %arg0[%[[C0]]] : !stream.binding -> memref<{{.*}}xi32, strided<[1], offset: ?>>
+    # CHECK:            %[[IDX:.+]] = memref.load %[[INDICES]][%[[thread_id_x]]] : memref<{{.*}}xi32, strided<[1], offset: ?>>
+    # CHECK:            %[[alloc:.*]] = memref.alloc() : memref<{{.*}}xi32, #gpu.address_space<workgroup>>
+    # CHECK:            vector.store %[[ZERO_VEC]], %[[alloc]][%[[C0]]] : memref<{{.*}}xi32, #gpu.address_space<workgroup>>, vector<{{.*}}xi32>
+    # CHECK:            %[[IDX_CAST:.+]] = arith.index_cast %[[IDX]] : i32 to index
+    # CHECK:            %[[ATOMIC_ADD:.+]] = memref.atomic_rmw addi %[[C1_I32]], %[[alloc]][%[[IDX_CAST]]] : (i32, memref<{{.*}}xi32, #gpu.address_space<workgroup>>) -> i32
+    # CHECK:            amdgpu.lds_barrier
+    # CHECK:            %[[RESULT:.+]] = vector.load %[[alloc]][%[[C0]]] : memref<{{.*}}xi32, #gpu.address_space<workgroup>>, vector<{{.*}}xi32>
+    # CHECK:            %[[EXPERTS:.+]] = stream.binding.subspan %arg1[%[[C0]]] : !stream.binding -> memref<{{.*}}xi32, strided<[1], offset: ?>>
+    # CHECK:            vector.store %[[RESULT]], %[[EXPERTS]][%[[C0]]] : memref<{{.*}}xi32, strided<[1], offset: ?>>, vector<{{.*}}xi32>
+
+
+@run_test
+def test_dist_gemm():
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    DEVICE_M = tkl.sym.DEVICE_M
+    DEVICE_N = tkl.sym.DEVICE_N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = []
+    # Add device constraints for distribution
+    constraints += [DeviceConstraint(M, DEVICE_M, 0)]
+    constraints += [DeviceConstraint(N, DEVICE_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=64, mma_type=MMAType.F32_32x32x8_F16)
+    ]
+
+    @tkw.wave(constraints)
+    def dist_gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    # Set up hyperparams with device distribution (2x1 distribution)
+    hyperparams = {
+        M: 1024,
+        N: 5120,
+        K: 640,
+        DEVICE_M: 512,  # M distributed across 2 devices
+        DEVICE_N: 2560,  # N distributed across 2 devices
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+    }
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        iree_launch_async=False,
+        compile_to_mlir=True,
+    )
+    dist_gemm = wave_compile(options, dist_gemm)
+    print(dist_gemm.asm)
+
+    # CHECK-LABEL: test_dist_gemm
+    # Core gemm function should remain simple
+    # CHECK: func.func @dist_gemm
+    # CHECK-SAME: (%{{.*}}: !stream.binding, %{{.*}}: !stream.binding, %{{.*}}: !stream.binding)
+    # CHECK: amdgpu.mfma
+
+    # The header should contain the full input and output tensor sizes
+    # CHECK: func.func @isolated_benchmark
+    # CHECK-SAME: (%{{.*}}: tensor<1024x640xf16>, %{{.*}}: tensor<5120x640xf16>, %{{.*}}: tensor<1024x5120xf32>) -> tensor<1024x5120xf32>
+
+    # Matrix A sliced along M dimension (2 slices of 512x640)
+    # CHECK-DAG: %[[SLICE_A0:.+]] = flow.tensor.slice %{{.*}}[%{{.*}}, %{{.*}} for %c512, %c640] : tensor<1024x640xf16> -> tensor<512x640xf16>
+    # CHECK-DAG: %[[SLICE_A1:.+]] = flow.tensor.slice %{{.*}}[%c512, %{{.*}} for %c512, %c640] : tensor<1024x640xf16> -> tensor<512x640xf16>
+
+    # Matrix B sliced along N dimension (2 slices of 2560x640)
+    # CHECK-DAG: %[[SLICE_B0:.+]] = flow.tensor.slice %{{.*}}[%{{.*}}, %{{.*}} for %c2560, %c640] : tensor<5120x640xf16> -> tensor<2560x640xf16>
+    # CHECK-DAG: %[[SLICE_B1:.+]] = flow.tensor.slice %{{.*}}[%c2560, %{{.*}} for %c2560, %c640] : tensor<5120x640xf16> -> tensor<2560x640xf16>
+
+    # Matrix C sliced along both dimensions (4 slices of 512x2560)
+    # CHECK-DAG: %[[SLICE_C00:.+]] = flow.tensor.slice %{{.*}}[%{{.*}}, %{{.*}} for %c512, %c2560] : tensor<1024x5120xf32> -> tensor<512x2560xf32>
+    # CHECK-DAG: %[[SLICE_C10:.+]] = flow.tensor.slice %{{.*}}[%c512, %{{.*}} for %c512, %c2560] : tensor<1024x5120xf32> -> tensor<512x2560xf32>
+    # CHECK-DAG: %[[SLICE_C01:.+]] = flow.tensor.slice %{{.*}}[%{{.*}}, %c2560 for %c512, %c2560] : tensor<1024x5120xf32> -> tensor<512x2560xf32>
+    # CHECK-DAG: %[[SLICE_C11:.+]] = flow.tensor.slice %{{.*}}[%c512, %c2560 for %c512, %c2560] : tensor<1024x5120xf32> -> tensor<512x2560xf32>
+
+    # Device transfers to 4 devices (2x2 grid)
+    # CHECK-DAG: %[[TRANSFER_A0:.+]] = flow.tensor.transfer %[[SLICE_A0]] : tensor<512x640xf16> to #hal.device.promise<@__device_0>
+    # CHECK-DAG: %[[TRANSFER_A1:.+]] = flow.tensor.transfer %[[SLICE_A1]] : tensor<512x640xf16> to #hal.device.promise<@__device_1>
+    # CHECK-DAG: %[[TRANSFER_B0:.+]] = flow.tensor.transfer %[[SLICE_B0]] : tensor<2560x640xf16> to #hal.device.promise<@__device_0>
+    # CHECK-DAG: %[[TRANSFER_B1:.+]] = flow.tensor.transfer %[[SLICE_B1]] : tensor<2560x640xf16> to #hal.device.promise<@__device_2>
+    # CHECK-DAG: %[[TRANSFER_C00:.+]] = flow.tensor.transfer %[[SLICE_C00]] : tensor<512x2560xf32> to #hal.device.promise<@__device_0>
+    # CHECK-DAG: %[[TRANSFER_C10:.+]] = flow.tensor.transfer %[[SLICE_C10]] : tensor<512x2560xf32> to #hal.device.promise<@__device_1>
+    # CHECK-DAG: %[[TRANSFER_C01:.+]] = flow.tensor.transfer %[[SLICE_C01]] : tensor<512x2560xf32> to #hal.device.promise<@__device_2>
+    # CHECK-DAG: %[[TRANSFER_C11:.+]] = flow.tensor.transfer %[[SLICE_C11]] : tensor<512x2560xf32> to #hal.device.promise<@__device_3>
+
+    # Four dispatches (one per device in 2x2 grid)
+    # CHECK-DAG: %[[DISPATCH00:.+]] = flow.dispatch @{{.*}}::@{{.*}}(%[[TRANSFER_A0]], %[[TRANSFER_B0]], %[[TRANSFER_C00]])
+    # CHECK-DAG: %[[DISPATCH10:.+]] = flow.dispatch @{{.*}}::@{{.*}}(%[[TRANSFER_A1]], %[[TRANSFER_B0]], %[[TRANSFER_C10]])
+    # CHECK-DAG: %[[DISPATCH01:.+]] = flow.dispatch @{{.*}}::@{{.*}}(%[[TRANSFER_A0]], %[[TRANSFER_B1]], %[[TRANSFER_C01]])
+    # CHECK-DAG: %[[DISPATCH11:.+]] = flow.dispatch @{{.*}}::@{{.*}}(%[[TRANSFER_A1]], %[[TRANSFER_B1]], %[[TRANSFER_C11]])
+
+    # Result reassembly with tensor.insert_slice (2x2 grid pattern)
+    # CHECK-DAG: %[[INSERT0:.+]] = tensor.insert_slice %[[DISPATCH00]] into %{{.*}}[0, 0] [512, 2560] [1, 1] : tensor<512x2560xf32> into tensor<1024x5120xf32>
+    # CHECK-DAG: %[[INSERT1:.+]] = tensor.insert_slice %[[DISPATCH10]] into %[[INSERT0]][512, 0] [512, 2560] [1, 1] : tensor<512x2560xf32> into tensor<1024x5120xf32>
+    # CHECK-DAG: %[[INSERT2:.+]] = tensor.insert_slice %[[DISPATCH01]] into %[[INSERT1]][0, 2560] [512, 2560] [1, 1] : tensor<512x2560xf32> into tensor<1024x5120xf32>
+    # CHECK-DAG: %[[INSERT3:.+]] = tensor.insert_slice %[[DISPATCH11]] into %[[INSERT2]][512, 2560] [512, 2560] [1, 1] : tensor<512x2560xf32> into tensor<1024x5120xf32>
+
+    # Terminate the DAG with the final return
+    # CHECK: return %{{.*}} : tensor<1024x5120xf32>

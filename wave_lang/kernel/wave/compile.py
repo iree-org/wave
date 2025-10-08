@@ -26,6 +26,7 @@ from .utils.run_utils import (
 )
 from .water import water_leak_in_bounds_check
 from wave_lang.runtime.launch import Launchable
+from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
 from .profiling import benchmark_module
 from .debug_log_hoist import DebugArgInfo
 import iree.runtime as rt
@@ -70,12 +71,29 @@ class WaveKernel:
         self.debug_outputs = debug_outputs
         self.debug_handlers = debug_handlers
 
-        if not options.wave_runtime:
-            # Disable async dispatch for benchmarking.
-            is_async = options.iree_launch_async and not options.run_bench
+        # If we are compiling to MLIR, we don't have an executable
+        if options.compile_to_mlir:
+            return
 
-            # 'launchable' decides if function is async or not based on name.
-            self.func_name = options.func_name + ("$async" if is_async else "")
+        # If we are using the wave runtime, we don't need to create a launchable
+        if options.wave_runtime:
+            return
+
+        # Disable async dispatch for benchmarking.
+        is_async = options.iree_launch_async and not options.run_bench
+
+        # 'launchable' decides if function is async or not based on name.
+        self.func_name = options.func_name + ("$async" if is_async else "")
+
+        if self.options.num_devices > 1:
+            device_list = [f"hip://{d}" for d in range(options.num_devices)]
+            self.launchable = MultiDeviceLaunchable.from_vmfb(
+                self.executable,
+                devices=device_list,
+                function_name=self.func_name,
+                runtime_flags=["--hip_use_streams=true"],
+            )
+        else:
 
             def loader(device):
                 vm_instance = device.vm_instance
@@ -325,6 +343,10 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         ) = kernel._trace_and_get_kernel_signature(options)
         options.kernel_sig = kernel_sig
 
+        # calculate the number of devices based on the device layout
+        for dim in device_layout.dims:
+            options.num_devices *= dim
+
         # Get the trace from the kernel. Since the trace contains complex objects
         # that are not easily serializable, we don't cache the trace. So this trace
         # is not available for cached kernels. The primary use case for the trace is
@@ -343,10 +365,14 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             options.dynamic_symbols,
             location_capture_config=options.location_capture_config,
             async_dispatch=is_async,
+            device_layout=device_layout,
+            device_constraints=kernel.device_constraints,
         )
+        mb.module_op.verify()
         asm = mb.module_op.get_asm(
             enable_debug_info=options.location_capture_config.level
-            != LocationCaptureLevel.NONE,
+            != LocationCaptureLevel.NONE
+            and not options.drop_debug_info_before_mlir,
             use_local_scope=options.use_local_scope,
         )
 
