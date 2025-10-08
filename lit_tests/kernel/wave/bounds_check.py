@@ -78,7 +78,26 @@ def test_bounds_check():
 
     # CHECK-LABEL:    test_bounds_check
     # CHECK:          func.func @read_write
-    # CHECK:            scf.if
+    # CHECK:            %[[C227:.*]] = arith.constant 227 : index
+    # CHECK:            %[[D0:.*]] = affine.apply #map()[%block_id_y]
+
+    #                   Mask check
+    # CHECK:            %[[D1:.*]] = arith.cmpi slt, %[[D0]], %[[C227]] : index
+
+    # CHECK:            %[[D2:.*]] = affine.apply #map1()[%thread_id_x, %block_id_x]
+
+    #                   Mask check
+    # CHECK:            %[[D3:.*]] = arith.cmpi slt, %[[D2]], %[[C227]] : index
+
+    #                   Bounds check
+    # CHECK:            %[[D4:.*]] = arith.cmpi sge, %[[D0]], %[[C227]] : index
+    # CHECK:            %[[D5:.*]] = arith.cmpi sge, %[[D2]], %[[C227]] : index
+    # CHECK:            %[[D6:.*]] = arith.ori %[[D4]], %[[D5]] : i1
+
+    #                   Combine with mask
+    # CHECK:            %[[D7:.*]] = arith.andi %[[D3]], %[[D6]] : i1
+    # CHECK:            %[[D8:.*]] = arith.andi %[[D7]], %[[D1]] : i1
+    # CHECK:            scf.if %[[D8]]
     # CHECK:              gpu.printf
     # CHECK:              llvm.intr.trap
 
