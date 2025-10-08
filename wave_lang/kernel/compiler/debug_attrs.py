@@ -14,7 +14,7 @@ bindings, so we use string parsing for now.
 """
 
 import os
-from typing import Optional
+from typing import Callable, Optional
 
 from wave_lang.support.ir_imports import (
     Attribute,
@@ -24,19 +24,9 @@ from wave_lang.support.ir_imports import (
 from wave_lang.kernel._support.location import FileLineColInfo, StackTraceInfo
 
 
-# Global counter for distinct IDs
-_distinct_id_counter = 0
-
-
-def get_next_distinct_id() -> int:
-    """Get the next distinct ID for debug attributes."""
-    global _distinct_id_counter
-    result = _distinct_id_counter
-    _distinct_id_counter += 1
-    return result
-
-
-def create_di_compile_unit(di_file: Attribute) -> Attribute:
+def create_di_compile_unit(
+    get_next_distinct_id: Callable[[], int], di_file: Attribute
+) -> Attribute:
     distinct_id = get_next_distinct_id()
     # The sourceLanguage field has an enum that doesn't have a blank or default
     # value.  Let's just use C for now, as it seems that it is used as a default
@@ -56,6 +46,7 @@ def create_di_compile_unit(di_file: Attribute) -> Attribute:
 
 
 def create_di_subprogram(
+    get_next_distinct_id: Callable[[], int],
     di_compile_unit: Attribute,
     di_file: Attribute,
     di_subroutine_type: Attribute,
@@ -85,6 +76,7 @@ def create_di_subprogram(
 
 
 def create_debug_info_for_kernel(
+    get_next_distinct_id: Callable[[], int],
     function_name: str,
     location_info: Optional[FileLineColInfo | StackTraceInfo] = None,
 ) -> Location:
@@ -95,6 +87,7 @@ def create_debug_info_for_kernel(
     FusedLoc that has the necessary attributes for the kernel function.
 
     Args:
+        get_next_distinct_id: Callable that returns the next distinct ID
         function_name: Name of the function
         location_info: Location information captured from the source
 
@@ -127,7 +120,7 @@ def create_debug_info_for_kernel(
     di_file_str = f'#llvm.di_file<"{filename}" in "{directory}">'
     di_file = Attribute.parse(di_file_str)
 
-    di_compile_unit = create_di_compile_unit(di_file)
+    di_compile_unit = create_di_compile_unit(get_next_distinct_id, di_file)
     # This is a stand-in subroutine type with no args for now, but when we have
     # variable tracking we should update this to have real types.
     di_subroutine_type = Attribute.parse(
@@ -135,7 +128,12 @@ def create_debug_info_for_kernel(
     )
 
     di_subprogram = create_di_subprogram(
-        di_compile_unit, di_file, di_subroutine_type, function_name, line_number
+        get_next_distinct_id,
+        di_compile_unit,
+        di_file,
+        di_subroutine_type,
+        function_name,
+        line_number,
     )
 
     location_with_di = Location.fused([base_location], metadata=di_subprogram)

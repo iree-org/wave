@@ -154,7 +154,7 @@ class StreamExecutable:
 
             if kernel_location is not None:
                 func_location_with_di = create_debug_info_for_kernel(
-                    name, kernel_location
+                    self.def_module.get_next_distinct_id, name, kernel_location
                 )
             else:
                 func_location_with_di = Location.unknown()
