@@ -8,7 +8,9 @@ import pytest
 import torch
 from torch.nn import functional as F
 import math
+from wave_lang.kernel._support.tracing import CapturedTrace
 import wave_lang.kernel.lang as tkl
+from wave_lang.kernel.ops.wave_ops import Iterate, get_custom
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.general_utils import (
@@ -1219,6 +1221,15 @@ def testAttentionBSHD_Prefetch_MultiBuffer(
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention_func)
+
+    # Check for successful reordering
+    trace: CapturedTrace = base_attention.get_compiled_graph()
+    if trace:
+        iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
+        reordering_success = all(
+            [node.meta.get("reordering_success", False) for node in iterate_nodes]
+        )
+        assert reordering_success, "Reordering failed"
 
     torch.manual_seed(1)
     q = device_randn(q_shape, dtype=torch.float16)
