@@ -1616,6 +1616,150 @@ def scatter_gemm_fused_test(is_debug=False):
     print("GEMM test passed!")
 
 
+def conditional_weight_gemm_test(is_debug=False):
+    """
+    Test GEMM with conditional topk_weight multiplication.
+
+    This demonstrates how to conditionally multiply GEMM output by weights based on an i32 flag.
+    Use case: In MoE, GEMM1 doesn't need weight multiplication, but GEMM2 does.
+
+    - When apply_weights=0: output = A @ B.T
+    - When apply_weights=1: output = (A @ B.T) * weights
+    """
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
+        b: Memory[N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
+        weights: Memory[M, ADDRESS_SPACE_A, f32],  # TopK weights per row
+        c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
+        apply_weights: i32,  # Flag: 0 = no multiply, 1 = multiply by weights
+    ):
+        # Initialize the accumulator register with zeros
+        c_reg = Register[M, N, f32](0.0)
+
+        # Iterate over the K dimension to compute the dot product
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: Register[M, N, f32]) -> Register[M, N, f32]:
+            # Load elements from A and B
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+
+            # Compute matrix multiplication and accumulate
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        # Store GEMM result in register (don't write to memory yet)
+        tkw.write(repeat, c)
+
+        # Conditionally multiply by weights if flag is set
+        condition = apply_weights == tkw.scalar(1, i32)
+
+        @tkw.conditional(condition)
+        def apply_topk_weights():
+            weights_reg = tkw.read(weights)
+            weights_broadcast = tkw.broadcast(weights_reg, target_shape=[M, N])
+            c_reg = tkw.read(c)
+            result = c_reg * weights_broadcast
+            tkw.write(result, c)
+
+    # Create test matrices
+    m, n, k = 64, 64, 64
+
+    # Initialize input matrices with random values
+    torch.manual_seed(0)
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    b = torch.randn(n, k, dtype=torch.float16, device="cuda")
+
+    # TopK weights (simulating router weights in MoE)
+    weights = torch.full((m,), 2.0, dtype=torch.float32, device="cuda")
+
+    # Test 1: Without weight multiplication (apply_weights=0)
+    c_no_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
+    hyperparams = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        M: m,
+        N: n,
+        K: k,
+    }
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        print_ir_after="all" if is_debug else [],
+        print_ir_before="all" if is_debug else [],
+    )
+    options = set_default_run_config(options)
+    compiled_gemm = wave_compile(options, gemm)
+
+    # Run with apply_weights=0
+    compiled_gemm(a, b, weights, c_no_weights, 0)
+
+    if is_debug:
+        with open("conditional_weight_gemm.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
+
+    # Test 2: With weight multiplication (apply_weights=1)
+    c_with_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    c_with_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    compiled_gemm(a, b, weights, c_with_weights, 1)
+
+    # Verify results
+    expected_no_weights = torch.matmul(a, b.t()).to(torch.float32)
+    expected_with_weights = expected_no_weights * weights.view(-1, 1)
+
+    print("\n=== Conditional Weight GEMM Test ===")
+    print(f"Matrix dimensions: M={m}, N={n}, K={k}")
+    print(f"Weights shape: {weights.shape}")
+    print(f"Weights mean: {weights.mean().item():.4f}")
+
+    # Test without weights
+    torch.testing.assert_close(
+        c_no_weights.to(torch.float16),
+        expected_no_weights.to(torch.float16),
+        rtol=1e-2,
+        atol=1e-2,
+    )
+    print("Test 1 passed: apply_weights=0 (no multiplication)")
+
+    breakpoint()
+    # Test with weights
+    torch.testing.assert_close(
+        c_with_weights.to(torch.float16),
+        expected_with_weights.to(torch.float16),
+        rtol=1e-2,
+        atol=1e-2,
+    )
+    print("Test 2 passed: apply_weights=1 (with multiplication)")
+
+    # Verify that results are different
+    assert not torch.allclose(
+        c_no_weights, c_with_weights, rtol=1e-3, atol=1e-3
+    ), "Outputs should differ when weights are applied"
+
+    print(
+        f"\nOutput difference when weights applied: {((c_with_weights - c_no_weights).abs().mean().item()):.4f}"
+    )
+    print("Conditional weight GEMM test passed!")
+
+
 if __name__ == "__main__":
     args = parse_args()
     if args.list_tests:
