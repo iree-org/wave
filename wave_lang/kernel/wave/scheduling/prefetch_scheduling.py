@@ -169,7 +169,7 @@ class MMAGroup:
             elif isinstance(custom, GatherToLDS):
                 self.gather_to_lds_ops.add(node)
 
-    def has_g2s_and_shared_writes(self) -> bool:
+    def has_gather_to_lds_and_shared_writes(self) -> bool:
         """
         Checks if the MMA group contains both gather to LDS and shared write operations.
         """
@@ -301,8 +301,8 @@ class PrefetchAttentionScheduler(BaseScheduler):
 
         # Ensure we have either G2S -> SR or GR -> SW -> SR but not both
         if (
-            mma0_group.has_g2s_and_shared_writes()
-            or mma1_group.has_g2s_and_shared_writes()
+            mma0_group.has_gather_to_lds_and_shared_writes()
+            or mma1_group.has_gather_to_lds_and_shared_writes()
         ):
             logger.error(
                 "Unsupported: Received both gather to LDS and shared writes in MMA"
