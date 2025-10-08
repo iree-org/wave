@@ -1,7 +1,7 @@
 """
 Water Emitter for Wave Dialect
 
-This generates operations Wave dialect from a serialized wave trace.
+This generates operations of the Wave dialect from a serialized wave trace.
 It runs as a standalone process with access to Water Python bindings and emits
 mlir operations of wave and other dialects.
 """
@@ -129,7 +129,7 @@ def _type_to_wave_mlir(
 
 
 def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
-    """Reads and returns pickled trace and options from stdin and return.
+    """Reads and returns a pickled trace and options from stdin.
 
     The input is expected to be a dill-serialized dict with keys:
     - "trace": CapturedTrace object
@@ -270,6 +270,11 @@ def _emit_from_captured_trace(
 
                     # Add results to the value map in case they are used as
                     # operands later
+                    if len(mlir_op.results) > 1:
+                        # TODO: rework value_map to always map to a sequence of results
+                        raise RuntimeError(
+                            f"Missing support for operations with multiple results"
+                        )
                     for result in mlir_op.results:
                         value_map[fx_node] = result
 

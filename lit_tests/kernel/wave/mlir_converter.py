@@ -40,7 +40,7 @@ def matrix_add(
     b: Memory[M, N, ADDRESS_SPACE_B, tkl.f16],
     c: Memory[M, N, ADDRESS_SPACE_C, tkl.f16],
 ):
-    # Intialize the accumulator register with zeroes
+    # Initialize the accumulator register with zeroes
     c_reg = Register[M, N, tkl.f16](0.0)
 
     # loads values from memory into registers
