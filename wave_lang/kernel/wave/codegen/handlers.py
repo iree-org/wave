@@ -1644,7 +1644,7 @@ def handle_shared_memory_barrier_wait(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Malformed arguments") from e
 
     if wait_async_ops:
-        rocdl.s_wait_loadcnt(0)
+        rocdl_d.s_wait_loadcnt(0)
 
     rocdl_d.s_barrier_wait(barId)
 
