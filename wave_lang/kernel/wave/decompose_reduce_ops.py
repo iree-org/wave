@@ -369,11 +369,11 @@ def decompose_reduce_ops(
                 raise NotImplementedError(
                     "NYI: Expect all reduce_src to have same fastest dim."
                 )
-            if reduction_dim is not src_fastest_dims[0]:
-                raise NotImplementedError(
-                    f"Only implemented reduction on fastest dimension. Got {reduction_dim} and {src_fastest_dims}."
-                    f"\n{custom}"
-                )
+            # if reduction_dim is not src_fastest_dims[0]:
+            #     raise NotImplementedError(
+            #         f"Only implemented reduction on fastest dimension. Got {reduction_dim} and {src_fastest_dims}."
+            #         f"\n{custom}"
+            #     )
 
             get_thread_shape = lambda index: max(
                 subs_idxc(x.size) for x in index.values()
