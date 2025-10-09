@@ -104,6 +104,9 @@ def add_shared_memory_barriers(
     While sub-optimal, we use this as a baseline to compare more
     sophisticated barrier insertion strategies.
     """
+    if get_arch_family() != "CDNA":
+        return
+
     if not graph:
         graph = trace.get_root_graph()
 
