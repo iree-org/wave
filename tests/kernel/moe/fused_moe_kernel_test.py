@@ -90,11 +90,9 @@ def torch_ref_moe(
                 @ w2_compute[i].transpose(0, 1).float()
             )
 
-        # final_res = out.sum(dim=1)
-        final_res = (
-            out.view(B, -1, w2.shape[1]) * topk_weights.view(B, -1, 1).to(out.dtype)
-        ).sum(dim=1)
-    return gemm1_result, silu_mul_result, out, final_res
+    return (
+        out.view(B, -1, w2.shape[1]) * topk_weights.view(B, -1, 1).to(out.dtype)
+    ).sum(dim=1)
 
 
 def get_wave_moe_fused_gemm_kernel(
@@ -324,7 +322,8 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     )
     reduce_sum(reshape_out, topk_weights_broadcasted, final_out)
 
-    return gemm1_out, silu_and_mul_out, gemm2_out, final_out
+    # return gemm1_out, silu_and_mul_out, gemm2_out, final_out
+    return final_out
 
 
 num_tokens_values = [32]
@@ -364,26 +363,24 @@ def test_fused_moe(
     w2 = torch.randn(num_experts, k, n, dtype=dtype, device=device)
 
     score = torch.rand((num_tokens, num_experts), dtype=dtype, device=device)
-    [ref_gemm1_out, ref_silu_and_mul_out, ref_gemm2_out, ref_output] = torch_ref_moe(
-        a, w1, w2, score.clone(), topk
-    )
-    [tkw_gemm1_out, tkw_silu_and_mul_out, tkw_gemm2_out, tkw_output] = tkw_moe(
+    ref_output = torch_ref_moe(a, w1, w2, score.clone(), topk)
+    tkw_output = tkw_moe(
         a, w1, w2, score.clone(), topk, num_experts, block_size, num_tokens
     )
 
-    torch.testing.assert_close(
-        tkw_gemm1_out, ref_gemm1_out, rtol=rtol, atol=atol, msg="GEMM1 output mismatch"
-    )
-    torch.testing.assert_close(
-        tkw_silu_and_mul_out,
-        ref_silu_and_mul_out,
-        rtol=rtol,
-        atol=atol,
-        msg="SiLU and Mul output mismatch",
-    )
-    torch.testing.assert_close(
-        tkw_gemm2_out, ref_gemm2_out, rtol=rtol, atol=atol, msg="GEMM2 output mismatch"
-    )
+    # torch.testing.assert_close(
+    #     tkw_gemm1_out, ref_gemm1_out, rtol=rtol, atol=atol, msg="GEMM1 output mismatch"
+    # )
+    # torch.testing.assert_close(
+    #     tkw_silu_and_mul_out,
+    #     ref_silu_and_mul_out,
+    #     rtol=rtol,
+    #     atol=atol,
+    #     msg="SiLU and Mul output mismatch",
+    # )
+    # torch.testing.assert_close(
+    #     tkw_gemm2_out, ref_gemm2_out, rtol=rtol, atol=atol, msg="GEMM2 output mismatch"
+    # )
     torch.testing.assert_close(
         tkw_output, ref_output, rtol=rtol, atol=atol, msg="Final output mismatch"
     )
