@@ -1,4 +1,6 @@
 # RUN: python %s | FileCheck %s --check-prefix=CHECK,CHECK-%target
+# TODO: integrate with turbine repo?
+# REQUIRES: turbine
 
 import textwrap
 from typing import Optional
