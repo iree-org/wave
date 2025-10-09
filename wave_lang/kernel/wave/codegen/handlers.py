@@ -787,9 +787,9 @@ def handle_div(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
 @handle_binary_op(operator.mod)
 def handle_mod(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         result = arith_d.remf(lhs, rhs, fastmath=get_fast_math_flags(options))
-    elif _is_integer_like_type(element_type):
+    elif is_integer_like_type(element_type):
         result = arith_d.remsi(lhs, rhs)
     else:
         raise ValidationError(f"Found unhandled operand type for mod: {element_type}")
@@ -964,9 +964,9 @@ def handle_atomic_add(
     value_element_type = get_type_or_element_type(val.type)
     atomic_kind = None
     # Only scalars are supported currently
-    if _is_float_type(value_element_type):
+    if is_float_type(value_element_type):
         atomic_kind = arith_d.AtomicRMWKind.addf
-    elif _is_integer_like_type(value_element_type) and _is_signed_or_signless_type(
+    elif is_integer_like_type(value_element_type) and is_signed_or_signless_type(
         value_element_type
     ):
         atomic_kind = arith_d.AtomicRMWKind.addi
@@ -1283,7 +1283,7 @@ def handle_tanh(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_unary_op(round)
 def handle_round(source: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(source.type)
-    if _is_float_type(element_type):
+    if is_float_type(element_type):
         round = math_d.round(source)
     else:
         raise ValidationError(f"Found unhandled operand type for round: {element_type}")
