@@ -47,7 +47,6 @@ def is_float_type(type):
             Float8E5M2Type,
             Float8E5M2FNUZType,
             Float8E8M0FNUType,
-            Float8E8M0FNUType,
             Float6E2M3FNType,
             Float4E2M1FNType,
         ),
