@@ -26,6 +26,8 @@ from ...ops.wave_ops import (
     Placeholder,
     SharedMemoryBarrier,
     TopkOp,
+    SharedMemoryBarrierSignal,
+    SharedMemoryBarrierWait,
     Write,
     get_custom,
 )
@@ -425,9 +427,13 @@ def is_barrier_between_same_graph(src: fx.Node, dst: fx.Node) -> Optional[fx.Nod
     assuming that they are in the same graph.
     """
     next_node = src.next
+    signals = dict()
     while next_node != dst and next_node.next.op != "root":
-        if isinstance(get_custom(next_node), SharedMemoryBarrier):
+        custom_next_node = get_custom(next_node)
+        if isinstance(custom_next_node, SharedMemoryBarrier):
             return next_node
+        if isinstance(custom_next_node, SharedMemoryBarrierSignal):
+            pass
         next_node = next_node.next
 
     return None
