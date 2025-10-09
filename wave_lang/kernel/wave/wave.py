@@ -698,7 +698,7 @@ class LaunchableWave(Launchable):
         # Only emit MLIR if we don't have a module yet.
         if not module_op:
             emitter = WaveEmitter(
-                dispatch_entrypoint, trace, self.constraints, options, self.grid_type
+                dispatch_entrypoint, trace, self.constraints, options, self.grid_type.dims
             )
             try:
                 emitter.emit(trace.get_root_graph())

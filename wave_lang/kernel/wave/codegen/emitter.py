@@ -76,7 +76,7 @@ class WaveEmitter:
     trace: CapturedTrace
     constraints: list[Constraint]
     options: WaveCompileOptions
-    grid_type: Type["Grid"]
+    grid: list[IndexExpr]
     ip: InsertionPoint = None
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
     _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}
@@ -86,20 +86,20 @@ class WaveEmitter:
         self.dynamic_symbols = self.options.dynamic_symbols
 
     def emit_program_invariants(self):
-        grid_type = self.grid_type
+        grid = self.grid
 
         self.workgroup_ids = [
             gpu_d.block_id(
                 gpu_d.Dimension.x,
-                upper_bound=_get_upper_bound(grid_type.dims[0]),
+                upper_bound=_get_upper_bound(grid[0]),
             ),
             gpu_d.block_id(
                 gpu_d.Dimension.y,
-                upper_bound=_get_upper_bound(grid_type.dims[1]),
+                upper_bound=_get_upper_bound(grid[1]),
             ),
             gpu_d.block_id(
                 gpu_d.Dimension.z,
-                upper_bound=_get_upper_bound(grid_type.dims[2]),
+                upper_bound=_get_upper_bound(grid[2]),
             ),
         ]
 
