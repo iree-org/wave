@@ -32,6 +32,7 @@ from .utils.graph_utils import (
 )
 from .utils.run_utils import get_arch_family
 
+
 class MemoryAccessType(Enum):
     """Enum to classify memory access operations."""
 
@@ -88,6 +89,7 @@ class SharedMemoryBarrierInfo:
     is_async: bool = False
     last_node: Optional[fx.Node] = None
     last_node_type: MemoryAccessType = MemoryAccessType.NONE
+
 
 def add_shared_memory_barriers(
     trace: CapturedTrace,
@@ -150,6 +152,7 @@ def add_shared_memory_barriers(
         # Add barriers between ops from different iterations in the same loop.
         add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
 
+
 def add_shared_memory_barriers_gfx12(
     trace: CapturedTrace,
     graph: Optional[fx.Graph] = None,
@@ -192,10 +195,13 @@ def add_shared_memory_barriers_gfx12(
                     barrier_wait_node = None
                     with graph.inserting_before(node):
                         barrier_wait_node = SharedMemoryBarrierWait(
-                            -1, wait_async_ops=state.is_async,
+                            -1,
+                            wait_async_ops=state.is_async,
                         ).add_to_graph(graph, loc=custom.location)
                     with graph.inserting_before(barrier_wait_node):
-                        barrier_signal_node = SharedMemoryBarrierSignal(-1).add_to_graph(graph, loc=barrier_wait_node.location)
+                        barrier_signal_node = SharedMemoryBarrierSignal(
+                            -1
+                        ).add_to_graph(graph, loc=barrier_wait_node.location)
 
                 state.is_async = False
 

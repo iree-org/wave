@@ -1461,6 +1461,7 @@ class SharedMemoryBarrier(CustomOp):
     """
     Represents a shared memory barrier in the graph.
     """
+
     wait_async_ops: bool = False
 
     @property
