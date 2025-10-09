@@ -49,7 +49,8 @@ def torch_ref_moe(
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
     out = torch.zeros(B * topk, w2.shape[1], dtype=torch.float32, device=a.device)
     score = torch.softmax(score, dim=-1, dtype=torch.float32)
-    _, topk_ids = torch.topk(score, topk)
+    topk_weights, topk_ids = torch.topk(score, topk)
+    topk_weights = topk_weights.view(-1)
     topk_ids = topk_ids.view(-1)
 
     if w1.dtype in [torch.float8_e4m3fn, torch.float8_e4m3fnuz]:
@@ -89,7 +90,11 @@ def torch_ref_moe(
                 @ w2_compute[i].transpose(0, 1).float()
             )
 
-    return gemm1_result, silu_mul_result, out, out.sum(dim=1)
+        # final_res = out.sum(dim=1)
+        final_res = (
+            out.view(B, -1, w2.shape[1]) * topk_weights.view(B, -1, 1).to(out.dtype)
+        ).sum(dim=1)
+    return gemm1_result, silu_mul_result, out, final_res
 
 
 def get_wave_moe_fused_gemm_kernel(
@@ -158,8 +163,8 @@ def get_wave_silu_and_mul_kernel(m: int, n: int, dtype: DataType):
     return wave_compile(options, kernel)
 
 
-def get_wave_reduce_sum_kernel(m: int, n: int, dtype: DataType):
-    kernel, symbols = get_moe_reduce_sum_kernel(m, n, dtype)
+def get_wave_reduce_sum_kernel(b: int, k: int, d: int, dtype: DataType):
+    kernel, symbols = get_moe_reduce_sum_kernel(b, k, d, dtype)
     symbols.update(get_default_scheduling_params())
     options = WaveCompileOptions(
         subs=symbols,
@@ -176,7 +181,8 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     # Router: Select top-k experts for each token
     # TODO: replace with topk kernel implemented in Wave
     score = torch.softmax(score, dim=-1, dtype=torch.float32)
-    _, topk_ids = torch.topk(score, topk)
+    topk_weights, topk_ids = torch.topk(score, topk)
+    topk_weights = topk_weights.view(-1)
     topk_ids = topk_ids.view(-1)
 
     # Compile and run block alignment kernel to sort tokens by expert
@@ -304,14 +310,19 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     )
 
     # Reduce: Sum across output dimension
-    final_out = torch.zeros(m * topk, dtype=torch.float32, device=a.device)
+
+    reshape_out = gemm2_out.view(m, -1, w2.shape[1])
+    topk_weights_broadcasted = topk_weights.view(m, -1)
+
+    final_out = torch.zeros(m, w2.shape[1], dtype=torch.float32, device=a.device)
 
     reduce_sum = get_wave_reduce_sum_kernel(
-        m * topk,
-        w2.shape[1],
+        reshape_out.shape[0],
+        reshape_out.shape[1],
+        reshape_out.shape[2],
         tkl.f32,
     )
-    reduce_sum(gemm2_out, final_out)
+    reduce_sum(reshape_out, topk_weights_broadcasted, final_out)
 
     return gemm1_out, silu_and_mul_out, gemm2_out, final_out
 
