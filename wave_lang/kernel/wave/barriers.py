@@ -87,7 +87,6 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
 class SharedMemoryBarrierInfo:
     is_async: bool = False
     last_node: Optional[fx.Node] = None
-    last_node_type: MemoryAccessType = MemoryAccessType.NONE
 
 
 def add_shared_memory_barriers(
@@ -138,13 +137,13 @@ def add_shared_memory_barriers(
                         barrier_wait_node = None
                         with graph.inserting_before(node):
                             barrier_wait_node = SharedMemoryBarrierWait(
-                                -1,
-                                wait_async_ops=state.is_async,
+                                -1
                             ).add_to_graph(graph, loc=custom.location)
 
                         with graph.inserting_before(barrier_wait_node):
                             barrier_signal_node = SharedMemoryBarrierSignal(
-                                -1
+                                -1,
+                                wait_async_ops=state.is_async,
                             ).add_to_graph(
                                 graph, loc=get_custom(barrier_wait_node).location
                             )

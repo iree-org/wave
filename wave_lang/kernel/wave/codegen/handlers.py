@@ -1614,10 +1614,15 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
 def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
     try:
         barId = node.args[0]
+        wait_async_ops = node.args[1]
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
     rocdl_d.s_wait_dscnt(0)
+
+    if wait_async_ops:
+        rocdl_d.s_wait_loadcnt(0)
+
     rocdl_d.s_barrier_signal(barId)
 
 
@@ -1625,12 +1630,8 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
 def handle_shared_memory_barrier_wait(emitter: WaveEmitter, node: fx.Node):
     try:
         barId = node.args[0]
-        wait_async_ops = node.args[1]
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
-
-    if wait_async_ops:
-        rocdl_d.s_wait_loadcnt(0)
 
     rocdl_d.s_barrier_wait(barId)
 

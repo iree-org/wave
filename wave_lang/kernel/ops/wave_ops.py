@@ -123,7 +123,7 @@ def set_wave_prio(priority: int): ...
 def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
-def shared_memory_barrier_signal(barId: int = 0): ...
+def shared_memory_barrier_signal(barId: int = 0, wait_async_ops: bool = False): ...
 
 
 def shared_memory_barrier_wait(barId: int = 0): ...
@@ -1441,6 +1441,7 @@ class SharedMemoryBarrierSignal(CustomOp):
     """
 
     barId: int = 0
+    wait_async_ops: bool = False
 
     @property
     def has_side_effects(self) -> bool:
@@ -1461,7 +1462,6 @@ class SharedMemoryBarrierWait(CustomOp):
     """
 
     barId: int = 0
-    wait_async_ops: bool = False
 
     @property
     def has_side_effects(self) -> bool:
