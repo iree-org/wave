@@ -1420,7 +1420,6 @@ class SharedMemoryBarrier(CustomOp):
     """
     Represents a shared memory barrier in the graph.
     """
-
     wait_async_ops: bool = False
 
     @property
@@ -1461,6 +1460,7 @@ class SharedMemoryBarrierWait(CustomOp):
     """
 
     barId: int = 0
+    wait_async_ops: bool = False
 
     @property
     def has_side_effects(self) -> bool:
