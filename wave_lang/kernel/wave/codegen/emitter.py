@@ -28,6 +28,7 @@ from wave_lang.support.ir_imports import (
     Attribute,
     DenseElementsAttr,
     FloatAttr,
+    FunctionType,
     IndexType,
     InsertionPoint,
     IntegerAttr,
@@ -41,6 +42,7 @@ from wave_lang.support.ir_imports import (
     VectorType,
     affine_d,
     arith_d,
+    builtin_d,
     func_d,
     gpu_d,
     vector_d,
@@ -50,7 +52,7 @@ from ..._support.indexing import IndexExpr, IndexingContext, xor
 from ..._support.tracing import CapturedTrace
 from ...compiler.base import NDEBUG, CodegenError
 from ...compiler.builder import IRProxyValue, ScalarBuilder
-from ...compiler.kernel_codegen import BindingType, BoundKernelSignature
+from ...compiler.kernel_codegen import BindingType, BindingDesc, BoundKernelSignature
 from ...lang.wave_types import IndexSymbol
 from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint, HardwareConstraint, TilingConstraint
@@ -85,6 +87,32 @@ class WaveEmitter:
         self.ip = InsertionPoint(self.root_sig.entry_block)
         self.dynamic_symbols = self.options.dynamic_symbols
 
+        ip = self.ip
+        while not isinstance(ip.block.owner, builtin_d.ModuleOp):
+            ip = InsertionPoint(ip.block.owner)
+
+        bindings = self.root_sig.sig.linear_bindings
+
+        def abi_type(binding: BindingDesc):
+            if binding.binding_type == BindingType.KERNEL_BUFFER:
+                return MemRefType.get(
+                    [], element_type=binding.as_mlir_type().element_type
+                )
+            return binding.as_mlir_type()
+
+        with ip, Location.unknown():
+            arg_types = [abi_type(b) for b in bindings]
+
+            ftype = FunctionType.get(arg_types, [])
+            func_op = func_d.FuncOp("test_test", ftype)
+
+            locs = [Location.unknown()] * len(arg_types)
+            self.entry_block = func_op.add_entry_block(locs)
+
+        ip = InsertionPoint(self.entry_block)
+        with ip, Location.unknown():
+            func_d.ReturnOp([])
+
     def emit_program_invariants(self):
         grid = self.grid
 
@@ -118,9 +146,7 @@ class WaveEmitter:
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
 
-        for bind, arg in zip(
-            self.root_sig.sig.bindings, self.root_sig.entry_block.arguments
-        ):
+        for bind, arg in zip(self.root_sig.sig.bindings, self.entry_block.arguments):
             if bind.binding_type == BindingType.SYMBOL_VALUE:
                 self.dynamic_dims[bind.symbol_type] = arg
 
