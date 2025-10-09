@@ -141,7 +141,7 @@ def add_shared_memory_barriers(
                             ).add_to_graph(graph, loc=custom.location)
 
                         with graph.inserting_before(barrier_wait_node):
-                            barrier_signal_node = SharedMemoryBarrierSignal(
+                            _ = SharedMemoryBarrierSignal(
                                 -1,
                                 wait_async_ops=state.is_async,
                             ).add_to_graph(
