@@ -746,42 +746,52 @@ def get_silu_and_mul_kernel(
 
 
 def get_moe_reduce_sum_kernel(
-    m: int,
-    n: int,
+    b: int,
+    k: int,
+    d: int,
     datatype: DataType,
 ):
     # Input sizes
-    M = tkl.sym.M
-    N = tkl.sym.N
+    B = tkl.sym.B
+    K = tkl.sym.K
+    D = tkl.sym.D
     wave_size = 64
-    BLOCK_M = 1
-    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    BLOCK_B = 1
+    BLOCK_K = sympy.ceiling(K / wave_size) * wave_size
+    BLOCK_D = 1
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
             threads_per_wave=64,
-            vector_shapes={M: 1, N: BLOCK_N},
+            vector_shapes={B: BLOCK_B, K: BLOCK_K, D: BLOCK_D},
         )
     ]
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
+    constraints += [tkw.WorkgroupConstraint(K, BLOCK_K, 0)]
+    constraints += [tkw.WorkgroupConstraint(D, BLOCK_D, 1)]
+    constraints += [tkw.WaveConstraint(B, BLOCK_B)]
+    constraints += [tkw.WaveConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(D, BLOCK_D)]
 
     @tkw.wave(constraints)
     def moe_reduce_sum(
-        a: tkl.Memory[M, N, ADDRESS_SPACE, datatype],
-        c: tkl.Memory[M, ADDRESS_SPACE, datatype],
+        a: tkl.Memory[B, K, D, ADDRESS_SPACE, datatype],
+        b: tkl.Memory[B, K, ADDRESS_SPACE, datatype],
+        c: tkl.Memory[B, D, ADDRESS_SPACE, datatype],
     ):
-        res = tkw.read(a)
-        res = tkw.sum(res, dim=N)
+        gemm2_out = tkw.read(a)
+        topk_weights = tkw.read(b)
+        topk_weights_broadcasted = tkw.broadcast(topk_weights, [B, K, D])
+        res = gemm2_out * topk_weights_broadcasted
+        res = tkw.sum(res, dim=K)
         tkw.write(res, c)
 
     hyperparams = {
         ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
-        M: m,
-        N: n,
+        B: b,
+        K: k,
+        D: d,
     }
 
     return moe_reduce_sum, hyperparams
