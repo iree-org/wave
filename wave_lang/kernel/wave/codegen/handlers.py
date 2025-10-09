@@ -2024,7 +2024,10 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
 
         if mapping:
             symbolic_shape = list(bounds.keys())
-            index = transform_index_on_mapping(mapping, symbolic_shape, index)
+            # All mapping are transformed into read mapping during ops generation.
+            index = transform_index_on_mapping(
+                mapping, symbolic_shape, index, is_read=True
+            )
 
         start_indices = _get_start_indices(index)
         oob = sympy.Or(

@@ -35,6 +35,8 @@ def generate_bound_checks(trace: CapturedTrace):
 
         mapping = node.mapping
         if mapping and isinstance(node, Write):
+            # Transform write mapping into read mapping, so we don't need to distinguish between read and write
+            # during lowerings.
             mapping = copy.copy(mapping)
             mapping.input_mapping, mapping.output_mapping = (
                 mapping.output_mapping,
