@@ -18,7 +18,10 @@ def generate_bound_checks(trace: CapturedTrace):
     """
     Generate bound checks for read and write ops.
 
-    They are generated based on tensor memory shape.
+    Bound checks are generated based on the tensor's memory shape.
+
+    If a bounds check fails, an error message is reported (typically via printf)
+    and execution is halted.
     """
     logger.info("Generating bound checks")
 
