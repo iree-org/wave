@@ -422,7 +422,7 @@ def get_outer_node(outer_node: fx.Node) -> fx.Node:
 
 
 def is_barrier_between_same_graph(
-    src: fx.Node, dst: fx.Node, barId: int = -1
+    src: fx.Node, dst: fx.Node, barId: int = -1, barrier_check: set = None
 ) -> Optional[fx.Node]:
     """
     Checks if there is a barrier between the source and destination nodes,
@@ -430,7 +430,8 @@ def is_barrier_between_same_graph(
     """
     next_node = src.next
     guards = [SharedMemoryBarrier, SharedMemoryBarrierWait, SharedMemoryBarrierSignal]
-    barrier_check = set()
+    if barrier_check is None:
+        barrier_check = set()
     while next_node != dst and next_node.next.op != "root":
         custom_next_node = get_custom(next_node)
         if isinstance(custom_next_node, SharedMemoryBarrier):
@@ -451,6 +452,7 @@ def is_barrier_between(
     """
     Checks if there is a barrier between the source and destination nodes.
     """
+    barriers = set()
     if src.graph == dst.graph:
         # The following cases are handled when src and dst are in same graph:
         # 1. src and dst is on the same iteration step and src < dst (topographic).
@@ -464,12 +466,14 @@ def is_barrier_between(
         if dst < src:
             # Check between src and end of loop.
             if node := is_barrier_between_same_graph(
-                src, list(src.graph.nodes)[-1], barId
+                src, list(src.graph.nodes)[-1], barId, barriers
             ):
                 return node
             # If cannot find between src to end of loop,
             # then, we check beginning of loop to dst.
-            return is_barrier_between_same_graph(list(dst.graph.nodes)[0], dst, barId)
+            return is_barrier_between_same_graph(
+                list(dst.graph.nodes)[0], dst, barId, barriers
+            )
     else:
         # The following cases are handled when src and dst are in different graphs:
         # 1. src and dst graphs at the same nested level.
@@ -483,15 +487,15 @@ def is_barrier_between(
             ), "src and dst parent ops must be in the same graph"
             # Check if there is a barrier in the src graph between src and output.
             src_check = is_barrier_between_same_graph(
-                src, list(src.graph.nodes)[-1], barId
+                src, list(src.graph.nodes)[-1], barId, barriers
             )
             # Check if there is a barrier in the graph above between src root and dst root.
             root_check = is_barrier_between_same_graph(
-                src.graph.parent_op, dst.graph.parent_op, barId
+                src.graph.parent_op, dst.graph.parent_op, barId, barriers
             )
             # Check if there is a barrier in the dst graph between the root and dst.
             dst_check = is_barrier_between_same_graph(
-                list(dst.graph.nodes)[0], dst, barId
+                list(dst.graph.nodes)[0], dst, barId, barriers
             )
             return src_check or root_check or dst_check
 
@@ -499,19 +503,23 @@ def is_barrier_between(
         if hasattr(src.graph, "parent_op") and not hasattr(dst.graph, "parent_op"):
             # Check if there is a barrier in the src graph between src and output.
             src_check = is_barrier_between_same_graph(
-                src, list(src.graph.nodes)[-1], barId
+                src, list(src.graph.nodes)[-1], barId, barriers
             )
             # Check if there is a barrier in the graph above between src root and dst.
-            root_check = is_barrier_between_same_graph(src.graph.parent_op, dst, barId)
+            root_check = is_barrier_between_same_graph(
+                src.graph.parent_op, dst, barId, barriers
+            )
             return src_check or root_check
 
         # Case 3:
         if not hasattr(src.graph, "parent_op") and hasattr(dst.graph, "parent_op"):
             # Check if there is a barrier in the graph above between src and dst root.
-            root_check = is_barrier_between_same_graph(src, dst.graph.parent_op, barId)
+            root_check = is_barrier_between_same_graph(
+                src, dst.graph.parent_op, barId, barriers
+            )
             # Check if there is a barrier in the dst graph between the root and dst.
             dst_check = is_barrier_between_same_graph(
-                list(dst.graph.nodes)[0], dst, barId
+                list(dst.graph.nodes)[0], dst, barId, barriers
             )
             return dst_check or root_check
 

@@ -125,7 +125,6 @@ def get_dependent_state(
 class SharedMemoryBarrierInfo:
     is_async: bool = False
     last_node: Optional[fx.Node] = None
-    last_node_type: MemoryAccessType = MemoryAccessType.NONE
 
 
 def add_shared_memory_barriers(
@@ -155,23 +154,22 @@ def add_shared_memory_barriers(
     if info is None:
         info = defaultdict(SharedMemoryBarrierInfo)
 
+    # a map with key: barId, value: fx.Node to keep track of last node to signal
     if last_to_signal is None:
         last_to_signal = defaultdict()
 
     # TODO(megan.kuo) named barriers are disabled features in navi4x products.
     # will be supported in future generations.
     # WAR: 1, RAW: 2 [insert when meet last node]
-    named_bars = {MemoryAccessType.READ: 1, MemoryAccessType.WRITE: 2}
-    # a dict with key: barId, value: fx.Node to keep track of last node to signal
+    # named_bars = {MemoryAccessType.READ: 1, MemoryAccessType.WRITE: 2}
 
     for node in graph.nodes:
         custom = get_custom(node)
         depth = 1 if checking_next_iter else 0
         if mem := is_shared_memory_op(custom, depth):
             state = info[mem]
-            node_type = get_memory_access_type(custom)
 
-            barId = -1  # named_bars.get(node_type, -1)
+            barId = -1  # TODO named_bars.get(get_memory_access_type(node), -1)
             if state.last_node and need_barrier(custom, state.last_node):
 
                 if barrier := is_barrier_between(
@@ -236,6 +234,7 @@ def add_shared_memory_barriers(
                             case NodeDependentType.ROOT_REDUCTION:
                                 barrier_signal_node = last_to_signal.get(barId)
                                 barrier_wait_node = graph.parent_op.next
+                                root_dependent_node = None
 
                         if barrier_signal_node:
                             signal_node = move_to_valid(barrier_signal_node)
@@ -263,7 +262,6 @@ def add_shared_memory_barriers(
                 state.is_async = False
 
             state.last_node = custom
-            state.last_node_type = node_type
             last_to_signal.update({barId: node})
 
             if isinstance(custom, GatherToLDS):
