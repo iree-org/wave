@@ -430,14 +430,15 @@ def is_barrier_between_same_graph(
     """
     next_node = src.next
     guards = [SharedMemoryBarrier, SharedMemoryBarrierWait, SharedMemoryBarrierSignal]
+    barrier_check = set()
     while next_node != dst and next_node.next.op != "root":
         custom_next_node = get_custom(next_node)
         if isinstance(custom_next_node, SharedMemoryBarrier):
             return next_node
-        if isinstance(custom_next_node, SharedMemoryBarrierWait) or isinstance(
-            custom_next_node, SharedMemoryBarrierSignal
-        ):
-            if custom_next_node.barId == barId:
+        if isinstance(custom_next_node, SharedMemoryBarrierSignal):
+            barrier_check.add(custom_next_node.barId)
+        if isinstance(custom_next_node, SharedMemoryBarrierWait):
+            if custom_next_node.barId == barId and barId in barrier_check:
                 return next_node
         next_node = next_node.next
 
