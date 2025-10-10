@@ -1057,9 +1057,7 @@ def resolve_broadcasting_for_op(custom: CustomOp, operand_identifiers: list[str]
                     set(operand.custom.type.symbolic_shape)
                 )
                 is_only_missing_dim = missing_dims == {target.dim}
-                is_innermost_dim = (
-                    target.dim == target.custom.type.symbolic_shape[-1]
-                )
+                is_innermost_dim = target.dim == target.custom.type.symbolic_shape[-1]
 
                 if not is_only_missing_dim and not is_innermost_dim:
                     raise NotImplementedError(
