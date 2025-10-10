@@ -17,6 +17,10 @@
 
 namespace wave {
 
+//-----------------------------------------------------------------------------
+// HasWaveIndexMapping trait
+//-----------------------------------------------------------------------------
+
 // Common verifier for the optional 'index' attribute used by Wave ops.
 mlir::LogicalResult verifyWaveIndexMappings(mlir::Operation *op);
 
@@ -34,6 +38,10 @@ mlir::ParseResult parseWaveIndexDict(mlir::OpAsmParser &parser,
                                      mlir::DictionaryAttr &out);
 void printWaveIndexDict(mlir::OpAsmPrinter &printer, mlir::Operation *op,
                         mlir::DictionaryAttr dict);
+
+//-----------------------------------------------------------------------------
+// WaveInferTypeOpInterface and implementation traits
+//-----------------------------------------------------------------------------
 
 namespace detail {
 // Propagate shape information from `from` tensor types to `to` tensor types.
@@ -173,6 +181,206 @@ public:
         op, /*includeAddressSpace=*/false);
   }
 };
+
+//-----------------------------------------------------------------------------
+// WaveElementsPerThreadOpInterface
+//-----------------------------------------------------------------------------
+
+// Lattice for propagating the "elements per thread" value across wave dialect
+// operations. In addition to the bottom and top states, it can represent a
+// concrete state manifest as an integer value. The JOIN function is defined by
+// the following table:
+//
+// JOIN       top         concrete        bottom
+// top        top         top             top
+// concrete   top         concrete|top*   concrete
+// bottom     top         concrete        bottom
+//   * if two concrete values are equal, their JOIN is equal to each of them,
+//     otherwise it is considered a propagation conflict and results in the top
+//     state.
+class ElementsPerThreadLatticeValue {
+public:
+  // Usage as lattice requires value/storage classes to be default- and
+  // copy-constructible, as well as copy-assignable.
+  ElementsPerThreadLatticeValue() : value(kBottomTag) {}
+  ElementsPerThreadLatticeValue(const ElementsPerThreadLatticeValue &) =
+      default;
+  ElementsPerThreadLatticeValue &
+  operator=(const ElementsPerThreadLatticeValue &other) = default;
+
+  // Create a lattice value in the concrete state.
+  explicit ElementsPerThreadLatticeValue(uint64_t value) : value(value) {
+    assert(value != kTopTag && "please use top() instead");
+    assert(value != kBottomTag && "please use bottom() instead");
+  }
+
+  // Create a lattice value in the bottom state.
+  static ElementsPerThreadLatticeValue bottom() {
+    ElementsPerThreadLatticeValue result(0);
+    result.value = kBottomTag;
+    return result;
+  }
+
+  // Create a lattice value in the top state.
+  static ElementsPerThreadLatticeValue top() {
+    ElementsPerThreadLatticeValue result(0);
+    result.value = kTopTag;
+    return result;
+  }
+
+  // Usage as lattice requires value/storage class instances to be comparable.
+  bool operator==(const ElementsPerThreadLatticeValue &other) const {
+    return value == other.value;
+  }
+  bool operator!=(const ElementsPerThreadLatticeValue &other) const {
+    return !operator==(other);
+  }
+
+  // Examine the state of the lattice object.
+  bool isBottom() const { return value == kBottomTag; }
+  bool isTop() const { return value == kTopTag; }
+  uint64_t getValue() const {
+    assert(!isBottom() && !isTop());
+    return value;
+  }
+
+  // JOIN two lattice objects and return the result.
+  static ElementsPerThreadLatticeValue
+  join(const ElementsPerThreadLatticeValue &lhs,
+       const ElementsPerThreadLatticeValue &rhs);
+
+  // XXX: backward analysis calls `meet` instead of `join`, but it isn't related
+  // to the direction of the analysis. Just defer to join.
+  static ElementsPerThreadLatticeValue
+  meet(const ElementsPerThreadLatticeValue &lhs,
+       const ElementsPerThreadLatticeValue &rhs) {
+    return join(lhs, rhs);
+  }
+
+  // Forcibly assign the current value of the lattice. This MUST NOT be used in
+  // the transfer functions as it may be moving the instance back on the lattice
+  // and therefore breaking the analysis convergence guarantees due to
+  // non-monotonicity. This is useful during forceful initialization to override
+  // the quirk of the dataflow framework using the same function
+  // (`setToEntry/ExitState`) to both initialize the analysis and to indicate
+  // failure to analyze. Those functions can keep setting the lattice to the top
+  // state.
+  void unsafeSet(const ElementsPerThreadLatticeValue &value) {
+    this->value = value.value;
+  }
+
+  // Print the lattice value to the given output stream.
+  void print(llvm::raw_ostream &os) const;
+
+  LLVM_DUMP_METHOD void dump() const { print(llvm::errs()); }
+
+private:
+  uint64_t value;
+  constexpr const static uint64_t kBottomTag =
+      std::numeric_limits<uint64_t>::max() - 1;
+  constexpr const static uint64_t kTopTag =
+      std::numeric_limits<uint64_t>::max();
+};
+
+namespace detail {
+
+// Propagate elements per thread lattice values from the list in `from` to the
+// list in `to`. The lattice values in the `from` list are expected to be
+// compatible, i.e., their JOIN should not result in the top value unless one of
+// them is already the lattice top. Report errors about conflicts to the error
+// stream provided and return failure. Otherwise return whether any of the `to`
+// lattices was updated.
+llvm::FailureOr<mlir::ChangeResult> identityElementsPerThreadPropagate(
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> from,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> to,
+    llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs);
+
+// Propagate elements per thread lattice values from `from` to the
+// `mutableValues` list and check their compatibility with those in the
+// `immutableValues` list i.e., their JOIN should not result in the top value
+// unless one of them is already the lattice top. Report errors about conflicts
+// to the error stream provided and return failure. Otherwise return whether any
+// of the `mutableValues` lattices was updated.
+llvm::FailureOr<mlir::ChangeResult>
+checkAndPropagateElementsPerThreadFromConstant(
+    const ElementsPerThreadLatticeValue &from,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> immutableValues,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> mutableValues,
+    llvm::StringRef fromName, llvm::StringRef immutableName,
+    llvm::StringRef mutableName, llvm::raw_ostream &errs);
+
+} // namespace detail
+
+// Trait implementing the methods of the WaveElementsPerThreadOpInterface based
+// on the `elements_per_thead` attribute.
+template <typename OpTy>
+class AttrBasedElementsPerThreadOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, AttrBasedElementsPerThreadOpTrait> {
+public:
+  // Propagate `elements_per_thread` value to results.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadForward(
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs) {
+    std::optional<int64_t> elementsPerThread =
+        llvm::cast<OpTy>(this->getOperation()).getElementsPerThread();
+    if (!elementsPerThread)
+      return mlir::ChangeResult::NoChange;
+
+    return detail::checkAndPropagateElementsPerThreadFromConstant(
+        ElementsPerThreadLatticeValue(*elementsPerThread), operandTypes,
+        resultTypes, "elements_per_thread attribute", "operand", "result",
+        errs);
+  }
+
+  // Propagate `elements_per_thread` value to operands.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadBackward(
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs) {
+    std::optional<int64_t> elementsPerThread =
+        llvm::cast<OpTy>(this->getOperation()).getElementsPerThread();
+    if (!elementsPerThread)
+      return mlir::ChangeResult::NoChange;
+
+    return detail::checkAndPropagateElementsPerThreadFromConstant(
+        ElementsPerThreadLatticeValue(*elementsPerThread), resultTypes,
+        operandTypes, "elements_per_thread attribute", "result", "operand",
+        errs);
+  }
+};
+
+// Trait implementing the methods of the WaveElementsPerThreadOpInterface with
+// information flowing between operands and results.
+template <typename OpTy>
+class IdentityElementsPerThreadOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, IdentityElementsPerThreadOpTrait> {
+public:
+  // Propagate from operands to results.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadForward(
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs) {
+    return wave::detail::identityElementsPerThreadPropagate(
+        operandTypes, resultTypes, "operands", "results", errs);
+  }
+
+  // Propagate from results to operands.
+  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadBackward(
+      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandTypes,
+      llvm::ArrayRef<ElementsPerThreadLatticeValue> resultTypes,
+      llvm::raw_ostream &errs) {
+    return wave::detail::identityElementsPerThreadPropagate(
+        resultTypes, operandTypes, "results", "operands", errs);
+  }
+};
+
+// Trait indicating to the elements per thread propagation analysis that the
+// operation intentionally does not use or affect elements per thread.
+template <typename OpTy>
+class NoOpElementsPerThreadOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, NoOpElementsPerThreadOpTrait> {};
+
 } // namespace wave
 
 #include "water/Dialect/Wave/IR/WaveOpInterfaces.h.inc"

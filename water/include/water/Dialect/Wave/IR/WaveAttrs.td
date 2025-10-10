@@ -81,6 +81,8 @@ def NORMAL_FORM_OP_TYPES : I32BitEnumAttrCaseBit<
     "OpTypesSpecified",          1, "full_op_types">;
 def NORMAL_FORM_INDEX_EXPRS : I32BitEnumAttrCaseBit<
     "IndexExprsSpecified",       2, "index_exprs">;
+def NORMAL_FORM_MEMORY_ONLY_TYPES : I32BitEnumAttrCaseBit<
+    "MemoryOnlyTypes",           3, "memory_only_types">;
 
 def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
     "AllTypesSpecified", [
@@ -93,6 +95,7 @@ def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
   NORMAL_FORM_FUNC_BOUNDARY,
   NORMAL_FORM_OP_TYPES,
   NORMAL_FORM_INDEX_EXPRS,
+  NORMAL_FORM_MEMORY_ONLY_TYPES,
 
   // Group aliases.
   NORMAL_FORM_FULL_TYPES
@@ -205,7 +208,6 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
   }];
 }
 
-
 def WaveDistributedShapeAttr : AttrDef<WaveDialect, "DistributedShape"> {
   let mnemonic = "distributed_shape";
   let description = [{
@@ -233,6 +235,33 @@ def WaveDistributedShapeAttr : AttrDef<WaveDialect, "DistributedShape"> {
 
     std::optional<llvm::SmallVector<int64_t>>
     getResolvedShape(::wave::WaveHyperparameterAttr hyper) const;
+  }];
+}
+
+def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
+  let mnemonic = "read_write_bounds";
+  let description = [{
+    This attribute contains a dictionary mapping from symbolic dimension (strings)
+    to a WaveDistributedShapeAttr specifying the bounds of the read/write operations
+    this is attached to.
+
+    Example:
+    ```
+    #wave.read_write_bounds<{M = #wave.distributed_shape<[BLOCK_M] -> BLOCK_M * 2>}>
+    ```
+  }];
+
+  let parameters = (ins "::mlir::DictionaryAttr":$mapping);
+  let assemblyFormat = "`<` $mapping `>`";
+
+  let extraClassDeclaration = [{
+    /// Check if a symbolic dimension exists in the mapping
+    bool hasSymbol(::llvm::StringRef symbolicDim) const {
+      return getMapping().get(symbolicDim) != nullptr;
+    }
+
+    /// Get the number of symbols in the mapping
+    size_t getNumSymbols() const { return getMapping().size(); }
   }];
 }
 

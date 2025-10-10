@@ -16,6 +16,10 @@
 
 using namespace mlir;
 
+//-----------------------------------------------------------------------------
+// Index attribute verification
+//-----------------------------------------------------------------------------
+
 LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   // The attribute is optional.
   Attribute attribute = op->getAttr(wave::WaveDialect::kIndexExprAttrName);
@@ -65,6 +69,10 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   }
   return success();
 }
+
+//-----------------------------------------------------------------------------
+// Custom printing/parsing components
+//-----------------------------------------------------------------------------
 
 // ODS custom directive: parseWaveIndexDict/printWaveIndexDict
 ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, DictionaryAttr &out) {
@@ -182,6 +190,96 @@ wave::detail::identityTypeInferencePropagate(
     changeResult |= *res;
   }
   return changeResult;
+}
+
+//-----------------------------------------------------------------------------
+// WaveElementsPerThreadOpInterface helpers
+//-----------------------------------------------------------------------------
+
+// Print the error message indicating a mismatch between the two lattices.
+static void printElementsPerThreadMismatchMsg(
+    llvm::raw_ostream &errs, const wave::ElementsPerThreadLatticeValue &from,
+    const wave::ElementsPerThreadLatticeValue &to, llvm::StringRef fromName,
+    llvm::StringRef toName, size_t toIndex) {
+  errs << "mismatch between " << fromName << " (";
+  from.print(errs);
+  errs << ") and " << toName << " #" << toIndex << " (";
+  to.print(errs);
+  errs << ")";
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+    const ElementsPerThreadLatticeValue &from,
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> immutableValues,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> mutableValues,
+    llvm::StringRef fromName, llvm::StringRef immutableName,
+    llvm::StringRef mutableName, llvm::raw_ostream &errs) {
+  for (auto [i, fr] : llvm::enumerate(immutableValues)) {
+    if (fr.isBottom() || ElementsPerThreadLatticeValue::join(from, fr) == fr)
+      continue;
+
+    printElementsPerThreadMismatchMsg(errs, from, fr, fromName, immutableName,
+                                      i);
+    return mlir::failure();
+  }
+
+  mlir::ChangeResult changeResult = mlir::ChangeResult::NoChange;
+  for (auto &&[i, toType] : llvm::enumerate(mutableValues)) {
+    ElementsPerThreadLatticeValue joined =
+        ElementsPerThreadLatticeValue::join(from, toType);
+
+    if (joined.isTop() && !from.isTop() && !toType.isTop()) {
+      printElementsPerThreadMismatchMsg(errs, from, toType, fromName,
+                                        mutableName, i);
+      toType = ElementsPerThreadLatticeValue::top();
+      return mlir::failure();
+    }
+
+    if (joined != toType) {
+      changeResult = mlir::ChangeResult::Change;
+      toType = joined;
+    }
+  }
+  return changeResult;
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::detail::identityElementsPerThreadPropagate(
+    llvm::ArrayRef<ElementsPerThreadLatticeValue> from,
+    llvm::MutableArrayRef<ElementsPerThreadLatticeValue> to,
+    llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
+  assert(!from.empty());
+  assert(!to.empty());
+  return checkAndPropagateElementsPerThreadFromConstant(
+      from[0], from, to, (fromName + " #0").str(), fromName, toName, errs);
+}
+
+wave::ElementsPerThreadLatticeValue wave::ElementsPerThreadLatticeValue::join(
+    const wave::ElementsPerThreadLatticeValue &lhs,
+    const wave::ElementsPerThreadLatticeValue &rhs) {
+  if (lhs.isBottom())
+    return rhs;
+  if (rhs.isBottom())
+    return lhs;
+  if (lhs.isTop())
+    return lhs;
+  if (rhs.isTop())
+    return rhs;
+
+  // At this point, this is a specific lattice value.
+  if (lhs.value == rhs.value)
+    return lhs;
+  return top();
+}
+
+void wave::ElementsPerThreadLatticeValue::print(llvm::raw_ostream &os) const {
+  if (isBottom())
+    os << "<bottom>";
+  else if (isTop())
+    os << "<top>";
+  else
+    os << value;
 }
 
 //-----------------------------------------------------------------------------

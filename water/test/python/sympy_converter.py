@@ -18,7 +18,7 @@ def test_in_context(f):
 
 @test_in_context
 def test_basic_conversion():
-    symbols = [sympy.Symbol("x"), sympy.Symbol("y"), sympy.Symbol("z")]
+    symbols = ["x", "y", "z"]
 
     result = convert_sympy_to_affine_map(sympy.sympify("x + 2*y + 3"), symbols)
     # CHECK: ()[s0, s1, s2] -> (s0 + s1 * 2 + 3)
@@ -27,7 +27,7 @@ def test_basic_conversion():
 
 @test_in_context
 def test_mul_conversion():
-    symbols = [sympy.Symbol("x"), sympy.Symbol("y")]
+    symbols = ["x", "y"]
 
     try:
         convert_sympy_to_affine_map(sympy.sympify("x/4"), symbols)
@@ -86,7 +86,7 @@ def test_rational_conversion():
 
 @test_in_context
 def test_floor_ceil_conversion():
-    symbols = [sympy.Symbol("x"), sympy.Symbol("y"), sympy.Symbol("z")]
+    symbols = ["x", "y", "z"]
 
     # CHECK: ()[s0, s1, s2] -> ((s0 * 3) floordiv 2)
     print(convert_sympy_to_affine_map(sympy.sympify("floor(3*x/2)"), symbols))
@@ -117,7 +117,7 @@ def test_floor_ceil_conversion():
 
 @test_in_context
 def test_mod_conversion():
-    symbols = [sympy.Symbol("x"), sympy.Symbol("y")]
+    symbols = ["x", "y"]
 
     # CHECK: ()[s0, s1] -> (s0 mod s1)
     print(convert_sympy_to_affine_map(sympy.sympify("Mod(x, y)"), symbols))
@@ -129,7 +129,7 @@ def test_mod_conversion():
 
 @test_in_context
 def test_pow_conversion():
-    symbols = [sympy.Symbol("x"), sympy.Symbol("y")]
+    symbols = ["x", "y"]
 
     # CHECK: ()[s0, s1] -> ((s0 * s0) * s0)
     print(convert_sympy_to_affine_map(sympy.sympify("x^3"), symbols))
