@@ -43,10 +43,15 @@ class MemoryAccessType(Enum):
 
 def is_shared_memory_op(node: CustomOp, depth: int) -> Optional[fx.Node]:
     if (
-        isinstance(node, (Read, Write, AtomicOp))
+        isinstance(node, (Read, Write))
         and node.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
         return propagate_loop_carried_vars(node.memory, depth)
+    if (
+        isinstance(node, AtomicOp)
+        and node.memory_type.address_space == SHARED_ADDRESS_SPACE
+    ):
+        return propagate_loop_carried_vars(node.rhs, depth)
     elif isinstance(node, GatherToLDS):
         return propagate_loop_carried_vars(node.dst, depth)
 

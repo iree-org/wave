@@ -1546,7 +1546,7 @@ class AtomicOp(BinaryOpBase):
 
     @property
     def memory_type(self) -> "Memory":
-        return get_custom(self.lhs).type
+        return get_custom(self.rhs).type
 
 
 @define_op("atomic_add")
