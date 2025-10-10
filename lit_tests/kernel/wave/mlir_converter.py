@@ -4,6 +4,9 @@
 
 import sympy
 from typing import Any
+
+import torch
+
 from wave_lang.kernel._support.indexing import IndexSymbol
 import wave_lang.kernel.wave as wave
 import wave_lang.kernel.lang as tkl
@@ -11,8 +14,10 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
 
 M = tkl.sym.M
@@ -136,3 +141,34 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16>
 
     # CHECK: return
+
+
+@run_test
+def mlir_converter_gemm():
+    """Test MLIR converter with matrix addition kernel."""
+    gemm, subs, dynamic_symbols = get_gemm_kernel(
+        shape=(1024, 5120, 640),
+        dynamic_dims=False,
+        mfma_variant=MMAType.F32_32x32x8_F16,
+        dtype=torch.float16,
+        threads_per_wave=64,
+    )
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,  # Avoid IREE compilation
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, gemm)
+
+    # Get the trace from the compiled kernel
+    trace = compiled_kernel.trace
+
+    # Use the mlir_converter to emit wave MLIR dialect
+    mlir_output = emit_wave_dialect(trace, options)
+
+    # Print to stdout for FileCheck
+    print(mlir_output)
+
+    # TODO: Check lines

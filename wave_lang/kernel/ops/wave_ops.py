@@ -2185,7 +2185,10 @@ class Iterate(NestedRegionOp):
 
         output = get_custom(graph.output_node())
         assert isinstance(output, Output), f"Expected Output, but got {output}"
-        return output.return_vals[0]
+        outputs = output.return_vals[0]
+        if not isinstance(outputs, list):
+            outputs = [outputs]
+        return outputs
 
     @property
     def index(self) -> list[dict[IndexSymbol, IndexSequence]]:
