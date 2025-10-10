@@ -134,6 +134,8 @@ class WaveEmitter:
         while not isinstance(ip.block.owner, builtin_d.ModuleOp):
             ip = InsertionPoint(ip.block.owner)
 
+        self.module_op = ip.block.owner
+
         bindings = self.root_sig.sig.linear_bindings
 
         def abi_type(binding: BindingDesc):
@@ -148,7 +150,7 @@ class WaveEmitter:
             arg_types = [abi_type(b) for b in bindings]
 
             ftype = FunctionType.get(arg_types, [])
-            func_op = func_d.FuncOp("test_test", ftype)
+            func_op = func_d.FuncOp("test_test", ftype, visibility="private")
 
             locs = [Location.unknown()] * len(arg_types)
             self.entry_block = func_op.add_entry_block(locs)

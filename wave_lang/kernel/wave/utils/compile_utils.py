@@ -102,6 +102,19 @@ def force_inline(module: Operation):
     apply_transform(module, asm, {})
 
 
+def symbol_dce(module: Operation):
+    asm = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg1: !transform.any_op) {
+            %1 = transform.structured.match ops{["builtin.module"]} in %arg1 : (!transform.any_op) -> !transform.any_op
+            transform.apply_registered_pass "symbol-dce"
+            to %1 : (!transform.any_op) -> !transform.any_op
+            transform.yield
+        }
+    }"""
+    apply_transform(module, asm, {})
+
+
 def apply_transform(
     module: Operation, transform_asm: str, symbols: dict[IndexSymbol, Any]
 ):

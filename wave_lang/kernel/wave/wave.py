@@ -101,7 +101,12 @@ from .shared_memory_indexing import apply_shared_memory_indexing_corrections
 from .generate_bound_checks import generate_bound_checks
 from .symbolic_constraints import SymbolicAlias
 from .type_inference import infer_types
-from .utils.compile_utils import canonicalize_module, apply_transform, force_inline
+from .utils.compile_utils import (
+    canonicalize_module,
+    apply_transform,
+    force_inline,
+    symbol_dce,
+)
 from .utils.general_utils import (
     delinearize_index,
     get_hardware_constraint,
@@ -723,7 +728,8 @@ class LaunchableWave(Launchable):
             ), "expected overriding module to contain only upstream MLIR ops"
             _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
 
-        force_inline(mb.module_op)
+        force_inline(emitter.module_op)
+        symbol_dce(emitter.module_op)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
