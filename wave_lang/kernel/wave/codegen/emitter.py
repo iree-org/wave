@@ -20,6 +20,7 @@ from .ir_utils import (
 from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.lang import Memory
 from wave_lang.kernel.lang.kernel_buffer import KernelBuffer
+from wave_lang.kernel.compiler.utils import strides_from_symbolic_shape
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.support.logging import get_logger
 from wave_lang.support.ir_imports import (
@@ -45,6 +46,7 @@ from wave_lang.support.ir_imports import (
     builtin_d,
     func_d,
     gpu_d,
+    memref_d,
     vector_d,
 )
 
@@ -70,6 +72,11 @@ def _get_upper_bound(expr: Any) -> Optional[Attribute]:
         return None
 
 
+def _get_mixed_strides(stride: list[sympy.Expr | int]) -> str:
+    asm = ",".join(["?" if isinstance(s, sympy.Expr) else str(s) for s in stride])
+    return "[" + asm + "]"
+
+
 @dataclass
 class WaveEmitter:
     """Emits a warp function as a `func` with a signature derived from the gm."""
@@ -86,32 +93,6 @@ class WaveEmitter:
     def __post_init__(self):
         self.ip = InsertionPoint(self.root_sig.entry_block)
         self.dynamic_symbols = self.options.dynamic_symbols
-
-        ip = self.ip
-        while not isinstance(ip.block.owner, builtin_d.ModuleOp):
-            ip = InsertionPoint(ip.block.owner)
-
-        bindings = self.root_sig.sig.linear_bindings
-
-        def abi_type(binding: BindingDesc):
-            if binding.binding_type == BindingType.KERNEL_BUFFER:
-                return MemRefType.get(
-                    [], element_type=binding.as_mlir_type().element_type
-                )
-            return binding.as_mlir_type()
-
-        with ip, Location.unknown():
-            arg_types = [abi_type(b) for b in bindings]
-
-            ftype = FunctionType.get(arg_types, [])
-            func_op = func_d.FuncOp("test_test", ftype)
-
-            locs = [Location.unknown()] * len(arg_types)
-            self.entry_block = func_op.add_entry_block(locs)
-
-        ip = InsertionPoint(self.entry_block)
-        with ip, Location.unknown():
-            func_d.ReturnOp([])
 
     def emit_program_invariants(self):
         grid = self.grid
@@ -146,9 +127,98 @@ class WaveEmitter:
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
 
-        for bind, arg in zip(self.root_sig.sig.bindings, self.entry_block.arguments):
+        # Temp
+        ip = self.ip
+        while not isinstance(ip.block.owner, builtin_d.ModuleOp):
+            ip = InsertionPoint(ip.block.owner)
+
+        bindings = self.root_sig.sig.linear_bindings
+
+        def abi_type(binding: BindingDesc):
+            if binding.binding_type == BindingType.KERNEL_BUFFER:
+                element_type = IrType.parse(
+                    binding.kernel_buffer_type.dtype.ir_type_asm()
+                )
+                return MemRefType.get([], element_type=element_type)
+            return binding.as_mlir_type()
+
+        with ip, Location.unknown():
+            arg_types = [abi_type(b) for b in bindings]
+
+            ftype = FunctionType.get(arg_types, [])
+            func_op = func_d.FuncOp("test_test", ftype)
+
+            locs = [Location.unknown()] * len(arg_types)
+            self.entry_block = func_op.add_entry_block(locs)
+
+        for bind, arg in zip(bindings, self.entry_block.arguments):
             if bind.binding_type == BindingType.SYMBOL_VALUE:
                 self.dynamic_dims[bind.symbol_type] = arg
+
+        ip = InsertionPoint(self.entry_block)
+        with ip, Location.unknown():
+            for bind, arg in zip(bindings, self.entry_block.arguments):
+                if bind.binding_type != BindingType.KERNEL_BUFFER:
+                    continue
+
+                dyn_val = MemRefType.get_dynamic_size()
+
+                def get_static_dim(s: IndexExpr) -> int:
+                    s = subs_idxc(s)
+                    if is_literal(s):
+                        return int(s)
+
+                    return dyn_val
+
+                element_type = bind.kernel_buffer_type.dtype.ir_type_asm()
+                symbolic_shape = bind.kernel_buffer_type.symbolic_shape
+                if layout := bind.reference[1].type.physical_layout:
+                    symbolic_shape = layout.shape
+
+                static_sizes = [get_static_dim(s) for s in symbolic_shape]
+                spec_asm = "x".join(
+                    "?" if s == dyn_val else str(s) for s in static_sizes
+                )
+                spec_asm = f"{spec_asm}x{element_type}"
+
+                idx_context = IndexingContext.current()
+                strides = strides_from_symbolic_shape(
+                    idx_context, symbolic_shape, allow_mixed_shapes=True
+                )
+                if strides is None:
+                    memref_asm = f"memref<{spec_asm}>"
+                else:
+                    strides_str = _get_mixed_strides(strides)
+                    memref_asm = (
+                        f"memref<{spec_asm}, strided<{strides_str}, offset: ?>>"
+                    )
+
+                memref_type = IrType.parse(memref_asm)
+
+                static_strides = [get_static_dim(s) for s in strides]
+
+                offset = arith_d.constant(IndexType.get(), 0)
+                dyn_sizes = [
+                    gen_sympy_index(add_emitter_subs(self), s)
+                    for s in symbolic_shape
+                    if not is_literal(subs_idxc(s))
+                ]
+                dyn_strides = [
+                    gen_sympy_index(add_emitter_subs(self), s)
+                    for s in strides
+                    if not is_literal(subs_idxc(s))
+                ]
+                res = memref_d.reinterpret_cast(
+                    memref_type,
+                    arg,
+                    offsets=[offset],
+                    sizes=dyn_sizes,
+                    strides=dyn_strides,
+                    static_offsets=[dyn_val],
+                    static_sizes=static_sizes,
+                    static_strides=static_strides,
+                )
+            func_d.ReturnOp([])
 
     def emit(self, graph: Optional[fx.Graph] = None):
         with self.ip, Location.unknown():
