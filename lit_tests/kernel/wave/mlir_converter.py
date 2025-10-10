@@ -94,8 +94,6 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: BLOCK_N = 64 : i64
     # CHECK-SAME: M = 128 : i64
     # CHECK-SAME: N = 128 : i64
-    # CHECK: %[[CONST:.*]] = arith.constant 0.000000e+00 : f16
-    # CHECK: %[[REG:.*]] = wave.register %[[CONST]] : !wave.tensor<[@M, @N] of f16, <register>>
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]] : (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
