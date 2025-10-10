@@ -242,13 +242,14 @@ def add_placeholder_locations(
     return trace
 
 
-def _update_existing_module(
+def _rewrite_module_for_iree_stream_abi(
     module_op: Module,
     dispatch_entrypoint: dispatch_codegen.DispatchEntrypoint,
     exe: dispatch_codegen.StreamExecutable,
 ) -> None:
     """
-    Update an existing MLIR module that has been wrapped with IREE stream executable to be compatible with stream bindings arguments.
+    Update an existing MLIR module that has been wrapped with IREE stream executable
+    to be compatible with stream bindings arguments.
     """
 
     with exe._loc, InsertionPoint.at_block_begin(dispatch_entrypoint.entry_block):
@@ -716,7 +717,7 @@ class LaunchableWave(Launchable):
                 isinstance(op, stream_d.ExecutableOp)
                 for op in module_op.operation.regions[0].blocks[0]
             ), "expected overriding module to contain only upstream MLIR ops"
-            _update_existing_module(module_op, dispatch_entrypoint, exe)
+            _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
