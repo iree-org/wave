@@ -20,6 +20,8 @@ from ..ops.wave_ops import (
     NestedRegionOp,
     Read,
     SharedMemoryBarrier,
+    SharedMemoryBarrierSignal,
+    SharedMemoryBarrierWait,
     Write,
     get_custom,
 )
@@ -92,6 +94,7 @@ def add_shared_memory_barriers(
     graph: Optional[fx.Graph] = None,
     info: Optional[dict[fx.Node, SharedMemoryBarrierInfo]] = None,
     checking_next_iter: Optional[bool] = False,
+    target: str = "",
 ):
     """
     Adds shared memory barriers to the graph. The barriers are inserted
@@ -102,6 +105,9 @@ def add_shared_memory_barriers(
     While sub-optimal, we use this as a baseline to compare more
     sophisticated barrier insertion strategies.
     """
+
+    split_barrier = "gfx12" in target
+
     if not graph:
         graph = trace.get_root_graph()
 
@@ -119,14 +125,33 @@ def add_shared_memory_barriers(
                 ):
                     barrier = get_custom(barrier)
                     # Promote the barrier to wait for async ops
-                    if state.is_async and not barrier.wait_async_ops:
+                    if (
+                        state.is_async
+                        and hasattr(barrier, "wait_async_ops")
+                        and not barrier.wait_async_ops
+                    ):
                         barrier.update_arg("wait_async_ops", True)
                 else:
                     # Synchronize after the write to shared memory before we read from it.
-                    with graph.inserting_before(node):
-                        barrier_node = SharedMemoryBarrier(
-                            wait_async_ops=state.is_async,
-                        ).add_to_graph(graph, loc=custom.location)
+                    if split_barrier:
+                        barrier_wait_node = None
+                        with graph.inserting_before(node):
+                            barrier_wait_node = SharedMemoryBarrierWait(
+                                -1
+                            ).add_to_graph(graph, loc=custom.location)
+
+                        with graph.inserting_before(barrier_wait_node):
+                            _ = SharedMemoryBarrierSignal(
+                                -1,
+                                wait_async_ops=state.is_async,
+                            ).add_to_graph(
+                                graph, loc=get_custom(barrier_wait_node).location
+                            )
+                    else:
+                        with graph.inserting_before(node):
+                            barrier_node = SharedMemoryBarrier(
+                                wait_async_ops=state.is_async,
+                            ).add_to_graph(graph, loc=custom.location)
 
                 state.is_async = False
 
@@ -136,11 +161,13 @@ def add_shared_memory_barriers(
 
         if isinstance(custom, NestedRegionOp):
             add_shared_memory_barriers(
-                trace, trace.get_subgraph(custom.subgraph_name), info
+                trace, trace.get_subgraph(custom.subgraph_name), info, target=target
             )
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
     if is_reduction_subgraph(graph) and info and not checking_next_iter:
         # Add barriers between ops from different iterations in the same loop.
-        add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
+        add_shared_memory_barriers(
+            trace, graph, info, checking_next_iter=True, target=target
+        )
