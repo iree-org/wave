@@ -9,12 +9,9 @@ mlir operations of wave and other dialects.
 from __future__ import annotations
 import dill
 import torch.fx as fx
-import re
 import sys
 from typing import TYPE_CHECKING, Callable, List, Union
 import sympy
-from sympy import Symbol, Q, simplify
-from sympy.assumptions import assuming
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
@@ -36,7 +33,6 @@ try:
     )
     from water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
-        AffineConversionError,
     )
     from water_mlir.dialects import arith
     from water_mlir.dialects import func
@@ -169,7 +165,9 @@ def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
     return trace, options
 
 
-def _convert_sympy_expr_to_affine_map(expr: Union[sympy.Expr, int], symbols: List[sympy.Symbol]) -> ir.AffineMap:
+def _convert_sympy_expr_to_affine_map(
+    expr: Union[sympy.Expr, int], symbols: List[sympy.Symbol]
+) -> ir.AffineMap:
     if isinstance(expr, int):
         return ir.AffineMap.get(0, len(symbols), [ir.AffineExpr.get_constant(expr)])
 
@@ -188,17 +186,26 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
     if getattr(node, "index", None):
         index_mappings = {}
         for dim, exprs in node.index.items():
-            all_symbols = list(set().union(*[expr.free_symbols for expr in [exprs.start, exprs.size, exprs.stride] if isinstance(expr, sympy.Expr)]))
+            all_symbols = list(
+                set().union(
+                    *[
+                        expr.free_symbols
+                        for expr in [exprs.start, exprs.size, exprs.stride]
+                        if isinstance(expr, sympy.Expr)
+                    ]
+                )
+            )
             start = _convert_sympy_expr_to_affine_map(exprs.start, all_symbols)
             size = _convert_sympy_expr_to_affine_map(exprs.size, all_symbols)
             stride = _convert_sympy_expr_to_affine_map(exprs.stride, all_symbols)
-            index_mappings[str(dim)] = wave.WaveIndexMappingAttr.get([str(sym) for sym in all_symbols], start, size, stride)
-        print(index_mappings)
+            index_mappings[str(dim)] = wave.WaveIndexMappingAttr.get(
+                [str(sym) for sym in all_symbols], start, size, stride
+            )
         op.attributes["index"] = ir.DictAttr.get(index_mappings)
 
     if getattr(node, "elements_per_thread", None):
-        op.attributes["wave.elements_per_thread"] = (
-            ir.IntegerAttr.get(ir.IntegerType.get_signless(32), node.elements_per_thread)
+        op.attributes["wave.elements_per_thread"] = ir.IntegerAttr.get(
+            ir.IntegerType.get_signless(32), node.elements_per_thread
         )
 
     if getattr(node, "bounds", None):
@@ -206,16 +213,17 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
         for dim, expr in node.bounds.items():
             symbols = list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
             result = _convert_sympy_expr_to_affine_map(expr, symbols)
-            bounds[str(dim)] = wave.WaveDistributedShapeAttr.get([str(sym) for sym in symbols], result)
-        print(bounds)
-        op.attributes["wave.read_write_bounds"] = ir.DictAttr.get(bounds)
+            bounds[str(dim)] = wave.WaveExprAttr.get(
+                [str(sym) for sym in symbols], result
+            )
+        op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
 
 def _emit_from_captured_trace(
     trace: "CapturedTrace", options: WaveCompileOptions
 ) -> int:
     # Import wave types locally to avoid clashing with iree bindings
-    from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder, Output, Read, Write, NewRegister  # type: ignore
+    from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder, Output, Write, NewRegister  # type: ignore
 
     # keep track of which emitted value stems from what node to wire
     # arguments correctly
