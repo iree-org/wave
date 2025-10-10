@@ -18,6 +18,8 @@ import torch.fx as fx
 from sympy.utilities.lambdify import lambdastr
 
 from wave_lang.support.ir_imports import Context, Module, Operation
+from .scheduling.schedule_enums import SchedulingType
+from .wave_schedule import WaveSchedule
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
 from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
@@ -697,6 +699,7 @@ class LaunchableWave(Launchable):
     def _trace_and_get_kernel_signature(
         self,
         options: WaveCompileOptions,
+        schedule: Optional[WaveSchedule] = None,
         context: Optional[Context] = None,
         module_op: Optional[Operation] = None,
     ) -> tuple[
@@ -786,21 +789,26 @@ class LaunchableWave(Launchable):
             partial(decompose_scan_ops, trace, self.constraints),
         ]
 
-        # Schedule the reduction ops.
+        # Schedule the iterate ops.
         scheduling_type = options.schedule
-        use_scheduling_barriers = options.use_scheduling_barriers
-        graph_passes.append(
-            partial(
-                schedule_graph,
-                trace,
-                self.constraints,
-                use_scheduling_barriers,
-                scheduling_type,
-                options.override_schedule,
-                options.dump_schedule,
-                options.multi_buffer_count,
+        if options.schedule == SchedulingType.MANUAL:
+            graph_passes.append(
+                partial(self.run_manual_schedule, trace, self.constraints, schedule)
             )
-        )
+        else:
+            use_scheduling_barriers = options.use_scheduling_barriers
+            graph_passes.append(
+                partial(
+                    schedule_graph,
+                    trace,
+                    self.constraints,
+                    use_scheduling_barriers,
+                    scheduling_type,
+                    options.override_schedule,
+                    options.dump_schedule,
+                    options.multi_buffer_count,
+                )
+            )
 
         if options.optimization_level:
             graph_passes += [
@@ -906,3 +914,14 @@ class LaunchableWave(Launchable):
 
     def __repr__(self):
         return f"tk.wave @{self._name}[{self.grid_type}]"
+
+    def run_manual_schedule(
+        self,
+        trace: CapturedTrace,
+        constraints: list[Constraint],
+        schedule: WaveSchedule,
+    ):
+        """
+        Runs the manual schedule provided by the user.
+        """
+        schedule.trace(kernel_trace=trace, constraints=constraints)
