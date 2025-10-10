@@ -242,6 +242,64 @@ def add_placeholder_locations(
     return trace
 
 
+def _update_existing_module(
+    module_op: Module,
+    dispatch_entrypoint: dispatch_codegen.DispatchEntrypoint,
+    exe: dispatch_codegen.StreamExecutable,
+) -> None:
+    """
+    Update an existing MLIR module that has been wrapped with IREE stream executable to be compatible with stream bindings arguments.
+    """
+
+    with exe._loc, InsertionPoint.at_block_begin(dispatch_entrypoint.entry_block):
+        target_block = dispatch_entrypoint.entry_block
+        source_func_op = module_op.operation.regions[0].blocks[0].operations[0]
+        source_block = source_func_op.regions[0].blocks[0]
+
+        target_args = list(target_block.arguments)
+
+        def convert_memref_to_stream_binding(
+            target_block: Block,
+            old_arg: BlockArgument,
+            new_arg: BlockArgument,
+            index: int,
+        ) -> stream_d.BindingSubspanOp:
+            """Convert a memref argument to stream.binding + subspan extraction."""
+            # Create zero constant
+            result_type = IndexType.get()
+            zero_value = arith_d.constant(result_type, IntegerAttr.get(result_type, 0))
+
+            # Create subspan operation
+            subspan_op = stream_d.binding_subspan(
+                old_arg.type,  # The original memref type
+                new_arg,  # The stream.binding argument
+                byte_offset=zero_value,
+                # dynamic_dims=dispatch_entrypoint.get_dynamic_dims(binding),
+                dynamic_dims=[],  # TODO: get dynamic dims
+            )
+
+            return subspan_op
+
+        # Create argument mapping
+        arg_mapping = {}
+        for i, old_arg in enumerate(source_block.arguments):
+            if i < len(target_args) and isinstance(old_arg.type, MemRefType):
+                new_subspan = convert_memref_to_stream_binding(
+                    target_block, old_arg, target_args[i], i
+                )
+                arg_mapping[old_arg] = new_subspan
+
+        # Move operations
+        ops_to_move = list(source_block)
+        for op in ops_to_move:
+            op.detach_from_parent()
+            target_block.append(op)
+
+        # Replace all uses of old arguments with new subspan results
+        for old_arg, new_value in arg_mapping.items():
+            old_arg.replace_all_uses_with(new_value)
+
+
 class LaunchableWave(Launchable):
     def __init__(
         self,
@@ -633,7 +691,7 @@ class LaunchableWave(Launchable):
             trace.location,
         )
 
-        # Only emit MLIR if we don't have the module yet.
+        # Only emit MLIR if we don't have a module yet.
         if not module_op:
             emitter = WaveEmitter(
                 dispatch_entrypoint, trace, self.constraints, options, self.grid_type
@@ -646,63 +704,19 @@ class LaunchableWave(Launchable):
                 logger.info(asm)
                 raise
             emitter.finish()
-        # Otherwise we only want to iree-fy the existing module.
+        # Otherwise, we need to iree-fy the existing module (that supposedly has
+        # upstream MLIR ops only) in order for it to be executable in the wave
+        # pipeline.
         # `dispatch_entrypoint` already has most of the setup, we'll just need
         # to move the ops from existing module to inside `dispatch_entrypoint`.
         # Also we'll need to update the uses of the memref arguments (from the
         # existing module) to be compatible with the new stream.binding arguments.
         else:
-            with exe._loc, InsertionPoint.at_block_begin(
-                dispatch_entrypoint.entry_block
-            ):
-                target_block = dispatch_entrypoint.entry_block
-                source_func_op = module_op.operation.regions[0].blocks[0].operations[0]
-                source_block = source_func_op.regions[0].blocks[0]
-
-                target_args = list(target_block.arguments)
-
-                def convert_memref_to_stream_binding(
-                    target_block: Block,
-                    old_arg: BlockArgument,
-                    new_arg: BlockArgument,
-                    index: int,
-                ) -> stream_d.BindingSubspanOp:
-                    """Convert a memref argument to stream.binding + subspan extraction."""
-                    # Create zero constant
-                    result_type = IndexType.get()
-                    zero_value = arith_d.constant(
-                        result_type, IntegerAttr.get(result_type, 0)
-                    )
-
-                    # Create subspan operation
-                    subspan_op = stream_d.binding_subspan(
-                        old_arg.type,  # The original memref type
-                        new_arg,  # The stream.binding argument
-                        byte_offset=zero_value,
-                        # dynamic_dims=dispatch_entrypoint.get_dynamic_dims(binding),
-                        dynamic_dims=[],  # TODO: get dynamic dims
-                    )
-
-                    return subspan_op
-
-                # Create argument mapping
-                arg_mapping = {}
-                for i, old_arg in enumerate(source_block.arguments):
-                    if i < len(target_args) and isinstance(old_arg.type, MemRefType):
-                        new_subspan = convert_memref_to_stream_binding(
-                            target_block, old_arg, target_args[i], i
-                        )
-                        arg_mapping[old_arg] = new_subspan
-
-                # Move operations
-                ops_to_move = list(source_block)
-                for op in ops_to_move:
-                    op.detach_from_parent()
-                    target_block.append(op)
-
-                # Replace all uses of old arguments with new subspan results
-                for old_arg, new_value in arg_mapping.items():
-                    old_arg.replace_all_uses_with(new_value)
+            assert not any(
+                isinstance(op, stream_d.ExecutableOp)
+                for op in module_op.operation.regions[0].blocks[0]
+            ), "expected overriding module to contain only upstream MLIR ops"
+            _update_existing_module(module_op, dispatch_entrypoint, exe)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
