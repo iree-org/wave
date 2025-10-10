@@ -626,6 +626,30 @@ def get_rank(mlir_type):
         return -1
 
 
+def broadcast_scalar_args(*args: Value) -> tuple[Value, ...]:
+    """
+    Handle special scalar/rank-0 cases where arguments may be
+    Dtype, vector<Dtype>, or vector<1xDtype>. Broadcasts lower-rank
+    arguments to match higher-rank arguments when ranks differ and
+    all arguments have rank <= 1.
+
+    Returns a tuple of the arguments after broadcasting.
+    """
+    arg_ranks = [get_rank(arg.type) for arg in args]
+    max_rank = max(arg_ranks)
+
+    if max_rank <= 1 and not all(r == arg_ranks[0] for r in arg_ranks):
+        result = list(args)
+        for i, (arg, rank) in enumerate(zip(args, arg_ranks)):
+            if rank < max_rank:
+                # Find a higher-rank arg to broadcast to
+                target_type = next(a.type for a, r in zip(args, arg_ranks) if r > rank)
+                result[i] = vector_d.broadcast(target_type, arg)
+        return tuple(result)
+
+    return args
+
+
 _ops_to_scalarize = [
     operator.add,
     operator.sub,
@@ -648,14 +672,7 @@ def handle_binary_op(op):
 
             # Handle special scalar/rank-0 cases where lhs/rhs may be
             # Dtype, vector<Dtype>, or vector<1xDtype>.
-            arg_ranks = [get_rank(arg.type) for arg in (lhs, rhs)]
-            if (arg_ranks[0] != arg_ranks[1]) and max(arg_ranks) <= 1:
-                if arg_ranks[0] > arg_ranks[1]:
-                    # Case where rank(lhs) > rank(rhs)
-                    rhs = vector_d.broadcast(lhs.type, rhs)
-                else:
-                    # Case where rank(rhs) > rank(lhs)
-                    lhs = vector_d.broadcast(rhs.type, lhs)
+            lhs, rhs = broadcast_scalar_args(lhs, rhs)
 
             if lhs.type != rhs.type:
                 op = get_custom(node)
@@ -1773,13 +1790,7 @@ def handle_select(emitter: WaveEmitter, node: fx.Node):
 
     # Handle special scalar/rank-0 cases where if_true/if_false may be
     # Dtype, vector<Dtype>, or vector<1xDtype>.
-    true_false_ranks = [get_rank(arg.type) for arg in (if_true, if_false)]
-    t_rank = get_rank(if_true.type)
-    f_rank = get_rank(if_false.type)
-    if t_rank < f_rank:
-        if_true = vector_d.broadcast(if_false.type, if_true)
-    elif f_rank < t_rank:
-        if_false = vector_d.broadcast(if_true.type, if_false)
+    if_true, if_false = broadcast_scalar_args(if_true, if_false)
 
     selected = arith_d.select(cond, if_true, if_false)
     emitter.bind_node_proxy(node, IRProxyValue(selected))
