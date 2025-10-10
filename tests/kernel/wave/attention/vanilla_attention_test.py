@@ -8,7 +8,9 @@ import pytest
 import torch
 from torch.nn import functional as F
 import math
+from wave_lang.kernel._support.tracing import CapturedTrace
 import wave_lang.kernel.lang as tkl
+from wave_lang.kernel.ops.wave_ops import Iterate, get_custom
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.general_utils import (
@@ -1161,10 +1163,12 @@ def testAttentionF8(
         (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
     ],
 )
+@param_bool("use_global_to_shared", "g2s")
 def testAttentionBSHD_Prefetch_MultiBuffer(
     shape: tuple[int],
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
+    use_global_to_shared: bool,
     run_bench,
     perf_filename_tk,
 ):
@@ -1211,11 +1215,21 @@ def testAttentionBSHD_Prefetch_MultiBuffer(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_global_to_shared=use_global_to_shared,
         scalarize_packed_math=True,
         multi_buffer_count=2,  # TODO: Hack as schedule reordering doesn't respect lifetimes computed during the main scheduling algorithm.
     )
     options = set_default_run_config(options)
     base_attention = wave_compile(options, base_attention_func)
+
+    # Check for successful reordering
+    trace: CapturedTrace = base_attention.get_compiled_graph()
+    if trace:
+        iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
+        reordering_success = all(
+            [node.meta.get("reordering_success", False) for node in iterate_nodes]
+        )
+        assert reordering_success, "Reordering failed"
 
     torch.manual_seed(1)
     q = device_randn(q_shape, dtype=torch.float16)
