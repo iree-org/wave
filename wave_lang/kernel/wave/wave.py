@@ -706,14 +706,17 @@ class LaunchableWave(Launchable):
                 dispatch_entrypoint, trace, self.constraints, options, self.grid_type.dims
             )
             try:
-                emitter.emit(trace.get_root_graph())
+                func = emitter.emit(trace.get_root_graph())
             except:
                 logger.info("Error in emitter")
                 asm = mb.module_op.get_asm()
                 logger.info(asm)
                 raise
             mb.module_op.verify()
-            # emitter.finish()
+            func_module = func.parent
+            force_inline(func_module)
+            symbol_dce(func_module)
+
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave
         # pipeline.
@@ -727,9 +730,6 @@ class LaunchableWave(Launchable):
                 for op in module_op.operation.regions[0].blocks[0]
             ), "expected overriding module to contain only upstream MLIR ops"
             _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
-
-        force_inline(emitter.module_op)
-        symbol_dce(emitter.module_op)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)

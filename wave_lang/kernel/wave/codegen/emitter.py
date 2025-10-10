@@ -39,6 +39,7 @@ from wave_lang.support.ir_imports import (
     Location,
     MemRefType,
     OpResult,
+    Operation,
     ShapedType,
     Value,
     VectorType,
@@ -129,12 +130,10 @@ class WaveEmitter:
             ),
         ]
 
-    def emit_func(self):
+    def emit_func(self) -> Operation:
         ip = self.ip
         while not isinstance(ip.block.owner, builtin_d.ModuleOp):
             ip = InsertionPoint(ip.block.owner)
-
-        self.module_op = ip.block.owner
 
         bindings = self.root_sig.sig.linear_bindings
 
@@ -249,14 +248,17 @@ class WaveEmitter:
             func_d.ReturnOp([])
 
         self.ip = InsertionPoint.at_block_terminator(self.entry_block)
+        return func_op
 
-    def emit(self, graph: Optional[fx.Graph] = None):
-        self.emit_func()
+    def emit(self, graph: Optional[fx.Graph] = None) -> Operation:
+        func = self.emit_func()
         with self.ip, Location.unknown():
             self.emit_program_invariants()
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
             )
+
+        return func
 
     def finish(self):
         with self.ip, Location.unknown():
