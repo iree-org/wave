@@ -28,6 +28,7 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
+    FlatSymbolRefAttr,
     FloatAttr,
     FunctionType,
     IndexType,
@@ -47,6 +48,7 @@ from wave_lang.support.ir_imports import (
     func_d,
     gpu_d,
     memref_d,
+    stream_d,
     vector_d,
 )
 
@@ -220,8 +222,31 @@ class WaveEmitter:
                     static_sizes=static_sizes,
                     static_strides=static_strides,
                 )
-                # self._node_values[node] = [res]
+                self._node_values[node] = [res]
             func_d.ReturnOp([])
+
+        with self.ip, Location.unknown():
+            args = []
+            for arg, new_arg in zip(
+                self.root_sig.entry_block.arguments, self.entry_block.arguments
+            ):
+                if not isinstance(new_arg.type, MemRefType):
+                    args.append(arg)
+                    continue
+
+                zero_value = arith_d.constant(IndexType.get(), 0)
+                arg = stream_d.binding_subspan(
+                    new_arg.type,
+                    arg,
+                    byte_offset=zero_value,
+                    dynamic_dims=[],
+                )
+                args.append(arg)
+
+            func_d.call([], FlatSymbolRefAttr.get(func_op.name.value), args)
+            func_d.ReturnOp([])
+
+        self.ip = InsertionPoint.at_block_terminator(self.entry_block)
 
     def emit(self, graph: Optional[fx.Graph] = None):
         self.emit_func()
@@ -230,7 +255,6 @@ class WaveEmitter:
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
             )
-            func_d.ReturnOp([])
 
     def finish(self):
         with self.ip, Location.unknown():
