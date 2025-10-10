@@ -93,6 +93,8 @@ class WaveEmitter:
     def __post_init__(self):
         self.ip = InsertionPoint(self.root_sig.entry_block)
         self.dynamic_symbols = self.options.dynamic_symbols
+        self.induction_vars: dict[IndexSymbol, Value] = {}
+        self.dynamic_dims: dict[IndexSymbol, Value] = {}
 
     def emit_program_invariants(self):
         grid = self.grid
@@ -124,10 +126,8 @@ class WaveEmitter:
                 gpu_d.Dimension.z, upper_bound=_get_upper_bound(threads_per_block[2])
             ),
         ]
-        self.induction_vars: dict[IndexSymbol, Value] = {}
-        self.dynamic_dims: dict[IndexSymbol, Value] = {}
 
-        # Temp
+    def emit_func(self):
         ip = self.ip
         while not isinstance(ip.block.owner, builtin_d.ModuleOp):
             ip = InsertionPoint(ip.block.owner)
@@ -163,6 +163,8 @@ class WaveEmitter:
 
                 dyn_val = MemRefType.get_dynamic_size()
 
+                node = bind.reference[1]
+
                 def get_static_dim(s: IndexExpr) -> int:
                     s = subs_idxc(s)
                     if is_literal(s):
@@ -172,7 +174,7 @@ class WaveEmitter:
 
                 element_type = bind.kernel_buffer_type.dtype.ir_type_asm()
                 symbolic_shape = bind.kernel_buffer_type.symbolic_shape
-                if layout := bind.reference[1].type.physical_layout:
+                if layout := node.type.physical_layout:
                     symbolic_shape = layout.shape
 
                 static_sizes = [get_static_dim(s) for s in symbolic_shape]
@@ -218,14 +220,17 @@ class WaveEmitter:
                     static_sizes=static_sizes,
                     static_strides=static_strides,
                 )
+                # self._node_values[node] = [res]
             func_d.ReturnOp([])
 
     def emit(self, graph: Optional[fx.Graph] = None):
+        self.emit_func()
         with self.ip, Location.unknown():
             self.emit_program_invariants()
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
             )
+            func_d.ReturnOp([])
 
     def finish(self):
         with self.ip, Location.unknown():

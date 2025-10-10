@@ -707,7 +707,7 @@ class LaunchableWave(Launchable):
                 asm = mb.module_op.get_asm()
                 logger.info(asm)
                 raise
-            emitter.finish()
+            # emitter.finish()
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave
         # pipeline.
