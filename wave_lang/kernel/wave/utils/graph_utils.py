@@ -607,7 +607,6 @@ def finish_conditional_subgraph(
         main_graph: Main graph to add conditional to
         condition_node: Boolean condition for the conditional
         subgraph: The prepared subgraph
-        subgraph_name: Name for the subgraph
         implicit_captures: List of captured nodes
 
     Returns:

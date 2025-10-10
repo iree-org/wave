@@ -13,7 +13,7 @@ import wave_lang.kernel.lang as tkl
 
 from .._support.location import CapturedLocation
 from .._support.tracing import CapturedTrace
-from .._support.indexing import IndexSequence, IndexingContext, IndexExpr
+from .._support.indexing import IndexSequence, IndexExpr
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     Broadcast,
@@ -30,7 +30,6 @@ from ..ops.wave_ops import (
     TopkOp,
     get_custom,
 )
-import wave_lang.kernel.lang as tkl
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
@@ -50,7 +49,6 @@ from .analysis.index_sequence_analysis import resolve_broadcasting_for_op
 def construct_self_index_index_sequence(
     reduction_dim, elements_per_thread, constraints, register_idx, src_register_size
 ):
-    idxc = IndexingContext.current()
     hw_constraint = next(c for c in constraints if isinstance(c, HardwareConstraint))
     thread_offset = hw_constraint.linearized_thread_id
 
@@ -447,7 +445,7 @@ def pack_topk_results(
     original_index = get_custom(topk_src[0]).index
     final_values_index = {}
     for dim in original_index.keys():
-        final_values_index[dim] = IndexSequence(0, 1, 1)
+        final_values_index[dim] = IndexSequence(0, k_size, 1)
     get_custom(final_values).index = final_values_index
     get_custom(final_indices).index = final_values_index.copy()
 
