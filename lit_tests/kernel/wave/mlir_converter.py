@@ -2,6 +2,7 @@
 # RUN: python %s | FileCheck %s
 
 
+import sympy
 from typing import Any
 from wave_lang.kernel._support.indexing import IndexSymbol
 import wave_lang.kernel.wave as wave
@@ -27,8 +28,8 @@ constraints = [
     # specifies how computation is tiled
     tkw.WorkgroupConstraint(M, BLOCK_M, 0),
     tkw.WorkgroupConstraint(N, BLOCK_N, 1),
-    tkw.WaveConstraint(M, BLOCK_M / 2),
-    tkw.WaveConstraint(N, BLOCK_N / 2),
+    tkw.WaveConstraint(M, sympy.floor(BLOCK_M / 2)),
+    tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
     tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}),
 ]
 
@@ -94,8 +95,44 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: BLOCK_N = 64 : i64
     # CHECK-SAME: M = 128 : i64
     # CHECK-SAME: N = 128 : i64
-    # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
-    # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
-    # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]] : (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
-    # CHECK: wave.write %[[ADD]], %[[ARG2]] : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16>
+
+    # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]]
+    # CHECK-SAME: index
+    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
+    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: bounds
+    # CHECK-SAME: #wave.read_write_bounds
+    # CHECK-SAME: M = #wave.expr
+    # CHECK-SAME: N = #wave.expr
+    # CHECK-SAME: wave.elements_per_thread = 32
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
+
+    # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
+    # CHECK-SAME: index
+    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
+    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: bounds
+    # CHECK-SAME: #wave.read_write_bounds
+    # CHECK-SAME: M = #wave.expr
+    # CHECK-SAME: N = #wave.expr
+    # CHECK-SAME: wave.elements_per_thread = 32
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
+
+    # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
+    # CHECK-SAME: index
+    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
+    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
+
+    # CHECK: wave.write %[[ADD]], %[[ARG2]]
+    # CHECK-SAME: index
+    # CHECK-SAME: M : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, 1, 64)
+    # CHECK-SAME: N : [{{.*}}, {{.*}}, {{.*}}] -> ({{.*}}, BLOCK_N ceildiv 2, 1)
+    # CHECK-SAME: bounds
+    # CHECK-SAME: #wave.read_write_bounds
+    # CHECK-SAME: M = #wave.expr
+    # CHECK-SAME: N = #wave.expr
+    # CHECK-SAME: wave.elements_per_thread = 32
+    # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16>
+
     # CHECK: return
