@@ -364,7 +364,6 @@ def perform_topk_reductions(
                 node.vector_shapes,
                 subgroup_size,
                 induction_vars,
-                location,
             )
         global_val, global_idx = emit_intrawave_topk_reduction(
             binary_fn,
@@ -505,7 +504,7 @@ def decompose_topk_op(
             local_reduce_size,
             constraints,
             custom.graph,
-            location,
+            custom.location,
         )
 
         top_value_registers, top_index_registers = perform_topk_reductions(
