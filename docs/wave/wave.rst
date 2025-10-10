@@ -74,3 +74,4 @@ For more detailed information about Wave's architecture and optimization passes,
    trace
    debugging
    wave_schedule
+   asm_backend
