@@ -23,7 +23,7 @@ import torch.fx as fx
 from typing_extensions import Self
 from itertools import combinations
 
-from .._support.dtype import DataType, i1
+from .._support.dtype import DataType, i1, i32
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.location import capture_location, CapturedLocation
 from .._support.regions import RegionGraph
@@ -323,6 +323,13 @@ def min(
     acc: Optional["Register"] = None,
     dim: Optional[IndexExpr | int] = None,
 ) -> "Register": ...
+
+
+def topk(
+    src: "Register",
+    k_dim: IndexExpr,
+    dim: IndexExpr,
+) -> tuple["Register", "Register"]: ...
 
 
 def shuffle(src: "Register", offset: int, width: int) -> "Register": ...
@@ -2735,6 +2742,75 @@ class ShuffleOp(CustomOp):
 
     def infer_type(self, *args):
         self.type = get_custom(self.arg).type
+
+
+@define_op("topk")
+@dataclass
+class TopkOp(CustomOp):
+    """
+    Represents a TopK computation.
+
+    arg: Source tensor Register value to find top-k from
+    k_dim: Dimension symbol representing the K size (number of top elements to select)
+    dim: which symbolic dim to perform topk on.  This dimension will be replaced by k_dim in the output.
+    """
+
+    arg: fx.Node
+    k_dim: IndexSymbol
+    dim: IndexSymbol
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        from ..wave.utils.general_utils import all_equal
+
+        if isinstance(self.arg, Sequence):
+            src_indexings = [get_custom(arg).indexing_dims for arg in self.arg]
+            if not all_equal(src_indexings):
+                raise NotImplementedError(
+                    "NYI: Only support case where all inputs to TopkOp to have same indexing dim."
+                )
+            src_indexing = src_indexings[0]
+        else:
+            src_indexing = get_custom(self.arg).indexing_dims
+
+        # TopK replaces the reduction dimension with the K dimension
+        if self.dim in src_indexing:
+            result_dims = []
+            for dim in src_indexing:
+                if dim == self.dim:
+                    result_dims.append(self.k_dim)
+                else:
+                    result_dims.append(dim)
+            return result_dims
+        return src_indexing
+
+    def infer_type(self, *args):
+        src_type = get_custom(self.arg).type
+        dtype = src_type.dtype
+        src_indexing = get_custom(self.arg).indexing_dims
+
+        new_symbolic_shape = []
+        for i, dim_size in enumerate(src_type.symbolic_shape):
+            if i < len(src_indexing) and src_indexing[i] == self.dim:
+                new_symbolic_shape.append(self.k_dim)
+            else:
+                new_symbolic_shape.append(dim_size)
+
+        # TopK returns tuple of (values, indices) with the new shape
+        # Values have the same dtype as input, indices are i32
+        values_type = Register[(*new_symbolic_shape, dtype)]
+        indices_type = Register[(*new_symbolic_shape, i32)]
+        self.type = [values_type, indices_type]
+
+    @property
+    def reduction_dim(self) -> IndexSymbol:
+        return self.dim
+
+    # Provide init field to be compatible with ReduceOp interface.
+    # This allows some code in the expand_graph pass to be generic over the two.
+    @property
+    def init(self):
+        return None
 
 
 @define_op("cast")
