@@ -20,6 +20,8 @@ from ..ops.wave_ops import (
     NestedRegionOp,
     Read,
     SharedMemoryBarrier,
+    SharedMemoryBarrierSignal,
+    SharedMemoryBarrierWait,
     Write,
     get_custom,
 )
@@ -41,10 +43,15 @@ class MemoryAccessType(Enum):
 
 def is_shared_memory_op(node: CustomOp, depth: int) -> Optional[fx.Node]:
     if (
-        isinstance(node, (Read, Write, AtomicOp))
+        isinstance(node, (Read, Write))
         and node.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
         return propagate_loop_carried_vars(node.memory, depth)
+    if (
+        isinstance(node, AtomicOp)
+        and node.memory_type.address_space == SHARED_ADDRESS_SPACE
+    ):
+        return propagate_loop_carried_vars(node.rhs, depth)
     elif isinstance(node, GatherToLDS):
         return propagate_loop_carried_vars(node.dst, depth)
 
@@ -81,6 +88,44 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
     return False
 
 
+def move_to_valid(node: fx.Node):
+    while node and (
+        isinstance(node.next, SharedMemoryBarrierSignal)
+        or isinstance(node.next, SharedMemoryBarrierWait)
+    ):
+        node = node.next
+    return node
+
+
+class NodeDependentType(Enum):
+    """Enum to classify node dependencies."""
+
+    REGULAR = auto()
+    ROOT = auto()
+    REDUCTION = auto()
+    ROOT_REDUCTION = auto()
+
+
+def get_dependent_state(
+    node1: fx.Node,
+    node2: fx.Node,
+    is_reduction_phase: bool,
+    root_dependent_node: fx.Node = None,
+):
+    depend_on_root = node1.graph != node2.graph
+
+    if not depend_on_root and not is_reduction_phase:
+        return NodeDependentType.REGULAR
+    if depend_on_root and not is_reduction_phase:
+        return NodeDependentType.ROOT
+    if not depend_on_root and is_reduction_subgraph and root_dependent_node is None:
+        return NodeDependentType.REDUCTION
+    if root_dependent_node and is_reduction_subgraph:
+        return NodeDependentType.ROOT_REDUCTION
+
+    assert False, "There is no other types of dependencies."
+
+
 @dataclass
 class SharedMemoryBarrierInfo:
     is_async: bool = False
@@ -92,6 +137,9 @@ def add_shared_memory_barriers(
     graph: Optional[fx.Graph] = None,
     info: Optional[dict[fx.Node, SharedMemoryBarrierInfo]] = None,
     checking_next_iter: Optional[bool] = False,
+    target: str = "",
+    last_to_signal: dict = None,
+    root_dependent_node: fx.Node = None,
 ):
     """
     Adds shared memory barriers to the graph. The barriers are inserted
@@ -102,45 +150,148 @@ def add_shared_memory_barriers(
     While sub-optimal, we use this as a baseline to compare more
     sophisticated barrier insertion strategies.
     """
+
+    split_barrier = "gfx12" in target
+
     if not graph:
         graph = trace.get_root_graph()
 
     if info is None:
         info = defaultdict(SharedMemoryBarrierInfo)
 
+    # a map with key: barId, value: fx.Node to keep track of last node to signal
+    if last_to_signal is None:
+        last_to_signal = defaultdict()
+
+    # TODO(megan.kuo) named barriers are disabled features in navi4x products.
+    # will be supported in future generations.
+    # WAR: 1, RAW: 2 [insert when meet last node]
+    # named_bars = {MemoryAccessType.READ: 1, MemoryAccessType.WRITE: 2}
+
     for node in graph.nodes:
         custom = get_custom(node)
         depth = 1 if checking_next_iter else 0
         if mem := is_shared_memory_op(custom, depth):
             state = info[mem]
+
+            barId = -1  # TODO named_bars.get(get_memory_access_type(node), -1)
             if state.last_node and need_barrier(custom, state.last_node):
+
                 if barrier := is_barrier_between(
-                    state.last_node.fx_node, custom.fx_node
+                    state.last_node.fx_node, custom.fx_node, barId
                 ):
                     barrier = get_custom(barrier)
                     # Promote the barrier to wait for async ops
-                    if state.is_async and not barrier.wait_async_ops:
+                    if (
+                        state.is_async
+                        and hasattr(barrier, "wait_async_ops")
+                        and not barrier.wait_async_ops
+                    ):
                         barrier.update_arg("wait_async_ops", True)
                 else:
                     # Synchronize after the write to shared memory before we read from it.
-                    with graph.inserting_before(node):
-                        barrier_node = SharedMemoryBarrier(
-                            wait_async_ops=state.is_async,
-                        ).add_to_graph(graph, loc=custom.location)
+                    if split_barrier:
+                        # certain scenarios to consider if split barriers are enabled
+                        # 1. root graph, dependencies are straightforward,
+                        #    the algorithm iterate to the first node to wait,
+                        #    and we keep track of the last node to signal.
+                        #    -> signal after last node tracked, wait before the current node.
+                        #
+                        # 2. subgraph, dependencies can produced from root graph, reduction graph
+                        #    should also be taken care of.
+                        #
+                        #    1) no dependency from root and not a reduction graph
+                        #       -> works like 1.
+                        #
+                        #    2) dependency from root, not a reduction graph
+                        #       -> insert signal node in the root graph
+                        #       -> wait before current node.
+                        #
+                        #    3) no root dependencies, is a reduction graph
+                        #       -> insert signal and write at the end of state.last_node
+                        #
+                        #    4) dependency from root, is a reduction graph
+                        #       -> insert signal in the root graph
+                        #       -> wait at the root_depend_node
+                        #       -> insert signal at the next iterate last_to_signal node
+                        #       -> insert wait at the end of iterate
+
+                        barrier_wait_node = None
+                        barrier_signal_node = None
+                        dependnet_state = get_dependent_state(
+                            state.last_node.fx_node,
+                            node,
+                            checking_next_iter,
+                            root_dependent_node,
+                        )
+
+                        match dependnet_state:
+                            case NodeDependentType.REGULAR:
+                                barrier_signal_node = last_to_signal.get(barId)
+                                barrier_wait_node = node
+                            case NodeDependentType.ROOT:
+                                barrier_signal_node = last_to_signal.get(barId)
+                                barrier_wait_node = node
+                                root_dependent_node = root_dependent_node or node
+                            case NodeDependentType.REDUCTION:
+                                barrier_signal_node = last_to_signal.get(barId)
+                                barrier_wait_node = last_to_signal.get(barId).next
+                            case NodeDependentType.ROOT_REDUCTION:
+                                barrier_signal_node = last_to_signal.get(barId)
+                                barrier_wait_node = graph.parent_op.next
+                                root_dependent_node = None
+
+                        if barrier_signal_node:
+                            signal_node = move_to_valid(barrier_signal_node)
+                            signal_graph = barrier_signal_node.graph
+                            with signal_graph.inserting_after(signal_node):
+                                _ = SharedMemoryBarrierSignal(
+                                    barId, wait_async_ops=state.is_async
+                                ).add_to_graph(
+                                    signal_graph, loc=get_custom(signal_node).location
+                                )
+
+                        if barrier_wait_node:
+                            wait_node = move_to_valid(barrier_wait_node)
+                            wait_graph = barrier_wait_node.graph
+                            with wait_graph.inserting_before(wait_node):
+                                _ = SharedMemoryBarrierWait(barId).add_to_graph(
+                                    wait_graph, loc=get_custom(wait_node).location
+                                )
+                    else:
+                        with graph.inserting_before(node):
+                            barrier_node = SharedMemoryBarrier(
+                                wait_async_ops=state.is_async,
+                            ).add_to_graph(graph, loc=custom.location)
 
                 state.is_async = False
 
             state.last_node = custom
+            last_to_signal.update({barId: node})
+
             if isinstance(custom, GatherToLDS):
                 state.is_async = True
 
         if isinstance(custom, NestedRegionOp):
             add_shared_memory_barriers(
-                trace, trace.get_subgraph(custom.subgraph_name), info
+                trace,
+                trace.get_subgraph(custom.subgraph_name),
+                info,
+                target=target,
+                last_to_signal=last_to_signal,
+                root_dependent_node=root_dependent_node,
             )
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
     if is_reduction_subgraph(graph) and info and not checking_next_iter:
         # Add barriers between ops from different iterations in the same loop.
-        add_shared_memory_barriers(trace, graph, info, checking_next_iter=True)
+        add_shared_memory_barriers(
+            trace,
+            graph,
+            info,
+            checking_next_iter=True,
+            target=target,
+            last_to_signal=last_to_signal,
+            root_dependent_node=root_dependent_node,
+        )
