@@ -105,7 +105,6 @@ from .utils.compile_utils import (
     canonicalize_module,
     apply_transform,
     force_inline,
-    symbol_dce,
 )
 from .utils.general_utils import (
     delinearize_index,
@@ -713,9 +712,7 @@ class LaunchableWave(Launchable):
                 logger.info(asm)
                 raise
             mb.module_op.verify()
-            func_module = func.parent
-            force_inline(func_module)
-            symbol_dce(func_module)
+            force_inline(func.parent)
 
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave

@@ -93,22 +93,11 @@ def force_inline(module: Operation):
     module attributes {transform.with_named_sequence} {
         transform.named_sequence @__transform_main(%arg1: !transform.any_op) {
             %1 = transform.structured.match ops{["builtin.module"]} in %arg1 : (!transform.any_op) -> !transform.any_op
-            transform.apply_registered_pass "inline"
+            %2 = transform.apply_registered_pass "inline"
                 with options = { "default-pipeline" = "" }
-            to %1 : (!transform.any_op) -> !transform.any_op
-            transform.yield
-        }
-    }"""
-    apply_transform(module, asm, {})
-
-
-def symbol_dce(module: Operation):
-    asm = """
-    module attributes {transform.with_named_sequence} {
-        transform.named_sequence @__transform_main(%arg1: !transform.any_op) {
-            %1 = transform.structured.match ops{["builtin.module"]} in %arg1 : (!transform.any_op) -> !transform.any_op
+                to %1 : (!transform.any_op) -> !transform.any_op
             transform.apply_registered_pass "symbol-dce"
-            to %1 : (!transform.any_op) -> !transform.any_op
+                to %2 : (!transform.any_op) -> !transform.any_op
             transform.yield
         }
     }"""
