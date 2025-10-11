@@ -5,6 +5,7 @@ from typing import Any, Optional, Callable, Sequence
 import torch
 
 from wave_lang.kernel.lang import IndexSymbol
+from wave_lang.support.ir_imports import Module, stream_d
 
 from .._support.indexing import IndexingContext
 from ...support.location_config import LocationCaptureLevel
@@ -295,7 +296,8 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
 
         bound_scalar_symbols = kernel.bound_scalar_symbols
         symbols_args_map = kernel.symbols_args_map
-        if is_cache_enabled():
+        # Do not lookup cached kernel if user wants to run overriding MLIR.
+        if is_cache_enabled() and not options.override_mlir:
             cache_manager = get_cache_manager()
             options.kernel_hash = cache_manager.get_hash(
                 kernel.constraints,
@@ -341,6 +343,33 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
             debug_handlers,
             device_layout,
         ) = kernel._trace_and_get_kernel_signature(options)
+
+        ireefy_overriding_module = False
+        if options.override_mlir:
+            overriding_module_op = Module.parse(
+                options.override_mlir, context=mb.module_op.context
+            )
+            # If there is no stream.executable op at the top-level of the
+            # module, we need to iree-fy the module by invoking
+            # `compile_to_mlir()` with our existing module.
+            if not any(
+                isinstance(op, stream_d.ExecutableOp)
+                for op in overriding_module_op.operation.regions[0].blocks[0]
+            ):
+                (
+                    mb,
+                    _,
+                    exe,
+                    kernel_sig,
+                    entrypoint_name,
+                ) = kernel.compile_to_mlir(
+                    trace=graph,
+                    context=None,
+                    module_op=overriding_module_op,
+                    options=options,
+                )
+                ireefy_overriding_module = True
+
         options.kernel_sig = kernel_sig
 
         # calculate the number of devices based on the device layout
@@ -392,7 +421,10 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 ),
             )
 
-        if options.override_mlir:
+        # Only override here if the overriding module has not been iree-fied by
+        # `compile_to_mlir()`. Otherwise the asm would have been available in
+        # `mb.module_op.get_asm()`.
+        if options.override_mlir and not ireefy_overriding_module:
             asm = options.override_mlir
 
         if options.compile_to_mlir:
