@@ -10,7 +10,6 @@ from .._support.indexing import IndexingContext
 from ...support.location_config import LocationCaptureLevel
 from ..compiler import host_codegen, kernel_codegen
 from .cache import (
-    get_cache_base_dir,
     get_cache_manager,
     get_temp_binary_dir,
     is_cache_enabled,
@@ -55,6 +54,7 @@ class WaveKernel:
         self.asm = asm
         self.trace = trace
         self.compiled_graph = compiled_graph
+        self.gpu_binary_path = gpu_binary_path
         if gpu_binary_path:
             import wave_runtime
 
@@ -275,9 +275,14 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     binary_path = None
 
     def get_binary_path():
-        if is_cache_enabled():
+        if is_cache_enabled() and cache_manager is not None:
+            # For cached kernels, return the cache path directly
+            # Use cache_manager.base_dir instead of get_cache_base_dir() because:
+            # - get_cache_base_dir() always returns the default cache directory (~/.wave)
+            # - cache_manager.base_dir respects reset_cache_manager() calls in tests
+            # - This ensures tests use their temporary cache directory instead of the global one
             return (
-                str(get_cache_base_dir() / options.kernel_hash / options.kernel_hash)
+                str(cache_manager.base_dir / options.kernel_hash / options.kernel_hash)
                 + ".hsaco"
             )
         else:
@@ -395,7 +400,24 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
         if options.override_mlir:
             asm = options.override_mlir
 
-        if options.compile_to_mlir:
+        # Handle ASM compilation (both compile_to_asm and backend="asm")
+        asm_code = None
+        if options.compile_to_asm or options.backend == "asm":
+            asm_code = _generate_asm_code(mb, options)
+
+            if options.compile_to_asm:
+                # Only generate assembly, don't compile to binary
+                compiled_wave_vmfb = None
+            else:  # options.backend == "asm"
+                # Compile assembly to binary
+                _compile_asm_to_binary(asm_code, options)
+                compiled_wave_vmfb = None
+        else:
+            # Default LLVM backend
+            compiled_wave_vmfb = compile_to_vmfb(asm, options)
+
+        # Early return for compile_to_mlir if not compile_to_asm
+        if options.compile_to_mlir and not options.compile_to_asm:
             return cls(
                 options,
                 None,
@@ -408,8 +430,6 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 debug_arg_info,
                 debug_handlers,
             )
-
-        compiled_wave_vmfb = compile_to_vmfb(asm, options)
         if options.create_vmfb_file:
             write_file(options.create_vmfb_file, "wb", compiled_wave_vmfb)
 
@@ -426,13 +446,26 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
                 options,
             )
 
-    if options.wave_runtime:
+    # Set binary path based on backend
+    if options.wave_runtime and not options.compile_to_asm:
+        # Both ASM and LLVM backends should use get_binary_path() for consistency
+        # Skip binary loading for compile_to_asm
         binary_path = get_binary_path()
+    else:
+        binary_path = None
+
+    # Use the appropriate assembly code based on backend
+    if asm_code is not None:
+        # For any ASM compilation, use the generated AMDGCN assembly
+        final_asm = asm_code
+    else:
+        # For LLVM backend, use the MLIR assembly
+        final_asm = asm
 
     return cls(
         options,
         compiled_wave_vmfb,
-        asm,
+        final_asm,
         binary_path,
         bound_scalar_symbols,
         symbols_args_map,
@@ -443,6 +476,93 @@ def wave_compile(options: WaveCompileOptions, kernel: "LaunchableWave") -> WaveK
     )
 
 
+def _generate_asm_code(mb, options):
+    """Generate AMDGCN assembly from MLIR module."""
+    from .asm.asm_emitter import AsmEmitter
+
+    # Convert module_op to MLIR string
+    mlir_asm = mb.module_op.get_asm(
+        enable_debug_info=options.location_capture_config.level
+        != LocationCaptureLevel.NONE
+        and not options.drop_debug_info_before_mlir,
+        use_local_scope=options.use_local_scope,
+    )
+
+    # Generate AMDGCN assembly directly from MLIR string
+    return AsmEmitter.from_mlir_string(
+        mlir_asm, targetid=options.target, codeobj=options.codeobj
+    )
+
+
+def _compile_asm_to_binary(asm_code, options):
+    """Compile AMDGCN assembly to binary using amdclang++."""
+    import tempfile
+    import os
+    import subprocess
+
+    # Create temporary file for assembly output
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".s", delete=False) as asm_file:
+        asm_file.write(asm_code)
+        asm_output = asm_file.name
+
+    try:
+        # Generate code object using amdclang++
+        kernel_name = options.func_name
+        obj_file = os.path.join(get_temp_binary_dir(), f"{kernel_name}.o")
+        hsaco_file = os.path.join(get_temp_binary_dir(), f"{kernel_name}.hsaco")
+
+        # Step 1: Compile assembly to object file
+        compile_cmd = [
+            "amdclang++",
+            "-x",
+            "assembler",
+            "-target",
+            "amdgcn-amd-amdhsa",
+            "-mcode-object-version=4",
+            f"-mcpu={options.target}",
+            "-mwavefrontsize64",
+            "-c",
+            asm_output,
+            "-o",
+            obj_file,
+        ]
+
+        result = subprocess.run(compile_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Assembly compilation failed: {result.stderr}")
+
+        # Step 2: Link object file to hsaco file
+        link_cmd = [
+            "amdclang++",
+            "-target",
+            "amdgcn-amd-amdhsa",
+            "-Xlinker",
+            "--build-id=sha1",
+            "-o",
+            hsaco_file,
+            obj_file,
+        ]
+
+        result = subprocess.run(link_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Hsaco linking failed: {result.stderr}")
+
+    finally:
+        # Clean up temporary files
+        try:
+            os.unlink(asm_output)
+        except OSError:
+            pass
+
+
 def validate_options(options: WaveCompileOptions):
     if options.wave_runtime and options.run_bench:
         raise ValueError("Banchmarking is not supported in wave_runtime yet")
+
+    if options.backend not in ["llvm", "asm"]:
+        raise ValueError(
+            f"Invalid backend '{options.backend}'. Must be 'llvm' or 'asm'"
+        )
+
+    if options.backend == "asm" and not options.wave_runtime:
+        raise ValueError("ASM backend requires wave_runtime=True")
