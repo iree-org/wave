@@ -2067,6 +2067,8 @@ class Iterate(NestedRegionOp):
         expand_dims: list[IndexSymbol] = []
         subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
         return_node = get_custom(subgraph.output_node())
+        if return_node.return_vals[0] is None:
+            return []
         assert isinstance(return_node, Output)
         return_vals = return_node.return_vals[0]
         if not isinstance(return_vals, Sequence):
@@ -2609,7 +2611,7 @@ class ScanOp(CustomOp, ABC):
         else:
             indexing = get_custom(self.arg).indexing_dims
 
-        return [dim for dim in indexing if dim != self.dim]
+        return indexing
 
     def infer_type(self, *args):
         if isinstance(self.arg, Sequence):

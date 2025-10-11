@@ -1886,6 +1886,60 @@ def test_scalar_cond_copy(shape, run_bench):
 @pytest.mark.parametrize(
     "shape",
     [
+        (64,),
+    ],
+)
+def test_1d_scanop_cumsum(shape, run_bench):
+    N = tkl.sym.N
+    wave_size = 64
+    num_warps = 1
+    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={N: BLOCK_N // num_warps},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+        c: tkl.Memory[N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+    ):
+        lhs = tkw.read(a)
+        res = tkw.cumsum(lhs, dim=N)
+        tkw.write(res, c)
+
+    torch.manual_seed(1)
+    input = device_randint(low=1, high=5, size=shape, dtype=torch.int32)
+    output = device_zeros(shape, dtype=torch.int32)
+    torch_ref = torch.cumsum((input), dim=-1, dtype=torch.int32)
+    options = WaveCompileOptions(
+        subs={
+            N: shape[0],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(input, output)
+    print("input:", input)
+    print("output:", output)
+    print("torch_ref:", torch_ref)
+    assert_close(torch_ref, output, atol=1e-03, rtol=1e-05)
+
+
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
         (1, 27),
         (1, 64),
         (51, 64),
@@ -1895,7 +1949,7 @@ def test_scalar_cond_copy(shape, run_bench):
         (64, 500),
     ],
 )
-def test_scanop_cumsum(shape, run_bench):
+def test_2d_scanop_cumsum(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     wave_size = 64
@@ -2208,6 +2262,17 @@ def test_self_index(shape, run_bench, threads_per_wave):
         )
     ]
 
+    printer_args = None
+    handler_arg = None
+
+    def printer(*args):
+        nonlocal printer_args
+        printer_args = args
+
+    def handler(arg):
+        nonlocal handler_arg
+        handler_arg = arg
+
     # This kernel contains reduction + self_index.
     # It is loosely based on the speculative decode kernel.
     @tkw.wave(constraints)
@@ -2221,6 +2286,7 @@ def test_self_index(shape, run_bench, threads_per_wave):
         cdf = tkw.cumsum(input, dim=N)
         greather_than_cond = threshold >= cdf
         self_idx = tkw.self_index(N, dtype=tkl.i32)
+        tkw.debug_log(self_idx, label="self_index", printer=printer)
         self_idx = tkw.broadcast(self_idx, target_shape=[M, K, N])
         select_min_id = tkw.select(greather_than_cond, self_idx, threshold)
         tkw.write(select_min_id, result_self_index)
@@ -2242,7 +2308,11 @@ def test_self_index(shape, run_bench, threads_per_wave):
     options = set_default_run_config(options)
     test = wave_compile(options, test)
 
-    test(a, result_self_index)
+    print(test.asm)
+
+    debug_logs = {}
+    test(a, result_self_index, debug_logs=debug_logs)
+    breakpoint()
     assert_close(ref, result_self_index[0, 0, :])
 
 
