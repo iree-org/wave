@@ -28,7 +28,6 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
-    FlatSymbolRefAttr,
     FloatAttr,
     FunctionType,
     IndexType,
@@ -45,11 +44,9 @@ from wave_lang.support.ir_imports import (
     VectorType,
     affine_d,
     arith_d,
-    builtin_d,
     func_d,
     gpu_d,
     memref_d,
-    stream_d,
     vector_d,
 )
 
@@ -89,12 +86,10 @@ class WaveEmitter:
     constraints: list[Constraint]
     options: WaveCompileOptions
     grid: list[IndexExpr]
-    ip: InsertionPoint = None
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
     _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}
 
     def __post_init__(self):
-        self.ip = InsertionPoint(self.root_sig.entry_block)
         self.dynamic_symbols = self.options.dynamic_symbols
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
@@ -131,10 +126,6 @@ class WaveEmitter:
         ]
 
     def emit_func(self) -> Operation:
-        ip = self.ip
-        while not isinstance(ip.block.owner, builtin_d.ModuleOp):
-            ip = InsertionPoint(ip.block.owner)
-
         bindings = self.root_sig.sig.linear_bindings
 
         def abi_type(binding: BindingDesc):
@@ -145,22 +136,21 @@ class WaveEmitter:
                 return MemRefType.get([], element_type=element_type)
             return binding.as_mlir_type()
 
-        with ip, Location.unknown():
-            arg_types = [abi_type(b) for b in bindings]
+        arg_types = [abi_type(b) for b in bindings]
 
-            ftype = FunctionType.get(arg_types, [])
-            func_op = func_d.FuncOp("test_test", ftype, visibility="private")
+        ftype = FunctionType.get(arg_types, [])
+        func_op = func_d.FuncOp("test_test", ftype, visibility="private")
 
-            locs = [Location.unknown()] * len(arg_types)
-            self.entry_block = func_op.add_entry_block(locs)
+        locs = [Location.unknown()] * len(arg_types)
+        entry_block = func_op.add_entry_block(locs)
 
-        for bind, arg in zip(bindings, self.entry_block.arguments):
+        for bind, arg in zip(bindings, entry_block.arguments):
             if bind.binding_type == BindingType.SYMBOL_VALUE:
                 self.dynamic_dims[bind.symbol_type] = arg
 
-        ip = InsertionPoint(self.entry_block)
+        ip = InsertionPoint(entry_block)
         with ip, Location.unknown():
-            for bind, arg in zip(bindings, self.entry_block.arguments):
+            for bind, arg in zip(bindings, entry_block.arguments):
                 if bind.binding_type != BindingType.KERNEL_BUFFER:
                     continue
 
@@ -226,43 +216,17 @@ class WaveEmitter:
                 self._node_values[node] = [res]
             func_d.ReturnOp([])
 
-        with self.ip, Location.unknown():
-            args = []
-            for arg, new_arg in zip(
-                self.root_sig.entry_block.arguments, self.entry_block.arguments
-            ):
-                if not isinstance(new_arg.type, MemRefType):
-                    args.append(arg)
-                    continue
-
-                zero_value = arith_d.constant(IndexType.get(), 0)
-                arg = stream_d.binding_subspan(
-                    new_arg.type,
-                    arg,
-                    byte_offset=zero_value,
-                    dynamic_dims=[],
-                )
-                args.append(arg)
-
-            func_d.call([], FlatSymbolRefAttr.get(func_op.name.value), args)
-            func_d.ReturnOp([])
-
-        self.ip = InsertionPoint.at_block_terminator(self.entry_block)
         return func_op
 
     def emit(self, graph: Optional[fx.Graph] = None) -> Operation:
         func = self.emit_func()
-        with self.ip, Location.unknown():
+        with InsertionPoint.at_block_terminator(func.entry_block), Location.unknown():
             self.emit_program_invariants()
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
             )
 
         return func
-
-    def finish(self):
-        with self.ip, Location.unknown():
-            func_d.ReturnOp([])
 
     def _emit_graph(self, graph: fx.Graph):
         """Emits the given graph at the current insertion point."""
