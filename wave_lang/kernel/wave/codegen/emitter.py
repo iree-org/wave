@@ -148,8 +148,8 @@ class WaveEmitter:
             if bind.binding_type == BindingType.SYMBOL_VALUE:
                 self.dynamic_dims[bind.symbol_type] = arg
 
-        ip = InsertionPoint(entry_block)
-        with ip, Location.unknown():
+        with InsertionPoint(entry_block), Location.unknown():
+            self.emit_program_invariants()
             for bind, arg in zip(bindings, entry_block.arguments):
                 if bind.binding_type != BindingType.KERNEL_BUFFER:
                     continue
@@ -221,7 +221,6 @@ class WaveEmitter:
     def emit(self, graph: Optional[fx.Graph] = None) -> Operation:
         func = self.emit_func()
         with InsertionPoint.at_block_terminator(func.entry_block), Location.unknown():
-            self.emit_program_invariants()
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
             )
