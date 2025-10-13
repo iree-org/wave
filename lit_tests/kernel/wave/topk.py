@@ -62,9 +62,13 @@ def test_topk():
     # CHECK-DAG: %[[C0_I32:.*]] = arith.constant 0 : i32
     # CHECK-DAG: %[[C1_I32:.*]] = arith.constant 1 : i32
     # CHECK-DAG: %[[C64_I32:.*]] = arith.constant 64 : i32
+    # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+
+    # CHECK-DAG: %[[INPUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%[[C0]]], sizes: [32, 64], strides: [64, 1] : memref<f16> to memref<32x64xf16, strided<[64, 1], offset: ?>>
+    # CHECK-DAG: %[[VALUES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%[[C0]]], sizes: [32, 2], strides: [2, 1] : memref<f16> to memref<32x2xf16, strided<[2, 1], offset: ?>>
+    # CHECK-DAG: %[[INDICES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%[[C0]]], sizes: [32, 2], strides: [2, 1] : memref<i32> to memref<32x2xi32, strided<[2, 1], offset: ?>>
 
     # Check for read operation
-    # CHECK: %[[INPUT:.*]] = stream.binding.subspan %arg0
     # CHECK: %[[LOADED:.*]] = vector.load %[[INPUT]]
 
     # Check for thread index broadcast for self_index
@@ -100,7 +104,5 @@ def test_topk():
     # CHECK: vector.from_elements{{.*}} : vector<2xi32>
 
     # Write operations for both values and indices
-    # CHECK: %[[VALUES_OUT:.*]] = stream.binding.subspan %arg1
     # CHECK: vector.store{{.*}}, %[[VALUES_OUT]]{{.*}} : memref<32x2xf16{{.*}}>, vector<2xf16>
-    # CHECK: %[[INDICES_OUT:.*]] = stream.binding.subspan %arg2
     # CHECK: vector.store{{.*}}, %[[INDICES_OUT]]{{.*}} : memref<32x2xi32{{.*}}>, vector<2xi32>
