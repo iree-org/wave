@@ -173,63 +173,63 @@ def test_mma_32x32x8():
     # CHECK-DAG:        %[[BASE_ALLOC:.+]] = memref.alloc() : memref<3072xi8, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
     # CHECK-DAG:        %[[C1536:.+]] = arith.constant 1536 : index
+    # CHECK-DAG:        %[[SUBSPAN:.*]] = stream.binding.subspan %arg2[%[[C0]]] : !stream.binding -> memref<f32>
+    # CHECK-DAG:        %[[DST:.*]] = memref.reinterpret_cast %[[SUBSPAN]] to offset: [%[[C0]]], sizes: [128, 128], strides: [128, 1] : memref<f32> to memref<128x128xf32, strided<[128, 1], offset: ?>>
     # CHECK-DAG:        %[[ALLOC:.+]] = memref.view %[[BASE_ALLOC]][%[[C0]]][] : memref<3072xi8, #gpu.address_space<workgroup>> to memref<64x12xf16, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1536]]][] : memref<3072xi8, #gpu.address_space<workgroup>> to memref<64x12xf16, #gpu.address_space<workgroup>>
-    # CHECK-DAG:        %[[D12:.+]] = vector.load %[[ALLOC]]{{.*}} : memref<64x12xf16,
+    # CHECK:            %[[D12:.+]] = vector.load %[[ALLOC]]{{.*}} : memref<64x12xf16,
     # CHECK:            %[[D20:.+]] = vector.load %[[ALLOC_0]]{{.*}} : memref<64x12xf16,
     # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 8 : i32, m = 32 :
     # CHECK-SAME:         i32, n = 32 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
     # CHECK:            %[[VAL0:.*]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
-    # CHECK:            %[[D23:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref<128x128xf32,
-    # CHECK-SAME:         strided<[128, 1], offset: ?>>
 
     # CHECK:            %[[OFF0:.*]] = affine.apply #[[MAP0]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL0]], %[[D23]][%[[OFF0]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL0]], %[[DST]][%[[OFF0]], %{{.*}}]
     # CHECK:            %[[VAL1:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [1], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF1:.*]] = affine.apply #[[MAP1]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL1]], %[[D23]][%[[OFF1]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL1]], %[[DST]][%[[OFF1]], %{{.*}}]
     # CHECK:            %[[VAL2:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [2], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF2:.*]] = affine.apply #[[MAP2]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL2]], %[[D23]][%[[OFF2]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL2]], %[[DST]][%[[OFF2]], %{{.*}}]
     # CHECK:            %[[VAL3:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [3], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF3:.*]] = affine.apply #[[MAP3]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL3]], %[[D23]][%[[OFF3]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL3]], %[[DST]][%[[OFF3]], %{{.*}}]
     # CHECK:            %[[VAL4:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [4], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF4:.*]] = affine.apply #[[MAP4]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL4]], %[[D23]][%[[OFF4]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL4]], %[[DST]][%[[OFF4]], %{{.*}}]
     # CHECK:            %[[VAL5:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [5], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF5:.*]] = affine.apply #[[MAP5]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL5]], %[[D23]][%[[OFF5]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL5]], %[[DST]][%[[OFF5]], %{{.*}}]
     # CHECK:            %[[VAL6:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [6], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF6:.*]] = affine.apply #[[MAP6]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL6]], %[[D23]][%[[OFF6]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL6]], %[[DST]][%[[OFF6]], %{{.*}}]
     # CHECK:            %[[VAL7:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [7], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF7:.*]] = affine.apply #[[MAP7]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL7]], %[[D23]][%[[OFF7]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL7]], %[[DST]][%[[OFF7]], %{{.*}}]
     # CHECK:            %[[VAL8:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [8], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF8:.*]] = affine.apply #[[MAP8]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL8]], %[[D23]][%[[OFF8]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL8]], %[[DST]][%[[OFF8]], %{{.*}}]
     # CHECK:            %[[VAL9:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [9], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF9:.*]] = affine.apply #[[MAP9]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL9]], %[[D23]][%[[OFF9]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL9]], %[[DST]][%[[OFF9]], %{{.*}}]
     # CHECK:            %[[VAL10:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [10], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF10:.*]] = affine.apply #[[MAP10]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL10]], %[[D23]][%[[OFF10]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL10]], %[[DST]][%[[OFF10]], %{{.*}}]
     # CHECK:            %[[VAL11:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [11], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF11:.*]] = affine.apply #[[MAP11]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL11]], %[[D23]][%[[OFF11]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL11]], %[[DST]][%[[OFF11]], %{{.*}}]
     # CHECK:            %[[VAL12:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [12], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF12:.*]] = affine.apply #[[MAP12]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL12]], %[[D23]][%[[OFF12]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL12]], %[[DST]][%[[OFF12]], %{{.*}}]
     # CHECK:            %[[VAL13:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [13], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF13:.*]] = affine.apply #[[MAP13]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL13]], %[[D23]][%[[OFF13]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL13]], %[[DST]][%[[OFF13]], %{{.*}}]
     # CHECK:            %[[VAL14:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [14], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF14:.*]] = affine.apply #[[MAP14]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL14]], %[[D23]][%[[OFF14]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL14]], %[[DST]][%[[OFF14]], %{{.*}}]
     # CHECK:            %[[VAL15:.*]] = vector.extract_strided_slice %[[D21]]  {offsets = [15], sizes = [1], strides = [1]}
     # CHECK:            %[[OFF15:.*]] = affine.apply #[[MAP15]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[VAL15]], %[[D23]][%[[OFF15]], %{{.*}}]
+    # CHECK:            vector.store %[[VAL15]], %[[DST]][%[[OFF15]], %{{.*}}]
 
 
 @run_test
@@ -307,8 +307,6 @@ def test_mma_32x32x16():
     # CHECK-SAME:         i32, n = 32 : i32} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
     # CHECK:            %[[D22:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<16xf32> to vector<1xf32>
-    # CHECK:            %[[D23:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref<128x128xf32,
-    # CHECK-SAME:         strided<[128, 1], offset: ?>>
 
     # CHECK-COUNT-16:   vector.store
 
@@ -499,19 +497,15 @@ def test_wmma_f32_16x16x16_f16_w32():
     # CHECK-DAG:        %[[VIEW0:.+]] = memref.view %[[BASE_ALLOC]]
     # CHECK-DAG:        %[[VIEW1:.+]] = memref.view %[[BASE_ALLOC]]
 
-    # CHECK-DAG:        %[[V0:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref
-
     # CHECK-DAG:        %[[V1:.+]] = affine.apply #map()[%[[TID_X]], %[[BID_X]]]
     # CHECK-DAG:        %[[V2:.+]] = affine.apply #map1()[%[[TID_X]]]
-    # CHECK-DAG:        %[[R1:.+]] = vector.load %[[V0]][%[[V1]], %[[V2]]] {{.*}} vector<8xf16>
+    # CHECK-DAG:        %[[R1:.+]] = vector.load %{{.*}}[%[[V1]], %[[V2]]] {{.*}} vector<8xf16>
 
     # CHECK-DAG:        %[[V4:.+]] = affine.apply #map2()[%[[TID_X]]]
     # CHECK-DAG:        vector.store %[[R1]], %[[VIEW1]][%[[V4]], %[[V2]]] {{.*}} vector<8xf16>
 
-    # CHECK-DAG:        %[[V5:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref
-
     # CHECK-DAG:        %[[V6:.+]] = affine.apply #map3()[%[[TID_X]], %[[BID_Y]]]
-    # CHECK-DAG:        %[[R2:.+]] = vector.load %[[V5]][%[[V6]], %[[V2]]] {{.*}} vector<8xf16>
+    # CHECK-DAG:        %[[R2:.+]] = vector.load %{{.*}}[%[[V6]], %[[V2]]] {{.*}} vector<8xf16>
 
     # CHECK-DAG:        %[[V8:.+]] = affine.apply #map4()[%[[TID_X]]]
     # CHECK-DAG:        vector.store %[[R2]], %[[VIEW0]][%[[V8]], %[[V2]]] {{.*}} vector<8xf16>
@@ -525,37 +519,36 @@ def test_wmma_f32_16x16x16_f16_w32():
 
     # CHECK-DAG:        %[[E1:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [0], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
 
-    # CHECK-DAG:        %[[V13:.+]] = stream.binding.subspan {{.*}} : !stream.binding -> memref
     # CHECK-DAG:        %[[V14:.*]] = affine.apply #map5()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E1]], %[[V13]][%[[V14]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E1]], %{{.*}}[%[[V14]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK-DAG:        %[[E2:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [1], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
     # CHECK-DAG:        %[[V16:.*]] = affine.apply #map6()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E2]], %[[V13]][%[[V16]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E2]], {{.*}}[%[[V16]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK-DAG:        %[[E3:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [2], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
     # CHECK-DAG:        %[[V18:.*]] = affine.apply #map7()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E3]], %[[V13]][%[[V18]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E3]], %{{.*}}[%[[V18]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK-DAG:        %[[E4:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [3], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
     # CHECK-DAG:        %[[V20:.*]] = affine.apply #map8()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E4]], %[[V13]][%[[V20]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E4]], %{{.*}}[%[[V20]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK-DAG:        %[[E5:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [4], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
     # CHECK-DAG:        %[[V22:.*]] = affine.apply #map9()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E5]], %[[V13]][%[[V22]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E5]], %{{.*}}[%[[V22]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK-DAG:        %[[E6:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [5], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
     # CHECK-DAG:        %[[V24:.*]] = affine.apply #map10()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E6]], %[[V13]][%[[V24]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E6]], %{{.*}}[%[[V24]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK-DAG:        %[[E7:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [6], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
     # CHECK-DAG:        %[[V26:.*]] = affine.apply #map11()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E7]], %[[V13]][%[[V26]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E7]], %{{.*}}[%[[V26]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK-DAG:        %[[E8:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [7], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
     # CHECK-DAG:        %[[V28:.*]] = affine.apply #map12()[%[[TID_X]], %[[BID_X]]]
-    # CHECK-DAG:        vector.store %[[E8]], %[[V13]][%[[V28]], %[[V6]]] {{.*}} vector<1xf32>
+    # CHECK-DAG:        vector.store %[[E8]], %{{.*}}[%[[V28]], %[[V6]]] {{.*}} vector<1xf32>
 
     # CHECK:            return
 
