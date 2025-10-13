@@ -19,6 +19,7 @@ from ..ops.wave_ops import (
     GatherToLDS,
     NestedRegionOp,
     Read,
+    Iterate,
     SharedMemoryBarrier,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
@@ -97,35 +98,6 @@ def move_to_valid(node: fx.Node):
     return node
 
 
-class NodeDependentType(Enum):
-    """Enum to classify node dependencies."""
-
-    REGULAR = auto()
-    ROOT = auto()
-    REDUCTION = auto()
-    ROOT_REDUCTION = auto()
-
-
-def get_dependent_state(
-    node1: fx.Node,
-    node2: fx.Node,
-    is_reduction_phase: bool,
-    root_dependent_node: fx.Node = None,
-):
-    depend_on_root = node1.graph != node2.graph
-
-    if not depend_on_root and not is_reduction_phase:
-        return NodeDependentType.REGULAR
-    if depend_on_root and not is_reduction_phase:
-        return NodeDependentType.ROOT
-    if not depend_on_root and is_reduction_subgraph and root_dependent_node is None:
-        return NodeDependentType.REDUCTION
-    if root_dependent_node and is_reduction_subgraph:
-        return NodeDependentType.ROOT_REDUCTION
-
-    assert False, "There is no other types of dependencies."
-
-
 @dataclass
 class SharedMemoryBarrierInfo:
     is_async: bool = False
@@ -138,8 +110,7 @@ def add_shared_memory_barriers(
     info: Optional[dict[fx.Node, SharedMemoryBarrierInfo]] = None,
     checking_next_iter: Optional[bool] = False,
     target: str = "",
-    last_to_signal: dict = None,
-    root_dependent_node: fx.Node = None,
+    last_producer: dict = None,
 ):
     """
     Adds shared memory barriers to the graph. The barriers are inserted
@@ -160,13 +131,8 @@ def add_shared_memory_barriers(
         info = defaultdict(SharedMemoryBarrierInfo)
 
     # a map with key: barId, value: fx.Node to keep track of last node to signal
-    if last_to_signal is None:
-        last_to_signal = defaultdict()
-
-    # TODO(megan.kuo) named barriers are disabled features in navi4x products.
-    # will be supported in future generations.
-    # WAR: 1, RAW: 2 [insert when meet last node]
-    # named_bars = {MemoryAccessType.READ: 1, MemoryAccessType.WRITE: 2}
+    if last_producer is None:
+        last_producer = defaultdict()
 
     for node in graph.nodes:
         custom = get_custom(node)
@@ -191,73 +157,15 @@ def add_shared_memory_barriers(
                 else:
                     # Synchronize after the write to shared memory before we read from it.
                     if split_barrier:
-                        # certain scenarios to consider if split barriers are enabled
-                        # 1. root graph, dependencies are straightforward,
-                        #    the algorithm iterate to the first node to wait,
-                        #    and we keep track of the last node to signal.
-                        #    -> signal after last node tracked, wait before the current node.
-                        #
-                        # 2. subgraph, dependencies can produced from root graph, reduction graph
-                        #    should also be taken care of.
-                        #
-                        #    1) no dependency from root and not a reduction graph
-                        #       -> works like 1.
-                        #
-                        #    2) dependency from root, not a reduction graph
-                        #       -> insert signal node in the root graph
-                        #       -> wait before current node.
-                        #
-                        #    3) no root dependencies, is a reduction graph
-                        #       -> insert signal and write at the end of state.last_node
-                        #
-                        #    4) dependency from root, is a reduction graph
-                        #       -> insert signal in the root graph
-                        #       -> wait at the root_depend_node
-                        #       -> insert signal at the next iterate last_to_signal node
-                        #       -> insert wait at the end of iterate
+                        consumer = node
+                        producer = last_producer.get(barId)
+                        assert consumer and producer, "Bug: Consumer node and producer node should never be None."
 
-                        barrier_wait_node = None
-                        barrier_signal_node = None
-                        dependnet_state = get_dependent_state(
-                            state.last_node.fx_node,
-                            node,
-                            checking_next_iter,
-                            root_dependent_node,
-                        )
+                        has_root_dependency = producer.graph != consumer.graph
 
-                        match dependnet_state:
-                            case NodeDependentType.REGULAR:
-                                barrier_signal_node = last_to_signal.get(barId)
-                                barrier_wait_node = node
-                            case NodeDependentType.ROOT:
-                                barrier_signal_node = last_to_signal.get(barId)
-                                barrier_wait_node = node
-                                root_dependent_node = root_dependent_node or node
-                            case NodeDependentType.REDUCTION:
-                                barrier_signal_node = last_to_signal.get(barId)
-                                barrier_wait_node = last_to_signal.get(barId).next
-                            case NodeDependentType.ROOT_REDUCTION:
-                                barrier_signal_node = last_to_signal.get(barId)
-                                barrier_wait_node = graph.parent_op.next
-                                root_dependent_node = None
-
-                        if barrier_signal_node:
-                            signal_node = move_to_valid(barrier_signal_node)
-                            signal_graph = barrier_signal_node.graph
-                            with signal_graph.inserting_after(signal_node):
-                                _ = SharedMemoryBarrierSignal(
-                                    barId, wait_async_ops=state.is_async
-                                ).add_to_graph(
-                                    signal_graph, loc=get_custom(signal_node).location
-                                )
-
-                        if barrier_wait_node:
-                            wait_node = move_to_valid(barrier_wait_node)
-                            wait_graph = barrier_wait_node.graph
-                            with wait_graph.inserting_before(wait_node):
-                                _ = SharedMemoryBarrierWait(barId).add_to_graph(
-                                    wait_graph, loc=get_custom(wait_node).location
-                                )
+                        # root dependency will be handled in separate pass: add_signal_prolog_wait_epilog_to_graph
+                        if not has_root_dependency:
+                            add_shared_memory_split_barriers(producer, consumer, barId, state.is_async)
                     else:
                         with graph.inserting_before(node):
                             barrier_node = SharedMemoryBarrier(
@@ -267,7 +175,7 @@ def add_shared_memory_barriers(
                 state.is_async = False
 
             state.last_node = custom
-            last_to_signal.update({barId: node})
+            last_producer.update({barId: node})
 
             if isinstance(custom, GatherToLDS):
                 state.is_async = True
@@ -278,9 +186,9 @@ def add_shared_memory_barriers(
                 trace.get_subgraph(custom.subgraph_name),
                 info,
                 target=target,
-                last_to_signal=last_to_signal,
-                root_dependent_node=root_dependent_node,
+                last_producer=last_producer
             )
+            add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
@@ -292,6 +200,117 @@ def add_shared_memory_barriers(
             info,
             checking_next_iter=True,
             target=target,
-            last_to_signal=last_to_signal,
-            root_dependent_node=root_dependent_node,
+            last_producer=last_producer
         )
+
+def add_shared_memory_split_barriers(producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False):
+    '''
+    certain scenarios to consider if split barriers are enabled
+    1. root graph, dependencies are straightforward,
+       the algorithm iterate to the first node to wait,
+       and we keep track of the last node to signal.
+       -> signal after last node tracked, wait before the current node.
+    2. subgraph, dependencies can produced from root graph, reduction graph
+       should also be taken care of.
+
+        1) no dependency from root and not a reduction graph
+          -> works like 1.
+        2) dependency from root, not a reduction graph
+          -> insert signal node in the root graph
+          -> wait before current node.
+        3) no root dependencies, is a reduction graph
+          -> insert signal and write at the end of state.last_node
+        4) dependency from root, is a reduction graph
+          -> insert signal in the root graph
+          -> wait at the root_depend_node
+          -> insert signal at the next iterate last_producer node
+          -> insert wait at the end of iterate
+    These scenarios can be generalized to patterns like this:
+
+    <wait>
+    (nodes)
+    <signal>
+
+    for circular dependencies introduced by reduction graphs, it will be handled by add_signal_prolog_wait_epilog_to_graph pass.
+    '''
+
+    if producer:
+        signal_node = move_to_valid(producer)
+        signal_graph = producer.graph
+        with signal_graph.inserting_after(signal_node):
+            _ = SharedMemoryBarrierSignal(
+                barId, wait_async_ops=is_async
+            ).add_to_graph(
+                signal_graph, loc=get_custom(signal_node).location
+            )
+
+    if consumer:
+        wait_node = move_to_valid(consumer)
+        wait_graph = consumer.graph
+        with wait_graph.inserting_before(wait_node):
+            _ = SharedMemoryBarrierWait(barId).add_to_graph(
+                wait_graph, loc=get_custom(wait_node).location
+            )
+
+    return signal_graph != wait_graph
+
+
+def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
+    '''
+    Pattern: custom iterate node and wait node is before signal
+
+    This pass insert signal and wait barrier based on root_dependency.
+    Specifically, if has_root_dependency is set, a signal should already be inserted by
+    `add_shared_memory_barriers` pass, we only need to insert a wait at the epilog.
+    If has_root_dependency is not set but it is an iterate subgraph, that means producers
+    and consumers are both inside the subgraph, we insert signal at prolog and wait at epilog
+    to deal with circular dependency.
+
+    [root]
+    ...
+    <signal>
+        [subgraph]
+        ...
+        [end subgraph]
+    <wait>
+    ...
+    [end root]
+    '''
+
+    if not isinstance(custom, Iterate): return
+
+    subgraph = trace.get_subgraph(custom.subgraph_name)
+    if all_signals_before_waits(subgraph): return
+
+    producer = custom.fx_node.prev
+    consumer = custom.fx_node.next
+
+    same_graph = add_shared_memory_split_barriers(producer, consumer)
+    assert same_graph is False, "prolog and epilog should be inserted in the same graph."
+
+
+def all_signals_before_waits(graph):
+    '''
+    For difference scheduling such as Prefetch / Modulo, LR and LW may appear at prolog or epilog of a subgraph.
+    This function checks if there are waits before any signals.
+    Granuarity of this function is a graph (subgraphs should already be handled.)
+    '''
+
+    signals = defaultdict(bool) # barId : signal exist
+    lonely_waits = set()
+
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, SharedMemoryBarrierSignal):
+            assert signals[custom.barId] is False, "Bug: signal the same barId twice before any watis."
+            signals.update({custom.barId: True})
+        if isinstance(custom, SharedMemoryBarrierWait):
+            if not signals[custom.barId]:
+               lonely_waits.add(custom)
+            else:
+                signals.update({custom.barId: False})
+
+    assert len(lonely_waits) <= 1, "Wait barrier appear more than once before any signals, this is a serious bug."
+    assert sum(signals.values()) <= 1, "Signals are not consumed by waits for more than twice"
+
+    return len(lonely_waits) == 0
