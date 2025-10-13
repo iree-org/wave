@@ -137,4 +137,11 @@ def get_conversion_op(src_elem_type, dst_elem_type, fastmath=None):
         conversion_op = int_cast_ops[src_elem_type.width < dst_elem_type.width]
     else:
         conversion_op = conversion_ops[(is_src_float, is_dst_float)]
+
+    if is_index_type(src_elem_type):
+        conv = conversion_op
+        conversion_op = lambda t, v: conv(
+            t, arith_d.index_cast(IntegerType.get_signless(64), v)
+        )
+
     return conversion_op
