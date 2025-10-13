@@ -294,6 +294,7 @@ def _rewrite_module_for_iree_stream_abi(
                 )
                 arg_mapping[old_arg] = new_subspan
             else:
+                # Map scalar arguments to their corresponding arguments directly.
                 arg_mapping[old_arg] = target_args[i]
 
         # Move operations

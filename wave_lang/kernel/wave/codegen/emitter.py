@@ -130,10 +130,13 @@ class WaveEmitter:
 
         def abi_type(binding: BindingDesc):
             if binding.binding_type == BindingType.KERNEL_BUFFER:
+                # Buffer passed to kenel as 0D memrefs to simplify ABI.
                 element_type = IrType.parse(
                     binding.kernel_buffer_type.dtype.ir_type_asm()
                 )
                 return MemRefType.get([], element_type=element_type)
+
+            # Scalars are passed as is.
             return binding.as_mlir_type()
 
         arg_types = [abi_type(b) for b in bindings]
@@ -144,6 +147,7 @@ class WaveEmitter:
         locs = [Location.unknown()] * len(arg_types)
         entry_block = func_op.add_entry_block(locs)
 
+        # Map dynamic symbols to buffer argument indices and dimensions.
         for bind, arg in zip(bindings, entry_block.arguments):
             if bind.binding_type == BindingType.SYMBOL_VALUE:
                 self.dynamic_dims[bind.symbol_type] = arg
@@ -153,6 +157,7 @@ class WaveEmitter:
             for bind, arg in zip(bindings, entry_block.arguments):
                 node = bind.reference[1]
                 if bind.binding_type != BindingType.KERNEL_BUFFER:
+                    # Map scalar arguments to their corresponding node values.
                     self._node_values[node] = [arg]
                     continue
 
@@ -168,6 +173,7 @@ class WaveEmitter:
 
                     return dyn_val
 
+                # reinterpret_cast the 0D input buffers to the real shape/strides.
                 element_type = bind.kernel_buffer_type.dtype.ir_type_asm()
                 symbolic_shape = bind.kernel_buffer_type.symbolic_shape
                 physical_shape = symbolic_shape
