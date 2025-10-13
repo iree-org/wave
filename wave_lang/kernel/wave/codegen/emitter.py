@@ -151,12 +151,12 @@ class WaveEmitter:
         with InsertionPoint(entry_block), Location.unknown():
             self.emit_program_invariants()
             for bind, arg in zip(bindings, entry_block.arguments):
+                node = bind.reference[1]
                 if bind.binding_type != BindingType.KERNEL_BUFFER:
+                    self._node_values[node] = [arg]
                     continue
 
                 dyn_val = MemRefType.get_dynamic_size()
-
-                node = bind.reference[1]
 
                 def get_static_dim(s: Optional[IndexExpr]) -> int:
                     if s is None:
@@ -266,16 +266,8 @@ class WaveEmitter:
         assert NDEBUG or isinstance(node, fx.Node)
         values = self._node_values.get(node)
         if values is None:
-            # Force arg binding insertion point to be at the function level to
-            # avoid dominance errors when buffer is used inside multiple
-            # scf constructs.
-            ip = InsertionPoint.current
-            while not isinstance(ip.block.owner, func_d.FuncOp):
-                ip = InsertionPoint(ip.block.owner)
+            raise CodegenError(f"Node {node} has no IR Value")
 
-            with ip:
-                values = [self.root_sig.resolve_by_reference(("node", node))]
-            self._node_values[node] = values
         values = [v.ir_value if isinstance(v, IRProxyValue) else v for v in values]
         return values
 
