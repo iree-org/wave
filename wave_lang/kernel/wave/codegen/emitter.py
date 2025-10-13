@@ -158,7 +158,10 @@ class WaveEmitter:
 
                 node = bind.reference[1]
 
-                def get_static_dim(s: IndexExpr) -> int:
+                def get_static_dim(s: Optional[IndexExpr]) -> int:
+                    if s is None:
+                        return dyn_val
+
                     s = subs_idxc(s)
                     if is_literal(s):
                         return int(s)
@@ -167,10 +170,11 @@ class WaveEmitter:
 
                 element_type = bind.kernel_buffer_type.dtype.ir_type_asm()
                 symbolic_shape = bind.kernel_buffer_type.symbolic_shape
+                physical_shape = symbolic_shape
                 if layout := node.type.physical_layout:
-                    symbolic_shape = layout.shape
+                    physical_shape = layout.shape
 
-                static_sizes = [get_static_dim(s) for s in symbolic_shape]
+                static_sizes = [get_static_dim(s) for s in physical_shape]
                 spec_asm = "x".join(
                     "?" if s == dyn_val else str(s) for s in static_sizes
                 )
@@ -178,7 +182,7 @@ class WaveEmitter:
 
                 idx_context = IndexingContext.current()
                 strides = strides_from_symbolic_shape(
-                    idx_context, symbolic_shape, allow_mixed_shapes=True
+                    idx_context, physical_shape, allow_mixed_shapes=True
                 )
                 if strides is None:
                     memref_asm = f"memref<{spec_asm}>"
@@ -195,13 +199,13 @@ class WaveEmitter:
                 offset = arith_d.constant(IndexType.get(), 0)
                 dyn_sizes = [
                     gen_sympy_index(add_emitter_subs(self), s)
-                    for s in symbolic_shape
-                    if not is_literal(subs_idxc(s))
+                    for s, p in zip(symbolic_shape, physical_shape)
+                    if get_static_dim(p) == dyn_val
                 ]
                 dyn_strides = [
                     gen_sympy_index(add_emitter_subs(self), s)
                     for s in strides
-                    if not is_literal(subs_idxc(s))
+                    if get_static_dim(s) == dyn_val
                 ]
                 res = memref_d.reinterpret_cast(
                     memref_type,
