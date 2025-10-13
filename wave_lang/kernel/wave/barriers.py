@@ -192,7 +192,8 @@ def add_shared_memory_barriers(
                 target=target,
                 last_producer=last_producer,
             )
-            add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
+            if not checking_next_iter:
+                add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
