@@ -35,7 +35,6 @@ from .indexing import (
 )
 from ...support.location_config import LocationCaptureConfig
 from .location import CapturedLocation
-from .regions import RegionGraph, SubgraphTracer
 from ..wave.mlir_converter.utility import snapshot_node_fields, restore_node_fields
 from .regions import RegionGraph, SubgraphTracer, ScheduleRegionGraph
 

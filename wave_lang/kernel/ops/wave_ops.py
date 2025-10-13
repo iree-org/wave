@@ -41,6 +41,11 @@ AccT = TypeVar("AccT")
 CustomOpT = TypeVar("CustomOpT", bound="CustomOp")
 PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
 
+# List of keywords that are ignored when creating a custom op from an fx.Node.
+# An example of this is tag, which is only used for tagging operators
+# for their use in the custom wave schedule.
+IGNORED_KEYWORDS = ["tag"]
+
 
 def read_meets_hw_transpose_requirements(
     read: Read, constraints: list[Constraint]
@@ -616,7 +621,9 @@ class CustomOp(ABC):
         tag: Optional[str] = None,
     ) -> fx.Node:
         # Exclude tag from args since it's not part of the dataclass constructor
-        arg_list = tuple([value for key, value in vars(self).items() if key != "tag"])
+        arg_list = tuple(
+            [value for key, value in vars(self).items() if key not in IGNORED_KEYWORDS]
+        )
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
             "call_function",
@@ -639,7 +646,9 @@ class CustomOp(ABC):
 
     def _add_proxy_to_graph(self, region_graph: RegionGraph):
         # Exclude tag from args since it's not part of the dataclass constructor
-        arg_list = tuple([value for key, value in vars(self).items() if key != "tag"])
+        arg_list = tuple(
+            [value for key, value in vars(self).items() if key not in IGNORED_KEYWORDS]
+        )
         self.graph = region_graph
         self.fx_node = region_graph.create_proxy(
             "call_function",
