@@ -66,6 +66,9 @@ def is_signed_or_signless_type(type):
 
 
 def get_conversion_op(src_elem_type, dst_elem_type, fastmath=None):
+    if src_elem_type == dst_elem_type:
+        return lambda t, v: v
+
     is_src_float = is_float_type(src_elem_type)
     is_dst_float = is_float_type(dst_elem_type)
     is_src_int = is_integer_like_type(src_elem_type)
