@@ -102,10 +102,7 @@ from .shared_memory_indexing import apply_shared_memory_indexing_corrections
 from .generate_bound_checks import generate_bound_checks
 from .symbolic_constraints import SymbolicAlias
 from .type_inference import infer_types
-from .utils.compile_utils import (
-    canonicalize_module,
-    apply_transform,
-)
+from .utils.compile_utils import canonicalize_module, apply_transform
 from .utils.general_utils import (
     delinearize_index,
     get_hardware_constraint,
@@ -723,7 +720,6 @@ class LaunchableWave(Launchable):
         # to move the ops from existing module to inside `dispatch_entrypoint`.
         # Also we'll need to update the uses of the memref arguments (from the
         # existing module) to be compatible with the new stream.binding arguments.
-        # else:
 
         assert not any(
             isinstance(op, stream_d.ExecutableOp)
