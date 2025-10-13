@@ -15,7 +15,6 @@ Alternative approaches considered:
   add more attributes without further code changes here.
 """
 
-import dill
 import torch.fx as fx
 
 
@@ -39,32 +38,20 @@ CORE_NODE_FIELDS = {
 def snapshot_node_fields(node: fx.Node) -> None:
     """Snapshot non-core fx.Node attributes into node.meta[SNAPSHOT_KEY].
 
-    - Stores a dict of attribute_name -> dill-bytes directly under SNAPSHOT_KEY.
+    - Stores a dict of attribute_name -> value directly under SNAPSHOT_KEY.
     - Skips fx fields and internals.
     - Always snapshots `type` if present. It is not guaranteed to live in
       node.__dict__, so iterating over vars(node) will not catch it so we
       handle it explicitly here.
     """
     stored: dict[str, bytes] = {}
-    errors: list[str] = []
     for key, value in vars(node).items():
         if key in CORE_NODE_FIELDS:
             continue
-        try:
-            stored[key] = dill.dumps(value)
-        except Exception as e:
-            errors.append(f"Failed to serialize attribute '{key}': {e}")
+        stored[key] = value
     if hasattr(node, "type") and "type" not in stored:
-        try:
-            stored["type"] = dill.dumps(getattr(node, "type"))
-        except Exception as e:
-            errors.append(f"Failed to serialize attribute 'type': {e}")
+        stored["type"] = getattr(node, "type")
     node.meta[SNAPSHOT_KEY] = stored
-    if errors:
-        details = "\n".join(errors)
-        raise RuntimeError(
-            f"Encountered {len(errors)} error(s) while serializing node attributes for '{node.name}'.\n{details}"
-        )
 
 
 def restore_node_fields(node: fx.Node) -> None:
@@ -78,18 +65,7 @@ def restore_node_fields(node: fx.Node) -> None:
         raise TypeError(
             f"Expected dict at meta['{SNAPSHOT_KEY}'] for node '{node.name}', got {type(stored)}"
         )
-    errors: list[str] = []
-    for key, pickled in stored.items():
+    for key, value in stored.items():
         if key in CORE_NODE_FIELDS:
             continue
-        try:
-            value = dill.loads(pickled)
-        except Exception as e:
-            errors.append(f"Failed to deserialize attribute '{key}': {e}")
-            continue
         setattr(node, key, value)
-    if errors:
-        details = "\n".join(errors)
-        raise RuntimeError(
-            f"Encountered {len(errors)} error(s) while restoring node attributes for '{node.name}'.\n{details}"
-        )
