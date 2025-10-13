@@ -159,13 +159,17 @@ def add_shared_memory_barriers(
                     if split_barrier:
                         consumer = node
                         producer = last_producer.get(barId)
-                        assert consumer and producer, "Bug: Consumer node and producer node should never be None."
+                        assert (
+                            consumer and producer
+                        ), "Bug: Consumer node and producer node should never be None."
 
                         has_root_dependency = producer.graph != consumer.graph
 
                         # root dependency will be handled in separate pass: add_signal_prolog_wait_epilog_to_graph
                         if not has_root_dependency:
-                            add_shared_memory_split_barriers(producer, consumer, barId, state.is_async)
+                            add_shared_memory_split_barriers(
+                                producer, consumer, barId, state.is_async
+                            )
                     else:
                         with graph.inserting_before(node):
                             barrier_node = SharedMemoryBarrier(
@@ -186,7 +190,7 @@ def add_shared_memory_barriers(
                 trace.get_subgraph(custom.subgraph_name),
                 info,
                 target=target,
-                last_producer=last_producer
+                last_producer=last_producer,
             )
             add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
 
@@ -200,11 +204,14 @@ def add_shared_memory_barriers(
             info,
             checking_next_iter=True,
             target=target,
-            last_producer=last_producer
+            last_producer=last_producer,
         )
 
-def add_shared_memory_split_barriers(producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False):
-    '''
+
+def add_shared_memory_split_barriers(
+    producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False
+):
+    """
     certain scenarios to consider if split barriers are enabled
     1. root graph, dependencies are straightforward,
        the algorithm iterate to the first node to wait,
@@ -232,15 +239,13 @@ def add_shared_memory_split_barriers(producer: fx.Node, consumer: fx.Node, barId
     <signal>
 
     for circular dependencies introduced by reduction graphs, it will be handled by add_signal_prolog_wait_epilog_to_graph pass.
-    '''
+    """
 
     if producer:
         signal_node = move_to_valid(producer)
         signal_graph = producer.graph
         with signal_graph.inserting_after(signal_node):
-            _ = SharedMemoryBarrierSignal(
-                barId, wait_async_ops=is_async
-            ).add_to_graph(
+            _ = SharedMemoryBarrierSignal(barId, wait_async_ops=is_async).add_to_graph(
                 signal_graph, loc=get_custom(signal_node).location
             )
 
@@ -256,7 +261,7 @@ def add_shared_memory_split_barriers(producer: fx.Node, consumer: fx.Node, barId
 
 
 def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
-    '''
+    """
     Pattern: custom iterate node and wait node is before signal
 
     This pass insert signal and wait barrier based on root_dependency.
@@ -275,42 +280,52 @@ def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
     <wait>
     ...
     [end root]
-    '''
+    """
 
-    if not isinstance(custom, Iterate): return
+    if not isinstance(custom, Iterate):
+        return
 
     subgraph = trace.get_subgraph(custom.subgraph_name)
-    if all_signals_before_waits(subgraph): return
+    if all_signals_before_waits(subgraph):
+        return
 
     producer = custom.fx_node.prev
     consumer = custom.fx_node.next
 
     same_graph = add_shared_memory_split_barriers(producer, consumer)
-    assert same_graph is False, "prolog and epilog should be inserted in the same graph."
+    assert (
+        same_graph is False
+    ), "prolog and epilog should be inserted in the same graph."
 
 
 def all_signals_before_waits(graph):
-    '''
+    """
     For difference scheduling such as Prefetch / Modulo, LR and LW may appear at prolog or epilog of a subgraph.
     This function checks if there are waits before any signals.
     Granuarity of this function is a graph (subgraphs should already be handled.)
-    '''
+    """
 
-    signals = defaultdict(bool) # barId : signal exist
+    signals = defaultdict(bool)  # barId : signal exist
     lonely_waits = set()
 
     for node in graph.nodes:
         custom = get_custom(node)
         if isinstance(custom, SharedMemoryBarrierSignal):
-            assert signals[custom.barId] is False, "Bug: signal the same barId twice before any watis."
+            assert (
+                signals[custom.barId] is False
+            ), "Bug: signal the same barId twice before any watis."
             signals.update({custom.barId: True})
         if isinstance(custom, SharedMemoryBarrierWait):
             if not signals[custom.barId]:
-               lonely_waits.add(custom)
+                lonely_waits.add(custom)
             else:
                 signals.update({custom.barId: False})
 
-    assert len(lonely_waits) <= 1, "Wait barrier appear more than once before any signals, this is a serious bug."
-    assert sum(signals.values()) <= 1, "Signals are not consumed by waits for more than twice"
+    assert (
+        len(lonely_waits) <= 1
+    ), "Wait barrier appear more than once before any signals, this is a serious bug."
+    assert (
+        sum(signals.values()) <= 1
+    ), "Signals are not consumed by waits for more than twice"
 
     return len(lonely_waits) == 0
