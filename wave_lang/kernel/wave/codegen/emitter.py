@@ -139,7 +139,7 @@ class WaveEmitter:
         arg_types = [abi_type(b) for b in bindings]
 
         ftype = FunctionType.get(arg_types, [])
-        func_op = func_d.FuncOp("test_test", ftype, visibility="private")
+        func_op = func_d.FuncOp("kernel", ftype, visibility="private")
 
         locs = [Location.unknown()] * len(arg_types)
         entry_block = func_op.add_entry_block(locs)

@@ -726,7 +726,6 @@ class LaunchableWave(Launchable):
             for op in module_op.operation.regions[0].blocks[0]
         ), "expected overriding module to contain only upstream MLIR ops"
         _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
-        mb.module_op.verify()
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
