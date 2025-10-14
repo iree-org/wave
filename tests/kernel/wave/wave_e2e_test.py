@@ -1078,8 +1078,6 @@ def test_offset_write_one(shape, use_buffer_ops, run_bench):
 @pytest.mark.parametrize(
     "threads_per_wave",
     [
-        # Enabling wave64 mode on RDNA generates intrinsic %llvm.amdgcn.permlane32.swap,
-        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
         pytest.param(64, marks=require_cdna_2_or_3_or_4),
         pytest.param(32, marks=require_rdna4),
     ],
@@ -2553,18 +2551,26 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
 @require_e2e
 @pytest.mark.parametrize("shape,k", [((32, 64), 2), ((64, 128), 4), ((128, 256), 8)])
 @param_bool("allow_duplicates", "duplicates")
-def test_topk(shape, k, allow_duplicates, run_bench):
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        # Enabling wave64 mode on RDNA generates %llvm.amdgcn.permlane32.swap,
+        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_topk(shape, k, allow_duplicates, threads_per_wave, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     K = tkl.sym.K
-    wave_size = 64
     BLOCK_M = 1
-    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    BLOCK_N = sympy.ceiling(N / threads_per_wave) * threads_per_wave
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
-            threads_per_wave=64,
+            threads_per_wave=threads_per_wave,
             vector_shapes={M: 1, N: BLOCK_N, K: K},
         )
     ]
