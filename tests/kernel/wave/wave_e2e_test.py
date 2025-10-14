@@ -246,6 +246,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_bound_check(shape, use_buffer_ops, run_bench):

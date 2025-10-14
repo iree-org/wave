@@ -89,14 +89,6 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
     return False
 
 
-def move_to_valid(node: fx.Node):
-    while node and (
-        isinstance(node.next, SharedMemoryBarrierSignal)
-        or isinstance(node.next, SharedMemoryBarrierWait)
-    ):
-        node = node.next
-    return node
-
 
 @dataclass
 class SharedMemoryBarrierInfo:
@@ -243,22 +235,18 @@ def add_shared_memory_split_barriers(
     """
 
     if producer:
-        signal_node = move_to_valid(producer)
-        signal_graph = producer.graph
-        with signal_graph.inserting_after(signal_node):
+        with producer.graph.inserting_after(producer):
             _ = SharedMemoryBarrierSignal(barId, wait_async_ops=is_async).add_to_graph(
-                signal_graph, loc=get_custom(signal_node).location
+                producer.graph, loc=get_custom(producer).location
             )
 
     if consumer:
-        wait_node = move_to_valid(consumer)
-        wait_graph = consumer.graph
-        with wait_graph.inserting_before(wait_node):
+        with consumer.graph.inserting_before(consumer):
             _ = SharedMemoryBarrierWait(barId).add_to_graph(
-                wait_graph, loc=get_custom(wait_node).location
+                consumer.graph, loc=get_custom(consumer).location
             )
 
-    return signal_graph != wait_graph
+    return producer.graph != consumer.graph
 
 
 def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
