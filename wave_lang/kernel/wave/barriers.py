@@ -295,6 +295,6 @@ def all_signals_before_waits(graph):
     ), "Wait barrier appear more than once before any signals, this is a serious bug."
     assert (
         sum(signals.values()) <= 1
-    ), "Signals are not consumed by waits for more than twice"
+    ), "More than one signal exists without corresponding waits; this indicates a serious bug."
 
     return len(lonely_waits) == 0
