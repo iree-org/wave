@@ -10,7 +10,7 @@ from __future__ import annotations
 import dill
 import torch.fx as fx
 import sys
-from typing import TYPE_CHECKING, Callable, List, Union
+from typing import TYPE_CHECKING, Callable, Sequence
 import sympy
 
 if TYPE_CHECKING:
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     from wave_lang.kernel.ops.wave_ops import *
 
 try:
-    from water_mlir import ir
-    from water_mlir.dialects.wave import (
+    from water_mlir.water_mlir import ir
+    from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         DivOp,
         Exp2Op,
@@ -31,12 +31,12 @@ try:
         RegisterOp,
         WriteOp,
     )
-    from water_mlir.sympy_to_affine_converter import (
+    from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
     )
-    from water_mlir.dialects import arith
-    from water_mlir.dialects import func
-    from water_mlir.dialects import wave
+    from water_mlir.water_mlir.dialects import arith
+    from water_mlir.water_mlir.dialects import func
+    from water_mlir.water_mlir.dialects import wave
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -166,8 +166,14 @@ def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
 
 
 def _convert_sympy_expr_to_affine_map(
-    expr: Union[sympy.Expr, int], symbols: List[sympy.Symbol]
+    expr: sympy.Expr | int, symbols: Sequence[sympy.Symbol]
 ) -> ir.AffineMap:
+    """Converts sympy expressions to affine maps, handling the case
+    where the expression is already simplified to integer.
+
+    Adding assumptions about all symbols being positive to enable
+    more simplifications before converting expressions to affine maps.
+    """
     if isinstance(expr, int):
         return ir.AffineMap.get(0, len(symbols), [ir.AffineExpr.get_constant(expr)])
 
