@@ -282,7 +282,7 @@ def all_signals_before_waits(graph):
         if isinstance(custom, SharedMemoryBarrierSignal):
             assert (
                 signals[custom.barId] is False
-            ), "Bug: signal the same barId twice before any watis."
+            ), "Bug: signal the same barId twice before any waits."
             signals.update({custom.barId: True})
         if isinstance(custom, SharedMemoryBarrierWait):
             if not signals[custom.barId]:
