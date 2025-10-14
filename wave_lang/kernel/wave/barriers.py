@@ -89,7 +89,6 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
     return False
 
 
-
 @dataclass
 class SharedMemoryBarrierInfo:
     is_async: bool = False
