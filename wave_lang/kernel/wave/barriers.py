@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import copy
 from enum import Enum, auto
 from dataclasses import dataclass
 from collections import defaultdict
@@ -186,7 +185,10 @@ def add_shared_memory_barriers(
                 target=target,
                 last_producer=last_producer,
             )
-            if (isinstance(custom, Iterate) and not checking_next_iter) or (isinstance(custom, Conditional) and (producers != set(last_producer.items()))):
+            if (isinstance(custom, Iterate) and not checking_next_iter) or (
+                isinstance(custom, Conditional)
+                and (producers != set(last_producer.items()))
+            ):
                 # only add signal and wait around a subgraph if it is a reduction graph and we are not checking for next_iterations, or it is a conditional subgraph and a producer is inside the graph.
                 add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
 
