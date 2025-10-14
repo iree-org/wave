@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import copy
 from enum import Enum, auto
 from dataclasses import dataclass
 from collections import defaultdict
@@ -20,6 +21,7 @@ from ..ops.wave_ops import (
     NestedRegionOp,
     Read,
     Iterate,
+    Conditional,
     SharedMemoryBarrier,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
@@ -176,6 +178,7 @@ def add_shared_memory_barriers(
                 state.is_async = True
 
         if isinstance(custom, NestedRegionOp):
+            producers = set(last_producer.items())
             add_shared_memory_barriers(
                 trace,
                 trace.get_subgraph(custom.subgraph_name),
@@ -183,7 +186,8 @@ def add_shared_memory_barriers(
                 target=target,
                 last_producer=last_producer,
             )
-            if not checking_next_iter:
+            if (isinstance(custom, Iterate) and not checking_next_iter) or (isinstance(custom, Conditional) and (producers != set(last_producer.items()))):
+                # only add signal and wait around a subgraph if it is a reduction graph and we are not checking for next_iterations, or it is a conditional subgraph and a producer is inside the graph.
                 add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
 
     # Synchronize before the write to shared memory to avoid stepping over
@@ -225,7 +229,7 @@ def add_shared_memory_split_barriers(
 
 def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
     """
-    Pattern: custom iterate node + barrier wait appear before barrier signal
+    Pattern: custom NestedRegion nodes + barrier wait appear before barrier signal
 
     This pass insert signal and wait barrier around entry point and exit point of a subgraph.
 
@@ -240,15 +244,17 @@ def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
     [end root]
     """
 
-    if not isinstance(custom, Iterate):
+    if isinstance(custom, Iterate):
+        subgraph = trace.get_subgraph(custom.subgraph_name)
+        if all_signals_before_waits(subgraph):
+            return
+        producer = custom.fx_node.prev
+        consumer = custom.fx_node.next
+    elif isinstance(custom, Conditional):
+        producer = custom.fx_node
+        consumer = custom.fx_node.next
+    else:
         return
-
-    subgraph = trace.get_subgraph(custom.subgraph_name)
-    if all_signals_before_waits(subgraph):
-        return
-
-    producer = custom.fx_node.prev
-    consumer = custom.fx_node.next
 
     same_graph = add_shared_memory_split_barriers(producer, consumer)
     assert (

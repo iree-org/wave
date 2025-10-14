@@ -1136,7 +1136,6 @@ def test_reduce_sum(shape, run_bench, threads_per_wave):
 
 
 @require_e2e
-@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_common_test_shape("test_block_reduce"))
 @pytest.mark.parametrize(
     "threads_per_wave",
