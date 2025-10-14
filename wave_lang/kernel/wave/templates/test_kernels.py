@@ -217,26 +217,18 @@ def get_gemm_prefetch_kernel_and_schedule(
         shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
         mma = tkw.get_node_by_tag("mma")
 
-        # Create a pipeline with 2 stages and an initiation interval of 1.
-        # Manually set the stages.
-        with tkw.pipeline(
-            k_loop, num_stages=2, initiation_interval=2
-        ) as pipelined_loop:
+        # Create a pipeline with 2 stages and specify the operations that are overlapping.
+        with tkw.pipeline(k_loop) as pipelined_loop:
             pipelined_loop.set_stage(
-                0,
                 [
-                    global_load_a,
-                    global_load_b,
-                    shared_write_a,
-                    shared_write_b,
+                    (global_load_a, global_load_b),
+                    (shared_write_a, shared_write_b),
                 ],
             )
             pipelined_loop.set_stage(
-                1,
                 [
-                    shared_load_a,
-                    shared_load_b,
-                    mma,
+                    (shared_load_a, shared_load_b),
+                    (mma,),
                 ],
             )
 

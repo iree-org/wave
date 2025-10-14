@@ -103,7 +103,7 @@ def partition_by_address_space(node: Any, address_space: Any): ...
 
 
 @define_schedule_op
-def pipeline(iterate: Sequence[fx.Node], num_stages: int, initiation_interval: int): ...
+def pipeline(iterate: Sequence[fx.Node]): ...
 
 
 @define_schedule_op
@@ -189,7 +189,9 @@ class PartitionByAddressSpace(CustomScheduleOp):
     ):
         matched, unmatched = [], []
 
-        assert hasattr(nodes, "node"), "Nodes must be a proxy"
+        assert hasattr(
+            nodes, "node"
+        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
         nodes = get_proxy_result(nodes.node)
         assert nodes is not None, "Nodes must have a result"
         assert len(nodes) > 0, "Nodes must have at least one element"
@@ -221,14 +223,12 @@ class PipelinedLoop:
         iterate: Sequence[fx.Node],
         kernel_trace: "CapturedTrace",
         constraints: list[Constraint],
-        num_stages: int,
-        initiation_interval: int,
     ):
         self.iterate = iterate
         self.kernel_trace = kernel_trace
         self.constraints = constraints
-        self.num_stages = num_stages
-        self.initiation_interval = initiation_interval
+        self.initiation_interval = None
+        self.num_stages = 0
 
     def __enter__(self):
         return self
@@ -263,28 +263,39 @@ class PipelinedLoop:
             multi_buffer_count=None,
         )
 
-    def set_stage(self, stage: int, nodes: Sequence[fx.Node]):
-        result_nodes = []
-        for x in nodes:
-            result = get_proxy_result(x)
-            assert result is not None, "Nodes must have a result"
-            result_nodes.append(result)
+    def set_stage(self, nodes: Sequence[fx.Node]):
+        stage = self.num_stages
+        if self.initiation_interval is None:
+            self.initiation_interval = len(nodes)
+        else:
+            assert self.initiation_interval == len(
+                nodes
+            ), "The number of clusters must be the same across stages"
+        result_clusters = []
+        for cluster in nodes:
+            result_nodes = []
+            for node in cluster:
+                node_result = get_proxy_result(node)
+                assert node_result is not None, "Nodes must have a result"
+                result_nodes.append(node_result)
+            result_clusters.append(tuple(result_nodes))
 
-        for i, node in enumerate(result_nodes):
-            for subnode in node:
-                custom = get_custom(subnode)
-                custom.scheduling_parameters = {
-                    "absolute_cycle": stage * self.initiation_interval
-                    + (i // self.initiation_interval),
-                    "stage": stage,
-                    "initiation_interval": self.initiation_interval,
-                    "prefetch_stage": None,
-                }
-                custom.scheduling_parameters["cycle"] = (
-                    custom.scheduling_parameters["absolute_cycle"]
-                    % self.initiation_interval
-                )
+        for i, cluster in enumerate(result_clusters):
+            for nodes in cluster:
+                for node in nodes:
+                    custom = get_custom(node)
+                    custom.scheduling_parameters = {
+                        "absolute_cycle": stage * self.initiation_interval + i,
+                        "stage": stage,
+                        "initiation_interval": self.initiation_interval,
+                        "prefetch_stage": None,
+                    }
+                    custom.scheduling_parameters["cycle"] = (
+                        custom.scheduling_parameters["absolute_cycle"]
+                        % self.initiation_interval
+                    )
 
+        self.num_stages += 1
         # During tracing, return a proxy for the set_stage operation
         return empty_proxy("set_stage")
 
@@ -322,8 +333,6 @@ class GetItem(CustomScheduleOp):
 
 @dataclass
 class Pipeline(CustomScheduleOp):
-    num_stages: int
-    initiation_interval: int
     schedule_op_name = "pipeline"
 
     @classmethod
@@ -333,12 +342,8 @@ class Pipeline(CustomScheduleOp):
         kernel_trace,
         constraints: list[Constraint],
         iterate: Sequence[fx.Node],
-        num_stages: int,
-        initiation_interval: int,
     ):
-        real_pipelined_loop = PipelinedLoop(
-            iterate, kernel_trace, constraints, num_stages, initiation_interval
-        )
+        real_pipelined_loop = PipelinedLoop(iterate, kernel_trace, constraints)
 
         create_schedule_proxy(
             region_graph,

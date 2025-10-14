@@ -68,15 +68,33 @@ This operation separates operations based on whether they access global or share
 pipeline
 ~~~~~~~~
 
-Creates a pipelined execution pattern with configurable stages and initiation interval:
+Creates a pipelined execution pattern with automatic stage and initiation interval calculation:
 
 .. code-block:: python
 
-    with wave.pipeline(k_loop, num_stages=2, initiation_interval=2) as pipelined_loop:
-        pipelined_loop.set_stage(0, [global_load_a, global_load_b])
-        pipelined_loop.set_stage(1, [shared_load_a, mma])
+    with wave.pipeline(k_loop) as pipelined_loop:
+        pipelined_loop.set_stage([
+            (global_load_a, global_load_b),
+            (shared_write_a, shared_write_b),
+        ])
+        pipelined_loop.set_stage([
+            (shared_load_a, shared_load_b),
+            (mma,),
+        ])
 
 The pipeline operation enables advanced optimizations like overlapping memory operations with computation.
+
+**Automatic Parameter Calculation**: The pipeline system automatically calculates the initiation interval based on the number of operation groups (tuples) in each stage. For example, if a stage contains 2 operation groups like ``[(op1, op2), (op3, op4)]``, the initiation interval for that stage will be 2. Stages are numbered sequentially (0, 1, 2, ...) as they are added to the pipeline.
+
+**Operation Grouping**: Operations within each tuple are scheduled to execute in parallel, while tuples within a stage are scheduled sequentially. Additionally, operations in the same tuple position (ith tuple) across different stages will also co-execute. This allows fine-grained control over which operations can overlap and which must execute in order.
+
+For example, in a 2-stage pipeline where stage 0 has ``[(op1, op2), (op3, op4)]`` and stage 1 has ``[(op5, op6), (op7, op8)]``:
+- ``op1`` and ``op2`` execute in parallel (same tuple in stage 0)
+- ``op3`` and ``op4`` execute in parallel (same tuple in stage 0)
+- ``op5`` and ``op6`` execute in parallel (same tuple in stage 1)
+- ``op7`` and ``op8`` execute in parallel (same tuple in stage 1)
+- ``op1``, ``op2``, ``op5``, and ``op6`` co-execute in parallel (all are the 0th tuple across stages)
+- ``op3``, ``op4``, ``op7``, and ``op8`` co-execute in parallel (all are the 1st tuple across stages)
 
 getitem
 ~~~~~~~
@@ -181,27 +199,29 @@ Schedule Definition
         shared_write_b = wave.get_node_by_tag_and_type("read_b", wave.Write)
         mma = wave.get_node_by_tag("mma")
 
-        # Create a pipeline with 2 stages and initiation interval of 2
-        with wave.pipeline(
-            k_loop, num_stages=2, initiation_interval=2
-        ) as pipelined_loop:
-            pipelined_loop.set_stage(
-                0,
-                [
-                    global_load_a,
-                    global_load_b,
-                    shared_write_a,
-                    shared_write_b,
-                ],
-            )
-            pipelined_loop.set_stage(
-                1,
-                [
-                    shared_load_a,
-                    shared_load_b,
-                    mma,
-                ],
-            )
+        # Create a pipeline with 2 stages and automatic initiation interval calculation
+        with wave.pipeline(k_loop) as pipelined_loop:
+            pipelined_loop.set_stage([
+                (global_load_a, global_load_b),
+                (shared_write_a, shared_write_b),
+            ])
+            pipelined_loop.set_stage([
+                (shared_load_a, shared_load_b),
+                (mma,),
+            ])
+
+**Co-execution in GEMM Example**: In this pipeline configuration, the following clusters will co-execute:
+
+- **Stage 0, Tuple 0**: Global memory loads for matrices A and B execute in parallel
+- **Stage 0, Tuple 1**: Shared memory writes for matrices A and B execute in parallel
+- **Stage 1, Tuple 0**: Shared memory loads for matrices A and B execute in parallel
+- **Stage 1, Tuple 1**: MMA computation executes alone
+
+**Cross-stage co-execution**:
+- Global memory load cluster (stage 0, tuple 0) co-executes with shared memory load cluster (stage 1, tuple 0)
+- Shared memory write cluster (stage 0, tuple 1) co-executes with MMA computation cluster (stage 1, tuple 1)
+
+This creates an efficient pipeline where global memory loads overlap with shared memory loads, and shared memory writes overlap with MMA computation.
 
 Compilation and Execution
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -221,8 +241,9 @@ This example demonstrates:
 
 1. **Tagging**: Operations are tagged with meaningful names
 2. **Node Selection**: Schedule operations select and partition nodes
-3. **Pipeline Creation**: A 2-stage pipeline is created with explicit stage assignments
-4. **Manual Scheduling**: The schedule is applied using ``SchedulingType.MANUAL`` (and in this case produces the same result as setting the schedule to ``SchedulingType.PREFETCH``)
+3. **Pipeline Creation**: A 2-stage pipeline is created with automatic initiation interval calculation based on the number of operation groups in each stage
+4. **Operation Grouping**: Operations are grouped using tuples to specify which operations can execute in parallel within each stage
+5. **Manual Scheduling**: The schedule is applied using ``SchedulingType.MANUAL`` (and in this case produces the same result as setting the schedule to ``SchedulingType.PREFETCH``)
 
 
 Conclusion
