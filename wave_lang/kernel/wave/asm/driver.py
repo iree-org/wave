@@ -58,14 +58,14 @@ def main():
 
                 # Emit kernel preamble and kernargs
                 emitter = AsmEmitter(targetid=args.targetid, codeobj=args.codeobj)
-                emitter.emit_preamble(kernel_name)
+                emitter.emit_prologue(kernel_name)
                 emitter.emit_kernargs(num_args)
 
                 # Do full traversal with emitter to emit instructions
                 walker = IRWalker(emitter)
                 kernel_info = walker.interpret_func(function_operation)
 
-                emitter.emit_postamble(
+                emitter.emit_epilogue(
                     kernel_info.name,
                     kernel_info.wg_size[0],
                     kernel_info.subgroup_size,

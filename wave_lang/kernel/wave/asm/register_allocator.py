@@ -17,9 +17,9 @@ class RegFile:
 
 
 class SGPRAllocator:
-    def __init__(self, register_file: RegFile, start=2):
+    def __init__(self, register_file: RegFile):
         self.register_file = register_file
-        self.next_sgpr = start
+        self.next_sgpr = 2
 
     def pair(self) -> Tuple[int, int]:
         first_register, second_register = self.next_sgpr, self.next_sgpr + 1
@@ -29,8 +29,7 @@ class SGPRAllocator:
 
     def quad(self) -> Tuple[int, int, int, int]:
         # Ensure alignment to 4 SGPRs for SRD requirements
-        while self.next_sgpr % 4 != 0:
-            self.next_sgpr += 1
+        self.next_sgpr = (self.next_sgpr + 3) & (-4)
         register_0, register_1, register_2, register_3 = (
             self.next_sgpr,
             self.next_sgpr + 1,

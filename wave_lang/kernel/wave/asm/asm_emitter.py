@@ -81,14 +81,14 @@ class AsmEmitter:
                     num_args = len(fn.entry_block.arguments)
 
                     # Emit kernel preamble and kernargs
-                    emitter.emit_preamble(kernel_name)
+                    emitter.emit_prologue(kernel_name)
                     emitter.emit_kernargs(num_args)
 
                     # Do full traversal with emitter to emit instructions
                     walker = IRWalker(emitter)
                     ki = walker.interpret_func(fn)
 
-                    emitter.emit_postamble(
+                    emitter.emit_epilogue(
                         ki.name, ki.wg_size[0], ki.subgroup_size, len(ki.arg_ssa_order)
                     )
 
@@ -111,7 +111,7 @@ class AsmEmitter:
         self.lines.append(str(instr))
 
     # ---- high-level sections ----
-    def emit_preamble(self, kernel_name: str):
+    def emit_prologue(self, kernel_name: str):
         self.emit(f'.amdgcn_target "amdgcn-amd-amdhsa--{self.targetid}"')
         self.emit(".text")
         self.emit(f".protected {kernel_name}")
@@ -139,15 +139,13 @@ class AsmEmitter:
         self.emit(f".set Srd127_96, {self.SRD127_96}\n")
         self.emit(f"{kernel_name}:")
 
-    def emit_postamble(
+    def emit_epilogue(
         self, kernel_name: str, wg_size_x: int, subgroup_size: int, num_args: int
     ):
         self.emit_instruction(SEndpgm())
         self.emit("")
 
-        vgprs_used = (
-            (max(self.register_file.v_used) + 1) if self.register_file.v_used else 0
-        )
+        vgprs_used = max(self.register_file.v_used) + 1
         sgprs_used = self.register_file.s_max + 1
         txt = "\n".join(self.lines)
         txt = txt.replace(
@@ -324,19 +322,12 @@ amdhsa.kernels:
 
         This is a hardware limitation of the AMDGCN instruction set, not a configurable parameter.
         """
-        offsets = []
-        current_offset, remaining_bytes = 0, vector_bytes
-        while remaining_bytes >= 16:
-            offsets.append(current_offset)
-            current_offset += 16
-            remaining_bytes -= 16
-        if remaining_bytes != 0:
-            raise ValueError(f"Tail not supported (remaining {remaining_bytes} bytes).")
-        return offsets
+        if vector_bytes % 16 != 0:
+            raise ValueError(f"Tail not supported (remaining {vector_bytes} bytes).")
+        return list(map(lambda x: x * 16, range(vector_bytes // 16)))
 
-    def emit_load_or_store(
+    def emit_load(
         self,
-        kind: str,
         memref_ssa: str,
         vector_bytes: int,
         vector_index_register: str,
@@ -345,26 +336,21 @@ amdhsa.kernels:
         srd_register_0, srd_register_1, srd_register_2, srd_register_3 = self.srds[
             memref_ssa
         ]
-        if kind == "load":
-            register_list = []
-            self.emit(f"    # load {vector_bytes}B from {memref_ssa}")
-            for offset in self.chunk_offsets(vector_bytes):
-                vector_quad = self.vgpr_allocator.quad()
-                register_list.append(vector_quad)
-                total_offset = instruction_offset_base + offset
-                load_instruction = BufferLoadDwordx4(
-                    vector_quad,
-                    vector_index_register,
-                    (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
-                    total_offset,
-                )
-                self.emit_instruction(load_instruction)
-                self.emit_instruction(SWaitcnt("vmcnt(0)"))
-            return register_list
-        else:
-            raise AssertionError(
-                "emit_load_or_store called with store; use emit_store_with_regs"
+        register_list = []
+        self.emit(f"    # load {vector_bytes}B from {memref_ssa}")
+        for offset in self.chunk_offsets(vector_bytes):
+            vector_quad = self.vgpr_allocator.quad()
+            register_list.append(vector_quad)
+            total_offset = instruction_offset_base + offset
+            load_instruction = BufferLoadDwordx4(
+                vector_quad,
+                vector_index_register,
+                (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
+                total_offset,
             )
+            self.emit_instruction(load_instruction)
+            self.emit_instruction(SWaitcnt("vmcnt(0)"))
+        return register_list
 
     def emit_store_with_regs(
         self,

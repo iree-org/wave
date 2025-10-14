@@ -383,8 +383,8 @@ class IRWalker:
         vector_bytes = self.last_vec_bytes if self.last_vec_bytes else 32
 
         # Emit load instruction
-        self.last_regs = self.emitter.emit_load_or_store(
-            "load", memref_ssa, vector_bytes, vector_register, instruction_offset
+        self.last_regs = self.emitter.emit_load(
+            memref_ssa, vector_bytes, vector_register, instruction_offset
         )
         self.last_vec_bytes = vector_bytes
 

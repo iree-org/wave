@@ -47,6 +47,7 @@ from wave_lang.kernel.wave.templates.vanilla_attention import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from ..common.utils import (
+    require_cdna3,
     require_cdna_3_or_4,
     require_rdna4,
     require_e2e,
@@ -778,6 +779,7 @@ def testChangeFreeVarOfNestedFunction(tmp_path):
 
 @require_e2e
 @require_cache
+@require_cdna3
 def testAsmBackendCache(tmp_path):
     """Test that ASM backend caching works correctly."""
     reset_cache_manager(tmp_path)

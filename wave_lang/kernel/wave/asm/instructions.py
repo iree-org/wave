@@ -191,12 +191,10 @@ class SMovB32(ArithmeticInstruction):
 class VMbcntLoU32B32(ArithmeticInstruction):
     """Count active lanes in lower 32 bits."""
 
-    def __init__(
-        self, destination_register: int, source_register: int, comment: str = None
-    ):
+    def __init__(self, destination_register: int, mask: int, comment: str = None):
         super().__init__(
             "v_mbcnt_lo_u32_b32",
-            [f"v{destination_register}", str(source_register), "0"],
+            [f"v{destination_register}", str(mask), "0"],
             comment,
         )
 
@@ -207,13 +205,13 @@ class VMbcntHiU32B32(ArithmeticInstruction):
     def __init__(
         self,
         destination_register: int,
+        mask: int,
         source_register: int,
-        source2_register: int,
         comment: str = None,
     ):
         super().__init__(
             "v_mbcnt_hi_u32_b32",
-            [f"v{destination_register}", str(source_register), f"v{source2_register}"],
+            [f"v{destination_register}", str(mask), f"v{source_register}"],
             comment,
         )
 

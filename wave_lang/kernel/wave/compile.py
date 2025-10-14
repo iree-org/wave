@@ -542,7 +542,7 @@ def _compile_asm_to_binary(asm_code, options):
             "assembler",
             "-target",
             "amdgcn-amd-amdhsa",
-            "-mcode-object-version=4",
+            f"-mcode-object-version={options.codeobj}",
             f"-mcpu={options.target}",
             "-mwavefrontsize64",
             "-c",

@@ -29,17 +29,7 @@ def parse_vector_type(s: str) -> Tuple[int, int, str]:
         if not isinstance(vector_type, VectorType):
             raise ValueError(f"Expected VectorType, got {type(vector_type)}")
 
-        # Extract shape (first dimension for 1D vectors)
-        n = vector_type.shape[0] if vector_type.shape else 1
-
-        # Extract element type and bitwidth
-        element_type = vector_type.element_type
-        eb = element_type.width // 8  # Convert bits to bytes
-
-        # Get element type string representation
-        et = str(element_type)
-
-        return n, eb, et
+        return parse_vector_type_from_obj(vector_type)
     except Exception as e:
         raise ValueError(f"Failed to parse vector type '{s}': {e}")
 
@@ -56,18 +46,12 @@ def parse_memref_type(s: str) -> Tuple[List[int], List[int], int]:
         if not isinstance(memref_type, MemRefType):
             raise ValueError(f"Expected MemRefType, got {type(memref_type)}")
 
-        # Extract shape
-        shape = list(memref_type.shape)
+        shape, strides_elems, elem_bytes = parse_memref_type_from_obj(memref_type)
 
-        # Extract strides from layout
+        # Check if strides were explicitly provided (not defaulted)
         layout = memref_type.layout
-        if hasattr(layout, "strides") and layout.strides:
-            strides_elems = list(layout.strides)
-        else:
+        if not (hasattr(layout, "strides") and layout.strides):
             raise ValueError(f"Memref type '{s}' has no strides")
-        # Extract element type bitwidth
-        element_type = memref_type.element_type
-        elem_bytes = element_type.width // 8  # Convert bits to bytes
 
         return shape, strides_elems, elem_bytes
     except Exception as e:
@@ -80,6 +64,7 @@ def parse_vector_type_from_obj(vector_type_obj) -> Tuple[int, int, str]:
         raise ValueError(f"Expected VectorType, got {type(vector_type_obj)}")
 
     # Extract shape (first dimension for 1D vectors)
+    assert len(vector_type_obj.shape) == 1, "Vector type must be 1D"
     n = vector_type_obj.shape[0] if vector_type_obj.shape else 1
 
     # Extract element type and bitwidth
