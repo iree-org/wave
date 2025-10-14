@@ -276,12 +276,12 @@ LogicalResult MmaOp::verify() {
     return mlir::failure();
 
   if (detail::verifyTypesMatchingDimensions(getLoc(), "LHS", lhsType, {1},
-                                            "RHS", rhsType, {0})
+                                            "RHS", rhsType, {1})
           .failed() ||
       detail::verifyTypesMatchingDimensions(getLoc(), "LHS", lhsType, {0},
                                             "accumulator", accumulatorType, {0})
           .failed() ||
-      detail::verifyTypesMatchingDimensions(getLoc(), "RHS", rhsType, {1},
+      detail::verifyTypesMatchingDimensions(getLoc(), "RHS", rhsType, {0},
                                             "accumulator", accumulatorType, {1})
           .failed()) {
     return mlir::failure();
