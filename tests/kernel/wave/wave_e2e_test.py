@@ -1135,6 +1135,7 @@ def test_reduce_sum(shape, run_bench, threads_per_wave):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_common_test_shape("test_block_reduce"))
 @pytest.mark.parametrize(
     "threads_per_wave",
@@ -2551,6 +2552,7 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape,k", [((32, 64), 2), ((64, 128), 4), ((128, 256), 8)])
 @param_bool("allow_duplicates", "duplicates")
 @pytest.mark.parametrize(
