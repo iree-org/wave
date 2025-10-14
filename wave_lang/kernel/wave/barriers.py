@@ -185,9 +185,12 @@ def add_shared_memory_barriers(
                 target=target,
                 last_producer=last_producer,
             )
-            if (isinstance(custom, Iterate) and not checking_next_iter) or (
-                isinstance(custom, Conditional)
-                and (producers != set(last_producer.items()))
+            if split_barrier and (
+                (isinstance(custom, Iterate) and not checking_next_iter)
+                or (
+                    isinstance(custom, Conditional)
+                    and (producers != set(last_producer.items()))
+                )
             ):
                 # only add signal and wait around a subgraph if it is a reduction graph and we are not checking for next_iterations, or it is a conditional subgraph and a producer is inside the graph.
                 add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
