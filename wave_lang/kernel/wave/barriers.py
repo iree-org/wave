@@ -205,32 +205,7 @@ def add_shared_memory_split_barriers(
     producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False
 ):
     """
-    certain scenarios to consider if split barriers are enabled
-    1. root graph, dependencies are straightforward,
-       the algorithm iterate to the first node to wait,
-       and we keep track of the last node to signal.
-       -> signal after last node tracked, wait before the current node.
-    2. subgraph, dependencies can produced from root graph, reduction graph
-       should also be taken care of.
-
-        1) no dependency from root and not a reduction graph
-          -> works like 1.
-        2) dependency from root, not a reduction graph
-          -> insert signal node in the root graph
-          -> wait before current node.
-        3) no root dependencies, is a reduction graph
-          -> insert signal and write at the end of state.last_node
-        4) dependency from root, is a reduction graph
-          -> insert signal in the root graph
-          -> wait at the root_depend_node
-          -> insert signal at the next iterate last_producer node
-          -> insert wait at the end of iterate
-    These scenarios can be generalized to patterns like this:
-
-    <wait>
-    (nodes)
-    <signal>
-
+    This function adds a signal barrier after a producer and a wait before a consumer with barrier: barId
     for circular dependencies introduced by reduction graphs, it will be handled by add_signal_prolog_wait_epilog_to_graph pass.
     """
 
@@ -251,14 +226,9 @@ def add_shared_memory_split_barriers(
 
 def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
     """
-    Pattern: custom iterate node and wait node is before signal
+    Pattern: custom iterate node + barrier wait appear before barrier signal
 
-    This pass insert signal and wait barrier based on root_dependency.
-    Specifically, if has_root_dependency is set, a signal should already be inserted by
-    `add_shared_memory_barriers` pass, we only need to insert a wait at the epilog.
-    If has_root_dependency is not set but it is an iterate subgraph, that means producers
-    and consumers are both inside the subgraph, we insert signal at prolog and wait at epilog
-    to deal with circular dependency.
+    This pass insert signal and wait barrier around entry point and exit point of a subgraph.
 
     [root]
     ...
@@ -291,7 +261,7 @@ def all_signals_before_waits(graph):
     """
     For difference scheduling such as Prefetch / Modulo, LR and LW may appear at prolog or epilog of a subgraph.
     This function checks if there are waits before any signals.
-    Granuarity of this function is a graph (subgraphs should already be handled.)
+    Granuarity of this function is a graph (subgraphs are expected to be handled by nested calls.)
     """
 
     signals = defaultdict(bool)  # barId : signal exist
