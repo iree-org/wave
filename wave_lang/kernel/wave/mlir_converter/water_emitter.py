@@ -166,26 +166,38 @@ def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
 
 
 def _convert_sympy_expr_to_affine_map(
-    expr: sympy.Expr | int, symbols: Sequence[sympy.Symbol]
+    expr: sympy.Expr | int, symbol_mapping: dict[sympy.Symbol, sympy.Symbol]
 ) -> ir.AffineMap:
     """Converts sympy expressions to affine maps, handling the case
     where the expression is already simplified to integer.
-
-    Adding assumptions about all symbols being positive to enable
-    more simplifications before converting expressions to affine maps.
     """
     if isinstance(expr, int):
-        return ir.AffineMap.get(0, len(symbols), [ir.AffineExpr.get_constant(expr)])
+        return ir.AffineMap.get(
+            0, len(symbol_mapping), [ir.AffineExpr.get_constant(expr)]
+        )
 
     # Simplify the expression with the assumption that all symbols are positive. This allows for rewriting, for instance,
     # `Max(1, ceiling(x/2))` into `ceiling(x/2)`.
-    symbol_mapping = {}
-    for symbol in symbols:
-        symbol_mapping[symbol] = sympy.Symbol(str(symbol), positive=True)
     expr = expr.subs(symbol_mapping)
     expr = sympy.simplify(expr)
 
-    return convert_sympy_to_affine_map(expr, [str(s) for s in symbols])
+    return convert_sympy_to_affine_map(
+        expr, [sym.name for sym in symbol_mapping.values()]
+    )
+
+
+def _preprocess_symbols(
+    symbols: Sequence[sympy.Symbol],
+) -> dict[sympy.Symbol, sympy.Symbol]:
+    """
+    Preprocess symbols by:
+    (1) adding assumptions about all symbols being positive to later enable more simplifications.
+    (2) replacing `$` prefix of special symbols (e.g. `$WG0`) by `_` since MLIR affine expressions
+    do not accept `$`.
+    """
+    return {
+        sym: sympy.Symbol(sym.name.replace("$", "_"), positive=True) for sym in symbols
+    }
 
 
 def _attach_attributes(node: CustomOp, op: ir.Operation):
@@ -201,11 +213,12 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
                     ]
                 )
             )
-            start = _convert_sympy_expr_to_affine_map(exprs.start, all_symbols)
-            size = _convert_sympy_expr_to_affine_map(exprs.size, all_symbols)
-            stride = _convert_sympy_expr_to_affine_map(exprs.stride, all_symbols)
-            index_mappings[str(dim)] = wave.WaveIndexMappingAttr.get(
-                [str(sym) for sym in all_symbols], start, size, stride
+            symbol_mapping = _preprocess_symbols(all_symbols)
+            start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
+            size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
+            stride = _convert_sympy_expr_to_affine_map(exprs.stride, symbol_mapping)
+            index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
+                [sym.name for sym in symbol_mapping.values()], start, size, stride
             )
         op.attributes["index"] = ir.DictAttr.get(index_mappings)
 
@@ -217,10 +230,12 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
     if getattr(node, "bounds", None):
         bounds = {}
         for dim, expr in node.bounds.items():
-            symbols = list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
-            result = _convert_sympy_expr_to_affine_map(expr, symbols)
-            bounds[str(dim)] = wave.WaveExprAttr.get(
-                [str(sym) for sym in symbols], result
+            symbol_mapping = _preprocess_symbols(
+                list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
+            )
+            result = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
+            bounds[dim.name] = wave.WaveExprAttr.get(
+                [sym.name for sym in symbol_mapping.values()], result
             )
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
