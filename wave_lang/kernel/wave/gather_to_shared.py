@@ -201,7 +201,6 @@ def emit_global_to_lds(
     expected_number_of_loads: int,
     total_number_of_threads: int,
     thread_id: IndexExpr,
-    symbolic_shape: list[IndexSymbol],
     bounds: dict[IndexSymbol, IndexExpr],
     wave_subs: dict[IndexSymbol, IndexExpr],
     element_type: "DataType",
@@ -237,8 +236,9 @@ def emit_global_to_lds(
         nd_index = delinearize_index(thread_id_adjusted, materialized_shape_adjusted)
         logger.info(f"nd_index={nd_index}")
         write_index = {}
-        for bound_expr, idx in zip(symbolic_shape, nd_index):
-            last = bound_expr == symbolic_shape[-1]
+
+        for bound_expr, idx in zip(read.indexing_dims, nd_index):
+            last = bound_expr == read.indexing_dims[-1]
             dim = infer_dim(bound_expr)
 
             idx = idx * elements_per_thread if last else idx
@@ -444,7 +444,6 @@ def gather_to_shared(
             expected_number_of_loads,
             total_number_of_threads,
             thread_id,
-            symbolic_shape,
             bounds,
             wave_subs,
             element_type,
