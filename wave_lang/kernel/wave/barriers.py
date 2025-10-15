@@ -261,16 +261,16 @@ def add_signal_wait_to_subgraph(trace, graph, custom):
             return
         producer = custom.fx_node.prev
         consumer = custom.fx_node.next
+        add_shared_memory_split_barriers(producer, consumer)
     elif isinstance(custom, Conditional):
+        producer = custom.fx_node.prev
+        consumer = custom.fx_node
+        add_shared_memory_split_barriers(producer, consumer)
         producer = custom.fx_node
         consumer = custom.fx_node.next
+        add_shared_memory_split_barriers(producer, consumer)
     else:
         return
-
-    same_graph = add_shared_memory_split_barriers(producer, consumer)
-    assert (
-        same_graph is False
-    ), "prolog and epilog should be inserted in the same graph."
 
 
 def all_signals_before_waits(graph):
