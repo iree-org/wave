@@ -157,7 +157,7 @@ def add_shared_memory_barriers(
                         ), "Bug: Consumer node and producer node should never be None."
 
                         # Adding signals and waits in the same graph.
-                        # other variants of dependencies will be handled in separate pass: add_signal_prolog_wait_epilog_to_graph
+                        # other variants of dependencies will be handled in separate pass: add_signal_wait_to_subgraph
                         if producer.graph == consumer.graph:
                             add_shared_memory_split_barriers(
                                 producer, consumer, barId, state.is_async
@@ -188,7 +188,7 @@ def add_shared_memory_barriers(
             )
             producers_in_subgraph = producers != set(last_producer.items())
             if should_insert_split_barrier_for_nested_region_op(split_barrier, checking_next_iter, producers_in_subgraph):
-                add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
+                add_signal_wait_to_subgraph(trace, graph, custom)
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
@@ -215,7 +215,7 @@ def add_shared_memory_split_barriers(
 ):
     """
     This function adds a signal barrier after a producer and a wait before a consumer with barrier: barId
-    for circular dependencies introduced by reduction graphs, it will be handled by add_signal_prolog_wait_epilog_to_graph pass.
+    for circular dependencies introduced by reduction graphs, it will be handled by add_signal_wait_to_subgraph pass.
     """
 
     if producer:
@@ -233,7 +233,7 @@ def add_shared_memory_split_barriers(
     return producer.graph != consumer.graph
 
 
-def add_signal_prolog_wait_epilog_to_graph(trace, graph, custom):
+def add_signal_wait_to_subgraph(trace, graph, custom):
     """
     Pattern: custom NestedRegion nodes + barrier wait appear before barrier signal
 
