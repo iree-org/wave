@@ -25,7 +25,7 @@ API reference material
    :caption: Wave
    :glob:
 
-   wave/wave
+   wave/*
 
 
 Project documentation
