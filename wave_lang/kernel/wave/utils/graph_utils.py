@@ -429,7 +429,6 @@ def is_barrier_between_same_graph(
     assuming that they are in the same graph.
     """
     next_node = src.next
-    guards = [SharedMemoryBarrier, SharedMemoryBarrierWait, SharedMemoryBarrierSignal]
     if barrier_check is None:
         barrier_check = set()
     while next_node != dst and next_node.next.op != "root":

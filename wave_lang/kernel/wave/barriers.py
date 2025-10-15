@@ -132,7 +132,8 @@ def add_shared_memory_barriers(
         if mem := is_shared_memory_op(custom, depth):
             state = info[mem]
 
-            barId = -1  # TODO named_bars.get(get_memory_access_type(node), -1)
+            # TODO(megan.kuo) Add support for named barriers.
+            barId = -1
             if state.last_node and need_barrier(custom, state.last_node):
 
                 if barrier := is_barrier_between(
@@ -155,10 +156,9 @@ def add_shared_memory_barriers(
                             consumer and producer
                         ), "Bug: Consumer node and producer node should never be None."
 
-                        has_root_dependency = producer.graph != consumer.graph
-
-                        # root dependency will be handled in separate pass: add_signal_prolog_wait_epilog_to_graph
-                        if not has_root_dependency:
+                        # Adding signals and waits in the same graph.
+                        # other variants of dependencies will be handled in separate pass: add_signal_prolog_wait_epilog_to_graph
+                        if producer.graph == consumer.graph:
                             add_shared_memory_split_barriers(
                                 producer, consumer, barId, state.is_async
                             )
@@ -177,6 +177,7 @@ def add_shared_memory_barriers(
                 state.is_async = True
 
         if isinstance(custom, NestedRegionOp):
+            # the node items set is later used to compare if producers are updated in the next `add_shared_memory_barriers` recursive call.
             producers = set(last_producer.items())
             add_shared_memory_barriers(
                 trace,
@@ -185,14 +186,8 @@ def add_shared_memory_barriers(
                 target=target,
                 last_producer=last_producer,
             )
-            if split_barrier and (
-                (isinstance(custom, Iterate) and not checking_next_iter)
-                or (
-                    isinstance(custom, Conditional)
-                    and (producers != set(last_producer.items()))
-                )
-            ):
-                # only add signal and wait around a subgraph if it is a reduction graph and we are not checking for next_iterations, or it is a conditional subgraph and a producer is inside the graph.
+            producers_in_subgraph = producers != set(last_producer.items())
+            if should_insert_split_barrier_for_nested_region_op(split_barrier, checking_next_iter, producers_in_subgraph):
                 add_signal_prolog_wait_epilog_to_graph(trace, graph, custom)
 
     # Synchronize before the write to shared memory to avoid stepping over
@@ -208,6 +203,12 @@ def add_shared_memory_barriers(
             last_producer=last_producer,
         )
 
+
+def should_insert_split_barrier_for_nested_region_op(split_barrier: bool, checking_next_iter: bool, producers_in_subgraph: bool):
+    # only add signal and wait around a subgraph if
+    # 1) it is a reduction graph and we are not checking for next_iterations, or
+    # 2) it is a conditional subgraph and a producer is inside the graph.
+    return split_barrier and producers_in_subgraph and not checking_next_iter
 
 def add_shared_memory_split_barriers(
     producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False
