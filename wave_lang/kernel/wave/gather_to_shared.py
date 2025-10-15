@@ -229,7 +229,7 @@ def emit_global_to_lds(
 
     new_writes = defaultdict(list)
 
-    commmon_id = None
+    common_id = None
     for i in range(expected_number_of_loads):
         # As we adjusted our shape to be in `elements_per_thread` chunks, each
         # subsequent load will be `total_number_of_threads` elements apart.
@@ -270,11 +270,11 @@ def emit_global_to_lds(
             ).add_to_graph(write.graph, loc=write.location)
 
         if i == 0:
-            commmon_id = id(new_write)
+            common_id = id(new_write)
 
         # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
         # they are part of the same group later.
-        new_write.pre_expansion_id = commmon_id
+        new_write.pre_expansion_id = common_id
 
         new_writes[write.memory].append(new_write)
         if drop_padding:
