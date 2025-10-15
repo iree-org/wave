@@ -10,7 +10,8 @@ from __future__ import annotations
 import dill
 import torch.fx as fx
 import sys
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Sequence
+import sympy
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
     from wave_lang.kernel.ops.wave_ops import *
 
 try:
-    from water_mlir import ir
+    from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         DivOp,
@@ -29,6 +30,9 @@ try:
         ReadOp,
         RegisterOp,
         WriteOp,
+    )
+    from water_mlir.water_mlir.sympy_to_affine_converter import (
+        convert_sympy_to_affine_map,
     )
     from water_mlir.water_mlir.dialects import arith
     from water_mlir.water_mlir.dialects import func
@@ -161,6 +165,81 @@ def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
     return trace, options
 
 
+def _convert_sympy_expr_to_affine_map(
+    expr: sympy.Expr | int, symbol_mapping: dict[sympy.Symbol, sympy.Symbol]
+) -> ir.AffineMap:
+    """Converts sympy expressions to affine maps, handling the case
+    where the expression is already simplified to integer.
+    """
+    if isinstance(expr, int):
+        return ir.AffineMap.get(
+            0, len(symbol_mapping), [ir.AffineExpr.get_constant(expr)]
+        )
+
+    # Simplify the expression with the assumption that all symbols are positive. This allows for rewriting, for instance,
+    # `Max(1, ceiling(x/2))` into `ceiling(x/2)`.
+    expr = expr.subs(symbol_mapping)
+    expr = sympy.simplify(expr)
+
+    return convert_sympy_to_affine_map(
+        expr, [sym.name for sym in symbol_mapping.values()]
+    )
+
+
+def _preprocess_symbols(
+    symbols: Sequence[sympy.Symbol],
+) -> dict[sympy.Symbol, sympy.Symbol]:
+    """
+    Preprocess symbols by:
+    (1) adding assumptions about all symbols being positive to later enable more simplifications.
+    (2) replacing `$` prefix of special symbols (e.g. `$WG0`) by `_` since MLIR affine expressions
+    do not accept `$`.
+    """
+    return {
+        sym: sympy.Symbol(sym.name.replace("$", "_"), positive=True) for sym in symbols
+    }
+
+
+def _attach_attributes(node: CustomOp, op: ir.Operation):
+    if getattr(node, "index", None):
+        index_mappings = {}
+        for dim, exprs in node.index.items():
+            all_symbols = list(
+                set().union(
+                    *[
+                        expr.free_symbols
+                        for expr in [exprs.start, exprs.size, exprs.stride]
+                        if isinstance(expr, sympy.Expr)
+                    ]
+                )
+            )
+            symbol_mapping = _preprocess_symbols(all_symbols)
+            start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
+            size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
+            stride = _convert_sympy_expr_to_affine_map(exprs.stride, symbol_mapping)
+            index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
+                [sym.name for sym in symbol_mapping.values()], start, size, stride
+            )
+        op.attributes["index"] = ir.DictAttr.get(index_mappings)
+
+    if getattr(node, "elements_per_thread", None):
+        op.attributes["wave.elements_per_thread"] = ir.IntegerAttr.get(
+            ir.IntegerType.get_signless(32), node.elements_per_thread
+        )
+
+    if getattr(node, "bounds", None):
+        bounds = {}
+        for dim, expr in node.bounds.items():
+            symbol_mapping = _preprocess_symbols(
+                list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
+            )
+            result = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
+            bounds[dim.name] = wave.WaveExprAttr.get(
+                [sym.name for sym in symbol_mapping.values()], result
+            )
+        op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
+
+
 def _emit_from_captured_trace(
     trace: "CapturedTrace", options: WaveCompileOptions
 ) -> int:
@@ -267,6 +346,8 @@ def _emit_from_captured_trace(
                         raise RuntimeError(
                             f"Missing support for '{node.tkw_op_name}' operation"
                         )
+
+                    _attach_attributes(node, mlir_op.operation)
 
                     # Add results to the value map in case they are used as
                     # operands later
