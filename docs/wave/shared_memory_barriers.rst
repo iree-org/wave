@@ -104,7 +104,7 @@ A table below shows how split barriers are inserted for those cases.
 
 .. list-table::
     :header-rows: 1
-    
+
     * - NestedRegionOp
       - Signal
       - Wait
@@ -116,4 +116,4 @@ A table below shows how split barriers are inserted for those cases.
     * - ``Conditional``
       - subgraph prolog / epilog
       - subgraph epilog / epilog
-      - when producers or consumers are in the graph 
+      - when producers or consumers are in the graph
