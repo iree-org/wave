@@ -859,11 +859,11 @@ class LaunchableWave(Launchable):
             graph_passes += [
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(tensor_load_to_shared, trace, self.constraints, options),
-                partial(gather_to_shared, trace, self.constraints, options),
-                partial(gather_to_shared_swizzling, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
+                partial(gather_to_shared, trace, self.constraints, options),
+                partial(gather_to_shared_swizzling, trace, self.constraints, options),
                 partial(
                     mark_hardware_transpose_candidates, trace, self.constraints, options
                 ),

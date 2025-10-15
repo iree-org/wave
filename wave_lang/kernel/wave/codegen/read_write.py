@@ -957,27 +957,34 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     src = src.ir_value
     dst = dst.ir_value
-    dynamic_vals_map_start = {}
+    src_dynamic_vals_map_start = {}
+    dst_dynamic_vals_map_start = {}
 
     if src_mapping:
         dyn_vals = tuple(
             cast_vector(emitter, reg, element_type=IndexType.get())
             for reg in src_mapping_dyn_vals
         )
-        src_idx = transform_index_on_mapping(src_mapping, src_symbolic_shape, src_idx)
-        dynamic_vals_map_start = _build_dyn_vals_map(src_mapping, dyn_vals)
+        new_src_idx = transform_index_on_mapping(
+            src_mapping, src_symbolic_shape, src_idx, is_read=True
+        )
+        src_dynamic_vals_map_start = _build_dyn_vals_map(src_mapping, dyn_vals)
+    else:
+        new_src_idx = src_idx
     if dst_mapping:
         dyn_vals = tuple(
             cast_vector(emitter, reg, element_type=IndexType.get())
             for reg in dst_mapping_dyn_vals
         )
-        dst_idx = transform_index_on_mapping(dst_mapping, dst_symbolic_shape, dst_idx)
-        dynamic_vals_map_start = _build_dyn_vals_map(dst_mapping, dyn_vals)
+        dst_idx = transform_index_on_mapping(
+            dst_mapping, dst_symbolic_shape, dst_idx, is_read=False
+        )
+        dst_dynamic_vals_map_start = _build_dyn_vals_map(dst_mapping, dyn_vals)
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
     src_index, src_index_wg, src_index_th = _build_start_indices(
-        emitter, src_idx, dynamic_vals_map_start
+        emitter, new_src_idx, src_dynamic_vals_map_start
     )
 
     ip = InsertionPoint.current
@@ -993,7 +1000,9 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             ip = InsertionPoint(ip.block.owner)
 
     with ip:
-        dst_index, _, _ = _build_start_indices(emitter, dst_idx, dynamic_vals_map_start)
+        dst_index, _, _ = _build_start_indices(
+            emitter, dst_idx, dst_dynamic_vals_map_start
+        )
         # We are indexing shared mem so i32 is enough.
         i32 = IntegerType.get_signless(32)
         dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
@@ -1001,7 +1010,10 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
     )
-    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
+    strides = [
+        gen_sympy_index(add_emitter_subs(emitter, src_dynamic_vals_map_start), s)
+        for s in strides
+    ]
 
     src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
     src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
@@ -1013,7 +1025,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         src_idx,
         elements_per_thread=1,
         bounds=src_bounds,
-        dynamic_values=dynamic_vals_map_start,
+        dynamic_values=src_dynamic_vals_map_start,
     )
     if mask:
         mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])

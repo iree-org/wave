@@ -362,3 +362,12 @@ def test_gather_to_shared_not_minimize_shared_allocs():
     # CHECK:            memref.view {{.*}} : memref<1024xi8, #gpu.address_space<workgroup>> to memref<32x8xi8, #gpu.address_space<workgroup>>
     # CHECK:            memref.alloc() : memref<32x128xi8, #gpu.address_space<workgroup>>
     # CHECK:            scf.for
+    # CHECK:              amdgpu.lds_barrier
+    # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
+    # CHECK-NOT:          vector.load
+    # CHECK-NOT:          vector.store
+    # CHECK:              rocdl.s.waitcnt
+    # CHECK:              amdgpu.lds_barrier
+    # CHECK-COUNT-8:      vector.load
+    # CHECK-COUNT-2:      amdgpu.scaled_mfma
+    # CHECK-COUNT-4:    vector.store

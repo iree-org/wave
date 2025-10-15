@@ -6,6 +6,7 @@
 
 import logging
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass
 from math import prod
 from typing import Optional
@@ -127,9 +128,11 @@ def get_gather_to_shared_config(
         f"store_elems_per_thread={store_elems_per_thread}, "
         f"max_elements_per_store={max_elements_per_store}"
     )
+    bounds = {infer_dim(v): v for v in symbolic_shape}
+    ordered_shape = [bounds[dim] for dim in read.indexing_dims]
     vector_shapes = read.vector_shapes
     materialized_shape = materialize_shape(
-        constraint_tile_size, symbolic_shape, vector_shapes
+        constraint_tile_size, ordered_shape, vector_shapes
     )
     logger.info(f"materialized_shape={materialized_shape}")
 
@@ -202,7 +205,6 @@ def emit_global_to_lds(
     expected_number_of_loads: int,
     total_number_of_threads: int,
     thread_id: IndexExpr,
-    symbolic_shape: list[IndexSymbol],
     bounds: dict[IndexSymbol, IndexExpr],
     element_type: "DataType",
     waves_per_block: tuple[int, int, int],
@@ -241,8 +243,8 @@ def emit_global_to_lds(
         nd_index = delinearize_index(thread_id_adjusted, materialized_shape_adjusted)
         logger.info(f"nd_index={nd_index}")
         write_index = {}
-        for bound_expr, idx in zip(symbolic_shape, nd_index):
-            last = bound_expr == symbolic_shape[-1]
+        for bound_expr, idx in zip(read.indexing_dims, nd_index):
+            last = bound_expr == read.indexing_dims[-1]
             dim = infer_dim(bound_expr)
 
             idx = idx * elements_per_thread if last else idx
@@ -258,9 +260,30 @@ def emit_global_to_lds(
             write_index, threads_per_wave, waves_per_block
         )
 
-        logger.info(f"read_index={read_index}")
-        logger.info(f"write_index={write_index}")
         with write.graph.inserting_before(write.fx_node):
+            # Update the index fof the mapping dynamic vals to match the newly
+            # created offsets in `read_index`.  We can't modify the index of the
+            # indirect load, since the indirect load may be used elsewhere, so
+            # we create a duplicate indirect load with the new index.  This
+            # duplicate load is removed by the DCE pass.
+            new_dyn_vals = []
+            for dyn_val in read.mapping_dynamic_vals:
+                custom = get_custom(dyn_val)
+                new_read = Read(
+                    custom.memory,
+                    1,
+                    custom.mapping,
+                    custom.mapping_dynamic_vals,
+                ).add_to_graph(custom.graph, loc=custom.location)
+                new_dyn_vals.append(new_read)
+
+                new_read.index = deepcopy(custom.index)
+                new_read.pre_expansion_id = custom.pre_expansion_id
+                new_read.vector_shapes = custom.vector_shapes
+                for dim in read_index:
+                    if dim in dyn_val.index:
+                        new_read.index[dim] = read_index[dim]
+
             new_write = GatherToLDS(
                 read.memory,
                 write.memory,
@@ -271,7 +294,7 @@ def emit_global_to_lds(
                 read.mapping,
                 write.mapping,
                 bounds,
-                read.mapping_dynamic_vals,
+                new_dyn_vals,
                 write.mapping_dynamic_vals,
             ).add_to_graph(write.graph, loc=write.location)
 
@@ -439,7 +462,6 @@ def gather_to_shared(
             expected_number_of_loads,
             total_number_of_threads,
             thread_id,
-            symbolic_shape,
             bounds,
             element_type,
             waves_per_block,
