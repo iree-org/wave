@@ -97,6 +97,5 @@ def mlir_converter_matrix_add():
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]] : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]] : (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
-    # TODO: The type below is incorrectly formatted
-    # CHECK: wave.write %[[ADD]], %[[ARG2]] : <[@M, @N] of f16, <register>>, <[@M, @N] of f16>
+    # CHECK: wave.write %[[ADD]], %[[ARG2]] : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16>
     # CHECK: return
