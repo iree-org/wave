@@ -41,6 +41,11 @@ AccT = TypeVar("AccT")
 CustomOpT = TypeVar("CustomOpT", bound="CustomOp")
 PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
 
+# List of keywords that are ignored when creating a custom op from an fx.Node.
+# An example of this is tag, which is only used for tagging operators
+# for their use in the custom wave schedule.
+IGNORED_KEYWORDS = ["tag"]
+
 
 def read_meets_hw_transpose_requirements(
     read: Read, constraints: list[Constraint]
@@ -564,6 +569,10 @@ class CustomOp(ABC):
         if value:
             setattr(self.fx_node, "location", value)
 
+    @property
+    def tag(self) -> Optional[str]:
+        return getattr(self.fx_node, "tag", None)
+
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
         instance = cls(*node.args)
@@ -609,8 +618,12 @@ class CustomOp(ABC):
         region_graph: RegionGraph,
         type: Any = None,
         loc: Optional[CapturedLocation] = None,
+        tag: Optional[str] = None,
     ) -> fx.Node:
-        arg_list = tuple([value for _, value in vars(self).items()])
+        # Exclude tag from args since it's not part of the dataclass constructor
+        arg_list = tuple(
+            [value for key, value in vars(self).items() if key not in IGNORED_KEYWORDS]
+        )
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
             "call_function",
@@ -627,10 +640,15 @@ class CustomOp(ABC):
             get_custom(self.fx_node).infer_type()
         else:
             self.fx_node.type = type
+        if tag is not None:
+            self.fx_node.tag = tag
         return self.fx_node
 
     def _add_proxy_to_graph(self, region_graph: RegionGraph):
-        arg_list = tuple([value for _, value in vars(self).items()])
+        # Exclude tag from args since it's not part of the dataclass constructor
+        arg_list = tuple(
+            [value for key, value in vars(self).items() if key not in IGNORED_KEYWORDS]
+        )
         self.graph = region_graph
         self.fx_node = region_graph.create_proxy(
             "call_function",
@@ -704,6 +722,7 @@ class CustomOp(ABC):
         new_node = graph.node_copy(self.fx_node, arg_transform=arg_transform)
         new_node.tkw_op = self
         new_node.tkw_op_name = self.tkw_op_name
+        new_node.tag = self.tag
         self.copy_core_attributes(new_node)
         if new_name:
             new_node.name = new_name
@@ -764,11 +783,15 @@ class CustomOp(ABC):
 
     @classmethod
     def handle(cls, graph: RegionGraph, *args, **kwargs) -> fx.Node:
+        # Extract tag from kwargs if present
+        tag = kwargs.pop("tag", None)
         node = cls(*args, **kwargs)
         node._add_proxy_to_graph(graph)
         node.fx_node.node.tkw_op = cls
         node.fx_node.node.tkw_op_name = cls.tkw_op_name
         node.fx_node.node.location = capture_location(graph.location_capture_config)
+        if tag is not None:
+            node.fx_node.node.tag = tag
         return node.fx_node
 
     @property
@@ -1985,6 +2008,69 @@ class NestedRegionOp(CustomOp):
         del subgraphs[self.subgraph_name]
         super().erase()
 
+    @classmethod
+    def handle(cls, graph: RegionGraph, *args, **kwargs):
+        """
+        Base handle method for nested region operations.
+        Extracts tag from kwargs and sets it on the node and underlying fx.Node.
+        """
+
+        def wrapper(f):
+            with graph.subtracer() as subtracer:
+                subgraph_name, implicit_captures = subtracer.trace(f)
+            # Extract tag from kwargs if present
+            tag = kwargs.pop("tag", None)
+
+            # For Iterate, we need to handle additional parameters
+            if cls.__name__ == "Iterate":
+                # Extract Iterate-specific parameters
+                step = kwargs.pop("step", 1)
+                start = kwargs.pop("start", None)
+                condition = kwargs.pop("condition", None)
+                node = cls(
+                    *args,
+                    **kwargs,
+                    step=step,
+                    start=start,
+                    condition=condition,
+                    subgraph_name=subgraph_name,
+                    implicit_captures=implicit_captures,
+                )
+            else:
+                # For other nested region ops like Conditional
+                node = cls(
+                    *args,
+                    **kwargs,
+                    subgraph_name=subgraph_name,
+                    implicit_captures=implicit_captures,
+                )
+
+            node._add_proxy_to_graph(graph)
+            node.fx_node.node.tkw_op = cls
+            node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
+            if tag is not None:
+                node.fx_node.node.tag = tag
+
+            # Iterate-specific logic
+            if cls.__name__ == "Iterate":
+                # Remember which placeholders are init args. This connection gets
+                # lost otherwise
+                for nested_node in graph.subgraphs[subgraph_name].nodes:
+                    if nested_node.op == "placeholder":
+                        if nested_node not in [
+                            var.node
+                            for var in graph.inner_freevars[
+                                graph.subgraphs[subgraph_name]
+                            ]
+                        ]:
+                            nested_node.tkw_op = IterArg
+
+            graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
+            return node.fx_node
+
+        return wrapper
+
 
 @define_op("conditional")
 @dataclass
@@ -1992,27 +2078,6 @@ class Conditional(NestedRegionOp):
     condition: fx.Proxy | IndexExpr
     subgraph_name: str
     implicit_captures: Sequence[fx.Proxy]
-
-    @classmethod
-    def handle(cls, graph, *args, **kwargs):
-        def wrapper(f):
-            with graph.subtracer() as subtracer:
-                subgraph_name, implicit_captures = subtracer.trace(f)
-            node = Conditional(
-                *args,
-                **kwargs,
-                subgraph_name=subgraph_name,
-                implicit_captures=implicit_captures,
-            )
-
-            node._add_proxy_to_graph(graph)
-            node.fx_node.node.tkw_op = cls
-            node.fx_node.node.tkw_op_name = cls.tkw_op_name
-            node.fx_node.node.location = capture_location(graph.location_capture_config)
-            graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
-            return node.fx_node
-
-        return wrapper
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2032,42 +2097,6 @@ class Iterate(NestedRegionOp):
     step: int = 1
     start: Optional[IndexExpr] = None
     condition: Optional[IndexExpr] = None
-
-    @classmethod
-    def handle(cls, graph: RegionGraph, *args, **kwargs):
-        if not isinstance(graph, RegionGraph):
-            raise TypeError(
-                f"handle expected {RegionGraph.__name__} but got {type(graph)}"
-            )
-
-        def wrapper(f):
-            with graph.subtracer() as subtracer:
-                subgraph_name, implicit_captures = subtracer.trace(f)
-            node = Iterate(
-                *args,
-                **kwargs,
-                step=1,
-                subgraph_name=subgraph_name,
-                implicit_captures=implicit_captures,
-            )
-            # Remember which placeholders are init args. This connection gets
-            # lost otherwise
-            for nested_node in graph.subgraphs[subgraph_name].nodes:
-                if nested_node.op == "placeholder":
-                    if nested_node not in [
-                        var.node
-                        for var in graph.inner_freevars[graph.subgraphs[subgraph_name]]
-                    ]:
-                        nested_node.tkw_op = IterArg
-
-            node._add_proxy_to_graph(graph)
-            node.fx_node.node.tkw_op = cls
-            node.fx_node.node.tkw_op_name = cls.tkw_op_name
-            node.fx_node.node.location = capture_location(graph.location_capture_config)
-            graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
-            return node.fx_node
-
-        return wrapper
 
     @property
     def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:

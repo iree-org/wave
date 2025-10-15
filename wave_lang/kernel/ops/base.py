@@ -45,3 +45,21 @@ def define_op(f: T) -> T:
 
     wrapped.__wave_op_idname__ = idname
     return wrapped
+
+
+def define_schedule_op(f: T) -> T:
+    idname = f.__name__
+
+    @functools.wraps(f)
+    def wrapped(*args, **kwargs):
+        dispatcher = OpDispatcher.current()
+        try:
+            handler = getattr(dispatcher, f"handle_{idname}")
+        except AttributeError:
+            raise AttributeError(
+                f"The current OpDispatcher ({dispatcher}) does not register a handler for {idname}"
+            )
+        return handler(*args, **kwargs)
+
+    wrapped.__wave_schedule_op_idname__ = idname
+    return wrapped
