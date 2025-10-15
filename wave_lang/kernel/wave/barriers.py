@@ -187,7 +187,9 @@ def add_shared_memory_barriers(
                 last_producer=last_producer,
             )
             producers_in_subgraph = producers != set(last_producer.items())
-            if should_insert_split_barrier_for_nested_region_op(split_barrier, checking_next_iter, producers_in_subgraph):
+            if should_insert_split_barrier_for_nested_region_op(
+                split_barrier, checking_next_iter, producers_in_subgraph
+            ):
                 add_signal_wait_to_subgraph(trace, graph, custom)
 
     # Synchronize before the write to shared memory to avoid stepping over
@@ -204,11 +206,14 @@ def add_shared_memory_barriers(
         )
 
 
-def should_insert_split_barrier_for_nested_region_op(split_barrier: bool, checking_next_iter: bool, producers_in_subgraph: bool):
+def should_insert_split_barrier_for_nested_region_op(
+    split_barrier: bool, checking_next_iter: bool, producers_in_subgraph: bool
+):
     # only add signal and wait around a subgraph if
     # 1) it is a reduction graph and we are not checking for next_iterations, or
     # 2) it is a conditional subgraph and a producer is inside the graph.
     return split_barrier and producers_in_subgraph and not checking_next_iter
+
 
 def add_shared_memory_split_barriers(
     producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False
