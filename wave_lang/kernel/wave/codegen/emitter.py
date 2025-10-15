@@ -130,7 +130,7 @@ class WaveEmitter:
 
         def abi_type(binding: BindingDesc):
             if binding.binding_type == BindingType.KERNEL_BUFFER:
-                # Buffer passed to kenel as 0D memrefs to simplify ABI.
+                # Buffer passed to kernel as 0D memrefs to simplify ABI.
                 element_type = IrType.parse(
                     binding.kernel_buffer_type.dtype.ir_type_asm()
                 )
