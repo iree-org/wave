@@ -188,15 +188,8 @@ class WaveEmitter:
                     idx_context, physical_shape, allow_mixed_shapes=True
                 )
                 static_strides = [get_static_dim(s) for s in strides]
-                if strides is None:
-                    memref_type = MemRefType.get(static_sizes, element_type)
-                else:
-                    layout = StridedLayoutAttr.get(
-                        offset=dyn_val, strides=static_strides
-                    )
-                    memref_type = MemRefType.get(
-                        static_sizes, element_type, layout=layout
-                    )
+                layout = StridedLayoutAttr.get(offset=dyn_val, strides=static_strides)
+                memref_type = MemRefType.get(static_sizes, element_type, layout=layout)
 
                 offset = arith_d.constant(IndexType.get(), 0)
                 dyn_sizes = [
