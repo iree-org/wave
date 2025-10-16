@@ -62,18 +62,19 @@ The heuristic walks the graph in pre-order and proceeds as follows:
     * No: thank you, next. - jump to 0.
 
 2. Do we need a barrier relative to the last op on this memory?
-    * Yes: 
-      2.1 If a barrier already exists in between current node and its producer (query the memory map to get the last node accessing the memory).
-        * Yes: If the producer is an async op (GatherToLDS) -> we upgrade the barrier (setting ```wait_async_ops=True```).
-        * No: Does this target support split barriers?
+    * Yes:
+        * If a barrier already exists in between current node and its producer (query the memory map to get the last node accessing the memory).
             * Yes:
-                * Producer and consumer in a same graph: insert Signal after producer and wait before consumer.
-                * Producer and consumer not in a same graph: defer split barrier insertion to the `add_signal_wait_to_subgraph` pass.
-            * No: insert a single SharedMemoryBarrier before the consumer. Set `wait_async_ops` if needed.
+                * If the producer is an async op (GatherToLDS) -> we upgrade the barrier (setting ```wait_async_ops=True```).
+            * No: Does this target support split barriers?
+                * Yes:
+                    * Producer and consumer in a same graph: insert Signal after producer and wait before consumer.
+                    * Producer and consumer not in a same graph: defer split barrier insertion to the `add_signal_wait_to_subgraph` pass.
+                * No: insert a single SharedMemoryBarrier before the consumer. Set `wait_async_ops` if needed.
     * No: noop
 - end of step 2, jump to step 3.
 
-3. Update state
+3. Update memory map
     * update the last op that is taking ownership of the memory region.
     * if we just saw a `GatherToLDS` op, set `state.is_async` to True, otherwise, after inserting a barrier, set it back to False.
 - end of step 3, jump to step 4.
