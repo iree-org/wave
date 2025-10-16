@@ -18,6 +18,7 @@ from wave_lang.kernel.wave.templates.moe import (
     get_moe_align_block_size_kernel,
     get_moe_reduce_sum_kernel,
     get_silu_and_mul_kernel,
+    get_topk_kernel,
 )
 import torch.nn.functional as F
 
@@ -171,15 +172,38 @@ def get_wave_reduce_sum_kernel(b: int, k: int, d: int, dtype: DataType):
     return wave_compile(options, kernel)
 
 
+def get_wave_topk_kernel(m: int, n: int, k: int, dtype: DataType):
+    kernel, symbols = get_topk_kernel(m, n, k, dtype)
+    symbols.update(get_default_scheduling_params())
+    options = WaveCompileOptions(
+        subs=symbols,
+    )
+    options = set_default_run_config(options)
+    return wave_compile(options, kernel)
+
+
 def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     # Calculate buffer sizes for block-aligned computation
     max_num_tokens_padded = score.numel() + num_experts * (block_size - 1)
     max_num_m_blocks = -(max_num_tokens_padded // -block_size)
 
-    # Router: Select top-k experts for each token
-    # TODO: replace with topk kernel implemented in Wave
+    # Router: Select top-k experts for each token using Wave topk kernel
     score = torch.softmax(score, dim=-1, dtype=torch.float32)
-    topk_weights, topk_ids = torch.topk(score, topk)
+
+    # Compile and run topk kernel
+    topk_kernel = get_wave_topk_kernel(
+        num_tokens,
+        num_experts,
+        topk,
+        tkl.f32,
+    )
+
+    # Allocate output buffers for topk
+    topk_weights = torch.zeros((num_tokens, topk), dtype=torch.float32, device="cuda")
+    topk_ids = torch.zeros((num_tokens, topk), dtype=torch.int32, device="cuda")
+
+    # Run topk kernel
+    topk_kernel(score, topk_weights, topk_ids)
     topk_weights = topk_weights.view(-1)
     topk_ids = topk_ids.view(-1)
 
