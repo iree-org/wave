@@ -40,6 +40,7 @@ from wave_lang.support.ir_imports import (
     OpResult,
     Operation,
     ShapedType,
+    StridedLayoutAttr,
     Value,
     VectorType,
     affine_d,
@@ -75,11 +76,6 @@ def _get_upper_bound(expr: Any) -> Optional[Attribute]:
         return IntegerAttr.get(IndexType.get(), int(res))
     else:
         return None
-
-
-def _get_mixed_strides(stride: list[sympy.Expr | int]) -> str:
-    asm = ",".join(["?" if isinstance(s, sympy.Expr) else str(s) for s in stride])
-    return "[" + asm + "]"
 
 
 @dataclass
@@ -179,33 +175,28 @@ class WaveEmitter:
                     return dyn_val
 
                 # reinterpret_cast the 0D input buffers to the real shape/strides.
-                element_type = bind.kernel_buffer_type.dtype.ir_type_asm()
+                element_type = IrType.parse(bind.kernel_buffer_type.dtype.ir_type_asm())
                 symbolic_shape = bind.kernel_buffer_type.symbolic_shape
                 physical_shape = symbolic_shape
                 if layout := node.type.physical_layout:
                     physical_shape = layout.shape
 
                 static_sizes = [get_static_dim(s) for s in physical_shape]
-                spec_asm = "x".join(
-                    "?" if s == dyn_val else str(s) for s in static_sizes
-                )
-                spec_asm = f"{spec_asm}x{element_type}"
 
                 idx_context = IndexingContext.current()
                 strides = strides_from_symbolic_shape(
                     idx_context, physical_shape, allow_mixed_shapes=True
                 )
-                if strides is None:
-                    memref_asm = f"memref<{spec_asm}>"
-                else:
-                    strides_str = _get_mixed_strides(strides)
-                    memref_asm = (
-                        f"memref<{spec_asm}, strided<{strides_str}, offset: ?>>"
-                    )
-
-                memref_type = IrType.parse(memref_asm)
-
                 static_strides = [get_static_dim(s) for s in strides]
+                if strides is None:
+                    memref_type = MemRefType.get(static_sizes, element_type)
+                else:
+                    layout = StridedLayoutAttr.get(
+                        offset=dyn_val, strides=static_strides
+                    )
+                    memref_type = MemRefType.get(
+                        static_sizes, element_type, layout=layout
+                    )
 
                 offset = arith_d.constant(IndexType.get(), 0)
                 dyn_sizes = [
