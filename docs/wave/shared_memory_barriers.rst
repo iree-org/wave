@@ -1,4 +1,4 @@
-How is shared memory barriers inserted in wave
+How are shared memory barriers inserted in wave
 =============================================================
 
 We want to automatically insert shared-memory barriers so that read/write/atomics on the same LDS (shared memory) region are ordered correctly.
@@ -16,7 +16,7 @@ Terminologies
     * Iterate
     * Conditional
 
-**Note.** We will use producer to refer to an access type operator that takes ownership of a shared memory region for a period of time; consumer to refer to an access type operator that operates on the same shared memory region and therefore needs to synchronize utils the producer releases it.
+**Note.** We will use producer to refer to an access type operator that takes ownership of a shared memory region for a period of time; consumer to refer to an access type operator that operates on the same shared memory region and therefore needs to synchronize before the producer releases it.
 
 When do we need a barrier?
 --------------------
@@ -55,22 +55,23 @@ Heuristic: add_shared_memory_barriers
 --------------------
 The heuristic walks the graph in pre-order and proceeds as follows:
 
-0. Walks the graph in pre-order, node by node.
+0. Walks the graph in pre-order, node by node, maintains a memory map (key: memory node, value: last node that is accessing the memory).
 
 1. Is this a shared_memory_op?
     * Yes: get a "memory key" (fx node object) representing the shared memory, this keeps track of the last op taking ownership of this memory region. - jump to step 2.
     * No: thank you, next. - jump to 0.
 
 2. Do we need a barrier relative to the last op on this memory?
-    * Yes: if a barrier already exists in between producer and consumer.
-        * Yes: If a producer is an async op (GatherToLDS) -> we upgrade the barrier (setting ```wait_async_ops=True```).
+    * Yes: 
+      2.1 If a barrier already exists in between current node and its producer (query the memory map to get the last node accessing the memory).
+        * Yes: If the producer is an async op (GatherToLDS) -> we upgrade the barrier (setting ```wait_async_ops=True```).
         * No: Does this target support split barriers?
             * Yes:
                 * Producer and consumer in a same graph: insert Signal after producer and wait before consumer.
                 * Producer and consumer not in a same graph: defer split barrier insertion to the `add_signal_wait_to_subgraph` pass.
             * No: insert a single SharedMemoryBarrier before the consumer. Set `wait_async_ops` if needed.
     * No: noop
-- end of step 2, jump to setp 3.
+- end of step 2, jump to step 3.
 
 3. Update state
     * update the last op that is taking ownership of the memory region.
@@ -89,9 +90,9 @@ The heuristic walks the graph in pre-order and proceeds as follows:
     * No: noop
 - end of step 4, jump to step 0.
 
-- end of setp 0, jump to step 6.
+- end of step 0, jump to step 6.
 
-6. Is this graph a reductin graph? (ref. `is_reduction_subgraph`)
+6. Is this graph an iterate graph? (ref. `is_iterate_subgraph`)
     * Yes:
         * If we are not already checking the next iteration (i.e. `next-iteration check` mode is unset) -> run the pass again with `checking_next_iter` flag set. (This makes is_shared_memory_op look one level deeper so we catch hazards like **iter i+1 reads what iter i writes** and insert the necessary barriers.)
     * No: noop
@@ -112,7 +113,7 @@ A table below shows how split barriers are inserted for those cases.
     * - ``Iterate``
       - subgraph prolog
       - subgraph epilog
-      - when finish the second pass (exit check-next-iter mode) |
+      - when finish the second pass (exit check-next-iter mode)
     * - ``Conditional``
       - subgraph prolog / epilog
       - subgraph epilog / epilog
