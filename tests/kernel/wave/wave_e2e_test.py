@@ -246,6 +246,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_bound_check(shape, use_buffer_ops, run_bench):
@@ -2144,6 +2145,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
             shape=(M, N),
             distributed_shape=(1, BLOCK_N),
             dtype=tkl.i32,
+            address_space=SHARED_ADDRESS_SPACE,
         )
         inf_reg = tkl.Register[M, N, tkl.i32](1e6)
         tkw.write(inf_reg, shmem)
@@ -2160,6 +2162,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
             M: shape[0],
             N: shape[1],
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            SHARED_ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
         canonicalize=True,
         run_bench=run_bench,
