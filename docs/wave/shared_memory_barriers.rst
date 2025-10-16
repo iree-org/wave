@@ -77,14 +77,14 @@ The heuristic walks the graph in pre-order and proceeds as follows:
     * if we just saw a `GatherToLDS` op, set `state.is_async` to True, otherwise, after inserting a barrier, set it back to False.
 - end of step 3, jump to step 4.
 
-4. Is this op if of type NestedRegionOp (Iterate / Conditional)?
+4. Is this op of type NestedRegionOp (Iterate / Conditional)?
     * Yes:
         * Record a set of nodes that are currently taking ownership. This is used to compare if producers are updated in the subgraph.
         * Recurse into its subgraph. - jump to step 0, recurse on the subgraph.
         * After recursive call returns, there are some cases to consider: (ref. `should_insert_split_barrier_for_nested_region_op`)
-            * case 1: split barrier is not supported - jump to step 1
-            * case 2: producers are not updated in the subgraph - jump to step 1
-            * case 3: `next-iteration check` mode is set (by the Iterate node) - jump to step 1
+            * case 1: split barrier is not supported - jump to step 0
+            * case 2: producers are not updated in the subgraph - jump to step 0
+            * case 3: `next-iteration check` mode is set (by the Iterate node) - jump to step 0
             * otherwise: calls `add_signal_wait_to_subgraph` pass for inserting signal at subgraph prolog and wait at subgraph epilog for synchronization.
     * No: noop
 - end of step 4, jump to step 0.
