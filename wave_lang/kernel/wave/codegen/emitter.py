@@ -153,7 +153,7 @@ class WaveEmitter:
             if bind.binding_type == BindingType.SYMBOL_VALUE:
                 self.dynamic_dims[bind.symbol_type] = arg
 
-        with InsertionPoint(entry_block), Location.unknown():
+        with InsertionPoint(entry_block), Location.name("wave-generated function"):
             self.emit_program_invariants()
             for bind, arg in zip(bindings, entry_block.arguments):
                 node = bind.reference[1]
