@@ -795,3 +795,60 @@ def get_moe_reduce_sum_kernel(
     }
 
     return moe_reduce_sum, hyperparams
+
+
+def get_topk_kernel(
+    m: int,
+    n: int,
+    k: int,
+    datatype: DataType,
+    threads_per_wave: int = 64,
+):
+    """
+    Wave kernel for computing top-k values and indices.
+
+    Args:
+        m: Number of rows (tokens)
+        n: Number of columns (experts)
+        k: Number of top elements to select
+        datatype: Data type for input values
+        threads_per_wave: Number of threads per wave (default 64)
+    """
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = 1
+    BLOCK_N = sympy.ceiling(N / threads_per_wave) * threads_per_wave
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            vector_shapes={M: 1, N: BLOCK_N, K: K},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def topk_kernel(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, datatype],
+        values: tkl.Memory[M, K, ADDRESS_SPACE, datatype],
+        indices: tkl.Memory[M, K, ADDRESS_SPACE, tkl.i32],
+    ):
+        src = tkw.read(a)
+        topk_values, topk_indices = tkw.topk(src, K, N)
+        tkw.write(topk_values, values, elements_per_thread=K)
+        tkw.write(topk_indices, indices, elements_per_thread=K)
+
+    hyperparams = {
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+        M: m,
+        N: n,
+        K: k,
+    }
+
+    return topk_kernel, hyperparams
