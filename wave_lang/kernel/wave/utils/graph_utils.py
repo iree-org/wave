@@ -389,7 +389,7 @@ def replace_uses_in(users: dict[fx.Node, list[CustomOp]], old: CustomOp, new: fx
                 user.update_arg(i, new)
 
 
-def is_reduction_subgraph(graph: fx.Graph):
+def is_iterate_subgraph(graph: fx.Graph):
     """
     Check that graph is a subgraph that is owned by ReductionOp.
     """

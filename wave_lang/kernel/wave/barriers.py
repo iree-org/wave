@@ -29,7 +29,7 @@ from ..ops.wave_ops import (
 )
 from .utils.graph_utils import (
     is_barrier_between,
-    is_reduction_subgraph,
+    is_iterate_subgraph,
     propagate_loop_carried_vars,
 )
 
@@ -194,7 +194,7 @@ def add_shared_memory_barriers(
 
     # Synchronize before the write to shared memory to avoid stepping over
     # shared reads in the previous iteration of a loop.
-    if is_reduction_subgraph(graph) and info and not checking_next_iter:
+    if is_iterate_subgraph(graph) and info and not checking_next_iter:
         # Add barriers between ops from different iterations in the same loop.
         add_shared_memory_barriers(
             trace,
