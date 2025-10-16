@@ -54,7 +54,12 @@ from ..._support.indexing import IndexExpr, IndexingContext, xor
 from ..._support.tracing import CapturedTrace
 from ...compiler.base import NDEBUG, CodegenError
 from ...compiler.builder import IRProxyValue, ScalarBuilder
-from ...compiler.kernel_codegen import BindingType, BindingDesc, BoundKernelSignature
+from ...compiler.kernel_codegen import (
+    BindingType,
+    BindingDesc,
+    BoundKernelSignature,
+    create_argument_locations,
+)
 from ...lang.wave_types import IndexSymbol
 from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint, HardwareConstraint, TilingConstraint
@@ -144,7 +149,7 @@ class WaveEmitter:
         ftype = FunctionType.get(arg_types, [])
         func_op = func_d.FuncOp("kernel", ftype, visibility="private")
 
-        locs = [Location.unknown()] * len(arg_types)
+        locs = create_argument_locations(bindings)
         entry_block = func_op.add_entry_block(locs)
 
         # Map dynamic symbols to buffer argument indices and dimensions.
