@@ -3955,7 +3955,7 @@ scf.if %print { gpu.printf "pid_m %d pid_n %d thread %d k_start %d load_col %d\\
     """
 )
 
-    asm_dtype0_256_128_8_64_2_16384_mfma = (
+    asm_dtype0_32768_6144_8_64_2_16384_mfma = (
     """
 #translation = #iree_codegen.translation_info<pipeline = None workgroup_size = [64, 1, 1] subgroup_size = 64>
 
@@ -3968,20 +3968,20 @@ scf.if %print { gpu.printf "pid_m %d pid_n %d thread %d k_start %d load_col %d\\
 module attributes {transform.with_named_sequence} {
   stream.executable private @fused_moe_kernel {
     stream.executable.export public @fused_moe_kernel workgroups() -> (index, index, index) {
-      %c2084 = arith.constant 2084 : index
+      %c266752 = arith.constant 266752 : index
       %c1 = arith.constant 1 : index
       %c2 = arith.constant 2 : index
-      stream.return %c2084, %c1, %c1 : index, index, index
+      stream.return %c266752, %c1, %c1 : index, index, index
     }
     builtin.module {
       func.func @fused_moe_kernel(
           // Input memrefs
-       // %a_ptr: memref<16384x128xf16>,
-       // %b_ptr: memref<8x256x128xf16>,
+       // %a_ptr: memref<16384x6144xf16>,
+       // %b_ptr: memref<8x32768x6144xf16>,
        // %sorted_token_ids_ptr: memref<33335xi32>,
        // %expert_ids_ptr: memref<521xi32>,
        // %num_tokens_post_padded_ptr: memref<1xi32>,
-       // %c_ptr: memref<16384x2x256xf16>
+       // %c_ptr: memref<16384x2x32768xf16>
           %arg0: !stream.binding,
           %arg1: !stream.binding,
           %arg2: !stream.binding,
@@ -3989,16 +3989,16 @@ module attributes {transform.with_named_sequence} {
           %arg4: !stream.binding,
           %arg5: !stream.binding
       ) attributes {translation_info = #translation} {
-        // N = 256
-        // K = 128
+        // N = 32768
+        // K = 6144
         // EM = 33335
         // top_k = 2
         // num_valid_tokens = 32768
         // GROUP_SIZE_M = 8
         // BLOCK_SIZE_M = BLOCK_SIZE_N = 64
         // BLOCK_SIZE_K = 32
-        %N = arith.constant 256 : index
-        %K = arith.constant 128 : index
+        %N = arith.constant 32768 : index
+        %K = arith.constant 6144 : index
         %EM = arith.constant 33335 : index
         %top_k = arith.constant 2 : index
         %num_valid_tokens = arith.constant 32768 : index
@@ -4008,7 +4008,7 @@ module attributes {transform.with_named_sequence} {
         %BLOCK_SIZE_K = arith.constant 32 : index
 
         %c16384 = arith.constant 16384 : index
-        %c256 = arith.constant 256 : index
+        %c32768 = arith.constant 32768 : index
         %c0 = arith.constant 0 : index
         %c1 = arith.constant 1 : index
         %c2 = arith.constant 2 : index
@@ -4022,9 +4022,9 @@ module attributes {transform.with_named_sequence} {
         %f0_f16 = arith.constant 0.0 : f16
         %cst_mfma = arith.constant dense<0.000000e+00> : vector<4xf32>
 
-        %a_ptr = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<16384x128xf16>
-        %b_ptr = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<8x256x128xf16>
-        %c_ptr = stream.binding.subspan %arg5[%c0] : !stream.binding -> memref<16384x2x256xf16>
+        %a_ptr = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<16384x6144xf16>
+        %b_ptr = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<8x32768x6144xf16>
+        %c_ptr = stream.binding.subspan %arg5[%c0] : !stream.binding -> memref<16384x2x32768xf16>
         %sorted_token_ids_ptr = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<33335xi32>
         %expert_ids_ptr = stream.binding.subspan %arg3[%c0] : !stream.binding -> memref<521xi32>
         %num_tokens_post_padded_ptr = stream.binding.subspan %arg4[%c0] : !stream.binding -> memref<1xi32>
@@ -4075,7 +4075,7 @@ module attributes {transform.with_named_sequence} {
           %offs_bn_base = arith.muli %pid_n, %BLOCK_SIZE_N : index
           %b_row = arith.addi %offs_bn_base, %thread_id : index
 
-          // Allocate shared memory: 64×32 for A, 64×32 for B (instead of 64×128)
+          // Allocate shared memory: 64×32 for A, 64×32 for B (instead of 64×6144)
           %c4096 = arith.constant 4096 : index
           %alloc = memref.alloc() : memref<8192xi8, #gpu.address_space<workgroup>>
           %shared_a = memref.view %alloc[%c0][] : memref<8192xi8, #gpu.address_space<workgroup>>
@@ -4091,58 +4091,58 @@ module attributes {transform.with_named_sequence} {
 //scf.if %print { gpu.printf "pid_m %d\\n", %pid_m : index }
 //scf.if %print { gpu.printf "pid_n %d\\n",  %pid_n : index }
 //
-//%a0.0 = memref.load %shared_a[%c0, %c0] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a0.0 = memref.load %shared_a[%c0, %c0] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[0][0] %f\\n", %a0.0 : f16 }
 //
-//%a0.1 = memref.load %shared_a[%c0, %c1] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a0.1 = memref.load %shared_a[%c0, %c1] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[0][1] %f\\n", %a0.1 : f16 }
 //
-//%a0.127 = memref.load %shared_a[%c0, %c127] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a0.127 = memref.load %shared_a[%c0, %c127] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[0][127] %f\\n", %a0.127 : f16 }
 //
-//%a1.0 = memref.load %shared_a[%c1, %c0] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a1.0 = memref.load %shared_a[%c1, %c0] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[1][0] %f\\n", %a1.0 : f16 }
 //
-//%a1.1 = memref.load %shared_a[%c1, %c1] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a1.1 = memref.load %shared_a[%c1, %c1] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[1][1] %f\\n", %a1.1 : f16 }
 //
-//%a1.127 = memref.load %shared_a[%c1, %c127] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a1.127 = memref.load %shared_a[%c1, %c127] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[1][127] %f\\n", %a1.127 : f16 }
 //
-//%a63.0 = memref.load %shared_a[%c63, %c0] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a63.0 = memref.load %shared_a[%c63, %c0] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[63][0] %f\\n", %a63.0 : f16 }
 //
-//%a63.1 = memref.load %shared_a[%c63, %c1] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a63.1 = memref.load %shared_a[%c63, %c1] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[63][1] %f\\n", %a63.1 : f16 }
 //
-//%a63.127 = memref.load %shared_a[%c63, %c127] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%a63.127 = memref.load %shared_a[%c63, %c127] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "a[63][127] %f\\n", %a63.127 : f16 }
 //
-//%b0.0 = memref.load %shared_b[%c0, %c0] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b0.0 = memref.load %shared_b[%c0, %c0] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[0][0] %f\\n", %b0.0 : f16 }
 //
-//%b0.1 = memref.load %shared_b[%c0, %c1] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b0.1 = memref.load %shared_b[%c0, %c1] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[0][1] %f\\n", %b0.1 : f16 }
 //
-//%b0.127 = memref.load %shared_b[%c0, %c127] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b0.127 = memref.load %shared_b[%c0, %c127] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[0][127] %f\\n", %b0.127 : f16 }
 //
-//%b1.0 = memref.load %shared_b[%c1, %c0] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b1.0 = memref.load %shared_b[%c1, %c0] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[1][0] %f\\n", %b1.0 : f16 }
 //
-//%b1.1 = memref.load %shared_b[%c1, %c1] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b1.1 = memref.load %shared_b[%c1, %c1] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[1][1] %f\\n", %b1.1 : f16 }
 //
-//%b1.127 = memref.load %shared_b[%c1, %c127] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b1.127 = memref.load %shared_b[%c1, %c127] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[1][127] %f\\n", %b1.127 : f16 }
 //
-//%b63.0 = memref.load %shared_b[%c63, %c0] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b63.0 = memref.load %shared_b[%c63, %c0] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[63][0] %f\\n", %b63.0 : f16 }
 //
-//%b63.1 = memref.load %shared_b[%c63, %c1] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b63.1 = memref.load %shared_b[%c63, %c1] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[63][1] %f\\n", %b63.1 : f16 }
 //
-//%b63.127 = memref.load %shared_b[%c63, %c127] : memref<64x128xf16, #gpu.address_space<workgroup>>
+//%b63.127 = memref.load %shared_b[%c63, %c127] : memref<64x6144xf16, #gpu.address_space<workgroup>>
 //scf.if %print { gpu.printf "b[63][127] %f\\n", %b63.127 : f16 }
 //
 //amdgpu.lds_barrier
@@ -4164,17 +4164,17 @@ module attributes {transform.with_named_sequence} {
 
           // Each thread loads its 32-element slice from A (from k_start to k_start+32)
           %a_row_vec_0 = vector.transfer_read %a_ptr[%a_row, %k_start_0], %f0_f16, %token_mask :
-            memref<16384x128xf16>, vector<32xf16>
+            memref<16384x6144xf16>, vector<32xf16>
           // Store to shared memory
           vector.store %a_row_vec_0, %shared_a[%thread_id, %c0] :
             memref<64x32xf16, #gpu.address_space<workgroup>>, vector<32xf16>
 
 
           // Each thread loads its 32-element slice from B (from k_start to k_start+32)
-          // B is [8, 256, 128], we need [expert_id, b_row, k_start]
-          // Note: b_row is always < 256 since pid_n * 64 + thread_id_x < 256
+          // B is [8, 32768, 6144], we need [expert_id, b_row, k_start]
+          // Note: b_row is always < 32768 since pid_n * 64 + thread_id_x < 32768
           %b_row_vec_0 = vector.transfer_read %b_ptr[%expert_id, %b_row, %k_start_0], %f0_f16 :
-            memref<8x256x128xf16>, vector<32xf16>
+            memref<8x32768x6144xf16>, vector<32xf16>
           // Store to shared memory
           vector.store %b_row_vec_0, %shared_b[%thread_id, %c0] :
             memref<64x32xf16, #gpu.address_space<workgroup>>, vector<32xf16>
@@ -4236,9 +4236,9 @@ module attributes {transform.with_named_sequence} {
             %k_start_next = arith.addi %k_start, %BLOCK_SIZE_K : index
 
             %a_row_vec_next = vector.transfer_read %a_ptr[%a_row, %k_start_next], %f0_f16, %token_mask :
-              memref<16384x128xf16>, vector<32xf16>
+              memref<16384x6144xf16>, vector<32xf16>
             %b_row_vec_next = vector.transfer_read %b_ptr[%expert_id, %b_row, %k_start_next], %f0_f16 :
-              memref<8x256x128xf16>, vector<32xf16>
+              memref<8x32768x6144xf16>, vector<32xf16>
 
             // =========================================================================
             // SECOND HALF: K[16:32] - Load from shared memory
@@ -4558,7 +4558,7 @@ module attributes {transform.with_named_sequence} {
           %r33_3_f16 = vector.extract_strided_slice %r33_f16 {offsets = [3], sizes = [1], strides = [1]} : vector<4xf16> to vector<1xf16>
 
           // Flatten c_ptr for easier indexing
-          %c_flat = memref.collapse_shape %c_ptr [[0, 1, 2]] : memref<16384x2x256xf16> into memref<8388608xf16>
+          %c_flat = memref.collapse_shape %c_ptr [[0, 1, 2]] : memref<16384x2x32768xf16> into memref<1073741824xf16>
 
           // Each thread writes to 4 different rows (from load_row, load_row+16, load_row+32, load_row+48)
           // across 4 column groups (base, base+16, base+32, base+48)
@@ -4677,204 +4677,192 @@ module attributes {transform.with_named_sequence} {
           // Write all 16 tiles using vector.store
           // Tile (0,0)
           %idx_00_0 = arith.addi %out_base_0_0, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_00_0], %out_mask_0_0, %r00_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_00_0], %out_mask_0_0, %r00_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_00_1 = arith.addi %out_base_0_1, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_00_1], %out_mask_0_1, %r00_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_00_1], %out_mask_0_1, %r00_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_00_2 = arith.addi %out_base_0_2, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_00_2], %out_mask_0_2, %r00_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_00_2], %out_mask_0_2, %r00_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_00_3 = arith.addi %out_base_0_3, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_00_3], %out_mask_0_3, %r00_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
-
-%c0.0 = memref.load %c_flat[%idx_00_0] : memref<8388608xf16>
-scf.if %print { gpu.printf "c[%d] %f %f\\n", %idx_00_0, %c0.0 : index, f16 }
-
-%c0.1 = memref.load %c_flat[%idx_00_1] : memref<8388608xf16>
-scf.if %print { gpu.printf "c[%d] %f %f\\n", %idx_00_1, %c0.1 : index, f16 }
-
-%c0.2 = memref.load %c_flat[%idx_00_2] : memref<8388608xf16>
-scf.if %print { gpu.printf "c[%d] %f %f\\n", %idx_00_2, %c0.2 : index, f16 }
-
-%c0.3 = memref.load %c_flat[%idx_00_3] : memref<8388608xf16>
-scf.if %print { gpu.printf "c[%d] %f %f\\n", %idx_00_3, %c0.3 : index, f16 }
+          vector.maskedstore %c_flat[%idx_00_3], %out_mask_0_3, %r00_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (0,1)
           %idx_01_0 = arith.addi %out_base_0_0, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_01_0], %out_mask_0_0, %r01_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_01_0], %out_mask_0_0, %r01_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_01_1 = arith.addi %out_base_0_1, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_01_1], %out_mask_0_1, %r01_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_01_1], %out_mask_0_1, %r01_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_01_2 = arith.addi %out_base_0_2, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_01_2], %out_mask_0_2, %r01_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_01_2], %out_mask_0_2, %r01_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_01_3 = arith.addi %out_base_0_3, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_01_3], %out_mask_0_3, %r01_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_01_3], %out_mask_0_3, %r01_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (0,2)
           %idx_02_0 = arith.addi %out_base_0_0, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_02_0], %out_mask_0_0, %r02_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_02_0], %out_mask_0_0, %r02_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_02_1 = arith.addi %out_base_0_1, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_02_1], %out_mask_0_1, %r02_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_02_1], %out_mask_0_1, %r02_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_02_2 = arith.addi %out_base_0_2, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_02_2], %out_mask_0_2, %r02_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_02_2], %out_mask_0_2, %r02_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_02_3 = arith.addi %out_base_0_3, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_02_3], %out_mask_0_3, %r02_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_02_3], %out_mask_0_3, %r02_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (0,3)
           %idx_03_0 = arith.addi %out_base_0_0, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_03_0], %out_mask_0_0, %r03_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_03_0], %out_mask_0_0, %r03_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_03_1 = arith.addi %out_base_0_1, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_03_1], %out_mask_0_1, %r03_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_03_1], %out_mask_0_1, %r03_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_03_2 = arith.addi %out_base_0_2, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_03_2], %out_mask_0_2, %r03_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_03_2], %out_mask_0_2, %r03_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_03_3 = arith.addi %out_base_0_3, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_03_3], %out_mask_0_3, %r03_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_03_3], %out_mask_0_3, %r03_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (1,0)
           %idx_10_0 = arith.addi %out_base_16_0, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_10_0], %out_mask_16_0, %r10_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_10_0], %out_mask_16_0, %r10_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_10_1 = arith.addi %out_base_16_1, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_10_1], %out_mask_16_0, %r10_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_10_1], %out_mask_16_1, %r10_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_10_2 = arith.addi %out_base_16_2, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_10_2], %out_mask_16_0, %r10_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_10_2], %out_mask_16_2, %r10_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_10_3 = arith.addi %out_base_16_3, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_10_3], %out_mask_16_0, %r10_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_10_3], %out_mask_16_3, %r10_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (1,1)
           %idx_11_0 = arith.addi %out_base_16_0, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_11_0], %out_mask_16_0, %r11_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_11_0], %out_mask_16_0, %r11_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_11_1 = arith.addi %out_base_16_1, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_11_1], %out_mask_16_1, %r11_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_11_1], %out_mask_16_1, %r11_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_11_2 = arith.addi %out_base_16_2, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_11_2], %out_mask_16_2, %r11_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_11_2], %out_mask_16_2, %r11_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_11_3 = arith.addi %out_base_16_3, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_11_3], %out_mask_16_3, %r11_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_11_3], %out_mask_16_3, %r11_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (1,2)
           %idx_12_0 = arith.addi %out_base_16_0, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_12_0], %out_mask_16_0, %r12_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_12_0], %out_mask_16_0, %r12_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_12_1 = arith.addi %out_base_16_1, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_12_1], %out_mask_16_1, %r12_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_12_1], %out_mask_16_1, %r12_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_12_2 = arith.addi %out_base_16_2, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_12_2], %out_mask_16_2, %r12_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_12_2], %out_mask_16_2, %r12_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_12_3 = arith.addi %out_base_16_3, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_12_3], %out_mask_16_3, %r12_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_12_3], %out_mask_16_3, %r12_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (1,3)
           %idx_13_0 = arith.addi %out_base_16_0, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_13_0], %out_mask_16_0, %r13_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_13_0], %out_mask_16_0, %r13_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_13_1 = arith.addi %out_base_16_1, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_13_1], %out_mask_16_1, %r13_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_13_1], %out_mask_16_1, %r13_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_13_2 = arith.addi %out_base_16_2, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_13_2], %out_mask_16_2, %r13_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_13_2], %out_mask_16_2, %r13_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_13_3 = arith.addi %out_base_16_3, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_13_3], %out_mask_16_3, %r13_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_13_3], %out_mask_16_3, %r13_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (2,0)
           %idx_20_0 = arith.addi %out_base_32_0, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_20_0], %out_mask_32_0, %r20_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_20_0], %out_mask_32_0, %r20_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_20_1 = arith.addi %out_base_32_1, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_20_1], %out_mask_32_1, %r20_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_20_1], %out_mask_32_1, %r20_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_20_2 = arith.addi %out_base_32_2, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_20_2], %out_mask_32_2, %r20_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_20_2], %out_mask_32_2, %r20_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_20_3 = arith.addi %out_base_32_3, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_20_3], %out_mask_32_3, %r20_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_20_3], %out_mask_32_3, %r20_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (2,1)
           %idx_21_0 = arith.addi %out_base_32_0, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_21_0], %out_mask_32_0, %r21_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_21_0], %out_mask_32_0, %r21_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_21_1 = arith.addi %out_base_32_1, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_21_1], %out_mask_32_1, %r21_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_21_1], %out_mask_32_1, %r21_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_21_2 = arith.addi %out_base_32_2, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_21_2], %out_mask_32_2, %r21_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_21_2], %out_mask_32_2, %r21_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_21_3 = arith.addi %out_base_32_3, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_21_3], %out_mask_32_3, %r21_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_21_3], %out_mask_32_3, %r21_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (2,2)
           %idx_22_0 = arith.addi %out_base_32_0, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_22_0], %out_mask_32_0, %r22_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_22_0], %out_mask_32_0, %r22_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_22_1 = arith.addi %out_base_32_1, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_22_1], %out_mask_32_1, %r22_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_22_1], %out_mask_32_1, %r22_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_22_2 = arith.addi %out_base_32_2, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_22_2], %out_mask_32_2, %r22_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_22_2], %out_mask_32_2, %r22_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_22_3 = arith.addi %out_base_32_3, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_22_3], %out_mask_32_3, %r22_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_22_3], %out_mask_32_3, %r22_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (2,3)
           %idx_23_0 = arith.addi %out_base_32_0, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_23_0], %out_mask_32_0, %r23_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_23_0], %out_mask_32_0, %r23_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_23_1 = arith.addi %out_base_32_1, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_23_1], %out_mask_32_1, %r23_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_23_1], %out_mask_32_1, %r23_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_23_2 = arith.addi %out_base_32_2, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_23_2], %out_mask_32_2, %r23_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_23_2], %out_mask_32_2, %r23_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_23_3 = arith.addi %out_base_32_3, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_23_3], %out_mask_32_3, %r23_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_23_3], %out_mask_32_3, %r23_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (3,0)
           %idx_30_0 = arith.addi %out_base_48_0, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_30_0], %out_mask_48_0, %r30_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_30_0], %out_mask_48_0, %r30_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_30_1 = arith.addi %out_base_48_1, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_30_1], %out_mask_48_1, %r30_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_30_1], %out_mask_48_1, %r30_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_30_2 = arith.addi %out_base_48_2, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_30_2], %out_mask_48_2, %r30_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_30_2], %out_mask_48_2, %r30_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_30_3 = arith.addi %out_base_48_3, %out_col_0 : index
-          vector.maskedstore %c_flat[%idx_30_3], %out_mask_48_3, %r30_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_30_3], %out_mask_48_3, %r30_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (3,1)
           %idx_31_0 = arith.addi %out_base_48_0, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_31_0], %out_mask_48_0, %r31_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_31_0], %out_mask_48_0, %r31_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_31_1 = arith.addi %out_base_48_1, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_31_1], %out_mask_48_1, %r31_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_31_1], %out_mask_48_1, %r31_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_31_2 = arith.addi %out_base_48_2, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_31_2], %out_mask_48_2, %r31_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_31_2], %out_mask_48_2, %r31_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_31_3 = arith.addi %out_base_48_3, %out_col_1 : index
-          vector.maskedstore %c_flat[%idx_31_3], %out_mask_48_3, %r31_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_31_3], %out_mask_48_3, %r31_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (3,2)
           %idx_32_0 = arith.addi %out_base_48_0, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_32_0], %out_mask_48_0, %r32_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_32_0], %out_mask_48_0, %r32_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_32_1 = arith.addi %out_base_48_1, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_32_1], %out_mask_48_1, %r32_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_32_1], %out_mask_48_1, %r32_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_32_2 = arith.addi %out_base_48_2, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_32_2], %out_mask_48_2, %r32_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_32_2], %out_mask_48_2, %r32_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_32_3 = arith.addi %out_base_48_3, %out_col_2 : index
-          vector.maskedstore %c_flat[%idx_32_3], %out_mask_48_3, %r32_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_32_3], %out_mask_48_3, %r32_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
 
           // Tile (3,3)
           %idx_33_0 = arith.addi %out_base_48_0, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_33_0], %out_mask_48_0, %r33_0_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_33_0], %out_mask_48_0, %r33_0_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_33_1 = arith.addi %out_base_48_1, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_33_1], %out_mask_48_1, %r33_1_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_33_1], %out_mask_48_1, %r33_1_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_33_2 = arith.addi %out_base_48_2, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_33_2], %out_mask_48_2, %r33_2_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_33_2], %out_mask_48_2, %r33_2_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
           %idx_33_3 = arith.addi %out_base_48_3, %out_col_3 : index
-          vector.maskedstore %c_flat[%idx_33_3], %out_mask_48_3, %r33_3_f16 : memref<8388608xf16>, vector<1xi1>, vector<1xf16>
+          vector.maskedstore %c_flat[%idx_33_3], %out_mask_48_3, %r33_3_f16 : memref<1073741824xf16>, vector<1xi1>, vector<1xf16>
         }
         return
       }
     }
   }
   func.func @isolated_benchmark$async(%arg0: !hal.buffer_view, %arg1: !hal.buffer_view, %arg2: !hal.buffer_view, %arg3: !hal.buffer_view, %arg4: !hal.buffer_view, %arg5: !hal.buffer_view, %arg6: !hal.fence, %arg7: !hal.fence) -> !hal.buffer_view {
-       // %a_ptr: memref<16384x128xf16>,
-       // %b_ptr: memref<8x256x128xf16>,
+       // %a_ptr: memref<16384x6144xf16>,
+       // %b_ptr: memref<8x32768x6144xf16>,
        // %sorted_token_ids_ptr: memref<33335xi32>,
        // %expert_ids_ptr: memref<521xi32>,
        // %num_tokens_post_padded_ptr: memref<1xi32>,
-       // %c_ptr: memref<16384x2x256xf16>
-    %0 = hal.tensor.import wait(%arg6) => %arg0 : !hal.buffer_view -> tensor<16384x128xf16>
-    %1 = hal.tensor.import wait(%arg6) => %arg1 : !hal.buffer_view -> tensor<8x256x128xf16>
+       // %c_ptr: memref<16384x2x32768xf16>
+    %0 = hal.tensor.import wait(%arg6) => %arg0 : !hal.buffer_view -> tensor<16384x6144xf16>
+    %1 = hal.tensor.import wait(%arg6) => %arg1 : !hal.buffer_view -> tensor<8x32768x6144xf16>
     %2 = hal.tensor.import wait(%arg6) => %arg2 : !hal.buffer_view -> tensor<33335xi32>
     %3 = hal.tensor.import wait(%arg6) => %arg3 : !hal.buffer_view -> tensor<521xi32>
     %4 = hal.tensor.import wait(%arg6) => %arg4 : !hal.buffer_view -> tensor<1xi32>
-    %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<16384x2x256xf16>
-    %6 = flow.dispatch @fused_moe_kernel::@fused_moe_kernel(%0, %1, %2, %3, %4, %5) : (tensor<16384x128xf16>, tensor<8x256x128xf16>, tensor<33335xi32>, tensor<521xi32>, tensor<1xi32>, tensor<16384x2x256xf16>) -> %5
-    %7 = hal.tensor.barrier join(%6 : tensor<16384x2x256xf16>) => %arg7 : !hal.fence
-    %8 = hal.tensor.export %7 : tensor<16384x2x256xf16> -> !hal.buffer_view
+    %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<16384x2x32768xf16>
+    %6 = flow.dispatch @fused_moe_kernel::@fused_moe_kernel(%0, %1, %2, %3, %4, %5) : (tensor<16384x6144xf16>, tensor<8x32768x6144xf16>, tensor<33335xi32>, tensor<521xi32>, tensor<1xi32>, tensor<16384x2x32768xf16>) -> %5
+    %7 = hal.tensor.barrier join(%6 : tensor<16384x2x32768xf16>) => %arg7 : !hal.fence
+    %8 = hal.tensor.export %7 : tensor<16384x2x32768xf16> -> !hal.buffer_view
     return %8 : !hal.buffer_view
   }
 }
     """
 )
     asm = asm_dtype0_256_128_8_64_2_33
-    asm = asm_dtype0_256_128_8_64_2_33_mfma
-  # asm = asm_dtype0_256_128_8_64_2_16384_mfma
+  # asm = asm_dtype0_256_128_8_64_2_33_mfma
+    asm = asm_dtype0_32768_6144_8_64_2_16384_mfma
   # asm = asm_dtype0_1024_256_8_64_2_2048_mfma
     gemm_kernel, symbols = get_moe_gemm_kernel(
         num_tokens,
@@ -4923,9 +4911,9 @@ scf.if %print { gpu.printf "c[%d] %f %f\\n", %idx_00_3, %c0.3 : index, f16 }
  #      print(f"B[0][{i}] {b[0][i]}")
  #      print(f"B[1][{i}] {b[1][i]}")
     for i in range(1):
-        print(f"REF_C[{i}][0] {c[i][0]}")
+        print(f"REF_C[{i}][0] {ref_c[i][0]}")
         print(f"C[{i}][0] {mlir_c[i][0]}")
-        print(f"REF_C[{i}][1] {c[i][1]}")
+        print(f"REF_C[{i}][1] {ref_c[i][1]}")
         print(f"C[{i}][1] {mlir_c[i][1]}")
    #print(f"REF_C[5][1] {c[5][1]}")
    #print(f"REF_C[6][1] {c[6][1]}")
