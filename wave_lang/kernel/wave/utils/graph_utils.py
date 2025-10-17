@@ -146,11 +146,13 @@ def erase_graph(graph: fx.Graph):
 
 def get_users(
     node: fx.Node, reduction: fx.Node = None
-) -> tuple[list[fx.Node], fx.Node]:
+) -> tuple[list[fx.Node], Optional[fx.Node], Optional[fx.Node]]:
     """
-    Return the users of a node, propagating through reductions.
+    Return the users of a node, propagating through reductions and conditionals.
+    Returns (users, iterate_node, conditional_node).
     """
     users = []
+    conditional = None
     for user in node.users:
         custom = user
         if not isinstance(custom, CustomOp):
@@ -189,7 +191,20 @@ def get_users(
                     users.append(get_results[output_idx])
             continue
         if isinstance(custom, Conditional):
+            conditional = custom
             if node == custom.condition:
+                users.append(user)
+            elif custom.init_args is not None and node in custom.init_args:
+                # For init_args, the users are the iter_args in the subgraph
+                # and the conditional itself (as it returns the value)
+                subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
+                iter_args = custom.iter_args(subgraph)
+                # Find the iter_arg that corresponds to this init_arg
+                init_arg_idx = custom.init_args.index(node)
+                if init_arg_idx < len(iter_args):
+                    for u in iter_args[init_arg_idx].users:
+                        users.append(u)
+                # The conditional node itself is also a user if it returns values
                 users.append(user)
             else:
                 subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
@@ -201,7 +216,7 @@ def get_users(
             continue
 
         users.append(user)
-    return users, reduction
+    return users, reduction, conditional
 
 
 def propagate_placeholders(n: fx.Node) -> fx.Node:
@@ -257,28 +272,36 @@ def propagate_loop_carried_vars(n: fx.Node, depth: int = 0) -> fx.Node:
     return n
 
 
-def get_inputs(node: fx.Node, iterate: fx.Node = None) -> tuple[list[fx.Node], fx.Node]:
+def get_inputs(
+    node: fx.Node, iterate: fx.Node = None
+) -> tuple[list[fx.Node], Optional[fx.Node], Optional[fx.Node]]:
     """
-    Return the inputs of a node, propagating through reductions.
+    Return the inputs of a node, propagating through reductions and conditionals.
+    Returns (inputs, iterate_node, conditional_node).
     """
     inputs = []
+    conditional = None
     custom = get_custom(node)
     if isinstance(custom, IterArg):
         # Map iter args to init args
         if iterate is None:
-            iterate = custom.parent_op()
+            parent_op = custom.parent_op()
+            if isinstance(parent_op, Iterate):
+                iterate = parent_op
+            elif isinstance(parent_op, Conditional):
+                conditional = parent_op
         iter_arg_idx = custom.iter_idx
-        inputs.append(iterate.init_args[iter_arg_idx])
+        parent_op = iterate if iterate else conditional
+        if parent_op and parent_op.init_args:
+            inputs.append(parent_op.init_args[iter_arg_idx])
     elif isinstance(custom, GetResult):
         assert custom.value is not None, f"GetResult node {custom} has no value"
-        iterate = get_custom(custom.value)
-        if isinstance(iterate, TopkOp):
+        parent_op = get_custom(custom.value)
+        if isinstance(parent_op, TopkOp):
             iterate = None
             inputs += node.all_input_nodes
-        else:
-            assert isinstance(
-                iterate, Iterate
-            ), f"GetResult must be using an Iterate, but\n{custom}\nis using\n{iterate}"
+        elif isinstance(parent_op, Iterate):
+            iterate = parent_op
             # Map get result to output
             iteration_subgraph = iterate.get_root_graph().subgraphs[
                 iterate.subgraph_name
@@ -291,16 +314,37 @@ def get_inputs(node: fx.Node, iterate: fx.Node = None) -> tuple[list[fx.Node], f
                     inputs.append(outputs)
             else:
                 inputs.append(iterate.outputs(iteration_subgraph)[custom.res_idx])
+        elif isinstance(parent_op, Conditional):
+            conditional = parent_op
+            # Map get result to output
+            conditional_subgraph = conditional.get_root_graph().subgraphs[
+                conditional.subgraph_name
+            ]
+            outputs = conditional.outputs(conditional_subgraph)
+            if isinstance(outputs, Sequence):
+                if len(outputs) == 1:
+                    inputs.append(outputs[0])
+                else:
+                    inputs.append(outputs[custom.res_idx])
+            else:
+                inputs.append(outputs)
+        else:
+            raise ValueError(
+                f"GetResult must be using an Iterate or Conditional, but\n{custom}\nis using\n{parent_op}"
+            )
     elif isinstance(custom, Iterate):
         iteration_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
         inputs.append(custom.outputs(iteration_subgraph))
+    elif isinstance(custom, Conditional):
+        conditional_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
+        inputs.append(custom.outputs(conditional_subgraph))
     else:
         # Default handling for other ops.
         for input in node.all_input_nodes:
             inputs.append(input)
 
-    inputs = [propagate_placeholders(i) for i in inputs]
-    return inputs, iterate
+    inputs = [propagate_placeholders(i) for i in inputs if i is not None]
+    return inputs, iterate, conditional
 
 
 def bfs(
@@ -319,7 +363,7 @@ def bfs(
     reduction = None
     while queue:
         s = queue.pop(0)
-        neighbors, reduction = get_neighbors(s, reduction)
+        neighbors, reduction, conditional = get_neighbors(s, reduction)
         for neighbor in neighbors:
             if neighbor not in visited and filter_fn(neighbor):
                 visited.add(neighbor)
@@ -402,9 +446,12 @@ def initialize_iter_args(trace: CapturedTrace) -> None:
     """
     Initializes the IterArgs in each reduction with an index
     based on their location in the graph.
-
+    Also handles arguments to Conditional nodes.
     """
-    reductions = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
+
+    reductions = trace.walk(
+        lambda node: isinstance(get_custom(node), (Iterate, Conditional))
+    )
     for reduction in reductions:
         reduction_graph = trace.get_subgraph(get_custom(reduction).subgraph_name)
         count = 0
