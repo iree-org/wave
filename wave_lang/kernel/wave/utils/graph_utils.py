@@ -160,6 +160,9 @@ def get_users(
             if node in custom.init_args:
                 init_arg_idx = custom.init_args.index(node)
                 users.append(custom.iter_args(graph)[init_arg_idx])
+            elif node == custom.start:
+                # don't know what to do
+                continue
             else:
                 assert node in custom.implicit_captures
                 for outside_node in graph.nodes:
