@@ -1383,7 +1383,7 @@ def handle_cbrt(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_op(conditional)
 def handle_conditional(emitter: WaveEmitter, node: fx.Node):
     try:
-        condition, subgraph, implicit_capture = node.args
+        condition, subgraph_name, implicit_capture, else_return = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -1401,16 +1401,53 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
     zero = arith_d.constant(cond_type, 0)
     condition = arith_d.cmpi(arith_d.CmpIPredicate.ne, condition, zero)
 
-    if_op = scf_d.IfOp(condition)
+    # Handle else_return if present
+    flat_else_return = []
+    result_types = []
+    if else_return is not None:
+        import torch.utils._pytree as pytree
+
+        flat_else_return, _ = pytree.tree_flatten((else_return))
+        flat_else_return = [cast_py_value(emitter, arg) for arg in flat_else_return]
+        result_types = [a.ir_value.type for a in flat_else_return]
+
+    if_op = scf_d.IfOp(condition, result_types, hasElse=bool(else_return))
     with InsertionPoint(if_op.then_block) as ip:
-        subgraph: fx.Graph = emitter.trace.get_subgraph(subgraph)
+        subgraph = emitter.trace.get_subgraph(subgraph_name)
+
+        # Bind iter_args if present
+        if else_return is not None:
+            iter_args: list[fx.Node] = get_custom(node).iter_args(subgraph)
+            for i, iter_arg in enumerate(iter_args):
+                emitter.bind_node_proxy(iter_arg, flat_else_return[i])
 
         captured_vars: list[fx.Node] = get_custom(node).captured_vars(subgraph)
         for root_v, subgraph_v in zip(implicit_capture, captured_vars):
             emitter._node_values[subgraph_v] = emitter.lookup_node_values(root_v)
+
         # Emit the subgraph.
-        emitter._emit_graph(subgraph)
-        scf_d.YieldOp([])
+        return_values = emitter._emit_graph(subgraph)
+
+        if else_return is None:
+            scf_d.YieldOp([])
+        else:
+            if return_values and not all(x is None for x in return_values):
+                # Flatten return values.
+                flat_ret_values, _ = pytree.tree_flatten((return_values))
+                flat_ret_values = [
+                    cast_py_value(emitter, value).ir_value for value in flat_ret_values
+                ]
+                scf_d.YieldOp(flat_ret_values)
+            else:
+                # No return values from subgraph, yield else_return
+                scf_d.YieldOp([a.ir_value for a in flat_else_return])
+
+    if else_return is not None:
+        with InsertionPoint(if_op.else_block):
+            # Yield the else_return unchanged
+            scf_d.YieldOp([a.ir_value for a in flat_else_return])
+
+        emitter.bind_node_proxies(node, [IRProxyValue(v) for v in if_op.results_])
 
 
 @handle_op(iterate)
