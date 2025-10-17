@@ -316,9 +316,6 @@ def _get_splat_input(src: Optional[Value]) -> Optional[Value]:
         return None
 
     op = src.owner.opview
-    if isinstance(op, vector_d.SplatOp):
-        return op.input
-
     if isinstance(op, vector_d.BroadcastOp) and not VectorType.isinstance(
         op.source.type
     ):
