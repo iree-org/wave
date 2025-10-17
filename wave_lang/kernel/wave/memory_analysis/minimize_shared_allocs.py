@@ -45,7 +45,7 @@ def compute_live_intervals(allocs: list[fx.Node]):
     live_intervals = {}
     for alloc in allocs:
         live_intervals[alloc] = LiveInterval()
-        users, _ = get_users(alloc, None)
+        users, _, _ = get_users(alloc, None)
         users = flatten_list([propagate_user(u) for u in users])
         for user in users:
             if user._sort_key < live_intervals[alloc].start:
@@ -62,7 +62,7 @@ def get_shared_memory_allocation_size(alloc: fx.Node) -> int:
 def get_use(
     alloc: fx.Node, live_interval: LiveInterval, match_sort_key: int
 ) -> fx.Node:
-    users, _ = get_users(alloc, None)
+    users, _, _ = get_users(alloc, None)
     users = flatten_list([propagate_user(u) for u in users])
     matches = [x for x in users if x._sort_key == live_interval.start]
     if len(matches) != 1:
