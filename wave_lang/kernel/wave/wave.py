@@ -714,7 +714,12 @@ class LaunchableWave(Launchable):
                 module_op = Module.create()
 
             with InsertionPoint(module_op.body), Location.unknown():
-                emitter.emit(trace.get_root_graph())
+                func = emitter.emit(trace.get_root_graph())
+                host_func = emitter.emit_host_func(func)
+
+            print(module_op)
+
+        module_op.operation.verify()
 
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave

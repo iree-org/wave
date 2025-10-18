@@ -28,6 +28,7 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
+    FlatSymbolRefAttr,
     FloatAttr,
     FunctionType,
     IndexType,
@@ -226,6 +227,57 @@ class WaveEmitter:
             )
 
         return func
+
+    def emit_host_func(self, kernel_func: Operation) -> Operation:
+        bindings = self.root_sig.sig.linear_bindings
+
+        def abi_type(binding: BindingDesc):
+            if binding.binding_type == BindingType.KERNEL_BUFFER:
+                # Buffer passed to kernel as 0D memrefs to simplify ABI.
+                element_type = IrType.parse(
+                    binding.kernel_buffer_type.dtype.ir_type_asm()
+                )
+                return MemRefType.get([], element_type=element_type)
+
+            # Scalars are passed as is.
+            return binding.as_mlir_type()
+
+        arg_types = [abi_type(b) for b in bindings]
+
+        ftype = FunctionType.get(arg_types, [])
+        func_name = kernel_func.name.value + "_host_wrapper"
+        func_op = func_d.FuncOp(func_name, ftype)
+
+        locs = [Location.unknown()] * len(arg_types)
+        entry_block = func_op.add_entry_block(locs)
+
+        subs = add_emitter_subs(self)
+        threads_per_block = self.hardware_constraint.threads_per_block
+        with InsertionPoint(entry_block), Location.name("wave-generated host function"):
+            grid = [gen_sympy_index(subs, s) for s in self.grid]
+            threads = [gen_sympy_index(subs, s) for s in threads_per_block]
+            launch_op = gpu_d.launch(
+                async_token=None,
+                async_dependencies=[],
+                grid_size_x=grid[0],
+                grid_size_y=grid[1],
+                grid_size_z=grid[2],
+                block_size_x=threads[0],
+                block_size_y=threads[1],
+                block_size_z=threads[2],
+            )
+            gpu_block = launch_op.regions[0].blocks.append(
+                *[IndexType.get() for _ in range(12)]
+            )
+            func_d.ReturnOp([])
+
+        with InsertionPoint(gpu_block), Location.name("wave-generated host function"):
+            func_d.call(
+                [], FlatSymbolRefAttr.get(kernel_func.name.value), entry_block.arguments
+            )
+            gpu_d.terminator()
+
+        return func_op
 
     def _emit_graph(self, graph: fx.Graph):
         """Emits the given graph at the current insertion point."""
