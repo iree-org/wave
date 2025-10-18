@@ -708,6 +708,7 @@ class LaunchableWave(Launchable):
                 self.constraints,
                 options,
                 self.grid_type.dims,
+                entrypoint_name,
             )
             with mb.module_op.context, Location.unknown():
                 module_op = Module.create()

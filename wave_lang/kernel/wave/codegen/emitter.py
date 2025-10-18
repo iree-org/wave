@@ -87,6 +87,7 @@ class WaveEmitter:
     constraints: list[Constraint]
     options: WaveCompileOptions
     grid: list[IndexExpr]
+    kernel_name: str
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
     _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}
 
@@ -143,7 +144,7 @@ class WaveEmitter:
         arg_types = [abi_type(b) for b in bindings]
 
         ftype = FunctionType.get(arg_types, [])
-        func_op = func_d.FuncOp("kernel", ftype, visibility="private")
+        func_op = func_d.FuncOp(self.kernel_name, ftype, visibility="private")
 
         locs = create_argument_locations(bindings)
         entry_block = func_op.add_entry_block(locs)
