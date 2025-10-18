@@ -21,14 +21,15 @@ from wave_lang.support.ir_imports import (
     Block,
     BlockArgument,
     Context,
+    IndexType,
+    InsertionPoint,
+    IntegerAttr,
+    Location,
+    MemRefType,
     Module,
     Operation,
-    InsertionPoint,
-    stream_d,
-    IndexType,
-    IntegerAttr,
     arith_d,
-    MemRefType,
+    stream_d,
 )
 from .scheduling.schedule_enums import SchedulingType
 from .wave_schedule import WaveSchedule
@@ -292,6 +293,9 @@ def _rewrite_module_for_iree_stream_abi(
                     target_block, old_arg, target_args[i], i
                 )
                 arg_mapping[old_arg] = new_subspan
+            else:
+                # Map scalar arguments to their corresponding arguments directly.
+                arg_mapping[old_arg] = target_args[i]
 
         # Move operations
         ops_to_move = list(source_block)
@@ -698,16 +702,18 @@ class LaunchableWave(Launchable):
         # Only emit MLIR if we don't have a module yet.
         if not module_op:
             emitter = WaveEmitter(
-                dispatch_entrypoint, trace, self.constraints, options, self.grid_type
+                dispatch_entrypoint,
+                trace,
+                self.constraints,
+                options,
+                self.grid_type.dims,
             )
-            try:
+            with mb.module_op.context, Location.unknown():
+                module_op = Module.create()
+
+            with InsertionPoint(module_op.body), Location.unknown():
                 emitter.emit(trace.get_root_graph())
-            except:
-                logger.info("Error in emitter")
-                asm = mb.module_op.get_asm()
-                logger.info(asm)
-                raise
-            emitter.finish()
+
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave
         # pipeline.
@@ -715,12 +721,12 @@ class LaunchableWave(Launchable):
         # to move the ops from existing module to inside `dispatch_entrypoint`.
         # Also we'll need to update the uses of the memref arguments (from the
         # existing module) to be compatible with the new stream.binding arguments.
-        else:
-            assert not any(
-                isinstance(op, stream_d.ExecutableOp)
-                for op in module_op.operation.regions[0].blocks[0]
-            ), "expected overriding module to contain only upstream MLIR ops"
-            _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
+
+        assert not any(
+            isinstance(op, stream_d.ExecutableOp)
+            for op in module_op.operation.regions[0].blocks[0]
+        ), "expected overriding module to contain only upstream MLIR ops"
+        _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)

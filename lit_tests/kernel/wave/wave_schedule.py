@@ -25,6 +25,8 @@ def test_gemm_with_wave_schedule():
 
     # This is the same test as gemm_prefetch, but with wave_schedule instead of manually setting the schedule.
     # CHECK-LABEL:    func.func @gemm_prefetch
+    # CHECK:          %[[VIEW_0:.+]] = memref.view %alloc[%c0][]
+    # CHECK:          %[[VIEW_1:.+]] = memref.view %alloc[%c4608][]
     # Prologue
     # CHECK-COUNT-2:  vector.load
     # CHECK-COUNT-2:  vector.store
@@ -33,8 +35,8 @@ def test_gemm_with_wave_schedule():
     # CHECK:          scf.for
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # Steady State Local Read
-    # CHECK-COUNT-4:    vector.load %view
-    # CHECK-COUNT-4:    vector.load %view_0
+    # CHECK-COUNT-4:    vector.load %[[VIEW_0]]
+    # CHECK-COUNT-4:    vector.load %[[VIEW_1]]
 
     # Steady State Global Read
     # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1], offset: ?>>, vector<8xf16>
@@ -50,6 +52,6 @@ def test_gemm_with_wave_schedule():
     # CHECK:          scf.yield
 
     # Prologue
-    # CHECK-COUNT-4:  vector.load %view
-    # CHECK-COUNT-4:  vector.load %view_0
+    # CHECK-COUNT-4:  vector.load %[[VIEW_0]]
+    # CHECK-COUNT-4:  vector.load %[[VIEW_1]]
     # CHECK-COUNT-8:  amdgpu.mfma

@@ -73,7 +73,9 @@ def test_extend_attention():
     # CHECK:                stream.return %[[NQ_GRID]], %[[C1]], %[[NUM_SEQ]] : index, index, index
 
     # CHECK-LABEL:        func.func @extend_attention
-    # CHECK-DAG:            stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x16x64xf16, strided<[1024, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 16, 64], strides: [1024, 64, 1] : memref<f16> to memref<?x16x64xf16, strided<[1024, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
     # CHECK-DAG:            %[[C4352:.*]] = arith.constant 4352 : index
     # CHECK-DAG:            %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<8704xi8, #gpu.address_space<workgroup>>
@@ -98,8 +100,6 @@ def test_extend_attention():
     # CHECK-COUNT-4:        vector.maskedload
     # CHECK:                amdgpu.lds_barrier
     # CHECK-NOT:            amdgpu.lds_barrier
-    # CHECK:                stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
-    # CHECK:                stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
     # CHECK:                scf.for
     # CHECK-COUNT-1:            vector.maskedload
     # CHECK-COUNT-1:            vector.store %{{.*}}, %[[ALLOC2]]
@@ -168,7 +168,9 @@ def test_causal_extend_attention():
     # CHECK-DAG:            #[[map32:.*]] = affine_map<()[s0] -> (s0 * 64 + 64)>
     # CHECK-LABEL:       func.func @extend_attention
     # CHECK-DAG:            %[[workgroup_id_0:.*]] = gpu.block_id x
-    # CHECK-DAG:            stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x16x64xf16, strided<[1024, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 16, 64], strides: [1024, 64, 1] : memref<f16> to memref<?x16x64xf16, strided<[1024, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
     # CHECK-DAG:            %[[C4352:.*]] = arith.constant 4352 : index
     # CHECK-DAG:            %[[C0:.*]] = arith.constant 0 : index
     # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<8704xi8, #gpu.address_space<workgroup>>
@@ -218,9 +220,6 @@ def test_causal_extend_attention():
     # CHECK-COUNT-4:        vector.maskedload
     # CHECK:                amdgpu.lds_barrier
     # CHECK-NOT:            amdgpu.lds_barrier
-
-    # CHECK:                stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
-    # CHECK:                stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
 
     # CHECK:                scf.for
     # CHECK-COUNT-1:            vector.maskedload
@@ -315,7 +314,9 @@ def test_causal_extend_attention_32x32x8():
     # CHECK-DAG:            %[[C4608:.*]] = arith.constant 4608 : index
     # CHECK-DAG:            %[[C4352:.*]] = arith.constant 4352 : index
     # CHECK-DAG:            %[[C0:.*]] = arith.constant 0 : index
-    # CHECK-DAG:            stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x16x64xf16, strided<[1024, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 16, 64], strides: [1024, 64, 1] : memref<f16> to memref<?x16x64xf16, strided<[1024, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
+    # CHECK-DAG:            memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [%{{.*}}, 4, 64], strides: [256, 64, 1] : memref<f16> to memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
     # CHECK-DAG:            %[[ALLOC0:.*]] = memref.alloc() : memref<8960xi8, #gpu.address_space<workgroup>>
     # CHECK-DAG:            %[[ALLOC1:.*]] = memref.view %[[ALLOC0]][%[[C0]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<32x1x68xf16, #gpu.address_space<workgroup>>
     # CHECK-DAG:            %[[ALLOC2:.*]] = memref.view %[[ALLOC0]][%[[C4352]]][] : memref<8960xi8, #gpu.address_space<workgroup>> to memref<1x32x68xf16, #gpu.address_space<workgroup>>
@@ -359,8 +360,6 @@ def test_causal_extend_attention_32x32x8():
     # CHECK-COUNT-8:        vector.maskedload
     # CHECK:                amdgpu.lds_barrier
     # CHECK-NOT:            amdgpu.lds_barrier
-    # CHECK:                stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
-    # CHECK:                stream.binding.subspan %{{.*}}[%{{.*}}] : !stream.binding -> memref<?x4x64xf16, strided<[256, 64, 1], offset: ?>>
     # CHECK:                scf.for
     # CHECK-COUNT-1:            vector.maskedload
     # CHECK-COUNT-2:            vector.store %{{.*}}, %[[ALLOC4]]

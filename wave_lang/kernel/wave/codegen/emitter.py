@@ -20,6 +20,7 @@ from .ir_utils import (
 from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.lang import Memory
 from wave_lang.kernel.lang.kernel_buffer import KernelBuffer
+from wave_lang.kernel.compiler.utils import strides_from_symbolic_shape
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.support.logging import get_logger
 from wave_lang.support.ir_imports import (
@@ -28,6 +29,7 @@ from wave_lang.support.ir_imports import (
     Attribute,
     DenseElementsAttr,
     FloatAttr,
+    FunctionType,
     IndexType,
     InsertionPoint,
     IntegerAttr,
@@ -36,13 +38,16 @@ from wave_lang.support.ir_imports import (
     Location,
     MemRefType,
     OpResult,
+    Operation,
     ShapedType,
+    StridedLayoutAttr,
     Value,
     VectorType,
     affine_d,
     arith_d,
     func_d,
     gpu_d,
+    memref_d,
     vector_d,
 )
 
@@ -50,7 +55,12 @@ from ..._support.indexing import IndexExpr, IndexingContext, xor
 from ..._support.tracing import CapturedTrace
 from ...compiler.base import NDEBUG, CodegenError
 from ...compiler.builder import IRProxyValue, ScalarBuilder
-from ...compiler.kernel_codegen import BindingType, BoundKernelSignature
+from ...compiler.kernel_codegen import (
+    BindingType,
+    BindingDesc,
+    BoundKernelSignature,
+    create_argument_locations,
+)
 from ...lang.wave_types import IndexSymbol
 from ..compile_options import WaveCompileOptions
 from ..constraints import Constraint, HardwareConstraint, TilingConstraint
@@ -76,30 +86,30 @@ class WaveEmitter:
     trace: CapturedTrace
     constraints: list[Constraint]
     options: WaveCompileOptions
-    grid_type: Type["Grid"]
-    ip: InsertionPoint = None
+    grid: list[IndexExpr]
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
     _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}
 
     def __post_init__(self):
-        self.ip = InsertionPoint(self.root_sig.entry_block)
         self.dynamic_symbols = self.options.dynamic_symbols
+        self.induction_vars: dict[IndexSymbol, Value] = {}
+        self.dynamic_dims: dict[IndexSymbol, Value] = {}
 
     def emit_program_invariants(self):
-        grid_type = self.grid_type
+        grid = self.grid
 
         self.workgroup_ids = [
             gpu_d.block_id(
                 gpu_d.Dimension.x,
-                upper_bound=_get_upper_bound(grid_type.dims[0]),
+                upper_bound=_get_upper_bound(grid[0]),
             ),
             gpu_d.block_id(
                 gpu_d.Dimension.y,
-                upper_bound=_get_upper_bound(grid_type.dims[1]),
+                upper_bound=_get_upper_bound(grid[1]),
             ),
             gpu_d.block_id(
                 gpu_d.Dimension.z,
-                upper_bound=_get_upper_bound(grid_type.dims[2]),
+                upper_bound=_get_upper_bound(grid[2]),
             ),
         ]
 
@@ -115,25 +125,106 @@ class WaveEmitter:
                 gpu_d.Dimension.z, upper_bound=_get_upper_bound(threads_per_block[2])
             ),
         ]
-        self.induction_vars: dict[IndexSymbol, Value] = {}
-        self.dynamic_dims: dict[IndexSymbol, Value] = {}
 
-        for bind, arg in zip(
-            self.root_sig.sig.bindings, self.root_sig.entry_block.arguments
-        ):
+    def emit_func(self) -> Operation:
+        bindings = self.root_sig.sig.linear_bindings
+
+        def abi_type(binding: BindingDesc):
+            if binding.binding_type == BindingType.KERNEL_BUFFER:
+                # Buffer passed to kernel as 0D memrefs to simplify ABI.
+                element_type = IrType.parse(
+                    binding.kernel_buffer_type.dtype.ir_type_asm()
+                )
+                return MemRefType.get([], element_type=element_type)
+
+            # Scalars are passed as is.
+            return binding.as_mlir_type()
+
+        arg_types = [abi_type(b) for b in bindings]
+
+        ftype = FunctionType.get(arg_types, [])
+        func_op = func_d.FuncOp("kernel", ftype, visibility="private")
+
+        locs = create_argument_locations(bindings)
+        entry_block = func_op.add_entry_block(locs)
+
+        # Map dynamic symbols to buffer argument indices and dimensions.
+        for bind, arg in zip(bindings, entry_block.arguments):
             if bind.binding_type == BindingType.SYMBOL_VALUE:
                 self.dynamic_dims[bind.symbol_type] = arg
 
-    def emit(self, graph: Optional[fx.Graph] = None):
-        with self.ip, Location.unknown():
+        with InsertionPoint(entry_block), Location.name("wave-generated function"):
             self.emit_program_invariants()
+            for bind, arg in zip(bindings, entry_block.arguments):
+                node = bind.reference[1]
+                if bind.binding_type != BindingType.KERNEL_BUFFER:
+                    # Map scalar arguments to their corresponding node values.
+                    self._node_values[node] = [arg]
+                    continue
+
+                dyn_val = MemRefType.get_dynamic_size()
+
+                def get_static_dim(s: Optional[IndexExpr]) -> int:
+                    if s is None:
+                        return dyn_val
+
+                    s = subs_idxc(s)
+                    if is_literal(s):
+                        return int(s)
+
+                    return dyn_val
+
+                # reinterpret_cast the 0D input buffers to the real shape/strides.
+                element_type = IrType.parse(bind.kernel_buffer_type.dtype.ir_type_asm())
+                symbolic_shape = bind.kernel_buffer_type.symbolic_shape
+                physical_shape = symbolic_shape
+                if layout := node.type.physical_layout:
+                    physical_shape = layout.shape
+
+                static_sizes = [get_static_dim(s) for s in physical_shape]
+
+                idx_context = IndexingContext.current()
+                strides = strides_from_symbolic_shape(
+                    idx_context, physical_shape, allow_mixed_shapes=True
+                )
+                static_strides = [get_static_dim(s) for s in strides]
+                layout = StridedLayoutAttr.get(offset=dyn_val, strides=static_strides)
+                memref_type = MemRefType.get(static_sizes, element_type, layout=layout)
+
+                offset = arith_d.constant(IndexType.get(), 0)
+                dyn_sizes = [
+                    gen_sympy_index(add_emitter_subs(self), s)
+                    for s, p in zip(symbolic_shape, physical_shape)
+                    if get_static_dim(p) == dyn_val
+                ]
+                dyn_strides = [
+                    gen_sympy_index(add_emitter_subs(self), s)
+                    for s in strides
+                    if get_static_dim(s) == dyn_val
+                ]
+                res = memref_d.reinterpret_cast(
+                    memref_type,
+                    arg,
+                    offsets=[offset],
+                    sizes=dyn_sizes,
+                    strides=dyn_strides,
+                    static_offsets=[dyn_val],
+                    static_sizes=static_sizes,
+                    static_strides=static_strides,
+                )
+                self._node_values[node] = [res]
+            func_d.ReturnOp([])
+
+        return func_op
+
+    def emit(self, graph: Optional[fx.Graph] = None) -> Operation:
+        func = self.emit_func()
+        with InsertionPoint.at_block_terminator(func.entry_block), Location.unknown():
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
             )
 
-    def finish(self):
-        with self.ip, Location.unknown():
-            func_d.ReturnOp([])
+        return func
 
     def _emit_graph(self, graph: fx.Graph):
         """Emits the given graph at the current insertion point."""
@@ -170,16 +261,8 @@ class WaveEmitter:
         assert NDEBUG or isinstance(node, fx.Node)
         values = self._node_values.get(node)
         if values is None:
-            # Force arg binding insertion point to be at the function level to
-            # avoid dominance errors when buffer is used inside multiple
-            # scf constructs.
-            ip = InsertionPoint.current
-            while not isinstance(ip.block.owner, func_d.FuncOp):
-                ip = InsertionPoint(ip.block.owner)
+            raise CodegenError(f"Node {node} has no IR Value")
 
-            with ip:
-                values = [self.root_sig.resolve_by_reference(("node", node))]
-            self._node_values[node] = values
         values = [v.ir_value if isinstance(v, IRProxyValue) else v for v in values]
         return values
 

@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from wave_lang.support.ir_imports import (
-    func_d,
     affine_d,
-    gpu_d,
     arith_d,
-    vector_d,
+    func_d,
+    gpu_d,
+    memref_d,
     stream_d,
+    vector_d,
 )
 
 from .utils import (
@@ -301,9 +302,20 @@ class IRWalker:
         self, operation: stream_d.BindingSubspanOp, kernel_info: KernelInfo
     ):
         """Handle stream.binding.subspan operations - map memrefs to function arguments."""
+
+        # Subspan is immediately consumed by a reinterpret cast
+        users = list(operation.result.uses)
+        assert (
+            len(users) == 1
+        ), f"Expected 1 user for stream.binding.subspan operation, got {users}"
+        reinterpret = users[0].owner.operation.opview
+        assert isinstance(
+            reinterpret, memref_d.ReinterpretCastOp
+        ), f"Expected memref.reinterpret_cast operation, got {reinterpret}"
+
         # map memref SSA -> which function arg index it came from
         source_ssa = str(operation.operands[0])  # function arg SSA
-        result_ssa = str(operation.results[0])  # memref SSA
+        result_ssa = str(reinterpret.results[0])  # memref SSA
         argument_index = kernel_info.arg_ssa_order.index(source_ssa)
         binding_use = kernel_info.subspans.setdefault(
             result_ssa, BindingUse(result_ssa, argument_index)
@@ -311,7 +323,7 @@ class IRWalker:
 
         # Try to extract memref information from the result type
         try:
-            memref_type_object = operation.results[0].type
+            memref_type_object = reinterpret.results[0].type
             shape, strides, element_bytes = parse_memref_type_from_obj(
                 memref_type_object
             )

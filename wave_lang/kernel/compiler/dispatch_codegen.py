@@ -121,15 +121,7 @@ class StreamExecutable:
         dynamic_dim_bindings = sig.dynamic_dim_bindings
         scalar_bindings = sig.scalar_bindings
 
-        # Input bindings are always user specified.
-        # Output bindings are the real outputs.
-        # Dynamic dim bindings are the dynamic dims of the input and output tensors.
-        linear_bindings = (
-            kb_input_bindings
-            + kb_output_bindings
-            + scalar_bindings
-            + dynamic_dim_bindings
-        )
+        linear_bindings = sig.linear_bindings
 
         dynamic_dim_indices = {
             "begin": len(kb_input_bindings)
