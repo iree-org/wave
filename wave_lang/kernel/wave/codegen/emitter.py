@@ -28,7 +28,6 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
-    FlatSymbolRefAttr,
     FloatAttr,
     FunctionType,
     IndexType,
@@ -42,6 +41,10 @@ from wave_lang.support.ir_imports import (
     Operation,
     ShapedType,
     StridedLayoutAttr,
+    StringAttr,
+    SymbolRefAttr,
+    TypeAttr,
+    UnitAttr,
     Value,
     VectorType,
     affine_d,
@@ -215,7 +218,7 @@ class WaveEmitter:
                     static_strides=static_strides,
                 )
                 self._node_values[node] = [res]
-            func_d.ReturnOp([])
+            func_d.return_([])
 
         return func_op
 
@@ -245,10 +248,37 @@ class WaveEmitter:
         arg_types = [abi_type(b) for b in bindings]
 
         ftype = FunctionType.get(arg_types, [])
+        locs = [Location.unknown()] * len(arg_types)
+
+        gpu_module = gpu_d.GPUModuleOp("gpu_module")
+        gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()
+        module_block = gpu_module.bodyRegion.blocks.append()
+
+        with InsertionPoint(module_block), Location.name("wave-generated gpu module"):
+            kernel_func_wrapper = gpu_d.GPUFuncOp(TypeAttr.get(ftype))
+            kernel_func_wrapper.operation.attributes["sym_name"] = StringAttr.get(self.kernel_name)
+            kernel_func_wrapper.attributes["gpu.kernel"] = UnitAttr.get()
+
+        kernel_entry_block = kernel_func_wrapper.body.blocks.append(
+            *arg_types,
+            arg_locs=locs,
+        )
+        with InsertionPoint(kernel_entry_block), Location.name("wave-generated kernel function"):
+            # Move operations except terminator
+            ops_to_move = list(kernel_func.entry_block)[:-1]
+            for op in ops_to_move:
+                op.detach_from_parent()
+                kernel_entry_block.append(op)
+
+            # Replace all uses of old arguments
+            for old_arg, new_value in zip(kernel_func.entry_block.arguments, kernel_entry_block.arguments):
+                old_arg.replace_all_uses_with(new_value)
+
+            gpu_d.return_([])
+
         func_name = kernel_func.name.value + "_host_wrapper"
         func_op = func_d.FuncOp(func_name, ftype)
 
-        locs = [Location.unknown()] * len(arg_types)
         entry_block = func_op.add_entry_block(locs)
 
         subs = add_emitter_subs(self)
@@ -256,7 +286,7 @@ class WaveEmitter:
         with InsertionPoint(entry_block), Location.name("wave-generated host function"):
             grid = [gen_sympy_index(subs, s) for s in self.grid]
             threads = [gen_sympy_index(subs, s) for s in threads_per_block]
-            launch_op = gpu_d.launch(
+            launch_op = gpu_d.launch_func(
                 async_token=None,
                 async_dependencies=[],
                 grid_size_x=grid[0],
@@ -265,17 +295,10 @@ class WaveEmitter:
                 block_size_x=threads[0],
                 block_size_y=threads[1],
                 block_size_z=threads[2],
+                kernel=SymbolRefAttr.get([gpu_module.sym_name.value, self.kernel_name]),
+                kernel_operands=entry_block.arguments,
             )
-            gpu_block = launch_op.regions[0].blocks.append(
-                *[IndexType.get() for _ in range(12)]
-            )
-            func_d.ReturnOp([])
-
-        with InsertionPoint(gpu_block), Location.name("wave-generated host function"):
-            func_d.call(
-                [], FlatSymbolRefAttr.get(kernel_func.name.value), entry_block.arguments
-            )
-            gpu_d.terminator()
+            func_d.return_([])
 
         return func_op
 
