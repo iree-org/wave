@@ -28,6 +28,7 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
+    FlatSymbolRefAttr,
     FloatAttr,
     FunctionType,
     IndexType,
@@ -51,6 +52,7 @@ from wave_lang.support.ir_imports import (
     arith_d,
     func_d,
     gpu_d,
+    llvm_d,
     memref_d,
     vector_d,
 )
@@ -234,6 +236,8 @@ class WaveEmitter:
     def emit_host_func(self, kernel_func: Operation) -> Operation:
         bindings = self.root_sig.sig.linear_bindings
 
+        ptr = llvm_d.PointerType.get()
+
         def abi_type(binding: BindingDesc):
             if binding.binding_type == BindingType.KERNEL_BUFFER:
                 # Buffer passed to kernel as 0D memrefs to simplify ABI.
@@ -256,14 +260,19 @@ class WaveEmitter:
 
         with InsertionPoint(module_block), Location.name("wave-generated gpu module"):
             kernel_func_wrapper = gpu_d.GPUFuncOp(TypeAttr.get(ftype))
-            kernel_func_wrapper.operation.attributes["sym_name"] = StringAttr.get(self.kernel_name)
+            kernel_func_wrapper.operation.attributes["sym_name"] = StringAttr.get(
+                self.kernel_name
+            )
             kernel_func_wrapper.attributes["gpu.kernel"] = UnitAttr.get()
 
         kernel_entry_block = kernel_func_wrapper.body.blocks.append(
             *arg_types,
             arg_locs=locs,
         )
-        with InsertionPoint(kernel_entry_block), Location.name("wave-generated kernel function"):
+        with (
+            InsertionPoint(kernel_entry_block),
+            Location.name("wave-generated kernel function"),
+        ):
             # Move operations except terminator
             ops_to_move = list(kernel_func.entry_block)[:-1]
             for op in ops_to_move:
@@ -271,13 +280,26 @@ class WaveEmitter:
                 kernel_entry_block.append(op)
 
             # Replace all uses of old arguments
-            for old_arg, new_value in zip(kernel_func.entry_block.arguments, kernel_entry_block.arguments):
+            for old_arg, new_value in zip(
+                kernel_func.entry_block.arguments, kernel_entry_block.arguments
+            ):
                 old_arg.replace_all_uses_with(new_value)
 
             gpu_d.return_([])
 
+        buffer_type = MemRefType.get(
+            [MemRefType.get_dynamic_size()], element_type=IntegerType.get_signless(8)
+        )
+        get_buffer_ftype = FunctionType.get([ptr], [buffer_type])
+        get_buffer_func = func_d.FuncOp(
+            "$get_buffer", get_buffer_ftype, visibility="private"
+        )
+        get_buffer_func_symbol = FlatSymbolRefAttr.get(get_buffer_func.sym_name.value)
+
+        host_args_types = [ptr] * len(arg_types)
+        host_ftype = FunctionType.get(host_args_types, [])
         func_name = kernel_func.name.value + "_host_wrapper"
-        func_op = func_d.FuncOp(func_name, ftype)
+        func_op = func_d.FuncOp(func_name, host_ftype)
 
         entry_block = func_op.add_entry_block(locs)
 
@@ -286,7 +308,18 @@ class WaveEmitter:
         with InsertionPoint(entry_block), Location.name("wave-generated host function"):
             grid = [gen_sympy_index(subs, s) for s in self.grid]
             threads = [gen_sympy_index(subs, s) for s in threads_per_block]
-            launch_op = gpu_d.launch_func(
+
+            launch_args = []
+            for arg, dst_type in zip(entry_block.arguments, arg_types):
+                call = func_d.CallOp(
+                    get_buffer_ftype.results, get_buffer_func_symbol, [arg]
+                )
+                buffer = call.results[0]
+                offset = arith_d.constant(IndexType.get(), 0)
+                buffer = memref_d.view(dst_type, buffer, offset, [])
+                launch_args.append(buffer)
+
+            gpu_d.launch_func(
                 async_token=None,
                 async_dependencies=[],
                 grid_size_x=grid[0],
@@ -296,7 +329,7 @@ class WaveEmitter:
                 block_size_y=threads[1],
                 block_size_z=threads[2],
                 kernel=SymbolRefAttr.get([gpu_module.sym_name.value, self.kernel_name]),
-                kernel_operands=entry_block.arguments,
+                kernel_operands=launch_args,
             )
             func_d.return_([])
 
