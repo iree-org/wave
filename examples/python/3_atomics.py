@@ -172,6 +172,196 @@ def test_read_back_scalar(is_debug=False):
     print(c)
 
 
+def test_histogram(is_debug=False):
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+
+    """Atomic add operation to a histogram using dynamic mapping."""
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={M: M, NUM_EXPERTS: NUM_EXPERTS},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, M, 0)]
+    constraints += [tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 1)]
+    constraints += [tkw.WaveConstraint(M, M)]
+    constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    topk_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={M: d0},
+        outputs={M: i},
+        dynamic_val_mappings={M: i},
+    )
+
+    expert_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    @tkw.wave(constraints)
+    def histogram_atomic_add(
+        topk_ids: tkl.Memory[M, ADDRESS_SPACE, tkl.i32],
+        experts: tkl.Memory[NUM_EXPERTS, ADDRESS_SPACE, tkl.i32],
+    ):
+        one_reg = tkw.Register[NUM_EXPERTS, tkl.i32](1)
+        tid = tkw.scalar(THREAD_0, tkl.i32)
+
+        zero_vec = tkl.Register[NUM_EXPERTS, tkl.i32](0)
+        shmem = tkw.allocate(
+            shape=(NUM_EXPERTS,),
+            distributed_shape=(NUM_EXPERTS,),
+            dtype=tkl.i32,
+        )
+        tkw.write(zero_vec, shmem)
+
+        expert_id = tkw.read(
+            topk_ids,
+            mapping=topk_read_map,
+            mapping_dynamic_vals=(tid,),
+            elements_per_thread=1,
+        )
+
+        tkw.atomic_add(
+            one_reg,
+            shmem,
+            mapping=expert_read_map,
+            mapping_dynamic_vals=(expert_id,),
+            elements_per_thread=1,
+        )
+
+        tmp = tkw.read(shmem)
+        tkw.write(tmp, experts)
+
+    num_experts = 10
+    num_tokens = 64
+    hyperparams = {
+        M: num_tokens,
+        NUM_EXPERTS: num_experts,
+    }
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        minimize_shared_allocs=False,
+        print_ir_after="all" if is_debug else [],
+    )
+    histogram_atomic_add = wave_compile(options, histogram_atomic_add)
+    if is_debug:
+        print(histogram_atomic_add.asm)
+
+    topk_ids = torch.randint(0, num_experts, (num_tokens,), dtype=torch.int32).cuda()
+    experts = torch.zeros((num_experts,), dtype=torch.int32).cuda()
+    histogram_atomic_add(topk_ids, experts)
+    print("topk_ids: ", topk_ids)
+    print("experts: ", experts)
+    print("expected experts: ", torch.bincount(topk_ids, minlength=num_experts))
+
+
+def test_large_histogram(is_debug=False):
+    NUM_EXPERTS = tkl.sym.NUM_EXPERTS
+    TOKEN_OFFSET = sympy.Symbol("TOKEN_OFFSET")
+    """Atomic add operation to a histogram using dynamic mapping."""
+    constraints: list[tkw.Constraint] = []
+    constraints += [tkw.WorkgroupConstraint(M, M, 0)]
+    constraints += [tkw.WorkgroupConstraint(NUM_EXPERTS, NUM_EXPERTS, 1)]
+    constraints += [tkw.WaveConstraint(M, M)]
+    constraints += [tkw.WaveConstraint(NUM_EXPERTS, NUM_EXPERTS)]
+
+    constraints += [tkw.TilingConstraint(TOKEN_OFFSET)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(1, 1, 1),
+            vector_shapes={M: M, NUM_EXPERTS: NUM_EXPERTS, TOKEN_OFFSET: 0},
+        )
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    topk_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={M: d0},
+        outputs={M: i},
+        dynamic_val_mappings={M: i},
+    )
+
+    expert_read_map = tkw.IndexMapping(
+        num_iterators=1,
+        inputs={NUM_EXPERTS: d0},
+        outputs={NUM_EXPERTS: i},
+        dynamic_val_mappings={NUM_EXPERTS: i},
+    )
+
+    @tkw.wave(constraints)
+    def histogram_atomic_add(
+        topk_ids: tkl.Memory[M, ADDRESS_SPACE, tkl.i32],
+        experts: tkl.Memory[NUM_EXPERTS, ADDRESS_SPACE, tkl.i32],
+    ):
+        one_reg = tkw.Register[NUM_EXPERTS, tkl.i32](1)
+        zero_reg = tkw.Register[TOKEN_OFFSET, tkl.i32](0)
+
+        loop_condition = TOKEN_OFFSET < M
+
+        @tkw.iterate(
+            TOKEN_OFFSET, start=zero_reg, condition=loop_condition, init_args=[]
+        )
+        def count_tokens():
+            token_idx = tkw.self_index(TOKEN_OFFSET, tkl.i32)
+            tid_reg = tkw.Register[TOKEN_OFFSET, tkl.i32](THREAD_0)
+            # token_idx = token_idx*tkl.Register[TOKEN_OFFSET, tkl.i32](64)
+
+            expert_id = tkw.read(
+                topk_ids,
+                mapping=topk_read_map,
+                mapping_dynamic_vals=(token_idx,),
+                elements_per_thread=1,
+            )
+
+            tkw.atomic_add(
+                one_reg,
+                experts,
+                mapping=expert_read_map,
+                mapping_dynamic_vals=(expert_id,),
+                elements_per_thread=1,
+            )
+
+            next_token_idx = token_idx + tkl.Register[TOKEN_OFFSET, tkl.i32](64)
+            tkw.set_symbol(TOKEN_OFFSET, next_token_idx)
+
+    num_experts = 10
+    num_tokens = 64
+    hyperparams = {
+        M: num_tokens,
+        NUM_EXPERTS: num_experts,
+        TOKEN_OFFSET: 0,
+    }
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        minimize_shared_allocs=False,
+        print_ir_after="all" if is_debug else [],
+    )
+    histogram_atomic_add = wave_compile(options, histogram_atomic_add)
+    if is_debug:
+        print(histogram_atomic_add.asm)
+
+    topk_ids = torch.randint(0, num_experts, (num_tokens,), dtype=torch.int32).cuda()
+    experts = torch.zeros((num_experts,), dtype=torch.int32).cuda()
+
+    histogram_atomic_add(topk_ids, experts)
+    print("topk_ids: ", topk_ids)
+    print("experts: ", experts)
+    print("expected experts: ", torch.bincount(topk_ids, minlength=num_experts))
+
+
 if __name__ == "__main__":
     args = parse_args()
     if args.list_tests:
