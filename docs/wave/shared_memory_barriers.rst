@@ -2,7 +2,7 @@ How are shared memory barriers inserted in wave
 =============================================================
 
 We want to automatically insert shared-memory barriers so that read/write/atomics on the same LDS (shared memory) region are ordered correctly.
-To be more specific, cases like RAW (read after write), WAR (write after read), or touch memory via atomics, we must synchronize to avoid races and hangs. On gfx94, gfx95, we support basic shared memory barrier via `amdgpu.lds_barrier`; on gfx120x we prefer split barriers (Signal / Wait), split barriers are supported via lowering to `rocdl.s.wait_dscnt`, `rocdl.s.barrier.signal`, and `rocdl.s.barrier.wait`.
+To be more specific, cases like RAW (read after write), WAR (write after read), or touch memory via atomics, we must synchronize to avoid races and hangs. On gfx94, gfx95, we support basic shared memory barriers via `amdgpu.lds_barrier`; on gfx120x we prefer split barriers (Signal / Wait), split barriers are supported via lowering to `rocdl.s.wait_dscnt`, `rocdl.s.barrier.signal`, and `rocdl.s.barrier.wait`.
 
 Terminologies
 --------------------
@@ -24,7 +24,7 @@ When do we need a barrier?
     * If access types of producer and consumer are different. -> insert a barrier in front of the consumer node.
 
 - GFX12 split barrier
-    * If access types of producer and consumer are different. -> insert a signal after the producer and a wait before the consumer
+    * If access types of producer and consumer are different. -> insert a signal after the producer and a wait before the consumer.
 
 - READ_WRITE is involved {acts like both a producer and a consumer}
     * If it has a producer then this node will be treated like a consumer.
@@ -40,7 +40,7 @@ Visualization: add_shared_memory_barriers
     :alt: Basic barrier GIF
     :align: center
 
-The above gif is an visaul illustration for inserting shared memory barriers between producers and consumers.
+The above gif is an visual illustration for inserting shared memory barriers between producers and consumers.
 
 - Split barrier
 
@@ -49,7 +49,7 @@ The above gif is an visaul illustration for inserting shared memory barriers bet
     :alt: Split barrier GIF
     :align: center
 
-The above gif is an visaul illustration for inserting split barriers between producers and consumers.
+The above gif is an visual illustration for inserting split barriers between producers and consumers.
 
 Heuristic: add_shared_memory_barriers
 --------------------
