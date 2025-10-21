@@ -215,6 +215,25 @@ def AllocateOp : WaveOp<"allocate"> {
   let hasVerifier = 1;
 }
 
+def ExtractSliceOp : Op<WaveDialect, "extract_slice"> {
+  let summary = "Takes an n-D vector, k-D `offsets` wave expression attribute,
+    a k-sized `sizes` wave expression attribute, a k-sized `strides` wave expression
+    attribute and extracts the n-D subvector at the proper offset.";
+
+  let arguments = (ins
+    Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
+    Arg<WaveExprAttr>:$offset,
+    Arg<WaveExprAttr>:$size,
+    Arg<WaveExprAttr>:$stride
+  );
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Extracted values">:$result
+  );
+
+  let assemblyFormat = "$memory attr-dict `:` functional-type(operands, results)";
+}
+
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
     WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,

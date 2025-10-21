@@ -26,6 +26,7 @@ try:
         AddOp,
         AllocateOp,
         DivOp,
+        ExtractSliceOp,
         Exp2Op,
         MmaOp,
         MulOp,
@@ -34,6 +35,7 @@ try:
         WriteOp,
         IterateOp,
         YieldOp,
+        WaveExprAttr,
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
@@ -41,6 +43,7 @@ try:
     from water_mlir.water_mlir.dialects import arith
     from water_mlir.water_mlir.dialects import func
     from water_mlir.water_mlir.dialects import wave
+    from water_mlir.water_mlir.dialects import amdgpu
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -49,6 +52,7 @@ except Exception as e:
 WAVE_OP_CONSTRUCTORS = {
     "add": AddOp,
     "allocate": AllocateOp,
+    "extract_slice": ExtractSliceOp,
     "mma": MmaOp,
     "mul": MulOp,
     "div": DivOp,
@@ -209,7 +213,13 @@ def _preprocess_symbols(
 
 
 def _attach_attributes(node: CustomOp, op: ir.Operation):
-    if getattr(node, "index", None):
+    from wave_lang.kernel.ops.wave_ops import MMA
+
+    if isinstance(node, MMA):
+        # TODO: Have special handling for MMA index as it uses Piecewise.
+        return
+
+    if getattr(node, "index", None) and isinstance(node.index, dict):
         index_mappings = {}
         for dim, exprs in node.index.items():
             all_symbols = list(
@@ -248,6 +258,25 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
 
+def _convert_to_wave_expr_tuple(
+    exprs: Sequence[sympy.Expr], ctx: ir.Context
+) -> WaveExprAttr:
+    """
+    Returns a WaveExpressionAttribute from a sequence of wave IndexExpr.
+    """
+    symbols = list(
+        set().union(
+            *[
+                expr.free_symbols if isinstance(expr, sympy.Expr) else []
+                for expr in exprs
+            ]
+        )
+    )
+    return ir.Attribute.parse(
+        f"#wave.expr<{symbols} -> ({', '.join(map(str, exprs))})>", context=ctx
+    )
+
+
 def _emit_ops_from_graph(
     graph: fx.Graph,
     trace: CapturedTrace,
@@ -255,7 +284,19 @@ def _emit_ops_from_graph(
     ctx: ir.Context,
 ):
     # Import wave types locally to avoid clashing with iree bindings
-    from wave_lang.kernel.ops.wave_ops import get_custom, Placeholder, Output, Write, MMA, NewRegister, Iterate  # type: ignore
+    from wave_lang.kernel.ops.wave_ops import (
+        get_custom,
+        Allocate,
+        ExtractSlice,
+        GetResult,
+        Output,
+        Placeholder,
+        Write,
+        MMA,
+        NewRegister,
+        Iterate,
+        SharedMemoryBarrier,
+    )
     from wave_lang.kernel.wave.constraints import MMAType
 
     # Emit in original order to preserve dependencies
@@ -274,6 +315,24 @@ def _emit_ops_from_graph(
             for arg in fx_node.args
             if (mlir_arg := value_map.get(arg)) is not None
         ]
+        if isinstance(node, GetResult):
+            # Map to correct result of the corresponding iterate node
+            iterate_op = value_map[node.value].owner
+            assert isinstance(iterate_op.opview, IterateOp)
+            # Create mapping to correct result
+            if node.res_idx > len(iterate_op.results):
+                raise RuntimeError(
+                    f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
+                )
+            value_map[fx_node] = iterate_op.results[node.res_idx]
+            # additional handling for this op is not needed, skip rest
+            continue
+        if isinstance(node, SharedMemoryBarrier):
+            # TODO: For now we simply emit this here. This might need more careful handling in the future
+            amdgpu.lds_barrier()
+            # additional handling for this op is not needed, skip rest
+            continue
+
         result_type = _type_to_wave_mlir(ctx, node.type)
 
         mlir_op = None
@@ -329,7 +388,18 @@ def _emit_ops_from_graph(
                     f"#wave.mma_kind<{tmptype.name.lower()}>", context=ctx
                 )
                 mlir_op = op_builder(result_type, *operands, kind)
-
+            elif isinstance(node, Allocate):
+                mlir_op = op_builder(
+                    result_type,
+                    distributed_shape=_convert_to_wave_expr_tuple(
+                        node.distributed_shape, ctx
+                    ),
+                )
+            elif isinstance(node, ExtractSlice):
+                size = _convert_to_wave_expr_tuple(node.size, ctx)
+                stride = _convert_to_wave_expr_tuple(node.stride, ctx)
+                offset = _convert_to_wave_expr_tuple(node.offset, ctx)
+                mlir_op = op_builder(result_type, *operands, size, stride, offset)
             else:
                 try:
                     mlir_op = op_builder(result_type, *operands)
@@ -347,9 +417,7 @@ def _emit_ops_from_graph(
         # operands later
         if len(mlir_op.results) > 1:
             # TODO: rework value_map to always map to a sequence of results
-            raise RuntimeError(
-                f"Missing support for operations with multiple results"
-            )
+            raise RuntimeError(f"Missing support for operations with multiple results")
         for result in mlir_op.results:
             value_map[fx_node] = result
         # Add results to the value map in case they are used as
@@ -437,8 +505,6 @@ def _emit_from_captured_trace(
 
         # Verify the module before printing
         # TODO: Report back diagnostics emitted by the verification
-        # TODO: Can we register a diagnostic handler from Python?
-        # Otherwise have a call setup_water_custom_handling
         try:
             module.operation.verify()
         except ir.MLIRError as e:
