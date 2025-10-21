@@ -404,7 +404,7 @@ def WaveExpressionListAttr : AttrDef<WaveDialect, "ExpressionList"> {
       Each result expr_k defines the k-th physical dimension.
 
       Parsing/printing:
-      #wave.expr_list_list<[M, K] -> (M, K+4)>
+      #wave.expr_list<[M, K] -> (M, K+4)>
   }];
 
   let parameters = (ins
