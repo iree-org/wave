@@ -7,8 +7,6 @@
 #ifndef WATER_DIALECT_WAVE_IR_WAVEINTERFACES_H
 #define WATER_DIALECT_WAVE_IR_WAVEINTERFACES_H
 
-#include "water/Dialect/Wave/IR/WaveTypes.h"
-
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/OpDefinition.h"
@@ -16,6 +14,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace wave {
+
+class WaveTensorType;
 
 //-----------------------------------------------------------------------------
 // HasWaveIndexMapping trait
