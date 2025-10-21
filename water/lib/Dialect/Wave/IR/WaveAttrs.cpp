@@ -181,15 +181,16 @@ bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
 }
 
 //===----------------------------------------------------------------------===//
-// ExprAttr
+// ExpressionListAttr
 //===----------------------------------------------------------------------===//
 
 std::optional<llvm::SmallVector<int64_t>>
-wave::ExprAttr::getResolvedShape(wave::WaveHyperparameterAttr hyper) const {
-  return wave::evaluateMapWithHyperparams(getShape(), getSymbolNames(), hyper);
+wave::ExpressionListAttr::getResolvedShape(
+    wave::WaveHyperparameterAttr hyper) const {
+  return wave::evaluateMapWithHyperparams(getShape(), getSymbols(), hyper);
 }
 
-Attribute ExprAttr::parse(AsmParser &parser, Type) {
+Attribute ExpressionListAttr::parse(AsmParser &parser, Type) {
   if (parser.parseLess())
     return {};
 
@@ -234,12 +235,12 @@ Attribute ExprAttr::parse(AsmParser &parser, Type) {
   return get(parser.getContext(), symbolNameAttrs, shape);
 }
 
-void ExprAttr::print(mlir::AsmPrinter &printer) const {
+void ExpressionListAttr::print(mlir::AsmPrinter &printer) const {
   // Print symbol names like: [M, K] -> ( ... )
   printer << "<[";
   llvm::SmallVector<llvm::StringRef> names;
-  names.reserve(getSymbolNames().size());
-  llvm::interleaveComma(getSymbolNames(), printer.getStream(),
+  names.reserve(getSymbols().size());
+  llvm::interleaveComma(getSymbols(), printer.getStream(),
                         [&](wave::WaveSymbolAttr s) {
                           names.push_back(s.getName());
                           printer << s.getName();
@@ -483,7 +484,7 @@ llvm::LogicalResult wave::detail::verifyNormalFormAttr(
         if (wave::bitEnumContainsAll(
                 form, wave::WaveNormalForm::IndexExprsSpecified)) {
           if (op->hasTrait<wave::HasWaveIndexMapping>() &&
-              !op->getAttr(wave::WaveDialect::kIndexExprAttrName)) {
+              !op->getAttr(wave::WaveDialect::kIndexExpressionListAttrName)) {
             op->emitError()
                 << "normal form requires index expressions to be "
                    "provided for all supported wave dialect operations";

@@ -417,8 +417,8 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
   }];
 }
 
-def WaveExprAttr : AttrDef<WaveDialect, "Expr"> {
-  let mnemonic = "expr";
+def WaveExpressionListAttr : AttrDef<WaveDialect, "ExpressionList"> {
+  let mnemonic = "expr_list";
   let description = [{
   A tuple of affine expressions over named Wave symbols.
   This attribute is used to encode:
@@ -432,11 +432,11 @@ def WaveExprAttr : AttrDef<WaveDialect, "Expr"> {
       Each result expr_k defines the k-th physical dimension.
 
       Parsing/printing:
-      #wave.expr<[M, K] -> (M, K+4)>
+      #wave.expr_list_list<[M, K] -> (M, K+4)>
   }];
 
   let parameters = (ins
-    ArrayRefParameter<"WaveSymbolAttr">:$symbol_names,
+    ArrayRefParameter<"WaveSymbolAttr">:$symbols,
     "::mlir::AffineMap":$shape
   );
   let hasCustomAssemblyFormat = 1;
@@ -454,12 +454,12 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   let mnemonic = "read_write_bounds";
   let description = [{
     This attribute contains a dictionary mapping from symbolic dimension (strings)
-    to a WaveExprAttr specifying the bounds of the read/write operations
+    to a WaveExpressionListAttr specifying the bounds of the read/write operations
     this is attached to.
 
     Example:
     ```
-    #wave.read_write_bounds<{M = #wave.expr<[BLOCK_M] -> BLOCK_M * 2>}>
+    #wave.read_write_bounds<{M = #wave.expr_list<[BLOCK_M] -> BLOCK_M * 2>}>
     ```
   }];
 

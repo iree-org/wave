@@ -92,7 +92,8 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
   // TODO: we need a first-class attribute for this mapping, at which point this
   // special-casing will disappear as the walker below would also visit symbols
   // used as dictionary keys.
-  if (namedAttr.getName().strref() == wave::WaveDialect::kIndexExprAttrName) {
+  if (namedAttr.getName().strref() ==
+      wave::WaveDialect::kIndexExpressionListAttrName) {
     auto dictionary =
         llvm::dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
     // Skip verification if not a dictionary, op-level verifiers will detect

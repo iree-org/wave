@@ -28,11 +28,11 @@ public:
   matchAndRewrite(wave::AllocateOp op, wave::AllocateOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     wave::WaveTensorType resultType = op.getResult().getType();
-    wave::ExprAttr distributedShape = op.getDistributedShape();
+    wave::ExpressionListAttr distributedShape = op.getDistributedShape();
     auto *typeConverter =
         static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
     Type convertedResultType = typeConverter->convertTensorFromComponents(
-        distributedShape.getSymbolNames(), distributedShape.getShape(),
+        distributedShape.getSymbols(), distributedShape.getShape(),
         resultType.getElementType(), resultType.getAddressSpaceValue());
     if (!convertedResultType) {
       return rewriter.notifyMatchFailure(op,

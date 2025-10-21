@@ -168,10 +168,10 @@ buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
     StringRef name = orderedSyms[d].getName();
     Attribute a = boundsDict.getMapping().get(name);
     assert(a && "bounds dict missing entry for dimension symbol");
-    auto boundAttr = cast<wave::ExprAttr>(a);
+    auto boundAttr = cast<wave::ExpressionListAttr>(a);
     // Materialize bounds.
     FailureOr<SmallVector<Value>> boundValsFo = materializeAffine(
-        loc, boundAttr.getSymbolNames(), boundAttr.getShape(), rewriter, hyper);
+        loc, boundAttr.getSymbols(), boundAttr.getShape(), rewriter, hyper);
     if (failed(boundValsFo))
       return failure();
     SmallVector<Value> boundVals = std::move(*boundValsFo);

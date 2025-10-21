@@ -426,10 +426,11 @@ static LogicalResult verifyReadWriteBounds(Location loc,
                 "indexed memory tensor";
     }
 
-    // Value type must be WaveExprAttr.
-    if (!isa<wave::ExprAttr>(value.getValue()))
-      return emitError(loc) << "'bounds' values must be WaveExprAttr, got "
-                            << value.getValue();
+    // Value type must be WaveExpressionListAttr.
+    if (!isa<wave::ExpressionListAttr>(value.getValue()))
+      return emitError(loc)
+             << "'bounds' values must be WaveExpressionListAttr, got "
+             << value.getValue();
 
     knownSymbolNames.insert(value.getName().strref());
   }

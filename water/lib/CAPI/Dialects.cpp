@@ -119,15 +119,15 @@ MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
-// WaveExprAttr
+// WaveExpressionListAttr
 //===---------------------------------------------------------------------===//
 
-bool mlirAttributeIsAWaveExprAttr(MlirAttribute attr) {
-  return llvm::isa<wave::ExprAttr>(unwrap(attr));
+bool mlirAttributeIsAWaveExpressionListAttr(MlirAttribute attr) {
+  return llvm::isa<wave::ExpressionListAttr>(unwrap(attr));
 }
 
-MlirAttribute mlirWaveExprAttrGet(MlirAttribute *symbolNames,
-                                  MlirAffineMap map) {
+MlirAttribute mlirWaveExpressionListAttrGet(MlirAttribute *symbolNames,
+                                            MlirAffineMap map) {
   mlir::MLIRContext *ctx = unwrap(map).getContext();
 
   unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
@@ -137,11 +137,11 @@ MlirAttribute mlirWaveExprAttrGet(MlirAttribute *symbolNames,
         return llvm::cast<wave::WaveSymbolAttr>(unwrap(attr));
       });
 
-  return wrap(wave::ExprAttr::get(ctx, symbolAttrs, unwrap(map)));
+  return wrap(wave::ExpressionListAttr::get(ctx, symbolAttrs, unwrap(map)));
 }
 
-MlirTypeID mlirWaveExprAttrGetTypeID() {
-  return wrap(mlir::TypeID::get<wave::ExprAttr>());
+MlirTypeID mlirWaveExpressionListAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::ExpressionListAttr>());
 }
 
 //===---------------------------------------------------------------------===//
@@ -159,9 +159,10 @@ MlirAttribute mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping) {
 
   assert(llvm::all_of(dictAttr,
                       [](const mlir::NamedAttribute &namedAttr) {
-                        return llvm::isa<wave::ExprAttr>(namedAttr.getValue());
+                        return llvm::isa<wave::ExpressionListAttr>(
+                            namedAttr.getValue());
                       }) &&
-         "expected mapping to contain only WaveExprAttr values");
+         "expected mapping to contain only WaveExpressionListAttr values");
 
   return wrap(wave::WaveReadWriteBoundsAttr::get(ctx, dictAttr));
 }
