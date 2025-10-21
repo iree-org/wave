@@ -420,13 +420,6 @@ def _emit_ops_from_graph(
             raise RuntimeError(f"Missing support for operations with multiple results")
         for result in mlir_op.results:
             value_map[fx_node] = result
-        # Add results to the value map in case they are used as
-        # operands later
-        if len(mlir_op.results) > 1:
-            # TODO: rework value_map to always map to a sequence of results
-            raise RuntimeError(f"Missing support for operations with multiple results")
-        for result in mlir_op.results:
-            value_map[fx_node] = result
 
 
 def _emit_from_captured_trace(
