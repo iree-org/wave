@@ -6084,13 +6084,481 @@ module attributes {transform.with_named_sequence} {
 
     asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering = (
     """
+#translation = #iree_codegen.translation_info<pipeline = None workgroup_size = [128, 2, 1] subgroup_size = 64>
+
+#map_load_row = affine_map<()[s0] -> (s0 mod 32)>
+#map_load_col = affine_map<()[s0] -> (((s0 mod 64) floordiv 32) * 4)>
+
+module attributes {transform.with_named_sequence} {
+  stream.executable private @fused_moe_kernel {
+    stream.executable.export public @fused_moe_kernel workgroups() -> (index, index, index) {
+      %c266752 = arith.constant 266752 : index
+      %c1 = arith.constant 1 : index
+      stream.return %c266752, %c1, %c1 : index, index, index
+    }
+    builtin.module {
+      func.func @fused_moe_kernel(
+          %arg0: !stream.binding,
+          %arg1: !stream.binding,
+          %arg2: !stream.binding,
+          %arg3: !stream.binding,
+          %arg4: !stream.binding,
+          %arg5: !stream.binding
+      ) attributes {translation_info = #translation} {
+        // Constants
+        %N = arith.constant 32768 : index
+        %K = arith.constant 6144 : index
+        %EM = arith.constant 33335 : index
+        %top_k = arith.constant 2 : index
+        %num_valid_tokens = arith.constant 32768 : index
+        %GROUP_SIZE_M = arith.constant 8 : index
+        %BLOCK_SIZE_M = arith.constant 64 : index
+        %BLOCK_SIZE_N = arith.constant 64 : index
+        %BLOCK_SIZE_K = arith.constant 32 : index
+
+        %c0 = arith.constant 0 : index
+        %c1 = arith.constant 1 : index
+        %c2 = arith.constant 2 : index
+        %c4 = arith.constant 4 : index
+        %c8 = arith.constant 8 : index
+        %c16 = arith.constant 16 : index
+        %c24 = arith.constant 24 : index
+        %c32 = arith.constant 32 : index
+        %c64 = arith.constant 64 : index
+        %c128 = arith.constant 128 : index
+        %f0 = arith.constant 0.0 : f32
+        %f0_f16 = arith.constant 0.0 : f16
+        %cst_mfma = arith.constant dense<0.000000e+00> : vector<16xf32>
+
+        %a_ptr = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<16384x6144xf16>
+        %b_ptr = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<8x32768x6144xf16>
+        %c_ptr = stream.binding.subspan %arg5[%c0] : !stream.binding -> memref<16384x2x32768xf16>
+        %sorted_token_ids_ptr = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<33335xi32>
+        %expert_ids_ptr = stream.binding.subspan %arg3[%c0] : !stream.binding -> memref<521xi32>
+        %num_tokens_post_padded_ptr = stream.binding.subspan %arg4[%c0] : !stream.binding -> memref<1xi32>
+
+        // Thread ID calculation
+        %thread_id_x = gpu.thread_id x upper_bound 128
+        %thread_id_y = gpu.thread_id y upper_bound 2
+        %thread_id_y_scaled = arith.muli %thread_id_y, %c128 : index
+        %thread_id = arith.addi %thread_id_x, %thread_id_y_scaled : index
+
+        // Program ID mapping
+        %pid = gpu.block_id x
+        %num_pid_m = arith.ceildivui %EM, %BLOCK_SIZE_M : index
+        %num_pid_n = arith.ceildivui %N, %BLOCK_SIZE_N : index
+        %num_pid_in_group = arith.muli %GROUP_SIZE_M, %num_pid_n : index
+        %group_id = arith.divui %pid, %num_pid_in_group : index
+        %first_pid_m = arith.muli %group_id, %GROUP_SIZE_M : index
+        %min_group_size_m = arith.subi %num_pid_m, %first_pid_m : index
+        %group_size_m = arith.minui %GROUP_SIZE_M, %min_group_size_m : index
+        %0 = arith.remsi %pid, %num_pid_in_group : index
+        %1 = arith.remsi %0, %group_size_m : index
+        %pid_m = arith.addi %first_pid_m, %1 : index
+        %pid_n = arith.divui %0, %group_size_m : index
+
+        // Early exit check
+        %2 = memref.load %num_tokens_post_padded_ptr[%c0] : memref<1xi32>
+        %num_tokens_post_padded = arith.index_cast %2 : i32 to index
+        %pid_m_offset = arith.muli %pid_m, %BLOCK_SIZE_M : index
+        %should_exit = arith.cmpi sge, %pid_m_offset, %num_tokens_post_padded : index
+
+        scf.if %should_exit {
+          scf.yield
+        } else {
+          %offs_token_id_base = arith.muli %pid_m, %BLOCK_SIZE_M : index
+
+          %expert_id_val = memref.load %expert_ids_ptr[%pid_m] : memref<521xi32>
+          %expert_id = arith.index_cast %expert_id_val : i32 to index
+
+// =========================================================================
+// DOUBLE BUFFERED SHARED MEMORY LAYOUT
+// Buffer 0: offset 0
+// Buffer 1: offset 4352 (64 * 34 * 2 bytes)
+// Total per matrix: 8704 bytes
+// Total: 17408 bytes (well within 64KB LDS limit)
+// =========================================================================
+%c34 = arith.constant 34 : index
+%c4352 = arith.constant 4352 : index  // 64 * 34 * 2 bytes
+%c8704 = arith.constant 8704 : index  // 2 * 4352
+%c13056 = arith.constant 13056 : index // 3 * 4352
+
+%alloc = memref.alloc() : memref<17408xi8, #gpu.address_space<workgroup>>
+
+// A buffers (ping-pong)
+%shared_a_0 = memref.view %alloc[%c0][] : memref<17408xi8, #gpu.address_space<workgroup>>
+  to memref<64x34xf16, #gpu.address_space<workgroup>>
+%shared_a_1 = memref.view %alloc[%c4352][] : memref<17408xi8, #gpu.address_space<workgroup>>
+  to memref<64x34xf16, #gpu.address_space<workgroup>>
+
+// B buffers (ping-pong)
+%shared_b_0 = memref.view %alloc[%c8704][] : memref<17408xi8, #gpu.address_space<workgroup>>
+  to memref<64x34xf16, #gpu.address_space<workgroup>>
+%shared_b_1 = memref.view %alloc[%c13056][] : memref<17408xi8, #gpu.address_space<workgroup>>
+  to memref<64x34xf16, #gpu.address_space<workgroup>>
+
+// Wave and tile assignment (same as before)
+%wave_id = arith.divui %thread_id, %c64 : index
+%lane_id = arith.remui %thread_id, %c64 : index
+
+%tile_m = arith.divui %wave_id, %c2 : index
+%tile_n = arith.remui %wave_id, %c2 : index
+
+%tile_m_offset = arith.muli %tile_m, %c32 : index
+%tile_n_offset = arith.muli %tile_n, %c32 : index
+
+// Cooperative loading
+%thread_in_half = arith.remui %thread_id, %c128 : index
+%load_row_base = arith.divui %thread_in_half, %c2 : index
+%load_col_group = arith.remui %thread_in_half, %c2 : index
+%load_col_offset = arith.muli %load_col_group, %c16 : index
+
+// Get token IDs
+%thread_token_id = arith.addi %offs_token_id_base, %load_row_base : index
+%token_id_val = memref.load %sorted_token_ids_ptr[%thread_token_id] : memref<33335xi32>
+%token_id = arith.index_cast %token_id_val : i32 to index
+%a_row = arith.divui %token_id, %top_k : index
+
+%token_valid = arith.cmpi slt, %token_id, %num_valid_tokens : index
+%token_mask = vector.broadcast %token_valid : i1 to vector<16xi1>
+
+%offs_bn_base = arith.muli %pid_n, %BLOCK_SIZE_N : index
+%b_row = arith.addi %offs_bn_base, %load_row_base : index
+
+// MFMA load indices
+%mfma_load_col = affine.apply #map_load_col()[%lane_id]
+%mfma_load_row = affine.apply #map_load_row()[%lane_id]
+
+%mfma_row_a = arith.addi %mfma_load_row, %tile_m_offset : index
+%mfma_row_b = arith.addi %mfma_load_row, %tile_n_offset : index
+
+%mfma_col_8 = arith.addi %mfma_load_col, %c8 : index
+%mfma_col_16 = arith.addi %mfma_load_col, %c16 : index
+%mfma_col_24 = arith.addi %mfma_load_col, %c24 : index
+
+%num_blocks = arith.ceildivui %K, %BLOCK_SIZE_K : index
+%num_blocks_minus_1 = arith.subi %num_blocks, %c1 : index
+
+// =========================================================================
+// PROLOGUE: Load iteration 0 into buffer 0
+// =========================================================================
+%k_start_0 = arith.constant 0 : index
+%k_col_start_0 = arith.addi %k_start_0, %load_col_offset : index
+
+%a_row_vec_0 = vector.transfer_read %a_ptr[%a_row, %k_col_start_0], %f0_f16, %token_mask :
+  memref<16384x6144xf16>, vector<16xf16>
+%b_row_vec_0 = vector.transfer_read %b_ptr[%expert_id, %b_row, %k_col_start_0], %f0_f16 :
+  memref<8x32768x6144xf16>, vector<16xf16>
+
+// Store to buffer 0
+vector.store %a_row_vec_0, %shared_a_0[%load_row_base, %load_col_offset] :
+  memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+vector.store %b_row_vec_0, %shared_b_0[%load_row_base, %load_col_offset] :
+  memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+
+amdgpu.lds_barrier
+
+// =========================================================================
+// MAIN LOOP with DOUBLE BUFFERING
+// =========================================================================
+%loop_result = scf.for %k_block = %c0 to %num_blocks_minus_1 step %c1
+    iter_args(%acc = %cst_mfma) -> (vector<16xf32>) {
+
+  // Determine which buffer to read from (current iteration)
+  %read_buffer_idx = arith.remui %k_block, %c2 : index
+  %is_buffer_0 = arith.cmpi eq, %read_buffer_idx, %c0 : index
+
+  // Determine which buffer to write to (next iteration)
+  %k_block_plus_1 = arith.addi %k_block, %c1 : index
+  %write_buffer_idx = arith.remui %k_block_plus_1, %c2 : index
+  %write_to_buffer_0 = arith.cmpi eq, %write_buffer_idx, %c0 : index
+
+  // -----------------------------------------------------------------------
+  // LOAD from current buffer and execute MFMA
+  // -----------------------------------------------------------------------
+
+  %a0 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %a = vector.load %shared_a_0[%mfma_row_a, %mfma_load_col] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  } else {
+    %a = vector.load %shared_a_1[%mfma_row_a, %mfma_load_col] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  }
+
+  %b0 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %b = vector.load %shared_b_0[%mfma_row_b, %mfma_load_col] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  } else {
+    %b = vector.load %shared_b_1[%mfma_row_b, %mfma_load_col] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  }
+
+  %a1 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %a = vector.load %shared_a_0[%mfma_row_a, %mfma_col_8] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  } else {
+    %a = vector.load %shared_a_1[%mfma_row_a, %mfma_col_8] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  }
+
+  %b1 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %b = vector.load %shared_b_0[%mfma_row_b, %mfma_col_8] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  } else {
+    %b = vector.load %shared_b_1[%mfma_row_b, %mfma_col_8] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  }
+
+  // -----------------------------------------------------------------------
+  // PREFETCH: Load next iteration from global memory
+  // -----------------------------------------------------------------------
+  %k_start_next = arith.addi %k_block, %c1 : index
+  %k_start_next_scaled = arith.muli %k_start_next, %BLOCK_SIZE_K : index
+  %k_col_start_next = arith.addi %k_start_next_scaled, %load_col_offset : index
+
+  %a_row_vec_next = vector.transfer_read %a_ptr[%a_row, %k_col_start_next], %f0_f16, %token_mask :
+    memref<16384x6144xf16>, vector<16xf16>
+  %b_row_vec_next = vector.transfer_read %b_ptr[%expert_id, %b_row, %k_col_start_next], %f0_f16 :
+    memref<8x32768x6144xf16>, vector<16xf16>
+
+  // Continue loading from current buffer
+  %a2 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %a = vector.load %shared_a_0[%mfma_row_a, %mfma_col_16] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  } else {
+    %a = vector.load %shared_a_1[%mfma_row_a, %mfma_col_16] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  }
+
+  %b2 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %b = vector.load %shared_b_0[%mfma_row_b, %mfma_col_16] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  } else {
+    %b = vector.load %shared_b_1[%mfma_row_b, %mfma_col_16] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  }
+
+  %a3 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %a = vector.load %shared_a_0[%mfma_row_a, %mfma_col_24] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  } else {
+    %a = vector.load %shared_a_1[%mfma_row_a, %mfma_col_24] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %a : vector<4xf16>
+  }
+
+  %b3 = scf.if %is_buffer_0 -> (vector<4xf16>) {
+    %b = vector.load %shared_b_0[%mfma_row_b, %mfma_col_24] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  } else {
+    %b = vector.load %shared_b_1[%mfma_row_b, %mfma_col_24] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    scf.yield %b : vector<4xf16>
+  }
+
+  // -----------------------------------------------------------------------
+  // MFMA OPERATIONS
+  // -----------------------------------------------------------------------
+  %r0 = amdgpu.mfma %a0 * %b0 + %acc {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+  %r1 = amdgpu.mfma %a1 * %b1 + %r0 {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+  %r2 = amdgpu.mfma %a2 * %b2 + %r1 {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+  %r3 = amdgpu.mfma %a3 * %b3 + %r2 {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+
+  // -----------------------------------------------------------------------
+  // STORE: Write prefetched data to next buffer
+  // -----------------------------------------------------------------------
+  amdgpu.lds_barrier  // Wait for MFMA to finish reading current buffer
+
+  scf.if %write_to_buffer_0 {
+    vector.store %a_row_vec_next, %shared_a_0[%load_row_base, %load_col_offset] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+    vector.store %b_row_vec_next, %shared_b_0[%load_row_base, %load_col_offset] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+  } else {
+    vector.store %a_row_vec_next, %shared_a_1[%load_row_base, %load_col_offset] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+    vector.store %b_row_vec_next, %shared_b_1[%load_row_base, %load_col_offset] :
+      memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+  }
+
+  amdgpu.lds_barrier  // Wait for stores to complete before next iteration reads
+
+  scf.yield %r3 : vector<16xf32>
+}
+
+// =========================================================================
+// EPILOGUE: Process last iteration
+// =========================================================================
+amdgpu.lds_barrier
+
+%last_buffer_idx = arith.remui %num_blocks_minus_1, %c2 : index
+%use_buffer_0_last = arith.cmpi eq, %last_buffer_idx, %c0 : index
+
+%a0_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %a = vector.load %shared_a_0[%mfma_row_a, %mfma_load_col] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+} else {
+  %a = vector.load %shared_a_1[%mfma_row_a, %mfma_load_col] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+}
+
+%b0_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %b = vector.load %shared_b_0[%mfma_row_b, %mfma_load_col] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+} else {
+  %b = vector.load %shared_b_1[%mfma_row_b, %mfma_load_col] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+}
+
+%a1_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %a = vector.load %shared_a_0[%mfma_row_a, %mfma_col_8] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+} else {
+  %a = vector.load %shared_a_1[%mfma_row_a, %mfma_col_8] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+}
+
+%b1_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %b = vector.load %shared_b_0[%mfma_row_b, %mfma_col_8] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+} else {
+  %b = vector.load %shared_b_1[%mfma_row_b, %mfma_col_8] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+}
+
+%a2_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %a = vector.load %shared_a_0[%mfma_row_a, %mfma_col_16] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+} else {
+  %a = vector.load %shared_a_1[%mfma_row_a, %mfma_col_16] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+}
+
+%b2_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %b = vector.load %shared_b_0[%mfma_row_b, %mfma_col_16] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+} else {
+  %b = vector.load %shared_b_1[%mfma_row_b, %mfma_col_16] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+}
+
+%a3_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %a = vector.load %shared_a_0[%mfma_row_a, %mfma_col_24] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+} else {
+  %a = vector.load %shared_a_1[%mfma_row_a, %mfma_col_24] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %a : vector<4xf16>
+}
+
+%b3_last = scf.if %use_buffer_0_last -> (vector<4xf16>) {
+  %b = vector.load %shared_b_0[%mfma_row_b, %mfma_col_24] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+} else {
+  %b = vector.load %shared_b_1[%mfma_row_b, %mfma_col_24] :
+    memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+  scf.yield %b : vector<4xf16>
+}
+
+%r0_last = amdgpu.mfma %a0_last * %b0_last + %loop_result {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+%r1_last = amdgpu.mfma %a1_last * %b1_last + %r0_last {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+%r2_last = amdgpu.mfma %a2_last * %b2_last + %r1_last {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+%result_final = amdgpu.mfma %a3_last * %b3_last + %r2_last {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+
+          // STORE RESULTS
+          %result_f16 = arith.truncf %result_final : vector<16xf32> to vector<16xf16>
+
+          %c_flat = memref.collapse_shape %c_ptr [[0, 1, 2]] : memref<16384x2x32768xf16> into memref<1073741824xf16>
+
+          %thread_col_in_tile = arith.remui %lane_id, %c32 : index
+          %thread_row_group = arith.divui %lane_id, %c32 : index
+          %thread_row_base_store = arith.muli %thread_row_group, %c4 : index
+
+          %out_col_base = arith.muli %pid_n, %BLOCK_SIZE_N : index
+          %store_col_offset = arith.addi %out_col_base, %tile_n_offset : index
+          %store_col = arith.addi %store_col_offset, %thread_col_in_tile : index
+
+          scf.for %group = %c0 to %c4 step %c1 {
+            %group_base = arith.muli %group, %c8 : index
+
+            scf.for %i = %c0 to %c4 step %c1 {
+              %row_offset_in_group = arith.addi %group_base, %i : index
+              %row_in_tile = arith.addi %thread_row_base_store, %row_offset_in_group : index
+              %row_in_block = arith.addi %tile_m_offset, %row_in_tile : index
+              %store_row = arith.addi %offs_token_id_base, %row_in_block : index
+
+              %tok_id_i32 = memref.load %sorted_token_ids_ptr[%store_row] : memref<33335xi32>
+              %tok_id = arith.index_cast %tok_id_i32 : i32 to index
+              %out_valid = arith.cmpi slt, %tok_id, %num_valid_tokens : index
+
+              scf.if %out_valid {
+                %elem_idx_base = arith.muli %group, %c4 : index
+                %elem_idx = arith.addi %elem_idx_base, %i : index
+                %elem_val = vector.extract %result_f16[%elem_idx] : f16 from vector<16xf16>
+
+                %out_row_base = arith.muli %tok_id, %N : index
+                %out_idx = arith.addi %out_row_base, %store_col : index
+                memref.store %elem_val, %c_flat[%out_idx] : memref<1073741824xf16>
+              }
+              scf.yield
+            }
+            scf.yield
+          }
+        }
+        return
+      }
+    }
+  }
+
+  func.func @isolated_benchmark$async(%arg0: !hal.buffer_view, %arg1: !hal.buffer_view, %arg2: !hal.buffer_view, %arg3: !hal.buffer_view, %arg4: !hal.buffer_view, %arg5: !hal.buffer_view, %arg6: !hal.fence, %arg7: !hal.fence) -> !hal.buffer_view {
+    %0 = hal.tensor.import wait(%arg6) => %arg0 : !hal.buffer_view -> tensor<16384x6144xf16>
+    %1 = hal.tensor.import wait(%arg6) => %arg1 : !hal.buffer_view -> tensor<8x32768x6144xf16>
+    %2 = hal.tensor.import wait(%arg6) => %arg2 : !hal.buffer_view -> tensor<33335xi32>
+    %3 = hal.tensor.import wait(%arg6) => %arg3 : !hal.buffer_view -> tensor<521xi32>
+    %4 = hal.tensor.import wait(%arg6) => %arg4 : !hal.buffer_view -> tensor<1xi32>
+    %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<16384x2x32768xf16>
+    %6 = flow.dispatch @fused_moe_kernel::@fused_moe_kernel(%0, %1, %2, %3, %4, %5) : (tensor<16384x6144xf16>, tensor<8x32768x6144xf16>, tensor<33335xi32>, tensor<521xi32>, tensor<1xi32>, tensor<16384x2x32768xf16>) -> %5
+    %7 = hal.tensor.barrier join(%6 : tensor<16384x2x32768xf16>) => %arg7 : !hal.fence
+    %8 = hal.tensor.export %7 : tensor<16384x2x32768xf16> -> !hal.buffer_view
+    return %8 : !hal.buffer_view
+  }
+}
+
     """
 )
     asm = asm_dtype0_256_128_8_64_2_33
   # asm = asm_dtype0_256_128_8_64_2_33_mfma
     asm = asm_dtype0_32768_6144_8_64_2_16384_mfma
     asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering
-    asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding
+  # asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding
   # asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves
   # asm = asm_dtype0_1024_256_8_64_2_2048_mfma
     gemm_kernel, symbols = get_moe_gemm_kernel(
@@ -6168,10 +6636,10 @@ module attributes {transform.with_named_sequence} {
         for j in range(num):
             k = j * 64
             k = j * 16384
-            print(f"REF_C[{i}][0][{k}] {ref_c[i][0][k:k+64]}")
-            print(f"C[{i}][0][{k}] {mlir_c[i][0][k:k+64]}")
-            print(f"REF_C[{i}][1][{k}] {ref_c[i][1][k:k+64]}")
-            print(f"C[{i}][1][{k}] {mlir_c[i][1][k:k+64]}")
+       #    print(f"REF_C[{i}][0][{k}] {ref_c[i][0][k:k+64]}")
+       #    print(f"C[{i}][0][{k}] {mlir_c[i][0][k:k+64]}")
+       #    print(f"REF_C[{i}][1][{k}] {ref_c[i][1][k:k+64]}")
+       #    print(f"C[{i}][1][{k}] {mlir_c[i][1][k:k+64]}")
             torch.testing.assert_close(
                 ref_c[i][0][k:k+16384],
                 mlir_c[i][0][k:k+16384],
