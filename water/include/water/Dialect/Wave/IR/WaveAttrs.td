@@ -189,7 +189,7 @@ def WorkgroupConstraintAttr : AttrDef<WaveDialect, "WorkgroupConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.workgroup_constraint<dim = <"M">,
-                               tile_size = [BLOCK_M] -> (BLOCK_M),
+                               tile_size = <[BLOCK_M] -> (BLOCK_M)>,
                                workgroup_dim = <x>,
                                primary = true>
     ```
@@ -213,7 +213,7 @@ def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.wave_constraint<dim = <"K">,
-                          tile_size = [WAVE_K] -> (WAVE_K),
+                          tile_size = <[WAVE_K] -> (WAVE_K)>,
                           wg_constraint = #wg_constraint>
     ```
 
@@ -238,7 +238,7 @@ def TilingConstraintAttr : AttrDef<WaveDialect, "TilingConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.tiling_constraint<dim = <"K">,
-                            tile_size = [TILE_K] -> (TILE_K)>
+                            tile_size = <[TILE_K] -> (TILE_K)>>
     ```
 
     specifies that we want to distribute the K dimension among multiple threads. With
@@ -256,7 +256,7 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
   let description = [{
     A constraint of the form:
     ```mlir
-    #wave.device_constraint<dim = <"M">, tile_size = [DEVICE_M] -> (DEVICE_M), device_dim = 0>
+    #wave.device_constraint<dim = <"M">, tile_size = <[DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
     ```
 
     specifies that we want to distribute dimension `M` along the device with a tile size of `DEVICE_M`.
@@ -274,8 +274,8 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
 
     ```mlir
     wave.constraints = [
-      #wave.device_constraint<dim = <"M">, tile_size = [DEVICE_M] -> (DEVICE_M), device_dim = 0>
-      #wave.device_constraint<dim = <"N">, tile_size = [DEVICE_N] -> (DEVICE_N), device_dim = 1>
+      #wave.device_constraint<dim = <"M">, <tile_size = [DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
+      #wave.device_constraint<dim = <"N">, <tile_size = [DEVICE_N] -> (DEVICE_N)>, device_dim = 1>
     ]
     ```
 

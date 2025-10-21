@@ -18,54 +18,54 @@ func.func private @test_hw2() attributes { wave.hyperparameters = #wave.hyperpar
 
 
 // CHECK-LABEL: @test_wg1
-// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M), workgroup_dim = <x>>
-#wg_constraint1 = #wave.workgroup_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M), workgroup_dim = <x>>
+// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
+#wg_constraint1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
 #wg_hyperparams1 = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
 func.func private @test_wg1() attributes { wave.hyperparameters = #wg_hyperparams1, wave.constraints = [#wg_constraint1] }
 
 // CHECK-LABEL: @test_wg2
-// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M), workgroup_dim = <x>>
+// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
 #wg_constraint2 = #wave.workgroup_constraint<dim = <"M">,
-                                             tile_size = [BLOCK_M] -> (BLOCK_M),
+                                             tile_size = <[BLOCK_M] -> (BLOCK_M)>,
                                              workgroup_dim = <x>,
                                              primary = true>
 func.func private @test_wg2() attributes { wave.hyperparameters = #wg_hyperparams1, wave.constraints = [#wg_constraint2] }
 
 // CHECK-LABEL: @test_wg3
-// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M), workgroup_dim = <x>>
-// CHECK: #wave.workgroup_constraint<dim = <"N">, tile_size = [BLOCK_N] -> (BLOCK_N), workgroup_dim = <y>>
-#wg_constraint3 = #wave.workgroup_constraint<dim = <"N">, tile_size = [BLOCK_N] -> (BLOCK_N), workgroup_dim = <y>>
+// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
+// CHECK: #wave.workgroup_constraint<dim = <"N">, tile_size = <[BLOCK_N] -> (BLOCK_N)>, workgroup_dim = <y>>
+#wg_constraint3 = #wave.workgroup_constraint<dim = <"N">, tile_size = <[BLOCK_N] -> (BLOCK_N)>, workgroup_dim = <y>>
 #wg_hyperparams3 = #wave.hyperparameters<{M = 1024,N = 1024, BLOCK_M = 128, BLOCK_N = 128}>
 func.func private @test_wg3() attributes { wave.hyperparameters = #wg_hyperparams3, wave.constraints = [#wg_constraint2, #wg_constraint3] }
 
 // CHECK-LABEL: @test_wg4
-// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M), workgroup_dim = <x>>,
-// CHECKL #wave.workgroup_constraint<dim = <"N">, tile_size = [BLOCK_N] -> (BLOCK_N), workgroup_dim = <x>, primary = false>
-#wg_constraint4 = #wave.workgroup_constraint<dim = <"N">, tile_size = [BLOCK_N] -> (BLOCK_N), workgroup_dim = <x>, primary=false>
+// CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>,
+// CHECKL #wave.workgroup_constraint<dim = <"N">, tile_size = <[BLOCK_N] -> (BLOCK_N)>, workgroup_dim = <x>, primary = false>
+#wg_constraint4 = #wave.workgroup_constraint<dim = <"N">, tile_size = <[BLOCK_N] -> (BLOCK_N)>, workgroup_dim = <x>, primary=false>
 func.func private @test_wg4() attributes { wave.hyperparameters = #wg_hyperparams3, wave.constraints = [#wg_constraint2, #wg_constraint4] }
 
 // CHECK-LABEL: @test_tiling
-// CHECK: #wave.tiling_constraint<dim = <"K">, tile_size = [BLOCK_K] -> (BLOCK_K)>
-#tl_constraint = #wave.tiling_constraint<dim = <"K">, tile_size = [BLOCK_K] -> (BLOCK_K)>
+// CHECK: #wave.tiling_constraint<dim = <"K">, tile_size = <[BLOCK_K] -> (BLOCK_K)>>
+#tl_constraint = #wave.tiling_constraint<dim = <"K">, tile_size = <[BLOCK_K] -> (BLOCK_K)>>
 #tl_hyperparams = #wave.hyperparameters<{K = 1024, BLOCK_K = 128}>
 func.func private @test_tiling() attributes { wave.hyperparameters = #tl_hyperparams, wave.constraints = [#tl_constraint] }
 
 // CHECK-LABEL: @test_wave1
-// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M floordiv 4)>
-#wv_constraint1 = #wave.wave_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M floordiv 4)>
+// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>>
+#wv_constraint1 = #wave.wave_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>>
 #wv_hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
 func.func private @test_wave1() attributes { wave.hyperparameters = #wv_hyperparams, wave.constraints = [#wg_constraint1, #wv_constraint1] }
 
 // CHECK-LABEL: @test_wave2
-// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M floordiv 4),
-// CHECK:   wg_constraint = <dim = <"M">, tile_size = [BLOCK_M] -> (BLOCK_M), workgroup_dim = <x>>
+// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>,
+// CHECK:   wg_constraint = <dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
 #wv_constraint2 = #wave.wave_constraint<dim = <"M">,
-                                        tile_size = [BLOCK_M] -> (BLOCK_M floordiv 4),
+                                        tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>,
                                         wg_constraint = #wg_constraint1>
 func.func private @test_wave2() attributes { wave.hyperparameters = #wv_hyperparams, wave.constraints = [#wg_constraint2, #wv_constraint2] }
 
 // CHECK-LABEL: @test_device
-// CHECK: #wave.device_constraint<dim = <"M">, tile_size = [DEVICE_M] -> (DEVICE_M), device_dim = 0>
-#dv_constraint = #wave.device_constraint<dim = <"M">, tile_size = [DEVICE_M] -> (DEVICE_M), device_dim = 0>
+// CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
+#dv_constraint = #wave.device_constraint<dim = <"M">, tile_size = <[DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
 #dv_hyperparams = #wave.hyperparameters<{M = 1024, DEVICE_M = 512}>
 func.func private @test_device() attributes { wave.hyperparameters = #dv_hyperparams, wave.constraints = [#dv_constraint] }
