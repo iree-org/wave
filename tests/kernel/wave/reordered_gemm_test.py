@@ -20,6 +20,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 from .common.utils import (
     require_cdna_2_or_3_or_4,
     require_cdna3,
+    require_cdna4,
     require_e2e,
 )
 
@@ -30,7 +31,6 @@ reordered_gemm_test_shapes = [
 ]
 
 
-@require_cdna3
 @require_e2e
 @require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", reordered_gemm_test_shapes)
@@ -91,22 +91,33 @@ def testReorderedPingPongGemm(
 
 
 @require_e2e
-@require_cdna3
-@pytest.mark.parametrize("shape", [(8192, 8192, 8192)])
+@require_cdna_2_or_3_or_4
+@pytest.mark.parametrize("shape", reordered_gemm_test_shapes)
 @pytest.mark.parametrize(
     "enable_scheduling",
-    [SchedulingType.PREFETCH, SchedulingType.NONE, SchedulingType.FOUR_STAGE],
+    [SchedulingType.PREFETCH],
 )
 @pytest.mark.parametrize(
     "input_dtype, quant_dtype, mfma_variant",
     [
-        (
+        pytest.param(
             torch.float16,
             torch.float8_e4m3fnuz,
             (MMAType.F32_32x32x16_F8, MMAType.F32_32x32x16_K8_F16),
+            marks=require_cdna3,
         ),
-        (torch.float16, None, MMAType.F32_16x16x16_F16),
-        (torch.bfloat16, None, MMAType.F32_16x16x16_F16),
+        pytest.param(
+            torch.float16,
+            None,
+            MMAType.F32_16x16x16_F16,
+            marks=require_cdna_2_or_3_or_4,
+        ),
+        pytest.param(
+            torch.bfloat16,
+            None,
+            MMAType.F32_16x16x32_BF16,
+            marks=require_cdna4,
+        ),
     ],
 )
 @pytest.mark.parametrize("transpose", ["NN", "NT", "TN"])

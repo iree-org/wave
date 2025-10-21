@@ -50,7 +50,7 @@ def get_reordered_matmul(
     STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
 
     input_dtype = torch_dtype_to_wave(input_dtype)
-    output_dtype = torch_dtype_to_wave(torch.float32)
+    output_dtype = torch_dtype_to_wave(output_dtype)
     if quantized_dtype:
         quantized_dtype = torch_dtype_to_wave(quantized_dtype)
 

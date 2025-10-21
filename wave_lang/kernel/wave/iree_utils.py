@@ -121,7 +121,7 @@ def _convert_dtype_to_mlir(dtype: str) -> ir.Type:
     return dtypes[dtype]()
 
 
-def get_mm_asm(
+def get_mm_any_transpose_asm(
     lhs_type: str,
     rhs_type: str,
     acc_type: str,
@@ -346,12 +346,12 @@ def generate_iree_ref(
         asm, func_name = get_chain_mmt_f8_asm(
             query_type, key_type, value_type, output_type
         )
-    elif kernel_type.startswith("mm"):
+    elif kernel_type.startswith("mm_"):
         lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
         rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
         acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
         tA, tB = kernel_type.split("_")[1]
-        asm, func_name = get_mm_asm(
+        asm, func_name = get_mm_any_transpose_asm(
             lhs_type,
             rhs_type,
             acc_type,
