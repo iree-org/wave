@@ -171,7 +171,7 @@ buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
     auto boundAttr = cast<wave::ExpressionListAttr>(a);
     // Materialize bounds.
     FailureOr<SmallVector<Value>> boundValsFo = materializeAffine(
-        loc, boundAttr.getSymbols(), boundAttr.getShape(), rewriter, hyper);
+        loc, boundAttr.getSymbols(), boundAttr.getMap(), rewriter, hyper);
     if (failed(boundValsFo))
       return failure();
     SmallVector<Value> boundVals = std::move(*boundValsFo);

@@ -187,7 +187,7 @@ bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
 std::optional<llvm::SmallVector<int64_t>>
 wave::ExpressionListAttr::getResolvedShape(
     wave::WaveHyperparameterAttr hyper) const {
-  return wave::evaluateMapWithHyperparams(getShape(), getSymbols(), hyper);
+  return wave::evaluateMapWithHyperparams(getMap(), getSymbols(), hyper);
 }
 
 Attribute ExpressionListAttr::parse(AsmParser &parser, Type) {
@@ -249,7 +249,7 @@ void ExpressionListAttr::print(mlir::AsmPrinter &printer) const {
 
   // We have one map with N results. For each result expr, make a 1-result map
   // so we can reuse the identical stringifyWithNames(map,names) helper.
-  mlir::AffineMap full = getShape(); // your stored map
+  mlir::AffineMap full = getMap(); // your stored map
   for (unsigned i = 0, e = full.getNumResults(); i < e; ++i) {
     if (i)
       printer << ", ";
@@ -260,60 +260,6 @@ void ExpressionListAttr::print(mlir::AsmPrinter &printer) const {
     printer << stringifyWithNames(one, names);
   }
   printer << ")>";
-}
-
-//===----------------------------------------------------------------------===//
-// WaveExpressionAttr
-//===----------------------------------------------------------------------===//
-
-Attribute WaveExpressionAttr::parse(AsmParser &parser, Type type) {
-  // Parse custom syntax: '[' symbol-names ']' '->' '(' expr ')'
-  // This preserves meaningful symbol names while leveraging the existing
-  // affine parser.
-  SmallVector<WaveSymbolAttr> symbolNameAttrs;
-  SmallVector<StringRef> symbolNames;
-
-  // Parse '[' symbol-names ']' allowing empty or non-empty lists.
-  if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, [&]() {
-        return parseSymbol(symbolNameAttrs, symbolNames, parser);
-      }))
-    return {};
-
-  // Parse affine expr: '->' '(' expr ')'
-  if (parser.parseArrow() || parser.parseLParen())
-    return {};
-
-  MLIRContext *context = parser.getContext();
-  AffineExpr expr;
-  if (failed(parseExprWithNames(symbolNames, expr, parser)) ||
-      parser.parseRParen()) {
-    parser.emitError(parser.getCurrentLocation(),
-                     "expected one affine expressions");
-    return {};
-  }
-
-  // Build map
-  auto map = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), expr, context);
-
-  return get(context, symbolNameAttrs, map);
-}
-
-void WaveExpressionAttr::print(AsmPrinter &printer) const {
-  // Print '[' symbol-names '] -> (expr)'.
-  // We keep one global symbol list (symbol_names) for all three expressions.
-  // Each expression is an affine map with the same numSymbols; we substitute
-  // s0, s1, ... using the shared names when rendering each expression.
-  printer << "[";
-  llvm::interleaveComma(getSymbolNames(), printer,
-                        [&](WaveSymbolAttr s) { printer << s.getName(); });
-  printer << "] -> ";
-
-  SmallVector<StringRef> allNames = getAllSymbolNames();
-  // All three maps share the same symbol set and order.
-  std::string str = stringifyWithNames(getMap(), allNames);
-
-  printer << "(" << str << ")";
 }
 
 //-----------------------------------------------------------------------------
@@ -344,10 +290,20 @@ LogicalResult HardwareConstraintAttr::verify(
   return success();
 }
 
-LogicalResult WaveConstraintAttr::verify(
-    ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    ::wave::WaveSymbolAttr dim, ::wave::WaveExpressionAttr tile_size,
-    ::wave::WorkgroupConstraintAttr wg_constraint) {
+LogicalResult WorkgroupConstraintAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, WaveSymbolAttr dim,
+    ExpressionListAttr tile_size, WaveWorkgroupDimAttr workgroup_dim,
+    bool primary) {
+  if (tile_size.getSize() != 1) {
+    return emitError() << "invalid ExpressionList size. Expected 1.";
+  }
+  return success();
+}
+
+LogicalResult
+WaveConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                           WaveSymbolAttr dim, ExpressionListAttr tile_size,
+                           WorkgroupConstraintAttr wg_constraint) {
   if (wg_constraint && wg_constraint.getDim() != dim)
     return emitError()
            << "the dimension of the workgroup constraint in wg_constraint: "
@@ -356,6 +312,29 @@ LogicalResult WaveConstraintAttr::verify(
               "constraint: "
            << dim;
 
+  if (tile_size.getSize() != 1) {
+    return emitError() << "invalid ExpressionList size. Expected 1.";
+  }
+
+  return success();
+}
+
+LogicalResult
+TilingConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                             WaveSymbolAttr dim, ExpressionListAttr tile_size) {
+  if (tile_size.getSize() != 1) {
+    return emitError() << "invalid ExpressionList size. Expected 1.";
+  }
+  return success();
+}
+
+LogicalResult
+DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                             WaveSymbolAttr dim, ExpressionListAttr tile_size,
+                             unsigned int device_dim) {
+  if (tile_size.getSize() != 1) {
+    return emitError() << "invalid ExpressionList size. Expected 1.";
+  }
   return success();
 }
 
