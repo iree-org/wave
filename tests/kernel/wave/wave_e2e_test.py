@@ -246,6 +246,127 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
+@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
+@param_bool("use_buffer_ops", "buf_ops")
+def test_bound_check(shape, use_buffer_ops, run_bench):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    # Each workgroup works on single row of input data, and rows are further
+    # split into blocks of size up to 256. We have single wave per WG,
+    # and with default wave size of 64, each thread is operating on up to 4
+    # elements.
+    wave_size = 64
+    BLOCK_M = 1
+    # Tile size cannot be dynamic, so we use a fixed value here.
+    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a)
+        tkw.write(res, b)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+        use_buffer_ops=use_buffer_ops,
+        use_bound_check=True,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(a, b)
+    assert_close(a, b)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
+@pytest.mark.skip(
+    reason="There is no reliable way to recover from kernel crash/llvm.trap yet"
+)
+def test_bound_check_failure(shape, run_bench):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    # Each workgroup works on single row of input data, and rows are further
+    # split into blocks of size up to 256. We have single wave per WG,
+    # and with default wave size of 64, each thread is operating on up to 4
+    # elements.
+    wave_size = 64
+    BLOCK_M = 1
+    # Tile size cannot be dynamic, so we use a fixed value here.
+    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    mapping = tkw.IndexMapping(
+        num_iterators=2, inputs={M: i + 1024, N: j}, outputs={M: i, N: j}
+    )
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a, mapping=mapping)
+        tkw.write(res, b)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+        use_bound_check=True,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    with pytest.raises(RuntimeError):
+        test(a, b)
+        torch.cuda.synchronize()
+
+
+@require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_transpose_read"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_transpose_read(shape, use_buffer_ops, run_bench):
@@ -958,8 +1079,6 @@ def test_offset_write_one(shape, use_buffer_ops, run_bench):
 @pytest.mark.parametrize(
     "threads_per_wave",
     [
-        # Enabling wave64 mode on RDNA generates intrinsic %llvm.amdgcn.permlane32.swap,
-        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
         pytest.param(64, marks=require_cdna_2_or_3_or_4),
         pytest.param(32, marks=require_rdna4),
     ],
@@ -2026,6 +2145,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
             shape=(M, N),
             distributed_shape=(1, BLOCK_N),
             dtype=tkl.i32,
+            address_space=SHARED_ADDRESS_SPACE,
         )
         inf_reg = tkl.Register[M, N, tkl.i32](1e6)
         tkw.write(inf_reg, shmem)
@@ -2042,6 +2162,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
             M: shape[0],
             N: shape[1],
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            SHARED_ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -2428,6 +2549,92 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
         assert torch.equal(debug_logs["acc"]["value"][-1], c)
         # Meanwhile the first element should be quite different.
         assert not torch.allclose(debug_logs["acc"]["value"][0], c)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape,k", [((32, 64), 2), ((64, 128), 4), ((128, 256), 8)])
+@param_bool("allow_duplicates", "duplicates")
+@pytest.mark.parametrize(
+    "threads_per_wave",
+    [
+        # Enabling wave64 mode on RDNA generates %llvm.amdgcn.permlane32.swap,
+        # this intrinsic gives access to v_permlane32_swap_b32 which is not a valid instruction in a RDNA4 device.
+        pytest.param(64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(32, marks=require_rdna4),
+    ],
+)
+def test_topk(shape, k, allow_duplicates, threads_per_wave, run_bench):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = 1
+    BLOCK_N = sympy.ceiling(N / threads_per_wave) * threads_per_wave
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            vector_shapes={M: 1, N: BLOCK_N, K: K},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        values: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        indices: tkl.Memory[M, K, ADDRESS_SPACE, tkl.i32],
+    ):
+        src = tkw.read(a)
+        topk_values, topk_indices = tkw.topk(src, K, N)
+        tkw.write(topk_values, values, elements_per_thread=K)
+        tkw.write(topk_indices, indices, elements_per_thread=K)
+
+    torch.manual_seed(1)
+
+    if allow_duplicates:
+        a = device_randn(shape, dtype=torch.float16)
+    else:
+        # Generate input with no duplicates per row.
+        # Each row contains unique values by using a shuffled range.
+        a = device_zeros(shape, dtype=torch.float16)
+        for i in range(shape[0]):
+            perm = device_randperm(shape[1], dtype=torch.int32)
+            unique_values = (perm.float() + device_randn(shape[1]) * 0.1).to(
+                torch.float16
+            )
+            a[i, :] = unique_values
+
+    values_out = device_zeros((shape[0], k), dtype=torch.float16)
+    indices_out = device_zeros((shape[0], k), dtype=torch.int32)
+
+    ref_values, ref_indices = torch.topk(a, k, dim=-1)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            K: k,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(a, values_out, indices_out)
+
+    assert values_out.shape == ref_values.shape
+    assert indices_out.shape == ref_indices.shape
+    assert_close(ref_values, values_out, atol=0.1, rtol=1e-05)
+    # When there are duplicate values, the indices may be different due to
+    # difference in tie breaking during sort.
+    if not allow_duplicates:
+        assert torch.equal(ref_indices, indices_out)
 
 
 @require_e2e

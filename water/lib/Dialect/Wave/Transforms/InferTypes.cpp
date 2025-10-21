@@ -20,15 +20,22 @@
 
 #define DEBUG_TYPE "wave-infer-types"
 
+using wave::ElementsPerThreadLatticeValue;
+
 namespace wave {
 #define GEN_PASS_DEF_WATERWAVEINFERTYPESPASS
+#define GEN_PASS_DEF_WATERWAVEPROPAGATEELEMENTSPERTHREADPASS
 #include "water/Dialect/Wave/Transforms/Passes.h.inc"
 } // namespace wave
 
 namespace {
 
+//-----------------------------------------------------------------------------
+// WaveInferTypeOpInterface and implementation traits
+//-----------------------------------------------------------------------------
+
 // Core lattice for type/shape inference of wave tensors. In addition to the
-// bottom and top states, it can represent have a concrete type which may be
+// bottom and top states, it can represent a concrete type which may be
 // a fully specified tensor type (specific) or an underspecified type (any). The
 // JOIN function is defined by the following table:
 //
@@ -163,7 +170,7 @@ public:
 // manipulate wave tensor types, failure otherwise. Returns nullopt if the op
 // does implement the interface.
 static std::optional<llvm::LogicalResult>
-handleNonInterfaceOp(mlir::Operation *op) {
+handleNonInterfaceOpInferType(mlir::Operation *op) {
   if (llvm::isa<wave::WaveInferTypeOpInterface>(op))
     return std::nullopt;
 
@@ -242,7 +249,7 @@ public:
   visitOperation(mlir::Operation *op,
                  llvm::ArrayRef<const InferTypeLattice *> operands,
                  llvm::ArrayRef<InferTypeLattice *> results) override {
-    std::optional<mlir::LogicalResult> res = handleNonInterfaceOp(op);
+    std::optional<mlir::LogicalResult> res = handleNonInterfaceOpInferType(op);
     if (res)
       return *res;
 
@@ -329,12 +336,12 @@ public:
     if (getSolverConfig().isInterprocedural())
       return top->emitError() << "interprocedural analysis not supported";
 
-    if (mlir::failed(SparseBackwardDataFlowAnalysis::initialize(top)))
-      return mlir::failure();
-
     // Call the base class initialization in order to set up update listeners.
     // Note that this will initialize values at function/region entries to
     // lattice top.
+    if (mlir::failed(SparseBackwardDataFlowAnalysis::initialize(top)))
+      return mlir::failure();
+
     top->walk([this](mlir::Operation *op) {
       if (!op->hasTrait<mlir::OpTrait::ReturnLike>())
         return;
@@ -363,7 +370,7 @@ public:
   visitOperation(mlir::Operation *op,
                  llvm::ArrayRef<InferTypeLattice *> operands,
                  llvm::ArrayRef<const InferTypeLattice *> results) override {
-    std::optional<mlir::LogicalResult> res = handleNonInterfaceOp(op);
+    std::optional<mlir::LogicalResult> res = handleNonInterfaceOpInferType(op);
     if (res)
       return *res;
 
@@ -423,6 +430,67 @@ public:
   }
 };
 
+// Run the dataflow analyses and capture whether some diagnostics were emitted.
+// Only emit a generic diagnostic if no more specific diagnostic was emitted.
+// This is usually indicative of some deep internal problem in the dataflow
+// solver.
+static llvm::LogicalResult
+runSolverAndCaptureErrors(mlir::DataFlowSolver &solver, mlir::Operation *root,
+                          bool force) {
+  bool emittedError = false;
+  mlir::DiagnosticEngine::HandlerID handlerID =
+      root->getContext()->getDiagEngine().registerHandler(
+          [&](mlir::Diagnostic &diag) {
+            if (diag.getSeverity() == mlir::DiagnosticSeverity::Error)
+              emittedError = true;
+
+            // Returning failure indicates that the diagnostic wan't handled
+            // and it is forwarded to other registered handlers.
+            return mlir::failure();
+          });
+  if (mlir::failed(solver.initializeAndRun(root))) {
+    if (!emittedError)
+      root->emitError() << "dataflow analysis failed";
+    if (!force)
+      return llvm::failure();
+  }
+  root->getContext()->getDiagEngine().eraseHandler(handlerID);
+  return llvm::success();
+}
+
+// Walk over all value definitions (op results and block arguments) and directly
+// set their types using the provided callback. Report error and stop if
+// any type failed to infer. Inferred types are supposed to still be accepted by
+// the op verifiers that will normally run after the pass.
+static llvm::LogicalResult updateValueTypes(
+    mlir::Operation *root,
+    llvm::function_ref<llvm::LogicalResult(mlir::Value, llvm::StringRef)>
+        updateType) {
+  mlir::WalkResult walkResult = root->walk([&](mlir::Operation *op) {
+    for (mlir::OpResult res : op->getResults()) {
+      if (mlir::failed(updateType(
+              res, "result #" + std::to_string(res.getResultNumber()))))
+        return mlir::WalkResult::interrupt();
+    }
+
+    for (mlir::Region &region : op->getRegions()) {
+      for (auto &&[blockNumber, block] : llvm::enumerate(region)) {
+        for (mlir::BlockArgument arg : block.getArguments()) {
+          auto fmt = llvm::formatv("argument #{0} of block #{1} in region #{2}",
+                                   arg.getArgNumber(), blockNumber,
+                                   region.getRegionNumber());
+          if (mlir::failed(updateType(arg, fmt.str())))
+            return mlir::WalkResult::interrupt();
+        }
+      }
+    }
+
+    return mlir::WalkResult::advance();
+  });
+
+  return llvm::failure(walkResult.wasInterrupted());
+}
+
 // Type inference pass implementation.
 class InferTypes : public wave::impl::WaterWaveInferTypesPassBase<InferTypes> {
 public:
@@ -446,28 +514,8 @@ public:
     solver.load<InferTypeBackwardAnalysis>(symbolTable);
     mlir::Operation *root = getOperation();
 
-    // Run the dataflow analyses and capture whether some diagnostics were
-    // emitted. Only emitted a generic diagnostic if no more specific diagnostic
-    // was emitted. This is usually indicative of some deep internal problem in
-    // the dataflow solver.
-    bool emittedError = false;
-    mlir::DiagnosticEngine::HandlerID handlerID =
-        getContext().getDiagEngine().registerHandler(
-            [&](mlir::Diagnostic &diag) {
-              if (diag.getSeverity() == mlir::DiagnosticSeverity::Error)
-                emittedError = true;
-
-              // Returning failure indicates that the diagnostic wan't handled
-              // and it is forwarded to other registered handlers.
-              return mlir::failure();
-            });
-    if (mlir::failed(solver.initializeAndRun(root))) {
-      if (!emittedError)
-        getOperation()->emitError() << "dataflow analysis failed";
-      if (!force)
-        return signalPassFailure();
-    }
-    getContext().getDiagEngine().eraseHandler(handlerID);
+    if (llvm::failed(runSolverAndCaptureErrors(solver, root, force)))
+      return signalPassFailure();
 
     // Update the type of the value given the lattice. Don't return failure
     // after emitting error if force-processing is requested.
@@ -490,40 +538,292 @@ public:
       return mlir::success();
     };
 
-    // Walk over all value definitions (op results and block arguments) and
-    // directly set their types to ones using the inferred shape. Report error
-    // and stop if any type failed to infer. Inferred types are supposed to
-    // still be accepted by the op verifiers that will normally run after the
-    // pass.
-    mlir::WalkResult walkResult =
-        getOperation()->walk([&](mlir::Operation *op) {
-          for (mlir::OpResult res : op->getResults()) {
-            if (mlir::failed(updateType(
-                    res, "result #" + std::to_string(res.getResultNumber()))))
-              return mlir::WalkResult::interrupt();
-          }
-
-          for (mlir::Region &region : op->getRegions()) {
-            for (auto &&[blockNumber, block] : llvm::enumerate(region)) {
-              for (mlir::BlockArgument arg : block.getArguments()) {
-                auto fmt = llvm::formatv(
-                    "argument #{0} of block #{1} in region #{2}",
-                    arg.getArgNumber(), blockNumber, region.getRegionNumber());
-                if (mlir::failed(updateType(arg, fmt.str())))
-                  return mlir::WalkResult::interrupt();
-              }
-            }
-          }
-
-          return mlir::WalkResult::advance();
-        });
-
-    if (walkResult.wasInterrupted())
+    if (llvm::failed(updateValueTypes(getOperation(), updateType)))
       return signalPassFailure();
 
     llvm::LogicalResult result = setNormalFormPassPostcondition(
         wave::WaveNormalForm::AllTypesSpecified, getOperation());
     if (llvm::failed(result) && !force)
+      return signalPassFailure();
+  }
+};
+
+//-----------------------------------------------------------------------------
+// WaveInferTypeOpInterface and implementation traits
+//-----------------------------------------------------------------------------
+
+// Typed lattice object for elements-per-thread dataflow propagation.
+class ElementsPerThreadLattice
+    : public mlir::dataflow::Lattice<ElementsPerThreadLatticeValue> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ElementsPerThreadLattice);
+  using Lattice::Lattice;
+};
+
+// Helper function for forward/backward inference handling ops that do not
+// implement the elements per thread propagation interface. Returns success if
+// the op doesn't manipulate register-resident wave tensor types, failure
+// otherwise. Returns nullopt if the op does implement the interface.
+static std::optional<llvm::LogicalResult>
+handleNonInterfaceOpElementsPerThread(mlir::Operation *op) {
+  if (llvm::isa<wave::WaveElementsPerThreadOpInterface>(op))
+    return std::nullopt;
+
+  if (llvm::none_of(op->getOperandTypes(), wave::isaTensorInRegister) &&
+      llvm::none_of(op->getResultTypes(), wave::isaTensorInRegister))
+    return llvm::success();
+
+  return op->emitError()
+         << "cannot propagate elements per thread information across an "
+            "operation not implementing the corresponding interface";
+}
+
+// Dataflow analysis propagating elements-per-thread information from operands
+// to results. This is an optimistic sparse context-insensitive forward dataflow
+// analysis intended for intra-procedural use and composition with the
+// equivalent backward analysis. It propagates information based on per-op
+// implementations of WaveElementsPerThreadOpInterface,
+// NoOpElementsPerThreadOpTrait as well as regular control flow interfaces until
+// convergence. In case of a conflict, e.g., the same value is used with
+// different number of elements per thread in two different IR contexts, reports
+// a diagnostic and sets the value lattice to the top state. If the analysis
+// fails due to the lack of information, e.g., control flow operations not
+// implementing the requested interfaces, the lattice instances may be set to
+// the top state without diagnostics. If insufficient information is available
+// in the IR, e.g., memory-related operations do not provide an explicit number
+// of elements per thread and there is no context allowing to infer them, the
+// lattice value remains set to bottom.
+class ElementsPerThreadForwardAnalysis
+    : public mlir::dataflow::SparseForwardDataFlowAnalysis<
+          ElementsPerThreadLattice> {
+public:
+  using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
+
+  // Basic initialization and configuration filtering.
+  mlir::LogicalResult initialize(mlir::Operation *top) override {
+    if (getSolverConfig().isInterprocedural())
+      return top->emitError() << "interprocedural analysis not supported";
+
+    // Call the base class initialization in order to set up update listeners.
+    // Note that this will initialize values at function/region entries to
+    // lattice top.
+    if (mlir::failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
+      return mlir::failure();
+
+    return mlir::success();
+  }
+
+  // Called by base class initialization and when the analysis fails to identify
+  // lattices to join.
+  void setToEntryState(ElementsPerThreadLattice *lattice) override {
+    propagateIfChanged(lattice,
+                       lattice->join(ElementsPerThreadLatticeValue::top()));
+  }
+
+  // Dataflow transfer function, defers to either
+  // WaveElementsPerThreadOpInterface or NoOpElementsPerThreadOpTrait.
+  mlir::LogicalResult
+  visitOperation(mlir::Operation *op,
+                 llvm::ArrayRef<const ElementsPerThreadLattice *> operands,
+                 llvm::ArrayRef<ElementsPerThreadLattice *> results) override {
+    if (op->hasTrait<wave::NoOpElementsPerThreadOpTrait>())
+      return llvm::success();
+
+    std::optional<mlir::LogicalResult> res =
+        handleNonInterfaceOpElementsPerThread(op);
+    if (res)
+      return *res;
+
+    auto extractValue = [](const ElementsPerThreadLattice *lattice) {
+      return lattice->getValue();
+    };
+    llvm::SmallVector<ElementsPerThreadLatticeValue> operandElements =
+        llvm::map_to_vector(operands, extractValue);
+    llvm::SmallVector<ElementsPerThreadLatticeValue> resultElements =
+        llvm::map_to_vector(results, extractValue);
+
+    std::string errorMessage;
+    llvm::raw_string_ostream errs(errorMessage);
+    llvm::FailureOr<mlir::ChangeResult> result =
+        llvm::cast<wave::WaveElementsPerThreadOpInterface>(op)
+            .propagateElementsPerThreadForward(operandElements, resultElements,
+                                               errs);
+    if (llvm::failed(result)) {
+      return op->emitError()
+             << "failed to propagate elements per thread forward: "
+             << errs.str();
+    }
+    if (*result == mlir::ChangeResult::NoChange)
+      return mlir::success();
+
+    for (auto &&[result, lattice] : llvm::zip_equal(resultElements, results)) {
+      propagateIfChanged(lattice,
+                         lattice->join(ElementsPerThreadLatticeValue(result)));
+    }
+    return mlir::success();
+  }
+};
+
+// Dataflow analysis propagating elements-per-thread information from results
+// to operands. This is an optimistic sparse context-insensitive forward
+// dataflow analysis intended for intra-procedural use and composition with the
+// equivalent backward analysis. It propagates information based on per-op
+// implementations of WaveElementsPerThreadOpInterface,
+// NoOpElementsPerThreadOpTrait as well as regular control flow interfaces until
+// convergence. In case of a conflict, e.g., the same value is used with
+// different number of elements per thread in two different IR contexts, reports
+// a diagnostic and sets the value lattice to the top state. If the analysis
+// fails due to the lack of information, e.g., control flow operations not
+// implementing the requested interfaces, the lattice instances may be set to
+// the top state without diagnostics. If insufficient information is available
+// in the IR, e.g., memory-related operations do not provide an explicit number
+// of elements per thread and there is no context allowing to infer them, the
+// lattice value remains set to bottom.
+class ElementsPerThreadBackwardAnalysis
+    : public mlir::dataflow::SparseBackwardDataFlowAnalysis<
+          ElementsPerThreadLattice> {
+public:
+  using SparseBackwardDataFlowAnalysis::SparseBackwardDataFlowAnalysis;
+
+  // Basic initialization and configuration filtering.
+  mlir::LogicalResult initialize(mlir::Operation *top) override {
+    if (getSolverConfig().isInterprocedural())
+      return top->emitError() << "interprocedural analysis not supported";
+
+    if (mlir::failed(SparseBackwardDataFlowAnalysis::initialize(top)))
+      return mlir::failure();
+
+    return mlir::success();
+  }
+
+  // Called by base class initialization and when the analysis fails to identify
+  // lattices to join.
+  void setToExitState(ElementsPerThreadLattice *lattice) override {
+    propagateIfChanged(lattice,
+                       lattice->join(ElementsPerThreadLatticeValue::top()));
+  }
+
+  // Specialization of the dataflow transfer function for control flow branch
+  // operation that are not forwarded to the branching target, so they cannot be
+  // backpropagated from there. We do not expect this to happen so move the
+  // lattice instance to the top state, indicating a conflict if this ever
+  // happens.
+  void visitBranchOperand(mlir::OpOperand &opOperand) override {
+    if (!wave::isaTensorInRegister(opOperand.get().getType()))
+      return;
+
+    setToExitState(getLatticeElement(opOperand.get()));
+  }
+
+  // Specialization of the dataflow transfer function for call operands that are
+  // not forwarded to the callee. We do not expect register-resident types
+  // handled by this analysis to be present at the function boundary so we move
+  // the lattice instance to the top state, indicating a conflict if this ever
+  // happens.
+  void visitCallOperand(mlir::OpOperand &opOperand) override {
+    if (!wave::isaTensorInRegister(opOperand.get().getType()))
+      return;
+
+    setToExitState(getLatticeElement(opOperand.get()));
+  }
+
+  // Dataflow transfer function, defers to either
+  // WaveElementsPerThreadOpInterface or NoOpElementsPerThreadOpTrait.
+  llvm::LogicalResult visitOperation(
+      mlir::Operation *op, llvm::ArrayRef<ElementsPerThreadLattice *> operands,
+      llvm::ArrayRef<const ElementsPerThreadLattice *> results) override {
+    if (op->hasTrait<wave::NoOpElementsPerThreadOpTrait>())
+      return llvm::success();
+
+    std::optional<mlir::LogicalResult> res =
+        handleNonInterfaceOpElementsPerThread(op);
+    if (res)
+      return *res;
+
+    auto extractValue = [](const ElementsPerThreadLattice *lattice) {
+      return lattice->getValue();
+    };
+    llvm::SmallVector<ElementsPerThreadLatticeValue> operandElements =
+        llvm::map_to_vector(operands, extractValue);
+    llvm::SmallVector<ElementsPerThreadLatticeValue> resultElements =
+        llvm::map_to_vector(results, extractValue);
+
+    std::string errorMessage;
+    llvm::raw_string_ostream errs(errorMessage);
+    llvm::FailureOr<mlir::ChangeResult> result =
+        llvm::cast<wave::WaveElementsPerThreadOpInterface>(op)
+            .propagateElementsPerThreadBackward(operandElements, resultElements,
+                                                errs);
+    if (llvm::failed(result)) {
+      return op->emitError()
+             << "failed to propagate elements per thread backward: "
+             << errs.str();
+    }
+    if (*result == mlir::ChangeResult::NoChange)
+      return llvm::success();
+
+    for (auto &&[operand, lattice] :
+         llvm::zip_equal(operandElements, operands)) {
+      propagateIfChanged(lattice,
+                         lattice->join(ElementsPerThreadLatticeValue(operand)));
+    }
+    return llvm::success();
+  }
+};
+
+// Elements-per-thread propagation pass implementation.
+class PropagateElementsPerThread
+    : public wave::impl::WaterWavePropagateElementsPerThreadPassBase<
+          PropagateElementsPerThread> {
+public:
+  using WaterWavePropagateElementsPerThreadPassBase::
+      WaterWavePropagateElementsPerThreadPassBase;
+
+  void runOnOperation() override {
+    // Configure the analyses. The dead code and SCP analyses are required by
+    // the logic of the solver currently.
+    mlir::SymbolTableCollection symbolTable;
+    mlir::DataFlowConfig dataFlowConfig;
+    dataFlowConfig.setInterprocedural(false);
+    mlir::DataFlowSolver solver(dataFlowConfig);
+    solver.load<mlir::dataflow::DeadCodeAnalysis>();
+    solver.load<mlir::dataflow::SparseConstantPropagation>();
+    solver.load<ElementsPerThreadForwardAnalysis>();
+    solver.load<ElementsPerThreadBackwardAnalysis>(symbolTable);
+
+    if (llvm::failed(runSolverAndCaptureErrors(solver, getOperation(), false)))
+      return signalPassFailure();
+
+    auto updateType = [&](mlir::Value value, llvm::StringRef description) {
+      auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(value.getType());
+      if (!tensorType ||
+          tensorType.getAddressSpaceValue() != wave::WaveAddressSpace::Register)
+        return llvm::success();
+
+      const auto *lattice = solver.lookupState<ElementsPerThreadLattice>(value);
+      if (!lattice || lattice->getValue().isBottom()) {
+        emitError(value.getLoc())
+            << "couldn't identify elements per thread for " << description;
+        return llvm::failure();
+      }
+      if (lattice->getValue().isTop()) {
+        emitError(value.getLoc())
+            << "elements per thread conflict was detected for " << description;
+        return llvm::failure();
+      }
+
+      auto vectorType = mlir::VectorType::get(
+          {static_cast<int64_t>(lattice->getValue().getValue())},
+          tensorType.getElementType());
+      value.setType(vectorType);
+      return llvm::success();
+    };
+
+    if (llvm::failed(updateValueTypes(getOperation(), updateType)))
+      return signalPassFailure();
+
+    if (llvm::failed(wave::setNormalFormPassPostcondition(
+            wave::WaveNormalForm::MemoryOnlyTypes, getOperation())))
       return signalPassFailure();
   }
 };

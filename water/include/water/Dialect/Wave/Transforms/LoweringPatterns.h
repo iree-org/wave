@@ -23,7 +23,7 @@ public:
   // Type converter is contextual in the given scope, where the scope defines
   // the hyper-parameters to be used. These feed into symbolic shapes that get
   // converted into static shapes based on hyperparameter values.
-  explicit WaveTypeConverter(wave::WaveHyperparameterAttr hyperParameters);
+  explicit WaveTypeConverter(wave::WaveHyperparameterAttr hyperparameters);
 
   // Convert a Wave tensor type without constructing it first. This allows to
   // both avoid the cost of constructing a new type object and to handle more
@@ -34,8 +34,12 @@ public:
                               mlir::AffineMap shape, mlir::Type elementType,
                               wave::WaveAddressSpace addressSpace) const;
 
+  wave::WaveHyperparameterAttr getHyperparameters() const {
+    return hyperparameters;
+  }
+
 private:
-  wave::WaveHyperparameterAttr hyperParameters;
+  wave::WaveHyperparameterAttr hyperparameters;
 };
 
 // Adds pattern that lowers `wave.register` to upstream MLIR ops.
@@ -49,6 +53,11 @@ void populateWaveBinaryOpLoweringPatterns(WaveTypeConverter &typeConverter,
 // Adds pattern that lowers 'wave.allocate' ops to upstream MLIR ops.
 void populateWaveAllocateOpLoweringPatterns(WaveTypeConverter &typeConverter,
                                             mlir::RewritePatternSet &patterns);
+
+// Adds pattern that lowers 'wave.read' and 'wave.write' ops to upstream MLIR
+// ops.
+void populateWaveReadWriteLoweringPatterns(WaveTypeConverter &typeConverter,
+                                           mlir::RewritePatternSet &patterns);
 
 } // namespace wave
 

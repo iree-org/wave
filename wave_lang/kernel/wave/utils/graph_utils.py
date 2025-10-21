@@ -10,6 +10,7 @@ import torch.fx as fx
 import wave_lang.kernel.lang as tkl
 
 from ..._support.indexing import IndexSymbol
+from ..._support.location import CapturedLocation
 from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import *
 from ...ops.wave_ops import (
@@ -24,6 +25,9 @@ from ...ops.wave_ops import (
     Output,
     Placeholder,
     SharedMemoryBarrier,
+    TopkOp,
+    SharedMemoryBarrierSignal,
+    SharedMemoryBarrierWait,
     Write,
     get_custom,
 )
@@ -268,19 +272,25 @@ def get_inputs(node: fx.Node, iterate: fx.Node = None) -> tuple[list[fx.Node], f
     elif isinstance(custom, GetResult):
         assert custom.value is not None, f"GetResult node {custom} has no value"
         iterate = get_custom(custom.value)
-        assert isinstance(
-            iterate, Iterate
-        ), f"GetResult must be using an Iterate, but\n{custom}\nis using\n{iterate}"
-        # Map get result to output
-        iteration_subgraph = iterate.get_root_graph().subgraphs[iterate.subgraph_name]
-        if len(iterate.init_args) == 1:
-            outputs = iterate.outputs(iteration_subgraph)
-            if isinstance(outputs, Sequence):
-                inputs += outputs
-            else:
-                inputs.append(outputs)
+        if isinstance(iterate, TopkOp):
+            iterate = None
+            inputs += node.all_input_nodes
         else:
-            inputs.append(iterate.outputs(iteration_subgraph)[custom.res_idx])
+            assert isinstance(
+                iterate, Iterate
+            ), f"GetResult must be using an Iterate, but\n{custom}\nis using\n{iterate}"
+            # Map get result to output
+            iteration_subgraph = iterate.get_root_graph().subgraphs[
+                iterate.subgraph_name
+            ]
+            if len(iterate.init_args) == 1:
+                outputs = iterate.outputs(iteration_subgraph)
+                if isinstance(outputs, Sequence):
+                    inputs += outputs
+                else:
+                    inputs.append(outputs)
+            else:
+                inputs.append(iterate.outputs(iteration_subgraph)[custom.res_idx])
     elif isinstance(custom, Iterate):
         iteration_subgraph = custom.get_root_graph().subgraphs[custom.subgraph_name]
         inputs.append(custom.outputs(iteration_subgraph))
@@ -379,7 +389,7 @@ def replace_uses_in(users: dict[fx.Node, list[CustomOp]], old: CustomOp, new: fx
                 user.update_arg(i, new)
 
 
-def is_reduction_subgraph(graph: fx.Graph):
+def is_iterate_subgraph(graph: fx.Graph):
     """
     Check that graph is a subgraph that is owned by ReductionOp.
     """
@@ -411,24 +421,37 @@ def get_outer_node(outer_node: fx.Node) -> fx.Node:
     return outer_node
 
 
-def is_barrier_between_same_graph(src: fx.Node, dst: fx.Node) -> Optional[fx.Node]:
+def is_barrier_between_same_graph(
+    src: fx.Node, dst: fx.Node, barId: int = -1, barrier_check: set = None
+) -> Optional[fx.Node]:
     """
     Checks if there is a barrier between the source and destination nodes,
     assuming that they are in the same graph.
     """
     next_node = src.next
+    if barrier_check is None:
+        barrier_check = set()
     while next_node != dst and next_node.next.op != "root":
-        if isinstance(get_custom(next_node), SharedMemoryBarrier):
+        custom_next_node = get_custom(next_node)
+        if isinstance(custom_next_node, SharedMemoryBarrier):
             return next_node
+        if isinstance(custom_next_node, SharedMemoryBarrierSignal):
+            barrier_check.add(custom_next_node.barId)
+        if isinstance(custom_next_node, SharedMemoryBarrierWait):
+            if custom_next_node.barId == barId and barId in barrier_check:
+                return next_node
         next_node = next_node.next
 
     return None
 
 
-def is_barrier_between(src: fx.Node, dst: fx.Node) -> Optional[fx.Node]:
+def is_barrier_between(
+    src: fx.Node, dst: fx.Node, barId: int = -1
+) -> Optional[fx.Node]:
     """
     Checks if there is a barrier between the source and destination nodes.
     """
+    barriers = set()
     if src.graph == dst.graph:
         # The following cases are handled when src and dst are in same graph:
         # 1. src and dst is on the same iteration step and src < dst (topographic).
@@ -436,16 +459,20 @@ def is_barrier_between(src: fx.Node, dst: fx.Node) -> Optional[fx.Node]:
 
         # Case 1:
         if dst >= src:
-            return is_barrier_between_same_graph(src, dst)
+            return is_barrier_between_same_graph(src, dst, barId)
 
         # Case 2:
         if dst < src:
             # Check between src and end of loop.
-            if node := is_barrier_between_same_graph(src, list(src.graph.nodes)[-1]):
+            if node := is_barrier_between_same_graph(
+                src, list(src.graph.nodes)[-1], barId, barriers
+            ):
                 return node
             # If cannot find between src to end of loop,
             # then, we check beginning of loop to dst.
-            return is_barrier_between_same_graph(list(dst.graph.nodes)[0], dst)
+            return is_barrier_between_same_graph(
+                list(dst.graph.nodes)[0], dst, barId, barriers
+            )
     else:
         # The following cases are handled when src and dst are in different graphs:
         # 1. src and dst graphs at the same nested level.
@@ -458,29 +485,41 @@ def is_barrier_between(src: fx.Node, dst: fx.Node) -> Optional[fx.Node]:
                 src.graph.parent_op.graph == dst.graph.parent_op.graph
             ), "src and dst parent ops must be in the same graph"
             # Check if there is a barrier in the src graph between src and output.
-            src_check = is_barrier_between_same_graph(src, list(src.graph.nodes)[-1])
+            src_check = is_barrier_between_same_graph(
+                src, list(src.graph.nodes)[-1], barId, barriers
+            )
             # Check if there is a barrier in the graph above between src root and dst root.
             root_check = is_barrier_between_same_graph(
-                src.graph.parent_op, dst.graph.parent_op
+                src.graph.parent_op, dst.graph.parent_op, barId, barriers
             )
             # Check if there is a barrier in the dst graph between the root and dst.
-            dst_check = is_barrier_between_same_graph(list(dst.graph.nodes)[0], dst)
+            dst_check = is_barrier_between_same_graph(
+                list(dst.graph.nodes)[0], dst, barId, barriers
+            )
             return src_check or root_check or dst_check
 
         # Case 2:
         if hasattr(src.graph, "parent_op") and not hasattr(dst.graph, "parent_op"):
             # Check if there is a barrier in the src graph between src and output.
-            src_check = is_barrier_between_same_graph(src, list(src.graph.nodes)[-1])
+            src_check = is_barrier_between_same_graph(
+                src, list(src.graph.nodes)[-1], barId, barriers
+            )
             # Check if there is a barrier in the graph above between src root and dst.
-            root_check = is_barrier_between_same_graph(src.graph.parent_op, dst)
+            root_check = is_barrier_between_same_graph(
+                src.graph.parent_op, dst, barId, barriers
+            )
             return src_check or root_check
 
         # Case 3:
         if not hasattr(src.graph, "parent_op") and hasattr(dst.graph, "parent_op"):
             # Check if there is a barrier in the graph above between src and dst root.
-            root_check = is_barrier_between_same_graph(src, dst.graph.parent_op)
+            root_check = is_barrier_between_same_graph(
+                src, dst.graph.parent_op, barId, barriers
+            )
             # Check if there is a barrier in the dst graph between the root and dst.
-            dst_check = is_barrier_between_same_graph(list(dst.graph.nodes)[0], dst)
+            dst_check = is_barrier_between_same_graph(
+                list(dst.graph.nodes)[0], dst, barId, barriers
+            )
             return dst_check or root_check
 
         assert False, "Unhandled case when src and dst are in different graphs"
@@ -516,3 +555,107 @@ def update_sort_keys(
                 trace.region_graph.subgraphs[custom.subgraph_name],
                 node._sort_key,
             )
+
+
+def get_graph_node(
+    custom: CustomOp,
+    graph: fx.Graph,
+    location: Optional[CapturedLocation] = None,
+) -> fx.Node:
+    """Add a CustomOp to a graph and return its fx_node."""
+    custom.add_to_graph(graph, loc=location)
+    return custom.fx_node
+
+
+def prepare_subgraph_for_conditional(
+    subgraph_name: str,
+    captured_nodes: list[fx.Node],
+    memory_nodes: list[fx.Node] = None,
+) -> tuple[fx.Graph, list[fx.Node], dict[fx.Node, fx.Node]]:
+    """
+    Prepare a subgraph with placeholders for captured nodes.
+    Intended for use with finish_conditional_subgraph.
+    When creating a subgraph, the nodes within the subgraph can't just refer to nodes in the outer graph.
+    So to allow communication, we create placeholder nodes in the subgraph to represent the outer nodes.
+    The captured_nodes argument specifies which outer nodes the inner graph needs to represent.
+
+    This returns the subgraph, the captures list (to pass to
+    finish_conditional_subgraph, the output list is not the same as the input
+    capture captured_nodes list), and a dictionary for placeholders.
+    When adding nodes to the subgraph, you can use the dictionary to map from outer nodes to their placeholders.
+    Eg.
+
+    ```
+        subgraph, captures, placeholders = prepare_subgraph_for_conditional(name, [arg1, arg2], [arg2])
+        write_val = Write(placeholders[arg1], placeholders[arg2], 1).add_to_graph(subgraph)
+        finish_conditional_subgraph(trace, graph, condition, subgraph, captures)
+    ```
+
+
+    Args:
+        subgraph_name: Name for the subgraph
+        captured_nodes: Nodes from outer graph that need to be accessible in subgraph
+        memory_nodes: Subset of captured_nodes that are memory allocations (get "lifted" metadata)
+
+    Returns:
+        (subgraph, implicit_captures, placeholders_map)
+    """
+    subgraph = fx.Graph()
+    subgraph._name = subgraph_name
+
+    memory_nodes = set(memory_nodes or [])
+    placeholders = {}
+    implicit_captures = []
+
+    for node in captured_nodes:
+        # Create placeholder in subgraph
+        custom = get_custom(node) if hasattr(node, "tkw_op") else node
+        placeholder = get_graph_node(Placeholder.from_fx_node(custom), subgraph)
+        placeholder.type = custom.type
+
+        # Mark memory allocations with "lifted" metadata
+        if node in memory_nodes:
+            placeholder.meta["lifted"] = node
+
+        placeholders[node] = placeholder
+        implicit_captures.append(get_outer_node(node))
+
+    return subgraph, implicit_captures, placeholders
+
+
+def finish_conditional_subgraph(
+    trace: CapturedTrace,
+    main_graph: fx.Graph,
+    condition_node: fx.Node,
+    subgraph: fx.Graph,
+    implicit_captures: list[fx.Node],
+    location: Optional[CapturedLocation] = None,
+) -> fx.Node:
+    """Create conditional node and register subgraph with trace.
+
+    Args:
+        trace: Trace to register subgraph with
+        main_graph: Main graph to add conditional to
+        condition_node: Boolean condition for the conditional
+        subgraph: The prepared subgraph
+        implicit_captures: List of captured nodes
+
+    Returns:
+        The conditional node
+    """
+    conditional = get_graph_node(
+        Conditional(
+            condition_node,
+            subgraph_name=subgraph._name,
+            implicit_captures=implicit_captures,
+        ),
+        main_graph,
+        location,
+    )
+
+    # Register subgraph with trace
+    subgraph.parent_op = conditional
+    trace.add_subgraph(subgraph._name, subgraph)
+    trace.get_root_graph().subgraphs[subgraph._name] = subgraph
+
+    return conditional

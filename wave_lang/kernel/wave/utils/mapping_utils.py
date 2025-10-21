@@ -325,7 +325,7 @@ def transform_index_on_mapping(
     symbolic_shape: tuple[IndexExpr, ...],
     index: dict[IndexExpr, IndexSequence],
     is_read: bool = True,
-) -> tuple[IndexExpr, ...]:
+) -> dict[IndexExpr, IndexSequence]:
     """Transforms the index according to the specified mapping"""
     symbolic_shape = tuple(infer_dim(d) for d in symbolic_shape)
     if is_read:

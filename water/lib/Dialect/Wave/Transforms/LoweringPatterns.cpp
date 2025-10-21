@@ -28,7 +28,7 @@ public:
   matchAndRewrite(wave::AllocateOp op, wave::AllocateOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     wave::WaveTensorType resultType = op.getResult().getType();
-    wave::DistributedShapeAttr distributedShape = op.getDistributedShape();
+    wave::ExprAttr distributedShape = op.getDistributedShape();
     auto *typeConverter =
         static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
     Type convertedResultType = typeConverter->convertTensorFromComponents(
@@ -99,16 +99,13 @@ public:
   LogicalResult
   matchAndRewrite(WaveOp op, typename WaveOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type convertedType = this->getTypeConverter()->convertType(op);
+    Type convertedType =
+        this->getTypeConverter()->convertType(op.getResult().getType());
     if (!convertedType) {
       return rewriter.notifyMatchFailure(op,
                                          "WaveTensorType conversion failed");
     }
-    auto vectorType = dyn_cast<VectorType>(convertedType);
-    if (!vectorType) {
-      return rewriter.notifyMatchFailure(op,
-                                         "expected vector type for binary op");
-    }
+    auto vectorType = cast<VectorType>(convertedType);
 
     Value lhs = adaptor.getLhs();
     Value rhs = adaptor.getRhs();
@@ -152,16 +149,13 @@ public:
   LogicalResult
   matchAndRewrite(wave::RegisterOp op, wave::RegisterOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type convertedType = getTypeConverter()->convertType(op);
+    Type convertedType =
+        getTypeConverter()->convertType(op.getResult().getType());
     if (!convertedType) {
       return rewriter.notifyMatchFailure(op,
                                          "WaveTensorType conversion failed");
     }
-    auto vectorType = dyn_cast<VectorType>(convertedType);
-    if (!vectorType) {
-      return rewriter.notifyMatchFailure(
-          op, "expected vector type after conversion");
-    }
+    auto vectorType = cast<VectorType>(convertedType);
 
     TypedAttr splatAttr;
     Value initValue = op.getInit();

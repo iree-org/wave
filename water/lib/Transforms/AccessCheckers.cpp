@@ -249,7 +249,7 @@ static Value createDummyValue(OpBuilder &builder, Location loc, Type type) {
     Value element = createDummyValue(builder, loc, vecType.getElementType());
     if (!element)
       return nullptr;
-    return builder.create<vector::SplatOp>(loc, element, vecType);
+    return builder.create<vector::BroadcastOp>(loc, vecType, element);
   }
   return nullptr;
 }

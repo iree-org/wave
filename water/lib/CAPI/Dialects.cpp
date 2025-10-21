@@ -95,3 +95,77 @@ MlirAttribute mlirWaveHyperparameterAttrGet(MlirAttribute mapping) {
 MlirTypeID mlirWaveHyperparameterAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveHyperparameterAttr>());
 }
+
+//===---------------------------------------------------------------------===//
+// WaveAddressSpaceAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveAddressSpaceAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveAddressSpaceAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveAddressSpaceAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveAddressSpaceAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveAddressSpace>(value)));
+}
+
+uint32_t mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveAddressSpaceAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveAddressSpaceAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveExprAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveExprAttr(MlirAttribute attr) {
+  return llvm::isa<wave::ExprAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveExprAttrGet(MlirAttribute *symbolNames,
+                                  MlirAffineMap map) {
+  mlir::MLIRContext *ctx = unwrap(map).getContext();
+
+  unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
+  llvm::SmallVector<wave::WaveSymbolAttr> symbolAttrs = llvm::map_to_vector(
+      llvm::make_range(symbolNames, symbolNames + numSymbols),
+      [](MlirAttribute attr) {
+        return llvm::cast<wave::WaveSymbolAttr>(unwrap(attr));
+      });
+
+  return wrap(wave::ExprAttr::get(ctx, symbolAttrs, unwrap(map)));
+}
+
+MlirTypeID mlirWaveExprAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::ExprAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveReadWriteBoundsAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveReadWriteBoundsAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveReadWriteBoundsAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping) {
+  auto dictAttr = llvm::cast<mlir::DictionaryAttr>(unwrap(mapping));
+
+  mlir::MLIRContext *ctx = dictAttr.getContext();
+
+  assert(llvm::all_of(dictAttr,
+                      [](const mlir::NamedAttribute &namedAttr) {
+                        return llvm::isa<wave::ExprAttr>(namedAttr.getValue());
+                      }) &&
+         "expected mapping to contain only WaveExprAttr values");
+
+  return wrap(wave::WaveReadWriteBoundsAttr::get(ctx, dictAttr));
+}
+
+MlirTypeID mlirWaveReadWriteBoundsAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveReadWriteBoundsAttr>());
+}

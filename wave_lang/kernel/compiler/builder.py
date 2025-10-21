@@ -75,6 +75,13 @@ class ModuleBuilder:
         self.context = self.module_op.context
         self.unknown_loc = Location.unknown(self.context)
         self.symbol_table = SymbolTable(self.module_op)
+        self.distinct_id_counter = 0
+
+    def get_next_distinct_id(self) -> int:
+        """Get the next distinct ID for debug attributes."""
+        result = self.distinct_id_counter
+        self.distinct_id_counter += 1
+        return result
 
 
 class _ScalarBuilder:

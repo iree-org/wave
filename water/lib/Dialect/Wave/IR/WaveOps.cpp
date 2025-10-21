@@ -5,16 +5,22 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
-#include "water/Dialect/Wave/IR/WaveAttrs.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
+#include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/TypeSwitch.h"
+
+using namespace mlir;
+using namespace wave;
 
 //-----------------------------------------------------------------------------
 // Custom parsing and printing hooks. These must be defined before including the
@@ -31,21 +37,29 @@ static mlir::ParseResult parseRegisterOpTypes(mlir::OpAsmParser &parser,
   if (mlir::failed(parser.parseType(resultType)))
     return mlir::failure();
 
-  auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(resultType);
-  if (!tensorType)
-    return parser.emitError(loc)
-           << "expected wave tensor type, got " << resultType;
+  initType =
+      llvm::TypeSwitch<mlir::Type, mlir::Type>(resultType)
+          .Case<wave::WaveTensorType, mlir::VectorType>(
+              [](auto containerType) { return containerType.getElementType(); })
+          .Default([](mlir::Type) { return nullptr; });
 
-  initType = tensorType.getElementType();
+  if (!initType)
+    return parser.emitError(loc)
+           << "expected wave tensor or vector type, got " << resultType;
+
   return mlir::success();
 }
 
 // Print types of the `wave.register` operation.
 static void printRegisterOpTypes(mlir::OpAsmPrinter &printer, mlir::Operation *,
                                  mlir::Type initType, mlir::Type resultType) {
-  assert(initType ==
-             llvm::cast<wave::WaveTensorType>(resultType).getElementType() &&
-         "expected equal types");
+#ifndef NDEBUG
+  auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(resultType);
+  mlir::Type elementType =
+      tensorType ? tensorType.getElementType()
+                 : llvm::cast<mlir::VectorType>(resultType).getElementType();
+  assert(initType == elementType && "expected equal types");
+#endif // NDEBUG
   (void)initType;
   printer.printType(resultType);
 }
@@ -67,9 +81,6 @@ static void printSingleSymbol(mlir::OpAsmPrinter &printer, mlir::Operation *,
                               wave::WaveSymbolAttr symbolAttr) {
   printer.printSymbolName(symbolAttr.getName());
 }
-
-using namespace mlir;
-using namespace wave;
 
 #define GET_OP_CLASSES
 #include "water/Dialect/Wave/IR/WaveOps.cpp.inc"
@@ -264,10 +275,22 @@ static mlir::LogicalResult checkMmaTypeCompatibility(mlir::Location loc,
 //===----------------------------------------------------------------------===//
 
 LogicalResult MmaOp::verify() {
-  WaveTensorType lhsType = getLhs().getType();
-  WaveTensorType rhsType = getRhs().getType();
-  WaveTensorType accumulatorType = getAccumulator().getType();
-  WaveTensorType resultType = getResult().getType();
+  Type lhsTypeGeneric = getLhs().getType();
+  Type rhsTypeGeneric = getRhs().getType();
+  Type accumulatorTypeGeneric = getAccumulator().getType();
+  Type resultTypeGeneric = getResult().getType();
+
+  WaveTensorType lhsType = dyn_cast<wave::WaveTensorType>(lhsTypeGeneric);
+  WaveTensorType rhsType = dyn_cast<wave::WaveTensorType>(rhsTypeGeneric);
+  WaveTensorType accumulatorType =
+      dyn_cast<wave::WaveTensorType>(accumulatorTypeGeneric);
+  WaveTensorType resultType = dyn_cast<wave::WaveTensorType>(resultTypeGeneric);
+
+  // TODO: need to verify vector types, but for that, we need to know what they
+  // must look like based on the MMA enum.
+  if (!lhsType || !rhsType || !accumulatorType || !resultType) {
+    return success();
+  }
 
   if (failed(detail::verifyElementTypesMatch(getLoc(), "LHS", lhsType, "RHS",
                                              rhsType)) ||
@@ -276,12 +299,12 @@ LogicalResult MmaOp::verify() {
     return mlir::failure();
 
   if (detail::verifyTypesMatchingDimensions(getLoc(), "LHS", lhsType, {1},
-                                            "RHS", rhsType, {0})
+                                            "RHS", rhsType, {1})
           .failed() ||
       detail::verifyTypesMatchingDimensions(getLoc(), "LHS", lhsType, {0},
                                             "accumulator", accumulatorType, {0})
           .failed() ||
-      detail::verifyTypesMatchingDimensions(getLoc(), "RHS", rhsType, {1},
+      detail::verifyTypesMatchingDimensions(getLoc(), "RHS", rhsType, {0},
                                             "accumulator", accumulatorType, {1})
           .failed()) {
     return mlir::failure();
@@ -293,20 +316,189 @@ LogicalResult MmaOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// ReadOp
+//-----------------------------------------------------------------------------
+
+// Check the well-formedness of the index attribute (must have at most one
+// non-unit dimension) and its correspondence with the explicit elements per
+// thread, if provided, and with the number of elements in the vector type.
+static LogicalResult
+verifyIndexElementsPerThread(Operation *op, mlir::DictionaryAttr indexDict,
+                             std::optional<int64_t> elementsPerThread,
+                             wave::WaveTensorType tensorType,
+                             Type maybeVectorType) {
+  auto vectorType = dyn_cast<VectorType>(maybeVectorType);
+  auto vectorSize = vectorType
+                        ? std::optional<int64_t>(vectorType.getDimSize(0))
+                        : std::nullopt;
+
+  if (elementsPerThread && vectorSize && *elementsPerThread != *vectorSize) {
+    return op->emitOpError()
+           << "expected result vector type to have the "
+              "number of elements per thread matching the attribute ("
+           << *elementsPerThread << "), got " << vectorType.getDimSize(0);
+  }
+
+  if (!indexDict)
+    return success();
+
+  wave::WaveHyperparameterAttr hyper = wave::WaveHyperparameterAttr();
+  for (Operation *cur = op; cur != nullptr && !hyper;
+       cur = cur->getParentOp()) {
+    hyper = cur->getAttrOfType<wave::WaveHyperparameterAttr>(
+        WaveDialect::kHyperparameterAttrName);
+  }
+  // Default to empty hyperparameter set, sometimes we can run checks even in
+  // absence of these.
+  if (!hyper)
+    hyper = wave::WaveHyperparameterAttr::get(
+        op->getContext(), DictionaryAttr::get(op->getContext()));
+
+  SmallVector<int64_t> shape =
+      getUncollapsedVectorShape(tensorType.getShape(), indexDict, hyper);
+  int64_t nonUnit = 1;
+  bool hadDynamic = false;
+  for (auto [i, size] : llvm::enumerate(shape)) {
+    if (ShapedType::isDynamic(size)) {
+      hadDynamic = true;
+      continue;
+    }
+
+    if (size == 1) {
+      continue;
+    }
+    if (nonUnit == 1) {
+      nonUnit = size;
+      continue;
+    }
+
+    InFlightDiagnostic diag =
+        op->emitError() << "'index' has more than one entry with non-unit step";
+    diag.attachNote() << "second non-unit step dimension: " << i;
+    return diag;
+  }
+
+  // If there were unevaluated steps, they may end up matching later on.
+  if (hadDynamic)
+    return success();
+
+  if (elementsPerThread && nonUnit != *elementsPerThread) {
+    return op->emitError() << "vectorized dimension step in the index "
+                              "expression with current hyperparameters ("
+                           << nonUnit
+                           << ") doesn't match the explicitly specified "
+                              "elements per thread value ("
+                           << *elementsPerThread << ")";
+  }
+
+  if (vectorSize && nonUnit != *vectorSize) {
+    return op->emitError() << "vectorized dimension step in the index "
+                              "expression with current hyperparameters ("
+                           << nonUnit << ") doesn't match the vector size ("
+                           << *vectorSize << ")";
+  }
+  return success();
+}
+
+// Check that if the given read/write operation has bound expressions specified,
+// each symbolic dimension of the WaveTensorType has exactly one bound
+// expression.
+static LogicalResult verifyReadWriteBounds(Location loc,
+                                           wave::WaveTensorType boundedType,
+                                           DictionaryAttr bounds) {
+  assert(bounds && "expected non-null bounds");
+  assert(boundedType && "expected non-null type");
+
+  // We need a fixed iteration order of names for determinism of error messages,
+  // so using a vector instead of a StringSet.
+  // TODO: consider refactoring bounds and other dictionary-like attributes to
+  // be indexed by symbol expressions rather than string attributes to avoid
+  // string comparisons everywhere.
+  SmallVector<StringRef> requiredSymbolNames = llvm::map_to_vector(
+      boundedType.getShape(),
+      [](wave::WaveSymbolAttr symbol) { return symbol.getName(); });
+  llvm::StringSet<> knownSymbolNames;
+  for (NamedAttribute value : bounds) {
+    if (!llvm::is_contained(requiredSymbolNames, value.getName().strref())) {
+      return emitError(loc)
+             << "'bounds' specified for a symbol " << value.getName()
+             << " not used in the "
+                "indexed memory tensor";
+    }
+
+    // Value type must be WaveExprAttr.
+    if (!isa<wave::ExprAttr>(value.getValue()))
+      return emitError(loc) << "'bounds' values must be WaveExprAttr, got "
+                            << value.getValue();
+
+    knownSymbolNames.insert(value.getName().strref());
+  }
+  for (StringRef requiredName : requiredSymbolNames) {
+    if (knownSymbolNames.contains(requiredName))
+      continue;
+
+    return emitError(loc) << "bounds not provided for memory tensor symbol '"
+                          << requiredName << "'";
+  }
+
+  return success();
+}
+
+LogicalResult ReadOp::verify() {
+  if (failed(verifyIndexElementsPerThread(
+          *this, getIndexAttr(), getElementsPerThread(), getMemory().getType(),
+          getResult().getType())))
+    return failure();
+
+  wave::WaveReadWriteBoundsAttr bounds =
+      getBounds().value_or(wave::WaveReadWriteBoundsAttr());
+  if (!bounds)
+    return success();
+
+  return verifyReadWriteBounds(getLoc(), getMemory().getType(),
+                               bounds.getMapping());
+}
+
+//-----------------------------------------------------------------------------
 // RegisterOp
 //-----------------------------------------------------------------------------
 
 mlir::LogicalResult wave::RegisterOp::verify() {
-  WaveTensorType tensorType = getResult().getType();
+  Type type = getResult().getType();
+  auto tensorType = dyn_cast<WaveTensorType>(type);
+  auto elementType = tensorType ? tensorType.getElementType()
+                                : cast<VectorType>(type).getElementType();
   mlir::Type initType = getInit().getType();
-  if (tensorType.getElementType() != initType) {
+  if (elementType != initType) {
     return emitOpError() << "expected the type of the init value to match the "
-                            "elemental type of the tensor";
+                            "elemental type of the result";
   }
+  if (!tensorType)
+    return success();
+
   if (!tensorType.getFullySpecified()) {
     return emitOpError() << "expected fully-specified tensor type";
   }
   return mlir::success();
+}
+
+//-----------------------------------------------------------------------------
+// WriteOp
+//-----------------------------------------------------------------------------
+
+LogicalResult WriteOp::verify() {
+  if (failed(verifyIndexElementsPerThread(
+          *this, getIndexAttr(), getElementsPerThread(), getMemory().getType(),
+          getValueToStore().getType())))
+    return failure();
+
+  wave::WaveReadWriteBoundsAttr bounds =
+      getBounds().value_or(wave::WaveReadWriteBoundsAttr());
+  if (!bounds)
+    return success();
+
+  return verifyReadWriteBounds(getLoc(), getMemory().getType(),
+                               bounds.getMapping());
 }
 
 //-----------------------------------------------------------------------------

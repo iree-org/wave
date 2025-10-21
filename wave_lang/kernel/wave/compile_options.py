@@ -41,8 +41,10 @@ class WaveCompileOptions:
     kernel_usages: tuple[KernelBufferUsage] = None
 
     # === Backend options ===
+    backend: str = "llvm"  # "llvm" or "asm"
     device: str = "hip"
     target: str = "gfx942"
+    codeobj: str = "5"  # Code object version ("4" or "5")
     iree_preprocessing_pass_pipeline: str = None
     num_devices: int = 1
 
@@ -92,6 +94,7 @@ class WaveCompileOptions:
     reorder_allocs: bool = True
     override_schedule: Optional[str] = None
     dump_schedule: Optional[str] = None
+    use_bound_check: bool = False
 
     # === Print options ===
     mlir_print_ir_after_all: bool = False
@@ -104,3 +107,8 @@ class WaveCompileOptions:
     print_mlir: bool = False
     print_mlir_file: Optional[str] = None
     print_pass_times: bool = False
+
+    # === ASM backend options ===
+    compile_to_asm: bool = (
+        False  # Compile to AMDGCN assembly (for lit tests, no amdclang++)
+    )

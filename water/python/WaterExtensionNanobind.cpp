@@ -9,6 +9,7 @@
 #include "mlir-c/BuiltinTypes.h"
 #include "mlir/Bindings/Python/Nanobind.h"
 #include "mlir/Bindings/Python/NanobindAdaptors.h"
+#include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/c/Dialects.h"
 
 #include "nanobind/nanobind.h"
@@ -148,4 +149,121 @@ NB_MODULE(_waterDialects, m) {
           nb::arg("cls"), nb::arg("symbol_dict"),
           nb::arg("context") = nb::none(),
           "Gets a wave.WaveHyperparameterAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // WaveAddressSpaceAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveAddressSpaceAttr", mlirAttributeIsAWaveAddressSpaceAttr,
+      mlirWaveAddressSpaceAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, wave::WaveAddressSpace value,
+             MlirContext context) {
+            return cls(mlirWaveAddressSpaceAttrGet(
+                context, static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveAddressSpaceAttr from an address space enum value.")
+      .def(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<wave::WaveAddressSpace>(
+                mlirWaveAddressSpaceAttrGetValue(self));
+          },
+          "Returns the address space enum value.");
+
+  nb::enum_<wave::WaveAddressSpace>(d, "WaveAddressSpace")
+      .value("Unspecified", wave::WaveAddressSpace::Unspecified)
+      .value("Global", wave::WaveAddressSpace::Global)
+      .value("Shared", wave::WaveAddressSpace::Shared)
+      .value("Register", wave::WaveAddressSpace::Register);
+
+  //===---------------------------------------------------------------------===//
+  // WaveExprAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveExprAttr", mlirAttributeIsAWaveExprAttr,
+      mlirWaveExprAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, const std::vector<std::string> &symbolNames,
+             MlirAffineMap map) {
+            std::vector<MlirAttribute> symbolAttrs;
+            intptr_t numSymbols = symbolNames.size();
+            symbolAttrs.reserve(numSymbols);
+
+            for (const std::string &symbolName : symbolNames) {
+              MlirStringRef symbolNameStrRef =
+                  mlirStringRefCreate(symbolName.data(), symbolName.size());
+              MlirAttribute symbolAttr = mlirWaveSymbolAttrGet(
+                  mlirAffineMapGetContext(map), symbolNameStrRef);
+              symbolAttrs.push_back(symbolAttr);
+            }
+
+            if (numSymbols != mlirAffineMapGetNumSymbols(map)) {
+              throw nb::value_error("Expected symbol_names to have as many "
+                                    "entries as map have symbols.");
+            }
+            if (mlirAffineMapGetNumDims(map) != 0) {
+              throw nb::value_error("Maps should not involve dimensions.");
+            }
+            return cls(mlirWaveExprAttrGet(symbolAttrs.data(), map));
+          },
+          nb::arg("cls"), nb::arg("symbol_names"), nb::arg("map"),
+          "Gets a wave.WaveExprAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // WaveReadWriteBoundsAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveReadWriteBoundsAttr", mlirAttributeIsAWaveReadWriteBoundsAttr,
+      mlirWaveReadWriteBoundsAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, const nb::dict &symDimDict,
+             // MlirContext should always come last to allow for being
+             // automatically deduced from context.
+             MlirContext context) {
+            std::vector<MlirNamedAttribute> namedAttrs;
+            namedAttrs.reserve(symDimDict.size());
+
+            for (auto [key, value] : symDimDict) {
+              // Get the key (symbolic dimension)
+              nb::handle key_handle = key;
+              if (!nb::isinstance<nb::str>(key_handle)) {
+                throw nb::type_error(
+                    "Symbolic dimension dictionary key must be a string");
+              }
+              std::string symbolicDim = nb::cast<std::string>(key_handle);
+
+              // Get the value (bound expression)
+              MlirAttribute attr;
+              try {
+                attr = nb::cast<MlirAttribute>(value);
+              } catch (const nb::cast_error &e) {
+                throw nb::type_error(
+                    "Symbolic dimension dictionary value must be an attribute");
+              }
+              if (!mlirAttributeIsAWaveExprAttr(attr)) {
+                throw nb::type_error("Symbolic dimension dictionary value must "
+                                     "be a WaveExprAttr");
+              }
+
+              namedAttrs.push_back(mlirNamedAttributeGet(
+                  mlirIdentifierGet(context,
+                                    mlirStringRefCreate(symbolicDim.data(),
+                                                        symbolicDim.size())),
+                  attr));
+            }
+
+            return cls(mlirWaveReadWriteBoundsAttrGet(mlirDictionaryAttrGet(
+                context, namedAttrs.size(), namedAttrs.data())));
+          },
+          nb::arg("cls"), nb::arg("sym_dim_dict"),
+          nb::arg("context") = nb::none(),
+          "Gets a wave.WaveReadWriteBoundsAttr from parameters.");
 }

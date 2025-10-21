@@ -5,6 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/MLIRContext.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
@@ -17,6 +20,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "water/Dialect/Wave/IR/WaveEnums.cpp.inc"
@@ -25,6 +29,36 @@
 
 using namespace mlir;
 using namespace wave;
+
+//===----------------------------------------------------------------------===//
+// Helpers
+//===----------------------------------------------------------------------===//
+
+/// Helper function to parse a `WaveSymbolAttr`, keeping track of both the
+/// parse WaveSymbolAttr and the symbol name string.
+static ParseResult parseSymbol(SmallVectorImpl<WaveSymbolAttr> &symbolNameAttrs,
+                               SmallVectorImpl<StringRef> &symbolNames,
+                               AsmParser &parser) {
+  MLIRContext *context = parser.getContext();
+  StringRef symbolName;
+  if (failed(parser.parseKeyword(&symbolName)))
+    return failure();
+  symbolNameAttrs.push_back(WaveSymbolAttr::get(context, symbolName));
+  symbolNames.push_back(symbolName);
+  return success();
+};
+
+/// Helper function to parse an affine wave expression with the wave
+/// symbol names passed in `names`.
+static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
+                                      AffineExpr &outExpr, AsmParser &parser) {
+  MLIRContext *context = parser.getContext();
+  SmallVector<std::pair<StringRef, AffineExpr>> symbolSet;
+  symbolSet.reserve(names.size());
+  for (auto [i, nm] : llvm::enumerate(names))
+    symbolSet.emplace_back(nm, getAffineSymbolExpr(i, context));
+  return parser.parseAffineExpr(symbolSet, outExpr);
+};
 
 //===----------------------------------------------------------------------===//
 // WaveIndexMappingAttr
@@ -68,18 +102,10 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<WaveSymbolAttr> symbolNameAttrs;
   SmallVector<StringRef> symbolNames;
 
-  auto parseSymbol = [&]() -> ParseResult {
-    StringRef symbolName;
-    if (failed(parser.parseKeyword(&symbolName)))
-      return failure();
-    symbolNameAttrs.push_back(
-        WaveSymbolAttr::get(parser.getContext(), symbolName));
-    symbolNames.push_back(symbolName);
-    return success();
-  };
-
   // Parse '[' symbol-names ']' allowing empty or non-empty lists.
-  if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, parseSymbol))
+  if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, [&]() {
+        return parseSymbol(symbolNameAttrs, symbolNames, parser);
+      }))
     return {};
 
   // Parse affine expr triple: '->' '(' start_expr ',' step_expr ',' stride_expr
@@ -88,23 +114,14 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   MLIRContext *context = parser.getContext();
-  auto parseExprWithNames = [&](ArrayRef<StringRef> names,
-                                AffineExpr &outExpr) -> ParseResult {
-    SmallVector<std::pair<StringRef, AffineExpr>> symbolSet;
-    symbolSet.reserve(names.size());
-    for (auto [i, nm] : llvm::enumerate(names))
-      symbolSet.emplace_back(nm, getAffineSymbolExpr(i, context));
-    return parser.parseAffineExpr(symbolSet, outExpr);
-  };
-
   AffineExpr startExpr;
   AffineExpr stepExpr;
   AffineExpr strideExpr;
-  if (failed(parseExprWithNames(symbolNames, startExpr)) ||
+  if (failed(parseExprWithNames(symbolNames, startExpr, parser)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, stepExpr)) ||
+      failed(parseExprWithNames(symbolNames, stepExpr, parser)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, strideExpr)) ||
+      failed(parseExprWithNames(symbolNames, strideExpr, parser)) ||
       parser.parseRParen()) {
     parser.emitError(
         parser.getCurrentLocation(),
@@ -120,8 +137,7 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   auto strideMap = AffineMap::get(
       /*numDims=*/0, /*numSymbols=*/symbolNames.size(), strideExpr, context);
 
-  return get(parser.getContext(), symbolNameAttrs, startMap, stepMap,
-             strideMap);
+  return get(context, symbolNameAttrs, startMap, stepMap, strideMap);
 }
 
 void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
@@ -165,38 +181,25 @@ bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
 }
 
 //===----------------------------------------------------------------------===//
-// WaveDistributedShapeAttr
+// ExprAttr
 //===----------------------------------------------------------------------===//
 
 std::optional<llvm::SmallVector<int64_t>>
-wave::DistributedShapeAttr::getResolvedShape(
-    wave::WaveHyperparameterAttr hyper) const {
-  std::optional<SmallVector<int64_t>> values =
-      wave::resolveSymbolNames(getSymbolNames(), hyper);
-  if (!values)
-    return std::nullopt;
-  return wave::evaluateMapWithSymbols(getShape(), *values);
+wave::ExprAttr::getResolvedShape(wave::WaveHyperparameterAttr hyper) const {
+  return wave::evaluateMapWithHyperparams(getShape(), getSymbolNames(), hyper);
 }
 
-Attribute DistributedShapeAttr::parse(AsmParser &parser, Type) {
+Attribute ExprAttr::parse(AsmParser &parser, Type) {
   if (parser.parseLess())
     return {};
 
   SmallVector<WaveSymbolAttr> symbolNameAttrs;
   SmallVector<StringRef> symbolNames;
 
-  auto parseSymbol = [&]() -> ParseResult {
-    StringRef symbolName;
-    if (failed(parser.parseKeyword(&symbolName)))
-      return failure();
-    symbolNameAttrs.push_back(
-        WaveSymbolAttr::get(parser.getContext(), symbolName));
-    symbolNames.push_back(symbolName);
-    return success();
-  };
-
   // Parse '[' symbol-names ']' allowing empty or non-empty lists.
-  if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, parseSymbol))
+  if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, [&]() {
+        return parseSymbol(symbolNameAttrs, symbolNames, parser);
+      }))
     return {};
 
   // Parse: '->' '(' expr (',' expr)* ')'
@@ -204,19 +207,10 @@ Attribute DistributedShapeAttr::parse(AsmParser &parser, Type) {
     return {};
   MLIRContext *context = parser.getContext();
 
-  // Helper to parse an affine expr where symbols are named by `names`.
-  auto parseExprWithNames = [&](AffineExpr &outExpr) -> ParseResult {
-    SmallVector<std::pair<StringRef, AffineExpr>> symbolSet;
-    symbolSet.reserve(symbolNames.size());
-    for (auto [i, nm] : llvm::enumerate(symbolNames))
-      symbolSet.emplace_back(nm, getAffineSymbolExpr(i, context));
-    return parser.parseAffineExpr(symbolSet, outExpr);
-  };
-
   SmallVector<AffineExpr> results;
   auto parseOneExpr = [&]() -> ParseResult {
     AffineExpr e;
-    if (failed(parseExprWithNames(e)))
+    if (failed(parseExprWithNames(symbolNames, e, parser)))
       return failure();
     results.push_back(e);
     return success();
@@ -225,8 +219,9 @@ Attribute DistributedShapeAttr::parse(AsmParser &parser, Type) {
     return {};
 
   if (results.empty()) {
-    parser.emitError(parser.getCurrentLocation(),
-                     "distributed shape must have at least one dimension");
+    parser.emitError(
+        parser.getCurrentLocation(),
+        "wave expression attribute must have at least one dimension");
     return {};
   }
   if (parser.parseGreater())
@@ -239,7 +234,7 @@ Attribute DistributedShapeAttr::parse(AsmParser &parser, Type) {
   return get(parser.getContext(), symbolNameAttrs, shape);
 }
 
-void DistributedShapeAttr::print(mlir::AsmPrinter &printer) const {
+void ExprAttr::print(mlir::AsmPrinter &printer) const {
   // Print symbol names like: [M, K] -> ( ... )
   printer << "<[";
   llvm::SmallVector<llvm::StringRef> names;
@@ -266,6 +261,103 @@ void DistributedShapeAttr::print(mlir::AsmPrinter &printer) const {
   printer << ")>";
 }
 
+//===----------------------------------------------------------------------===//
+// WaveExpressionAttr
+//===----------------------------------------------------------------------===//
+
+Attribute WaveExpressionAttr::parse(AsmParser &parser, Type type) {
+  // Parse custom syntax: '[' symbol-names ']' '->' '(' expr ')'
+  // This preserves meaningful symbol names while leveraging the existing
+  // affine parser.
+  SmallVector<WaveSymbolAttr> symbolNameAttrs;
+  SmallVector<StringRef> symbolNames;
+
+  // Parse '[' symbol-names ']' allowing empty or non-empty lists.
+  if (parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, [&]() {
+        return parseSymbol(symbolNameAttrs, symbolNames, parser);
+      }))
+    return {};
+
+  // Parse affine expr: '->' '(' expr ')'
+  if (parser.parseArrow() || parser.parseLParen())
+    return {};
+
+  MLIRContext *context = parser.getContext();
+  AffineExpr expr;
+  if (failed(parseExprWithNames(symbolNames, expr, parser)) ||
+      parser.parseRParen()) {
+    parser.emitError(parser.getCurrentLocation(),
+                     "expected one affine expressions");
+    return {};
+  }
+
+  // Build map
+  auto map = AffineMap::get(
+      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), expr, context);
+
+  return get(context, symbolNameAttrs, map);
+}
+
+void WaveExpressionAttr::print(AsmPrinter &printer) const {
+  // Print '[' symbol-names '] -> (expr)'.
+  // We keep one global symbol list (symbol_names) for all three expressions.
+  // Each expression is an affine map with the same numSymbols; we substitute
+  // s0, s1, ... using the shared names when rendering each expression.
+  printer << "[";
+  llvm::interleaveComma(getSymbolNames(), printer,
+                        [&](WaveSymbolAttr s) { printer << s.getName(); });
+  printer << "] -> ";
+
+  SmallVector<StringRef> allNames = getAllSymbolNames();
+  // All three maps share the same symbol set and order.
+  std::string str = stringifyWithNames(getMap(), allNames);
+
+  printer << "(" << str << ")";
+}
+
+//-----------------------------------------------------------------------------
+// Constraint attributes
+//-----------------------------------------------------------------------------
+
+LogicalResult HardwareConstraintAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, unsigned threadsPerWave,
+    ArrayRef<unsigned> wavesPerBlock, WaveMmaKindAttr mmaType,
+    DictionaryAttr vectorShapes, unsigned maxBitsPerLoad) {
+
+  if (vectorShapes && wavesPerBlock.size() != vectorShapes.size())
+    return emitError() << "waves_per_block (" << wavesPerBlock
+                       << ") does should have the same size as vector_shapes ("
+                       << vectorShapes << ")";
+
+  if (vectorShapes) {
+    for (NamedAttribute attr : vectorShapes) {
+      // TODO: verify that attr.getName() is a valid WaveSymbol
+      Attribute value = attr.getValue();
+
+      if (!isa<IntegerAttr>(value))
+        return emitError() << attr.getName()
+                           << " is not an IntegerAttr: " << attr.getValue();
+    }
+  }
+
+  return success();
+}
+
+LogicalResult WaveConstraintAttr::verify(
+    ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
+    ::wave::WaveSymbolAttr dim, ::wave::WaveExpressionAttr tile_size,
+    ::wave::WorkgroupConstraintAttr wg_constraint) {
+  if (wg_constraint && wg_constraint.getDim() != dim)
+    return emitError()
+           << "the dimension of the workgroup constraint in wg_constraint: "
+           << wg_constraint.getDim()
+           << " should match the dimension of the wave "
+              "constraint: "
+           << dim;
+
+  return success();
+}
+
 void wave::WaveDialect::registerAttributes() {
   addAttributes<
 #define GET_ATTRDEF_LIST
@@ -287,6 +379,53 @@ verifyTypesFullySpecified(std::optional<mlir::Location> loc,
     if (loc)
       mlir::emitError(*loc) << message;
     return llvm::failure();
+  }
+  return llvm::success();
+}
+
+// Verify that wave tensor types in the given range have memory-related address
+// spaces, i.e., no unspecified and no register space.
+static llvm::LogicalResult
+verifyMemoryOnlyAddressSpaces(std::optional<mlir::Location> loc,
+                              mlir::TypeRange types, llvm::StringRef message) {
+  for (mlir::Type type : types) {
+    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(type);
+    if (!tensorType || llvm::is_contained({wave::WaveAddressSpace::Global,
+                                           wave::WaveAddressSpace::Shared},
+                                          tensorType.getAddressSpaceValue()))
+      continue;
+
+    if (loc)
+      mlir::emitError(*loc) << message;
+    return llvm::failure();
+  }
+  return llvm::success();
+}
+
+// Type of a callback visiting and verifying types of operation operands,
+// results and block argument lists. The callback is expected to emit a
+// diagnostic with the given message if the location is provided, and return
+// failure in any case if verification fails.
+using OpTypeRangeVisitor = llvm::function_ref<llvm::LogicalResult(
+    std::optional<mlir::Location>, mlir::TypeRange, llvm::StringRef)>;
+
+// Call `visitor` to verify type ranges of operation operands, results and block
+// argument lists in immediately nested regions.
+static llvm::LogicalResult visitOpRelatedTypes(mlir::Operation *op,
+                                               OpTypeRangeVisitor visitor,
+                                               llvm::StringRef message,
+                                               bool emitDiagnostics) {
+  std::optional<mlir::Location> optionalLoc =
+      emitDiagnostics ? std::optional(op->getLoc()) : std::nullopt;
+  if (llvm::failed(visitor(optionalLoc, op->getOperandTypes(), message)))
+    return llvm::failure();
+  if (llvm::failed(visitor(optionalLoc, op->getResultTypes(), message)))
+    return llvm::failure();
+  for (mlir::Region &region : op->getRegions()) {
+    for (mlir::Block &block : region) {
+      if (llvm::failed(visitor(optionalLoc, block.getArgumentTypes(), message)))
+        return llvm::failure();
+    }
   }
   return llvm::success();
 }
@@ -322,20 +461,22 @@ llvm::LogicalResult wave::detail::verifyNormalFormAttr(
 
         if (wave::bitEnumContainsAll(form,
                                      wave::WaveNormalForm::OpTypesSpecified)) {
-          const llvm::StringLiteral kMessage =
-              "normal form requires tensor types to be fully specified";
-          if (llvm::failed(verifyTypesFullySpecified(
-                  optionalLoc, op->getOperandTypes(), kMessage)))
+          if (llvm::failed(visitOpRelatedTypes(
+                  op, verifyTypesFullySpecified,
+                  "normal form requires tensor types to be fully specified",
+                  emitDiagnostics))) {
             return mlir::WalkResult::interrupt();
-          if (llvm::failed(verifyTypesFullySpecified(
-                  optionalLoc, op->getResultTypes(), kMessage)))
+          }
+        }
+
+        if (wave::bitEnumContainsAll(form,
+                                     wave::WaveNormalForm::MemoryOnlyTypes)) {
+          if (llvm::failed(visitOpRelatedTypes(
+                  op, verifyMemoryOnlyAddressSpaces,
+                  "normal form requires tensor types to have only memory "
+                  "address spaces (elements per thread propagation missing?)",
+                  emitDiagnostics))) {
             return mlir::WalkResult::interrupt();
-          for (mlir::Region &region : op->getRegions()) {
-            for (mlir::Block &block : region) {
-              if (llvm::failed(verifyTypesFullySpecified(
-                      optionalLoc, block.getArgumentTypes(), kMessage)))
-                return mlir::WalkResult::interrupt();
-            }
           }
         }
 

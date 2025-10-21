@@ -10,6 +10,7 @@
 include "water/Dialect/Wave/IR/WaveAttrs.td"
 include "water/Dialect/Wave/IR/WaveDialect.td"
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/CommonTypeConstraints.td"
 
 //-----------------------------------------------------------------------------
 // Tensor type
@@ -92,14 +93,14 @@ def WaveTensorAddressSpaceShared
   : CPred<"::llvm::cast<::wave::WaveTensorType>($_self).getAddressSpaceValue()"
           " == ::wave::WaveAddressSpace::Shared">;
 def WaveTensorAddressSpaceRegister
-  : CPred<"::llvm::cast<::wave::WaveTensorType>($_self).getAddressSpaceValue()"
-          " == ::wave::WaveAddressSpace::Register">;
+  : CPred<"::wave::isaTensorInRegister($_self)">;
 
 def WaveTensorInRegister : TypeConstraint<
-  And<[WaveTensorType.predicate,
-       Or<[WaveTensorAddressSpaceUnspecified, WaveTensorAddressSpaceRegister]>]>,
-  "Wave tensor in register",
-  WaveTensorType.cppType
+  Or<[WaveTensorAddressSpaceRegister,
+      And<[WaveTensorType.predicate, WaveTensorAddressSpaceUnspecified]>,
+      IsFixedVectorOfRankPred<[1]>]>,
+  "Wave tensor in register or a 1D vector",
+  "::mlir::Type"
 >;
 
 def WaveTensorInMemory : TypeConstraint<

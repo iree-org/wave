@@ -41,7 +41,7 @@ mlirAttributeIsAWaveIndexMappingAttr(MlirAttribute attr);
 /// maps that are interpreted as accepting the symbols provided in the
 /// `symbolNames` list. The list must have as many entries as maps have symbols,
 /// and all maps must have the same number of symbols and zero dimensions. The
-/// list is expected to only contain WaveIndexAttr instances.
+/// list is expected to only contain WaveSymbolAttr instances.
 MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGet(
     MlirContext mlirCtx, MlirAttribute *symbolNames, MlirAffineMap start,
     MlirAffineMap step, MlirAffineMap stride);
@@ -64,6 +64,59 @@ mlirWaveHyperparameterAttrGet(MlirAttribute mapping);
 
 /// Returns the typeID of a WaveHyperparameterAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveHyperparameterAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveAddressSpaceAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveAddressSpaceAttr(MlirAttribute attr);
+
+/// Creates a new WaveAddressSpaceAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveAddressSpaceAttrGet(MlirContext mlirCtx, uint32_t value);
+
+// Get the value from a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveAddressSpaceAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveExprAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveExprAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveExprAttr(MlirAttribute attr);
+
+/// Creates a new WaveExprAttr with the given map that is
+/// interpreted as accepting the symbols provided in the
+/// `symbolNames` list. The list must have as many entries as maps have symbols,
+/// and all maps must have the same number of symbols and zero dimensions. The
+/// list is expected to only contain WaveSymbolAttr instances.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveExprAttrGet(MlirAttribute *symbolNames,
+                                                     MlirAffineMap map);
+
+/// Returns the typeID of a WaveExprAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveExprAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveReadWriteBoundsAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveReadWriteBoundsAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveReadWriteBoundsAttr(MlirAttribute attr);
+
+/// Creates a new WaveReadWriteBoundsAttr with the given mapping from symbolic
+/// dimensions to their bound expressions.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping);
+
+/// Returns the typeID of a WaveReadWriteBoundsAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveReadWriteBoundsAttrGetTypeID();
 
 #ifdef __cplusplus
 }

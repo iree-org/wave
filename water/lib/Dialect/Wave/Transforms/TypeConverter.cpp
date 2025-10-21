@@ -21,8 +21,8 @@
 using namespace mlir;
 
 wave::WaveTypeConverter::WaveTypeConverter(
-    wave::WaveHyperparameterAttr hyperParameters)
-    : hyperParameters(hyperParameters) {
+    wave::WaveHyperparameterAttr hyperparameters)
+    : hyperparameters(hyperparameters) {
   // Catch-all noop conversion. This will be called last.
   addConversion([](Type t) { return t; });
 
@@ -31,6 +31,17 @@ wave::WaveTypeConverter::WaveTypeConverter(
                                        /*shape=*/{},
                                        tensorType.getElementType(),
                                        tensorType.getAddressSpaceValue());
+  });
+
+  addConversion([this](VectorType vectorType) -> Type {
+    if (vectorType.isScalable() || vectorType.getRank() != 1)
+      return nullptr;
+
+    Type elementType = convertType(vectorType.getElementType());
+    if (elementType == vectorType.getElementType())
+      return vectorType;
+
+    return VectorType::get(vectorType.getShape(), elementType);
   });
 
   addSourceMaterialization([](OpBuilder &builder, wave::WaveTensorType waveType,
@@ -55,13 +66,9 @@ wave::WaveTypeConverter::WaveTypeConverter(
 mlir::Type wave::WaveTypeConverter::convertTensorFromComponents(
     llvm::ArrayRef<wave::WaveSymbolAttr> symbols, mlir::AffineMap shape,
     mlir::Type elementType, wave::WaveAddressSpace addressSpace) const {
-  std::optional<SmallVector<int64_t>> symbolValues =
-      wave::resolveSymbolNames(symbols, hyperParameters);
-  if (!symbolValues)
-    return nullptr;
-
   std::optional<SmallVector<int64_t>> staticShape =
-      shape ? wave::evaluateMapWithSymbols(shape, *symbolValues) : symbolValues;
+      shape ? wave::evaluateMapWithHyperparams(shape, symbols, hyperparameters)
+            : wave::resolveSymbolNames(symbols, hyperparameters);
   if (!staticShape)
     return nullptr;
 
@@ -93,8 +100,7 @@ mlir::Type wave::WaveTypeConverter::convertTensorFromComponents(
   }
 
   case wave::WaveAddressSpace::Register:
-    // For register space, use vector type (registers are handled by LLVM)
-    return VectorType::get(*staticShape, elementType);
+    return nullptr;
   }
 
   llvm_unreachable("unsupported address space");

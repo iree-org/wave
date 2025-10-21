@@ -3,6 +3,7 @@ import warnings
 from abc import ABC, abstractmethod
 from types import FunctionType, BuiltinFunctionType
 from typing import (
+    Any,
     Callable,
     Dict,
     Optional,
@@ -22,6 +23,8 @@ from ..ops.base import (
     OpDispatcher,
 )
 from ..ops.wave_ops import CustomOp
+from ..ops.wave_schedule_ops import CustomScheduleOp
+from ..wave.constraints import Constraint
 from . import context
 from .dtype import DataType
 from .indexing import (
@@ -31,7 +34,9 @@ from .indexing import (
     backed_sym_index_type,
 )
 from ...support.location_config import LocationCaptureConfig
-from .regions import RegionGraph, SubgraphTracer
+from .location import CapturedLocation
+from ..wave.mlir_converter.utility import snapshot_node_fields, restore_node_fields
+from .regions import RegionGraph, SubgraphTracer, ScheduleRegionGraph
 
 try:
     from typing import assert_type
@@ -163,9 +168,15 @@ class KernelTracer(SubgraphTracer):
 
 
 class CapturedTrace:
-    def __init__(self, region_graph: RegionGraph, root_graph: str):
+    def __init__(
+        self,
+        region_graph: RegionGraph,
+        root_graph: str,
+        location: Optional[CapturedLocation],
+    ):
         self.region_graph = region_graph
         self.root_graph = root_graph
+        self.location = location
         self.region_graph.subgraphs[root_graph].subgraphs = {}
         for name, subgraph in self.region_graph.subgraphs.items():
             if name != root_graph:
@@ -187,6 +198,31 @@ class CapturedTrace:
                 if filter is None or filter(node):
                     nodes.append(node)
         return nodes
+
+    def snapshot_node_state(self) -> None:
+        # Snapshot supplemental node fields for pickling
+        for node in self.walk():
+            snapshot_node_fields(node)
+
+    def restore_node_state(self) -> None:
+        # Restore supplemental node fields after unpickling
+        for node in self.walk():
+            restore_node_fields(node)
+
+
+class ScheduleTracer(SubgraphTracer):
+    def __init__(
+        self,
+        region_graph: ScheduleRegionGraph,
+        parent: Optional["ScheduleTracer"] = None,
+    ):
+        super().__init__(region_graph, parent)
+
+    def create_proxy(self, *args, **kwargs):
+        return super().create_proxy(*args, **kwargs)
+
+    def create_node(self, *args, **kwargs):
+        return super().create_node(*args, **kwargs)
 
 
 ###############################################################################
@@ -230,6 +266,42 @@ class CompiledContext(BaseContext):
             return op.handle(self.region_graph, *args, **kwargs)
 
         setattr(self, f"handle_{name}", handler)
+
+
+class ScheduleContext(BaseContext):
+    """Context for schedule tracing that doesn't require a grid."""
+
+    def __init__(
+        self,
+        region_graph: RegionGraph,
+        kernel_trace=None,
+        constraints: list[Constraint] = None,
+    ):
+        super().__init__(eager=False)
+        self.region_graph = region_graph
+        self.kernel_trace = kernel_trace
+        self.constraints = constraints
+        # Dictionary to maintain mapping from proxies to their results
+        self.proxy_to_results: Dict[fx.Proxy, Any] = {}
+
+    def register_custom_op(self, name: str, op: CustomScheduleOp):
+        def handler(*args, **kwargs):
+            return op.handle(
+                self.region_graph, self.kernel_trace, self.constraints, *args, **kwargs
+            )
+
+        setattr(self, f"handle_{name}", handler)
+
+    def get_proxy_result(self, proxy: fx.Proxy) -> Any:
+        """Get the result for a proxy, checking the dictionary first, then falling back to .target()"""
+        if proxy in self.proxy_to_results:
+            return self.proxy_to_results[proxy]
+        else:
+            # Fall back to .target() function with error handling
+            try:
+                return proxy.target()
+            except:
+                raise ValueError(f"Proxy {proxy} has no result or target function")
 
 
 ###############################################################################

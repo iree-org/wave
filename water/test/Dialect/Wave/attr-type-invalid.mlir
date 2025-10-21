@@ -15,5 +15,10 @@ module attributes {wave.hyperparameters = 1} {}
 
 // -----
 
+// expected-error @below {{"wave.elements_per_thread" expects an IntegerAttr}}
+module attributes {wave.elements_per_thread = "abc"} {}
+
+// -----
+
 // expected-error @below {{unexpected wave dialect attribute "wave.unexpected"}}
 module attributes {wave.unexpected = 42} {}

@@ -81,6 +81,55 @@ try:
         else:
             assert False, "Expected to fail with ValueError."
 
+        # CHECK: #wave.address_space<shared>
+        addr_attr = wave.WaveAddressSpaceAttr.get(wave.WaveAddressSpace.Shared)
+        print(addr_attr)
+
+        # CHECK: WaveAddressSpace.Shared
+        print(addr_attr.value())
+
+        try:
+            wave.WaveAddressSpaceAttr.get(5)
+        except TypeError as e:
+            assert "incompatible function arguments" in str(e)
+        else:
+            assert False, "Expected to fail with TypeError."
+
+        # CHECK: #wave.expr<[$WG0, BLOCK_M, $T0] -> ($WG0 * 3)>
+        expr_attr = wave.WaveExprAttr.get(symbol_names, start_map)
+        print(expr_attr)
+
+        try:
+            wave.WaveExprAttr.get(symbol_names[:-1], start_map)
+        except ValueError as e:
+            assert "as many entries as map have symbols" in str(e)
+        else:
+            assert False, "Expected to fail with ValueError."
+
+        # CHECK: #wave.read_write_bounds<{M = #wave.expr<[$WG0, BLOCK_M, $T0] -> ($WG0 * 3)>}>
+        print(wave.WaveReadWriteBoundsAttr.get({"M": expr_attr}))
+
+        try:
+            wave.WaveReadWriteBoundsAttr.get({3: expr_attr})
+        except TypeError as e:
+            assert "must be a string" in str(e)
+        else:
+            assert False, "Expected to fail with TypeError."
+
+        try:
+            wave.WaveReadWriteBoundsAttr.get({"A": 1.0})
+        except TypeError as e:
+            assert "must be an attribute" in str(e)
+        else:
+            assert False, "Expected to fail with TypeError."
+
+        try:
+            wave.WaveReadWriteBoundsAttr.get({"A": addr_attr})
+        except TypeError as e:
+            assert "must be a WaveExprAttr" in str(e)
+        else:
+            assert False, "Expected to fail with TypeError."
+
     # CHECK: wave_ok
     print("wave_ok")
 except Exception as e:

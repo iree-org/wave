@@ -23,3 +23,4 @@ class SchedulingType(Enum):
     PREFETCH = 0x20
     FOUR_STAGE = 0x21
     PREFETCH_ATTENTION = 0x22
+    MANUAL = 0x30

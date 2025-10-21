@@ -77,6 +77,8 @@ def test_location_local_scope():
     # CHECK: vector.load {{.*}} loc("{{.*}}location.py":{{[0-9]+}}
     # CHECK: arith.addf {{.*}} loc("{{.*}}location.py":{{[0-9]+}}
     #
+    # CHECK: #llvm.di_subprogram<{{.*}} compileUnit = <{{.*}} file = <"location.py" in "{{.*}}lit_tests/kernel/wave">,
+    #
     # CHECK: @isolated_benchmark$async(%{{.*}} loc("a"("{{.*}}location.py":{{[0-9]+}}{{.*}} loc("b"("{{.*}}location.py":{{[0-9]+}}
 
 
