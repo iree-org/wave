@@ -510,7 +510,9 @@ def test_wmma_f32_16x16x16_f16_w32():
     # CHECK-DAG:        %[[V8:.+]] = affine.apply #map4()[%[[TID_X]]]
     # CHECK-DAG:        vector.store %[[R2]], %[[VIEW0]][%[[V8]], %[[V2]]] {{.*}} vector<8xf16>
 
-    # CHECK-DAG:        amdgpu.lds_barrier
+    # CHECK-DAG:        rocdl.s.wait.dscnt
+    # CHECK-DAG:        rocdl.s.barrier.signal
+    # CHECK-DAG:        rocdl.s.barrier.wait
 
     # CHECK-DAG:        %[[R3:.+]] = vector.load %[[VIEW0]][%[[V8]], %[[V2]]] {{.*}} vector<8xf16>
     # CHECK-DAG:        %[[R4:.+]] = vector.load %[[VIEW1]][%[[V4]], %[[V2]]] {{.*}} vector<8xf16>

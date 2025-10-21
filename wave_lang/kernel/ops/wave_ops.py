@@ -128,6 +128,12 @@ def set_wave_prio(priority: int): ...
 def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
+def shared_memory_barrier_signal(barId: int = 0, wait_async_ops: bool = False): ...
+
+
+def shared_memory_barrier_wait(barId: int = 0): ...
+
+
 def workgroup_barrier(): ...
 
 
@@ -1463,6 +1469,46 @@ class SharedMemoryBarrier(CustomOp):
         return True
 
 
+@define_op("shared_memory_barrier_signal")
+@dataclass
+class SharedMemoryBarrierSignal(CustomOp):
+    """
+    Represents a shared memory barrier signal in the graph. (gfx12)
+    Argument specifies which barrier to signal.
+    [1:31]:  named barriers
+     0:     NOOP
+    -1:     works as s_barrier
+    -2:     trap barrier
+    """
+
+    barId: int = 0
+    wait_async_ops: bool = False
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
+@define_op("shared_memory_barrier_wait")
+@dataclass
+class SharedMemoryBarrierWait(CustomOp):
+    """
+    Wait for all waves in a WG to signal the barrier before proceeding. (gfx12)
+    synchronize waves within a WG.
+    Argument specifies which barrier to wait on.
+    [1:31]:  named barriers
+     0:     NOOP
+    -1:     works as s_barrier
+    -2:     trap barrier
+    """
+
+    barId: int = 0
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
 @define_op("scheduling_barrier")
 @dataclass
 class SchedulingBarrier(CustomOp):
@@ -1500,7 +1546,7 @@ class AtomicOp(BinaryOpBase):
 
     @property
     def memory_type(self) -> "Memory":
-        return get_custom(self.lhs).type
+        return get_custom(self.rhs).type
 
 
 @define_op("atomic_add")

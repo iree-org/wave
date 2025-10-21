@@ -40,6 +40,8 @@ from ...ops.wave_ops import (
     SelectOp,
     SetWavePrio,
     SharedMemoryBarrier,
+    SharedMemoryBarrierSignal,
+    SharedMemoryBarrierWait,
     WorkgroupBarrier,
     Write,
     get_custom,
@@ -216,7 +218,16 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
             continue
         if isinstance(custom, (Output, NestedRegionOp)):
             continue
-        if isinstance(custom, (SharedMemoryBarrier, SetWavePrio, WorkgroupBarrier)):
+        if isinstance(
+            custom,
+            (
+                SharedMemoryBarrier,
+                SharedMemoryBarrierSignal,
+                SharedMemoryBarrierWait,
+                SetWavePrio,
+                WorkgroupBarrier,
+            ),
+        ):
             continue
         if isinstance(custom.type, DataType):
             continue
