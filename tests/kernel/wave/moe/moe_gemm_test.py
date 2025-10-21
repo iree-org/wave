@@ -5867,18 +5867,18 @@ module attributes {transform.with_named_sequence} {
 
           // =========================================================================
           // PADDED SHARED MEMORY LAYOUT
-          // Use 64x40 with 8 columns of padding for optimal bank conflict avoidance
-          // 64x40x2 = 5120 bytes per buffer
-          // Total: 10240 bytes (well within 64KB LDS limit)
+          // Use 64x34 with 8 columns of padding for optimal bank conflict avoidance
+          // 64x34x2 = 4352 bytes per buffer
+          // Total: 8704 bytes (well within 64KB LDS limit)
           // Row stride = 80 bytes = 20 banks (not a divisor of 32, good!)
           // =========================================================================
           %c40 = arith.constant 40 : index
-          %c5120 = arith.constant 5120 : index
-          %alloc = memref.alloc() : memref<10240xi8, #gpu.address_space<workgroup>>
-          %shared_a = memref.view %alloc[%c0][] : memref<10240xi8, #gpu.address_space<workgroup>>
-            to memref<64x40xf16, #gpu.address_space<workgroup>>
-          %shared_b = memref.view %alloc[%c5120][] : memref<10240xi8, #gpu.address_space<workgroup>>
-            to memref<64x40xf16, #gpu.address_space<workgroup>>
+          %c4352 = arith.constant 4352 : index
+          %alloc = memref.alloc() : memref<8704xi8, #gpu.address_space<workgroup>>
+          %shared_a = memref.view %alloc[%c0][] : memref<8704xi8, #gpu.address_space<workgroup>>
+            to memref<64x34xf16, #gpu.address_space<workgroup>>
+          %shared_b = memref.view %alloc[%c4352][] : memref<8704xi8, #gpu.address_space<workgroup>>
+            to memref<64x34xf16, #gpu.address_space<workgroup>>
 
           // Wave and tile assignment
           %wave_id = arith.divui %thread_id, %c64 : index
@@ -5920,11 +5920,9 @@ module attributes {transform.with_named_sequence} {
 
           // Store to padded shared memory
           vector.store %a_row_vec_0, %shared_a[%load_row_base, %load_col_offset] :
-            memref<64x40xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+            memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
           vector.store %b_row_vec_0, %shared_b[%load_row_base, %load_col_offset] :
-            memref<64x40xf16, #gpu.address_space<workgroup>>, vector<16xf16>
-
-          amdgpu.lds_barrier
+            memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
 
           // MFMA load indices
           %mfma_load_col = affine.apply #map_load_col()[%lane_id]
@@ -5946,16 +5944,18 @@ module attributes {transform.with_named_sequence} {
 
             %k_start = arith.muli %k_block, %BLOCK_SIZE_K : index
 
+            amdgpu.lds_barrier
+
             // Load from padded shared memory
             %a0 = vector.load %shared_a[%mfma_row_a, %mfma_load_col] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
             %b0 = vector.load %shared_b[%mfma_row_b, %mfma_load_col] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
             %a1 = vector.load %shared_a[%mfma_row_a, %mfma_col_8] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
             %b1 = vector.load %shared_b[%mfma_row_b, %mfma_col_8] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
             // Prefetch
             %k_start_next = arith.addi %k_start, %BLOCK_SIZE_K : index
@@ -5967,52 +5967,54 @@ module attributes {transform.with_named_sequence} {
               memref<8x32768x6144xf16>, vector<16xf16>
 
             %a2 = vector.load %shared_a[%mfma_row_a, %mfma_col_16] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
             %b2 = vector.load %shared_b[%mfma_row_b, %mfma_col_16] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
             %a3 = vector.load %shared_a[%mfma_row_a, %mfma_col_24] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
             %b3 = vector.load %shared_b[%mfma_row_b, %mfma_col_24] :
-                memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+                memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
             // MFMA operations
             %r0 = amdgpu.mfma %a0 * %b0 + %acc {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
             %r1 = amdgpu.mfma %a1 * %b1 + %r0 {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
 
-            amdgpu.lds_barrier
-            vector.store %a_row_vec_next, %shared_a[%load_row_base, %load_col_offset] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<16xf16>
-            vector.store %b_row_vec_next, %shared_b[%load_row_base, %load_col_offset] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<16xf16>
-            amdgpu.lds_barrier
-
             %r2 = amdgpu.mfma %a2 * %b2 + %r1 {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
             %r3 = amdgpu.mfma %a3 * %b3 + %r2 {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+
+            vector.store %a_row_vec_next, %shared_a[%load_row_base, %load_col_offset] :
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+            vector.store %b_row_vec_next, %shared_b[%load_row_base, %load_col_offset] :
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<16xf16>
+
+            amdgpu.lds_barrier
 
             scf.yield %r3 : vector<16xf32>
           }
 
+          amdgpu.lds_barrier
+
           // EPILOGUE
           %a0_last = vector.load %shared_a[%mfma_row_a, %mfma_load_col] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
           %b0_last = vector.load %shared_b[%mfma_row_b, %mfma_load_col] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
           %a1_last = vector.load %shared_a[%mfma_row_a, %mfma_col_8] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
           %b1_last = vector.load %shared_b[%mfma_row_b, %mfma_col_8] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
           %a2_last = vector.load %shared_a[%mfma_row_a, %mfma_col_16] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
           %b2_last = vector.load %shared_b[%mfma_row_b, %mfma_col_16] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
           %a3_last = vector.load %shared_a[%mfma_row_a, %mfma_col_24] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
           %b3_last = vector.load %shared_b[%mfma_row_b, %mfma_col_24] :
-              memref<64x40xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+              memref<64x34xf16, #gpu.address_space<workgroup>>, vector<4xf16>
 
           %r0_last = amdgpu.mfma %a0_last * %b0_last + %result {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
           %r1_last = amdgpu.mfma %a1_last * %b1_last + %r0_last {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<16xf32>
@@ -6079,11 +6081,17 @@ module attributes {transform.with_named_sequence} {
 }
     """
 )
+
+    asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering = (
+    """
+    """
+)
     asm = asm_dtype0_256_128_8_64_2_33
   # asm = asm_dtype0_256_128_8_64_2_33_mfma
     asm = asm_dtype0_32768_6144_8_64_2_16384_mfma
+    asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering
     asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding
-    asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves
+  # asm = asm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves
   # asm = asm_dtype0_1024_256_8_64_2_2048_mfma
     gemm_kernel, symbols = get_moe_gemm_kernel(
         num_tokens,
@@ -6160,10 +6168,10 @@ module attributes {transform.with_named_sequence} {
         for j in range(num):
             k = j * 64
             k = j * 16384
-       #    print(f"REF_C[{i}][0][{k}] {ref_c[i][0][k:k+64]}")
-       #    print(f"C[{i}][0][{k}] {mlir_c[i][0][k:k+64]}")
-       #    print(f"REF_C[{i}][1][{k}] {ref_c[i][1][k:k+64]}")
-       #    print(f"C[{i}][1][{k}] {mlir_c[i][1][k:k+64]}")
+            print(f"REF_C[{i}][0][{k}] {ref_c[i][0][k:k+64]}")
+            print(f"C[{i}][0][{k}] {mlir_c[i][0][k:k+64]}")
+            print(f"REF_C[{i}][1][{k}] {ref_c[i][1][k:k+64]}")
+            print(f"C[{i}][1][{k}] {mlir_c[i][1][k:k+64]}")
             torch.testing.assert_close(
                 ref_c[i][0][k:k+16384],
                 mlir_c[i][0][k:k+16384],
