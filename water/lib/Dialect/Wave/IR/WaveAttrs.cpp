@@ -296,7 +296,7 @@ WorkgroupConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                 WaveWorkgroupDimAttr workgroup_dim,
                                 bool primary) {
   if (tile_size.getSize() != 1) {
-    return emitError() << "invalid ExpressionList size. Expected 1.";
+    return emitError() << "invalid ExpressionList size, expected 1";
   }
   return success();
 }
@@ -324,7 +324,7 @@ LogicalResult
 TilingConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                              WaveSymbolAttr dim, WaveExprListAttr tile_size) {
   if (tile_size.getSize() != 1) {
-    return emitError() << "invalid ExpressionList size. Expected 1.";
+    return emitError() << "invalid ExpressionList size, expected 1";
   }
   return success();
 }
@@ -334,7 +334,7 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                              WaveSymbolAttr dim, WaveExprListAttr tile_size,
                              unsigned int device_dim) {
   if (tile_size.getSize() != 1) {
-    return emitError() << "invalid ExpressionList size. Expected 1.";
+    return emitError() << "invalid ExpressionList size, expected 1";
   }
   return success();
 }
