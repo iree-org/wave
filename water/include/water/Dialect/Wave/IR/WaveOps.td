@@ -225,9 +225,9 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 
   let arguments = (ins
     Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
-    Arg<WaveExprAttr>:$offset,
-    Arg<WaveExprAttr>:$size,
-    Arg<WaveExprAttr>:$stride
+    Arg<WaveExprListAttr>:$offset,
+    Arg<WaveExprListAttr>:$size,
+    Arg<WaveExprListAttr>:$stride
   );
 
   let results = (outs

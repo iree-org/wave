@@ -191,7 +191,7 @@ wave::WaveExprListAttr::getResolvedShape(
 }
 
 llvm::LogicalResult
-wave::verifyExprAttrsSameRank(llvm::ArrayRef<wave::ExprAttr> exprs) {
+wave::verifyExprAttrsSameRank(llvm::ArrayRef<wave::WaveExprListAttr> exprs) {
   if (exprs.empty())
     return mlir::success();
 
@@ -206,7 +206,7 @@ wave::verifyExprAttrsSameRank(llvm::ArrayRef<wave::ExprAttr> exprs) {
 }
 
 llvm::LogicalResult
-wave::verifyExprAttrsNoSymbols(llvm::ArrayRef<wave::ExprAttr> exprs) {
+wave::verifyExprAttrsNoSymbols(llvm::ArrayRef<wave::WaveExprListAttr> exprs) {
   for (const auto &expr : exprs) {
     if (expr.getNumSymbols() != 0)
       return mlir::failure();

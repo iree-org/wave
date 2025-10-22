@@ -487,16 +487,15 @@ mlir::LogicalResult wave::RegisterOp::verify() {
 //-----------------------------------------------------------------------------
 
 LogicalResult ExtractSliceOp::verify() {
-  wave::ExprAttr offset = getOffset();
-  wave::ExprAttr size = getSize();
-  wave::ExprAttr stride = getStride();
+  wave::WaveExprListAttr offset = getOffset();
+  wave::WaveExprListAttr size = getSize();
+  wave::WaveExprListAttr stride = getStride();
 
   if (failed(wave::verifyExprAttrsSameRank({offset, size, stride}))) {
     return emitOpError() << "offset, size, and stride must all have the same "
                             "rank, but got offset rank "
-                         << offset.getRank() << ", size rank "
-                         << size.getRank() << ", and stride rank "
-                         << stride.getRank();
+                         << offset.getRank() << ", size rank " << size.getRank()
+                         << ", and stride rank " << stride.getRank();
   }
 
   if (failed(wave::verifyExprAttrsNoSymbols({offset, size, stride}))) {

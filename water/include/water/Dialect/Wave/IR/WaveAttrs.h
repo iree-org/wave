@@ -18,12 +18,14 @@ namespace wave {
 
 /// Verify that all provided ExprAttr attributes have the same rank. Returns
 /// success if all ranks match, failure otherwise.
-llvm::LogicalResult verifyExprAttrsSameRank(llvm::ArrayRef<ExprAttr> exprs);
+llvm::LogicalResult
+verifyExprAttrsSameRank(llvm::ArrayRef<WaveExprListAttr> exprs);
 
 /// Verify that all provided ExprAttr attributes have no symbols (i.e., they are
 /// constant expressions). Returns success if all have zero symbols, failure
 /// otherwise.
-llvm::LogicalResult verifyExprAttrsNoSymbols(llvm::ArrayRef<ExprAttr> exprs);
+llvm::LogicalResult
+verifyExprAttrsNoSymbols(llvm::ArrayRef<WaveExprListAttr> exprs);
 
 } // namespace wave
 

@@ -12,6 +12,7 @@ import torch.fx as fx
 import sys
 from typing import TYPE_CHECKING, Callable, Sequence
 import sympy
+import warnings
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
@@ -21,8 +22,8 @@ if TYPE_CHECKING:
     from wave_lang.kernel.ops.wave_ops import *
 
 try:
-    from water_mlir.water_mlir import ir
-    from water_mlir.water_mlir.dialects.wave import (
+    from water_mlir import ir
+    from water_mlir.dialects.wave import (
         AddOp,
         AllocateOp,
         DivOp,
@@ -35,7 +36,7 @@ try:
         WriteOp,
         IterateOp,
         YieldOp,
-        WaveExprAttr,
+        WaveExprListAttr,
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
@@ -217,6 +218,9 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
 
     if isinstance(node, MMA):
         # TODO: Have special handling for MMA index as it uses Piecewise.
+        warnings.warn(
+            "MMA node index handling not yet implemented - skipping", UserWarning
+        )
         return
 
     if getattr(node, "index", None) and isinstance(node.index, dict):
@@ -260,7 +264,7 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
 
 def _convert_to_wave_expr_tuple(
     exprs: Sequence[sympy.Expr], ctx: ir.Context
-) -> WaveExprAttr:
+) -> WaveExprListAttr:
     """
     Returns a WaveExpressionAttribute from a sequence of wave IndexExpr.
     """
