@@ -191,8 +191,40 @@ def is_water_available() -> bool:
         return False
 
 
+def get_water_binary_path() -> str:
+    return find_binary("water-opt")
+
+
+def make_linear_pass_pipeline(
+    pipeline: Sequence[
+        tuple[str, dict[str, Any]] | tuple[str, dict[str, Any], str] | str
+    ],
+) -> str:
+    def make_pass_arguments(
+        name: str, args: dict[str, Any], module_name: str = None
+    ) -> str:
+        ret = (
+            name
+            + "{"
+            + " ".join("=".join((key, str(value))) for (key, value) in args.items())
+            + "}"
+        )
+        if module_name:
+            ret = module_name + "(" + ret + ")"
+        return ret
+
+    return (
+        "--pass-pipeline=builtin.module("
+        + ",".join(
+            entry if isinstance(entry, str) else make_pass_arguments(*entry)
+            for entry in pipeline
+        )
+        + ")"
+    )
+
+
 def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
-    binary = find_binary("water-opt")
+    binary = get_water_binary_path()
     generic_mlir = _deiree(module) if override_ir == "" else override_ir
     pipeline = [
         (
@@ -207,26 +239,6 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         "canonicalize",
         "water-check-static-assertions",
     ]
-
-    def make_linear_pass_pipeline(
-        pipeline: Sequence[tuple[str, dict[str, Any]] | str],
-    ) -> str:
-        def make_pass_arguments(name: str, args: dict[str, Any]) -> str:
-            return (
-                name
-                + "{"
-                + " ".join("=".join((key, str(value))) for (key, value) in args.items())
-                + "}"
-            )
-
-        return (
-            "--pass-pipeline=builtin.module("
-            + ",".join(
-                entry if isinstance(entry, str) else make_pass_arguments(*entry)
-                for entry in pipeline
-            )
-            + ")"
-        )
 
     def get_code_context(
         filename: str, start_line: int, end_line, context: int = 2
@@ -364,3 +376,19 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         )
     else:
         print("[info] No out-of-bounds accesses detected.")
+
+
+def water_lowering_pipeline(module: Module) -> Module:
+    binary = get_water_binary_path()
+    mlir_asm = module.operation.get_asm()
+    pipeline = [
+        ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
+        ("rocdl-attach-target", {"chip": "gfx1100"}, "gpu.module"),
+    ]
+    result = subprocess.check_output(
+        [binary, make_linear_pass_pipeline(pipeline)],
+        input=mlir_asm,
+        text=True,
+        stderr=subprocess.STDOUT,
+    )
+    print(result)
