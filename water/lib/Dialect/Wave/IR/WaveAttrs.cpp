@@ -190,6 +190,31 @@ wave::WaveExprListAttr::getResolvedShape(
   return wave::evaluateMapWithHyperparams(getMap(), getSymbols(), hyper);
 }
 
+llvm::LogicalResult
+wave::verifyExprAttrsSameRank(llvm::ArrayRef<wave::ExprAttr> exprs) {
+  if (exprs.empty())
+    return mlir::success();
+
+  unsigned expectedRank = exprs[0].getRank();
+
+  for (size_t i = 1; i < exprs.size(); ++i) {
+    if (exprs[i].getRank() != expectedRank)
+      return mlir::failure();
+  }
+
+  return mlir::success();
+}
+
+llvm::LogicalResult
+wave::verifyExprAttrsNoSymbols(llvm::ArrayRef<wave::ExprAttr> exprs) {
+  for (const auto &expr : exprs) {
+    if (expr.getNumSymbols() != 0)
+      return mlir::failure();
+  }
+
+  return mlir::success();
+}
+
 Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
   if (parser.parseLess())
     return {};

@@ -216,9 +216,12 @@ def AllocateOp : WaveOp<"allocate"> {
 }
 
 def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait]> {
-  let summary = "Takes an n-D vector, k-D `offset` wave expression attribute,"
-    "a k-sized `sizes` wave expression attribute, a k-sized `strides` wave expression"
-    " attribute and extracts the n-D subvector at the proper offset.";
+  let summary = "Extracts a subvector from an n-D tensor";
+  let description = [{
+    Extracts an n-D subvector from an n-D tensor using k-D offset, size, and
+    stride wave expression attributes, where k <= n. When k < n, the first k
+    dimensions are sliced while the remaining (n-k) dimensions are preserved.
+  }];
 
   let arguments = (ins
     Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
@@ -232,6 +235,7 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
   );
 
   let assemblyFormat = "$memory attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
 }
 
 def ReadOp : WaveOp<"read", [
