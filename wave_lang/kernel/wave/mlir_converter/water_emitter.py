@@ -297,7 +297,6 @@ def _emit_ops_from_graph(
         Iterate,
         SharedMemoryBarrier,
     )
-    from wave_lang.kernel.wave.constraints import MMAType
 
     # Emit in original order to preserve dependencies
     for fx_node in graph.nodes:
@@ -310,7 +309,7 @@ def _emit_ops_from_graph(
             continue
 
         # Collect already emitted mlir values for the args of this node
-        operands = [
+        mlir_operands = [
             mlir_arg
             for arg in fx_node.args
             if (mlir_arg := value_map.get(arg)) is not None
@@ -383,11 +382,12 @@ def _emit_ops_from_graph(
                     # create YieldOp
                     YieldOp([value_map[output] for output in outputs])
             elif isinstance(node, MMA):
-                tmptype = MMAType.F32_32x32x8_F16
-                kind = ir.Attribute.parse(
-                    f"#wave.mma_kind<{tmptype.name.lower()}>", context=ctx
+                if node.mma_type is None:
+                    raise RuntimeError("MMA op missing mma_type")
+                mma_kind = ir.Attribute.parse(
+                    f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
                 )
-                mlir_op = op_builder(result_type, *operands, kind)
+                mlir_op = op_builder(result_type, *mlir_operands, mma_kind)
             elif isinstance(node, Allocate):
                 mlir_op = op_builder(
                     result_type,
@@ -399,17 +399,19 @@ def _emit_ops_from_graph(
                 size = _convert_to_wave_expr_tuple(node.size, ctx)
                 stride = _convert_to_wave_expr_tuple(node.stride, ctx)
                 offset = _convert_to_wave_expr_tuple(node.offset, ctx)
-                mlir_op = op_builder(result_type, *operands, size, stride, offset)
+                mlir_op = op_builder(result_type, *mlir_operands, size, stride, offset)
             else:
                 try:
-                    mlir_op = op_builder(result_type, *operands)
+                    mlir_op = op_builder(result_type, *mlir_operands)
                 except Exception:
                     raise RuntimeError(
                         f"Could not map arguments correctly for MLIR constructor of '{node.tkw_op_name}' operation"
                     )
 
         if mlir_op is None:
-            raise RuntimeError(f"Missing support for '{node.tkw_op_name}' operation")
+            raise NotImplementedError(
+                f"Missing support for '{node.tkw_op_name}' operation"
+            )
 
         _attach_attributes(node, mlir_op.operation)
 
@@ -417,7 +419,9 @@ def _emit_ops_from_graph(
         # operands later
         if len(mlir_op.results) > 1:
             # TODO: rework value_map to always map to a sequence of results
-            raise RuntimeError(f"Missing support for operations with multiple results")
+            raise NotImplementedError(
+                f"Missing support for operations with multiple results"
+            )
         for result in mlir_op.results:
             value_map[fx_node] = result
 
