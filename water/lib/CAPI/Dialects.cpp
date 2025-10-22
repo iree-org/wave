@@ -119,15 +119,15 @@ MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
-// WaveExpressionListAttr
+// WaveWaveExprListAttr
 //===---------------------------------------------------------------------===//
 
-bool mlirAttributeIsAWaveExpressionListAttr(MlirAttribute attr) {
-  return llvm::isa<wave::ExpressionListAttr>(unwrap(attr));
+bool mlirAttributeIsAWaveWaveExprListAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveExprListAttr>(unwrap(attr));
 }
 
-MlirAttribute mlirWaveExpressionListAttrGet(MlirAttribute *symbolNames,
-                                            MlirAffineMap map) {
+MlirAttribute mlirWaveWaveExprListAttrGet(MlirAttribute *symbolNames,
+                                          MlirAffineMap map) {
   mlir::MLIRContext *ctx = unwrap(map).getContext();
 
   unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
@@ -137,11 +137,11 @@ MlirAttribute mlirWaveExpressionListAttrGet(MlirAttribute *symbolNames,
         return llvm::cast<wave::WaveSymbolAttr>(unwrap(attr));
       });
 
-  return wrap(wave::ExpressionListAttr::get(ctx, symbolAttrs, unwrap(map)));
+  return wrap(wave::WaveExprListAttr::get(ctx, symbolAttrs, unwrap(map)));
 }
 
-MlirTypeID mlirWaveExpressionListAttrGetTypeID() {
-  return wrap(mlir::TypeID::get<wave::ExpressionListAttr>());
+MlirTypeID mlirWaveWaveExprListAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveExprListAttr>());
 }
 
 //===---------------------------------------------------------------------===//
@@ -159,10 +159,10 @@ MlirAttribute mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping) {
 
   assert(llvm::all_of(dictAttr,
                       [](const mlir::NamedAttribute &namedAttr) {
-                        return llvm::isa<wave::ExpressionListAttr>(
+                        return llvm::isa<wave::WaveExprListAttr>(
                             namedAttr.getValue());
                       }) &&
-         "expected mapping to contain only WaveExpressionListAttr values");
+         "expected mapping to contain only WaveWaveExprListAttr values");
 
   return wrap(wave::WaveReadWriteBoundsAttr::get(ctx, dictAttr));
 }

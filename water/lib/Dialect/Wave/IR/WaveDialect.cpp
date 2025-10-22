@@ -93,7 +93,7 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
   // special-casing will disappear as the walker below would also visit symbols
   // used as dictionary keys.
   if (namedAttr.getName().strref() ==
-      wave::WaveDialect::kIndexExpressionListAttrName) {
+      wave::WaveDialect::kIndexWaveExprListAttrName) {
     auto dictionary =
         llvm::dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
     // Skip verification if not a dictionary, op-level verifiers will detect

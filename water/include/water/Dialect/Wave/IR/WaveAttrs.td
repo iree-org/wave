@@ -199,7 +199,7 @@ def WorkgroupConstraintAttr : AttrDef<WaveDialect, "WorkgroupConstraint"> {
     dimension.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::ExpressionListAttr":$tile_size,
+                        "::wave::WaveExprListAttr":$tile_size,
                         "::wave::WaveWorkgroupDimAttr":$workgroup_dim,
                         DefaultValuedParameter<"bool", "true">:$primary);
 
@@ -225,7 +225,7 @@ def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
     is given by BLOCK_K // WAVE_K.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::ExpressionListAttr":$tile_size,
+                        "::wave::WaveExprListAttr":$tile_size,
                         OptionalParameter<"::wave::WorkgroupConstraintAttr">:$wg_constraint);
 
   let assemblyFormat = "`<` struct(params) `>`";
@@ -245,7 +245,7 @@ def TilingConstraintAttr : AttrDef<WaveDialect, "TilingConstraint"> {
     each thread operating on a tile size of TILE_K.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::ExpressionListAttr":$tile_size);
+                        "::wave::WaveExprListAttr":$tile_size);
 
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
@@ -284,7 +284,7 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
     dimensions `M` and `N` respectively.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::ExpressionListAttr":$tile_size,
+                        "::wave::WaveExprListAttr":$tile_size,
                         "unsigned":$device_dim);
 
   let assemblyFormat = "`<` struct(params) `>`";
@@ -389,7 +389,7 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
   }];
 }
 
-def WaveExpressionListAttr : AttrDef<WaveDialect, "ExpressionList"> {
+def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
   let mnemonic = "expr_list";
   let description = [{
   A tuple of affine expressions over named Wave symbols.
@@ -427,7 +427,7 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   let mnemonic = "read_write_bounds";
   let description = [{
     This attribute contains a dictionary mapping from symbolic dimension (strings)
-    to a WaveExpressionListAttr specifying the bounds of the read/write operations
+    to a WaveWaveExprListAttr specifying the bounds of the read/write operations
     this is attached to.
 
     Example:

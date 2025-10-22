@@ -23,7 +23,7 @@ using namespace mlir;
 LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   // The attribute is optional.
   Attribute attribute =
-      op->getAttr(wave::WaveDialect::kIndexExpressionListAttrName);
+      op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName);
   if (!attribute)
     return success();
 

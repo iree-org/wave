@@ -181,16 +181,16 @@ bool WaveHyperparameterAttr::hasSymbol(StringRef symbolName) const {
 }
 
 //===----------------------------------------------------------------------===//
-// ExpressionListAttr
+// WaveExprListAttr
 //===----------------------------------------------------------------------===//
 
 std::optional<llvm::SmallVector<int64_t>>
-wave::ExpressionListAttr::getResolvedShape(
+wave::WaveExprListAttr::getResolvedShape(
     wave::WaveHyperparameterAttr hyper) const {
   return wave::evaluateMapWithHyperparams(getMap(), getSymbols(), hyper);
 }
 
-Attribute ExpressionListAttr::parse(AsmParser &parser, Type) {
+Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
   if (parser.parseLess())
     return {};
 
@@ -235,7 +235,7 @@ Attribute ExpressionListAttr::parse(AsmParser &parser, Type) {
   return get(parser.getContext(), symbolNameAttrs, shape);
 }
 
-void ExpressionListAttr::print(mlir::AsmPrinter &printer) const {
+void WaveExprListAttr::print(mlir::AsmPrinter &printer) const {
   // Print symbol names like: [M, K] -> ( ... )
   printer << "<[";
   llvm::SmallVector<llvm::StringRef> names;
@@ -290,10 +290,11 @@ LogicalResult HardwareConstraintAttr::verify(
   return success();
 }
 
-LogicalResult WorkgroupConstraintAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError, WaveSymbolAttr dim,
-    ExpressionListAttr tile_size, WaveWorkgroupDimAttr workgroup_dim,
-    bool primary) {
+LogicalResult
+WorkgroupConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                WaveSymbolAttr dim, WaveExprListAttr tile_size,
+                                WaveWorkgroupDimAttr workgroup_dim,
+                                bool primary) {
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size. Expected 1.";
   }
@@ -302,7 +303,7 @@ LogicalResult WorkgroupConstraintAttr::verify(
 
 LogicalResult
 WaveConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                           WaveSymbolAttr dim, ExpressionListAttr tile_size,
+                           WaveSymbolAttr dim, WaveExprListAttr tile_size,
                            WorkgroupConstraintAttr wg_constraint) {
   if (wg_constraint && wg_constraint.getDim() != dim)
     return emitError()
@@ -321,7 +322,7 @@ WaveConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult
 TilingConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                             WaveSymbolAttr dim, ExpressionListAttr tile_size) {
+                             WaveSymbolAttr dim, WaveExprListAttr tile_size) {
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size. Expected 1.";
   }
@@ -330,7 +331,7 @@ TilingConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult
 DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                             WaveSymbolAttr dim, ExpressionListAttr tile_size,
+                             WaveSymbolAttr dim, WaveExprListAttr tile_size,
                              unsigned int device_dim) {
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size. Expected 1.";
@@ -463,7 +464,7 @@ llvm::LogicalResult wave::detail::verifyNormalFormAttr(
         if (wave::bitEnumContainsAll(
                 form, wave::WaveNormalForm::IndexExprsSpecified)) {
           if (op->hasTrait<wave::HasWaveIndexMapping>() &&
-              !op->getAttr(wave::WaveDialect::kIndexExpressionListAttrName)) {
+              !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
             op->emitError()
                 << "normal form requires index expressions to be "
                    "provided for all supported wave dialect operations";
