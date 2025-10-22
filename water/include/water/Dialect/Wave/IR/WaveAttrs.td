@@ -427,7 +427,7 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   let mnemonic = "read_write_bounds";
   let description = [{
     This attribute contains a dictionary mapping from symbolic dimension (strings)
-    to a WaveWaveExprListAttr specifying the bounds of the read/write operations
+    to a WaveExprListAttr specifying the bounds of the read/write operations
     this is attached to.
 
     Example:

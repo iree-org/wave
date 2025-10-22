@@ -181,12 +181,12 @@ NB_MODULE(_waterDialects, m) {
       .value("Register", wave::WaveAddressSpace::Register);
 
   //===---------------------------------------------------------------------===//
-  // WaveWaveExprListAttr
+  // WaveExprListAttr
   //===---------------------------------------------------------------------===//
 
   mlir::python::nanobind_adaptors::mlir_attribute_subclass(
-      d, "WaveWaveExprListAttr", mlirAttributeIsAWaveWaveExprListAttr,
-      mlirWaveWaveExprListAttrGetTypeID)
+      d, "WaveExprListAttr", mlirAttributeIsAWaveExprListAttr,
+      mlirWaveExprListAttrGetTypeID)
       .def_classmethod(
           "get",
           [](const nb::object &cls, const std::vector<std::string> &symbolNames,
@@ -210,10 +210,10 @@ NB_MODULE(_waterDialects, m) {
             if (mlirAffineMapGetNumDims(map) != 0) {
               throw nb::value_error("Maps should not involve dimensions.");
             }
-            return cls(mlirWaveWaveExprListAttrGet(symbolAttrs.data(), map));
+            return cls(mlirWaveExprListAttrGet(symbolAttrs.data(), map));
           },
           nb::arg("cls"), nb::arg("symbol_names"), nb::arg("map"),
-          "Gets a wave.WaveWaveExprListAttr from parameters.");
+          "Gets a wave.WaveExprListAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
   // WaveReadWriteBoundsAttr
@@ -248,9 +248,9 @@ NB_MODULE(_waterDialects, m) {
                 throw nb::type_error(
                     "Symbolic dimension dictionary value must be an attribute");
               }
-              if (!mlirAttributeIsAWaveWaveExprListAttr(attr)) {
+              if (!mlirAttributeIsAWaveExprListAttr(attr)) {
                 throw nb::type_error("Symbolic dimension dictionary value must "
-                                     "be a WaveWaveExprListAttr");
+                                     "be a WaveExprListAttr");
               }
 
               namedAttrs.push_back(mlirNamedAttributeGet(

@@ -96,11 +96,11 @@ try:
             assert False, "Expected to fail with TypeError."
 
         # CHECK: #wave.expr_list<[$WG0, BLOCK_M, $T0] -> ($WG0 * 3)>
-        expr_attr = wave.WaveWaveExprListAttr.get(symbol_names, start_map)
+        expr_attr = wave.WaveExprListAttr.get(symbol_names, start_map)
         print(expr_attr)
 
         try:
-            wave.WaveWaveExprListAttr.get(symbol_names[:-1], start_map)
+            wave.WaveExprListAttr.get(symbol_names[:-1], start_map)
         except ValueError as e:
             assert "as many entries as map have symbols" in str(e)
         else:
@@ -126,7 +126,7 @@ try:
         try:
             wave.WaveReadWriteBoundsAttr.get({"A": addr_attr})
         except TypeError as e:
-            assert "must be a WaveWaveExprListAttr" in str(e)
+            assert "must be a WaveExprListAttr" in str(e)
         else:
             assert False, "Expected to fail with TypeError."
 
