@@ -359,7 +359,7 @@ def _emit_ops_from_graph(
 
                 result_types = []
                 outputs = node.outputs()
-                for fx_output in node.outputs():
+                for fx_output in outputs:
                     output = get_custom(fx_output)
                     output.infer_type()
                     result_types.append(_type_to_wave_mlir(ctx, output.type))
@@ -380,8 +380,8 @@ def _emit_ops_from_graph(
                         trace.get_subgraph(node.subgraph_name), trace, value_map, ctx
                     )
 
-                    # create yieldOp
-                    YieldOp([value_map[output] for output in node.outputs()])
+                    # create YieldOp
+                    YieldOp([value_map[output] for output in outputs])
             elif isinstance(node, MMA):
                 tmptype = MMAType.F32_32x32x8_F16
                 kind = ir.Attribute.parse(
@@ -485,7 +485,10 @@ def _emit_from_captured_trace(
                 # With top-level placeholders and iterargs filtered out the remaining
                 # placeholders are duplicates. Find the original one by name
                 if not nested_placeholder.name in top_level_names:
-                    raise RuntimeError(f"Incorrectly structured placeholders in trace.")
+                    raise RuntimeError(
+                        f"Incorrectly structured placeholders in trace: "
+                        f"placeholder '{nested_placeholder.name}' not found in top-level names {top_level_names}."
+                    )
                 value_map[nested_placeholder] = value_map[
                     top_level_placeholders[
                         top_level_names.index(nested_placeholder.name)

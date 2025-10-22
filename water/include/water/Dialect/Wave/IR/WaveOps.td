@@ -215,8 +215,8 @@ def AllocateOp : WaveOp<"allocate"> {
   let hasVerifier = 1;
 }
 
-def ExtractSliceOp : Op<WaveDialect, "extract_slice"> {
-  let summary = "Takes an n-D vector, k-D `offsets` wave expression attribute,"
+def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait]> {
+  let summary = "Takes an n-D vector, k-D `offset` wave expression attribute,"
     "a k-sized `sizes` wave expression attribute, a k-sized `strides` wave expression"
     " attribute and extracts the n-D subvector at the proper offset.";
 
