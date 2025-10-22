@@ -189,7 +189,7 @@ def WorkgroupConstraintAttr : AttrDef<WaveDialect, "WorkgroupConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.workgroup_constraint<dim = <"M">,
-                               tile_size = [BLOCK_M] -> (BLOCK_M),
+                               tile_size = <[BLOCK_M] -> (BLOCK_M)>,
                                workgroup_dim = <x>,
                                primary = true>
     ```
@@ -199,11 +199,12 @@ def WorkgroupConstraintAttr : AttrDef<WaveDialect, "WorkgroupConstraint"> {
     dimension.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::WaveExpressionAttr":$tile_size,
+                        "::wave::WaveExprListAttr":$tile_size,
                         "::wave::WaveWorkgroupDimAttr":$workgroup_dim,
                         DefaultValuedParameter<"bool", "true">:$primary);
 
   let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
 }
 
 def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
@@ -212,7 +213,7 @@ def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.wave_constraint<dim = <"K">,
-                          tile_size = [WAVE_K] -> (WAVE_K),
+                          tile_size = <[WAVE_K] -> (WAVE_K)>,
                           wg_constraint = #wg_constraint>
     ```
 
@@ -224,7 +225,7 @@ def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
     is given by BLOCK_K // WAVE_K.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::WaveExpressionAttr":$tile_size,
+                        "::wave::WaveExprListAttr":$tile_size,
                         OptionalParameter<"::wave::WorkgroupConstraintAttr">:$wg_constraint);
 
   let assemblyFormat = "`<` struct(params) `>`";
@@ -237,16 +238,17 @@ def TilingConstraintAttr : AttrDef<WaveDialect, "TilingConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.tiling_constraint<dim = <"K">,
-                            tile_size = [TILE_K] -> (TILE_K)>
+                            tile_size = <[TILE_K] -> (TILE_K)>>
     ```
 
     specifies that we want to distribute the K dimension among multiple threads. With
     each thread operating on a tile size of TILE_K.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::WaveExpressionAttr":$tile_size);
+                        "::wave::WaveExprListAttr":$tile_size);
 
   let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
 }
 
 def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
@@ -254,7 +256,7 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
   let description = [{
     A constraint of the form:
     ```mlir
-    #wave.device_constraint<dim = <"M">, tile_size = [DEVICE_M] -> (DEVICE_M), device_dim = 0>
+    #wave.device_constraint<dim = <"M">, tile_size = <[DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
     ```
 
     specifies that we want to distribute dimension `M` along the device with a tile size of `DEVICE_M`.
@@ -272,8 +274,8 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
 
     ```mlir
     wave.constraints = [
-      #wave.device_constraint<dim = <"M">, tile_size = [DEVICE_M] -> (DEVICE_M), device_dim = 0>
-      #wave.device_constraint<dim = <"N">, tile_size = [DEVICE_N] -> (DEVICE_N), device_dim = 1>
+      #wave.device_constraint<dim = <"M">, <tile_size = [DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
+      #wave.device_constraint<dim = <"N">, <tile_size = [DEVICE_N] -> (DEVICE_N)>, device_dim = 1>
     ]
     ```
 
@@ -282,10 +284,11 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
     dimensions `M` and `N` respectively.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::WaveExpressionAttr":$tile_size,
+                        "::wave::WaveExprListAttr":$tile_size,
                         "unsigned":$device_dim);
 
   let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
 }
 
 
@@ -310,37 +313,6 @@ def WaveSymbolAttr : AttrDef<WaveDialect, "WaveSymbol"> {
     void printAsSymbolRef(::llvm::raw_ostream &os) const {
       os << "@" << getName();
     }
-  }];
-}
-
-def WaveExpressionAttr : AttrDef<WaveDialect, "WaveExpression"> {
-  // TOOD: reuse some code between this and WaveIndexMappingAttr
-  let mnemonic = "wave_expr";
-  let description = [{
-    Base symbolic expression used in the Wave dialect.
-  }];
-
-  let parameters = (ins ArrayRefParameter<"WaveSymbolAttr">:$symbol_names,
-                    "::mlir::AffineMap":$map);
-
-  let hasCustomAssemblyFormat = 1;
-
-  let extraClassDeclaration = [{
-    /// Get the symbol name at the given index.
-    ::llvm::StringRef getSymbolName(unsigned index) const {
-      auto names = getSymbolNames();
-      if (index >= names.size()) return ::llvm::StringRef();
-        return names[index].getName();
-    }
-
-    /// Get all symbol names as a vector of string references.
-    ::llvm::SmallVector<::llvm::StringRef> getAllSymbolNames() const {
-      auto names = getSymbolNames();
-      return ::llvm::map_to_vector(names, [](::wave::WaveSymbolAttr attr) {
-        return attr.getName();
-      });
-    }
-
   }];
 }
 
@@ -417,8 +389,8 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
   }];
 }
 
-def WaveExprAttr : AttrDef<WaveDialect, "Expr"> {
-  let mnemonic = "expr";
+def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
+  let mnemonic = "expr_list";
   let description = [{
   A tuple of affine expressions over named Wave symbols.
   This attribute is used to encode:
@@ -432,18 +404,19 @@ def WaveExprAttr : AttrDef<WaveDialect, "Expr"> {
       Each result expr_k defines the k-th physical dimension.
 
       Parsing/printing:
-      #wave.expr<[M, K] -> (M, K+4)>
+      #wave.expr_list<[M, K] -> (M, K+4)>
   }];
 
   let parameters = (ins
-    ArrayRefParameter<"WaveSymbolAttr">:$symbol_names,
-    "::mlir::AffineMap":$shape
+    ArrayRefParameter<"WaveSymbolAttr">:$symbols,
+    "::mlir::AffineMap":$map
   );
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = [{
-    unsigned getRank() const { return getShape().getNumResults(); }
-    unsigned getNumSymbols() const { return getShape().getNumSymbols(); }
+    unsigned getRank() const { return getMap().getNumResults(); }
+    unsigned getNumSymbols() const { return getMap().getNumSymbols(); }
+    uint64_t getSize() const { return getMap().getNumResults(); }
 
     std::optional<llvm::SmallVector<int64_t>>
     getResolvedShape(::wave::WaveHyperparameterAttr hyper) const;
@@ -454,12 +427,12 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   let mnemonic = "read_write_bounds";
   let description = [{
     This attribute contains a dictionary mapping from symbolic dimension (strings)
-    to a WaveExprAttr specifying the bounds of the read/write operations
+    to a WaveWaveExprListAttr specifying the bounds of the read/write operations
     this is attached to.
 
     Example:
     ```
-    #wave.read_write_bounds<{M = #wave.expr<[BLOCK_M] -> BLOCK_M * 2>}>
+    #wave.read_write_bounds<{M = #wave.expr_list<[BLOCK_M] -> BLOCK_M * 2>}>
     ```
   }];
 

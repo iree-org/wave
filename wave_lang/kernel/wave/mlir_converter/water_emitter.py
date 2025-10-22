@@ -234,7 +234,7 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
                 list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
             )
             result = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
-            bounds[dim.name] = wave.WaveExprAttr.get(
+            bounds[dim.name] = wave.WaveWaveExprListAttr.get(
                 [sym.name for sym in symbol_mapping.values()], result
             )
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)

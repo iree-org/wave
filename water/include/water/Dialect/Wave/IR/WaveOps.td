@@ -203,7 +203,7 @@ def AllocateOp : WaveOp<"allocate"> {
 
   let arguments = !con((ins
     Arg<Optional<WaveTensorType>, "Optional parent buffer to view into">:$parent,
-    Arg<WaveExprAttr, "Distributed (physical) shape">:$distributed_shape,
+    Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset
   ), commonArguments);
 

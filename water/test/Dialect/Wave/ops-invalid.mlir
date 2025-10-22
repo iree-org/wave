@@ -144,7 +144,7 @@ func.func @mismatch_shape_write(%lhs: !wave.tensor<[@A, @B] of f32, <register>>,
 
 func.func @empty_distributed_shape() {
   // expected-error @below {{wave expression attribute must have at least one dimension}}
-  %buf = wave.allocate { distributed_shape = #wave.expr<[BLOCK_M, BLOCK_K] -> ()>}
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> ()>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
 
@@ -152,17 +152,17 @@ func.func @empty_distributed_shape() {
 
 func.func @alloc_offset_no_parent() {
   // expected-error @below {{expects parent and offset to be present simultaneously}}
-  %buf = wave.allocate { distributed_shape = #wave.expr<[] -> (42)>, offset = 42}
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[] -> (42)>, offset = 42}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
 
 // -----
 
 func.func @alloc_parent_no_offset() {
-  %alloc = wave.allocate { distributed_shape = #wave.expr<[] -> (100)> }
+  %alloc = wave.allocate { distributed_shape = #wave.expr_list<[] -> (100)> }
     : !wave.tensor<[@M, @K] of bf16, <shared>>
   // expected-error @below {{expects parent and offset to be present simultaneously}}
-  %buf = wave.allocate in %alloc : !wave.tensor<[@M, @K] of bf16, <shared>> { distributed_shape = #wave.expr<[] -> (42)>}
+  %buf = wave.allocate in %alloc : !wave.tensor<[@M, @K] of bf16, <shared>> { distributed_shape = #wave.expr_list<[] -> (42)>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
 
@@ -253,7 +253,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 
 func.func @bounds_missing_dim(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.tensor<[@M, @N] of f32, <register>>) {
   // expected-error @below {{bounds not provided for memory tensor symbol 'N'}}
-  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
   return
 }
 
@@ -261,14 +261,14 @@ func.func @bounds_missing_dim(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.t
 
 func.func @bounds_extraneous_dim(%mem: !wave.tensor<[@N] of f32>, %val: !wave.tensor<[@N] of f32, <register>>) {
   // expected-error @below {{'bounds' specified for a symbol "M" not used in the indexed memory tensor}}
-  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
+  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
   return
 }
 
 // -----
 
 func.func @bounds_wrong_type(%mem: !wave.tensor<[@N] of f32>) {
-  // expected-error @below {{'bounds' values must be WaveExprAttr, got 42 : i64}}
+  // expected-error @below {{'bounds' values must be WaveWaveExprListAttr, got 42 : i64}}
   wave.read %mem { bounds = #wave.read_write_bounds<{ N = 42 }> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
   return
 }
