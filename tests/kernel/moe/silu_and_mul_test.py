@@ -25,12 +25,12 @@ import torch.nn.functional as F
 torch.manual_seed(0)
 
 
-def silu_and_mul_ref(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-    """Reference implementation of SiLU and Mul operation"""
-    return F.silu(x1) * x2
+def silu_and_mul_ref(x: torch.Tensor) -> torch.Tensor:
+    d = x.shape[-1] // 2
+    return F.silu(x[..., :d]) * x[..., d:]
 
 
-def test_silu_and_mul_kernel(
+def silu_and_mul_kernel(
     m: int = 32,
     n: int = 64,
     dtype: torch.dtype = torch.float32,
@@ -39,11 +39,10 @@ def test_silu_and_mul_kernel(
     device = "cuda"
 
     # Create test inputs
-    x1 = torch.randn(m, n, dtype=dtype, device=device)
-    x2 = torch.randn(m, n, dtype=dtype, device=device)
+    x = torch.randn(m, 2 * n, dtype=dtype, device=device)
 
     # Reference implementation
-    ref_output = silu_and_mul_ref(x1, x2)
+    ref_output = silu_and_mul_ref(x)
 
     # Kernel implementation
     output = torch.zeros(m, n, dtype=dtype, device=device)
@@ -56,7 +55,7 @@ def test_silu_and_mul_kernel(
     silu_and_mul = wave_compile(options, silu_and_mul)
 
     # Run the kernel
-    silu_and_mul(x1, x2, output)
+    silu_and_mul(x, output)
 
     # Compare results
     rtol, atol = 1e-4, 1e-4
@@ -78,10 +77,10 @@ dtypes = [torch.float32]
 @pytest.mark.parametrize("dtype", dtypes)
 def test_silu_and_mul_parametrized(m: int, n: int, dtype: torch.dtype):
     """Parametrized test for SiLU and Mul kernel"""
-    test_silu_and_mul_kernel(m, n, dtype)
+    silu_and_mul_kernel(m, n, dtype)
 
 
 if __name__ == "__main__":
     # Run a simple test when script is executed directly
-    test_silu_and_mul_kernel()
+    silu_and_mul_kernel()
     print("All SiLU and Mul tests passed!")

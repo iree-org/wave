@@ -167,7 +167,7 @@ def get_fused_moe_gemm(
         condition = THREAD_0 < BLOCK_SHAPE
 
         @tkw.conditional(condition)
-        def scatter_op():
+        def gather_op():
             tid = tkw.Register[TOTAL_ELEMS, i32](THREAD_0)
             wid = tkw.Register[TOTAL_ELEMS, i32](WORKGROUP_2)
             tid_offset = tkw.Register[TOTAL_ELEMS, i32](BLOCK_SHAPE) * wid + tid
@@ -520,7 +520,7 @@ def get_moe_align_block_size_kernel(
         """
         if (threadIdx.x < num_experts) {
             for (int i = cumsum[threadIdx.x]; i < cumsum[threadIdx.x + 1]; i += block_size) {
-                expert_ids[i / block_size] = threadIdx.x - 1;
+                expert_ids[i / block_size] = threadIdx.x;
             }
         }
         """
@@ -694,6 +694,8 @@ def get_silu_and_mul_kernel(
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
+    TWO_N = tkl.sym.TWO_N
+
     # Each workgroup works on single row of input data, and rows are further
     # split into blocks of size up to 256. We have single wave per WG,
     # and with default wave size of 64, each thread is operating on up to 4
@@ -701,7 +703,7 @@ def get_silu_and_mul_kernel(
     wave_size = 64
     BLOCK_M = 1
     # Tile size cannot be dynamic, so we use a fixed value here.
-    BLOCK_N = sympy.Max(sympy.Min(n, 256), wave_size)
+    BLOCK_N = 64
     # Address space (for GPU, shared(1) or global(0))
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
@@ -709,7 +711,6 @@ def get_silu_and_mul_kernel(
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(
             threads_per_wave=wave_size,
-            waves_per_block=(1, 1, 1),
             vector_shapes={M: BLOCK_M, N: BLOCK_N},
         )
     ]
@@ -718,28 +719,47 @@ def get_silu_and_mul_kernel(
     constraints += [tkw.WaveConstraint(M, BLOCK_M)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N)]
 
+    # Create index mappings to read gate (first half) and up (second half)
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    k = tkw.IndexMapping.dynamic_val(0)
+    x1_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, TWO_N: k},
+        outputs={M: i, N: j},
+        dynamic_val_mappings={TWO_N: j},
+    )
+
+    x2_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, TWO_N: k + N},
+        outputs={M: i, N: j},
+        dynamic_val_mappings={TWO_N: j},
+    )
+
     @tkw.wave(constraints)
     def silu_and_mul(
-        x1: tkl.Memory[M, N, ADDRESS_SPACE, datatype],
-        x2: tkl.Memory[M, N, ADDRESS_SPACE, datatype],
+        gemm1_out: tkl.Memory[M, TWO_N, ADDRESS_SPACE, datatype],
         out: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, datatype],
     ):
-        x1_reg = tkw.read(x1)
-        cst_m1 = tkl.Register[M, N, datatype](-1.0)
-        cst_1 = tkl.Register[M, N, datatype](1.0)
+        # Read x1 (first half: columns 0 to N-1)
+        # Compute global thread ID accounting for workgroup offset
+        tid = tkw.scalar(THREAD_0 + WORKGROUP_0 * wave_size, tkl.i32)
+        x1_reg = tkw.read(gemm1_out, mapping=x1_read_map, mapping_dynamic_vals=(tid,))
+        cst_m1 = tkw.Register[M, N, datatype](-1.0)
+        cst_1 = tkw.Register[M, N, datatype](1.0)
         exp_out = tkw.exp(x1_reg * cst_m1)
         sigmoid = cst_1 / (cst_1 + exp_out)
         silu = sigmoid * x1_reg
-
-        x2_reg = tkw.read(x2)
+        x2_reg = tkw.read(gemm1_out, mapping=x2_read_map, mapping_dynamic_vals=(tid,))
         res = silu * x2_reg
-
         tkw.write(res, out)
 
     hyperparams = {
-        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
         M: m,
         N: n,
+        TWO_N: 2 * n,
     }
 
     return silu_and_mul, hyperparams
