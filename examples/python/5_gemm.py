@@ -1621,6 +1621,142 @@ def test_gather_gemm_fused(is_debug=False):
     print("GEMM test passed!")
 
 
+def fused_gemms(is_debug=False):
+    """Fused GEMM kernel where we run two GEMMs back to back."""
+    N1 = sym.N1
+    N2 = sym.N2
+    BLOCK_N1 = sym.BLOCK_N1
+    BLOCK_N2 = sym.BLOCK_N2
+
+    # Define constraints for the kernel
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N2, BLOCK_N2, 1),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N2, BLOCK_N2 / 2),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.TilingConstraint(N1, BLOCK_N1),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N1: 16, N2: 16, K: 16},
+        ),
+    ]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    k = tkw.IndexMapping.iterator(2)
+    d0 = tkw.IndexMapping.dynamic_val(0)
+
+    a_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: d0, K: j},
+        outputs={M: i, K: j},
+        dynamic_val_mappings={M: i},
+    )
+
+    w1_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={N1: i, K: j},
+        outputs={N1: i, K: j},
+    )
+
+    w2_read_map = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={N2: i, N1: j},
+        outputs={N2: i, N1: j},
+    )
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
+        w1: Memory[N1, K, ADDRESS_SPACE_B, f16],  # Input matrix B
+        w2: Memory[N2, N1, ADDRESS_SPACE_B, f16],  # Input matrix D
+        c_back1: Memory[M, N1, ADDRESS_SPACE_C, f32],
+        c: Memory[M, N2, ADDRESS_SPACE_C, f32],  # Output matrix C
+    ):
+        # Initialize the accumulator register with zeros
+        c_reg1 = Register[M, N1, f32](0.0)
+        c_reg2 = Register[M, N2, f32](0.0)
+
+        # Iterate over the K dimension to compute the dot product
+        @tkw.iterate(K, init_args=[c_reg1])
+        def repeat1(acc: Register[M, N1, f32]) -> Register[M, N1, f32]:
+            # Load elements from A and B
+            a_reg = tkw.read(a)
+            w1_reg = tkw.read(w1)
+            acc = tkw.mma(a_reg, w1_reg, acc)
+            return acc
+
+        # Store the final result to C
+        tkw.write(repeat1, c_back1)
+
+        @tkw.iterate(N1, init_args=[c_reg2])
+        def repeat2(acc: Register[M, N2, f32]) -> Register[M, N2, f32]:
+            # Load elements from A and B
+            a_reg = tkw.read(c_back1)
+            a_reg = tkw.cast(a_reg, f16)
+            w2_reg = tkw.read(w2)
+            acc = tkw.mma(a_reg, w2_reg, acc)
+            return acc
+
+        # Store the final result to C
+        tkw.write(repeat2, c)
+
+    # Create test matrices
+    m, k = 64, 64  # Small dimensions for testing
+    n1, n2 = 64, 64
+    # Initialize input matrices with random values
+    torch.manual_seed(0)
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    w1 = torch.randn(n1, k, dtype=torch.float16, device="cuda")
+    w2 = torch.randn(n2, n1, dtype=torch.float16, device="cuda")
+    c = torch.zeros(m, n2, dtype=torch.float32, device="cuda")
+    c_back1 = torch.zeros(m, n1, dtype=torch.float32, device="cuda")
+
+    # Set hyperparameters for compilation
+    hyperparams = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N1: 64,
+        BLOCK_N2: 64,
+        BLOCK_K: 32,
+        M: m,
+        N1: n1,
+        N2: n2,
+        K: k,
+    }
+
+    # Compile the kernel
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        print_ir_after="all" if is_debug else [],
+    )
+    options = set_default_run_config(options)
+    compiled_gemm = wave_compile(options, gemm)
+
+    if is_debug:
+        print(compiled_gemm.asm)
+        with open("gemm.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
+
+    # Run the GEMM kernel
+    compiled_gemm(a, w1, w2, c_back1, c)
+
+    # Verify the result using PyTorch's matmul
+    expected = torch.matmul(a, w1.t())
+    expected = torch.matmul(expected, w2.t())
+
+    # Check if results are close (accounting for floating-point precision)
+    assert torch.allclose(
+        c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
+    ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
+
+    print("GEMM test passed!")
+
+
 if __name__ == "__main__":
     args = parse_args()
     if args.list_tests:
