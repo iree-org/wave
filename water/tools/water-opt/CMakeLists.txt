@@ -15,6 +15,7 @@ set(LIBS
         MLIRRegisterAllDialects
         MLIRRegisterAllExtensions
         MLIRRegisterAllPasses
+        MLIRToLLVMIRTranslationRegistration
 )
 
 add_llvm_executable(water-opt
