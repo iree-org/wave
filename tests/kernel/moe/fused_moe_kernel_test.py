@@ -279,16 +279,16 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     gemm1(a, w1, sorted_ids, expert_ids, a_scratch, gemm1_out, c_scratch)
 
     # Apply SiLU activation: SiLU(gate) * up
-    d = gemm1_out.shape[-1] // 2
-    gate = gemm1_out[..., :d].contiguous()
-    up = gemm1_out[..., d:].contiguous()
+    # d = gemm1_out.shape[-1] // 2
+    # gate = gemm1_out[..., :d].contiguous()
+    # up = gemm1_out[..., d:].contiguous()
 
     silu_and_mul = get_wave_silu_and_mul_kernel(
-        gate.shape[0],
-        gate.shape[1],
+        gemm1_out.shape[0],
+        gemm1_out.shape[1] // 2,
         tkl.f32,
     )
-    silu_and_mul(gate, up, silu_and_mul_out)
+    silu_and_mul(gemm1_out, silu_and_mul_out)
 
     # GEMM2: Down projection (silu_and_mul_out @ w2.T)
     a2_scratch = torch.zeros(
@@ -346,7 +346,6 @@ def tkw_moe(a, w1, w2, score, topk, num_experts, block_size, num_tokens):
     )
     reduce_sum(reshape_out, topk_weights_broadcasted, final_out)
 
-    # return gemm1_out, silu_and_mul_out, gemm2_out, final_out
     return final_out
 
 
@@ -356,7 +355,7 @@ k_values = [128]
 num_experts = [4]
 top_ks = [2]
 dtypes = [torch.float16]
-rtol, atol = 1e-1, 1e-2
+rtol, atol = 1e-3, 1e-3
 block_size_values = [4]
 
 
