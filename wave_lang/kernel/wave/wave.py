@@ -718,6 +718,9 @@ class LaunchableWave(Launchable):
                 host_func = emitter.emit_host_func(func)
 
             print(module_op)
+            from .water import water_lowering_pipeline
+
+            water_lowering_pipeline(module_op)
 
         module_op.operation.verify()
 
