@@ -20,6 +20,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
@@ -40,19 +41,11 @@ int main(int argc, char **argv) {
   mlir::water::registerPasses();
   mlir::water::test::registerAllPasses();
   wave::registerPasses();
-  mlir::arith::registerArithIntRangeOptsPass();
-  mlir::registerCanonicalizerPass();
-  mlir::registerCSEPass();
-  mlir::registerLoopInvariantCodeMotionPass();
-  mlir::registerLowerAffinePass();
 
+  mlir::registerAllPasses();
   mlir::DialectRegistry registry;
-  registry.insert<mlir::affine::AffineDialect, mlir::amdgpu::AMDGPUDialect,
-                  mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-                  mlir::func::FuncDialect, mlir::gpu::GPUDialect,
-                  mlir::LLVM::LLVMDialect, mlir::ROCDL::ROCDLDialect,
-                  mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
-                  mlir::vector::VectorDialect, wave::WaveDialect>();
+  mlir::registerAllDialects(registry);
+  mlir::registerAllExtensions(registry);
 
   mlir::water::test::registerWaterTestDialect(registry);
 
