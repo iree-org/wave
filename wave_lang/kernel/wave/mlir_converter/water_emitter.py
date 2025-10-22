@@ -12,7 +12,6 @@ import torch.fx as fx
 import sys
 from typing import TYPE_CHECKING, Callable, Sequence
 import sympy
-import warnings
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
@@ -38,13 +37,13 @@ try:
         YieldOp,
         WaveExprListAttr,
     )
-    from water_mlir.water_mlir.sympy_to_affine_converter import (
+    from water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
     )
-    from water_mlir.water_mlir.dialects import arith
-    from water_mlir.water_mlir.dialects import func
-    from water_mlir.water_mlir.dialects import wave
-    from water_mlir.water_mlir.dialects import amdgpu
+    from water_mlir.dialects import arith
+    from water_mlir.dialects import func
+    from water_mlir.dialects import wave
+    from water_mlir.dialects import amdgpu
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -218,9 +217,6 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
 
     if isinstance(node, MMA):
         # TODO: Have special handling for MMA index as it uses Piecewise.
-        warnings.warn(
-            "MMA node index handling not yet implemented - skipping", UserWarning
-        )
         return
 
     if getattr(node, "index", None) and isinstance(node.index, dict):
@@ -262,11 +258,11 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
 
-def _convert_to_wave_expr_tuple(
+def _convert_to_wave_expr_list_tuple(
     exprs: Sequence[sympy.Expr], ctx: ir.Context
 ) -> WaveExprListAttr:
     """
-    Returns a WaveExpressionAttribute from a sequence of wave IndexExpr.
+    Returns a WaveExprListAttr from a sequence of wave IndexExpr.
     """
     symbols = list(
         set().union(
@@ -277,7 +273,7 @@ def _convert_to_wave_expr_tuple(
         )
     )
     return ir.Attribute.parse(
-        f"#wave.expr<{symbols} -> ({', '.join(map(str, exprs))})>", context=ctx
+        f"#wave.expr_list<{symbols} -> ({', '.join(map(str, exprs))})>", context=ctx
     )
 
 
@@ -321,9 +317,8 @@ def _emit_ops_from_graph(
         if isinstance(node, GetResult):
             # Map to correct result of the corresponding iterate node
             iterate_op = value_map[node.value].owner
-            assert isinstance(iterate_op.opview, IterateOp)
             # Create mapping to correct result
-            if node.res_idx > len(iterate_op.results):
+            if node.res_idx >= len(iterate_op.results):
                 raise RuntimeError(
                     f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
                 )
@@ -395,14 +390,14 @@ def _emit_ops_from_graph(
             elif isinstance(node, Allocate):
                 mlir_op = op_builder(
                     result_type,
-                    distributed_shape=_convert_to_wave_expr_tuple(
+                    distributed_shape=_convert_to_wave_expr_list_tuple(
                         node.distributed_shape, ctx
                     ),
                 )
             elif isinstance(node, ExtractSlice):
-                size = _convert_to_wave_expr_tuple(node.size, ctx)
-                stride = _convert_to_wave_expr_tuple(node.stride, ctx)
-                offset = _convert_to_wave_expr_tuple(node.offset, ctx)
+                size = _convert_to_wave_expr_list_tuple(node.size, ctx)
+                stride = _convert_to_wave_expr_list_tuple(node.stride, ctx)
+                offset = _convert_to_wave_expr_list_tuple(node.offset, ctx)
                 mlir_op = op_builder(result_type, *mlir_operands, size, stride, offset)
             else:
                 try:
