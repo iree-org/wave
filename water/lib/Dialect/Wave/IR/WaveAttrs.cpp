@@ -314,7 +314,7 @@ WaveConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
            << dim;
 
   if (tile_size.getSize() != 1) {
-    return emitError() << "invalid ExpressionList size. Expected 1.";
+    return emitError() << "invalid ExpressionList size, expected 1";
   }
 
   return success();
