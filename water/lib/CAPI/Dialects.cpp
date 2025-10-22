@@ -119,15 +119,15 @@ MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
-// WaveWaveExprListAttr
+// WaveExprListAttr
 //===---------------------------------------------------------------------===//
 
-bool mlirAttributeIsAWaveWaveExprListAttr(MlirAttribute attr) {
+bool mlirAttributeIsAWaveExprListAttr(MlirAttribute attr) {
   return llvm::isa<wave::WaveExprListAttr>(unwrap(attr));
 }
 
-MlirAttribute mlirWaveWaveExprListAttrGet(MlirAttribute *symbolNames,
-                                          MlirAffineMap map) {
+MlirAttribute mlirWaveExprListAttrGet(MlirAttribute *symbolNames,
+                                      MlirAffineMap map) {
   mlir::MLIRContext *ctx = unwrap(map).getContext();
 
   unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
@@ -140,7 +140,7 @@ MlirAttribute mlirWaveWaveExprListAttrGet(MlirAttribute *symbolNames,
   return wrap(wave::WaveExprListAttr::get(ctx, symbolAttrs, unwrap(map)));
 }
 
-MlirTypeID mlirWaveWaveExprListAttrGetTypeID() {
+MlirTypeID mlirWaveExprListAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveExprListAttr>());
 }
 
@@ -162,7 +162,7 @@ MlirAttribute mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping) {
                         return llvm::isa<wave::WaveExprListAttr>(
                             namedAttr.getValue());
                       }) &&
-         "expected mapping to contain only WaveWaveExprListAttr values");
+         "expected mapping to contain only WaveExprListAttr values");
 
   return wrap(wave::WaveReadWriteBoundsAttr::get(ctx, dictAttr));
 }

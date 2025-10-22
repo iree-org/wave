@@ -268,7 +268,7 @@ func.func @bounds_extraneous_dim(%mem: !wave.tensor<[@N] of f32>, %val: !wave.te
 // -----
 
 func.func @bounds_wrong_type(%mem: !wave.tensor<[@N] of f32>) {
-  // expected-error @below {{'bounds' values must be WaveWaveExprListAttr, got 42 : i64}}
+  // expected-error @below {{'bounds' values must be WaveExprListAttr, got 42 : i64}}
   wave.read %mem { bounds = #wave.read_write_bounds<{ N = 42 }> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
   return
 }

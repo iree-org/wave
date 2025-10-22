@@ -85,23 +85,22 @@ mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
-// WaveWaveExprListAttr
+// WaveExprListAttr
 //===---------------------------------------------------------------------===//
 
-/// Checks whether the given MLIR attribute is a WaveWaveExprListAttr.
-MLIR_CAPI_EXPORTED bool
-mlirAttributeIsAWaveWaveExprListAttr(MlirAttribute attr);
+/// Checks whether the given MLIR attribute is a WaveExprListAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveExprListAttr(MlirAttribute attr);
 
-/// Creates a new WaveWaveExprListAttr with the given map that is
+/// Creates a new WaveExprListAttr with the given map that is
 /// interpreted as accepting the symbols provided in the
 /// `symbolNames` list. The list must have as many entries as maps have symbols,
 /// and all maps must have the same number of symbols and zero dimensions. The
 /// list is expected to only contain WaveSymbolAttr instances.
 MLIR_CAPI_EXPORTED MlirAttribute
-mlirWaveWaveExprListAttrGet(MlirAttribute *symbolNames, MlirAffineMap map);
+mlirWaveExprListAttrGet(MlirAttribute *symbolNames, MlirAffineMap map);
 
-/// Returns the typeID of a WaveWaveExprListAttr.
-MLIR_CAPI_EXPORTED MlirTypeID mlirWaveWaveExprListAttrGetTypeID();
+/// Returns the typeID of a WaveExprListAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveExprListAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
 // WaveReadWriteBoundsAttr
