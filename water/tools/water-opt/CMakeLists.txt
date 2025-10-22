@@ -11,6 +11,10 @@ set(LIBS
 
         MLIRWaterTestTransforms
         MLIRWaterTestDialect
+
+        MLIRRegisterAllDialects
+        MLIRRegisterAllExtensions
+        MLIRRegisterAllPasses
 )
 
 add_llvm_executable(water-opt
