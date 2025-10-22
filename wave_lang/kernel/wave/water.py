@@ -378,17 +378,30 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         print("[info] No out-of-bounds accesses detected.")
 
 
-def water_lowering_pipeline(module: Module) -> Module:
+def water_lowering_pipeline(module: Module, target_chip: str) -> Module:
     binary = get_water_binary_path()
     mlir_asm = module.operation.get_asm()
     pipeline = [
+        "lower-affine",
+        "canonicalize",
+        "cse",
+        "loop-invariant-code-motion",
+        "int-range-optimizations",
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
-        ("rocdl-attach-target", {"chip": "gfx1100"}, "gpu.module"),
+        ("rocdl-attach-target", {"chip": target_chip}),
+        ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
+        "reconcile-unrealized-casts",
+        "canonicalize",
+        "cse",
+        "gpu-module-to-binary",
     ]
-    result = subprocess.check_output(
-        [binary, make_linear_pass_pipeline(pipeline)],
-        input=mlir_asm,
-        text=True,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        result = subprocess.check_output(
+            [binary, make_linear_pass_pipeline(pipeline)],
+            input=mlir_asm,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(e.stderr)
+        raise e
     print(result)
