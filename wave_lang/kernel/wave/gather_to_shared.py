@@ -44,6 +44,7 @@ from .utils.general_utils import (
     remove_thread_indexing,
     remove_global_indexing,
 )
+from .global_to_shared_gathers import update_read_mapping_dynamic_values
 from .utils.general_utils import is_gather
 from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
@@ -252,20 +253,33 @@ def emit_global_to_lds(
         # so make the index wave-uniform, simplifying the calculation.
         write_index = {k: v.subs(wave_subs) for k, v in write_index.items()}
 
+        with read.graph.inserting_before(read.fx_node):
+            new_read = Read(
+                read.memory,
+                elements_per_thread,
+                mapping=read.mapping,
+                mapping_dynamic_vals=read.mapping_dynamic_vals,
+            ).add_to_graph(read.graph, loc=read.location)
+            new_read.index = read_index
+            new_read.vector_shapes = read.vector_shapes
+            new_read_custom = get_custom(new_read)
+            new_read_custom.infer_type()
+            update_read_mapping_dynamic_values(new_read_custom)
+
         logger.info(f"read_index={read_index}")
         logger.info(f"write_index={write_index}")
         with write.graph.inserting_before(write.fx_node):
             new_write = GatherToLDS(
-                read.memory,
+                new_read_custom.memory,
                 write.memory,
-                read_index,
+                new_read_custom.index,
                 write_index,
                 element_type,
                 elements_per_thread,
-                read.mapping,
+                new_read_custom.mapping,
                 write.mapping,
                 bounds,
-                read.mapping_dynamic_vals,
+                new_read_custom.mapping_dynamic_vals,
                 write.mapping_dynamic_vals,
             ).add_to_graph(write.graph, loc=write.location)
 

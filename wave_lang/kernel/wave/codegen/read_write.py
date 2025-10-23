@@ -808,20 +808,20 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
     src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
 
-    # We previously checked mask is same for all elements, so we can use
-    # elements_per_thread=1 to build the mask.
-    mask = _build_mask(
-        emitter,
-        src_idx,
-        elements_per_thread=1,
-        bounds=src_bounds,
-        dynamic_values=src_dynamic_vals_map_start,
-    )
-    if mask:
-        mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
-        oob_index_value = _get_out_of_bounds_index(element_type)
-        oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-        offset_th = arith_d.select(mask, offset_th, oob_index)
+    # # We previously checked mask is same for all elements, so we can use
+    # # elements_per_thread=1 to build the mask.
+    # mask = _build_mask(
+    #     emitter,
+    #     src_idx,
+    #     elements_per_thread=1,
+    #     bounds=src_bounds,
+    #     dynamic_values=src_dynamic_vals_map_start,
+    # )
+    # if mask:
+    #     mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
+    #     oob_index_value = _get_out_of_bounds_index(element_type)
+    #     oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+    #     offset_th = arith_d.select(mask, offset_th, oob_index)
 
     src_index = [offset_th]
 
