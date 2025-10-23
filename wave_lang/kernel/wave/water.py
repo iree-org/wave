@@ -394,6 +394,10 @@ def water_lowering_pipeline(module: Module, target_chip: str) -> Module:
         "canonicalize",
         "cse",
         "gpu-module-to-binary",
+        "water-gpu-to-gpu-runtime",
+        "symbol-dce",
+        "canonicalize",
+        "cse",
     ]
     try:
         result = subprocess.check_output(
