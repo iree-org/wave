@@ -14,6 +14,13 @@ func.func @mma(%lhs: !wave.tensor<[@A, @B] of f16>, %rhs: !wave.tensor<[@C, @B] 
   return %0 : !wave.tensor<[@A, @C] of f32>
 }
 
+// CHECK-LABEL: @extract_slice
+func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
+  // CHECK: wave.extract_slice
+  %0 = wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return %0 : !wave.tensor<[@A, @B] of f16>
+}
+
 // CHECK-LABEL: @unary
 func.func @unary(%value: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16> {
   // CHECK: wave.exp2

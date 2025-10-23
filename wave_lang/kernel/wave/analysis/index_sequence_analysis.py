@@ -764,6 +764,8 @@ def set_thread_dependent_index_from_mma(
     visited = set()
     symbolic_constraints = [c for c in constraints if isinstance(c, SymbolicAlias)]
     for source in sources:
+        if source.mma_type is None:
+            source.update_arg("mma_type", hardware_constraint.mma_type)
         visited = visited.union(set([x for x in sources]))
         visited.remove(source)
         if isinstance(source, ScaledMMA):

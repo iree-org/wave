@@ -323,3 +323,43 @@ func.func @read_index_multi_step_eval(%mem: !wave.tensor<[@M, @N] of f32>) attri
   } : (!wave.tensor<[@M, @N] of f32>) -> vector<4xf32>
   return
 }
+
+// -----
+
+func.func @extract_slice_mismatch_offset_size(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 1, size rank 2, and stride rank 1}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32, 16)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_mismatch_offset_stride(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 2, size rank 2, and stride rank 1}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3, 5)>, size = #wave.expr_list<[] -> (32, 16)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_mismatch_size_stride(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 1, size rank 1, and stride rank 3}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2, 1, 4)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must be constant expressions with no symbols, but got offset with 1 symbols, size with 0 symbols, and stride with 0 symbols}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[BLOCK_M] -> (BLOCK_M)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_all_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must be constant expressions with no symbols, but got offset with 1 symbols, size with 1 symbols, and stride with 1 symbols}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[BLOCK_M] -> (BLOCK_M + 2)>, size = #wave.expr_list<[BLOCK_K] -> (BLOCK_K * 2)>, stride = #wave.expr_list<[BLOCK_N] -> (BLOCK_N)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}

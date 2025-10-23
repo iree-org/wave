@@ -483,6 +483,33 @@ mlir::LogicalResult wave::RegisterOp::verify() {
 }
 
 //-----------------------------------------------------------------------------
+// ExtractSliceOp
+//-----------------------------------------------------------------------------
+
+LogicalResult ExtractSliceOp::verify() {
+  wave::WaveExprListAttr offset = getOffset();
+  wave::WaveExprListAttr size = getSize();
+  wave::WaveExprListAttr stride = getStride();
+
+  if (failed(wave::verifyExprAttrsSameRank({offset, size, stride}))) {
+    return emitOpError() << "offset, size, and stride must all have the same "
+                            "rank, but got offset rank "
+                         << offset.getRank() << ", size rank " << size.getRank()
+                         << ", and stride rank " << stride.getRank();
+  }
+
+  if (failed(wave::verifyExprAttrsNoSymbols({offset, size, stride}))) {
+    return emitOpError() << "offset, size, and stride must be constant "
+                            "expressions with no symbols, but got offset with "
+                         << offset.getNumSymbols() << " symbols, size with "
+                         << size.getNumSymbols() << " symbols, and stride with "
+                         << stride.getNumSymbols() << " symbols";
+  }
+
+  return success();
+}
+
+//-----------------------------------------------------------------------------
 // WriteOp
 //-----------------------------------------------------------------------------
 
