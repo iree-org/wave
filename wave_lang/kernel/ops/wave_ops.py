@@ -392,6 +392,18 @@ def scatter_add(
     elements_per_thread: Optional[int] = 1,
 ) -> "Register": ...
 
+def tensor_load_to_lds(
+    src: Memory,
+    dst: Memory,
+    src_idx: dict[IndexSymbol, IndexSequence],
+    dst_idx: dict[IndexSymbol, IndexSequence],
+    elements_per_thread: Optional[IndexExpr | int] = None,
+    src_mapping: Optional[IndexMapping] = None,
+    dst_mapping: Optional[IndexMapping] = None,
+    src_mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    dst_mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    descriptors = []
+): ...
 
 def gather_to_lds(
     src: Memory,
@@ -3022,6 +3034,21 @@ class Reshape(CustomOp, ABC):
 
     def infer_type(self, *args):
         self.type = get_custom(_to_sequence(self.args)[0]).type
+
+
+@define_op("tensor_load_to_lds")
+@dataclass
+class TensorLoadToLDS(CustomOp):
+    src: Memory
+    dst: Memory
+    src_index: dict[IndexSymbol, IndexSequence]
+    dst_index: dict[IndexSymbol, IndexSequence]
+    src_mapping: Optional[IndexMapping]
+    dst_mapping: Optional[IndexMapping]
+    src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
+    src_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+    dst_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+    descriptors = []
 
 
 @define_op("gather_to_lds")

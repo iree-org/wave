@@ -45,6 +45,7 @@ from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
     CustomOp,
     gather_to_lds,
+    tensor_load_to_lds,
     get_custom,
     read,
     write,
@@ -696,6 +697,115 @@ def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
     res = arith_d.index_cast(original_type, res)
     return res
 
+@handle_op(tensor_load_to_lds)
+def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (
+            src,
+            dst,
+            src_idx,
+            dst_idx,
+            src_mapping,
+            dst_mapping,
+            src_mapping_dyn_vals,
+            dst_mapping_dyn_vals,
+            descriptors,
+        ) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+
+    src_symbolic_shape = _get_symbolic_shape(src)
+    dst_symbolic_shape = _get_symbolic_shape(dst)
+
+    src = cast_py_value(emitter, src)
+    dst = cast_py_value(emitter, dst)
+
+    if not (
+        MemRefType.isinstance(src.ir_value.type)
+        and MemRefType.isinstance(dst.ir_value.type)
+    ):
+        op = get_custom(node)
+        raise ValidationError(
+            f"Expected src and dst to be of Memref type for\n"
+            f"{op}\nGot\n"
+            f"src: {src.ir_value.type}\n"
+            f"dst: {dst.ir_value.type}\n"
+        )
+
+    src = src.ir_value
+    dst = dst.ir_value
+    dynamic_vals_map_start = {}
+
+    # assume no mapping
+
+    # get groups from descriptors
+    group0 = descriptors[0]
+    group1 = descriptors[1]
+    global_index = group0[1]
+    shared_index = group0[2]
+
+    # construct defualt descriptors
+    i256 = IntegerType.get_signless(256)
+    i128 = IntegerType.get_signless(128)
+    d0 = arith_d.constant(i128, 0)
+    d1 = arith_d.constant(i256, 0)
+    d2 = arith_d.constant(i128, 0)
+    d3 = arith_d.constant(i128, 0)
+
+    i64 = IntegerType.get_signless(64)
+    i32 = IntegerType.get_signless(32)
+    i16 = IntegerType.get_signless(16)
+
+    ip = InsertionPoint.current
+
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+
+
+    # build group 0
+    global_index, wg, th = _build_start_indices(
+        emitter, global_index, dynamic_vals_map_start
+    )
+    global_index = [assume_index_subgroup_uniform(idx, i32) for idx in global_index]
+
+    with ip:
+        shared_index, _, _ = _build_start_indices(emitter, shared_index, dynamic_vals_map_start)
+        shared_index = [assume_index_subgroup_uniform(idx, i32) for idx in shared_index]
+
+    t00 = arith_d.extui(i128, global_index)
+    t01 = arith_d.shli(t00, i64)
+    t02 = arith_d.extui(i128, shared_index)
+    t03 = arith_d.shli(t02, i32)
+    d0 = arith_d.ori(t01, t03)
+
+    # build group 1
+    dim_stride_1 = cast_py_value(group1[0], i256)
+    dim_stride_0 = cast_py_value(group1[1], i256)
+    tile_size_1 = cast_py_value(group1[3], i256)
+    tile_size_0 = cast_py_value(group1[4], i256)
+    dim_size_1 = cast_py_value(group1[5], i256)
+    dim_size_0 = cast_py_value(group1[6], i256)
+    data_size = cast_py_value(group1[8], i256)
+
+    t10 = arith_d.shli(dim_stride_1, IntegerType.get_signless(208))
+    t11 = arith_d.shli(dim_stride_0, IntegerType.get_signless(160))
+    t12 = arith_d.shli(tile_size_1, IntegerType.get_signless(128))
+    t13 = arith_d.shli(tile_size_0, IntegerType.get_signless(112))
+    t14 = arith_d.shli(dim_size_1, IntegerType.get_signless(80))
+    t15 = arith_d.shli(dim_size_0, IntegerType.get_signless(48))
+    t16 = arith_d.shli(data_size, IntegerType.get_signless(16))
+    d1 = arith_d.ori(d1, t10)
+    d1 = arith_d.ori(d1, t11)
+    d1 = arith_d.ori(d1, t12)
+    d1 = arith_d.ori(d1, t13)
+    d1 = arith_d.ori(d1, t14)
+    d1 = arith_d.ori(d1, t15)
+    d1 = arith_d.ori(d1, t16)
+
+    return llvm_d.call_intrinsic(
+        None, "llvm.amdgcn.tensor.load.to.lds",
+        [d0, d1, d2, d3], [], []
+    )
 
 @handle_op(gather_to_lds)
 def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
