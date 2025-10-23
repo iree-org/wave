@@ -697,14 +697,11 @@ def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
     res = arith_d.index_cast(original_type, res)
     return res
 
+
 @handle_op(tensor_load_to_lds)
 def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
-        (
-            src,
-            dst,
-            descriptors
-        ) = node.args
+        (src, dst, descriptors) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -730,10 +727,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         )
 
     # assume no mapping
-    def shift(value, bits, direction = "l"):
+    def shift(value, bits, direction="l"):
         sh = arith_d.constant(value.type, bits)
 
-        if direction not in {"l", "r"}: assert False, f"Invalid shifting direction, get {direction}"
+        if direction not in {"l", "r"}:
+            assert False, f"Invalid shifting direction, get {direction}"
 
         if direction == "l":
             val = arith_d.shli(value, sh)
@@ -763,7 +761,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # get global and shared base address pointer
     # global_addr = memref_d.extract_strided_metadata(global_value)[0] # get base buffer
-    strides_sym = strides_from_symbolic_shape(IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True)
+    strides_sym = strides_from_symbolic_shape(
+        IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
+    )
     strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides_sym]
     global_indices, wg, th = _build_start_indices(emitter, group0[1])
     _, global_ptr = _linearize_memref(global_value, wg, th, strides)
@@ -773,7 +773,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # global_ptr = memref_d.extract_aligned_pointer_as_index(global_addr)
     # pack global address of a tile
     # 1. get lower 32 bit from global value
-    global_val = arith_d.index_cast(i57, global_ptr) # i57
+    global_val = arith_d.index_cast(i57, global_ptr)  # i57
     global_val_lower = arith_d.trunci(i32, global_val)
     d0 = vector_d.insert(global_val_lower, d0, static_position=[2], dynamic_position=[])
     # 2. get rest of the upper 25 bit from global value and cast to i32
@@ -787,7 +787,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # insert shared addreess to descriptor 0
     shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_addr)
-    shared_val = arith_d.index_cast(i32, shared_ptr) # i64
+    shared_val = arith_d.index_cast(i32, shared_ptr)  # i64
     d0 = vector_d.insert(shared_val, d0, static_position=[1], dynamic_position=[])
 
     # build group 1 -> 8xi32
@@ -805,7 +805,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # get lower 16 bit from tensor dim 0 and pack to i32
     tensor_dim_0_lower = shift(dim_size_0, 15, "l")
-    d1 = vector_d.insert(tensor_dim_0_lower, d1, static_position=[6], dynamic_position=[])
+    d1 = vector_d.insert(
+        tensor_dim_0_lower, d1, static_position=[6], dynamic_position=[]
+    )
 
     # get upper 16 bit from tensor dim 0 and lower 16 bit from tensor dim 1, pack to i32
     tensor_dim_0_upper = shift(dim_size_0, 15, "r")
@@ -824,7 +826,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # truncate upper 16 bit from dim stride 0 -> i48 to i32
     dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0)
-    d1 = vector_d.insert(dim_stride_0_trunc, d1, static_position=[2], dynamic_position=[])
+    d1 = vector_d.insert(
+        dim_stride_0_trunc, d1, static_position=[2], dynamic_position=[]
+    )
 
     # get upper 16 bit from dim stride 0, get lower 16 bit from dim stride 1, packed to i32
     dim_stride_0_upper = shift(dim_stride_0, 31, "r")
@@ -843,9 +847,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     cpol = arith_d.constant(i32, 0)
 
     return llvm_d.call_intrinsic(
-        None, "llvm.amdgcn.tensor.load.to.lds",
-        [d0, d1, d2, d3, cpol], [], []
+        None, "llvm.amdgcn.tensor.load.to.lds", [d0, d1, d2, d3, cpol], [], []
     )
+
 
 @handle_op(gather_to_lds)
 def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):

@@ -2,12 +2,11 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from math import prod
-from typing import Optional
 
 import sympy
 import torch.fx as fx
 
-from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol, xor
+from .._support.indexing import IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -30,16 +29,12 @@ from .minimize_global_loads import (
     update_write_dependencies,
 )
 from .utils.general_utils import (
-    ceildiv,
-    delinearize_index,
-    find_index_bounds,
     get_hardware_constraint,
     get_workgroup_constraints,
     infer_dim,
     remove_thread_indexing,
     remove_global_indexing,
 )
-from .utils.general_utils import is_gather
 from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
 
@@ -74,14 +69,15 @@ def is_valid_write(write: CustomOp) -> bool:
 
 @dataclass
 class TensorLoadConfig:
-    '''
+    """
     tensor_shapes : [M, N]
     tensor_strides: [N, 1]
     tensor_data_size: 0: 1 bytes, 1: 2 bytes, 2: 4 bytes, 4: 8 bytes
     tensor_tile_shapes: [BLOCK_M, BLOCK_N]
     global_tile_index
     Note. shared addresses will be calculated during MLIR codegen
-    '''
+    """
+
     tensor_shapes: list = None
     tensor_strides: list = None
     tensor_data_size: int = 0
@@ -90,7 +86,8 @@ class TensorLoadConfig:
 
 
 def get_tensor_data_size(tensor_type: "DataType" = None):
-    if not tensor_type: return 0
+    if not tensor_type:
+        return 0
     byte_size = tensor_type.bitwidth() >> 3
     match byte_size:
         case 1:
@@ -105,29 +102,32 @@ def get_tensor_data_size(tensor_type: "DataType" = None):
             return 0
     return 0
 
+
 def get_tensor_tile_shapes(read: Read, constraint_tile_size: dict[IndexSymbol, int]):
-    '''
+    """
     0. Get symbolic shape from Read node.
     1. Materialize the tile from constraints.
-    '''
+    """
     symbolic_shapes = read.type.symbolic_shape
-    tensor_tile_shapes = materialize_shape(
-        constraint_tile_size, symbolic_shapes
-    )
+    tensor_tile_shapes = materialize_shape(constraint_tile_size, symbolic_shapes)
     return tensor_tile_shapes
 
+
 def get_tensor_shapes(read: Read):
-    '''
+    """
     0. Get symbolic shape from Read node.
     1. Materialize the `data shape` using index subs
-    '''
+    """
     tensor_shapes = []
     symbolic_shapes = read.type.symbolic_shape
     for sym_dim in symbolic_shapes:
         tensor_shapes.append(subs_idxc(sym_dim))
 
-    assert all([type(shape) is sympy.core.numbers.Integer for shape in tensor_shapes]), "Unknown or dynamic dimension is not currently supported for tensor load to shared."
+    assert all(
+        [type(shape) is sympy.core.numbers.Integer for shape in tensor_shapes]
+    ), "Unknown or dynamic dimension is not currently supported for tensor load to shared."
     return tensor_shapes
+
 
 def get_tensor_strides(tensor_shapes):
     base = 1
@@ -139,15 +139,17 @@ def get_tensor_strides(tensor_shapes):
     return strides
 
 
-def get_global_tile_address(read: Read, tile_shapes, tensor_strides, wave_subs, constraints):
-    '''
+def get_global_tile_address(
+    read: Read, tile_shapes, tensor_strides, wave_subs, constraints
+):
+    """
     query address: global_base_address + (X + Y * tensor_dim_0_stride) * data size
     Index sequence
     - dim0: X // BLOCK_M, 1, 1
     - dim1: Y // BLOCK_N, 1, 1
 
     combine with global base
-    '''
+    """
     global_base_address = remove_thread_indexing(read.index)
     nonglobal_address = remove_global_indexing(read.index, constraints)
 
@@ -162,6 +164,7 @@ def get_global_tile_address(read: Read, tile_shapes, tensor_strides, wave_subs, 
     new_pattern = combine_index(global_base_address, access_pattern)
     new_pattern = {k: v.subs(wave_subs) for k, v in new_pattern.items()}
     return new_pattern
+
 
 def get_tensor_load_descriptor_config(
     read: Read,
@@ -189,7 +192,9 @@ def get_tensor_load_descriptor_config(
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
     # get global tile addr
-    global_tile_index = get_global_tile_address(read, tensor_tile_shapes, tensor_strides, wave_subs, constraint_tile_size)
+    global_tile_index = get_global_tile_address(
+        read, tensor_tile_shapes, tensor_strides, wave_subs, constraint_tile_size
+    )
 
     return TensorLoadConfig(
         tensor_shapes,
@@ -199,8 +204,9 @@ def get_tensor_load_descriptor_config(
         global_tile_index,
     )
 
+
 def build_tensor_descriptors(config: TensorLoadConfig):
-    '''
+    """
     Constructor descriptor groups, the comment below should follow bit order (from high to low)
 
     Group0: 4xi32
@@ -225,9 +231,21 @@ def build_tensor_descriptors(config: TensorLoadConfig):
         - _: i16
 
     Returns: [g0, g1, g2, g3], where gx has type list
-    '''
+    """
     group0 = [2, config.global_tile_index, 0, 0]
-    group1 = [config.tensor_strides[1], config.tensor_strides[0], 0, config.tensor_tile_shapes[1], config.tensor_tile_shapes[0], config.tensor_shapes[1], config.tensor_shapes[0], 0, 0, config.tensor_data_size, 0]
+    group1 = [
+        config.tensor_strides[1],
+        config.tensor_strides[0],
+        0,
+        config.tensor_tile_shapes[1],
+        config.tensor_tile_shapes[0],
+        config.tensor_shapes[1],
+        config.tensor_shapes[0],
+        0,
+        0,
+        config.tensor_data_size,
+        0,
+    ]
     group2 = [0, 0, 0, 0]
     group3 = [0, 0, 0, 0]
 
@@ -251,9 +269,7 @@ def emit_tensor_load_to_shared(
 
     with write.graph.inserting_before(write.fx_node):
         tensor_write = TensorLoadToLDS(
-            read.memory,
-            write.memory,
-            descriptors
+            read.memory, write.memory, descriptors
         ).add_to_graph(write.graph, loc=write.location)
 
     # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
@@ -263,7 +279,6 @@ def emit_tensor_load_to_shared(
     tensor_writes[write.memory].append(tensor_write)
 
     return tensor_writes
-
 
 
 def tensor_load_to_shared(
@@ -323,7 +338,6 @@ def tensor_load_to_shared(
         THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
     }
 
-
     constraint_tile_size = {
         c.dim: c.tile_size
         for c in constraints
@@ -333,7 +347,9 @@ def tensor_load_to_shared(
     for reads_writes in id_to_read_write.values():
         read, write = reads_writes[0]
 
-        assert read.index == write.index, "Bug: Read Write for a same shared space has different access pattern."
+        assert (
+            read.index == write.index
+        ), "Bug: Read Write for a same shared space has different access pattern."
 
         element_type = read.type.dtype
 
@@ -360,4 +376,3 @@ def tensor_load_to_shared(
         update_write_dependencies(tensor_writes, trace)
 
     DCE(trace)
-

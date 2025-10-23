@@ -392,11 +392,11 @@ def scatter_add(
     elements_per_thread: Optional[int] = 1,
 ) -> "Register": ...
 
+
 def tensor_load_to_lds(
-    src: Memory,
-    dst: Memory,
-    descriptors: list = field(default_factory=list)
+    src: Memory, dst: Memory, descriptors: list = field(default_factory=list)
 ): ...
+
 
 def gather_to_lds(
     src: Memory,
