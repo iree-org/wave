@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     from wave_lang.kernel.ops.wave_ops import *
 
 try:
-    from water_mlir import ir
-    from water_mlir.dialects.wave import (
+    from water_mlir.water_mlir import ir
+    from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         AllocateOp,
         DivOp,
@@ -37,13 +37,13 @@ try:
         YieldOp,
         WaveExprListAttr,
     )
-    from water_mlir.sympy_to_affine_converter import (
+    from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
     )
-    from water_mlir.dialects import arith
-    from water_mlir.dialects import func
-    from water_mlir.dialects import wave
-    from water_mlir.dialects import amdgpu
+    from water_mlir.water_mlir.dialects import arith
+    from water_mlir.water_mlir.dialects import func
+    from water_mlir.water_mlir.dialects import wave
+    from water_mlir.water_mlir.dialects import amdgpu
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
