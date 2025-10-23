@@ -721,7 +721,8 @@ class LaunchableWave(Launchable):
             canonicalize_module(module_op)
             from .water import water_lowering_pipeline
 
-            water_lowering_pipeline(module_op, options.target)
+            module_op = water_lowering_pipeline(module_op, options.target)
+            print(module_op)
 
         module_op.operation.verify()
 
