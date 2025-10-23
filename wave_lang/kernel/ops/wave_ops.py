@@ -393,6 +393,11 @@ def scatter_add(
 ) -> "Register": ...
 
 
+def tensor_load_to_lds(
+    src: Memory, dst: Memory, descriptors: list = field(default_factory=list)
+): ...
+
+
 def gather_to_lds(
     src: Memory,
     dst: Memory,
@@ -3021,6 +3026,14 @@ class Reshape(CustomOp, ABC):
 
     def infer_type(self, *args):
         self.type = get_custom(_to_sequence(self.args)[0]).type
+
+
+@define_op("tensor_load_to_lds")
+@dataclass
+class TensorLoadToLDS(CustomOp):
+    src: Memory
+    dst: Memory
+    descriptors: list = field(default_factory=list)
 
 
 @define_op("gather_to_lds")
