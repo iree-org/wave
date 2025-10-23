@@ -34,6 +34,7 @@ from .utils.general_utils import (
     delinearize_index,
     find_index_bounds,
     get_hardware_constraint,
+    get_workgroup_constraints,
     infer_dim,
     remove_thread_indexing,
     remove_global_indexing,
@@ -41,6 +42,8 @@ from .utils.general_utils import (
 from .utils.general_utils import is_gather
 from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
+
+from .gather_to_shared import combine_index
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +76,17 @@ def is_valid_write(write: CustomOp) -> bool:
 class TensorLoadConfig:
     '''
     tensor_shapes : [M, N]
-    tensor_tile_stride: [N, 1]
+    tensor_strides: [N, 1]
     tensor_data_size: 0: 1 bytes, 1: 2 bytes, 2: 4 bytes, 4: 8 bytes
     tensor_tile_shapes: [BLOCK_M, BLOCK_N]
-    global_mem_base: remove_thread_indexing
-    shared_mem_base:
+    global_tile_index
+    Note. shared addresses will be calculated during MLIR codegen
     '''
     tensor_shapes: list = None
     tensor_strides: list = None
     tensor_data_size: int = 0
     tensor_tile_shapes: list = None
-    global_mem_base: IndexSequence = None
-    shared_mem_base: IndexSequence = None
+    global_tile_index: IndexSequence = None
 
 
 def get_tensor_data_size(tensor_type: "DataType" = None):
@@ -137,12 +139,29 @@ def get_tensor_strides(tensor_shapes):
     return strides
 
 
-def get_write_shared_base_address(read: Read, write: Write, wave_subs, hardware_constraint, tile_shape):
+def get_global_tile_address(read: Read, tile_shapes, tensor_strides, wave_subs, constraints):
+    '''
+    query address: global_base_address + (X + Y * tensor_dim_0_stride) * data size
+    Index sequence
+    - dim0: X // BLOCK_M, 1, 1
+    - dim1: Y // BLOCK_N, 1, 1
+
+    combine with global base
+    '''
+    global_base_address = remove_thread_indexing(read.index)
+    nonglobal_address = remove_global_indexing(read.index, constraints)
+
+    access_pattern = {}
     symbolic_shapes = read.type.symbolic_shape
-    tid = hardware_constraint.linearized_thread_id
-    nd_index = delinearize_index(tid, tile_shape)
-    write_index = {k: v.subs(wave_subs) for k, v in zip(symbolic_shapes, nd_index)}
-    return write_index
+    for i, (dim_expr, idx) in enumerate(zip(symbolic_shapes, nonglobal_address)):
+        tile = tile_shapes[i]
+        dim = infer_dim(dim_expr)
+        offset = idx // tile
+        access_pattern[dim] = IndexSequence(offset, 1, 1)
+
+    new_pattern = combine_index(global_base_address, access_pattern)
+    new_pattern = {k: v.subs(wave_subs) for k, v in new_pattern.items()}
+    return new_pattern
 
 def get_tensor_load_descriptor_config(
     read: Read,
@@ -169,31 +188,29 @@ def get_tensor_load_descriptor_config(
     # get tile shape
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
-    # get global base addr
-    global_index = remove_thread_indexing(read.index)
-
-    # get shared base addr
-    shared_index = get_write_shared_base_address(read, write, wave_subs, hardware_constraint, tensor_tile_shapes)
+    # get global tile addr
+    global_tile_index = get_global_tile_address(read, tensor_tile_shapes, tensor_strides, wave_subs, constraint_tile_size)
 
     return TensorLoadConfig(
         tensor_shapes,
         tensor_strides,
         tensor_data_size,
         tensor_tile_shapes,
-        global_index,
-        shared_index
+        global_tile_index,
     )
 
 def build_tensor_descriptors(config: TensorLoadConfig):
     '''
     Constructor descriptor groups, the comment below should follow bit order (from high to low)
 
-    Group0: i128
-        - global address: i64,
-        - lds address: i32,
-        - others: i32
+    Group0: 4xi32
+        - _: i32
+            - 2 for image mode -> deafult by FM
+        - global address: IndexSequence,
+        - lds address: MLIR codegen
+        - _: 0
 
-    Group1: i256
+    Group1: 8xi32
         - tensor dim 1 stride: i48
         - tensor dim 0 stride: i48
         - _: i16
@@ -202,13 +219,14 @@ def build_tensor_descriptors(config: TensorLoadConfig):
         - tensor dim 1 shape: 32
         - tensor dim 0 shape: 32
         - _: i16
-        - _: i14
-        - data size: i2
+        - element: i16
+            - _: i14
+            - data size: i2
         - _: i16
 
     Returns: [g0, g1, g2, g3], where gx has type list
     '''
-    group0 = [0, config.global_mem_base, config.shared_mem_base, 0]
+    group0 = [2, config.global_tile_index, 0, 0]
     group1 = [config.tensor_strides[1], config.tensor_strides[0], 0, config.tensor_tile_shapes[1], config.tensor_tile_shapes[0], config.tensor_shapes[1], config.tensor_shapes[0], 0, 0, config.tensor_data_size, 0]
     group2 = [0, 0, 0, 0]
     group3 = [0, 0, 0, 0]
@@ -235,13 +253,7 @@ def emit_tensor_load_to_shared(
         tensor_write = TensorLoadToLDS(
             read.memory,
             write.memory,
-            read.index,
-            write.index,
-            read.mapping,
-            write.mapping,
-            read.mapping_dynamic_vals,
-            write.mapping_dynamic_vals,
-            descriptors,
+            descriptors
         ).add_to_graph(write.graph, loc=write.location)
 
     # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
@@ -290,6 +302,7 @@ def tensor_load_to_shared(
         return
 
     hardware_constraint = get_hardware_constraint(constraints)
+    wg_constraints = get_workgroup_constraints(constraints)
     threads_per_wave = hardware_constraint.threads_per_wave
     waves_per_block = hardware_constraint.waves_per_block
     threads_per_block = hardware_constraint.threads_per_block
