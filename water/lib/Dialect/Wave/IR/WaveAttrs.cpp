@@ -192,7 +192,7 @@ wave::WaveExprListAttr::getResolvedShape(
 
 llvm::LogicalResult
 wave::verifyExprAttrsSameRank(llvm::ArrayRef<wave::WaveExprListAttr> exprs) {
-  if (exprs.empty())
+  if (exprs.size() < 2)
     return mlir::success();
 
   unsigned expectedRank = exprs[0].getRank();
