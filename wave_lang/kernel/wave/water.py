@@ -404,4 +404,6 @@ def water_lowering_pipeline(module: Module, target_chip: str) -> Module:
     except subprocess.CalledProcessError as e:
         print(e.stderr)
         raise e
-    print(result)
+
+    with module.context:
+        return Module.parse(result)
