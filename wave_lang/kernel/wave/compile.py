@@ -179,7 +179,8 @@ class WaveKernel:
                     "value": memory,
                     "symbolic_shape": info_dict["symbolic_shape"],
                     "iteration_dimensions": [
-                        dim for dim, _, _ in info_dict["extra_iteration_dimensions"]
+                        dim
+                        for dim, _, _ in info_dict.get("extra_iteration_dimensions", [])
                     ],
                 }
                 debug_args.append(memory)

@@ -2461,8 +2461,10 @@ def test_debug_log_core(dynamic_dims: bool):
 @pytest.mark.parametrize(
     "mfma_variant, threads_per_wave",
     [
-        pytest.param(tkw.MMAType.F32_16x16x16_F16, 64),
-        pytest.param(tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32),
+        pytest.param(tkw.MMAType.F32_16x16x16_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(
+            tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4
+        ),
     ],
 )
 def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
@@ -2483,7 +2485,7 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
         tkw.WaveConstraint(M, BLOCK_M / 2),
         tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.HardwareConstraint(
-            threads_per_wave=64, mma_type=tkw.MMAType.F32_16x16x16_F16
+            threads_per_wave=threads_per_wave, mma_type=mfma_variant
         ),
     ]
 
@@ -2499,17 +2501,17 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
         b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
-        c_reg = Register[M, N, tkl.f32](0.0)
+        c_reg = tkw.Register[M, N, tkl.f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: Register[M, N, tkl.f32]) -> Register[M, N, tkl.f32]:
+        def repeat(acc: tkw.Register[M, N, tkl.f32]) -> tkw.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a)
             b_reg = tkw.read(b)
             acc = tkw.mma(a_reg, b_reg, acc)
-            debug_log(
+            tkw.debug_log(
                 acc,
                 "acc",
-                extra_iteration_dimensions=[(tkl.sym.iter, k, iterations)],
+                extra_iteration_dimensions=[(tkl.sym.iter, K, iterations)],
                 handler=handler,
             )
             return acc
@@ -2549,6 +2551,8 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
         assert torch.equal(debug_logs["acc"]["value"][-1], c)
         # Meanwhile the first element should be quite different.
         assert not torch.allclose(debug_logs["acc"]["value"][0], c)
+
+    test_gemm()
 
 
 @require_e2e

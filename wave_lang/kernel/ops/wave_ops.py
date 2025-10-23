@@ -187,7 +187,7 @@ def write(
 def debug_log(
     register_: "Register",
     label: Optional[str],
-    extra_iter_dimensions: Optional[
+    extra_iteration_dimensions: Optional[
         list[tuple["IndexSymbol", "IndexSymbol", int]]
     ] = None,
     mapping: Optional[IndexMapping] = None,
@@ -2384,7 +2384,7 @@ class DebugLog(CustomOp):
     The optional `handler` argument should be a function that accepts the whole `debug_logs` object (IE all logs, not just one).
     The handler function gives a way to specify something like a viewer for all logs, but specify it inline among print functions rather than separately.
 
-    The optional `extra_iter_dimensions` argument allows you to add extra dimensions to capture values from multiple iterations of a loop.
+    The optional `extra_iteration_dimensions` argument allows you to add extra dimensions to capture values from multiple iterations of a loop.
     It takes a list of tuples, where each tuple contains `(dimension_name, iteration_axis, max_iterations)`.
     The `dimension_name` must be a unique symbol, and will be the name of the dimension in the symbolic shape of the output.
     The `iteration_axis` must be the axis of an `Iterate` operation, IE the dimension being reduced in the iteration.
