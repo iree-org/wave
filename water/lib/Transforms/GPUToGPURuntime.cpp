@@ -64,7 +64,7 @@ static Value createKernelHandle(OpBuilder &builder, Type globaType,
     auto handleName = getUniqueLLVMGlobalName(mod, "kernel_handle");
     handle = builder.create<LLVM::GlobalOp>(
         loc, globaType, /*isConstant*/ false, LLVM::Linkage::Internal,
-        handleName, Attribute());
+        handleName, LLVM::ZeroAttr::get(builder.getContext()));
   }
   return builder.create<LLVM::AddressOfOp>(loc, ptrType, handle.getSymName());
 }
