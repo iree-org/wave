@@ -296,12 +296,15 @@ class WaveEmitter:
         )
         get_buffer_func_symbol = FlatSymbolRefAttr.get(get_buffer_func.sym_name.value)
 
-        host_args_types = [ptr] * len(arg_types)
+        # First argument is stream pointer
+        host_args_types = [ptr] + [ptr] * len(arg_types)
         host_ftype = FunctionType.get(host_args_types, [])
         func_name = kernel_func.name.value + "_host_wrapper"
         func_op = func_d.FuncOp(func_name, host_ftype)
 
-        entry_block = func_op.add_entry_block(locs)
+        entry_block = func_op.add_entry_block(
+            [Location.unknown()] * len(host_args_types)
+        )
 
         subs = add_emitter_subs(self)
         threads_per_block = self.hardware_constraint.threads_per_block
@@ -310,7 +313,8 @@ class WaveEmitter:
             threads = [gen_sympy_index(subs, s) for s in threads_per_block]
 
             launch_args = []
-            for arg, dst_type in zip(entry_block.arguments, arg_types):
+            func_args = entry_block.arguments[1:]
+            for arg, dst_type in zip(func_args, arg_types):
                 call = func_d.CallOp(
                     get_buffer_ftype.results, get_buffer_func_symbol, [arg]
                 )
