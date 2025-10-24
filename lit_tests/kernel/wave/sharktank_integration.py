@@ -1,4 +1,4 @@
-# RUN: python %s | FileCheck %s --check-prefix=CHECK,CHECK-%target
+# RUN: python %s | FileCheck %s --check-prefixes=CHECK,CHECK-%target
 
 import textwrap
 from typing import Optional
