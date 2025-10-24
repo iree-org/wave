@@ -86,7 +86,7 @@ def mlir_converter_matrix_add():
     trace = compiled_kernel.get_compiled_graph()
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output = emit_wave_dialect(trace, options)
+    mlir_output, _ = emit_wave_dialect(trace, options, False)
 
     # Print to stdout for FileCheck
     print(mlir_output)
@@ -212,7 +212,7 @@ def mlir_converter_matmul():
     trace = compiled_kernel.compiled_graph
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output = emit_wave_dialect(trace, options)
+    mlir_output, _ = emit_wave_dialect(trace, options, False)
 
     # Print to stdout for FileCheck
     print(mlir_output)

@@ -12,6 +12,8 @@ import torch.fx as fx
 import sys
 from typing import TYPE_CHECKING, Callable, Sequence
 import sympy
+import argparse
+
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
@@ -144,12 +146,13 @@ def _type_to_wave_mlir(
     raise RuntimeError(f"Unsupported wave type for MLIR conversion: {type_}")
 
 
-def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
-    """Reads and returns a pickled trace and options from stdin.
+def _parse_input() -> tuple[CapturedTrace, WaveCompileOptions, str]:
+    """Parses and returns the pickled trace, options, and pipeline from stdin.
 
     The input is expected to be a dill-serialized dict with keys:
     - "trace": CapturedTrace object
     - "options": WaveCompileOptions
+    - "pipeline": A string containing the transform dialect pass pipeline
 
     Restores supplemental fx.Node fields (e.g., .type) from node.meta.
     """
@@ -159,22 +162,29 @@ def _read_trace() -> tuple[CapturedTrace, WaveCompileOptions]:
         raise SystemExit(f"FATAL: failed to unpickle: {e}")
     trace = unpickled.get("trace") if isinstance(unpickled, dict) else None
     options = unpickled.get("options") if isinstance(unpickled, dict) else None
+    pipeline = unpickled.get("pipeline") if isinstance(unpickled, dict) else None
 
     # TODO: Properly importing this unconditionally at top of the file still
     #       clashes with IREE bindings.
     from wave_lang.kernel._support.tracing import CapturedTrace
     from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 
-    if not isinstance(trace, CapturedTrace) or not isinstance(
-        options, WaveCompileOptions
-    ):
+    if not isinstance(trace, CapturedTrace):
         raise SystemExit(
-            f"FATAL: unpickled objects are not CapturedTrace and WaveCompileOptions (got {type(trace)} and {type(options)})"
+            f"FATAL: unpickled object is not CapturedTrace (got {type(trace)})"
         )
+
+    if not isinstance(options, WaveCompileOptions):
+        raise SystemExit(
+            f"FATAL: unpickled object is not WaveCompileOptions (got {type(options)})"
+        )
+
+    if not isinstance(pipeline, str):
+        raise SystemExit(f"FATAL: unpickled object is not str (got {type(pipeline)})")
 
     # Restore supplemental node fields captured in the meta field
     trace.restore_node_state()
-    return trace, options
+    return trace, options, pipeline
 
 
 def _convert_sympy_expr_to_affine_map(
@@ -426,7 +436,10 @@ def _emit_ops_from_graph(
 
 
 def _emit_from_captured_trace(
-    trace: "CapturedTrace", options: WaveCompileOptions
+    trace: "CapturedTrace",
+    options: WaveCompileOptions,
+    pipeline: str,
+    test_diagnostics=False,
 ) -> int:
     from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
 
@@ -434,11 +447,28 @@ def _emit_from_captured_trace(
     # arguments correctly
     value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
 
+    if pipeline:
+        raise NotImplementedError(
+            "Transform dialect pipelines are not implemented yet."
+        )
+
     # TODO: Forward locations properly
     with ir.Context() as ctx, ir.Location.unknown():
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
         module = ir.Module.create()
+
+        diagnostics = []
+
+        def diagnostics_handler(d):
+            diagnostics.append(f"{d.location}: {d.message}")
+            return True
+
+        ctx.attach_diagnostic_handler(diagnostics_handler)
+
+        if test_diagnostics:
+            loc = ir.Location.unknown(ctx)
+            loc.emit_error("test error")
 
         # Collect placeholders from graph
         placeholders = [
@@ -503,16 +533,31 @@ def _emit_from_captured_trace(
                 func.ReturnOp(operands_=[])
 
         # Verify the module before printing
-        # TODO: Report back diagnostics emitted by the verification
         try:
             module.operation.verify()
         except ir.MLIRError as e:
-            raise RuntimeError(f"Emitted MLIR module does not verify") from e
-        sys.stdout.write(str(module))
+            diagnostics.append(str(e))
+
+        output = dill.dumps({"diagnostics": diagnostics, "module": str(module)})
+        sys.stdout.buffer.write(output)
         sys.stdout.flush()
     return 0
 
 
 if __name__ == "__main__":
-    data, options = _read_trace()
-    sys.exit(_emit_from_captured_trace(data, options))
+    parser = argparse.ArgumentParser(description="Water dialect emitter")
+
+    parser.add_argument(
+        "--test-diagnostic-emission",
+        action="store_true",
+        help="Test diagnostic serialization and deserialization through stdin and stdout",
+    )
+
+    args = parser.parse_args()
+
+    trace, options, pipeline = _parse_input()
+    sys.exit(
+        _emit_from_captured_trace(
+            trace, options, pipeline, args.test_diagnostic_emission
+        )
+    )
