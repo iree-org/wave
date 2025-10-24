@@ -292,11 +292,12 @@ class WaveEmitter:
         )
         get_buffer_ftype = FunctionType.get([ptr], [buffer_type])
         get_buffer_func = func_d.FuncOp(
-            "$get_buffer", get_buffer_ftype, visibility="private"
+            "wave_get_buffer", get_buffer_ftype, visibility="private"
         )
         get_buffer_func_symbol = FlatSymbolRefAttr.get(get_buffer_func.sym_name.value)
 
         # First argument is stream pointer
+        # Rest are kernel arguments as PyObject*
         host_args_types = [ptr] + [ptr] * len(arg_types)
         host_ftype = FunctionType.get(host_args_types, [])
         func_name = kernel_func.name.value + "_host_wrapper"
