@@ -2226,9 +2226,19 @@ def testI8HwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
     assert_close(c.to(torch.int32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False)
 
 
-@require_e2e
 @require_cdna4
-@pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (4096, 4096, 4096),  # Aligned baseline
+        (3072, 4096, 2048),  # M not power of 2
+        (4096, 3584, 4096),  # N not power of 2
+        (2560, 2560, 1536),  # All unaligned
+        (1280, 5120, 2048),  # Wide N
+        (5120, 1280, 2048),  # Tall M
+    ],
+)
 @pytest.mark.parametrize(
     "mfma_variant",
     [
