@@ -12,6 +12,7 @@ from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     CustomOp,
     TensorLoadToLDS,
+    SharedMemoryBarrier,
     IndexSequence,
     Read,
     Write,
@@ -83,7 +84,7 @@ class TensorLoadConfig:
     tensor_data_size: int = 0
     tensor_tile_shapes: list = None
     global_tile_index: IndexSequence = None
-
+    shared_tile_index: IndexSequence = None
 
 def get_tensor_data_size(tensor_type: "DataType" = None):
     if not tensor_type:
@@ -132,37 +133,57 @@ def get_tensor_shapes(read: Read):
 def get_tensor_strides(tensor_shapes):
     base = 1
     strides = []
-    for shape in tensor_shapes:
-        strides.append(base)
+    for shape in reversed(tensor_shapes):
         base *= shape
+        strides.append(base)
 
+    # return list(reversed(strides))
     return strides
 
 
-def get_global_tile_address(
-    read: Read, tile_shapes, tensor_strides, wave_subs, constraints
+def get_global_indexing(node_index):
+    base = remove_thread_indexing(node_index)
+    return {
+        key: IndexSequence(base[key].start,1,1)
+        for key in base.keys()
+    }
+
+def get_thread_indexing(node_index, global_index):
+    return {
+        key: IndexSequence(
+            node_index[key].start - global_index[key].start,
+            1,
+            1)
+        for key in node_index.keys()
+    }
+
+    return {node_index.start - global_index.start, 1, 1}
+
+def get_tile_offset(
+    node: CustomOp, wave_subs, constraints, waves_per_block
 ):
     """
-    query address: global_base_address + (X + Y * tensor_dim_0_stride) * data size
-    Index sequence
-    - dim0: X // BLOCK_M, 1, 1
-    - dim1: Y // BLOCK_N, 1, 1
+    node is Read | Write
 
-    combine with global base
+    expect address (element unit): base_address + tile offset
+
+    tile offset in dim D:
+    - WAVE_ID * BLK_D / (num of waves in D)
     """
-    global_base_address = remove_thread_indexing(read.index)
-    nonglobal_address = remove_global_indexing(read.index, constraints)
+    index = {k: v.subs(wave_subs) for k, v in node.index.items()}
+    # WG index and induction var index
+    global_index = get_global_indexing(index)
+    wave_index = get_thread_indexing(index, global_index)
 
     access_pattern = {}
-    symbolic_shapes = read.type.symbolic_shape
-    for i, (dim_expr, idx) in enumerate(zip(symbolic_shapes, nonglobal_address)):
-        tile = tile_shapes[i]
+    symbolic_shapes = node.type.symbolic_shape
+    for i, dim_expr in enumerate(symbolic_shapes):
         dim = infer_dim(dim_expr)
-        offset = idx // tile
+        tile_sym = constraints[dim]
+        offset = wave_index[dim].start * (tile_sym // waves_per_block[i])
         access_pattern[dim] = IndexSequence(offset, 1, 1)
 
-    new_pattern = combine_index(global_base_address, access_pattern)
-    new_pattern = {k: v.subs(wave_subs) for k, v in new_pattern.items()}
+    new_pattern = combine_index(global_index, access_pattern)
     return new_pattern
 
 
@@ -170,7 +191,7 @@ def get_tensor_load_descriptor_config(
     read: Read,
     write: Write,
     constraint_tile_size: dict[IndexSymbol, int],
-    total_number_of_threads,
+    waves_per_block,
     element_type: "DataType",
     wave_subs,
     hardware_constraint: "HardwareConstraint",
@@ -192,8 +213,13 @@ def get_tensor_load_descriptor_config(
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
     # get global tile addr
-    global_tile_index = get_global_tile_address(
-        read, tensor_tile_shapes, tensor_strides, wave_subs, constraint_tile_size
+    global_tile_index = get_tile_offset(
+        read, wave_subs, constraint_tile_size, waves_per_block
+    )
+
+    # get LDS base address
+    shared_tile_index = get_tile_offset(
+        write, wave_subs, constraint_tile_size, waves_per_block
     )
 
     return TensorLoadConfig(
@@ -202,6 +228,7 @@ def get_tensor_load_descriptor_config(
         tensor_data_size,
         tensor_tile_shapes,
         global_tile_index,
+        shared_tile_index
     )
 
 
@@ -214,7 +241,7 @@ def build_tensor_descriptors(config: TensorLoadConfig):
             - 2 for image mode -> deafult by FM
         - global address: IndexSequence,
         - lds address: MLIR codegen
-        - _: 0
+        - valid tensor: 1
 
     Group1: 8xi32
         - tensor dim 1 stride: i48
@@ -232,7 +259,7 @@ def build_tensor_descriptors(config: TensorLoadConfig):
 
     Returns: [g0, g1, g2, g3], where gx has type list
     """
-    group0 = [2, config.global_tile_index, 0, 0]
+    group0 = [2, config.global_tile_index, config.shared_tile_index, 1]
     group1 = [
         config.tensor_strides[1],
         config.tensor_strides[0],
@@ -271,6 +298,7 @@ def emit_tensor_load_to_shared(
         tensor_write = TensorLoadToLDS(
             read.memory, write.memory, descriptors
         ).add_to_graph(write.graph, loc=write.location)
+        barrier = SharedMemoryBarrier(wait_async_ops=False).add_to_graph(write.graph, loc=tensor_write.location)
 
     # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
     # they are part of the same group later.
@@ -321,16 +349,14 @@ def tensor_load_to_shared(
     threads_per_wave = hardware_constraint.threads_per_wave
     waves_per_block = hardware_constraint.waves_per_block
     threads_per_block = hardware_constraint.threads_per_block
-    total_number_of_threads = prod(threads_per_block)
 
     thread_id = hardware_constraint.linearized_thread_id
 
     # uniform shared memory write base address by aligning thread indexing position.
     # $T0 // wave size -> wave id
-    # wave id * wave size -> wave start position
     wave_subs = {
         THREAD_0: (
-            ((THREAD_0 // threads_per_wave) * threads_per_wave)
+            (THREAD_0 // threads_per_wave)
             if waves_per_block[0] > 1
             else 0
         ),
@@ -357,7 +383,7 @@ def tensor_load_to_shared(
             read,
             write,
             constraint_tile_size,
-            total_number_of_threads,
+            waves_per_block,
             element_type,
             wave_subs,
             hardware_constraint,
