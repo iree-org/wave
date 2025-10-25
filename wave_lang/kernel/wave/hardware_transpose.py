@@ -24,48 +24,85 @@ from ..wave.constraints import Constraint
 from .compile_options import WaveCompileOptions
 
 
-def fetch_delinearized_indices(shape, dtype_width, thread_id):
-    if shape == (16, 32) and dtype_width == 8:
-        return [
-            (thread_id % 2) * 8 + (sympy.floor(thread_id / 16) % 2) * 16,
-            sympy.floor((thread_id % 64) / 32) * 8 + sympy.floor((thread_id % 16) / 2),
-        ]
+def _calculate_wide_tile_offset(Tm, dtype_width, vw):
+    """Calculate offset for wide tile transpose operations."""
+    if Tm > 8 and dtype_width == 16:
+        return vw * 2
+    return vw
 
-    if shape == (32, 16) and dtype_width == 8:
-        return [
-            (thread_id % 2) * 8,
-            sympy.floor((thread_id % 64) / 2),
-        ]
 
-    if shape == (16, 16) and dtype_width == 16:
-        return [
-            (thread_id % 4) * 4,
-            sympy.floor((thread_id % 64) / 4),
-        ]
+def compute_transpose_indices(shape, dtype_width, thread_id, threads_per_wave):
+    """
+    Uses tile classification to determine the appropriate index pattern.
+    Classifies tiles as wide, tall, or base based on shape parameters.
+    """
+    Tm, Tk = shape
 
-    if shape == (8, 32) and dtype_width == 16:
-        return [
-            (thread_id % 4) * 4 + sympy.floor((thread_id % 32) / 16) * 16,
-            sympy.floor((thread_id % 16) / 4) + sympy.floor((thread_id % 64) / 32) * 4,
-        ]
+    # Hardware constants
+    TILE_THRESHOLD = 16
 
-    if shape == (32, 16) and dtype_width == 16:
-        return [
-            (thread_id % 4) * 4,
-            sympy.floor((thread_id % 64) / 4) + 4 * sympy.floor((thread_id % 64) / 16),
-        ]
+    # Vector width in elements (4 for 16-bit, 8 for 8-bit)
+    vw = threads_per_wave // dtype_width
 
-    if shape == (16, 32) and dtype_width == 16:
-        return [
-            (thread_id % 4) * 4 + sympy.floor((thread_id % 32) / 16) * 16,
-            sympy.floor((thread_id % 16) / 4) + sympy.floor((thread_id % 64) / 32) * 8,
-        ]
+    # Group size for first dimension cycling (4 for 16-bit, 2 for 8-bit)
+    group_size = vw if dtype_width == 16 else vw // 4
 
-    # XXX: Uncomment following line for debugging
-    # assert False, "Unhandled shape and datatype!"
+    # Precompute common thread ID modulo operations
+    tid_mod_group = thread_id % group_size
+    tid_mod_16 = thread_id % 16
+    tid_mod_32 = thread_id % 32
+    tid_mod_wave = thread_id % threads_per_wave
 
-    # Signal to caller that we should not use the transposed load operation
-    return None
+    # Base pattern components
+    base_first = tid_mod_group * vw
+    base_second = sympy.floor(tid_mod_wave / group_size)
+
+    # Tile classification
+    is_wide_tile = Tm <= TILE_THRESHOLD and Tk > TILE_THRESHOLD
+    is_tall_tile = Tm > TILE_THRESHOLD and Tk <= vw * group_size and dtype_width == 16
+
+    if is_wide_tile:
+        # Wide tiles: multiple wave-groups horizontally
+        first_dim = (
+            base_first + sympy.floor(tid_mod_32 / TILE_THRESHOLD) * TILE_THRESHOLD
+        )
+        wide_second_base = sympy.floor(tid_mod_16 / group_size)
+        offset = _calculate_wide_tile_offset(Tm, dtype_width, vw)
+        second_dim = wide_second_base + sympy.floor(tid_mod_wave / 32) * offset
+    elif is_tall_tile:
+        # Tall tiles: multiple wave-groups vertically
+        first_dim = base_first
+        second_dim = base_second + group_size * sympy.floor(
+            tid_mod_wave / TILE_THRESHOLD
+        )
+    else:
+        # Base case: single wave-group (16x16 or smaller)
+        first_dim = base_first
+        second_dim = base_second
+
+    return [first_dim, second_dim]
+
+
+def fetch_delinearized_indices(shape, dtype_width, thread_id, threads_per_wave):
+    """
+    Returns delinearized indices for hardware transpose operations.
+
+    Now uses unified formula with tile classification instead of 6 hardcoded cases.
+    All shapes meeting basic alignment constraints are supported.
+    """
+    # Validate supported configurations
+    if dtype_width not in (8, 16):
+        return None
+
+    Tm, Tk = shape
+    vw = threads_per_wave // dtype_width
+
+    # Check if shape is supported (must be compatible with base unit)
+    if Tm % 4 != 0 or Tk % vw != 0:
+        return None
+
+    # All aligned shapes now supported via tile classification
+    return compute_transpose_indices(shape, dtype_width, thread_id, threads_per_wave)
 
 
 def modify_index(index, elems_per_thread, delinearized):
@@ -156,7 +193,9 @@ def mark_hardware_transpose_candidates(
         mem_type = custom_node.memory_type
         width = mem_type.dtype.bitwidth()
         concrete_shape = tuple(map(sub, custom_node.memory_type.symbolic_shape))
-        maybe_indices = fetch_delinearized_indices(concrete_shape, width, thread_id)
+        maybe_indices = fetch_delinearized_indices(
+            concrete_shape, width, thread_id, hardware_constraint.threads_per_wave
+        )
         if not maybe_indices:
             continue
 
