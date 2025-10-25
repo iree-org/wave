@@ -108,3 +108,88 @@ def get_gemm_kernel(
         del hyperparams[K]
 
     return gemm, hyperparams, dynamic_symbols
+
+
+def get_gemm_kernel_transpose_a_b(
+    shape: tuple[int, int, int],
+    dynamic_dims: bool | tuple[bool, bool, bool],
+    mfma_variant: MMAType,
+    dtype: torch.dtype = torch.float16,
+    threads_per_wave: int = 64,
+):
+    if not isinstance(dynamic_dims, Sequence):
+        dynamic_dims = (dynamic_dims,) * 3
+
+    # Input sizes
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    # Workgroup tile sizes
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    # Address space (for GPU, shared(1) or global(0))
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    # Iterator symbols
+    m = tkl.sym.m
+    n = tkl.sym.n
+    k = tkl.sym.k
+
+    dtype = torch_dtype_to_wave(dtype)
+    # Expose user-constraints
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.IteratorBindings({m: M, n: N, k: K})]
+
+    constraints += [
+        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+    ]
+
+    if dynamic_dims[2]:
+        constraints += [tkw.Assumption(K > BLOCK_K * 4)]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[K, M, ADDRESS_SPACE, dtype],
+        b: tkl.Memory[K, N, ADDRESS_SPACE, dtype],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a, source=(k, m), target=(m, k))
+            b_reg = tkw.read(b, source=(k, n), target=(n, k))
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        M: shape[0],
+        N: shape[1],
+        K: shape[2],
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    dynamic_symbols = []
+    if dynamic_dims[0]:
+        dynamic_symbols.append(M)
+        del hyperparams[M]
+
+    if dynamic_dims[1]:
+        dynamic_symbols.append(N)
+        del hyperparams[N]
+
+    if dynamic_dims[2]:
+        dynamic_symbols.append(K)
+        del hyperparams[K]
+
+    return gemm, hyperparams, dynamic_symbols
