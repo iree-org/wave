@@ -1976,7 +1976,14 @@ def test_scalar_cond_copy(shape, run_bench):
 @pytest.mark.parametrize(
     "shape",
     [
+        (27,),
+        (51,),
         (64,),
+        (65,),
+        (128,),
+        (256,),
+        (500,),
+        (512,),
     ],
 )
 def test_1d_scanop_cumsum(shape, run_bench):
