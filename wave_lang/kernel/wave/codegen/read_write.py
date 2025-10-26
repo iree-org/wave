@@ -734,7 +734,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     data_size = cast_py_value(emitter, group1[9], i32).ir_value
 
     src_symbolic_shape = _get_symbolic_shape(src)
-    dst_symbolic_shape = _get_symbolic_shape(dst)
+    dst_symbolic_shape = get_custom(dst).distributed_shape
 
     global_mem = cast_py_value(emitter, src)
     shared_mem = cast_py_value(emitter, dst)
@@ -742,37 +742,71 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_value = global_mem.ir_value
     shared_value = shared_mem.ir_value
 
-    # calculcate global address
     element_type = global_value.type.element_type
     element_byte = element_type.width // 8
     element_byte_index = arith_d.constant(IndexType.get(), element_byte)
     element_byte_constant = arith_d.index_cast(i32, element_byte_index)
 
-    strides_sym = strides_from_symbolic_shape(
+    # calculcate global address
+    # 0. breakdown index sequence to WG & TH offsets : ele
+    # 1. uniform per wave access : ele
+    # 2. linearize N-D memref to 1-D memref and extract TH offset. (fold WG offset into memref base) : ele
+    # 3. offset = X + Y * tensor dim 0 stride : ele
+    # 4. offset_byte = offset * element byte : byte
+    # 5. get global memory pointer
+    # 6. move global memory pointer by offset_byte to get global address of a tile : byte
+    index, wg, th = _build_start_indices(emitter, group0[1])
+
+    wave_index_x = assume_index_subgroup_uniform(th[0], i32)
+    wave_index_y = assume_index_subgroup_uniform(th[1], i32)
+
+    wave_x = arith_d.index_cast(i32, wave_index_x)
+    wave_y = arith_d.index_cast(i32, wave_index_y)
+
+    g_strides_sym = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
     )
-    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides_sym]
-    index, wg, th = _build_start_indices(emitter, group0[1])
-    wave_index = [assume_index_subgroup_uniform(idx, i32) for idx in index]
-    global_buffer, _ = _linearize_memref(global_value, wg, th, strides)
-    global_buffer = _cast_buffer_and_encode_stride(global_buffer, strides, element_type, emitter)
+    g_strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in g_strides_sym]
+    global_buffer, _ = _linearize_memref(global_value, wg, th, g_strides)
+    global_buffer = _cast_buffer_and_encode_stride(
+        global_buffer, g_strides, element_type, emitter
+    )
 
-    wave_x = arith_d.index_cast(i32, index[0])
-    wave_y = arith_d.index_cast(i32, index[1])
-
-    stride0 = arith_d.index_cast(i32, dim_stride_0)
-    y_offset = arith_d.muli(wave_y, stride0)
-    global_base_offset = arith_d.addi(wave_x, y_offset)
-    global_byte_offset = arith_d.muli(global_base_offset, element_byte_constant)
+    stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
+    y_offset = arith_d.muli(wave_index_y, stride0)
+    global_base_offset = arith_d.addi(wave_index_x, y_offset)
+    global_index_offset = arith_d.muli(global_base_offset, element_byte_index)
 
     global_ptr = memref_d.extract_aligned_pointer_as_index(global_buffer)
-    global_byte_address = arith_d.addi(global_ptr, global_byte_offset)
+    global_byte_address = arith_d.addi(global_ptr, global_index_offset)
 
+    # calculate shared address
+    # 0. breakdown index sequence to WG & TH offsets : ele
+    # 1. uniform per lds access : ele
+    # 2. linearize N-D memref to 1-D memref and extract TH offset. (fold WG offset into memref base) : ele
+    # 3. offset = X + Y * dim 0 tile size : ele
+    # 4. offset_byte = offset * element byte : byte
+    # 5. get shared memory pointer
+    # 6. move shared memory pointer by offset_byte to get shared memory address of a tile.
+    index, _, _ = _build_start_indices(emitter, group0[2])
+
+    lds_index_x = assume_index_subgroup_uniform(index[0], i32)
+    lds_index_y = assume_index_subgroup_uniform(index[1], i32)
+
+    lds_x = arith_d.index_cast(i32, lds_index_x)
+    lds_y = arith_d.index_cast(i32, lds_index_y)
+
+    s_strides_sym = strides_from_symbolic_shape(
+        IndexingContext.current(), dst_symbolic_shape, allow_mixed_shapes=True
+    )
+    s_strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in s_strides_sym]
     shared_buffer = _linearize_shared_mem(shared_value)
-    shared_indices, _, _ = _build_start_indices(emitter, group0[2])
+    shared_buffer = _cast_buffer_and_encode_stride(
+        shared_buffer, s_strides, element_type, emitter
+    )
 
-    y_offset = arith_d.muli(wave_y, tile_size_0)
-    shared_base_offset = arith_d.addi(wave_x, y_offset)
+    y_offset = arith_d.muli(lds_y, tile_size_0)
+    shared_base_offset = arith_d.addi(lds_x, y_offset)
     shared_byte_offset = arith_d.muli(shared_base_offset, element_byte_constant)
 
     shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
@@ -808,7 +842,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     d0 = vector_d.insert(pack, d0, static_position=[3], dynamic_position=[])
 
     # insert shared addreess to descriptor 0
-    d0 = vector_d.insert(shared_byte_address, d0, static_position=[1], dynamic_position=[])
+    d0 = vector_d.insert(
+        shared_byte_address, d0, static_position=[1], dynamic_position=[]
+    )
 
     # valid tensor
     valid_tensor = arith_d.constant(i32, group0[3])

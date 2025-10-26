@@ -1,7 +1,6 @@
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from math import prod
 
 import sympy
 import torch.fx as fx
@@ -34,9 +33,7 @@ from .utils.general_utils import (
     get_workgroup_constraints,
     infer_dim,
     remove_thread_indexing,
-    remove_global_indexing,
 )
-from .utils.graph_utils import DCE
 from .utils.symbol_utils import subs_idxc
 
 from .gather_to_shared import combine_index
@@ -72,7 +69,7 @@ def is_valid_write(write: CustomOp) -> bool:
 class TensorLoadConfig:
     """
     tensor_shapes : [M, N]
-    tensor_strides: [N, 1]
+    tensor_strides: [N, M*N]
     tensor_data_size: 0: 1 bytes, 1: 2 bytes, 2: 4 bytes, 4: 8 bytes
     tensor_tile_shapes: [BLOCK_M, BLOCK_N]
     global_tile_index
@@ -85,6 +82,7 @@ class TensorLoadConfig:
     tensor_tile_shapes: list = None
     global_tile_index: IndexSequence = None
     shared_tile_index: IndexSequence = None
+
 
 def get_tensor_data_size(tensor_type: "DataType" = None):
     if not tensor_type:
@@ -143,25 +141,19 @@ def get_tensor_strides(tensor_shapes):
 
 def get_global_indexing(node_index):
     base = remove_thread_indexing(node_index)
-    return {
-        key: IndexSequence(base[key].start,1,1)
-        for key in base.keys()
-    }
+    return {key: IndexSequence(base[key].start, 1, 1) for key in base.keys()}
+
 
 def get_thread_indexing(node_index, global_index):
     return {
-        key: IndexSequence(
-            node_index[key].start - global_index[key].start,
-            1,
-            1)
+        key: IndexSequence(node_index[key].start - global_index[key].start, 1, 1)
         for key in node_index.keys()
     }
 
     return {node_index.start - global_index.start, 1, 1}
 
-def get_tile_offset(
-    node: CustomOp, wave_subs, constraints, waves_per_block
-):
+
+def get_tile_offset(node: CustomOp, wave_subs, constraints, waves_per_block):
     """
     node is Read | Write
 
@@ -228,7 +220,7 @@ def get_tensor_load_descriptor_config(
         tensor_data_size,
         tensor_tile_shapes,
         global_tile_index,
-        shared_tile_index
+        shared_tile_index,
     )
 
 
@@ -298,7 +290,9 @@ def emit_tensor_load_to_shared(
         tensor_write = TensorLoadToLDS(
             read.memory, write.memory, descriptors
         ).add_to_graph(write.graph, loc=write.location)
-        barrier = SharedMemoryBarrier(wait_async_ops=False).add_to_graph(write.graph, loc=tensor_write.location)
+        barrier = SharedMemoryBarrier(wait_async_ops=False).add_to_graph(
+            write.graph, loc=tensor_write.location
+        )
 
     # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
     # they are part of the same group later.
@@ -319,8 +313,10 @@ def tensor_load_to_shared(
         1) option.tensor_load is set
         2) target is gfx1250
     1. Build 1-many mapping of GLOBAL_READ: SHARED_WRITE_X ... #a
-    2. Materialize workgroup data size, wave tile data size
-    3. Calculate global base address and shared base address
+    2. Materialize workgroup tile size, per wave tile size
+        - workgroup tile size = BLOCK_M * BLOCK_D
+        - wave tile size = BLOCK_M / wave_M * BLOCK_D / wave_D
+    3. Calculate global address and shared address accessed by a wave
     4. Build descriptors for tensor.load.to.lds
     5. Replace #a with tensor_load_to_shared op.
     """
@@ -355,11 +351,7 @@ def tensor_load_to_shared(
     # uniform shared memory write base address by aligning thread indexing position.
     # $T0 // wave size -> wave id
     wave_subs = {
-        THREAD_0: (
-            (THREAD_0 // threads_per_wave)
-            if waves_per_block[0] > 1
-            else 0
-        ),
+        THREAD_0: ((THREAD_0 // threads_per_wave) if waves_per_block[0] > 1 else 0),
         THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
         THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
     }
