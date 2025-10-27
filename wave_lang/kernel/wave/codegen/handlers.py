@@ -1622,7 +1622,9 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
         waitcnt(0)
 
     if tensor_wait:
-        rocdl_d.s_wait_tensorcnt(0)
+        # TODO(megan.kuo): Use rocdl intrinsic when iree has support
+        c0 = arith_d.constant(IntegerType.get_signless(16), 0)
+        llvm_d.call_intrinsic(None, "llvm.amdgcn.s.wait.tensorcnt", [c0], [], [])
 
     amdgpu_d.lds_barrier()
 
