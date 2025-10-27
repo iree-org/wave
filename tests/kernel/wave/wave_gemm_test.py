@@ -2404,3 +2404,52 @@ def test_gemm_prefetch_manual_schedule(shape: tuple[int], mfma_variant: MMAType)
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
+
+
+@require_e2e
+@require_gfx1250
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.NONE,
+    ],
+)
+@pytest.mark.parametrize("shape", [(16, 16, 16)])
+@pytest.mark.parametrize("datatype", [torch.float16])
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32)],
+)
+def testTensorLoadToShared(
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    mfma_variant: MMAType,
+    threads_per_wave,
+    datatype: torch.dtype,
+):
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
+        shape, False, mfma_variant, datatype
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=enable_scheduling,
+        dynamic_symbols=dynamic_symbols,
+        use_global_to_shared=True,
+        wave_runtime=True,
+        target="gfx1250"
+    )
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm)
+
+    a = torch.randn(shape[0], shape[2], dtype=datatype).cuda()
+    b = torch.randn(shape[1], shape[2], dtype=datatype).cuda()
+    c = torch.zeros(shape[0], shape[1], dtype=torch.float32).cuda()
+    asm = gemm(a, b, c)
+
+    assert "wait.tensorcnt" in asm, "gather_to_lds not found in asm"
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c.cpu(), iree_ref.cpu(), check_device=False)
