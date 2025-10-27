@@ -23,6 +23,7 @@ from ...ops.wave_ops import (
     Allocate,
     CustomOp,
     GatherToLDS,
+    TensorLoadToLDS,
     Iterate,
     Read,
     Write,
@@ -474,6 +475,8 @@ def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
     if is_shared_read(custom) or is_shared_write(custom):
         return custom.memory
     if isinstance(custom, GatherToLDS):
+        return custom.dst
+    if isinstance(custom, TensorLoadToLDS):
         return custom.dst
 
     return None

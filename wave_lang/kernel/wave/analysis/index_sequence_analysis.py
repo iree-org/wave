@@ -28,6 +28,7 @@ from ...ops.wave_ops import (
     GetResult,
     IterArg,
     Iterate,
+    TensorLoadToLDS,
     MMA,
     MMABase,
     NestedRegionOp,
@@ -230,6 +231,8 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
         ):
             continue
         if isinstance(custom.type, DataType):
+            continue
+        if isinstance(custom, TensorLoadToLDS):
             continue
         assert (
             custom.index != None
