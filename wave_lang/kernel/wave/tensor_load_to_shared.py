@@ -186,6 +186,7 @@ def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map):
     offset_sym = alloc_offset_map[node.memory]
     return int(offset_sym)
 
+
 def get_tensor_load_descriptor_config(
     read: Read,
     write: Write,
@@ -194,7 +195,7 @@ def get_tensor_load_descriptor_config(
     element_type: "DataType",
     wave_subs,
     hardware_constraint: "HardwareConstraint",
-    alloc_offset_map
+    alloc_offset_map,
 ) -> TensorLoadConfig:
     """
     Get the gather to shared config for the given read and write.
@@ -218,9 +219,7 @@ def get_tensor_load_descriptor_config(
     )
 
     # get LDS base address
-    shared_tile_index = get_shared_tile_byte_offset(
-        write, alloc_offset_map
-    )
+    shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
 
     return TensorLoadConfig(
         tensor_shapes,
@@ -386,9 +385,7 @@ def tensor_load_to_shared(
             custom_memory.update_arg("padding", 0)
             new_distributed_shape = list(custom_memory.distributed_shape)
             new_distributed_shape[-1] -= padding
-            custom_memory.update_arg(
-                "distributed_shape", tuple(new_distributed_shape)
-            )
+            custom_memory.update_arg("distributed_shape", tuple(new_distributed_shape))
 
     allocate_offsets = get_allocation_offsets(trace)
 

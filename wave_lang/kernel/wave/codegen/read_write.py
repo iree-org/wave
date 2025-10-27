@@ -769,7 +769,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     g_strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in g_strides_sym]
     global_buffer, _ = _linearize_memref(global_value, wg, th, g_strides)
     # global_buffer = _cast_buffer_and_encode_stride(
-        # global_buffer, g_strides, element_type, emitter
+    # global_buffer, g_strides, element_type, emitter
     # )
 
     stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
@@ -792,7 +792,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     shared_buffer = _linearize_shared_mem(shared_value)
 
     shared_base_offset = arith_d.constant(i32, group0[2])
-    shared_byte_offset = shared_base_offset # arith_d.muli(shared_base_offset, element_byte_constant)
+    shared_byte_offset = (
+        shared_base_offset  # arith_d.muli(shared_base_offset, element_byte_constant)
+    )
 
     shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
     shared_ptr = arith_d.index_cast(i32, shared_ptr)
