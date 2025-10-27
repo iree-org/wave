@@ -106,6 +106,7 @@ from iree.compiler.ir import (
     MLIRError,
     MemRefType,
     Module,
+    OpAttributeMap,
     OpResult,
     Operation,
     RankedTensorType,

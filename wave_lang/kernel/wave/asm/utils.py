@@ -105,14 +105,7 @@ def parse_memref_type_from_obj(memref_type_obj) -> Tuple[List[int], List[int], i
 
 
 def attrs_to_dict(attrs) -> Dict[str, object]:
-    result = {}
-    for x in attrs:
-        if hasattr(x, 'name') and hasattr(x, 'attr'):
-            result[x.name] = x.attr
-        elif isinstance(x, str):
-            # Handle string attributes - they might be key-value pairs
-            continue  # Skip string attributes for now
-    return result
+    return {x.name: x.attr for x in attrs}
 
 
 def parse_wg_and_subgroup(
