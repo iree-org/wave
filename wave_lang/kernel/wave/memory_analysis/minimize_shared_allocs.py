@@ -114,7 +114,7 @@ def get_alloc_info(trace: CapturedTrace):
 
     allocs = trace.walk(is_shared_alloc)
     if not allocs:
-        return
+        return None, None, None
     live_intervals = compute_live_intervals(allocs)
 
     alloc_info = [
@@ -139,6 +139,10 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
     update_sort_keys(trace, trace.get_root_graph())
 
     allocs, live_intervals, alloc_info = get_alloc_info(trace)
+
+    if allocs is None:
+        return
+
     offsets, allocation_size = determine_allocations_offsets(alloc_info)
     if offsets is None:
         raise ValueError("No feasible solution found for shared memory allocation.")
