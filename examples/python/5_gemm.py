@@ -7,8 +7,8 @@ input reordering, scatter operations, and conditional weight application.
 
 import torch
 import argparse
-
 import wave_lang.kernel.wave as tkw
+import wave_lang.kernel.lang as tkl
 from wave_lang.kernel._support.dtype import f16, f32, i32
 from wave_lang.kernel._support.indexing import sym
 from wave_lang.kernel.lang.global_symbols import *
@@ -1672,12 +1672,17 @@ def fused_gemms(is_debug=False):
         a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
         w1: Memory[N1, K, ADDRESS_SPACE_B, f16],  # Input matrix B
         w2: Memory[N2, N1, ADDRESS_SPACE_B, f16],  # Input matrix D
-        c_back1: Memory[M, N1, ADDRESS_SPACE_C, f32],
         c: Memory[M, N2, ADDRESS_SPACE_C, f32],  # Output matrix C
     ):
         # Initialize the accumulator register with zeros
         c_reg1 = Register[M, N1, f32](0.0)
         c_reg2 = Register[M, N2, f32](0.0)
+
+        c_back1 = tkw.allocate(
+            shape=(M, N1),
+            distributed_shape=(M, N1),
+            dtype=tkl.f32,
+        )
 
         # Iterate over the K dimension to compute the dot product
         @tkw.iterate(K, init_args=[c_reg1])
@@ -1743,7 +1748,7 @@ def fused_gemms(is_debug=False):
             f.write(compiled_gemm.asm)
 
     # Run the GEMM kernel
-    compiled_gemm(a, w1, w2, c_back1, c)
+    compiled_gemm(a, w1, w2, c)
 
     # Verify the result using PyTorch's matmul
     expected = torch.matmul(a, w1.t())
