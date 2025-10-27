@@ -38,6 +38,9 @@ from .utils.symbol_utils import subs_idxc
 
 from .gather_to_shared import combine_index
 
+from .memory_analysis.minimize_shared_allocs import get_alloc_info
+from .memory_analysis.solver import determine_allocations_offsets
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,6 +182,10 @@ def get_tile_offset(node: CustomOp, wave_subs, constraints, waves_per_block):
     return new_pattern
 
 
+def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map):
+    offset_sym = alloc_offset_map[node.memory]
+    return int(offset_sym)
+
 def get_tensor_load_descriptor_config(
     read: Read,
     write: Write,
@@ -187,6 +194,7 @@ def get_tensor_load_descriptor_config(
     element_type: "DataType",
     wave_subs,
     hardware_constraint: "HardwareConstraint",
+    alloc_offset_map
 ) -> TensorLoadConfig:
     """
     Get the gather to shared config for the given read and write.
@@ -210,8 +218,8 @@ def get_tensor_load_descriptor_config(
     )
 
     # get LDS base address
-    shared_tile_index = get_tile_offset(
-        write, wave_subs, constraint_tile_size, waves_per_block
+    shared_tile_index = get_shared_tile_byte_offset(
+        write, alloc_offset_map
     )
 
     return TensorLoadConfig(
@@ -290,7 +298,7 @@ def emit_tensor_load_to_shared(
         tensor_write = TensorLoadToLDS(
             read.memory, write.memory, descriptors
         ).add_to_graph(write.graph, loc=write.location)
-        barrier = SharedMemoryBarrier(wait_async_ops=False).add_to_graph(
+        barrier = SharedMemoryBarrier(tensor_wait=True).add_to_graph(
             write.graph, loc=tensor_write.location
         )
 
@@ -301,6 +309,13 @@ def emit_tensor_load_to_shared(
     tensor_writes[write.memory].append(tensor_write)
 
     return tensor_writes
+
+
+def get_allocation_offsets(trace):
+    allocs, _, alloc_info = get_alloc_info(trace)
+    offsets, allocation_size = determine_allocations_offsets(alloc_info)
+    allocs_to_offsets = {allocs[i]: offsets[i] for i in range(len(allocs))}
+    return allocs_to_offsets
 
 
 def tensor_load_to_shared(
@@ -362,6 +377,21 @@ def tensor_load_to_shared(
         if isinstance(c, TilingConstraint) or isinstance(c, WorkgroupConstraint)
     }
 
+    # clear all padding
+    for _writes in id_to_read_write.values():
+        _, write = _writes[0]
+        custom_memory = get_custom(write.memory)
+        padding = custom_memory.padding
+        if padding != 0:
+            custom_memory.update_arg("padding", 0)
+            new_distributed_shape = list(custom_memory.distributed_shape)
+            new_distributed_shape[-1] -= padding
+            custom_memory.update_arg(
+                "distributed_shape", tuple(new_distributed_shape)
+            )
+
+    allocate_offsets = get_allocation_offsets(trace)
+
     for reads_writes in id_to_read_write.values():
         read, write = reads_writes[0]
 
@@ -379,6 +409,7 @@ def tensor_load_to_shared(
             element_type,
             wave_subs,
             hardware_constraint,
+            allocate_offsets,
         )
 
         if config is None:
