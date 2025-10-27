@@ -39,7 +39,7 @@ def test_gemm_with_wave_schedule():
     # CHECK-COUNT-4:    vector.load %[[VIEW_1]]
 
     # Steady State Global Read
-    # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1], offset: ?>>, vector<8xf16>
+    # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1]>>, vector<8xf16>
     # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
 
     # Compute

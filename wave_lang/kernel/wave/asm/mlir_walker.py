@@ -12,12 +12,12 @@ from wave_lang.support.ir_imports import (
     memref_d,
     stream_d,
     vector_d,
+    OpAttributeMap,
 )
 
 from .utils import (
     parse_vector_type_from_obj,
     parse_memref_type_from_obj,
-    attrs_to_dict,
     parse_wg_and_subgroup,
     tid_upper_bound_from_thread_id,
     simplify_expression,
@@ -40,7 +40,8 @@ class IRWalker:
         kernel_info.arg_ssa_order = [str(arg) for arg in entry_block.arguments]
 
         # Extract translation_info from function attributes
-        function_attributes = attrs_to_dict(fn.attributes)
+        assert isinstance(fn.attributes, OpAttributeMap)
+        function_attributes = dict(fn.attributes)
         translation_info = function_attributes.get("translation_info")
         if translation_info is not None:
             workgroup_size, subgroup_size = parse_wg_and_subgroup(translation_info)
