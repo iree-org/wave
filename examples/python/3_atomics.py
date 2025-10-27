@@ -265,7 +265,7 @@ def test_histogram(is_debug=False):
 
 def test_large_histogram(is_debug=False):
     NUM_EXPERTS = tkl.sym.NUM_EXPERTS
-    TOKEN_OFFSET = sympy.Symbol("TOKEN_OFFSET")
+    TOKEN_OFFSET = tkl.sym.TOKEN_OFFSET
     """Atomic add operation to a histogram using dynamic mapping."""
     constraints: list[tkw.Constraint] = []
     constraints += [tkw.WorkgroupConstraint(M, M, 0)]
@@ -316,7 +316,7 @@ def test_large_histogram(is_debug=False):
         def count_tokens():
             token_idx = tkw.self_index(TOKEN_OFFSET, tkl.i32)
             tid_reg = tkw.Register[TOKEN_OFFSET, tkl.i32](THREAD_0)
-            # token_idx = token_idx*tkl.Register[TOKEN_OFFSET, tkl.i32](64)
+            token_idx = token_idx * tkl.Register[TOKEN_OFFSET, tkl.i32](64) + tid_reg
 
             expert_id = tkw.read(
                 topk_ids,
@@ -341,7 +341,6 @@ def test_large_histogram(is_debug=False):
     hyperparams = {
         M: num_tokens,
         NUM_EXPERTS: num_experts,
-        TOKEN_OFFSET: 0,
     }
     options = WaveCompileOptions(
         subs=hyperparams,
