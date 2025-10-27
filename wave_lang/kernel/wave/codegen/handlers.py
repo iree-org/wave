@@ -2093,7 +2093,7 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
             args += [gen(bounds[dim]) for dim in index.keys()]
 
             # Print index info
-            gpu_d.printf(format=fmt, args=args)
+            gpu_d.printf(fmt, *args)
 
             # Kill the wave.
             llvm_d.intr_trap()
