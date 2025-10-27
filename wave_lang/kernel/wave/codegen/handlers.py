@@ -1614,7 +1614,10 @@ def waitcnt(vmcnt: int):
 @handle_op(shared_memory_barrier)
 def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     try:
-        (wait_async_ops, tensor_wait, ) = node.args
+        (
+            wait_async_ops,
+            tensor_wait,
+        ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 

@@ -1108,7 +1108,7 @@ def test_tensor_waitcnt():
 
     @tkw.wave(constraints)
     def schedule_ops(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16]):
-        tkw.shared_memory_barrier(tensor_wait = True)
+        tkw.shared_memory_barrier(tensor_wait=True)
         tkw.read(a)
 
     schedule_ops = wave_compile(get_wave_compile_options(), schedule_ops)
