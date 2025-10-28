@@ -227,7 +227,9 @@ def mark_hardware_transpose_candidates(
 
     for read in trace.walk(is_read):
         custom_node = get_custom(read)
-        if not read_meets_hw_transpose_requirements(custom_node, constraints):
+        if not read_meets_hw_transpose_requirements(
+            custom_node, constraints, options.target
+        ):
             continue
 
         mem_type = custom_node.memory_type

@@ -603,7 +603,9 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
-    if read_meets_hw_transpose_requirements(get_custom(node), emitter.constraints):
+    if read_meets_hw_transpose_requirements(
+        get_custom(node), emitter.constraints, emitter.options.target
+    ):
         result = amdgpu_d.transpose_load(vector_type, kb_src, start_indices)
     else:
         result = _create_vec_read_write(
