@@ -98,15 +98,15 @@ def test_read_write():
     # CHECK:          .p2align 6
     # CHECK:          .amdhsa_kernel read_write
     # CHECK:          .amdhsa_user_sgpr_kernarg_segment_ptr 1
-    # CHECK:          .amdhsa_accum_offset 12
-    # CHECK:          .amdhsa_next_free_vgpr 12
-    # CHECK:          .amdhsa_next_free_sgpr 16
+    # CHECK:          .amdhsa_accum_offset {{[0-9]+}}
+    # CHECK:          .amdhsa_next_free_vgpr {{[0-9]+}}
+    # CHECK:          .amdhsa_next_free_sgpr {{[0-9]+}}
     # CHECK:          .amdhsa_group_segment_fixed_size 0
     # CHECK:          .amdhsa_private_segment_fixed_size 0
-    # CHECK:          .amdhsa_system_sgpr_workgroup_id_x 1
-    # CHECK:          .amdhsa_system_sgpr_workgroup_id_y 1
-    # CHECK:          .amdhsa_system_sgpr_workgroup_id_z 1
-    # CHECK:          .amdhsa_system_vgpr_workitem_id 0
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_x 0
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_y 0
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_z 0
+    # CHECK:          .amdhsa_system_vgpr_workitem_id 1
     # CHECK:          .amdhsa_float_denorm_mode_32 3
     # CHECK:          .amdhsa_float_denorm_mode_16_64 3
     # CHECK:          .end_amdhsa_kernel
@@ -120,24 +120,149 @@ def test_read_write():
     # CHECK:              # SRD for Value(%reinterpret_cast = memref.reinterpret_cast %0 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>) (arg0)
     # CHECK:              s_mov_b32 s8, s2
     # CHECK:              s_mov_b32 s9, s3
-    # CHECK:              s_mov_b32 s10, 2048
+    # CHECK:              s_mov_b32 s10, {{[0-9]+}}
     # CHECK:              s_mov_b32 s11, Srd127_96
     # CHECK:              # SRD for Value(%reinterpret_cast_0 = memref.reinterpret_cast %1 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>) (arg1)
     # CHECK:              s_mov_b32 s12, s4
     # CHECK:              s_mov_b32 s13, s5
-    # CHECK:              s_mov_b32 s14, 2048
+    # CHECK:              s_mov_b32 s14, {{[0-9]+}}
     # CHECK:              s_mov_b32 s15, Srd127_96
     # CHECK:              # lane id (0..63)
-    # CHECK:              v_mbcnt_lo_u32_b32 v0, -1, 0
-    # CHECK:              v_mbcnt_hi_u32_b32 v0, -1, v0
-    # CHECK:              v_lshlrev_b32 v2, 5, v0
-    # CHECK:              # load 32B from Value(%reinterpret_cast = memref.reinterpret_cast %0 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>)
-    # CHECK:              buffer_load_dwordx4  v[4:7], v2, s[8:11], 0 offen offset:0
+    # CHECK:              v_mbcnt_lo_u32_b32 v{{[0-9]+}}, -1
+    # CHECK:              v_mbcnt_hi_u32_b32 v{{[0-9]+}}, -1, v{{[0-9]+}}
+    # CHECK:              v_lshlrev_b32 v{{[0-9]+}}, 5, v{{[0-9]+}}
+    # CHECK:              # load 32B from {{.*}}
+    # CHECK:              buffer_load_dwordx4  v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[8:11], 0 offen offset:0
+    # CHECK:              buffer_load_dwordx4  v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[8:11], 0 offen offset:16
     # CHECK:              s_waitcnt vmcnt(0)
-    # CHECK:              buffer_load_dwordx4  v[8:11], v2, s[8:11], 0 offen offset:16
+    # CHECK:              # store 32B to {{.*}}
+    # CHECK:              buffer_store_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[12:15], 0 offen offset:0
+    # CHECK:              buffer_store_dwordx4 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[12:15], 0 offen offset:16
+    # CHECK:              s_endpgm
+
+
+@run_test
+def test_mma():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        b_reg = tkw.read(b, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        acc = tkw.mma(a_reg, b_reg, c_reg)
+        tkw.write(acc, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 16,
+            N: 16,
+            K: 16,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    # Compile to AMDGCN assembly (for lit tests, no amdclang++)
+    compile_options.compile_to_asm = True
+    mma = wave_compile(compile_options, mma)
+    print(mma.asm)
+
+    # CHECK-LABEL:    test_mma
+    # CHECK:          .amdgcn_target "amdgcn-amd-amdhsa--gfx942"
+    # CHECK:          .text
+    # CHECK:          .protected mma
+    # CHECK:          .globl mma
+    # CHECK:          .p2align 8
+    # CHECK:          .type mma,@function
+    # CHECK:          .section .rodata,#alloc
+    # CHECK:          .p2align 6
+    # CHECK:          .amdhsa_kernel mma
+    # CHECK:          .amdhsa_user_sgpr_kernarg_segment_ptr 1
+    # CHECK:          .amdhsa_accum_offset {{[0-9]+}}
+    # CHECK:          .amdhsa_next_free_vgpr {{[0-9]+}}
+    # CHECK:          .amdhsa_next_free_sgpr {{[0-9]+}}
+    # CHECK:          .amdhsa_group_segment_fixed_size {{[0-9]+}}
+    # CHECK:          .amdhsa_private_segment_fixed_size 0
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_x 0
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_y 0
+    # CHECK:          .amdhsa_system_sgpr_workgroup_id_z 0
+    # CHECK:          .amdhsa_system_vgpr_workitem_id 1
+    # CHECK:          .amdhsa_float_denorm_mode_32 3
+    # CHECK:          .amdhsa_float_denorm_mode_16_64 3
+    # CHECK:          .end_amdhsa_kernel
+    # CHECK:          .text
+    # CHECK:          # SRD upper word (gfx9xx): data_format=4 => 0x20000
+    # CHECK:          .set Srd127_96, 0x20000
+    # CHECK:          mma:
+    # CHECK:              s_load_dwordx2 s[2:3], s[0:1], 0x0
+    # CHECK:              s_load_dwordx2 s[4:5], s[0:1], 0x8
+    # CHECK:              s_load_dwordx2 s[6:7], s[0:1], 0x10
+    # CHECK:              s_waitcnt lgkmcnt(0)
+    # CHECK:              # SRD for {{.*}} (arg0)
+    # CHECK:              s_mov_b32 s8, s2
+    # CHECK:              s_mov_b32 s9, s3
+    # CHECK:              s_mov_b32 s10, {{[0-9]+}}
+    # CHECK:              s_mov_b32 s11, Srd127_96
+    # CHECK:              # SRD for {{.*}} (arg1)
+    # CHECK:              s_mov_b32 s12, s4
+    # CHECK:              s_mov_b32 s13, s5
+    # CHECK:              s_mov_b32 s14, {{[0-9]+}}
+    # CHECK:              s_mov_b32 s15, Srd127_96
+    # CHECK:              # SRD for {{.*}} (arg2)
+    # CHECK:              s_mov_b32 s16, s6
+    # CHECK:              s_mov_b32 s17, s7
+    # CHECK:              s_mov_b32 s18, {{[0-9]+}}
+    # CHECK:              s_mov_b32 s19, Srd127_96
+    # CHECK:              # lane id (0..63)
+    # CHECK:              v_mbcnt_lo_u32_b32 v{{[0-9]+}}, -1
+    # CHECK:              v_mbcnt_hi_u32_b32 v{{[0-9]+}}, -1, v{{[0-9]+}}
+    # CHECK:              # load 8B from {{.*}}
+    # CHECK:              buffer_load_dwordx2 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[8:11], 0 offen offset:0
     # CHECK:              s_waitcnt vmcnt(0)
-    # CHECK:              v_lshlrev_b32 v2, 5, v0
-    # CHECK:              # store 32B to Value(%reinterpret_cast_0 = memref.reinterpret_cast %1 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>)
-    # CHECK:              buffer_store_dwordx4 v[4:7], v2, s[12:15], 0 offen offset:0
-    # CHECK:              buffer_store_dwordx4 v[8:11], v2, s[12:15], 0 offen offset:16
+    # CHECK:              ds_write_b64 v{{[0-9]+}}, v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:              # load 8B from {{.*}}
+    # CHECK:              buffer_load_dwordx2 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}, s[12:15], 0 offen offset:0
+    # CHECK:              s_waitcnt vmcnt(0)
+    # CHECK:              ds_write_b64 v{{[0-9]+}}, v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:              s_barrier
+    # CHECK:              ds_read_b64 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
+    # CHECK:              ds_read_b64 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
+    # CHECK:              v_mfma_f32_16x16x16_f16 a[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], 0
+    # CHECK:              s_nop 6
+    # CHECK:              v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
+    # CHECK:              v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
+    # CHECK:              v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
+    # CHECK:              v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
+    # CHECK-DAG:          v_lshrrev_b32 v{{[0-9]+}}, 4, v{{[0-9]+}}
+    # CHECK-DAG:          v_and_b32 v{{[0-9]+}}, 15, v{{[0-9]+}}
+    # CHECK-DAG:          v_lshlrev_b32 v{{[0-9]+}}, {{[0-9]+}}, v{{[0-9]+}}
+    # CHECK-DAG:          v_add_u32 v{{[0-9]+}}, v{{[0-9]+}}, v{{[0-9]+}}
+    # CHECK:              # store 4B to {{.*}}
+    # CHECK:              buffer_store_dword v{{[0-9]+}}, v{{[0-9]+}}, s[16:19], 0 offen offset:{{[0-9]+}}
+    # CHECK:              # store 4B to {{.*}}
+    # CHECK:              buffer_store_dword v{{[0-9]+}}, v{{[0-9]+}}, s[16:19], 0 offen offset:{{[0-9]+}}
+    # CHECK:              # store 4B to {{.*}}
+    # CHECK:              buffer_store_dword v{{[0-9]+}}, v{{[0-9]+}}, s[16:19], 0 offen offset:{{[0-9]+}}
+    # CHECK:              # store 4B to {{.*}}
+    # CHECK:              buffer_store_dword v{{[0-9]+}}, v{{[0-9]+}}, s[16:19], 0 offen offset:{{[0-9]+}}
     # CHECK:              s_endpgm

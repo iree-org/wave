@@ -99,11 +99,14 @@ class BufferLoadDwordx4(LoadInstruction):
     def __init__(
         self,
         dst_regs: Tuple[int, int, int, int],
-        vindex_reg: str,
+        vindex_reg: Union[str, int],
         srd_regs: Tuple[int, int, int, int],
         offset: int,
         comment: str = None,
     ):
+        # Format vindex_reg as string if it's an integer
+        if isinstance(vindex_reg, int):
+            vindex_reg = f"v{vindex_reg}"
         super().__init__(
             "buffer_load_dwordx4",
             [
@@ -139,11 +142,14 @@ class BufferStoreDwordx4(StoreInstruction):
     def __init__(
         self,
         src_regs: Tuple[int, int, int, int],
-        vindex_reg: str,
+        vindex_reg: Union[str, int],
         srd_regs: Tuple[int, int, int, int],
         offset: int,
         comment: str = None,
     ):
+        # Format vindex_reg as string if it's an integer
+        if isinstance(vindex_reg, int):
+            vindex_reg = f"v{vindex_reg}"
         super().__init__(
             "buffer_store_dwordx4",
             [
@@ -173,6 +179,85 @@ class BufferStoreDwordx4(StoreInstruction):
         return f"    {self.mnemonic} {formatted_operands}"
 
 
+# Additional Buffer Instructions
+class BufferLoadDwordx2(LoadInstruction):
+    """Load 2 dwords (8 bytes) from buffer memory."""
+
+    def __init__(
+        self,
+        dst_regs: Tuple[int, int],
+        vindex_reg: Union[str, int],
+        srd_regs: Tuple[int, int, int, int],
+        offset: int,
+        comment: str = None,
+    ):
+        # Format vindex_reg as string if it's an integer
+        if isinstance(vindex_reg, int):
+            vindex_reg = f"v{vindex_reg}"
+        super().__init__(
+            "buffer_load_dwordx2",
+            [
+                f"v[{dst_regs[0]}:{dst_regs[1]}]",
+                vindex_reg,
+                f"s[{srd_regs[0]}:{srd_regs[3]}]",
+                "0",
+                "offen",
+                f"offset:{offset}",
+            ],
+            comment,
+        )
+
+    def __str__(self) -> str:
+        if not self.mnemonic:
+            return f"    # {self.comment}" if self.comment else ""
+        if len(self.operands) >= 6:
+            formatted_operands = (
+                ", ".join(self.operands[:3]) + ", " + " ".join(self.operands[3:])
+            )
+        else:
+            formatted_operands = ", ".join(self.operands)
+        return f"    {self.mnemonic} {formatted_operands}"
+
+
+class BufferStoreDword(StoreInstruction):
+    """Store 1 dword (4 bytes) to buffer memory."""
+
+    def __init__(
+        self,
+        src_reg: int,
+        vindex_reg: Union[str, int],
+        srd_regs: Tuple[int, int, int, int],
+        offset: int,
+        comment: str = None,
+    ):
+        # Format vindex_reg as string if it's an integer
+        if isinstance(vindex_reg, int):
+            vindex_reg = f"v{vindex_reg}"
+        super().__init__(
+            "buffer_store_dword",
+            [
+                f"v{src_reg}",
+                vindex_reg,
+                f"s[{srd_regs[0]}:{srd_regs[3]}]",
+                "0",
+                "offen",
+                f"offset:{offset}",
+            ],
+            comment,
+        )
+
+    def __str__(self) -> str:
+        if not self.mnemonic:
+            return f"    # {self.comment}" if self.comment else ""
+        if len(self.operands) >= 6:
+            formatted_operands = (
+                ", ".join(self.operands[:3]) + ", " + " ".join(self.operands[3:])
+            )
+        else:
+            formatted_operands = ", ".join(self.operands)
+        return f"    {self.mnemonic} {formatted_operands}"
+
+
 # Arithmetic Instructions
 class SMovB32(ArithmeticInstruction):
     """Move 32-bit scalar value."""
@@ -185,6 +270,15 @@ class SMovB32(ArithmeticInstruction):
     ):
         super().__init__(
             "s_mov_b32", [f"s{destination_register}", str(source_value)], comment
+        )
+
+
+class SMovkI32(ArithmeticInstruction):
+    """Move 16-bit literal into scalar register (sign-extended)."""
+
+    def __init__(self, destination_register: int, literal: int, comment: str = None):
+        super().__init__(
+            "s_movk_i32", [f"s{destination_register}", str(literal)], comment
         )
 
 
@@ -228,6 +322,23 @@ class VLshlRevB32(ArithmeticInstruction):
     ):
         super().__init__(
             "v_lshlrev_b32",
+            [f"v{destination_register}", str(shift_amount), f"v{source_register}"],
+            comment,
+        )
+
+
+class VLshrrevB32(ArithmeticInstruction):
+    """Logical right shift with reversed operands."""
+
+    def __init__(
+        self,
+        destination_register: int,
+        shift_amount: int,
+        source_register: int,
+        comment: str = None,
+    ):
+        super().__init__(
+            "v_lshrrev_b32",
             [f"v{destination_register}", str(shift_amount), f"v{source_register}"],
             comment,
         )
@@ -287,6 +398,131 @@ class VAddU32(ArithmeticInstruction):
             ],
             comment,
         )
+
+
+class VAddU32Any(ArithmeticInstruction):
+    """Add 32-bit values allowing scalar or vector for source2."""
+
+    def __init__(
+        self,
+        destination_register: int,
+        source1_register: int,
+        source2_any: str,
+        comment: str = None,
+    ):
+        super().__init__(
+            "v_add_u32",
+            [f"v{destination_register}", f"v{source1_register}", source2_any],
+            comment,
+        )
+
+
+# Bitwise AND
+class VAndB32(ArithmeticInstruction):
+    """Bitwise AND 32-bit."""
+
+    def __init__(
+        self,
+        destination_register: int,
+        source1: Union[int, str],
+        source2_register: int,
+        comment: str = None,
+    ):
+        src1 = str(source1) if isinstance(source1, int) else source1
+        super().__init__(
+            "v_and_b32",
+            [f"v{destination_register}", src1, f"v{source2_register}"],
+            comment,
+        )
+
+
+# DS (LDS) Instructions
+class DSWriteB32(MemoryInstruction):
+    """Write 32 bits to LDS."""
+
+    def __init__(self, addr_vreg: int, src_vreg: int, comment: str = None):
+        super().__init__("ds_write_b32", [f"v{addr_vreg}", f"v{src_vreg}"], comment)
+
+
+class DSWriteB64(MemoryInstruction):
+    """Write 64 bits to LDS."""
+
+    def __init__(self, addr_vreg: int, src_vregs: Tuple[int, int], comment: str = None):
+        super().__init__(
+            "ds_write_b64",
+            [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[1]}]"],
+            comment,
+        )
+
+
+class DSWriteB128(MemoryInstruction):
+    """Write 128 bits to LDS."""
+
+    def __init__(
+        self, addr_vreg: int, src_vregs: Tuple[int, int, int, int], comment: str = None
+    ):
+        super().__init__(
+            "ds_write_b128",
+            [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[3]}]"],
+            comment,
+        )
+
+
+class DSReadB64(MemoryInstruction):
+    """Read 64 bits from LDS."""
+
+    def __init__(self, dst_vregs: Tuple[int, int], addr_vreg: int, comment: str = None):
+        super().__init__(
+            "ds_read_b64",
+            [f"v[{dst_vregs[0]}:{dst_vregs[1]}]", f"v{addr_vreg}"],
+            comment,
+        )
+
+
+# MFMA + AGPR spill
+class VMfmaF32_16x16x16F16(ArithmeticInstruction):
+    """Matrix FMA f32_16x16x16_f16."""
+
+    def __init__(
+        self,
+        agpr_base: int,
+        a_src_pair: Tuple[int, int],
+        b_src_pair: Tuple[int, int],
+        c_sel: int = 0,
+        comment: str = None,
+    ):
+        super().__init__(
+            "v_mfma_f32_16x16x16_f16",
+            [
+                f"a[{agpr_base}:{agpr_base+3}]",
+                f"v[{a_src_pair[0]}:{a_src_pair[1]}]",
+                f"v[{b_src_pair[0]}:{b_src_pair[1]}]",
+                str(c_sel),
+            ],
+            comment,
+        )
+
+
+class VAccvgprReadB32(ArithmeticInstruction):
+    """Read 32-bit from AGPR to VGPR."""
+
+    def __init__(self, dst_vreg: int, acc_idx: int, comment: str = None):
+        super().__init__("v_accvgpr_read_b32", [f"v{dst_vreg}", f"a{acc_idx}"], comment)
+
+
+# Scalar control
+class SBarrier(ControlFlowInstruction):
+    """Barrier across wave/wg."""
+
+    def __init__(self, comment: str = None):
+        super().__init__("s_barrier", [], comment)
+
+
+class SNop(ControlFlowInstruction):
+    """Scalar no-op."""
+
+    def __init__(self, count: int = 0, comment: str = None):
+        super().__init__("s_nop", [str(count)], comment)
 
 
 # Wait Instructions

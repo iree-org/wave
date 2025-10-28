@@ -90,7 +90,6 @@ __all__ = [
     "attrs_to_dict",
     "parse_wg_and_subgroup",
     "tid_upper_bound_from_thread_id",
-    "affine_map_simplifies_to_tid_x",
     "simplify_expression",
     "emit_expression_asm",
 ]
