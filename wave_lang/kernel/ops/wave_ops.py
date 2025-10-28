@@ -1463,6 +1463,7 @@ class SharedMemoryBarrier(CustomOp):
     """
 
     wait_async_ops: bool = False
+    tensor_wait: bool = False
 
     @property
     def has_side_effects(self) -> bool:

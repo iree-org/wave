@@ -1614,12 +1614,20 @@ def waitcnt(vmcnt: int):
 @handle_op(shared_memory_barrier)
 def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     try:
-        (wait_async_ops,) = node.args
+        (
+            wait_async_ops,
+            tensor_wait,
+        ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
     if wait_async_ops:
         waitcnt(0)
+
+    if tensor_wait:
+        # TODO(megan.kuo): Use rocdl intrinsic when iree has support
+        c0 = arith_d.constant(IntegerType.get_signless(16), 0)
+        llvm_d.call_intrinsic(None, "llvm.amdgcn.s.wait.tensorcnt", [c0], [], [])
 
     amdgpu_d.lds_barrier()
 
