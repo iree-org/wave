@@ -130,6 +130,91 @@ try:
         else:
             assert False, "Expected to fail with TypeError."
 
+        # CHECK: #wave.mma_kind<f32_16x16x16_f16>
+        mma_type_attr = wave.WaveMmaKindAttr.get(wave.WaveMmaKind.F32_16x16x16_F16)
+        print(mma_type_attr)
+
+        # CHECK: #wave.workgroup_dim<x>
+        wg_dim_x = wave.WaveWorkgroupDimAttr.get(wave.WaveWorkgroupDim.X)
+        print(wg_dim_x)
+
+        # CHECK: #wave.symbol<"M">
+        M = wave.WaveSymbolAttr.get("M")
+        print(M)
+
+        # CHECK: #wave.expr_list<[M, BLOCK_M] -> (M floordiv BLOCK_M)>
+        symbol_names = ["M", "BLOCK_M"]
+        s0 = ir.AffineSymbolExpr.get(0)
+        s1 = ir.AffineSymbolExpr.get(1)
+        expr_map = ir.AffineMap.get(0, 2, [ir.AffineExpr.get_floor_div(s0, s1)])
+        expr_attr = wave.WaveExprListAttr.get(symbol_names, expr_map)
+        print(expr_attr)
+
+        # CHECK: #wave.expr_list<[] -> (512)>
+        int_expr_map = ir.AffineMap.get(0, 0, [ir.AffineExpr.get_constant(512)])
+        int_expr_attr = wave.WaveExprListAttr.get([], int_expr_map)
+        print(int_expr_attr)
+
+        # CHECK: {M = 512 : i64, N = 512 : i64}
+        i64 = ir.IntegerType.get_signless(64)
+        shape_dict = ir.DictAttr.get(
+            {"M": ir.IntegerAttr.get(i64, 512), "N": ir.IntegerAttr.get(i64, 512)}
+        )
+        print(shape_dict)
+
+        # CHECK: #wave.hardware_constraint<threads_per_wave = 64, mma_type = <f32_16x16x16_f16>>
+        print(
+            wave.HardwareConstraintAttr.get(
+                threads_per_wave=64, mma_type=mma_type_attr, max_bits_per_load=128
+            )
+        )
+
+        # CHECK: #wave.hardware_constraint<threads_per_wave = 64, vector_shapes = {M = 512 : i64, N = 512 : i64}>
+        print(
+            wave.HardwareConstraintAttr.get(
+                threads_per_wave=64, vector_shapes=shape_dict, max_bits_per_load=128
+            )
+        )
+
+        # CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2], vector_shapes = {M = 512 : i64, N = 512 : i64}>
+        print(
+            wave.HardwareConstraintAttr.get(
+                threads_per_wave=64,
+                waves_per_block=[2, 2],
+                vector_shapes=shape_dict,
+                max_bits_per_load=128,
+            )
+        )
+
+        # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, device_dim = 0>
+        print(wave.DeviceConstraintAttr.get(dim="M", tile_size=expr_attr, device_dim=0))
+
+        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>
+        wg_constraint = wave.WorkgroupConstraintAttr.get(
+            dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x
+        )
+        print(wg_constraint)
+
+        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
+        print(
+            wave.WorkgroupConstraintAttr.get(
+                dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x, primary=False
+            )
+        )
+
+        # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>>
+        print(wave.WaveConstraintAttr.get(dim="M", tile_size=expr_attr))
+
+        # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, wg_constraint = <dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>>
+        print(
+            wave.WaveConstraintAttr.get(
+                dim="M", tile_size=expr_attr, wg_constraint=wg_constraint
+            )
+        )
+
+        # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>>
+        print(wave.TilingConstraintAttr.get(dim="M", tile_size=expr_attr))
+
     # CHECK: wave_ok
     print("wave_ok")
 except Exception as e:

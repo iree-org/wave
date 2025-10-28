@@ -296,9 +296,10 @@ LogicalResult HardwareConstraintAttr::verify(
     ArrayRef<unsigned> wavesPerBlock, WaveMmaKindAttr mmaType,
     DictionaryAttr vectorShapes, unsigned maxBitsPerLoad) {
 
-  if (vectorShapes && wavesPerBlock.size() != vectorShapes.size())
+  if (vectorShapes && !wavesPerBlock.empty() &&
+      wavesPerBlock.size() != vectorShapes.size())
     return emitError() << "waves_per_block (" << wavesPerBlock
-                       << ") does should have the same size as vector_shapes ("
+                       << ") should have the same size as vector_shapes ("
                        << vectorShapes << ")";
 
   if (vectorShapes) {
