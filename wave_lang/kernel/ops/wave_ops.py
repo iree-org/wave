@@ -1442,6 +1442,10 @@ class Allocate(CustomOp):
             unpadded_dim[sym_type] = self.distributed_shape[idx]
         return unpadded_dim
 
+    def infer_type(self, *args):
+        type_expr = Memory[(*self.shape, self.address_space, self.dtype)]
+        self.fx_node.type = type_expr
+
 
 @define_op("self_index")
 @dataclass
