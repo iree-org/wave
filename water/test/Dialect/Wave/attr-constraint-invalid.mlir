@@ -1,6 +1,6 @@
 // RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-constructors --split-input-file --verify-diagnostics
 
-// expected-error @below {{waves_per_block (1) does should have the same size as vector_shapes ({M = 1 : i64, N = 64 : i64})}}
+// expected-error @below {{waves_per_block (1) should have the same size as vector_shapes ({M = 1 : i64, N = 64 : i64})}}
 #hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
                                            waves_per_block = [1],
                                            mma_type = #wave.mma_kind<f32_16x16x16_f16>,
