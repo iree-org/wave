@@ -371,7 +371,14 @@ static FailureOr<MemAccessInfo> createMemoryIndicesAndMask(
   // This logic operates after the "expansion" pass that usually unrolls all
   // tensor dimensions but one so the extent along them is 1. The dimension
   // with non-unit extent is considered to be vectorized.
-  DictionaryAttr indexDict = op.getIndexAttr();
+
+  // Read/Write ops only carry a single index expression: the first (and only)
+  // dictionary inside the array attribute.
+  ArrayAttr indexArr = op.getIndexAttr();
+  if (!indexArr || indexArr.size() != 1)
+    return rewriter.notifyMatchFailure(
+        op, "'index' must be an array with exactly one dictionary");
+  DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(indexArr[0]);
   if (!indexDict)
     return rewriter.notifyMatchFailure(
         op, "cannot lower without 'index' attribute");

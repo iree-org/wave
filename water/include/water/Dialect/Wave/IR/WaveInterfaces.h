@@ -35,9 +35,9 @@ public:
 };
 
 mlir::ParseResult parseWaveIndexDict(mlir::OpAsmParser &parser,
-                                     mlir::DictionaryAttr &out);
+                                     mlir::ArrayAttr &out);
 void printWaveIndexDict(mlir::OpAsmPrinter &printer, mlir::Operation *op,
-                        mlir::DictionaryAttr dict);
+                        mlir::ArrayAttr arr);
 
 //-----------------------------------------------------------------------------
 // WaveInferTypeOpInterface and implementation traits
