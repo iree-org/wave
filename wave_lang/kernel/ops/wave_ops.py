@@ -1446,6 +1446,10 @@ class Allocate(CustomOp):
     def unpadded_shape(self) -> tuple[IndexExpr]:
         unpadded_dims = self.unpadded_dims
         return tuple(unpadded_dims[s] for s in self.shape)
+    
+    def infer_type(self, *args):
+        type_expr = Memory[(*self.shape, self.address_space, self.dtype)]
+        self.fx_node.type = type_expr
 
 
 @define_op("self_index")
