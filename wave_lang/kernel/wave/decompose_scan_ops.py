@@ -4,7 +4,7 @@ from typing import Callable, Optional
 
 import torch.fx as fx
 
-from wave_lang.kernel._support.indexing import IndexSymbol
+from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
 from wave_lang.kernel.wave.utils.general_utils import all_equal
 from wave_lang.kernel.wave.utils.symbol_utils import subs_idxc
 
@@ -25,7 +25,6 @@ from ..ops.wave_ops import (
 )
 from .constraints import HardwareConstraint
 from .utils.classes import ShuffleMode
-from .utils.graph_utils import DCE
 
 
 def get_graph_node(
@@ -118,8 +117,15 @@ def emit_global_scan(
     last_local_scan_node = get_custom(scanop_result)
 
     target_shape = list(src.type.symbolic_shape)
-    target_shape.pop(target_shape.index(scan_dim))
-    scanop_result.index = {target_shape[0]: get_custom(src).index[target_shape[0]]}
+    src_index = get_custom(src).index
+    # Keep indices for all dimensions EXCEPT scan_dim
+    scanop_result.index = {
+        dim: src_index[dim] for dim in target_shape if dim != scan_dim
+    }
+
+    # If no indices are left, set the index to the scan_dim with size 1 (?)
+    if not scanop_result.index:
+        scanop_result.index = {scan_dim: IndexSequence(0, 1, 1)}
 
     num_steps = int(math.log2(float(subgroup_size)))
     for idx in range(num_steps):
@@ -343,4 +349,5 @@ def decompose_scan_ops(
                     custom.fx_node, global_scan[user.expanded_dims[scan_dim]]
                 )
 
-    DCE(trace)
+        custom.graph.erase_node(custom.fx_node)
+    # DCE(trace)
