@@ -119,6 +119,61 @@ def apply_promotion_pattern(
             return last_write_to_shared
 
 
+def fix_manual_allocate_dependencies(trace: CapturedTrace):
+    """
+    Fix write dependencies for user-created manual allocations.
+    When users manually allocate shared memory and write to it, the subsequent
+    reads need write dependencies set to prevent DCE from removing the writes.
+    """
+    root_graph = trace.get_root_graph()
+    for subgraph in root_graph.subgraphs.values():
+        node_list = list(subgraph.nodes)
+
+        # Group writes by which allocate they target
+        writes_by_allocate = {}
+        for node in node_list:
+            custom = get_custom(node)
+
+            # look for the write nodes that target a placeholder
+            if not isinstance(custom, Write):
+                continue
+
+            memory_custom = get_custom(custom.memory)
+            if not isinstance(memory_custom, Placeholder):
+                continue
+
+            # ensure that the placeholder is an allocate
+            # can't differentiate between compiler generated allocate and user-created allocate
+            captured_node = memory_custom.get_captured_fx_node()
+            if not (captured_node and isinstance(get_custom(captured_node), Allocate)):
+                continue
+
+            # map this write to the allocate
+            # can we have multiple writes to the same memory (?)
+            writes_by_allocate.setdefault(custom.memory, []).append(node)
+
+        # set write dependencies on reads from those allocates
+        for read_idx, node in enumerate(node_list):
+            custom = get_custom(node)
+            if not isinstance(custom, Read):
+                continue
+            if custom._write_dependency is not None:
+                continue
+            if custom.memory not in writes_by_allocate:
+                continue
+
+            # Find writes that came before this read to the same allocate
+            # the we read from. In case of multiple writes, return the writes that occur before the read
+            writes_before = [
+                w
+                for w in writes_by_allocate[custom.memory]
+                if node_list.index(w) < read_idx
+            ]
+            if writes_before:
+                custom.update_arg("_write_dependency", writes_before)
+                logger.debug(f"Set write dependency for {node} to {writes_before}")
+
+
 def promote_node(
     node: Read | Write,
     last_write_to_shared: fx.Node,
@@ -179,6 +234,11 @@ def promote_placeholders(
                 constraints,
                 reorder_allocs,
             )
+
+    # Fix write dependencies for user-created allocations
+    # When users manually allocate shared memory, the reads from those allocations
+    # need write dependencies set to prevent DCE from removing the writes
+    fix_manual_allocate_dependencies(graph)
 
 
 def compute_shared_memory_usage(
