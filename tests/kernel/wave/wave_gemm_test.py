@@ -2569,3 +2569,120 @@ def testGemmTransposeAB(
     assert_close(
         c.to(torch.float16), torch_ref, atol=1e-3, rtol=1e-3, check_device=False
     )
+
+
+@require_e2e
+@require_cdna_2_or_3_or_4
+@pytest.mark.parametrize(
+    "m, n, k",
+    [
+        (64, 128, 64),
+        (128, 128, 64),
+        (128, 256, 128),
+        (256, 256, 128),
+    ],
+)
+@pytest.mark.parametrize(
+    "block_m, block_n, block_k",
+    [
+        (64, 64, 32),
+        (128, 128, 64),
+    ],
+)
+def test_explicit_shared_gemm(m, n, k, block_m, block_n, block_k, run_bench):
+    """GEMM with explicit shared memory management."""
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
+    ADDRESS_SPACE_B = tkl.sym.ADDRESS_SPACE_B
+    ADDRESS_SPACE_C = tkl.sym.ADDRESS_SPACE_C
+
+    # Skip invalid combinations
+    if block_m > m or block_n > n or block_k > k:
+        pytest.skip("Block size larger than problem size")
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE_A, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE_B, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_C, tkl.f32],
+    ):
+        # Allocate shared memory explicitly
+        # shape: logical shape, distributed_shape: per-workgroup tile size
+        a_shared = tkw.allocate(
+            (M, K), (BLOCK_M, BLOCK_K), tkl.f16, SHARED_ADDRESS_SPACE
+        )
+        b_shared = tkw.allocate(
+            (N, K), (BLOCK_N, BLOCK_K), tkl.f16, SHARED_ADDRESS_SPACE
+        )
+
+        c_acc = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_acc])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_global = tkw.read(a)
+            b_global = tkw.read(b)
+
+            tkw.write(a_global, a_shared)
+            tkw.write(b_global, b_shared)
+
+            tkw.shared_memory_barrier()
+
+            a_reg = tkw.read(a_shared)
+            b_reg = tkw.read(b_shared)
+
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    # Test setup
+    torch.manual_seed(0)
+    a = device_randn((m, k), dtype=torch.float16)
+    b = device_randn((n, k), dtype=torch.float16)
+    c = device_zeros((m, n), dtype=torch.float32)
+
+    hyperparams = {
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        M: m,
+        N: n,
+        K: k,
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        use_scheduling_barriers=False,
+        minimize_shared_allocs=False,
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+
+    compiled_gemm = wave_compile(options, gemm)
+    compiled_gemm(a, b, c)
+
+    expected = torch.matmul(a, b.t())
+    assert_close(c.to(torch.float16), expected, rtol=1e-2, atol=1e-2)
