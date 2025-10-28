@@ -750,15 +750,15 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # calculcate global address
     # 0. breakdown index sequence to WG & TH offsets : ele
     # 1. uniform per wave access : ele
-    # 2. linearize N-D memref to 1-D memref and extract TH offset. (fold WG offset into memref base) : ele
+    # 2. linearize global memory buffer
     # 3. offset = X + Y * tensor dim 0 stride : ele
     # 4. offset_byte = offset * element byte : byte
     # 5. get global memory pointer
     # 6. move global memory pointer by offset_byte to get global address of a tile : byte
     index, wg, th = _build_start_indices(emitter, group0[1])
 
-    wave_index_x = assume_index_subgroup_uniform(th[0], i32)
-    wave_index_y = assume_index_subgroup_uniform(th[1], i32)
+    wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
+    wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
 
     wave_x = arith_d.index_cast(i32, wave_index_x)
     wave_y = arith_d.index_cast(i32, wave_index_y)
@@ -768,9 +768,6 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     )
     g_strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in g_strides_sym]
     global_buffer, _ = _linearize_memref(global_value, wg, th, g_strides)
-    # global_buffer = _cast_buffer_and_encode_stride(
-    # global_buffer, g_strides, element_type, emitter
-    # )
 
     stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
     y_offset = arith_d.muli(wave_index_y, stride0)
@@ -778,23 +775,16 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_index_offset = arith_d.muli(global_base_offset, element_byte_index)
 
     global_ptr = memref_d.extract_aligned_pointer_as_index(global_buffer)
-    global_byte_address = global_ptr
-    # global_byte_address = arith_d.addi(global_ptr, global_index_offset)
+    # global_byte_address = global_ptr
+    global_byte_address = arith_d.addi(global_ptr, global_index_offset)
 
     # calculate shared address
-    # 0. breakdown index sequence to WG & TH offsets : ele
-    # 1. uniform per lds access : ele
-    # 2. linearize N-D memref to 1-D memref and extract TH offset. (fold WG offset into memref base) : ele
-    # 3. offset = X + Y * dim 0 tile size : ele
-    # 4. offset_byte = offset * element byte : byte
-    # 5. get shared memory pointer
-    # 6. move shared memory pointer by offset_byte to get shared memory address of a tile.
+    # 0. get allocation space offset in descriptor
+    # 1. get shared memory pointer
+    # 2. move shared memory pointer by offset_byte to get shared memory address of a tile.
     shared_buffer = _linearize_shared_mem(shared_value)
 
-    shared_base_offset = arith_d.constant(i32, group0[2])
-    shared_byte_offset = (
-        shared_base_offset  # arith_d.muli(shared_base_offset, element_byte_constant)
-    )
+    shared_byte_offset = arith_d.constant(i32, group0[2])
 
     shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
     shared_ptr = arith_d.index_cast(i32, shared_ptr)

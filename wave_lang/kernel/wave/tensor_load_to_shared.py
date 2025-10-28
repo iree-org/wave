@@ -31,12 +31,10 @@ from .minimize_global_loads import (
 from .utils.general_utils import (
     get_hardware_constraint,
     get_workgroup_constraints,
-    infer_dim,
     remove_thread_indexing,
 )
 from .utils.symbol_utils import subs_idxc
 
-from .gather_to_shared import combine_index
 
 from .memory_analysis.minimize_shared_allocs import get_alloc_info
 from .memory_analysis.solver import determine_allocations_offsets
@@ -134,12 +132,12 @@ def get_tensor_shapes(read: Read):
 
 
 def get_tensor_strides(tensor_shapes):
-    '''
+    """
     formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
     - stride 0 = dim x
     - stride 1 = stride 0 * dim y
     - stride 2 = stride 1 * dim z
-    '''
+    """
 
     strides = [tensor_shapes[0]]
     for i in range(1, len(tensor_shapes)):
@@ -147,14 +145,6 @@ def get_tensor_strides(tensor_shapes):
         strides.append(base * tensor_shapes[i])
 
     return strides
-    # base = 1
-    # strides = []
-    # for shape in reversed(tensor_shapes):
-        # base *= shape
-        # strides.append(base)
-#
-    # # return list(reversed(strides))
-    # return strides
 
 
 def get_global_indexing(node_index):
@@ -171,33 +161,24 @@ def get_thread_indexing(node_index, global_index):
     return {node_index.start - global_index.start, 1, 1}
 
 
-def get_tile_offset(node: CustomOp, wave_subs, constraints, waves_per_block):
+def get_global_tile_byte_offset(
+    node: CustomOp, wave_subs, constraints, waves_per_block
+):
     """
-    node is Read | Write
-
-    expect address (element unit): base_address + tile offset
-
-    tile offset in dim D:
-    - WAVE_ID * BLK_D / (num of waves in D)
+    : node is an instance of Read
+    expect address for TDM (:byte): base_address + tile offset
+    this function returns the tile offset
     """
+    assert isinstance(node, Read), "Expect Read custom node as caller argument"
+
     index = {k: v.subs(wave_subs) for k, v in node.index.items()}
-    # WG index and induction var index
-    global_index = get_global_indexing(index)
-    wave_index = get_thread_indexing(index, global_index)
-
-    access_pattern = {}
-    symbolic_shapes = node.type.symbolic_shape
-    for i, dim_expr in enumerate(symbolic_shapes):
-        dim = infer_dim(dim_expr)
-        tile_sym = constraints[dim]
-        offset = wave_index[dim].start * (tile_sym // waves_per_block[i])
-        access_pattern[dim] = IndexSequence(offset, 1, 1)
-
-    new_pattern = combine_index(global_index, access_pattern)
-    return new_pattern
+    return {key: IndexSequence(index[key].start, 1, 1) for key in index.keys()}
 
 
 def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map):
+    """
+    Allocation space offset + tile offset in bytes
+    """
     offset_sym = alloc_offset_map[node.memory]
     return int(offset_sym)
 
@@ -232,7 +213,7 @@ def get_tensor_load_descriptor_config(
     shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
 
     # get global tile addr
-    global_tile_index = get_tile_offset(
+    global_tile_index = get_global_tile_byte_offset(
         read, wave_subs, constraint_tile_size, waves_per_block
     )
 
@@ -380,7 +361,11 @@ def tensor_load_to_shared(
     # uniform shared memory write base address by aligning thread indexing position.
     # $T0 // wave size -> wave id
     wave_subs = {
-        THREAD_0: ((THREAD_0 // threads_per_wave) if waves_per_block[0] > 1 else 0),
+        THREAD_0: (
+            (THREAD_0 // threads_per_wave) * threads_per_wave
+            if waves_per_block[0] > 1
+            else 0
+        ),
         THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
         THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
     }
