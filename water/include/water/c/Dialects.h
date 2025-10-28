@@ -114,7 +114,7 @@ MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveMmaKindAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute mlirWaveMmaKindAttrGet(MlirContext mlirCtx,
                                                         uint32_t value);
 
-// Get the value from a WaveMmaKindAttr.
+/// Get the value from a WaveMmaKindAttr.
 MLIR_CAPI_EXPORTED uint32_t mlirWaveMmaKindAttrGetValue(MlirAttribute attr);
 
 /// Returns the typeID of a WaveMmaKindAttr.
