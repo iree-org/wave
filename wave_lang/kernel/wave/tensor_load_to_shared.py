@@ -261,8 +261,8 @@ def get_tensor_load_descriptor_config(
         tensor_strides,
         tensor_data_size,
         tensor_tile_shapes,
-        global_tile_index,
         shared_tile_index,
+        global_tile_index,
     )
 
 
