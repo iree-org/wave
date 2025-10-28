@@ -1,3 +1,43 @@
+"""
+In this pass:
+
+* Dimension / Shapes
+Shape is measured in array elements (not bytes).
+    - dim0 corresponds to movements along the X axis.
+    - dim1 corresponds to movements along the Y axis.
+
+* Example:
+For a tensor with shape M x K:
+    - dim0 refers to K (the X-axis / inner dimension).
+    - dim1 refers to M (the Y-axis / outer dimension).
+
+* Strides
+Each stride is measured in array elements (not bytes).
+    - stride for dim0 = number of elements to advance one step in dim1.
+    - stride for dim1 = number of elements to advance one step in dim2.
+    - etc.
+note. This definition is derived from the formula: addr = x + y * stride0 + z * stride1 + a * stride2 + b * stride3
+
+Example:
+For a tensor with shape M x K, and K is the contiguous dimension:
+    - In order to advance one step in dim M, number of elements have to skip = shape[K]
+
+* Offsets
+    ** Global offset (Index Sequence unit : elements)
+        global offset is calculated by only perserving global index sequence with wave index sequence.
+        this is valid because tensor load instruction expects global base address of a tile.
+    ** Shared offset (Allocation size unit: bytes)
+        shared offset is calculated by materializing the distributed shape from a "write_shared" node.
+
+Example:
+For loading tensors with shape M x K to alloc0 (smem), and N x K to alloc1 (smem),
+with tile size = BLOCK_M * BLOCK_K, BLOCK_N x BLOCK_K, and K is the contiguous dimension:
+    - global offset perserves BLOCK index and WAVE_ID: $WG0 * BLOCK_M + BLOCK_M * ($T0 // 32)
+    - shared offset:
+        - for alloc0 = 0
+        - for alloc1 = BLOCKM * BLOCK_K
+"""
+
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
@@ -69,20 +109,23 @@ def is_valid_write(write: CustomOp) -> bool:
 @dataclass
 class TensorLoadConfig:
     """
-    tensor_shapes : [M, N]
-    tensor_strides: [N, M*N]
+    tensor_shapes : [tensor dim 0 shape, tensor dim 1 shape]
+    tensor_strides
     tensor_data_size: 0: 1 bytes, 1: 2 bytes, 2: 4 bytes, 4: 8 bytes
-    tensor_tile_shapes: [BLOCK_M, BLOCK_N]
-    global_tile_index
-    Note. shared addresses will be calculated during MLIR codegen
+    tensor_tile_shapes : [tile dim 0 shape, tile dim 1 shape]
+
+    shared_tile_index (bytes)
+    global_tile_index (IndexSequence)
+
+    note. base address will be represented as pointers in codegen.
     """
 
     tensor_shapes: list = None
     tensor_strides: list = None
     tensor_data_size: int = 0
     tensor_tile_shapes: list = None
+    shared_tile_index: int = None
     global_tile_index: IndexSequence = None
-    shared_tile_index: IndexSequence = None
 
 
 def get_tensor_data_size(tensor_type: "DataType" = None):
@@ -107,7 +150,7 @@ def get_tensor_tile_shapes(read: Read, constraint_tile_size: dict[IndexSymbol, i
     """
     0. Get symbolic shape from Read node.
     1. Materialize the tile from constraints.
-    e.g., for BLK_MxBLK_K, tile dim 0 is BLK_K and tile dim 1 is BLK_M
+    2. Return [tile dim 0 shape, tile dim 1 shape]
     """
     symbolic_shapes = read.type.symbolic_shape
     tensor_tile_shapes = materialize_shape(constraint_tile_size, symbolic_shapes)
@@ -118,7 +161,7 @@ def get_tensor_shapes(read: Read):
     """
     0. Get symbolic shape from Read node.
     1. Materialize the `data shape` using index subs
-    e.g., for MxK, tensor dim 0 is K and tensor dim 1 is M
+    2. Return [tensor dim 0 shape, tensor dim 1 shape]
     """
     tensor_shapes = []
     symbolic_shapes = read.type.symbolic_shape
@@ -133,7 +176,7 @@ def get_tensor_shapes(read: Read):
 
 def get_tensor_strides(tensor_shapes):
     """
-    formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
+    Formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
     - stride 0 = dim x
     - stride 1 = stride 0 * dim y
     - stride 2 = stride 1 * dim z
@@ -161,13 +204,10 @@ def get_thread_indexing(node_index, global_index):
     return {node_index.start - global_index.start, 1, 1}
 
 
-def get_global_tile_byte_offset(
-    node: CustomOp, wave_subs, constraints, waves_per_block
-):
+def get_global_element_offset(node: CustomOp, wave_subs):
     """
-    : node is an instance of Read
-    expect address for TDM (:byte): base_address + tile offset
-    this function returns the tile offset
+    Global address = global mem buffer + tile offset in bytes
+    This function returns the address by removing threads offset within a tile.
     """
     assert isinstance(node, Read), "Expect Read custom node as caller argument"
 
@@ -177,7 +217,8 @@ def get_global_tile_byte_offset(
 
 def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map):
     """
-    Allocation space offset + tile offset in bytes
+    LDS address = Shared mem buffer + tile offset in bytes
+    This function returns the tile offset.
     """
     offset_sym = alloc_offset_map[node.memory]
     return int(offset_sym)
@@ -194,7 +235,7 @@ def get_tensor_load_descriptor_config(
     alloc_offset_map,
 ) -> TensorLoadConfig:
     """
-    Get the gather to shared config for the given read and write.
+    Get the tensor to shared config for the given read and write.
     """
 
     # get data shape
@@ -209,13 +250,11 @@ def get_tensor_load_descriptor_config(
     # get tile shape
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
-    # get LDS base address
+    # get LDS byte offset
     shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
 
     # get global tile addr
-    global_tile_index = get_global_tile_byte_offset(
-        read, wave_subs, constraint_tile_size, waves_per_block
-    )
+    global_tile_index = get_global_element_offset(read, wave_subs)
 
     return TensorLoadConfig(
         tensor_shapes,
@@ -280,14 +319,12 @@ def emit_tensor_load_to_shared(
     config: TensorLoadConfig,
 ) -> defaultdict[fx.Node, list[Write]]:
     """
-    Emit `GatherToLDS` for the given read and write.
+    Emit `TensorLoadToLDS` for the given read and write.
     """
 
     descriptors = build_tensor_descriptors(config)
 
     tensor_writes = defaultdict(list)
-
-    common_id = None
 
     with write.graph.inserting_before(write.fx_node):
         tensor_write = TensorLoadToLDS(
@@ -297,8 +334,6 @@ def emit_tensor_load_to_shared(
             write.graph, loc=tensor_write.location
         )
 
-    # Set `pre_expansion_id` for newly created `GatherToLDS` ops so we can find
-    # they are part of the same group later.
     tensor_write.pre_expansion_id = id(tensor_write)
 
     tensor_writes[write.memory].append(tensor_write)
@@ -320,15 +355,13 @@ def tensor_load_to_shared(
 ):
     """
     0. Check requirement:
-        1) option.tensor_load is set
+        1) option.use_global_to_shared is set
         2) target is gfx1250
     1. Build 1-many mapping of GLOBAL_READ: SHARED_WRITE_X ... #a
-    2. Materialize workgroup tile size, per wave tile size
-        - workgroup tile size = BLOCK_M * BLOCK_D
-        - wave tile size = BLOCK_M / wave_M * BLOCK_D / wave_D
-    3. Calculate global address and shared address accessed by a wave
-    4. Build descriptors for tensor.load.to.lds
-    5. Replace #a with tensor_load_to_shared op.
+    2. Get shared memory allocation information.
+    3. Build descriptors for tensor.load.to.lds.
+    4. Replace #a with tensor_load_to_shared op.
+    5. Update write dependencies.
     """
     if not options.use_global_to_shared:
         return

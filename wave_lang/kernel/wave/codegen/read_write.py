@@ -763,19 +763,12 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     wave_x = arith_d.index_cast(i32, wave_index_x)
     wave_y = arith_d.index_cast(i32, wave_index_y)
 
-    g_strides_sym = strides_from_symbolic_shape(
-        IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
-    )
-    g_strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in g_strides_sym]
-    global_buffer, _ = _linearize_memref(global_value, wg, th, g_strides)
-
     stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
     y_offset = arith_d.muli(wave_index_y, stride0)
     global_base_offset = arith_d.addi(wave_index_x, y_offset)
     global_index_offset = arith_d.muli(global_base_offset, element_byte_index)
 
-    global_ptr = memref_d.extract_aligned_pointer_as_index(global_buffer)
-    # global_byte_address = global_ptr
+    global_ptr = memref_d.extract_aligned_pointer_as_index(global_value)
     global_byte_address = arith_d.addi(global_ptr, global_index_offset)
 
     # calculate shared address
