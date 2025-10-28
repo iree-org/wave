@@ -77,7 +77,7 @@ mlirAttributeIsAWaveWorkgroupDimAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveWorkgroupDimAttrGet(MlirContext mlirCtx, uint32_t value);
 
-// Get the value from a WaveWorkgroupDimAttr.
+/// Get the value from a WaveWorkgroupDimAttr.
 MLIR_CAPI_EXPORTED uint32_t
 mlirWaveWorkgroupDimAttrGetValue(MlirAttribute attr);
 
