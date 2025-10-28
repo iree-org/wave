@@ -141,6 +141,28 @@ MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveMmaKindAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveMmaKindAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveMmaKindAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveMmaKindAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveMmaKindAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveMmaKind>(value)));
+}
+
+uint32_t mlirWaveMmaKindAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveMmaKindAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveMmaKindAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveMmaKindAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveExprListAttr
 //===---------------------------------------------------------------------===//
 

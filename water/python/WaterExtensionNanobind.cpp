@@ -213,6 +213,26 @@ NB_MODULE(_waterDialects, m) {
   // WaveMmaKindAttr
   //===---------------------------------------------------------------------===//
 
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveMmaKindAttr", mlirAttributeIsAWaveMmaKindAttr,
+      mlirWaveMmaKindAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, wave::WaveMmaKind value,
+             MlirContext context) {
+            return cls(
+                mlirWaveMmaKindAttrGet(context, static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveMmaKindAttr from an MMA kind enum value.")
+      .def(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<wave::WaveMmaKind>(
+                mlirWaveMmaKindAttrGetValue(self));
+          },
+          "Returns the MMA kind enum value.");
+
   nb::enum_<wave::WaveMmaKind>(d, "WaveMmaKind")
       // CDNA1
       .value("F32_16x16x16_F16", wave::WaveMmaKind::F32_16x16x16_F16)

@@ -104,6 +104,23 @@ mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveMmaKindAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveMmaKindAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveMmaKindAttr(MlirAttribute attr);
+
+/// Creates a new WaveMmaKindAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveMmaKindAttrGet(MlirContext mlirCtx,
+                                                        uint32_t value);
+
+// Get the value from a WaveMmaKindAttr.
+MLIR_CAPI_EXPORTED uint32_t mlirWaveMmaKindAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveMmaKindAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveMmaKindAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
 // WaveExprListAttr
 //===---------------------------------------------------------------------===//
 
