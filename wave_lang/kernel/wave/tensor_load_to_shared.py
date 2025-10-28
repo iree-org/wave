@@ -109,20 +109,22 @@ def get_tensor_tile_shapes(read: Read, constraint_tile_size: dict[IndexSymbol, i
     """
     0. Get symbolic shape from Read node.
     1. Materialize the tile from constraints.
+    e.g., for BLK_MxBLK_K, tile dim 0 is BLK_K and tile dim 1 is BLK_M
     """
     symbolic_shapes = read.type.symbolic_shape
     tensor_tile_shapes = materialize_shape(constraint_tile_size, symbolic_shapes)
-    return tensor_tile_shapes
+    return list(reversed(tensor_tile_shapes))
 
 
 def get_tensor_shapes(read: Read):
     """
     0. Get symbolic shape from Read node.
     1. Materialize the `data shape` using index subs
+    e.g., for MxK, tensor dim 0 is K and tensor dim 1 is M
     """
     tensor_shapes = []
     symbolic_shapes = read.type.symbolic_shape
-    for sym_dim in symbolic_shapes:
+    for sym_dim in reversed(symbolic_shapes):
         tensor_shapes.append(subs_idxc(sym_dim))
 
     assert all(
@@ -132,14 +134,27 @@ def get_tensor_shapes(read: Read):
 
 
 def get_tensor_strides(tensor_shapes):
-    base = 1
-    strides = []
-    for shape in reversed(tensor_shapes):
-        base *= shape
-        strides.append(base)
+    '''
+    formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
+    - stride 0 = dim x
+    - stride 1 = stride 0 * dim y
+    - stride 2 = stride 1 * dim z
+    '''
 
-    # return list(reversed(strides))
+    strides = [tensor_shapes[0]]
+    for i in range(1, len(tensor_shapes)):
+        base = strides[-1]
+        strides.append(base * tensor_shapes[i])
+
     return strides
+    # base = 1
+    # strides = []
+    # for shape in reversed(tensor_shapes):
+        # base *= shape
+        # strides.append(base)
+#
+    # # return list(reversed(strides))
+    # return strides
 
 
 def get_global_indexing(node_index):
@@ -213,13 +228,13 @@ def get_tensor_load_descriptor_config(
     # get tile shape
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
+    # get LDS base address
+    shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
+
     # get global tile addr
     global_tile_index = get_tile_offset(
         read, wave_subs, constraint_tile_size, waves_per_block
     )
-
-    # get LDS base address
-    shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
 
     return TensorLoadConfig(
         tensor_shapes,
