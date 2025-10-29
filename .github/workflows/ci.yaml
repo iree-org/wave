@@ -22,6 +22,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check_ip:
+    runs-on: [ubuntu-24.04]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get Runner IP
+      run: curl https://api.ipify.org
   test:
     name: "${{ matrix.name }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
     strategy:
