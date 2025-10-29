@@ -394,7 +394,15 @@ def scatter_add(
 
 
 def tensor_load_to_lds(
-    src: Memory, dst: Memory, descriptors: list = field(default_factory=list)
+    src: Memory,
+    dst: Memory,
+    tensor_shapes: list = field(default_factory=list),
+    tensor_strides: list = field(default_factory=list),
+    element_type: DataType = None,
+    tensor_tile_shapes: list = field(default_factory=list),
+    shared_tile_index: int | IndexSequence = None,
+    global_tile_index: int | IndexSequence = None,
+    bounds: list = field(default_factory=list),
 ): ...
 
 
@@ -3034,7 +3042,13 @@ class Reshape(CustomOp, ABC):
 class TensorLoadToLDS(CustomOp):
     src: Memory
     dst: Memory
-    descriptors: list = field(default_factory=list)
+    tensor_shapes: list = field(default_factory=list)
+    tensor_strides: list = field(default_factory=list)
+    element_type: DataType = None
+    tensor_tile_shapes: list = field(default_factory=list)
+    shared_tile_index: int | IndexSequence = None
+    global_tile_index: int | IndexSequence = None
+    bounds: list = field(default_factory=list)
 
 
 @define_op("gather_to_lds")

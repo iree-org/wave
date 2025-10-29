@@ -40,7 +40,7 @@ with tile size = BLOCK_M * BLOCK_K, BLOCK_N x BLOCK_K, and K is the contiguous d
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import sympy
 import torch.fx as fx
@@ -111,39 +111,31 @@ class TensorLoadConfig:
     """
     tensor_shapes : [tensor dim 0 shape, tensor dim 1 shape]
     tensor_strides
-    tensor_data_size: 0: 1 bytes, 1: 2 bytes, 2: 4 bytes, 4: 8 bytes
+    element_type
     tensor_tile_shapes : [tile dim 0 shape, tile dim 1 shape]
-
     shared_tile_index (bytes)
     global_tile_index (IndexSequence)
+    bounds
 
     note. base address will be represented as pointers in codegen.
     """
 
     tensor_shapes: list = None
     tensor_strides: list = None
-    tensor_data_size: int = 0
+    element_type: "DataType" = None
     tensor_tile_shapes: list = None
     shared_tile_index: int = None
     global_tile_index: IndexSequence = None
+    bounds: list = field(default_factory=list)
 
-
-def get_tensor_data_size(tensor_type: "DataType" = None):
-    if not tensor_type:
-        return 0
-    byte_size = tensor_type.bitwidth() >> 3
-    match byte_size:
-        case 1:
-            return 0
-        case 2:
-            return 1
-        case 4:
-            return 2
-        case 8:
-            return 3
-        case _:
-            return 0
-    return 0
+    def __iter__(self):
+        yield self.tensor_shapes
+        yield self.tensor_strides
+        yield self.element_type
+        yield self.tensor_tile_shapes
+        yield self.shared_tile_index
+        yield self.global_tile_index
+        yield self.bounds
 
 
 def get_tensor_tile_shapes(read: Read, constraint_tile_size: dict[IndexSymbol, int]):
@@ -244,9 +236,6 @@ def get_tensor_load_descriptor_config(
     # get data strides
     tensor_strides = get_tensor_strides(tensor_shapes)
 
-    # get data size
-    tensor_data_size = get_tensor_data_size(element_type)
-
     # get tile shape
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
@@ -259,7 +248,7 @@ def get_tensor_load_descriptor_config(
     return TensorLoadConfig(
         tensor_shapes,
         tensor_strides,
-        tensor_data_size,
+        element_type,
         tensor_tile_shapes,
         shared_tile_index,
         global_tile_index,
@@ -322,14 +311,12 @@ def emit_tensor_load_to_shared(
     Emit `TensorLoadToLDS` for the given read and write.
     """
 
-    descriptors = build_tensor_descriptors(config)
-
     tensor_writes = defaultdict(list)
 
     with write.graph.inserting_before(write.fx_node):
-        tensor_write = TensorLoadToLDS(
-            read.memory, write.memory, descriptors
-        ).add_to_graph(write.graph, loc=write.location)
+        tensor_write = TensorLoadToLDS(read.memory, write.memory, *config).add_to_graph(
+            write.graph, loc=write.location
+        )
         barrier = SharedMemoryBarrier(tensor_wait=True).add_to_graph(
             write.graph, loc=tensor_write.location
         )

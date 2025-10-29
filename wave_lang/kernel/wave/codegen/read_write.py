@@ -701,7 +701,17 @@ def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
 @handle_op(tensor_load_to_lds)
 def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
-        (src, dst, descriptors) = node.args
+        (
+            src,
+            dst,
+            tensor_shapes,
+            tensor_strides,
+            element_type,
+            tensor_tile_shapes,
+            shared_tile_index,
+            global_tile_index,
+            bounds,
+        ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -720,18 +730,19 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     d2 = vector_d.broadcast(vec_type_4, c0)
     d3 = vector_d.broadcast(vec_type_4, c0)
 
-    # get groups from descriptors
-    group0 = descriptors[0]
-    group1 = descriptors[1]
+    # descriptor properties
+    mode = 2  # vimage
+    valid = 1
+    dim_stride_1 = cast_py_value(emitter, tensor_strides[1], i48).ir_value
+    dim_stride_0 = cast_py_value(emitter, tensor_strides[0], i48).ir_value
+    tile_size_1 = cast_py_value(emitter, tensor_tile_shapes[1], i32).ir_value
+    tile_size_0 = cast_py_value(emitter, tensor_tile_shapes[0], i32).ir_value
+    dim_size_1 = cast_py_value(emitter, tensor_shapes[1], i32).ir_value
+    dim_size_0 = cast_py_value(emitter, tensor_shapes[0], i32).ir_value
 
-    # properties
-    dim_stride_1 = cast_py_value(emitter, group1[0], i48).ir_value
-    dim_stride_0 = cast_py_value(emitter, group1[1], i48).ir_value
-    tile_size_1 = cast_py_value(emitter, group1[3], i32).ir_value
-    tile_size_0 = cast_py_value(emitter, group1[4], i32).ir_value
-    dim_size_1 = cast_py_value(emitter, group1[5], i32).ir_value
-    dim_size_0 = cast_py_value(emitter, group1[6], i32).ir_value
-    data_size = cast_py_value(emitter, group1[9], i32).ir_value
+    # 0: 1 byte; 1: 2 byte; 2: 4 byte; 3: 8 byte
+    descriptor_type = lambda x: int(math.log2(x.bitwidth() >> 3))
+    data_size = cast_py_value(emitter, descriptor_type(element_type), i32).ir_value
 
     src_symbolic_shape = _get_symbolic_shape(src)
     dst_symbolic_shape = get_custom(dst).distributed_shape
@@ -742,8 +753,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_value = global_mem.ir_value
     shared_value = shared_mem.ir_value
 
-    element_type = global_value.type.element_type
-    element_byte = element_type.width // 8
+    element_byte = 1 << descriptor_type(element_type)
     element_byte_index = arith_d.constant(IndexType.get(), element_byte)
     element_byte_constant = arith_d.index_cast(i32, element_byte_index)
 
@@ -755,7 +765,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # 4. offset_byte = offset * element byte : byte
     # 5. get global memory pointer
     # 6. move global memory pointer by offset_byte to get global address of a tile : byte
-    index, wg, th = _build_start_indices(emitter, group0[1])
+    index, wg, th = _build_start_indices(emitter, global_tile_index)
 
     wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
     wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
@@ -777,7 +787,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # 2. move shared memory pointer by offset_byte to get shared memory address of a tile.
     shared_buffer = _linearize_shared_mem(shared_value)
 
-    shared_byte_offset = arith_d.constant(i32, group0[2])
+    shared_byte_offset = arith_d.constant(i32, shared_tile_index)
 
     shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
     shared_ptr = arith_d.index_cast(i32, shared_ptr)
@@ -806,7 +816,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_val_rest = shift(global_val, 32, "r")
     global_val_upper = arith_d.trunci(i32, global_val_rest)
     # 3. pack with image mode bit
-    mode = arith_d.constant(i32, group0[0])
+    mode = arith_d.constant(i32, mode)
     image_mode = shift(mode, 30, "l")
     pack = arith_d.ori(image_mode, global_val_upper)
     d0 = vector_d.insert(pack, d0, static_position=[3], dynamic_position=[])
@@ -817,7 +827,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     )
 
     # valid tensor
-    valid_tensor = arith_d.constant(i32, group0[3])
+    valid_tensor = arith_d.constant(i32, valid)
     d0 = vector_d.insert(valid_tensor, d0, static_position=[0], dynamic_position=[])
 
     # get data size val packed to i32
