@@ -1,0 +1,92 @@
+# Copyright 2024 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: "Wave FFM CI"
+
+on:
+  # manual
+  workflow_dispatch: {}
+  pull_request:
+    types: [opened, synchronize, ready_for_review, converted_to_draft]
+  push:
+    branches:
+      - main
+
+concurrency:
+  # A PR number if a pull request and otherwise the commit hash. This cancels
+  # queued and in-progress runs for the same PR (presubmit) or commit
+  # (postsubmit). The workflow name is prepended to avoid conflicts between
+  # different workflows.
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "Test on FFM"
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["3.11"]
+        os: [ubuntu-22.04]
+        pytorch_requirements: ["pytorch-cpu-requirements.txt"]
+        wave_sim_env: ["patches/setup.sh"]
+        wave_sim_patch: ["patches/simulator.patch"]
+    runs-on: ${{matrix.os}}
+    timeout-minutes: 60
+
+    # skip for draft PR
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+
+    env:
+      VENV_DIR: ${{ github.workspace  }}/.wave-venv
+      steps:
+        - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+        - name: "Get simulator"
+          run: |
+            wget https://atlartifactory.amd.com:8443/ui/repos/tree/General/SW-ROCDTIF-MI-DEV-LOCAL/Packages/FFM-Lite/rocm-ffmlite-mi450-f1d5d1bf-rel-20251023.tar.gz
+            cd rocm-ffmlite-mi450-f1d5d1bf-rel-20251023
+            source ffmlite_env.sh
+
+        - name: "Prepare wave repo"
+          run: |
+            source ${{ matrix.wave_sim_env }}
+            git apply ${{ matrix.wave_patch }}
+
+        - name: "Setting up Rust"
+          uses: actions-rust-lang/setup-rust-toolchain@v1
+          with:
+            toolchain: stable
+
+        - name: "Setting up Python"
+          id: setup_python
+          uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+          with:
+            python-version: ${{matrix.version}}
+
+        - name: Create Python venv
+          run: |
+            python -m venv ${VENV_DIR}
+            source ${VENV_DIR}/bin/activate
+            echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
+            echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
+
+        - name: Install pip deps
+          run: |
+            python -m pip install --no-compile --upgrade pip
+            pip install --no-compile -r ${{ matrix.pytorch_requirements  }}
+            pip install --no-cache-dir -r requirements-iree-pinned.txt
+            pip install -r requirements.txt -e .
+
+        - name: Run unit tests
+          if: ${{ !cancelled()  }}
+          run: |
+            pytest -n 4 --capture=tee-sys -vv ./tests
+
+        - name: Run LIT tests
+          if: ${{ !cancelled()  }}
+          run: |
+            lit lit_tests/ -v
