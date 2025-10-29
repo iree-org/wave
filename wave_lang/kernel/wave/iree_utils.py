@@ -191,7 +191,7 @@ def get_mm_any_transpose_asm(
                 map_C = ir.AffineMap.get(3, 0, [d0, d1])
                 if tA == "T":
                     map_A = ir.AffineMap.get(3, 0, [d2, d0])
-                elif tB == "T":
+                if tB == "T":
                     map_B = ir.AffineMap.get(3, 0, [d1, d2])
 
                 indexing_maps = ir.ArrayAttr.get(
