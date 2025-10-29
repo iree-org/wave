@@ -126,12 +126,12 @@ class TensorLoadConfig:
     """
 
     tensor_shapes: list[IndexExpr] = None
-    tensor_strides: list = None
+    tensor_strides: list[int] = None
     element_type: "DataType" = None
-    tensor_tile_shapes: list = None
+    tensor_tile_shapes: list[int] = None
     shared_tile_index: int = None
     global_tile_index: dict[IndexSymbol, IndexSequence] = None
-    bounds: list = field(default_factory=list)
+    bounds: list[int] = field(default_factory=list)
 
     def __iter__(self):
         yield self.tensor_shapes
@@ -145,7 +145,7 @@ class TensorLoadConfig:
 
 def get_tensor_tile_shapes(
     read: Read, constraint_tile_size: dict[IndexSymbol, int]
-) -> list:
+) -> list[int]:
     """
     0. Get symbolic shape from Read node.
     1. Materialize the tile from constraints.
@@ -173,7 +173,7 @@ def get_tensor_shapes(read: Read) -> list[IndexExpr]:
     return tensor_shapes
 
 
-def get_tensor_strides(tensor_shapes) -> list:
+def get_tensor_strides(tensor_shapes) -> list[int]:
     """
     Formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
     - stride 0 = dim x
