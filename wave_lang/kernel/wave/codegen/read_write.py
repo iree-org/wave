@@ -794,17 +794,14 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     shared_byte_address = arith_d.addi(shared_ptr, shared_byte_offset)
 
     # assume no mapping
-    def shift(value, bits, direction="l"):
+    def lshift(value, bits):
         sh = arith_d.constant(value.type, bits)
+        val = arith_d.shli(value, sh)
+        return val
 
-        if direction not in {"l", "r"}:
-            assert False, f"Invalid shifting direction, get {direction}"
-
-        if direction == "l":
-            val = arith_d.shli(value, sh)
-        if direction == "r":
-            val = arith_d.shrui(value, sh)
-
+    def rshift(value, bits):
+        sh = arith_d.constant(value.type, bits)
+        val = arith_d.shrui(value, sh)
         return val
 
     # pack global address of a tile
@@ -813,11 +810,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_val_lower = arith_d.trunci(i32, global_val)
     d0 = vector_d.insert(global_val_lower, d0, static_position=[2], dynamic_position=[])
     # 2. get rest of the upper 25 bit from global value and cast to i32
-    global_val_rest = shift(global_val, 32, "r")
+    global_val_rest = rshift(global_val, 32)
     global_val_upper = arith_d.trunci(i32, global_val_rest)
     # 3. pack with image mode bit
     mode = arith_d.constant(i32, mode)
-    image_mode = shift(mode, 30, "l")
+    image_mode = lshift(mode, 30)
     pack = arith_d.ori(image_mode, global_val_upper)
     d0 = vector_d.insert(pack, d0, static_position=[3], dynamic_position=[])
 
@@ -831,24 +828,24 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     d0 = vector_d.insert(valid_tensor, d0, static_position=[0], dynamic_position=[])
 
     # get data size val packed to i32
-    data_size_val = shift(data_size, 16, "l")
+    data_size_val = lshift(data_size, 16)
     d1 = vector_d.insert(data_size_val, d1, static_position=[0], dynamic_position=[])
 
     # get lower 16 bit from tensor dim 0 and pack to i32
-    tensor_dim_0_lower = shift(dim_size_0, 16, "l")
+    tensor_dim_0_lower = lshift(dim_size_0, 16)
     d1 = vector_d.insert(
         tensor_dim_0_lower, d1, static_position=[1], dynamic_position=[]
     )
 
     # get upper 16 bit from tensor dim 0 and lower 16 bit from tensor dim 1, pack to i32
-    tensor_dim_0_upper = shift(dim_size_0, 16, "r")
-    tensor_dim_1_lower = shift(dim_size_1, 16, "l")
+    tensor_dim_0_upper = rshift(dim_size_0, 16)
+    tensor_dim_1_lower = lshift(dim_size_1, 16)
     pack = arith_d.ori(tensor_dim_1_lower, tensor_dim_0_upper)
     d1 = vector_d.insert(pack, d1, static_position=[2], dynamic_position=[])
 
     # get upper 16 bit from tensor dim 1, packed with tile size 0
-    tensor_dim_1_upper = shift(dim_size_1, 16, "r")
-    tile_size_0_shift = shift(tile_size_0, 16, "l")
+    tensor_dim_1_upper = rshift(dim_size_1, 16)
+    tile_size_0_shift = lshift(tile_size_0, 16)
     pack = arith_d.ori(tensor_dim_1_upper, tile_size_0_shift)
     d1 = vector_d.insert(pack, d1, static_position=[3], dynamic_position=[])
 
@@ -862,15 +859,15 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     )
 
     # get upper 16 bit from dim stride 0, get lower 16 bit from dim stride 1, packed to i32
-    dim_stride_0_upper = shift(dim_stride_0, 32, "r")
+    dim_stride_0_upper = rshift(dim_stride_0, 32)
     dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0_upper)
     dim_stride_1_lower = arith_d.trunci(i32, dim_stride_1)
-    dim_stride_1_trunc = shift(dim_stride_1_lower, 16, "l")
+    dim_stride_1_trunc = lshift(dim_stride_1_lower, 16)
     pack = arith_d.ori(dim_stride_0_trunc, dim_stride_1_trunc)
     d1 = vector_d.insert(pack, d1, static_position=[6], dynamic_position=[])
 
     # shift dim stride 1 to get upper 32 bit and pack to i32
-    dim_stride_1_sh = shift(dim_stride_1, 16, "r")
+    dim_stride_1_sh = rshift(dim_stride_1, 16)
     pack = arith_d.trunci(i32, dim_stride_1_sh)
     d1 = vector_d.insert(pack, d1, static_position=[7], dynamic_position=[])
 
