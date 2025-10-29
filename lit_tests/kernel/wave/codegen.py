@@ -2114,6 +2114,7 @@ def test_binary_lowerings():
         res = tkw.minimum(a_reg, b_reg)
         res = tkw.atan2(res, a_reg)
         res = tkw.powf(res, a_reg)
+        res = tkw.remf(a_reg, b_reg)
         tkw.write(res, a, elements_per_thread=4)
 
     binary_lowerings = wave_compile(get_wave_compile_options(), binary_lowerings)
@@ -2127,6 +2128,7 @@ def test_binary_lowerings():
     # CHECK: %[[MINIMUM:.+]] = arith.minimumf
     # CHECK: %[[ATAN2:.+]] = math.atan2 %[[MINIMUM]]
     # CHECK: %[[POWF:.+]] = math.powf %[[ATAN2]]
+    # CHECK: %[[REMF:.+]] = arith.remf
 
 
 @run_test
