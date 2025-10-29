@@ -118,7 +118,7 @@ def test_mxfp4_scaled_mma_16x16x128():
     # CHECK:        %[[VECTOR_LOAD_7:.+]] = vector.load %[[VIEW_2]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
     # CHECK:        %[[BITCAST_0:.+]] = vector.bitcast %[[VECTOR_LOAD_7]] : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK:        %[[BITCAST_1:.+]] = vector.bitcast %[[VECTOR_LOAD_5]] : vector<16xi8> to vector<32xf4E2M1FN>
-    # CHECK:        %[[SCALED_MFMA:.+]] = amdgpu.scaled_mfma(%[[VECTOR_LOAD_6]][0] * %[[BITCAST_0]]) * (%[[VECTOR_LOAD_4]][0] * %[[BITCAST_1]]) + %[[CST]] {k = 128 : i32, m = 16 : i32, n = 16 : i32} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
+    # CHECK:        %[[SCALED_MFMA:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[VECTOR_LOAD_6]][0] * %[[BITCAST_0]]) * (%[[VECTOR_LOAD_4]][0] * %[[BITCAST_1]]) + %[[CST]] : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
     # CHECK:        %[[EXTRACT_STRIDED_SLICE_0:.+]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [0], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:        %[[AFFINE_APPLY_4:.+]] = affine.apply #[[MAP4]]()[%[[THREAD_ID_X]]]
     # CHECK:        vector.store %[[EXTRACT_STRIDED_SLICE_0]], %{{.*}}[%[[AFFINE_APPLY_4]], %[[AFFINE_APPLY_3]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
@@ -247,7 +247,7 @@ def test_mxfp8_scaled_mma_16x16x128():
     # CHECK:       %[[LOAD9:.*]] = vector.load %[[VIEW_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
     # CHECK:       %[[INSERT_STRIDED_SLICE_4:.*]] = vector.insert_strided_slice %[[LOAD8]], %[[CST_0]] {offsets = [0], strides = [1]} : vector<16xf8E5M2> into vector<32xf8E5M2>
     # CHECK:       %[[INSERT_STRIDED_SLICE_5:.*]] = vector.insert_strided_slice %[[LOAD9]], %[[INSERT_STRIDED_SLICE_4]] {offsets = [16], strides = [1]} : vector<16xf8E5M2> into vector<32xf8E5M2>
-    # CHECK:       %[[SCALED_MFMA:.*]] = amdgpu.scaled_mfma(%[[LOAD7]][0] * %[[INSERT_STRIDED_SLICE_5]]) * (%[[LOAD4]][0] * %[[INSERT_STRIDED_SLICE_3]]) + %[[CST]] {k = 128 : i32, m = 16 : i32, n = 16 : i32} : f8E8M0FNU, vector<32xf8E5M2>, f8E8M0FNU, vector<32xf8E5M2>, vector<4xf32>
+    # CHECK:       %[[SCALED_MFMA:.*]] = amdgpu.scaled_mfma 16x16x128 (%[[LOAD7]][0] * %[[INSERT_STRIDED_SLICE_5]]) * (%[[LOAD4]][0] * %[[INSERT_STRIDED_SLICE_3]]) + %[[CST]] : f8E8M0FNU, vector<32xf8E5M2>, f8E8M0FNU, vector<32xf8E5M2>, vector<4xf32>
     # CHECK:       %[[EXTRACT_STRIDED_SLICE:.*]] = vector.extract_strided_slice %[[SCALED_MFMA]] {offsets = [0], sizes = [1], strides = [1]} : vector<4xf32> to vector<1xf32>
     # CHECK:       %[[AFFINE_APPLY5:.*]] = affine.apply #[[MAP5]]()[%[[THREAD_ID_X]]]
     # CHECK:       vector.store %[[EXTRACT_STRIDED_SLICE]], %{{.*}}[%[[AFFINE_APPLY5]], %[[AFFINE_APPLY4]]] : memref<32x32xf32, strided<[32, 1]>>, vector<1xf32>
@@ -359,7 +359,7 @@ def test_mxfp4_scaled_mma_256x256x256():
     # CHECK-COUNT-8:    vector.bitcast {{.*}} : vector<1xi8> to vector<1xf8E8M0FNU>
     # CHECK-COUNT-16:   vector.bitcast {{.*}} : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK-COUNT-16:   vector.bitcast {{.*}} : vector<1xi8> to vector<1xf8E8M0FNU>
-    # CHECK-COUNT-64:   amdgpu.scaled_mfma{{.*}} {k = 128 : i32, m = 16 : i32, n = 16 : i32} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
+    # CHECK-COUNT-64:   amdgpu.scaled_mfma 16x16x128 {{.*}} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
     # CHECK:            scf.yield
     # CHECK:        }
 
@@ -477,4 +477,4 @@ def test_mxfp4_scaled_mma_linearize_shared_access():
     # CHECK:        %[[VECTOR_LOAD_7:.+]] = vector.load %[[LINEAR_VIEW_2]][%[[AFFINE_APPLY_8]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
     # CHECK:        %[[BITCAST_0:.+]] = vector.bitcast %[[VECTOR_LOAD_7]] : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK:        %[[BITCAST_1:.+]] = vector.bitcast %[[VECTOR_LOAD_5]] : vector<16xi8> to vector<32xf4E2M1FN>
-    # CHECK:        %[[SCALED_MFMA:.+]] = amdgpu.scaled_mfma(%[[VECTOR_LOAD_6]][0] * %[[BITCAST_0]]) * (%[[VECTOR_LOAD_4]][0] * %[[BITCAST_1]]) + %[[CST]] {k = 128 : i32, m = 16 : i32, n = 16 : i32} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
+    # CHECK:        %[[SCALED_MFMA:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[VECTOR_LOAD_6]][0] * %[[BITCAST_0]]) * (%[[VECTOR_LOAD_4]][0] * %[[BITCAST_1]]) + %[[CST]] : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>

@@ -579,10 +579,10 @@ def batched_prefetch_mxfp4_test():
     # CHECK-DAG:      %[[C512_I14:.+]] = arith.constant 512 : i14
 
     # Prologue Global Read
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1]>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C512_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
-    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [%{{.*}}], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
+    # CHECK:          memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1]>>
     # CHECK:          amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}}) cacheSwizzleStride(%[[C32_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:          vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<4xi8>
     # CHECK-COUNT-4:  vector.load {{.*}} : memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>, vector<16xi8>
@@ -851,13 +851,11 @@ def test_mxfp4_scaled_mma_unaligned_16x16x128():
     # CHECK-DAG:        %[[BLOCK_ID_Z:.*]] = gpu.block_id  z
     # CHECK-DAG:        %[[THREAD_ID_X:.*]] = gpu.thread_id  x upper_bound 256
     # CHECK-DAG:        %[[THREAD_ID_Y:.*]] = gpu.thread_id  y upper_bound 2
-    # CHECK:            %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP3]]()[%arg6]
-    # CHECK:            %[[VIEW6:.*]] = memref.view
-    # CHECK:            %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
+    # CHECK-DAG:        %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP3]]()[%arg6]
+    # CHECK-DAG:        %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
     # CHECK:            %[[MUL1:.*]] = arith.muli %[[BLOCK_ID_Z]], %[[AFFINE_APPLY2]] overflow<nsw> : index
-    # CHECK:            %{{.*}}, %[[OFFSET_TO_TENSOR:.+]], %{{.*}}, %{{.*}} = memref.extract_strided_metadata %{{.*}} : memref<?x?x8192xi8, strided<[?, 8192, 1], offset: ?>> -> memref<i8>, index, index, index, index, index, index, index
-    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%[[OFFSET_TO_TENSOR]]], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1], offset: ?>>
-    # CHECK:            %[[CAST:.*]] = memref.cast %[[REINTERPRET_CAST]] : memref<2147483646xi8, strided<[1], offset: ?>> to memref<?xi8, strided<[1], offset: ?>>
+    # CHECK:            %[[REINTERPRET_CAST:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [2147483646], strides: [1] : memref<i8> to memref<2147483646xi8, strided<[1]>>
+    # CHECK:            %[[CAST:.*]] = memref.cast %[[REINTERPRET_CAST]] : memref<2147483646xi8, strided<[1]>> to memref<?xi8, strided<[1], offset: ?>>
     # CHECK:            %[[BUFF_CAST:.*]] = amdgpu.fat_raw_buffer_cast %[[CAST]] validBytes(%[[C2147483646_I64]]) cacheSwizzleStride(%[[C_NEG_8192_I14]]) resetOffset : memref<?xi8, strided<[1], offset: ?>> to memref<?xi8, #amdgpu.address_space<fat_raw_buffer>>
     # CHECK:            %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]], %[[BLOCK_ID_X]]]
     # CHECK:            %[[CMP1:.*]] = arith.cmpi slt, %[[AFFINE_APPLY3]], %arg6 : index
@@ -903,4 +901,4 @@ def test_mxfp4_broadcasted_scale_scaled_mma_16x16x128():
     # CHECK:            %[[LHS_SCALE:.+]] = vector.load {{.*}} : memref<40xi8, #gpu.address_space<workgroup>>, vector<1xi8>
     # CHECK:            %[[LHS_SCALE_BITCAST:.+]] = vector.bitcast %[[LHS_SCALE]] : vector<1xi8> to vector<1xf8E8M0FNU>
     # CHECK:            %[[LHS_SCALE_EXTRACT:.+]] = vector.extract %[[LHS_SCALE_BITCAST]][0] : f8E8M0FNU from vector<1xf8E8M0FNU>
-    # CHECK-COUNT-2:    amdgpu.scaled_mfma(%[[LHS_SCALE_EXTRACT]][0] * %{{.*}}) * (%{{.*}}[0] * %{{.*}}) + %{{.*}} {k = 128 : i32, m = 16 : i32, n = 16 : i32} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
+    # CHECK-COUNT-2:    amdgpu.scaled_mfma 16x16x128 (%[[LHS_SCALE_EXTRACT]][0] * %{{.*}}) * (%{{.*}}[0] * %{{.*}}) + %{{.*}} : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
