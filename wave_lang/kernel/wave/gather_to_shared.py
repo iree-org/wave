@@ -209,8 +209,8 @@ def emit_global_to_lds(
     """
     Emit `GatherToLDS` for the given read and write.
     """
-    elements_per_wave = elements_per_thread * total_number_of_threads
-    logger.info(f"elements_per_wave={elements_per_wave}")
+    elements_per_block = elements_per_thread * total_number_of_threads
+    logger.info(f"elements_per_block={elements_per_block}")
 
     # For index delinearization, assume our shape in `elements_per_thread` chunks.
     materialized_shape_adjusted = list(materialized_shape)
@@ -218,10 +218,12 @@ def emit_global_to_lds(
 
     logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
-    # GatherToLDS writes `elements_per_wave` elements contiguously to LDS, so we
+    # GatherToLDS writes `elements_per_block` elements contiguously to LDS, so we
     # cannot have any padding if it crosses a array row boundary.
-    drop_padding = materialized_shape[-1] % elements_per_wave != 0
-    tail_padding = elements_per_wave - prod(materialized_shape) % elements_per_wave
+    drop_padding = materialized_shape[-1] % elements_per_block != 0
+    tail_padding = sympy.ceiling(
+        prod(materialized_shape) / elements_per_block
+    ) * elements_per_block - prod(materialized_shape)
     logger.info(f"tail_padding={tail_padding}")
 
     global_index = remove_thread_indexing(read.index)

@@ -357,10 +357,8 @@ def test_gather_to_shared_not_minimize_shared_allocs():
     # CHECK:          func.func @scaled_gemm
     # CHECK:            memref.alloc() : memref<1024xi8, #gpu.address_space<workgroup>>
     # CHECK:            memref.view {{.*}} : memref<1024xi8, #gpu.address_space<workgroup>> to memref<32x8xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.alloc() : memref<8192xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.view {{.*}} : memref<8192xi8, #gpu.address_space<workgroup>> to memref<32x128xi8, #gpu.address_space<workgroup>>
+    # CHECK:            memref.alloc() : memref<32x128xi8, #gpu.address_space<workgroup>>
     # CHECK:            memref.alloc() : memref<1024xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.view {{.*}} memref<1024xi8, #gpu.address_space<workgroup>> to memref<32x8xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.alloc() : memref<8192xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.view {{.*}} memref<8192xi8, #gpu.address_space<workgroup>> to memref<32x128xi8, #gpu.address_space<workgroup>>
+    # CHECK:            memref.view {{.*}} : memref<1024xi8, #gpu.address_space<workgroup>> to memref<32x8xi8, #gpu.address_space<workgroup>>
+    # CHECK:            memref.alloc() : memref<32x128xi8, #gpu.address_space<workgroup>>
     # CHECK:            scf.for
