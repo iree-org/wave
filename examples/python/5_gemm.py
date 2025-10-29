@@ -23,7 +23,6 @@ from wave_lang.kernel.wave.schedule_reordering import (
     get_local_writes,
     slice_mma,
 )
-from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.ops.wave_schedule_ops import (
     get_proxy_result,
     create_schedule_proxy,
@@ -1943,47 +1942,20 @@ def gemm_schedule_test(is_debug=False):
         mma = tkw.get_node_by_tag("mma")
 
         # Get the actual fx.Nodes from the Proxies
-        mma_result = get_proxy_result(mma)
-        local_load_lhs, local_load_rhs = get_local_loads(mma_result)
+        mma_nodes = get_proxy_result(mma)
+        local_load_lhs, local_load_rhs = get_local_loads(mma_nodes)
         local_write_lhs, local_write_rhs = get_local_writes(local_load_lhs)
         # global_load_lhs, global_load_rhs = get_global_loads(local_write_lhs)
         # global_load_rhs, global_load_rhs = get_global_loads(local_write_rhs)
 
         # Slice MMAs by K iteration
         num_slice = 2
-        sliced_mma_nodes_fin, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
-            mma_result, local_load_lhs, local_load_rhs, num_slice
-        )
-        reduction_dim = get_custom(mma_result[0]).reduction_dim
-        reduction_dim_ids = set(
-            [get_custom(node).expanded_dims[reduction_dim] for node in mma_result]
+        sliced_mma_nodes, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
+            mma_nodes, local_load_lhs, local_load_rhs, num_slice
         )
 
-        # Validate
-        reduction_expand_size = len(reduction_dim_ids)
-        assert (
-            reduction_expand_size >= num_slice
-            and reduction_expand_size % num_slice == 0
-        )
-        assert all(x in reduction_dim_ids for x in range(reduction_expand_size))
-
-        # Initialize sliced lists
-        sliced_mma_nodes = [[] for _ in range(num_slice)]
-
-        # Bin operations by K iteration
-        size_of_slice = reduction_expand_size // num_slice
-        for mma_node in mma_result:
-            custom = get_custom(mma_node)
-            k_id = custom.expanded_dims[reduction_dim]
-            slice_id = k_id // size_of_slice
-            sliced_mma_nodes[slice_id].append(mma_node)
-
-        print(f"Sliced into {num_slice} chunks:")
-        for i in range(num_slice):
-            print(f"\tChunk {i}: {len(sliced_mma_nodes[i])} MMAs")
-
-        sliced_mma_proxies = []
         # Create Proxies for the sliced lists so set_stage can use them
+        sliced_mma_proxies = []
         current_context = ScheduleContext.current()
         region_graph = current_context.region_graph
         for i in range(num_slice):
