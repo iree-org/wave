@@ -86,6 +86,7 @@ from .decompose_scan_ops import decompose_scan_ops
 from .decompose_topk_ops import decompose_topk_ops
 from .decompose_vmma_ops import decompose_vmma_ops
 from .expansion.expansion import add_get_results, expand_graph
+from .tensor_load_to_shared import tensor_load_to_shared
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
@@ -857,6 +858,7 @@ class LaunchableWave(Launchable):
         if options.optimization_level:
             graph_passes += [
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
+                partial(tensor_load_to_shared, trace, self.constraints, options),
                 partial(gather_to_shared, trace, self.constraints, options),
                 partial(gather_to_shared_swizzling, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints, options),

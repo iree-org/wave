@@ -592,3 +592,91 @@ def test_wmma_f32_16x16x32_f16():
     # CHECK:          func.func @mma
 
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16"({{.*}}) : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+
+
+@run_test
+def test_wmma_with_tensor_load():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32, mma_type=tkw.MMAType.GFX1250_F32_16x16x32_F16
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a)
+        b_reg = tkw.read(b)
+        acc = tkw.mma(a_reg, b_reg, c_reg)
+        tkw.write(acc, c)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 128,
+            K: 32,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            BLOCK_K: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx1250",
+        use_global_to_shared=True,
+    )
+    mma = wave_compile(compile_options, mma)
+    print(mma.asm)
+
+    # CHECK-LABEL: test_wmma_with_tensor_load
+    # CHECK:          func.func @mma
+
+    ### descriptors packing [group1]
+    # CHECK-DAG:    %[[TENSOR_DESC_0:.+]] = arith.constant dense<[65536, 2097152, 8388608, 2097152, 16, 32, 268435456, 0]> : vector<8xi32>
+    # CHECK-DAG:    %[[TENSOR_DESC_1:.+]] = arith.constant dense<[65536, 2097152, 4194304, 2097152, 16, 32, 134217728, 0]> : vector<8xi32>
+
+    ### global buffer is bound to %0, %1 and %2 : MK, NK, MN
+    # CHECK-DAG:    %[[SUBSPAN0:.*]] = stream.binding.subspan
+    # CHECK-DAG:    %[[SUBSPAN1:.*]] = stream.binding.subspan
+    # CHECK-DAG:    %[[SUBSPAN2:.*]] = stream.binding.subspan
+
+    # CHECK-DAG:    %[[CAST_0:.*]] = memref.reinterpret_cast %[[SUBSPAN0]]
+    # CHECK-DAG:    %[[CAST_1:.*]] = memref.reinterpret_cast %[[SUBSPAN1]]
+    # CHECK-DAG:    %[[CAST_2:.*]] = memref.reinterpret_cast %[[SUBSPAN2]]
+
+    ### shared memory alloc
+    # CHECK-DAG:    %[[SMEM:.+]] = memref.alloc()
+    # CHECK-DAG:    %[[VIEW0:.+]] = memref.view
+    # CHECK-DAG:    %[[VIEW1:.+]] = memref.view
+
+    ### get global buffer pointer
+    # CHECK-DAG:    %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
+
+    ### get shared buffer pointer
+    # CHECK-DAG:    %[[CAST_3:.*]] = memref.reinterpret_cast %[[VIEW1]]
+    # CHECK-DAG:    %[[INT_PTR_1:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_3]]
+
+    ### pack descriptors and invoke tensor load
+    # CHECK-DAG:    %[[D0:.*]] = vector.from_elements
+    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_1]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK-DAG:    amdgpu.lds_barrier
+
+    ### pack descriptors and invoke tensor load
+    # CHECK-DAG:    %[[D1:.*]] = vector.from_elements
+    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D1]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK-DAG:    amdgpu.lds_barrier
+
+    ### wmma
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16"({{.*}}) : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
