@@ -5,12 +5,14 @@
 
 import logging
 import torch
-from torch._dynamo import register_backend
 import torch.fx as fx
+import wave_lang.kernel.lang as tkl
+
+from collections import defaultdict
+from torch._dynamo import register_backend
 from torch.fx.node import Node
 from typing import List, Dict, Any, Callable, Optional
 
-import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
@@ -49,7 +51,7 @@ class GraphAnalyzer:
 
     def analyze(self) -> Dict[str, Any]:
         """Perform graph analysis"""
-        analysis = {
+        analysis: Dict[str, Any] = {
             "total_nodes": 0,
             "op_counts": {},
             "optimizable_ops": [],
@@ -61,13 +63,13 @@ class GraphAnalyzer:
             # Count operation types
             if node.op == "call_function":
                 op_name = self._get_op_name(node)
-                analysis["op_counts"][op_name] = (
-                    analysis["op_counts"].get(op_name, 0) + 1
-                )
+                op_counts: Dict[str, int] = analysis["op_counts"]
+                op_counts[op_name] = op_counts.get(op_name, 0) + 1
 
                 # Identify operations that can be optimized
                 if self._is_optimizable(node):
-                    analysis["optimizable_ops"].append(node)
+                    optimizable_ops: List[Node] = analysis["optimizable_ops"]
+                    optimizable_ops.append(node)
 
         return analysis
 
@@ -189,14 +191,14 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=64
     )
 
-    multibuffer = SchedulingType.NONE
+    multibuffer = False
     UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
     hyperparams[UNROLL_FACTOR] = 2 if multibuffer else 1
 
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        schedule=SchedulingType.NONE,
+        schedule=False,
         dynamic_symbols=dynamic_symbols,
     )
     options.postprocess = """
