@@ -9,6 +9,8 @@ import torch
 import argparse
 
 import wave_lang.kernel.wave as tkw
+import wave_lang.kernel.lang as tkl
+import wave_lang.kernel.wave.wave_schedule as wave_schedule
 from wave_lang.kernel._support.dtype import f16, f32, i32
 from wave_lang.kernel._support.indexing import sym
 from wave_lang.kernel.lang.global_symbols import *
@@ -1619,6 +1621,376 @@ def test_gather_gemm_fused(is_debug=False):
     ), f"GEMM result doesn't match expected output\nMax difference: {(c - expected).abs().max()}"
 
     print("GEMM test passed!")
+
+
+def test_gemm_conditional_weights(is_debug=False):
+    """GEMM with optional weight multiplication controlled by runtime flag."""
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: Memory[M, K, ADDRESS_SPACE_A, f16],  # Input matrix A
+        b: Memory[N, K, ADDRESS_SPACE_B, f16],  # Input matrix B
+        weights: Memory[M, ADDRESS_SPACE_A, f32],  # TopK weights per row
+        c: Memory[M, N, ADDRESS_SPACE_C, f32],  # Output matrix C
+        apply_weights: i32,  # Flag: 0 = no multiply, 1 = multiply by weights
+    ):
+        # Initialize the accumulator register with zeros
+        c_reg = Register[M, N, f32](0.0)
+
+        # Iterate over the K dimension to compute the dot product
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: Register[M, N, f32]) -> Register[M, N, f32]:
+            # Load elements from A and B
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+
+            # Compute matrix multiplication and accumulate
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        # Store GEMM result in register (don't write to memory yet)
+        tkw.write(repeat, c)
+
+        # Conditionally multiply by weights if flag is set
+        condition = apply_weights == tkw.scalar(1, i32)
+
+        @tkw.conditional(condition)
+        def apply_topk_weights():
+            weights_reg = tkw.read(weights)
+            weights_broadcast = tkw.broadcast(weights_reg, target_shape=[M, N])
+            c_reg = tkw.read(c)
+            result = c_reg * weights_broadcast
+            tkw.write(result, c)
+
+    # Create test matrices
+    m, n, k = 64, 64, 64
+
+    # Initialize input matrices with random values
+    torch.manual_seed(0)
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    b = torch.randn(n, k, dtype=torch.float16, device="cuda")
+
+    # TopK weights (simulating router weights in MoE)
+    weights = torch.full((m,), 2.0, dtype=torch.float32, device="cuda")
+
+    # Test 1: Without weight multiplication (apply_weights=0)
+    c_no_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
+    hyperparams = {
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K: 32,
+        M: m,
+        N: n,
+        K: k,
+    }
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        print_ir_after="all" if is_debug else [],
+    )
+    options = set_default_run_config(options)
+    compiled_gemm = wave_compile(options, gemm)
+
+    # Run with apply_weights=0
+    compiled_gemm(a, b, weights, c_no_weights, 0)
+
+    if is_debug:
+        with open("conditional_weight_gemm.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
+
+    # Test 2: With weight multiplication (apply_weights=1)
+    c_with_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    c_with_weights = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+    compiled_gemm(a, b, weights, c_with_weights, 1)
+
+    # Verify results
+    expected_no_weights = torch.matmul(a, b.t()).to(torch.float32)
+    expected_with_weights = expected_no_weights * weights.view(-1, 1)
+
+    print("\n=== Conditional Weight GEMM Test ===")
+    print(f"Matrix dimensions: M={m}, N={n}, K={k}")
+    print(f"Weights shape: {weights.shape}")
+    print(f"Weights mean: {weights.mean().item():.4f}")
+
+    # Test without weights
+    torch.testing.assert_close(
+        c_no_weights.to(torch.float16),
+        expected_no_weights.to(torch.float16),
+        rtol=1e-2,
+        atol=1e-2,
+    )
+    print("Test 1 passed: apply_weights=0 (no multiplication)")
+
+    breakpoint()
+    # Test with weights
+    torch.testing.assert_close(
+        c_with_weights.to(torch.float16),
+        expected_with_weights.to(torch.float16),
+        rtol=1e-2,
+        atol=1e-2,
+    )
+    print("Test 2 passed: apply_weights=1 (with multiplication)")
+
+    # Verify that results are different
+    assert not torch.allclose(
+        c_no_weights, c_with_weights, rtol=1e-3, atol=1e-3
+    ), "Outputs should differ when weights are applied"
+
+    print(
+        f"\nOutput difference when weights applied: {((c_with_weights - c_no_weights).abs().mean().item()):.4f}"
+    )
+    print("Conditional weight GEMM test passed!")
+
+
+def explicit_shared_gemm_test(is_debug=False):
+    """GEMM with explicit shared memory management."""
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 4),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: Memory[M, K, ADDRESS_SPACE_A, f16],
+        b: Memory[N, K, ADDRESS_SPACE_B, f16],
+        c: Memory[M, N, ADDRESS_SPACE_C, f32],
+    ):
+        # Allocate shared memory explicitly
+        # shape: logical shape, distributed_shape: per-workgroup tile size
+        a_shared = tkw.allocate((M, K), (BLOCK_M, BLOCK_K), f16, SHARED_ADDRESS_SPACE)
+        b_shared = tkw.allocate((N, K), (BLOCK_N, BLOCK_K), f16, SHARED_ADDRESS_SPACE)
+
+        c_acc = Register[M, N, f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_acc])
+        def repeat(acc: Register[M, N, f32]) -> Register[M, N, f32]:
+            a_global = tkw.read(a)
+            b_global = tkw.read(b)
+
+            tkw.write(a_global, a_shared)
+            tkw.write(b_global, b_shared)
+
+            tkw.shared_memory_barrier()
+
+            a_reg = tkw.read(a_shared)
+            b_reg = tkw.read(b_shared)
+
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    # Test setup
+    m, n, k = 128, 256, 128
+
+    torch.manual_seed(0)
+    a = torch.randn(m, k, dtype=torch.float16, device="cuda")
+    b = torch.randn(n, k, dtype=torch.float16, device="cuda")
+    c = torch.zeros(m, n, dtype=torch.float32, device="cuda")
+
+    hyperparams = {
+        BLOCK_M: 128,
+        BLOCK_N: 256,
+        BLOCK_K: 64,
+        M: m,
+        N: n,
+        K: k,
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        use_scheduling_barriers=False,
+        print_ir_after="all" if is_debug else [],
+        minimize_shared_allocs=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_gemm = wave_compile(options, gemm)
+
+    if is_debug:
+        print(compiled_gemm.asm)
+        with open("manual_pingpong.mlir", "w") as f:
+            f.write(compiled_gemm.asm)
+
+    compiled_gemm(a, b, c)
+
+    expected = torch.matmul(a, b.t())
+    assert torch.allclose(
+        c.to(torch.float16), expected, rtol=1e-2, atol=1e-2
+    ), f"Max difference: {(c - expected).abs().max()}"
+
+    print("Explicit shared GEMM test passed!")
+
+
+def gemm_schedule_test(is_debug=False):
+    """
+    Returns a GEMM kernel with prefetch schedule that demonstrates pipelining.
+
+    Args:
+        shape: Tuple of (M, N, K) dimensions for the matrix multiplication
+        mfma_variant: The MMA type to use for hardware constraint
+        compile_to_mlir: Whether to compile to MLIR IR
+
+    Returns:
+        tuple: (kernel_function, schedule_function, compile_options)
+    """
+    shape: tuple[int, int, int] = (128, 128, 128)
+    mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16
+
+    # Symbol definitions
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    # Basic constraints needed for compilation
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=mfma_variant,
+        )
+    ]
+
+    # Define the kernel
+    @tkw.wave(constraints)
+    def gemm_prefetch(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+        def repeat(
+            acc: tkl.Register[M, N, tkl.f32],
+        ) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(a_reg, b_reg, acc, tag="mma")
+            return acc
+
+        tkw.write(repeat, c)
+
+    # Define the schedule
+    @wave_schedule.wave_schedule()
+    def prefetch_schedule():
+        # Get nodes to be manipulated in the schedule.
+        k_loop = tkw.get_node_by_tag("k_loop")
+        load_a = tkw.get_node_by_tag_and_type("read_a", tkw.Read)
+        global_load_a, shared_load_a = tkw.partition_by_address_space(
+            load_a, GLOBAL_ADDRESS_SPACE
+        )
+        shared_write_a = tkw.get_node_by_tag_and_type("read_a", tkw.Write)
+        load_b = tkw.get_node_by_tag_and_type("read_b", tkw.Read)
+        global_load_b, shared_load_b = tkw.partition_by_address_space(
+            load_b, GLOBAL_ADDRESS_SPACE
+        )
+        shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
+        mma = tkw.get_node_by_tag("mma")
+
+        # Create a pipeline with 2 stages and specify the operations that are overlapping.
+        with tkw.pipeline(k_loop) as pipelined_loop:
+            pipelined_loop.set_stage(
+                [
+                    (global_load_a, global_load_b),
+                    (shared_write_a, shared_write_b),
+                ],
+            )
+            pipelined_loop.set_stage(
+                [
+                    (shared_load_a, shared_load_b),
+                    (mma,),
+                ],
+            )
+
+    # Define compile options
+    M_val, N_val, K_val = shape
+    options = WaveCompileOptions(
+        subs={
+            M: M_val,
+            N: N_val,
+            K: K_val,
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+            BLOCK_K: 32,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            READ_SHARED_DELAY: 1,
+            WRITE_SHARED_DELAY: 1,
+            READ_GLOBAL_DELAY: 2,
+            WRITE_GLOBAL_DELAY: 2,
+            MMA_DELAY: 1,
+            VALU_DELAY: 1,
+            SHUFFLE_DELAY: 1,
+            SHARED_MEMORY_UNITS: 4,
+            GLOBAL_MEMORY_UNITS: 4,
+            MMA_UNITS: 4,
+            VALU_UNITS: 8,
+            SHUFFLE_UNITS: 8,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.MANUAL,
+        use_scheduling_barriers=True,
+        print_ir_after="all" if is_debug else [],
+    )
+
+    # Set runtime configuration for execution
+    options = set_default_run_config(options)
+
+    # Compile the kernel with the schedule
+    gemm_prefetch = wave_compile(options, gemm_prefetch, prefetch_schedule)
+
+    # Create test data
+    a = torch.randn(shape[0], shape[2], dtype=torch.float16, device="cuda")
+    b = torch.randn(shape[1], shape[2], dtype=torch.float16, device="cuda")
+    c = torch.zeros(shape[0], shape[1], dtype=torch.float32, device="cuda")
+
+    # Run the kernel
+    gemm_prefetch(a, b, c)
+
+    expected = torch.matmul(a, b.t()).to(torch.float32)
+    assert torch.allclose(c, expected, rtol=1e-2, atol=1e-2)
+
+    print("GEMM prefetch test passed!")
 
 
 if __name__ == "__main__":
