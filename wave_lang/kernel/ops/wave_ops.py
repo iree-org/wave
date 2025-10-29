@@ -23,7 +23,7 @@ import torch.fx as fx
 from typing_extensions import Self
 from itertools import combinations
 
-from .._support.dtype import DataType, i1
+from .._support.dtype import DataType, i1, i32
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.location import capture_location, CapturedLocation
 from .._support.regions import RegionGraph
