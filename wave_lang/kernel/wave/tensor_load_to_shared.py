@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 import sympy
 import torch.fx as fx
 
-from .._support.indexing import IndexSequence, IndexSymbol
+from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -77,7 +77,6 @@ from .minimize_global_loads import (
 from .utils.general_utils import (
     get_hardware_constraint,
     get_workgroup_constraints,
-    remove_thread_indexing,
 )
 from .utils.symbol_utils import subs_idxc
 
@@ -126,12 +125,12 @@ class TensorLoadConfig:
     note. base address will be represented as pointers in codegen.
     """
 
-    tensor_shapes: list = None
+    tensor_shapes: list[IndexExpr] = None
     tensor_strides: list = None
     element_type: "DataType" = None
     tensor_tile_shapes: list = None
     shared_tile_index: int = None
-    global_tile_index: IndexSequence = None
+    global_tile_index: dict[IndexSymbol, IndexSequence] = None
     bounds: list = field(default_factory=list)
 
     def __iter__(self):
@@ -144,7 +143,9 @@ class TensorLoadConfig:
         yield self.bounds
 
 
-def get_tensor_tile_shapes(read: Read, constraint_tile_size: dict[IndexSymbol, int]):
+def get_tensor_tile_shapes(
+    read: Read, constraint_tile_size: dict[IndexSymbol, int]
+) -> list:
     """
     0. Get symbolic shape from Read node.
     1. Materialize the tile from constraints.
@@ -155,7 +156,7 @@ def get_tensor_tile_shapes(read: Read, constraint_tile_size: dict[IndexSymbol, i
     return list(reversed(tensor_tile_shapes))
 
 
-def get_tensor_shapes(read: Read):
+def get_tensor_shapes(read: Read) -> list[IndexExpr]:
     """
     0. Get symbolic shape from Read node.
     1. Materialize the `data shape` using index subs
@@ -172,7 +173,7 @@ def get_tensor_shapes(read: Read):
     return tensor_shapes
 
 
-def get_tensor_strides(tensor_shapes):
+def get_tensor_strides(tensor_shapes) -> list:
     """
     Formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
     - stride 0 = dim x
@@ -188,21 +189,9 @@ def get_tensor_strides(tensor_shapes):
     return strides
 
 
-def get_global_indexing(node_index):
-    base = remove_thread_indexing(node_index)
-    return {key: IndexSequence(base[key].start, 1, 1) for key in base.keys()}
-
-
-def get_thread_indexing(node_index, global_index):
-    return {
-        key: IndexSequence(node_index[key].start - global_index[key].start, 1, 1)
-        for key in node_index.keys()
-    }
-
-    return {node_index.start - global_index.start, 1, 1}
-
-
-def get_global_element_offset(node: CustomOp, wave_subs):
+def get_global_element_offset(
+    node: CustomOp, wave_subs
+) -> dict[IndexSymbol, IndexSequence]:
     """
     Global address = global mem buffer + tile offset in bytes
     This function returns the address by removing threads offset within a tile.
@@ -213,7 +202,7 @@ def get_global_element_offset(node: CustomOp, wave_subs):
     return {key: IndexSequence(index[key].start, 1, 1) for key in index.keys()}
 
 
-def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map):
+def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map) -> int:
     """
     LDS address = Shared mem buffer + tile offset in bytes
     This function returns the tile offset.
@@ -287,7 +276,7 @@ def emit_tensor_load_to_shared(
     return tensor_writes
 
 
-def get_allocation_offsets(trace):
+def get_allocation_offsets(trace) -> dict[fx.Node, int]:
     allocs, _, alloc_info = get_alloc_info(trace)
     offsets, allocation_size = determine_allocations_offsets(alloc_info)
     allocs_to_offsets = {allocs[i]: offsets[i] for i in range(len(allocs))}
