@@ -18,6 +18,11 @@ from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.schedule_reordering import (
+    get_local_loads,
+    get_local_writes,
+    slice_mma,
+)
 from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.ops.wave_schedule_ops import (
     get_proxy_result,
@@ -1939,11 +1944,16 @@ def gemm_schedule_test(is_debug=False):
 
         # Get the actual fx.Nodes from the Proxies
         mma_result = get_proxy_result(mma)
-        shared_load_a_result = get_proxy_result(shared_load_a)
-        shared_load_b_result = get_proxy_result(shared_load_b)
+        local_load_lhs, local_load_rhs = get_local_loads(mma_result)
+        local_write_lhs, local_write_rhs = get_local_writes(local_load_lhs)
+        # global_load_lhs, global_load_rhs = get_global_loads(local_write_lhs)
+        # global_load_rhs, global_load_rhs = get_global_loads(local_write_rhs)
 
-        # Slice operations by K iteration (following slice_mma pattern)
+        # Slice MMAs by K iteration
         num_slice = 2
+        sliced_mma_nodes_fin, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
+            mma_result, local_load_lhs, local_load_rhs, num_slice
+        )
         reduction_dim = get_custom(mma_result[0]).reduction_dim
         reduction_dim_ids = set(
             [get_custom(node).expanded_dims[reduction_dim] for node in mma_result]
@@ -1959,30 +1969,20 @@ def gemm_schedule_test(is_debug=False):
 
         # Initialize sliced lists
         sliced_mma_nodes = [[] for _ in range(num_slice)]
-        sliced_lhs_nodes = [[] for _ in range(num_slice)]
-        sliced_rhs_nodes = [[] for _ in range(num_slice)]
 
         # Bin operations by K iteration
         size_of_slice = reduction_expand_size // num_slice
-        for mma_node, lhs_node, rhs_node in zip(
-            mma_result, shared_load_a_result, shared_load_b_result
-        ):
+        for mma_node in mma_result:
             custom = get_custom(mma_node)
             k_id = custom.expanded_dims[reduction_dim]
             slice_id = k_id // size_of_slice
             sliced_mma_nodes[slice_id].append(mma_node)
-            sliced_lhs_nodes[slice_id].append(lhs_node)
-            sliced_rhs_nodes[slice_id].append(rhs_node)
 
         print(f"Sliced into {num_slice} chunks:")
         for i in range(num_slice):
-            print(
-                f"  Chunk {i}: {len(sliced_mma_nodes[i])} MMAs, {len(sliced_lhs_nodes[i])} load_a, {len(sliced_rhs_nodes[i])} load_b"
-            )
+            print(f"\tChunk {i}: {len(sliced_mma_nodes[i])} MMAs")
 
         sliced_mma_proxies = []
-        sliced_load_a_proxies = []
-        sliced_load_b_proxies = []
         # Create Proxies for the sliced lists so set_stage can use them
         current_context = ScheduleContext.current()
         region_graph = current_context.region_graph
@@ -1990,16 +1990,6 @@ def gemm_schedule_test(is_debug=False):
             sliced_mma_proxies.append(
                 create_schedule_proxy(
                     region_graph, sliced_mma_nodes[i], f"sliced_mma_{i}"
-                )
-            )
-            sliced_load_a_proxies.append(
-                create_schedule_proxy(
-                    region_graph, sliced_lhs_nodes[i], f"sliced_load_a_{i}"
-                )
-            )
-            sliced_load_b_proxies.append(
-                create_schedule_proxy(
-                    region_graph, sliced_rhs_nodes[i], f"sliced_load_b_{i}"
                 )
             )
 
@@ -2015,19 +2005,7 @@ def gemm_schedule_test(is_debug=False):
             pipelined_loop.set_stage(
                 [
                     (shared_load_a, shared_load_b),
-                    (global_load_a, global_load_b),
-                ],
-            )
-            pipelined_loop.set_stage(
-                [
                     (sliced_mma_proxies[0], sliced_mma_proxies[1]),
-                    (shared_write_a, shared_write_b),
-                ],
-            )
-            pipelined_loop.set_stage(
-                [
-                    (shared_load_a, shared_load_b),
-                    (mma,),
                 ],
             )
 
@@ -2084,6 +2062,8 @@ def gemm_schedule_test(is_debug=False):
 
 if __name__ == "__main__":
     args = parse_args()
+    import pdb, traceback
+
     if args.list_tests:
         list_tests()
     else:
@@ -2092,6 +2072,12 @@ if __name__ == "__main__":
             try:
                 globals()[args.test](args.debug)
                 print(f"Test {i} passed")
+            except SystemExit as e:
+                print(f"SystemExit: code={e.code!r}")
+                import pdb, traceback
+
+                traceback.print_exc()
+                pdb.post_mortem(e.__traceback__)
             except Exception as e:
                 print(f"Error: {e}")
                 print(f"Test {i} failed")
