@@ -17,6 +17,17 @@ from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.ops.wave_ops import get_custom
+from wave_lang.kernel.ops.wave_schedule_ops import (
+    get_proxy_result,
+    create_schedule_proxy,
+)
+from wave_lang.kernel._support.tracing import ScheduleContext
+
+from wave_lang.kernel.wave.utils.general_utils import (
+    get_default_scheduling_params,
+)
 
 # Define symbolic dimensions for our matrices
 M = sym.M  # Rows of A and C
@@ -59,12 +70,11 @@ def simple_gemm_test(is_debug=False):
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),
         tkw.WorkgroupConstraint(N, BLOCK_N, 1),
         tkw.TilingConstraint(K, BLOCK_K),
-        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(M, BLOCK_M / 4),
         tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.HardwareConstraint(
             threads_per_wave=64,
             mma_type=tkw.MMAType.F32_16x16x16_F16,
-            vector_shapes={M: 16, N: 16, K: 16},
         ),
     ]
 
@@ -1863,7 +1873,7 @@ def gemm_schedule_test(is_debug=False):
     Returns:
         tuple: (kernel_function, schedule_function, compile_options)
     """
-    shape: tuple[int, int, int] = (128, 128, 128)
+    shape: tuple[int, int, int] = (128, 256, 128)
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16
 
     # Symbol definitions
@@ -1880,7 +1890,7 @@ def gemm_schedule_test(is_debug=False):
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
     constraints += [
@@ -1927,11 +1937,90 @@ def gemm_schedule_test(is_debug=False):
         shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
         mma = tkw.get_node_by_tag("mma")
 
+        # Get the actual fx.Nodes from the Proxies
+        mma_result = get_proxy_result(mma)
+        shared_load_a_result = get_proxy_result(shared_load_a)
+        shared_load_b_result = get_proxy_result(shared_load_b)
+
+        # Slice operations by K iteration (following slice_mma pattern)
+        num_slice = 2
+        reduction_dim = get_custom(mma_result[0]).reduction_dim
+        reduction_dim_ids = set(
+            [get_custom(node).expanded_dims[reduction_dim] for node in mma_result]
+        )
+
+        # Validate
+        reduction_expand_size = len(reduction_dim_ids)
+        assert (
+            reduction_expand_size >= num_slice
+            and reduction_expand_size % num_slice == 0
+        )
+        assert all(x in reduction_dim_ids for x in range(reduction_expand_size))
+
+        # Initialize sliced lists
+        sliced_mma_nodes = [[] for _ in range(num_slice)]
+        sliced_lhs_nodes = [[] for _ in range(num_slice)]
+        sliced_rhs_nodes = [[] for _ in range(num_slice)]
+
+        # Bin operations by K iteration
+        size_of_slice = reduction_expand_size // num_slice
+        for mma_node, lhs_node, rhs_node in zip(
+            mma_result, shared_load_a_result, shared_load_b_result
+        ):
+            custom = get_custom(mma_node)
+            k_id = custom.expanded_dims[reduction_dim]
+            slice_id = k_id // size_of_slice
+            sliced_mma_nodes[slice_id].append(mma_node)
+            sliced_lhs_nodes[slice_id].append(lhs_node)
+            sliced_rhs_nodes[slice_id].append(rhs_node)
+
+        print(f"Sliced into {num_slice} chunks:")
+        for i in range(num_slice):
+            print(
+                f"  Chunk {i}: {len(sliced_mma_nodes[i])} MMAs, {len(sliced_lhs_nodes[i])} load_a, {len(sliced_rhs_nodes[i])} load_b"
+            )
+
+        sliced_mma_proxies = []
+        sliced_load_a_proxies = []
+        sliced_load_b_proxies = []
+        # Create Proxies for the sliced lists so set_stage can use them
+        current_context = ScheduleContext.current()
+        region_graph = current_context.region_graph
+        for i in range(num_slice):
+            sliced_mma_proxies.append(
+                create_schedule_proxy(
+                    region_graph, sliced_mma_nodes[i], f"sliced_mma_{i}"
+                )
+            )
+            sliced_load_a_proxies.append(
+                create_schedule_proxy(
+                    region_graph, sliced_lhs_nodes[i], f"sliced_load_a_{i}"
+                )
+            )
+            sliced_load_b_proxies.append(
+                create_schedule_proxy(
+                    region_graph, sliced_rhs_nodes[i], f"sliced_load_b_{i}"
+                )
+            )
+
+        breakpoint()
         # Create a pipeline with 2 stages and specify the operations that are overlapping.
         with tkw.pipeline(k_loop) as pipelined_loop:
             pipelined_loop.set_stage(
                 [
                     (global_load_a, global_load_b),
+                    (shared_write_a, shared_write_b),
+                ],
+            )
+            pipelined_loop.set_stage(
+                [
+                    (shared_load_a, shared_load_b),
+                    (global_load_a, global_load_b),
+                ],
+            )
+            pipelined_loop.set_stage(
+                [
+                    (sliced_mma_proxies[0], sliced_mma_proxies[1]),
                     (shared_write_a, shared_write_b),
                 ],
             )
@@ -1949,9 +2038,9 @@ def gemm_schedule_test(is_debug=False):
             M: M_val,
             N: N_val,
             K: K_val,
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K: 32,
+            BLOCK_M: 128,
+            BLOCK_N: 256,
+            BLOCK_K: 64,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
             READ_SHARED_DELAY: 1,
