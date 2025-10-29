@@ -221,7 +221,9 @@ def emit_global_to_lds(
     # GatherToLDS writes `elements_per_wave` elements contiguously to LDS, so we
     # cannot have any padding if it crosses a array row boundary.
     drop_padding = materialized_shape[-1] % elements_per_wave != 0
-    tail_padding = elements_per_wave - prod(materialized_shape) % elements_per_wave
+    tail_padding = (
+        elements_per_wave - (prod(materialized_shape) % elements_per_wave)
+    ) % elements_per_wave
     logger.info(f"tail_padding={tail_padding}")
 
     global_index = remove_thread_indexing(read.index)
