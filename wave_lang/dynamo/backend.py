@@ -8,7 +8,6 @@ import torch
 import torch.fx as fx
 import wave_lang.kernel.lang as tkl
 
-from collections import defaultdict
 from torch._dynamo import register_backend
 from torch.fx.node import Node
 from typing import List, Dict, Any, Callable, Optional
@@ -16,7 +15,6 @@ from typing import List, Dict, Any, Callable, Optional
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType
-from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
