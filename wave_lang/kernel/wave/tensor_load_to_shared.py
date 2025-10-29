@@ -261,53 +261,6 @@ def get_tensor_load_descriptor_config(
     )
 
 
-def build_tensor_descriptors(config: TensorLoadConfig):
-    """
-    Constructor descriptor groups, the comment below should follow bit order (from high to low)
-
-    Group0: 4xi32
-        - _: i32
-            - 2 for image mode -> deafult by FM
-        - global address: IndexSequence,
-        - lds address: MLIR codegen
-        - valid tensor: 1
-
-    Group1: 8xi32
-        - tensor dim 1 stride: i48
-        - tensor dim 0 stride: i48
-        - _: i16
-        - tensor tile shape 1: i16
-        - tensor tile shape 0: i16
-        - tensor dim 1 shape: 32
-        - tensor dim 0 shape: 32
-        - _: i16
-        - element: i16
-            - _: i14
-            - data size: i2
-        - _: i16
-
-    Returns: [g0, g1, g2, g3], where gx has type list
-    """
-    group0 = [2, config.global_tile_index, config.shared_tile_index, 1]
-    group1 = [
-        config.tensor_strides[1],
-        config.tensor_strides[0],
-        0,
-        config.tensor_tile_shapes[1],
-        config.tensor_tile_shapes[0],
-        config.tensor_shapes[1],
-        config.tensor_shapes[0],
-        0,
-        0,
-        config.tensor_data_size,
-        0,
-    ]
-    group2 = [0, 0, 0, 0]
-    group3 = [0, 0, 0, 0]
-
-    return [group0, group1, group2, group3]
-
-
 def emit_tensor_load_to_shared(
     read: Read,
     write: Write,
