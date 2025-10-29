@@ -125,7 +125,6 @@ def get_mm_any_transpose_asm(
     lhs_type: str,
     rhs_type: str,
     acc_type: str,
-    batch: bool = False,
     cast_fp8: bool = False,
     tA: str = "N",
     tB: str = "T",
@@ -143,8 +142,6 @@ def get_mm_any_transpose_asm(
         K, N = rhs_shape
 
     gemm_name = f"gemm_{M}_{N}_{K}_{tA}{tB}"
-    print(f"{gemm_name=}, {rhs_shape=}, {lhs_shape=}")
-    print(f"{M=} {N=} {K=}")
     with ir.Location.name(gemm_name, context=ir.Context()):
         operand_element_type = _convert_dtype_to_mlir(lhs_type.split("x")[-1])
         acc_element_type = _convert_dtype_to_mlir(acc_type.split("x")[-1])
@@ -157,12 +154,13 @@ def get_mm_any_transpose_asm(
             else ir.FloatAttr.get(acc_element_type, 0.0)
         )
 
-        shape_A = [K, M] if tA == "T" else [M, K]
-        shape_B = [N, K] if tB == "T" else [K, N]
+        shape_A = (K, M) if tA == "T" else (M, K)
+        shape_B = (N, K) if tB == "T" else (K, N)
+        shape_C = (M, N)
 
         arg0_type = ir.RankedTensorType.get(shape_A, operand_element_type)
         arg1_type = ir.RankedTensorType.get(shape_B, operand_element_type)
-        result_type = ir.RankedTensorType.get([M, N], result_element_type)
+        result_type = ir.RankedTensorType.get(shape_C, result_element_type)
 
         module = ir.Module.create()
         with ir.InsertionPoint(module.body):
@@ -218,7 +216,6 @@ def get_mm_any_transpose_asm(
                 return arith.truncf(result_type, acc)
 
             matmul_function = f"{module}"
-            print(matmul_function)
             return matmul_function, "main"
 
 
@@ -355,7 +352,6 @@ def generate_iree_ref(
             lhs_type,
             rhs_type,
             acc_type,
-            batch=False,
             cast_fp8="fp8" in kernel_type,
             tA=tA,
             tB=tB,

@@ -103,18 +103,18 @@ def get_reordered_matmul(
         tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant[0])
     ]
 
-    i = tkw.IndexMapping.iterator(0)
-    j = tkw.IndexMapping.iterator(1)
+    # Handle different transpose variants
+    m = tkl.sym.m
+    n = tkl.sym.n
+    k = tkl.sym.k
+    constraints += [tkw.IteratorBindings({m: M, n: N, k: K})]
 
     a_shape = (K, M) if tA == "T" else (M, K)
     b_shape = (N, K) if tB == "T" else (K, N)
-
-    a_mapping = tkw.IndexMapping(
-        num_iterators=2, inputs={M: i, K: j}, outputs={M: i, K: j}
-    )
-    b_mapping = tkw.IndexMapping(
-        num_iterators=2, inputs={N: i, K: j}, outputs={N: i, K: j}
-    )
+    a_source = (k, m) if tA == "T" else (m, k)
+    b_source = (n, k) if tB == "T" else (k, n)
+    a_target = (m, k)
+    b_target = (n, k)
 
     @tkw.wave(constraints)
     def gemm(
@@ -130,11 +130,17 @@ def get_reordered_matmul(
         ) -> tkl.Register[M, N, output_dtype]:
             # a_reg: tkw.Register[M, K, input_dtype]
             a_reg = tkw.read(
-                a, elements_per_thread=LOAD_ELEMS_PER_THREAD, mapping=a_mapping
+                a,
+                elements_per_thread=LOAD_ELEMS_PER_THREAD,
+                source=a_source,
+                target=a_target,
             )
             # b_reg: tkw.Register[N, K, input_dtype]
             b_reg = tkw.read(
-                b, elements_per_thread=LOAD_ELEMS_PER_THREAD, mapping=b_mapping
+                b,
+                elements_per_thread=LOAD_ELEMS_PER_THREAD,
+                source=b_source,
+                target=b_target,
             )
             if quantized_dtype:
                 a_reg = tkw.cast(a_reg, quantized_dtype)
