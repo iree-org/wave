@@ -372,7 +372,9 @@ def emit_mfma(m: int, n: int, k: int, acc: Value, values: list[Value]) -> Value:
     return result
 
 
-def emit_wmma(intr: MMAType, acc: Value, values: list[Value]) -> Value:
+def emit_wmma(
+    intr: MMAType, m: int, n: int, k: int, acc: Value, values: list[Value]
+) -> Value:
     source_a, source_b = values
     if intr == MMAType.GFX1250_F32_16x16x32_F16:
         # TODO: Use amdgpu intrinsic when it is supported
@@ -386,7 +388,8 @@ def emit_wmma(intr: MMAType, acc: Value, values: list[Value]) -> Value:
             [],
             [],
         )
-    return amdgpu_d.wmma(source_a, source_b, acc)
+
+    return amdgpu_d.wmma(m, n, k, source_a, source_b, acc)
 
 
 @handle_op(mma)
@@ -414,7 +417,7 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
     result = (
-        emit_wmma(mma_type, acc, values)
+        emit_wmma(mma_type, m, n, k, acc, values)
         if mma_type
         in [MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.GFX1250_F32_16x16x32_F16]
         else emit_mfma(m, n, k, acc, values)
