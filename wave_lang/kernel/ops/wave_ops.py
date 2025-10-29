@@ -285,9 +285,6 @@ def mod(lhs: "Register", rhs: "Register") -> "Register": ...
 def remf(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
-
-
-
 def cbrt(src: "Register") -> "Register": ...
 
 
