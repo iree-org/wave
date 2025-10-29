@@ -800,16 +800,6 @@ def handle_remf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult
     return result
 
 
-@handle_binary_op(remf)
-def handle_remf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
-    element_type = get_type_or_element_type(lhs.type)
-    if _is_float_type(element_type):
-        result = arith_d.remf(lhs, rhs, fastmath=get_fast_math_flags(options))
-    else:
-        raise ValidationError(f"Found unhandled operand type for remf: {element_type}")
-    return result
-
-
 @handle_binary_op(operator.truediv)
 def handle_div(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)

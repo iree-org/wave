@@ -1979,6 +1979,17 @@ class Read(CustomOp):
         if self.has_identity_mapping():
             return True
 
+        if self.elements_per_thread == 1:
+            return True
+
+        from ..wave.utils.mapping_utils import (
+            check_is_mapping_contiguous,
+            check_is_dynamic_vals_broadcasted,
+        )
+
+        if not check_is_dynamic_vals_broadcasted(self.mapping_dynamic_vals):
+            return False
+
         mapping = self.mapping
 
         memory = get_custom(self.memory)
