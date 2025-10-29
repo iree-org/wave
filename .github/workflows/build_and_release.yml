@@ -107,14 +107,23 @@ jobs:
           CIBW_BEFORE_ALL_LINUX: curl -sSf https://sh.rustup.rs | sh -s -- -y
           CIBW_ENVIRONMENT_LINUX: "PATH=$HOME/.cargo/bin:$PATH"
 
+          CIBW_ENVIRONMENT: IREE_CHANNEL="${{ env.IREE_CHANNEL }}" IREE_REQ="${{ env.IREE_REQ }}"
+          CIBW_ENVIRONMENT_WINDOWS: IREE_CHANNEL=${{ env.IREE_CHANNEL }};IREE_REQ=${{ env.IREE_REQ }}
+
           # Install the right IREE deps *inside each isolated build env* before building.
           CIBW_BEFORE_BUILD: |
+            set -eux
+            ls -la
+            echo "Using requirements: $IREE_REQ (channel=$IREE_CHANNEL)"
             python -m pip install -U pip
-            python -m pip install -r $IREE_REQ
+            python -m pip install -r "$IREE_REQ"
 
           CIBW_BEFORE_BUILD_WINDOWS: |
+            $ErrorActionPreference = "Stop"
+            Get-ChildItem
+            Write-Host "Using requirements: $env:IREE_REQ (channel=$env:IREE_CHANNEL)"
             python -m pip install -U pip
-            python -m pip install -r $env:IREE_REQ
+            python -m pip install -r "$env:IREE_REQ"
 
       - name: Upload python wheels
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
