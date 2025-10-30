@@ -46,9 +46,8 @@ with tile size = BLOCK_M * BLOCK_K, BLOCK_N x BLOCK_K, and K is the contiguous d
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-import sympy
 import torch.fx as fx
 
 from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
@@ -75,11 +74,11 @@ from .minimize_global_loads import (
     update_write_dependencies,
 )
 from .utils.general_utils import (
+    find_index_bounds,
     get_hardware_constraint,
-    get_workgroup_constraints,
+    infer_dim,
 )
 from .utils.symbol_utils import subs_idxc
-
 
 from .memory_analysis.minimize_shared_allocs import get_alloc_info
 from .memory_analysis.solver import determine_allocations_offsets
@@ -114,8 +113,6 @@ def is_valid_write(write: CustomOp) -> bool:
 @dataclass
 class TensorLoadConfig:
     """
-    tensor_shapes : [tensor dim 0 shape, tensor dim 1 shape]
-    tensor_strides
     element_type
     tensor_tile_shapes : [tile dim 0 shape, tile dim 1 shape]
     shared_tile_index (bytes)
@@ -125,68 +122,18 @@ class TensorLoadConfig:
     note. base address will be represented as pointers in codegen.
     """
 
-    tensor_shapes: list[IndexExpr] = None
-    tensor_strides: list[int] = None
-    element_type: "DataType" = None
-    tensor_tile_shapes: list[int] = None
-    shared_tile_index: int = None
-    global_tile_index: dict[IndexSymbol, IndexSequence] = None
-    bounds: list[int] = field(default_factory=list)
+    element_type: "DataType"
+    distributed_shape: list[IndexExpr]
+    shared_tile_index: int
+    global_tile_index: dict[IndexSymbol, IndexSequence]
+    bounds: dict[IndexSymbol, IndexExpr]
 
     def __iter__(self):
-        yield self.tensor_shapes
-        yield self.tensor_strides
         yield self.element_type
-        yield self.tensor_tile_shapes
+        yield self.distributed_shape
         yield self.shared_tile_index
         yield self.global_tile_index
         yield self.bounds
-
-
-def get_tensor_tile_shapes(
-    read: Read, constraint_tile_size: dict[IndexSymbol, int]
-) -> list[int]:
-    """
-    0. Get symbolic shape from Read node.
-    1. Materialize the tile from constraints.
-    2. Return [tile dim 0 shape, tile dim 1 shape]
-    """
-    symbolic_shapes = read.type.symbolic_shape
-    tensor_tile_shapes = materialize_shape(constraint_tile_size, symbolic_shapes)
-    return list(reversed(tensor_tile_shapes))
-
-
-def get_tensor_shapes(read: Read) -> list[IndexExpr]:
-    """
-    0. Get symbolic shape from Read node.
-    1. Materialize the `data shape` using index subs
-    2. Return [tensor dim 0 shape, tensor dim 1 shape]
-    """
-    tensor_shapes = []
-    symbolic_shapes = read.type.symbolic_shape
-    for sym_dim in reversed(symbolic_shapes):
-        tensor_shapes.append(subs_idxc(sym_dim))
-
-    assert all(
-        [type(shape) is sympy.core.numbers.Integer for shape in tensor_shapes]
-    ), "Unknown or dynamic dimension is not currently supported for tensor load to shared."
-    return tensor_shapes
-
-
-def get_tensor_strides(tensor_shapes) -> list[int]:
-    """
-    Formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
-    - stride 0 = dim x
-    - stride 1 = stride 0 * dim y
-    - stride 2 = stride 1 * dim z
-    """
-
-    strides = [tensor_shapes[0]]
-    for i in range(1, len(tensor_shapes)):
-        base = strides[-1]
-        strides.append(base * tensor_shapes[i])
-
-    return strides
 
 
 def get_global_element_offset(
@@ -213,9 +160,9 @@ def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map) -> int:
 
 def get_tensor_load_descriptor_config(
     read: Read,
+    constraints: list[Constraint],
     write: Write,
     constraint_tile_size: dict[IndexSymbol, int],
-    waves_per_block,
     element_type: "DataType",
     wave_subs,
     hardware_constraint: "HardwareConstraint",
@@ -225,14 +172,23 @@ def get_tensor_load_descriptor_config(
     Get the tensor to shared config for the given read and write.
     """
 
-    # get data shape
-    tensor_shapes = get_tensor_shapes(read)
+    symbolic_shape = read.type.symbolic_shape
 
-    # get data strides
-    tensor_strides = get_tensor_strides(tensor_shapes)
+    if read.bounds:
+        bounds = read.bounds
+    else:
+        vector_shapes = read.vector_shapes or hardware_constraint.vector_shapes
+        bounds = find_index_bounds(
+            constraints, read.index, vector_shapes, symbolic_shape
+        )
 
-    # get tile shape
-    tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
+    # Descriptor always expect bounds for all dimensions so if no bounds are provided, set to full shape
+    if bounds is None:
+        bounds = {infer_dim(v): v for v in symbolic_shape}
+    else:
+        bounds = {infer_dim(v): bounds.get(infer_dim(v), v) for v in symbolic_shape}
+
+    distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape)
 
     # get LDS byte offset
     shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
@@ -241,12 +197,11 @@ def get_tensor_load_descriptor_config(
     global_tile_index = get_global_element_offset(read, wave_subs)
 
     return TensorLoadConfig(
-        tensor_shapes,
-        tensor_strides,
         element_type,
-        tensor_tile_shapes,
+        distributed_shape,
         shared_tile_index,
         global_tile_index,
+        bounds,
     )
 
 
@@ -265,7 +220,7 @@ def emit_tensor_load_to_shared(
         tensor_write = TensorLoadToLDS(read.memory, write.memory, *config).add_to_graph(
             write.graph, loc=write.location
         )
-        barrier = SharedMemoryBarrier(tensor_wait=True).add_to_graph(
+        SharedMemoryBarrier(tensor_wait=True).add_to_graph(
             write.graph, loc=tensor_write.location
         )
 
@@ -319,12 +274,8 @@ def tensor_load_to_shared(
         return
 
     hardware_constraint = get_hardware_constraint(constraints)
-    wg_constraints = get_workgroup_constraints(constraints)
     threads_per_wave = hardware_constraint.threads_per_wave
     waves_per_block = hardware_constraint.waves_per_block
-    threads_per_block = hardware_constraint.threads_per_block
-
-    thread_id = hardware_constraint.linearized_thread_id
 
     # uniform shared memory write base address by aligning thread indexing position.
     # $T0 // wave size -> wave id
@@ -368,9 +319,9 @@ def tensor_load_to_shared(
 
         config = get_tensor_load_descriptor_config(
             read,
+            constraints,
             write,
             constraint_tile_size,
-            waves_per_block,
             element_type,
             wave_subs,
             hardware_constraint,

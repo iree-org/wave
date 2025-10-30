@@ -706,10 +706,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         (
             src,
             dst,
-            tensor_shapes,
-            tensor_strides,
             element_type,
-            tensor_tile_shapes,
+            distributed_shape,
             shared_tile_index,
             global_tile_index,
             bounds,
@@ -717,7 +715,21 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    # construct defualt descriptors
+    symbolic_shape = _get_symbolic_shape(src)
+    local_bounds = [bounds[s] - global_tile_index[s].start for s in symbolic_shape]
+    subs = add_emitter_subs(emitter)
+    local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
+
+    strides = strides_from_symbolic_shape(
+        IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
+    )
+    # Descriptor assumes rightmost stride 1 and expect last stride as full data size
+    strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
+    strides = [gen_sympy_index(subs, s) for s in strides]
+
+    distributed_shape = [gen_sympy_index(subs, s) for s in distributed_shape]
+
+    # construct default descriptors
     i32 = IntegerType.get_signless(32)
     i48 = IntegerType.get_signless(48)
     i57 = IntegerType.get_signless(57)
@@ -735,19 +747,16 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # descriptor properties
     mode = 2  # vimage
     valid = 1
-    dim_stride_1 = cast_py_value(emitter, tensor_strides[1], i48).ir_value
-    dim_stride_0 = cast_py_value(emitter, tensor_strides[0], i48).ir_value
-    tile_size_1 = cast_py_value(emitter, tensor_tile_shapes[1], i32).ir_value
-    tile_size_0 = cast_py_value(emitter, tensor_tile_shapes[0], i32).ir_value
-    dim_size_1 = cast_py_value(emitter, tensor_shapes[1], i32).ir_value
-    dim_size_0 = cast_py_value(emitter, tensor_shapes[0], i32).ir_value
+    dim_stride_1 = arith_d.index_cast(i48, strides[0])
+    dim_stride_0 = arith_d.index_cast(i48, strides[1])
+    tile_size_1 = arith_d.index_cast(i32, distributed_shape[0])
+    tile_size_0 = arith_d.index_cast(i32, distributed_shape[1])
+    dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
+    dim_size_0 = arith_d.index_cast(i32, local_bounds[1])
 
     # 0: 1 byte; 1: 2 byte; 2: 4 byte; 3: 8 byte
     descriptor_type = lambda x: int(math.log2(x.bitwidth() >> 3))
     data_size = cast_py_value(emitter, descriptor_type(element_type), i32).ir_value
-
-    src_symbolic_shape = _get_symbolic_shape(src)
-    dst_symbolic_shape = get_custom(dst).distributed_shape
 
     global_mem = cast_py_value(emitter, src)
     shared_mem = cast_py_value(emitter, dst)
@@ -757,7 +766,6 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     element_byte = 1 << descriptor_type(element_type)
     element_byte_index = arith_d.constant(IndexType.get(), element_byte)
-    element_byte_constant = arith_d.index_cast(i32, element_byte_index)
 
     # calculcate global address
     # 0. breakdown index sequence to WG & TH offsets : ele
@@ -767,13 +775,10 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # 4. offset_byte = offset * element byte : byte
     # 5. get global memory pointer
     # 6. move global memory pointer by offset_byte to get global address of a tile : byte
-    index, wg, th = _build_start_indices(emitter, global_tile_index)
+    index, _, _ = _build_start_indices(emitter, global_tile_index)
 
     wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
     wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
-
-    wave_x = arith_d.index_cast(i32, wave_index_x)
-    wave_y = arith_d.index_cast(i32, wave_index_y)
 
     stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
     y_offset = arith_d.muli(wave_index_y, stride0)
