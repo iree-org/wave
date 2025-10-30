@@ -1958,6 +1958,13 @@ def gemm_schedule_test(is_debug=False):
 
         # Create Proxies for the sliced lists so set_stage can use them
         sliced_mma_proxies = []
+        sliced_local_load_lhs_proxies = []
+        sliced_local_load_rhs_proxies = []
+        global_load_lhs_proxies = []
+        global_load_rhs_proxies = []
+        local_write_lhs_proxies = []
+        local_write_rhs_proxies = []
+
         current_context = ScheduleContext.current()
         region_graph = current_context.region_graph
         for i in range(num_slice):
@@ -1966,20 +1973,53 @@ def gemm_schedule_test(is_debug=False):
                     region_graph, sliced_mma_nodes[i], f"sliced_mma_{i}"
                 )
             )
-
+            sliced_local_load_lhs_proxies.append(
+                create_schedule_proxy(
+                    region_graph, sliced_local_load_lhs[i], f"sliced_local_load_lhs_{i}"
+                )
+            )
+            sliced_local_load_rhs_proxies.append(
+                create_schedule_proxy(
+                    region_graph, sliced_local_load_rhs[i], f"sliced_local_load_rhs_{i}"
+                )
+            )
+        global_load_lhs_proxies = create_schedule_proxy(
+            region_graph, global_load_lhs, f"global_load_lhs"
+        )
+        global_load_rhs_proxies = create_schedule_proxy(
+            region_graph, global_load_rhs, f"global_load_rhs"
+        )
+        local_write_lhs_proxies = create_schedule_proxy(
+            region_graph, local_write_lhs, f"local_write_lhs"
+        )
+        local_write_rhs_proxies = create_schedule_proxy(
+            region_graph, local_write_rhs, f"local_write_rhs"
+        )
         breakpoint()
         # Create a pipeline with 2 stages and specify the operations that are overlapping.
         with tkw.pipeline(k_loop) as pipelined_loop:
             pipelined_loop.set_stage(
                 [
-                    (global_load_a, global_load_b),
-                    (shared_write_a, shared_write_b),
+                    (global_load_lhs_proxies, global_load_rhs_proxies),
+                    (local_write_lhs_proxies, local_write_rhs_proxies),
                 ],
             )
             pipelined_loop.set_stage(
                 [
-                    (shared_load_a, shared_load_b),
-                    (sliced_mma_proxies[0], sliced_mma_proxies[1]),
+                    (
+                        sliced_local_load_lhs_proxies[0],
+                        sliced_local_load_rhs_proxies[0],
+                    ),
+                    (sliced_mma_proxies[0],),
+                ],
+            )
+            pipelined_loop.set_stage(
+                [
+                    (
+                        sliced_local_load_lhs_proxies[1],
+                        sliced_local_load_rhs_proxies[1],
+                    ),
+                    (sliced_mma_proxies[1],),
                 ],
             )
 
