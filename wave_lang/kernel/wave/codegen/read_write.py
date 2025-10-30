@@ -722,6 +722,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
     )
+    strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
     strides = [gen_sympy_index(subs, s) for s in strides]
 
     # construct defualt descriptors
