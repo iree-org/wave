@@ -151,6 +151,35 @@ NB_MODULE(_waterDialects, m) {
           "Gets a wave.WaveHyperparameterAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
+  // WaveWorkgroupDimAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveWorkgroupDimAttr", mlirAttributeIsAWaveWorkgroupDimAttr,
+      mlirWaveWorkgroupDimAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, wave::WaveWorkgroupDim value,
+             MlirContext context) {
+            return cls(mlirWaveWorkgroupDimAttrGet(
+                context, static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveWorkgroupDimAttr from a workgroup dim enum value.")
+      .def(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<wave::WaveWorkgroupDim>(
+                mlirWaveWorkgroupDimAttrGetValue(self));
+          },
+          "Returns the workgroup dim enum value.");
+
+  nb::enum_<wave::WaveWorkgroupDim>(d, "WaveWorkgroupDim")
+      .value("X", wave::WaveWorkgroupDim::X)
+      .value("Y", wave::WaveWorkgroupDim::Y)
+      .value("Z", wave::WaveWorkgroupDim::Z);
+
+  //===---------------------------------------------------------------------===//
   // WaveAddressSpaceAttr
   //===---------------------------------------------------------------------===//
 
@@ -179,6 +208,53 @@ NB_MODULE(_waterDialects, m) {
       .value("Global", wave::WaveAddressSpace::Global)
       .value("Shared", wave::WaveAddressSpace::Shared)
       .value("Register", wave::WaveAddressSpace::Register);
+
+  //===---------------------------------------------------------------------===//
+  // WaveMmaKindAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveMmaKindAttr", mlirAttributeIsAWaveMmaKindAttr,
+      mlirWaveMmaKindAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, wave::WaveMmaKind value,
+             MlirContext context) {
+            return cls(
+                mlirWaveMmaKindAttrGet(context, static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveMmaKindAttr from an MMA kind enum value.")
+      .def(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<wave::WaveMmaKind>(
+                mlirWaveMmaKindAttrGetValue(self));
+          },
+          "Returns the MMA kind enum value.");
+
+  nb::enum_<wave::WaveMmaKind>(d, "WaveMmaKind")
+      // CDNA1
+      .value("F32_16x16x16_F16", wave::WaveMmaKind::F32_16x16x16_F16)
+      .value("F32_32x32x8_F16", wave::WaveMmaKind::F32_32x32x8_F16)
+      .value("F32_16x16x32_K8_F16", wave::WaveMmaKind::F32_16x16x32_K8_F16)
+      .value("F32_32x32x16_K8_F16", wave::WaveMmaKind::F32_32x32x16_K8_F16)
+      .value("I32_16x16x16_I8", wave::WaveMmaKind::I32_16x16x16_I8)
+      .value("I32_32x32x8_I8", wave::WaveMmaKind::I32_32x32x8_I8)
+      // CDNA3
+      .value("F32_16x16x32_F8", wave::WaveMmaKind::F32_16x16x32_F8)
+      .value("F32_32x32x16_F8", wave::WaveMmaKind::F32_32x32x16_F8)
+      .value("F32_16x16x32_K4_F8", wave::WaveMmaKind::F32_16x16x32_K4_F8)
+      .value("F32_32x32x16_K4_F8", wave::WaveMmaKind::F32_32x32x16_K4_F8)
+      .value("I32_16x16x32_I8", wave::WaveMmaKind::I32_16x16x32_I8)
+      .value("I32_32x32x16_I8", wave::WaveMmaKind::I32_32x32x16_I8)
+      // CDNA4
+      .value("F32_16x16x128_F8F6F4", wave::WaveMmaKind::F32_16x16x128_F8F6F4)
+      .value("F32_32x32x64_F8F6F4", wave::WaveMmaKind::F32_32x32x64_F8F6F4)
+      .value("F32_32x32x16_BF16", wave::WaveMmaKind::F32_32x32x16_BF16)
+      .value("F32_16x16x32_BF16", wave::WaveMmaKind::F32_16x16x32_BF16)
+      .value("F32_32x32x16_F16", wave::WaveMmaKind::F32_32x32x16_F16)
+      .value("F32_16x16x32_F16", wave::WaveMmaKind::F32_16x16x32_F16);
 
   //===---------------------------------------------------------------------===//
   // WaveExprListAttr
@@ -266,4 +342,100 @@ NB_MODULE(_waterDialects, m) {
           nb::arg("cls"), nb::arg("sym_dim_dict"),
           nb::arg("context") = nb::none(),
           "Gets a wave.WaveReadWriteBoundsAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // HardwareConstraintAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "HardwareConstraintAttr", mlirAttributeIsAHardwareConstraintAttr,
+      mlirWHardwareConstraintAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, unsigned threadsPerWave,
+             const std::vector<unsigned> &wavesPerBlock, MlirAttribute mmaType,
+             MlirAttribute vectorShapes, unsigned maxBitsPerLoad,
+             MlirContext context) {
+            return cls(mlirHardwareConstraintAttrGet(
+                context, threadsPerWave,
+                const_cast<unsigned *>(wavesPerBlock.data()),
+                wavesPerBlock.size(), mmaType, vectorShapes, maxBitsPerLoad));
+          },
+          nb::arg("cls"), nb::arg("threads_per_wave"),
+          nb::arg("waves_per_block"), nb::arg("mma_type"),
+          nb::arg("vector_shapes"), nb::arg("max_bits_per_load") = 128,
+          nb::arg("context") = nb::none(),
+          "Gets a wave.HardwareConstraintAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // DeviceConstraintAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "DeviceConstraintAttr", mlirAttributeIsADeviceConstraintAttr,
+      mlirDeviceConstraintAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, MlirAttribute dim, MlirAttribute tileSize,
+             unsigned deviceDim, MlirContext context) {
+            return cls(
+                mlirDeviceConstraintAttrGet(context, dim, tileSize, deviceDim));
+          },
+          nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
+          nb::arg("device_dim"), nb::arg("context") = nb::none(),
+          "Gets a wave.DeviceConstraintAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // WorkgroupConstraintAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WorkgroupConstraintAttr", mlirAttributeIsAWorkgroupConstraintAttr,
+      mlirWorkgroupConstraintAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, MlirAttribute dim, MlirAttribute tileSize,
+             MlirAttribute workgroupDim, bool primary, MlirContext context) {
+            return cls(mlirWorkgroupConstraintAttrGet(context, dim, tileSize,
+                                                      workgroupDim, primary));
+          },
+          nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
+          nb::arg("workgroup_dim"), nb::arg("primary") = true,
+          nb::arg("context") = nb::none(),
+          "Gets a wave.WorkgroupConstraintAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // WaveConstraintAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveConstraintAttr", mlirAttributeIsAWaveConstraintAttr,
+      mlirWaveConstraintAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, MlirAttribute dim, MlirAttribute tileSize,
+             MlirAttribute wgConstraint, MlirContext context) {
+            return cls(mlirWaveConstraintAttrGet(context, dim, tileSize,
+                                                 wgConstraint));
+          },
+          nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
+          nb::arg("wg_constraint"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveConstraintAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // TilingConstraintAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "TilingConstraintAttr", mlirAttributeIsATilingConstraintAttr,
+      mlirTilingConstraintAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, MlirAttribute dim, MlirAttribute tileSize,
+             MlirContext context) {
+            return cls(mlirTilingConstraintAttrGet(context, dim, tileSize));
+          },
+          nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
+          nb::arg("context") = nb::none(),
+          "Gets a wave.TilingConstraintAttr from parameters.");
 }

@@ -66,6 +66,25 @@ mlirWaveHyperparameterAttrGet(MlirAttribute mapping);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveHyperparameterAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveWorkgroupDimAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveWorkgroupDimAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWaveWorkgroupDimAttr(MlirAttribute attr);
+
+/// Creates a new WaveWorkgroupDimAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveWorkgroupDimAttrGet(MlirContext mlirCtx, uint32_t value);
+
+/// Get the value from a WaveWorkgroupDimAttr.
+MLIR_CAPI_EXPORTED uint32_t
+mlirWaveWorkgroupDimAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveWorkgroupDimAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveWorkgroupDimAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
 // WaveAddressSpaceAttr
 //===---------------------------------------------------------------------===//
 
@@ -83,6 +102,23 @@ mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr);
 
 /// Returns the typeID of a WaveAddressSpaceAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveMmaKindAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveMmaKindAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveMmaKindAttr(MlirAttribute attr);
+
+/// Creates a new WaveMmaKindAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveMmaKindAttrGet(MlirContext mlirCtx,
+                                                        uint32_t value);
+
+/// Get the value from a WaveMmaKindAttr.
+MLIR_CAPI_EXPORTED uint32_t mlirWaveMmaKindAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveMmaKindAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveMmaKindAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
 // WaveExprListAttr
@@ -117,6 +153,85 @@ mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping);
 
 /// Returns the typeID of a WaveReadWriteBoundsAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveReadWriteBoundsAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// HardwareConstraintAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a HardwareConstraintAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr);
+
+/// Creates a new HardwareConstraintAttr
+MLIR_CAPI_EXPORTED MlirAttribute mlirHardwareConstraintAttrGet(
+    MlirContext mlirCtx, unsigned threadsPerWave, unsigned *wavesPerBlock,
+    size_t wavesPerBlockSize, MlirAttribute mmaType, MlirAttribute vectorShapes,
+    unsigned maxBitsPerLoad);
+
+/// Returns the typeID of a HardwareConstraintAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWHardwareConstraintAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// DeviceConstraintAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a DeviceConstraintAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsADeviceConstraintAttr(MlirAttribute attr);
+
+/// Creates a new DeviceConstraintAttr
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirDeviceConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
+                            MlirAttribute tileSize, unsigned deviceDim);
+
+/// Returns the typeID of a DeviceConstraintAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirDeviceConstraintAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WorkgroupConstraintAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WorkgroupConstraintAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsAWorkgroupConstraintAttr(MlirAttribute attr);
+
+/// Creates a new WorkgroupConstraintAttr
+MLIR_CAPI_EXPORTED MlirAttribute mlirWorkgroupConstraintAttrGet(
+    MlirContext mlirCtx, MlirAttribute dim, MlirAttribute tileSize,
+    MlirAttribute workgroupDim, bool primary);
+
+/// Returns the typeID of a WorkgroupConstraintAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWorkgroupConstraintAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveConstraintAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveConstraintAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveConstraintAttr(MlirAttribute attr);
+
+/// Creates a new WaveConstraintAttr
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
+                          MlirAttribute tileSize, MlirAttribute wgConstraint);
+
+/// Returns the typeID of a WaveConstraintAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveConstraintAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// TilingConstraintAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a TilingConstraintAttr.
+MLIR_CAPI_EXPORTED bool
+mlirAttributeIsATilingConstraintAttr(MlirAttribute attr);
+
+/// Creates a new TilingConstraintAttr
+MLIR_CAPI_EXPORTED MlirAttribute mlirTilingConstraintAttrGet(
+    MlirContext mlirCtx, MlirAttribute dim, MlirAttribute tileSize);
+
+/// Returns the typeID of a TilingConstraintAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirTilingConstraintAttrGetTypeID();
 
 #ifdef __cplusplus
 }
