@@ -8,14 +8,14 @@ API reference material
 
 .. toctree::
    :maxdepth: 1
-   :caption: IREE Turbine Core
+   :caption: Core
    :glob:
 
    core/*
 
 .. toctree::
    :maxdepth: 1
-   :caption: TK
+   :caption: Kernel
    :glob:
 
    kernel/*
@@ -23,9 +23,8 @@ API reference material
 .. toctree::
    :maxdepth: 1
    :caption: Wave
-   :glob:
 
-   wave/*
+   wave/wave
 
 
 Project documentation

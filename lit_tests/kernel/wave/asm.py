@@ -117,12 +117,12 @@ def test_read_write():
     # CHECK:              s_load_dwordx2 s[2:3], s[0:1], 0x0
     # CHECK:              s_load_dwordx2 s[4:5], s[0:1], 0x8
     # CHECK:              s_waitcnt lgkmcnt(0)
-    # CHECK:              # SRD for Value(%reinterpret_cast = memref.reinterpret_cast %0 to offset: [%c0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1], offset: ?>>) (arg0)
+    # CHECK:              # SRD for Value(%reinterpret_cast = memref.reinterpret_cast %0 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>) (arg0)
     # CHECK:              s_mov_b32 s8, s2
     # CHECK:              s_mov_b32 s9, s3
     # CHECK:              s_mov_b32 s10, 2048
     # CHECK:              s_mov_b32 s11, Srd127_96
-    # CHECK:              # SRD for Value(%reinterpret_cast_0 = memref.reinterpret_cast %1 to offset: [%c0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1], offset: ?>>) (arg1)
+    # CHECK:              # SRD for Value(%reinterpret_cast_0 = memref.reinterpret_cast %1 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>) (arg1)
     # CHECK:              s_mov_b32 s12, s4
     # CHECK:              s_mov_b32 s13, s5
     # CHECK:              s_mov_b32 s14, 2048
@@ -131,13 +131,13 @@ def test_read_write():
     # CHECK:              v_mbcnt_lo_u32_b32 v0, -1, 0
     # CHECK:              v_mbcnt_hi_u32_b32 v0, -1, v0
     # CHECK:              v_lshlrev_b32 v2, 5, v0
-    # CHECK:              # load 32B from Value(%reinterpret_cast = memref.reinterpret_cast %0 to offset: [%c0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1], offset: ?>>)
+    # CHECK:              # load 32B from Value(%reinterpret_cast = memref.reinterpret_cast %0 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>)
     # CHECK:              buffer_load_dwordx4  v[4:7], v2, s[8:11], 0 offen offset:0
     # CHECK:              s_waitcnt vmcnt(0)
     # CHECK:              buffer_load_dwordx4  v[8:11], v2, s[8:11], 0 offen offset:16
     # CHECK:              s_waitcnt vmcnt(0)
     # CHECK:              v_lshlrev_b32 v2, 5, v0
-    # CHECK:              # store 32B to Value(%reinterpret_cast_0 = memref.reinterpret_cast %1 to offset: [%c0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1], offset: ?>>)
+    # CHECK:              # store 32B to Value(%reinterpret_cast_0 = memref.reinterpret_cast %1 to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>)
     # CHECK:              buffer_store_dwordx4 v[4:7], v2, s[12:15], 0 offen offset:0
     # CHECK:              buffer_store_dwordx4 v[8:11], v2, s[12:15], 0 offen offset:16
     # CHECK:              s_endpgm

@@ -203,7 +203,7 @@ def AllocateOp : WaveOp<"allocate"> {
 
   let arguments = !con((ins
     Arg<Optional<WaveTensorType>, "Optional parent buffer to view into">:$parent,
-    Arg<WaveExprAttr, "Distributed (physical) shape">:$distributed_shape,
+    Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset
   ), commonArguments);
 
@@ -212,6 +212,29 @@ def AllocateOp : WaveOp<"allocate"> {
   let assemblyFormat =
     " (`in` $parent^ `:` type($parent))? attr-dict `:` type($result)";
 
+  let hasVerifier = 1;
+}
+
+def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait]> {
+  let summary = "Extracts a subvector from an n-D tensor";
+  let description = [{
+    Extracts an n-D subvector from an n-D tensor using k-D offset, size, and
+    stride wave expression attributes, where k <= n. When k < n, the first k
+    dimensions are sliced while the remaining (n-k) dimensions are preserved.
+  }];
+
+  let arguments = (ins
+    Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
+    Arg<WaveExprListAttr>:$offset,
+    Arg<WaveExprListAttr>:$size,
+    Arg<WaveExprListAttr>:$stride
+  );
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Extracted values">:$result
+  );
+
+  let assemblyFormat = "$memory attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 

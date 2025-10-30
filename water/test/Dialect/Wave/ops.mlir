@@ -14,6 +14,13 @@ func.func @mma(%lhs: !wave.tensor<[@A, @B] of f16>, %rhs: !wave.tensor<[@C, @B] 
   return %0 : !wave.tensor<[@A, @C] of f32>
 }
 
+// CHECK-LABEL: @extract_slice
+func.func @extract_slice(%memory: !wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16> {
+  // CHECK: wave.extract_slice
+  %0 = wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return %0 : !wave.tensor<[@A, @B] of f16>
+}
+
 // CHECK-LABEL: @unary
 func.func @unary(%value: !wave.tensor<[@A, @B] of bf16>) -> !wave.tensor<[@A, @B] of bf16> {
   // CHECK: wave.exp2
@@ -121,11 +128,11 @@ func.func @register_with_hyperparameter() attributes {hyperparameters = #wave.hy
 // CHECK-LABEL: @allocate
 func.func @allocate() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
   // CHECK: wave.allocate
-  %parent = wave.allocate { distributed_shape = #wave.expr<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>}
+  %parent = wave.allocate { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>}
     : !wave.tensor<[@M, @N] of bf16, <shared>>
 
   %buf = wave.allocate in %parent : !wave.tensor<[@M, @N] of bf16, <shared>>
-    { distributed_shape = #wave.expr<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>, offset = 64}
+    { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>, offset = 64}
     : !wave.tensor<[@M, @N] of bf16, <shared>>
 
   return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
@@ -148,6 +155,6 @@ attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N 
 // CHECK-LABEL: @write_with_bounds
 func.func @write_with_bounds(%memo: !wave.tensor<[@M] of f32>, %val: !wave.tensor<[@M] of f32, <register>>) {
   // CHECK:       wave.read_write_bounds
-  wave.write %val, %memo { bounds = #wave.read_write_bounds<{ M = #wave.expr<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32>
+  wave.write %val, %memo { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32>
   return
 }

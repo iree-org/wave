@@ -144,7 +144,7 @@ func.func @mismatch_shape_write(%lhs: !wave.tensor<[@A, @B] of f32, <register>>,
 
 func.func @empty_distributed_shape() {
   // expected-error @below {{wave expression attribute must have at least one dimension}}
-  %buf = wave.allocate { distributed_shape = #wave.expr<[BLOCK_M, BLOCK_K] -> ()>}
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> ()>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
 
@@ -152,17 +152,17 @@ func.func @empty_distributed_shape() {
 
 func.func @alloc_offset_no_parent() {
   // expected-error @below {{expects parent and offset to be present simultaneously}}
-  %buf = wave.allocate { distributed_shape = #wave.expr<[] -> (42)>, offset = 42}
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[] -> (42)>, offset = 42}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
 
 // -----
 
 func.func @alloc_parent_no_offset() {
-  %alloc = wave.allocate { distributed_shape = #wave.expr<[] -> (100)> }
+  %alloc = wave.allocate { distributed_shape = #wave.expr_list<[] -> (100)> }
     : !wave.tensor<[@M, @K] of bf16, <shared>>
   // expected-error @below {{expects parent and offset to be present simultaneously}}
-  %buf = wave.allocate in %alloc : !wave.tensor<[@M, @K] of bf16, <shared>> { distributed_shape = #wave.expr<[] -> (42)>}
+  %buf = wave.allocate in %alloc : !wave.tensor<[@M, @K] of bf16, <shared>> { distributed_shape = #wave.expr_list<[] -> (42)>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
 
@@ -253,7 +253,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 
 func.func @bounds_missing_dim(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.tensor<[@M, @N] of f32, <register>>) {
   // expected-error @below {{bounds not provided for memory tensor symbol 'N'}}
-  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
   return
 }
 
@@ -261,14 +261,14 @@ func.func @bounds_missing_dim(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.t
 
 func.func @bounds_extraneous_dim(%mem: !wave.tensor<[@N] of f32>, %val: !wave.tensor<[@N] of f32, <register>>) {
   // expected-error @below {{'bounds' specified for a symbol "M" not used in the indexed memory tensor}}
-  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
+  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
   return
 }
 
 // -----
 
 func.func @bounds_wrong_type(%mem: !wave.tensor<[@N] of f32>) {
-  // expected-error @below {{'bounds' values must be WaveExprAttr, got 42 : i64}}
+  // expected-error @below {{'bounds' values must be WaveExprListAttr, got 42 : i64}}
   wave.read %mem { bounds = #wave.read_write_bounds<{ N = 42 }> } : (!wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
   return
 }
@@ -321,5 +321,45 @@ func.func @read_index_multi_step_eval(%mem: !wave.tensor<[@M, @N] of f32>) attri
     M : [_T0, X] -> (_T0, 2 * X, 1),
     N : [_T1, X, Y] -> (_T1, X + Y, 1)
   } : (!wave.tensor<[@M, @N] of f32>) -> vector<4xf32>
+  return
+}
+
+// -----
+
+func.func @extract_slice_mismatch_offset_size(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 1, size rank 2, and stride rank 1}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32, 16)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_mismatch_offset_stride(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 2, size rank 2, and stride rank 1}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3, 5)>, size = #wave.expr_list<[] -> (32, 16)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_mismatch_size_stride(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must all have the same rank, but got offset rank 1, size rank 1, and stride rank 3}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2, 1, 4)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must be constant expressions with no symbols, but got offset with 1 symbols, size with 0 symbols, and stride with 0 symbols}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[BLOCK_M] -> (BLOCK_M)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  return
+}
+
+// -----
+
+func.func @extract_slice_all_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>) {
+  // expected-error @below {{offset, size, and stride must be constant expressions with no symbols, but got offset with 1 symbols, size with 1 symbols, and stride with 1 symbols}}
+  wave.extract_slice %memory {offset = #wave.expr_list<[BLOCK_M] -> (BLOCK_M + 2)>, size = #wave.expr_list<[BLOCK_K] -> (BLOCK_K * 2)>, stride = #wave.expr_list<[BLOCK_N] -> (BLOCK_N)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
   return
 }

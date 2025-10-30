@@ -41,6 +41,7 @@ from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
     infer_dim,
+    make_index_uniform_per_wave,
     remove_thread_indexing,
     remove_global_indexing,
 )
@@ -203,14 +204,15 @@ def emit_global_to_lds(
     thread_id: IndexExpr,
     symbolic_shape: list[IndexSymbol],
     bounds: dict[IndexSymbol, IndexExpr],
-    wave_subs: dict[IndexSymbol, IndexExpr],
     element_type: "DataType",
+    waves_per_block: tuple[int, int, int],
+    threads_per_wave: int,
 ) -> defaultdict[fx.Node, list[Write]]:
     """
     Emit `GatherToLDS` for the given read and write.
     """
-    elements_per_wave = elements_per_thread * total_number_of_threads
-    logger.info(f"elements_per_wave={elements_per_wave}")
+    elements_per_block = elements_per_thread * total_number_of_threads
+    logger.info(f"elements_per_block={elements_per_block}")
 
     # For index delinearization, assume our shape in `elements_per_thread` chunks.
     materialized_shape_adjusted = list(materialized_shape)
@@ -218,10 +220,12 @@ def emit_global_to_lds(
 
     logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
-    # GatherToLDS writes `elements_per_wave` elements contiguously to LDS, so we
+    # GatherToLDS writes `elements_per_block` elements contiguously to LDS, so we
     # cannot have any padding if it crosses a array row boundary.
-    drop_padding = materialized_shape[-1] % elements_per_wave != 0
-    tail_padding = elements_per_wave - prod(materialized_shape) % elements_per_wave
+    drop_padding = materialized_shape[-1] % elements_per_block != 0
+    tail_padding = sympy.ceiling(
+        prod(materialized_shape) / elements_per_block
+    ) * elements_per_block - prod(materialized_shape)
     logger.info(f"tail_padding={tail_padding}")
 
     global_index = remove_thread_indexing(read.index)
@@ -250,7 +254,9 @@ def emit_global_to_lds(
 
         # GatherToLDS only uses write index from the first thread in wave,
         # so make the index wave-uniform, simplifying the calculation.
-        write_index = {k: v.subs(wave_subs) for k, v in write_index.items()}
+        write_index = make_index_uniform_per_wave(
+            write_index, threads_per_wave, waves_per_block
+        )
 
         logger.info(f"read_index={read_index}")
         logger.info(f"write_index={write_index}")
@@ -372,17 +378,6 @@ def gather_to_shared(
 
     thread_id = hardware_constraint.linearized_thread_id
 
-    # Make LDS write index to be wave-uniform by doing (THREAD_0 // 64) * 64
-    wave_subs = {
-        THREAD_0: (
-            ((THREAD_0 // threads_per_wave) * threads_per_wave)
-            if waves_per_block[0] > 1
-            else 0
-        ),
-        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
-        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
-    }
-
     supported_load_widths = [32]
 
     if "gfx95" in options.target:
@@ -446,8 +441,9 @@ def gather_to_shared(
             thread_id,
             symbolic_shape,
             bounds,
-            wave_subs,
             element_type,
+            waves_per_block,
+            threads_per_wave,
         )
 
         update_write_dependencies(new_writes, trace)

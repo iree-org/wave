@@ -48,10 +48,15 @@ IGNORED_KEYWORDS = ["tag"]
 
 
 def read_meets_hw_transpose_requirements(
-    read: Read, constraints: list[Constraint]
+    read: Read, constraints: list[Constraint], target: str
 ) -> bool:
     from ..wave.minimize_global_loads import is_transposed_read
     from ..wave.utils.general_utils import find_index_bounds
+
+    # Check if target architecture supports amdgpu.transpose_load
+    # Only gfx950 and newer architectures support this operation
+    if not target.startswith("gfx95") and not target.startswith("gfx12"):
+        return False
 
     if read.bounds is not None:
         return False
@@ -187,7 +192,7 @@ def write(
 def debug_log(
     register_: "Register",
     label: Optional[str],
-    extra_iter_dimensions: Optional[
+    extra_iteration_dimensions: Optional[
         list[tuple["IndexSymbol", "IndexSymbol", int]]
     ] = None,
     mapping: Optional[IndexMapping] = None,
@@ -280,6 +285,9 @@ def powf(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
 def mod(lhs: "Register", rhs: "Register") -> "Register": ...
+
+
+def remf(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
 def cbrt(src: "Register") -> "Register": ...
@@ -391,6 +399,19 @@ def scatter_add(
     mapping: IndexMapping,
     elements_per_thread: Optional[int] = 1,
 ) -> "Register": ...
+
+
+def tensor_load_to_lds(
+    src: Memory,
+    dst: Memory,
+    tensor_shapes: list[IndexExpr] = field(default_factory=list),
+    tensor_strides: list[int] = field(default_factory=list),
+    element_type: DataType = None,
+    tensor_tile_shapes: list[int] = field(default_factory=list),
+    shared_tile_index: int | dict[IndexExpr, IndexSequence] = None,
+    global_tile_index: int | dict[IndexExpr, IndexSequence] = None,
+    bounds: list[int] = field(default_factory=list),
+): ...
 
 
 def gather_to_lds(
@@ -1041,6 +1062,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_interface_op("minimum")
 @define_interface_op("atan2")
 @define_interface_op("powf")
+@define_interface_op("remf")
 @dataclass
 class BinaryPyOp(BinaryOpBase, ABC):
     def infer_type(self, *args):
@@ -1463,6 +1485,7 @@ class SharedMemoryBarrier(CustomOp):
     """
 
     wait_async_ops: bool = False
+    tensor_wait: bool = False
 
     @property
     def has_side_effects(self) -> bool:
@@ -1964,11 +1987,11 @@ class Read(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
-        if read_meets_hw_transpose_requirements(self, constraints):
+        if read_meets_hw_transpose_requirements(self, constraints, target):
             return True
 
         if self.has_identity_mapping():
@@ -2326,7 +2349,7 @@ class Write(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
@@ -2384,7 +2407,7 @@ class DebugLog(CustomOp):
     The optional `handler` argument should be a function that accepts the whole `debug_logs` object (IE all logs, not just one).
     The handler function gives a way to specify something like a viewer for all logs, but specify it inline among print functions rather than separately.
 
-    The optional `extra_iter_dimensions` argument allows you to add extra dimensions to capture values from multiple iterations of a loop.
+    The optional `extra_iteration_dimensions` argument allows you to add extra dimensions to capture values from multiple iterations of a loop.
     It takes a list of tuples, where each tuple contains `(dimension_name, iteration_axis, max_iterations)`.
     The `dimension_name` must be a unique symbol, and will be the name of the dimension in the symbolic shape of the output.
     The `iteration_axis` must be the axis of an `Iterate` operation, IE the dimension being reduced in the iteration.
@@ -3021,6 +3044,20 @@ class Reshape(CustomOp, ABC):
 
     def infer_type(self, *args):
         self.type = get_custom(_to_sequence(self.args)[0]).type
+
+
+@define_op("tensor_load_to_lds")
+@dataclass
+class TensorLoadToLDS(CustomOp):
+    src: Memory
+    dst: Memory
+    tensor_shapes: list[IndexExpr] = field(default_factory=list)
+    tensor_strides: list[int] = field(default_factory=list)
+    element_type: DataType = None
+    tensor_tile_shapes: list[int] = field(default_factory=list)
+    shared_tile_index: int | dict[IndexSymbol, IndexSequence] = None
+    global_tile_index: int | dict[IndexSymbol, IndexSequence] = None
+    bounds: list[int] = field(default_factory=list)
 
 
 @define_op("gather_to_lds")

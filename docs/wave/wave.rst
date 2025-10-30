@@ -75,3 +75,4 @@ For more detailed information about Wave's architecture and optimization passes,
    debugging
    wave_schedule
    asm_backend
+   shared_memory_barriers

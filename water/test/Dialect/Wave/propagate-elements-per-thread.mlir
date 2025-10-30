@@ -124,12 +124,12 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // CHECK-LABEL: func.func @alloc_is_harmless
 func.func @alloc_is_harmless() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28, M = 128, N=128, K= 128}>}  {
   // CHECK: wave.allocate
-  %parent = wave.allocate { distributed_shape = #wave.expr<[] -> (256)> }
+  %parent = wave.allocate { distributed_shape = #wave.expr_list<[] -> (256)> }
     : !wave.tensor<[@M,@N,@K] of i8, <shared>>
 
   // CHECK: wave.allocate
   %buf = wave.allocate in %parent : !wave.tensor<[@M,@N,@K] of i8, <shared>>
-    { distributed_shape = #wave.expr<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>, offset = 128}
+    { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>, offset = 128}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
   return
   }
