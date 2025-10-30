@@ -659,6 +659,15 @@ def test_wmma_with_tensor_load():
     # CHECK-DAG:    %[[VIEW0:.+]] = memref.view
     # CHECK-DAG:    %[[VIEW1:.+]] = memref.view
 
+    ### get first thread in a wave
+    # CHECK-DAG:    %[[WTID:.*]] = affine.apply {{.*}}[%thread_id_x]
+    # CHECK-DAG:    %[[C_WTID:.*]] = arith.index_cast
+    # CHECK-DAG:    %[[TID:.*]] = arith.index_cast %thread_id_x
+    # CHECK-DAG:    %[[ELECTED:.*]] = arith.cmpi eq
+
+    ### elected thread condition
+    # CHECK-DAG:    scf.if %[[ELECTED]]
+
     ### get global buffer pointer
     # CHECK-DAG:    %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
 
@@ -669,12 +678,19 @@ def test_wmma_with_tensor_load():
     ### pack descriptors and invoke tensor load
     # CHECK-DAG:    %[[D0:.*]] = vector.from_elements
     # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_1]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK:        }
+
     # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
     # CHECK-DAG:    amdgpu.lds_barrier
+
+    ### elected thread condition
+    # CHECK-DAG:    scf.if %[[ELECTED]]
 
     ### pack descriptors and invoke tensor load
     # CHECK-DAG:    %[[D1:.*]] = vector.from_elements
     # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D1]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK:        }
+
     # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
     # CHECK-DAG:    amdgpu.lds_barrier
 
