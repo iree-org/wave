@@ -59,6 +59,7 @@ default_test_shapes["test_batched_gemm"] = [(8, 256, 128, 192), (32, 1024, 512, 
 
 default_test_shapes["test_tensor_load"] = [
     (16, 16, 16),
+    (17, 17, 17),
     (256, 256, 16),
     (16, 16, 256),
     (256, 256, 256),
