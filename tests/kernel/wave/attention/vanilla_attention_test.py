@@ -1161,10 +1161,12 @@ def testAttentionF8(
         (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
     ],
 )
+@param_bool("use_global_to_shared", "g2s")
 def testAttentionBSHD_Prefetch_MultiBuffer(
     shape: tuple[int],
     dynamic_dims: bool,
     mfma_variant: tuple[MMAType],
+    use_global_to_shared: bool,
     run_bench,
     perf_filename_tk,
 ):
@@ -1211,6 +1213,7 @@ def testAttentionBSHD_Prefetch_MultiBuffer(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_global_to_shared=use_global_to_shared,
         scalarize_packed_math=True,
         multi_buffer_count=2,  # TODO: Hack as schedule reordering doesn't respect lifetimes computed during the main scheduling algorithm.
     )
