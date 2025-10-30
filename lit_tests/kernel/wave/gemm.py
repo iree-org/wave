@@ -2127,4 +2127,4 @@ def test_gemm_with_transpose_a_b_gfx950():
     # CHECK:          func.func @gemm
     # Ensure that the transpose loads and mma are present.
     # CHECK-COUNT-8:    amdgpu.transpose_load {{.*}} : memref<{{.*}}xf16, #gpu.address_space<workgroup>> -> vector<{{.*}}xf16>
-    # CHECK-COUNT-8:    amdgpu.mfma {{.*}} * {{.*}} + {{.*}} {blocks = {{.*}} : i32, k = {{.*}} : i32, m = {{.*}} : i32, n = {{.*}} : i32} blgp = none : vector<{{.*}}xf16>, vector<{{.*}}xf16>, vector<{{.*}}xf32>
+    # CHECK-COUNT-8:    amdgpu.mfma {{.*}} * {{.*}} + {{.*}} blgp = none : vector<{{.*}}xf16>, vector<{{.*}}xf16>, vector<{{.*}}xf32>

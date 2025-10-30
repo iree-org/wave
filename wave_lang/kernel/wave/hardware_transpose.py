@@ -8,11 +8,10 @@
 import copy
 import sympy
 
-from .utils.general_utils import get_hardware_constraint
+from .utils.general_utils import get_hardware_constraint, make_index_uniform_per_wave
 from .utils.symbol_utils import safe_subs
 
 from .global_to_shared_gathers import update_read_mapping_dynamic_values
-from ..lang.global_symbols import THREAD_0, THREAD_1, THREAD_2
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     Read,
@@ -122,17 +121,7 @@ def modify_index(
     # Make revised index to be wave-uniform by doing (THREAD_0 // 64) * 64
     # This modification is only applied if there is more than one wave along
     # that dimension.
-    wave_subs = {
-        THREAD_0: (
-            ((THREAD_0 // threads_per_wave) * threads_per_wave)
-            if waves_per_block[0] > 1
-            else 0
-        ),
-        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
-        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
-    }
-
-    new_index = {k: v.subs(wave_subs) for k, v in index.items()}
+    new_index = make_index_uniform_per_wave(index, threads_per_wave, waves_per_block)
 
     # Apply delinearized offset and set size/stride
     for i, key in enumerate(index.keys()):

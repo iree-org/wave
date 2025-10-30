@@ -42,6 +42,21 @@ from .graph_utils import propagate_loop_carried_vars
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
 
 
+def make_index_uniform_per_wave(index, threads_per_wave, waves_per_block):
+    # Make LDS write index to be wave-uniform by doing (THREAD_0 // 64) * 64
+    wave_subs = {
+        THREAD_0: (
+            ((THREAD_0 // threads_per_wave) * threads_per_wave)
+            if waves_per_block[0] > 1
+            else 0
+        ),
+        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
+        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
+    }
+
+    return {k: v.subs(wave_subs) for k, v in index.items()}
+
+
 def run_test(func: Callable[[], None]) -> Callable[[], None]:
     """Run a function as part of the test suite."""
     # Print func name before running
