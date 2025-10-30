@@ -105,18 +105,20 @@ jobs:
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-${{ matrix.platform }}
           CIBW_BEFORE_ALL_LINUX: curl -sSf https://sh.rustup.rs | sh -s -- -y
-          CIBW_ENVIRONMENT_LINUX: "PATH=$HOME/.cargo/bin:$PATH"
+          CIBW_ENVIRONMENT_LINUX: 'PATH=$HOME/.cargo/bin:$PATH IREE_CHANNEL=${{ env.IREE_CHANNEL }} IREE_REQ=${{ env.IREE_REQ }}'
 
           CIBW_ENVIRONMENT: IREE_CHANNEL="${{ env.IREE_CHANNEL }}" IREE_REQ="${{ env.IREE_REQ }}"
-          CIBW_ENVIRONMENT_WINDOWS: IREE_CHANNEL=${{ env.IREE_CHANNEL }};IREE_REQ=${{ env.IREE_REQ }}
+          CIBW_ENVIRONMENT_WINDOWS: IREE_CHANNEL=${{ env.IREE_CHANNEL }} IREE_REQ=${{ env.IREE_REQ }}
 
           # Install the right IREE deps *inside each isolated build env* before building.
           CIBW_BEFORE_BUILD: |
-            set -eux
-            ls -la
-            echo "Using requirements: $IREE_REQ (channel=$IREE_CHANNEL)"
+            set -euxo pipefail
+            echo "IREE_CHANNEL=${IREE_CHANNEL}"
+            echo "IREE_REQ=${IREE_REQ}"
+            [ -n "${IREE_REQ:-}" ] || { echo "IREE_REQ is empty"; exit 2; }
+            [ -f "${IREE_REQ}" ] || { echo "Missing ${IREE_REQ}"; pwd; ls -la; exit 3; }
             python -m pip install -U pip
-            python -m pip install -r "$IREE_REQ"
+            python -m pip install -r "${IREE_REQ}"
 
           CIBW_BEFORE_BUILD_WINDOWS: |
             $ErrorActionPreference = "Stop"
