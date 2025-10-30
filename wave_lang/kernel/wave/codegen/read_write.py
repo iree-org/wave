@@ -704,7 +704,6 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         (
             src,
             dst,
-            tensor_strides,
             element_type,
             tensor_tile_shapes,
             shared_tile_index,

@@ -48,10 +48,9 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-import sympy
 import torch.fx as fx
 
-from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
+from .._support.indexing import IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -113,7 +112,6 @@ def is_valid_write(write: CustomOp) -> bool:
 @dataclass
 class TensorLoadConfig:
     """
-    tensor_strides
     element_type
     tensor_tile_shapes : [tile dim 0 shape, tile dim 1 shape]
     shared_tile_index (bytes)
@@ -123,7 +121,6 @@ class TensorLoadConfig:
     note. base address will be represented as pointers in codegen.
     """
 
-    tensor_strides: list[int] = None
     element_type: "DataType" = None
     tensor_tile_shapes: list[int] = None
     shared_tile_index: int = None
@@ -131,7 +128,6 @@ class TensorLoadConfig:
     bounds: list[int] = field(default_factory=list)
 
     def __iter__(self):
-        yield self.tensor_strides
         yield self.element_type
         yield self.tensor_tile_shapes
         yield self.shared_tile_index
@@ -150,39 +146,6 @@ def get_tensor_tile_shapes(
     symbolic_shapes = read.type.symbolic_shape
     tensor_tile_shapes = materialize_shape(constraint_tile_size, symbolic_shapes)
     return list(reversed(tensor_tile_shapes))
-
-
-def get_tensor_shapes(read: Read) -> list[IndexExpr]:
-    """
-    0. Get symbolic shape from Read node.
-    1. Materialize the `data shape` using index subs
-    2. Return [tensor dim 0 shape, tensor dim 1 shape]
-    """
-    tensor_shapes = []
-    symbolic_shapes = read.type.symbolic_shape
-    for sym_dim in reversed(symbolic_shapes):
-        tensor_shapes.append(subs_idxc(sym_dim))
-
-    assert all(
-        [type(shape) is sympy.core.numbers.Integer for shape in tensor_shapes]
-    ), "Unknown or dynamic dimension is not currently supported for tensor load to shared."
-    return tensor_shapes
-
-
-def get_tensor_strides(tensor_shapes) -> list[int]:
-    """
-    Formula: x + y * stride0 + z * stride1 + a * stride2 + b * stride3
-    - stride 0 = dim x
-    - stride 1 = stride 0 * dim y
-    - stride 2 = stride 1 * dim z
-    """
-
-    strides = [tensor_shapes[0]]
-    for i in range(1, len(tensor_shapes)):
-        base = strides[-1]
-        strides.append(base * tensor_shapes[i])
-
-    return strides
 
 
 def get_global_element_offset(
@@ -221,9 +184,6 @@ def get_tensor_load_descriptor_config(
     Get the tensor to shared config for the given read and write.
     """
 
-    # get data shape
-    tensor_shapes = get_tensor_shapes(read)
-
     symbolic_shape = read.type.symbolic_shape
 
     if read.bounds:
@@ -239,9 +199,6 @@ def get_tensor_load_descriptor_config(
     else:
         bounds = {v: bounds.get(v, v) for v in symbolic_shape}
 
-    # get data strides
-    tensor_strides = get_tensor_strides(tensor_shapes)
-
     # get tile shape
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
@@ -252,7 +209,6 @@ def get_tensor_load_descriptor_config(
     global_tile_index = get_global_element_offset(read, wave_subs)
 
     return TensorLoadConfig(
-        tensor_strides,
         element_type,
         tensor_tile_shapes,
         shared_tile_index,

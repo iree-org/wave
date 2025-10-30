@@ -3046,7 +3046,6 @@ class Reshape(CustomOp, ABC):
 class TensorLoadToLDS(CustomOp):
     src: Memory
     dst: Memory
-    tensor_strides: list[int] = field(default_factory=list)
     element_type: DataType = None
     tensor_tile_shapes: list[int] = field(default_factory=list)
     shared_tile_index: int | dict[IndexSymbol, IndexSequence] = None
