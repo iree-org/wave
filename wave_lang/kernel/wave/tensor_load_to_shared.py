@@ -194,6 +194,7 @@ def get_tensor_load_descriptor_config(
             constraints, read.index, vector_shapes, symbolic_shape
         )
 
+    # Descriptor always expect bounds for all dimensions so if no bounds are provided, set to full shape
     if bounds is None:
         bounds = {v: v for v in symbolic_shape}
     else:
