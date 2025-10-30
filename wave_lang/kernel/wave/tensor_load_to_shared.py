@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 
 import sympy
 import torch.fx as fx
+import wave_lang.kernel.lang as tkl
 
 from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from .._support.tracing import CapturedTrace
@@ -57,6 +58,9 @@ from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     CustomOp,
     TensorLoadToLDS,
+    Conditional,
+    NewScalar,
+    Eq,
     SharedMemoryBarrier,
     IndexSequence,
     Read,
@@ -250,7 +254,41 @@ def get_tensor_load_descriptor_config(
     )
 
 
+def insert_thread_election_condition(
+    trace, graph, loc, emit_cnt, is_elected_thread, load_instr
+):
+    load_graph = fx.Graph()
+    load_graph_name = f"tensor_load_graph_{emit_cnt}"
+
+    load_instr.add_to_graph(load_graph)
+    load_instr.location = loc
+
+    cond = Conditional(
+        is_elected_thread,
+        subgraph_name=load_graph_name,
+        implicit_captures=[],
+        nested_side_effect=load_instr.has_side_effects,
+    ).add_to_graph(graph)
+    cond.location = loc
+
+    load_graph.parent_op = cond
+
+    trace.add_subgraph(load_graph_name, load_graph)
+
+    return cond
+
+
+def get_graph_node(custom: CustomOp, graph: fx.Graph, location) -> fx.Node:
+    custom.add_to_graph(graph)
+    custom.location = location
+    custom = custom.fx_node
+    return custom
+
+
 def emit_tensor_load_to_shared(
+    trace,
+    hardware_constraint,
+    emit_cnt,
     read: Read,
     write: Write,
     config: TensorLoadConfig,
@@ -259,11 +297,30 @@ def emit_tensor_load_to_shared(
     Emit `TensorLoadToLDS` for the given read and write.
     """
 
-    tensor_writes = defaultdict(list)
+    graph = write.graph
 
-    with write.graph.inserting_before(write.fx_node):
-        tensor_write = TensorLoadToLDS(read.memory, write.memory, *config).add_to_graph(
-            write.graph, loc=write.location
+    tensor_writes = defaultdict(list)
+    thread_id = hardware_constraint.linearized_thread_id
+    threads_per_wave = hardware_constraint.threads_per_wave
+    thread0_in_wave = thread_id // threads_per_wave * threads_per_wave
+
+    with graph.inserting_before(write.fx_node):
+        elected_thread = get_graph_node(
+            NewScalar(thread0_in_wave, tkl.i32), graph, write.location
+        )
+
+        thread_id_reg = get_graph_node(
+            NewScalar(thread_id, tkl.i32), graph, write.location
+        )
+
+        is_elected_thread = get_graph_node(
+            Eq(thread_id_reg, elected_thread), graph, write.location
+        )
+
+    with graph.inserting_before(write.fx_node):
+        tensor_write = TensorLoadToLDS(read.memory, write.memory, *config)
+        insert_thread_election_condition(
+            trace, graph, write.location, emit_cnt, is_elected_thread, tensor_write
         )
         barrier = SharedMemoryBarrier(tensor_wait=True).add_to_graph(
             write.graph, loc=tensor_write.location
@@ -357,6 +414,7 @@ def tensor_load_to_shared(
 
     allocate_offsets = get_allocation_offsets(trace)
 
+    emit_cnt = 0
     for reads_writes in id_to_read_write.values():
         read, write = reads_writes[0]
 
@@ -382,10 +440,15 @@ def tensor_load_to_shared(
             continue
 
         tensor_writes = emit_tensor_load_to_shared(
+            trace,
+            hardware_constraint,
+            emit_cnt,
             read,
             write,
             config,
         )
+
+        emit_cnt += 1
 
         update_write_dependencies(tensor_writes, trace)
 
