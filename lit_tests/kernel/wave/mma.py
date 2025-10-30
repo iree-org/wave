@@ -641,42 +641,40 @@ def test_wmma_with_tensor_load():
     # CHECK-LABEL: test_wmma_with_tensor_load
     # CHECK:          func.func @mma
 
-    ### descriptors packing [group1]
-    # CHECK-DAG:    %[[TENSOR_DESC_0:.+]] = arith.constant dense<[65536, 2097152, 8388608, 2097152, 16, 32, 268435456, 0]> : vector<8xi32>
-    # CHECK-DAG:    %[[TENSOR_DESC_1:.+]] = arith.constant dense<[65536, 2097152, 4194304, 2097152, 16, 32, 134217728, 0]> : vector<8xi32>
-
     ### global buffer is bound to %0, %1 and %2 : MK, NK, MN
-    # CHECK-DAG:    %[[SUBSPAN0:.*]] = stream.binding.subspan
-    # CHECK-DAG:    %[[SUBSPAN1:.*]] = stream.binding.subspan
-    # CHECK-DAG:    %[[SUBSPAN2:.*]] = stream.binding.subspan
+    # CHECK:        %[[SUBSPAN0:.*]] = stream.binding.subspan
+    # CHECK:        %[[SUBSPAN1:.*]] = stream.binding.subspan
+    # CHECK:        %[[SUBSPAN2:.*]] = stream.binding.subspan
 
-    # CHECK-DAG:    %[[CAST_0:.*]] = memref.reinterpret_cast %[[SUBSPAN0]]
-    # CHECK-DAG:    %[[CAST_1:.*]] = memref.reinterpret_cast %[[SUBSPAN1]]
-    # CHECK-DAG:    %[[CAST_2:.*]] = memref.reinterpret_cast %[[SUBSPAN2]]
+    # CHECK:        %[[CAST_0:.*]] = memref.reinterpret_cast %[[SUBSPAN0]]
+    # CHECK:        %[[CAST_1:.*]] = memref.reinterpret_cast %[[SUBSPAN1]]
+    # CHECK:        %[[CAST_2:.*]] = memref.reinterpret_cast %[[SUBSPAN2]]
 
     ### shared memory alloc
-    # CHECK-DAG:    %[[SMEM:.+]] = memref.alloc()
-    # CHECK-DAG:    %[[VIEW0:.+]] = memref.view
-    # CHECK-DAG:    %[[VIEW1:.+]] = memref.view
+    # CHECK:        %[[SMEM:.+]] = memref.alloc()
+    # CHECK:        %[[VIEW0:.+]] = memref.view
+    # CHECK:        %[[VIEW1:.+]] = memref.view
 
     ### get global buffer pointer
-    # CHECK-DAG:    %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
+    # CHECK:        %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
 
     ### get shared buffer pointer
-    # CHECK-DAG:    %[[CAST_3:.*]] = memref.reinterpret_cast %[[VIEW1]]
-    # CHECK-DAG:    %[[INT_PTR_1:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_3]]
+    # CHECK:        %[[CAST_3:.*]] = memref.reinterpret_cast %[[VIEW1]]
+    # CHECK:        %[[INT_PTR_1:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_3]]
 
     ### pack descriptors and invoke tensor load
-    # CHECK-DAG:    %[[D0:.*]] = vector.from_elements
-    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_1]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
-    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
-    # CHECK-DAG:    amdgpu.lds_barrier
+    # CHECK:        %[[D0:.*]] = vector.from_elements
+    # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK:        amdgpu.lds_barrier
 
     ### pack descriptors and invoke tensor load
-    # CHECK-DAG:    %[[D1:.*]] = vector.from_elements
-    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D1]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
-    # CHECK-DAG:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
-    # CHECK-DAG:    amdgpu.lds_barrier
+    # CHECK:        %[[D1:.*]] = vector.from_elements
+    # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D1]], %[[TENSOR_DESC_1]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK:        amdgpu.lds_barrier
 
     ### wmma
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16"({{.*}}) : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
