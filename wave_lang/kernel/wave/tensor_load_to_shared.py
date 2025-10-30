@@ -46,7 +46,7 @@ with tile size = BLOCK_M * BLOCK_K, BLOCK_N x BLOCK_K, and K is the contiguous d
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch.fx as fx
 
@@ -121,11 +121,11 @@ class TensorLoadConfig:
     note. base address will be represented as pointers in codegen.
     """
 
-    element_type: "DataType" = None
-    distributed_shape: list[IndexExpr] = None
-    shared_tile_index: int = None
-    global_tile_index: dict[IndexSymbol, IndexSequence] = None
-    bounds: list[int] = field(default_factory=list)
+    element_type: "DataType"
+    distributed_shape: list[IndexExpr]
+    shared_tile_index: int
+    global_tile_index: dict[IndexSymbol, IndexSequence]
+    bounds: dict[IndexSymbol, IndexExpr]
 
     def __iter__(self):
         yield self.element_type

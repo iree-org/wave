@@ -3048,8 +3048,8 @@ class TensorLoadToLDS(CustomOp):
     dst: Memory
     element_type: DataType
     distributed_shape: list[IndexExpr]
-    shared_tile_index: int | dict[IndexSymbol, IndexSequence]
-    global_tile_index: int | dict[IndexSymbol, IndexSequence]
+    shared_tile_index: int
+    global_tile_index: dict[IndexSymbol, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
 
 
