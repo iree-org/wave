@@ -721,10 +721,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
     )
+    # Descriptor assumes rightmost stride 1 and expect last stride as full data size
     strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
     strides = [gen_sympy_index(subs, s) for s in strides]
 
-    # construct defualt descriptors
+    # construct default descriptors
     i32 = IntegerType.get_signless(32)
     i48 = IntegerType.get_signless(48)
     i57 = IntegerType.get_signless(57)
