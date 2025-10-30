@@ -778,9 +778,6 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
     wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
 
-    wave_x = arith_d.index_cast(i32, wave_index_x)
-    wave_y = arith_d.index_cast(i32, wave_index_y)
-
     stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
     y_offset = arith_d.muli(wave_index_y, stride0)
     global_base_offset = arith_d.addi(wave_index_x, y_offset)
