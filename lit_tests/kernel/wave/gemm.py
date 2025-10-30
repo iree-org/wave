@@ -10,6 +10,9 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
+from wave_lang.kernel.wave.templates.gemm import (
+    get_gemm_kernel_transpose_a_b,
+)
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -2103,3 +2106,25 @@ def test_batched_gemm_with_permute():
     # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
     # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
     # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
+
+
+@run_test
+def test_gemm_with_transpose_a_b_gfx950():
+    gemm, hyperparams, _ = get_gemm_kernel_transpose_a_b(
+        shape=(64, 256, 64),
+        dynamic_dims=False,
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+    )
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx950",
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+    # CHECK-LABEL:    test_gemm_with_transpose_a_b
+    # CHECK:          func.func @gemm
+    # Ensure that the transpose loads and mma are present.
+    # CHECK-COUNT-8:    amdgpu.transpose_load {{.*}} : memref<{{.*}}xf16, #gpu.address_space<workgroup>> -> vector<{{.*}}xf16>
+    # CHECK-COUNT-8:    amdgpu.mfma {{.*}} * {{.*}} + {{.*}} blgp = none : vector<{{.*}}xf16>, vector<{{.*}}xf16>, vector<{{.*}}xf32>
