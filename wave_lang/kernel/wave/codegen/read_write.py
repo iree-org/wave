@@ -719,6 +719,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     subs = add_emitter_subs(emitter)
     local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
 
+    strides = strides_from_symbolic_shape(
+        IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
+    )
+    strides = [gen_sympy_index(subs, s) for s in strides]
+
     # construct defualt descriptors
     i32 = IntegerType.get_signless(32)
     i48 = IntegerType.get_signless(48)
@@ -737,8 +742,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # descriptor properties
     mode = 2  # vimage
     valid = 1
-    dim_stride_1 = cast_py_value(emitter, tensor_strides[1], i48).ir_value
-    dim_stride_0 = cast_py_value(emitter, tensor_strides[0], i48).ir_value
+    dim_stride_1 = arith_d.index_cast(i48, strides[0])
+    dim_stride_0 = arith_d.index_cast(i48, strides[1])
     tile_size_1 = cast_py_value(emitter, tensor_tile_shapes[1], i32).ir_value
     tile_size_0 = cast_py_value(emitter, tensor_tile_shapes[0], i32).ir_value
     dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
