@@ -121,11 +121,12 @@ jobs:
             python -m pip install -r "${IREE_REQ}"
 
           CIBW_BEFORE_BUILD_WINDOWS: |
-            $ErrorActionPreference = "Stop"
-            Get-ChildItem
-            Write-Host "Using requirements: $env:IREE_REQ (channel=$env:IREE_CHANNEL)"
+            echo IREE_CHANNEL=%IREE_CHANNEL%
+            echo IREE_REQ=%IREE_REQ%
+            if not defined IREE_REQ ( echo IREE_REQ is empty & exit /b 2 )
+            if not exist "%IREE_REQ%" ( dir & echo Missing %IREE_REQ% & exit /b 3 )
             python -m pip install -U pip
-            python -m pip install -r "$env:IREE_REQ"
+            python -m pip install -r "%IREE_REQ%"
 
       - name: Upload python wheels
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
