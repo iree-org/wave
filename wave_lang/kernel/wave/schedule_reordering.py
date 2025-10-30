@@ -296,97 +296,140 @@ def reorder_graph(graph, clusters):
 ##############################################################
 
 
-def slice_mma(mma_nodes, lhs_nodes, rhs_nodes, num_slice):
-    sliced_mma_nodes = [[] for _ in range(num_slice)]
-    sliced_lhs_nodes = [[] for _ in range(num_slice)]
-    sliced_rhs_nodes = [[] for _ in range(num_slice)]
+def _slice_node_list(node_list, reduction_expand_size, num_slices, reduction_dim):
+    """
+    Slice a list of nodes based on reduction dimension into equal-sized slices.
 
+    This function computes slice boundaries based on the sorted order of nodes
+    (to determine how many nodes exist per reduction dimension), but returns
+    slices from the original node_list order. This assumes node_list is already
+    sorted by reduction dimension.
+
+    Args:
+        node_list: List of nodes to slice (assumed to be sorted by reduction_dim)
+        reduction_expand_size: Number of unique reduction dimension IDs
+        num_slices: Number of slices to create
+        reduction_dim: The reduction dimension index
+
+    Returns:
+        List of lists, where each inner list contains nodes for one slice
+    """
+    # Sort to compute nodes_per_k_dim, but slice the original list
+    # (which assumes it's already sorted by reduction_dim)
+    sorted_nodes = sorted(node_list, key=lambda x: x.expanded_dims[reduction_dim])
+    nodes_per_k_dim = len(sorted_nodes) // reduction_expand_size
+    slice_size = reduction_expand_size // num_slices
+
+    sliced_nodes = []
+    for slice_id in range(num_slices):
+        lower_bound_k_id = slice_id * slice_size
+        upper_bound_k_id = (slice_id + 1) * slice_size
+
+        start_idx = lower_bound_k_id * nodes_per_k_dim
+        end_idx = upper_bound_k_id * nodes_per_k_dim
+
+        sliced_nodes.append(node_list[start_idx:end_idx])
+
+    return sliced_nodes
+
+
+def slice_mma(mma_nodes, lhs_nodes, rhs_nodes, num_slice):
+    """
+    Slice MMA operations and their operand load nodes into equal-sized slices
+    based on the reduction dimension.
+
+    This function groups MMA nodes and their corresponding LHS/RHS load nodes
+    into slices, where each slice contains operations for a contiguous range
+    of reduction dimension IDs.
+
+    Args:
+        mma_nodes: List of MMA operation nodes
+        lhs_nodes: List of left-hand side load nodes
+        rhs_nodes: List of right-hand side load nodes
+        num_slice: Number of slices to create (must evenly divide reduction_expand_size)
+
+    Returns:
+        Tuple of (sliced_mma_nodes, sliced_lhs_nodes, sliced_rhs_nodes),
+        where each element is a list of lists, one per slice
+
+    Raises:
+        AssertionError: If slicing preconditions are not met
+    """
     reduction_dim = get_custom(mma_nodes[0]).reduction_dim
     reduction_dim_ids = set(
         [get_custom(node).expanded_dims[reduction_dim] for node in mma_nodes]
     )
-
     # Checking that MMAs is valid.
     reduction_expand_size = len(reduction_dim_ids)
     assert reduction_expand_size >= num_slice and reduction_expand_size % num_slice == 0
     assert all(x in reduction_dim_ids for x in range(reduction_expand_size))
 
-    size_of_slice = reduction_expand_size // num_slice
-    sorted_mma = sorted(mma_nodes, key=lambda x: x.expanded_dims[reduction_dim])
-    sorted_lhs = sorted(lhs_nodes, key=lambda x: x.expanded_dims[reduction_dim])
-    sorted_rhs = sorted(rhs_nodes, key=lambda x: x.expanded_dims[reduction_dim])
+    # Slice each node list independently
+    sliced_mma_nodes = _slice_node_list(
+        mma_nodes, reduction_expand_size, num_slice, reduction_dim
+    )
+    sliced_lhs_nodes = _slice_node_list(
+        lhs_nodes, reduction_expand_size, num_slice, reduction_dim
+    )
+    sliced_rhs_nodes = _slice_node_list(
+        rhs_nodes, reduction_expand_size, num_slice, reduction_dim
+    )
 
-    mma_per_k_dim = len(sorted_mma) // reduction_expand_size
-    lhs_per_k_dim = len(sorted_lhs) // reduction_expand_size
-    rhs_per_k_dim = len(sorted_rhs) // reduction_expand_size
-    for slice_id in range(num_slice):
-        lb_k_id = slice_id * size_of_slice
-        ub_k_id = (slice_id + 1) * size_of_slice
-        sliced_mma_nodes[slice_id] = mma_nodes[
-            lb_k_id * mma_per_k_dim : ub_k_id * mma_per_k_dim
-        ]
-        sliced_lhs_nodes[slice_id] = lhs_nodes[
-            lb_k_id * lhs_per_k_dim : ub_k_id * lhs_per_k_dim
-        ]
-        sliced_rhs_nodes[slice_id] = rhs_nodes[
-            lb_k_id * rhs_per_k_dim : ub_k_id * rhs_per_k_dim
-        ]
     return sliced_mma_nodes, sliced_lhs_nodes, sliced_rhs_nodes
 
 
 def slice_scale_mma(
     mma_nodes, lhs_nodes, rhs_nodes, lhs_scale_nodes, rhs_scale_nodes, num_slice
 ):
-    sliced_mma_nodes = [[] for _ in range(num_slice)]
-    sliced_lhs_nodes = [[] for _ in range(num_slice)]
-    sliced_rhs_nodes = [[] for _ in range(num_slice)]
-    sliced_lhs_scale_nodes = [[] for _ in range(num_slice)]
-    sliced_rhs_scale_nodes = [[] for _ in range(num_slice)]
+    """
+    Slice scaled MMA operations and their operand/scale load nodes into equal-sized slices
+    based on the reduction dimension.
 
+    This function groups scaled MMA nodes and their corresponding LHS/RHS load nodes
+    (including scale nodes) into slices, where each slice contains operations for a
+    contiguous range of reduction dimension IDs.
+
+    Args:
+        mma_nodes: List of MMA operation nodes
+        lhs_nodes: List of left-hand side load nodes
+        rhs_nodes: List of right-hand side load nodes
+        lhs_scale_nodes: List of left-hand side scale load nodes
+        rhs_scale_nodes: List of right-hand side scale load nodes
+        num_slice: Number of slices to create (must evenly divide reduction_expand_size)
+
+    Returns:
+        Tuple of (sliced_mma_nodes, sliced_lhs_nodes, sliced_rhs_nodes,
+                  sliced_lhs_scale_nodes, sliced_rhs_scale_nodes),
+        where each element is a list of lists, one per slice
+
+    Raises:
+        AssertionError: If slicing preconditions are not met
+    """
     reduction_dim = get_custom(mma_nodes[0]).reduction_dim
     reduction_dim_ids = set(
         [get_custom(node).expanded_dims[reduction_dim] for node in mma_nodes]
     )
-
     # Checking that MMAs is valid.
     reduction_expand_size = len(reduction_dim_ids)
     assert reduction_expand_size >= num_slice and reduction_expand_size % num_slice == 0
     assert all(x in reduction_dim_ids for x in range(reduction_expand_size))
 
-    size_of_slice = reduction_expand_size // num_slice
-    sorted_mma = sorted(mma_nodes, key=lambda x: x.expanded_dims[reduction_dim])
-    sorted_lhs = sorted(lhs_nodes, key=lambda x: x.expanded_dims[reduction_dim])
-    sorted_rhs = sorted(rhs_nodes, key=lambda x: x.expanded_dims[reduction_dim])
-    sorted_lhs_scale = sorted(
-        lhs_scale_nodes, key=lambda x: x.expanded_dims[reduction_dim]
+    # Slice each node list independently
+    sliced_mma_nodes = _slice_node_list(
+        mma_nodes, reduction_expand_size, num_slice, reduction_dim
     )
-    sorted_rhs_scale = sorted(
-        rhs_scale_nodes, key=lambda x: x.expanded_dims[reduction_dim]
+    sliced_lhs_nodes = _slice_node_list(
+        lhs_nodes, reduction_expand_size, num_slice, reduction_dim
     )
-
-    mma_per_k_dim = len(sorted_mma) // reduction_expand_size
-    lhs_per_k_dim = len(sorted_lhs) // reduction_expand_size
-    rhs_per_k_dim = len(sorted_rhs) // reduction_expand_size
-    lhs_scale_per_k_dim = len(sorted_lhs_scale) // reduction_expand_size
-    rhs_scale_per_k_dim = len(sorted_rhs_scale) // reduction_expand_size
-    for slice_id in range(num_slice):
-        lb_k_id = slice_id * size_of_slice
-        ub_k_id = (slice_id + 1) * size_of_slice
-        sliced_mma_nodes[slice_id] = mma_nodes[
-            lb_k_id * mma_per_k_dim : ub_k_id * mma_per_k_dim
-        ]
-        sliced_lhs_nodes[slice_id] = lhs_nodes[
-            lb_k_id * lhs_per_k_dim : ub_k_id * lhs_per_k_dim
-        ]
-        sliced_rhs_nodes[slice_id] = rhs_nodes[
-            lb_k_id * rhs_per_k_dim : ub_k_id * rhs_per_k_dim
-        ]
-        sliced_lhs_scale_nodes[slice_id] = lhs_scale_nodes[
-            lb_k_id * lhs_scale_per_k_dim : ub_k_id * lhs_scale_per_k_dim
-        ]
-        sliced_rhs_scale_nodes[slice_id] = rhs_scale_nodes[
-            lb_k_id * rhs_scale_per_k_dim : ub_k_id * rhs_scale_per_k_dim
-        ]
+    sliced_rhs_nodes = _slice_node_list(
+        rhs_nodes, reduction_expand_size, num_slice, reduction_dim
+    )
+    sliced_lhs_scale_nodes = _slice_node_list(
+        lhs_scale_nodes, reduction_expand_size, num_slice, reduction_dim
+    )
+    sliced_rhs_scale_nodes = _slice_node_list(
+        rhs_scale_nodes, reduction_expand_size, num_slice, reduction_dim
+    )
 
     return (
         sliced_mma_nodes,
