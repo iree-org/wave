@@ -705,7 +705,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             src,
             dst,
             element_type,
-            tensor_tile_shapes,
+            distributed_shape,
             shared_tile_index,
             global_tile_index,
             bounds,
@@ -724,6 +724,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # Descriptor assumes rightmost stride 1 and expect last stride as full data size
     strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
     strides = [gen_sympy_index(subs, s) for s in strides]
+
+    distributed_shape = [gen_sympy_index(subs, s) for s in distributed_shape]
 
     # construct default descriptors
     i32 = IntegerType.get_signless(32)
@@ -745,8 +747,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     valid = 1
     dim_stride_1 = arith_d.index_cast(i48, strides[0])
     dim_stride_0 = arith_d.index_cast(i48, strides[1])
-    tile_size_1 = cast_py_value(emitter, tensor_tile_shapes[1], i32).ir_value
-    tile_size_0 = cast_py_value(emitter, tensor_tile_shapes[0], i32).ir_value
+    tile_size_1 = arith_d.index_cast(i32, distributed_shape[0])
+    tile_size_0 = arith_d.index_cast(i32, distributed_shape[1])
     dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
     dim_size_0 = arith_d.index_cast(i32, local_bounds[1])
 

@@ -50,7 +50,7 @@ from dataclasses import dataclass, field
 
 import torch.fx as fx
 
-from .._support.indexing import IndexSequence, IndexSymbol
+from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -122,14 +122,14 @@ class TensorLoadConfig:
     """
 
     element_type: "DataType" = None
-    tensor_tile_shapes: list[int] = None
+    distributed_shape: list[IndexExpr] = None
     shared_tile_index: int = None
     global_tile_index: dict[IndexSymbol, IndexSequence] = None
     bounds: list[int] = field(default_factory=list)
 
     def __iter__(self):
         yield self.element_type
-        yield self.tensor_tile_shapes
+        yield self.distributed_shape
         yield self.shared_tile_index
         yield self.global_tile_index
         yield self.bounds
@@ -203,6 +203,8 @@ def get_tensor_load_descriptor_config(
     # get tile shape
     tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
+    distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape)
+
     # get LDS byte offset
     shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
 
@@ -211,7 +213,7 @@ def get_tensor_load_descriptor_config(
 
     return TensorLoadConfig(
         element_type,
-        tensor_tile_shapes,
+        distributed_shape,
         shared_tile_index,
         global_tile_index,
         bounds,
