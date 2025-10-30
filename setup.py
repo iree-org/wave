@@ -104,12 +104,11 @@ def load_requirement_pins(requirements_file: str):
 
 
 load_requirement_pins("requirements.txt")
-load_requirement_pins("requirements-iree-stable.txt")
 
 
 def get_version_spec(dep: str):
     if dep in requirement_pins:
-        return f"=={requirement_pins[dep]}"
+        return f">={requirement_pins[dep]}"
     else:
         return ""
 
