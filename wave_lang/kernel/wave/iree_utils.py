@@ -12,6 +12,8 @@ from .utils.run_utils import get_benchmark_flags, print_bench_result
 from .profiling import benchmark_module
 from .utils.compile_utils import compile_to_vmfb
 import iree.runtime as rt
+from iree.compiler import ir
+from iree.compiler.dialects import arith, func, linalg, tensor
 
 
 def get_chain_mmt_asm(
@@ -99,6 +101,122 @@ def get_chain_mmt_f8_asm(
     }}""",
         "chain_mmt_f8",
     )
+
+
+def _convert_dtype_to_mlir(dtype: str) -> ir.Type:
+    dtypes = {
+        "i8": lambda: ir.IntegerType.get_signless(8),
+        "i16": lambda: ir.IntegerType.get_signless(16),
+        "i32": lambda: ir.IntegerType.get_signless(32),
+        "i64": lambda: ir.IntegerType.get_signless(64),
+        "f8E4M3FNUZ": lambda: ir.Float8E4M3FNUZType.get(),
+        "f8E5M2FNUZ": lambda: ir.Float8E5M2FNUZType.get(),
+        "f8E4M3FN": lambda: ir.Float8E4M3FNType.get(),
+        "f8E5M2": lambda: ir.Float8E5M2Type.get(),
+        "f16": lambda: ir.F16Type.get(),
+        "f32": lambda: ir.F32Type.get(),
+        "f64": lambda: ir.F64Type.get(),
+        "bf16": lambda: ir.BF16Type.get(),
+    }
+    return dtypes[dtype]()
+
+
+def get_mm_any_transpose_asm(
+    lhs_type: str,
+    rhs_type: str,
+    acc_type: str,
+    cast_fp8: bool = False,
+    tA: str = "N",
+    tB: str = "T",
+) -> tuple[str, str]:
+    lhs_shape = list(map(int, lhs_type.split("x")[:-1]))
+    rhs_shape = list(map(int, rhs_type.split("x")[:-1]))
+
+    if tA == "T":
+        K, M = lhs_shape
+    else:
+        M, K = lhs_shape
+    if tB == "T":
+        N, K = rhs_shape
+    else:
+        K, N = rhs_shape
+
+    gemm_name = f"gemm_{M}_{N}_{K}_{tA}{tB}"
+    with ir.Location.name(gemm_name, context=ir.Context()):
+        operand_element_type = _convert_dtype_to_mlir(lhs_type.split("x")[-1])
+        acc_element_type = _convert_dtype_to_mlir(acc_type.split("x")[-1])
+        result_element_type = _convert_dtype_to_mlir(acc_type.split("x")[-1])
+
+        is_integer = isinstance(operand_element_type, ir.IntegerType)
+        literal_zero = (
+            ir.IntegerAttr.get(acc_element_type, 0)
+            if is_integer
+            else ir.FloatAttr.get(acc_element_type, 0.0)
+        )
+
+        shape_A = (K, M) if tA == "T" else (M, K)
+        shape_B = (N, K) if tB == "T" else (K, N)
+        shape_C = (M, N)
+
+        arg0_type = ir.RankedTensorType.get(shape_A, operand_element_type)
+        arg1_type = ir.RankedTensorType.get(shape_B, operand_element_type)
+        result_type = ir.RankedTensorType.get(shape_C, result_element_type)
+
+        module = ir.Module.create()
+        with ir.InsertionPoint(module.body):
+
+            @func.FuncOp.from_py_func(arg0_type, arg1_type)
+            def main(arg0, arg1):
+                if cast_fp8:
+                    f8_dtype = _convert_dtype_to_mlir("f8E4M3FNUZ")
+                    arg0_fp8_type = ir.RankedTensorType.get(shape_A, f8_dtype)
+                    arg1_fp8_type = ir.RankedTensorType.get(shape_B, f8_dtype)
+                    arg0_fp8 = arith.truncf(arg0_fp8_type, arg0)
+                    arg1_fp8 = arith.truncf(arg1_fp8_type, arg1)
+
+                zero_element = arith.constant(
+                    value=literal_zero, result=acc_element_type
+                )
+
+                empty_tensor = tensor.empty(element_type=acc_element_type, sizes=[M, N])
+                filled_tensor = linalg.fill(zero_element, outs=[empty_tensor])
+
+                # Define dimension expressions.
+                d0 = ir.AffineDimExpr.get(0)  # M
+                d1 = ir.AffineDimExpr.get(1)  # N
+                d2 = ir.AffineDimExpr.get(2)  # K
+                # Default maps.
+                map_A = ir.AffineMap.get(3, 0, [d0, d2])
+                map_B = ir.AffineMap.get(3, 0, [d2, d1])
+                map_C = ir.AffineMap.get(3, 0, [d0, d1])
+                if tA == "T":
+                    map_A = ir.AffineMap.get(3, 0, [d2, d0])
+                if tB == "T":
+                    map_B = ir.AffineMap.get(3, 0, [d1, d2])
+
+                indexing_maps = ir.ArrayAttr.get(
+                    [
+                        ir.AffineMapAttr.get(map_A),
+                        ir.AffineMapAttr.get(map_B),
+                        ir.AffineMapAttr.get(map_C),
+                    ]
+                )
+
+                acc = linalg.matmul(
+                    arg0_fp8 if cast_fp8 else arg0,
+                    arg1_fp8 if cast_fp8 else arg1,
+                    outs=[filled_tensor],
+                    indexing_maps=indexing_maps,
+                )
+
+                if acc_element_type == result_element_type:
+                    return acc
+                if is_integer:
+                    return arith.trunci(result_type, acc)
+                return arith.truncf(result_type, acc)
+
+            matmul_function = f"{module}"
+            return matmul_function, "main"
 
 
 def get_mmt_asm(
@@ -224,6 +342,19 @@ def generate_iree_ref(
         output_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
         asm, func_name = get_chain_mmt_f8_asm(
             query_type, key_type, value_type, output_type
+        )
+    elif kernel_type.startswith("mm_"):
+        lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
+        rhs_type = get_type_str(kernel_inputs[1].shape, kernel_inputs[1].dtype)
+        acc_type = get_type_str(kernel_outputs[0].shape, kernel_outputs[0].dtype)
+        tA, tB = kernel_type.split("_")[1]
+        asm, func_name = get_mm_any_transpose_asm(
+            lhs_type,
+            rhs_type,
+            acc_type,
+            cast_fp8="fp8" in kernel_type,
+            tA=tA,
+            tB=tB,
         )
     elif kernel_type.startswith(conv_str):
         lhs_type = get_type_str(kernel_inputs[0].shape, kernel_inputs[0].dtype)
