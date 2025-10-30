@@ -21,6 +21,7 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.schedule_reordering import (
     get_local_loads,
     get_local_writes,
+    get_global_loads,
     slice_mma,
 )
 from wave_lang.kernel.ops.wave_schedule_ops import (
@@ -1944,9 +1945,10 @@ def gemm_schedule_test(is_debug=False):
         # Get the actual fx.Nodes from the Proxies
         mma_nodes = get_proxy_result(mma)
         local_load_lhs, local_load_rhs = get_local_loads(mma_nodes)
-        local_write_lhs, local_write_rhs = get_local_writes(local_load_lhs)
-        # global_load_lhs, global_load_rhs = get_global_loads(local_write_lhs)
-        # global_load_rhs, global_load_rhs = get_global_loads(local_write_rhs)
+        local_write_lhs = get_local_writes(local_load_lhs)
+        local_write_rhs = get_local_writes(local_load_rhs)
+        global_load_lhs = get_global_loads(local_write_lhs)
+        global_load_rhs = get_global_loads(local_write_rhs)
 
         # Slice MMAs by K iteration
         num_slice = 2
