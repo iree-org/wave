@@ -135,19 +135,6 @@ class TensorLoadConfig:
         yield self.bounds
 
 
-def get_tensor_tile_shapes(
-    read: Read, constraint_tile_size: dict[IndexSymbol, int]
-) -> list[int]:
-    """
-    0. Get symbolic shape from Read node.
-    1. Materialize the tile from constraints.
-    2. Return [tile dim 0 shape, tile dim 1 shape]
-    """
-    symbolic_shapes = read.type.symbolic_shape
-    tensor_tile_shapes = materialize_shape(constraint_tile_size, symbolic_shapes)
-    return list(reversed(tensor_tile_shapes))
-
-
 def get_global_element_offset(
     node: CustomOp, wave_subs
 ) -> dict[IndexSymbol, IndexSequence]:
@@ -199,9 +186,6 @@ def get_tensor_load_descriptor_config(
         bounds = {v: v for v in symbolic_shape}
     else:
         bounds = {v: bounds.get(v, v) for v in symbolic_shape}
-
-    # get tile shape
-    tensor_tile_shapes = get_tensor_tile_shapes(read, constraint_tile_size)
 
     distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape)
 
