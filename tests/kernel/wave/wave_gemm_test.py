@@ -36,7 +36,10 @@ from .common.utils import (
     require_rdna4,
 )
 from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
-from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.wave.templates.gemm import (
+    get_gemm_kernel,
+    get_gemm_kernel_transpose_a_b,
+)
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
 )
@@ -2505,3 +2508,59 @@ def testTensorLoadToShared(
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c.cpu(), iree_ref.cpu(), check_device=False, atol=2e-5, rtol=1e-5)
+
+
+# TODO: This fails on the builder for rdna4, but when I run it locally it works.
+#       Investigate further. (Succeeded on rocm6.4, 7.0, pytorch2.9)
+@require_e2e
+@pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.NONE,
+        _xfail(SchedulingType.PREFETCH),
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ],
+)
+@param_bool("dynamic_dims", "dyn")
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+    ],
+)
+def testGemmTransposeAB(
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    dynamic_dims: bool,
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
+):
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel_transpose_a_b(
+        shape, dynamic_dims, mfma_variant, threads_per_wave=threads_per_wave
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=run_bench,
+        schedule=enable_scheduling,
+        dynamic_symbols=dynamic_symbols,
+    )
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, gemm)
+    a = device_randn(shape[2], shape[0], dtype=torch.float16)
+    b = device_randn(shape[2], shape[1], dtype=torch.float16)
+    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    gemm(a, b, c)
+
+    torch_ref = torch.matmul(a.T, b)
+    assert_close(
+        c.to(torch.float16), torch_ref, atol=1e-3, rtol=1e-3, check_device=False
+    )

@@ -48,10 +48,15 @@ IGNORED_KEYWORDS = ["tag"]
 
 
 def read_meets_hw_transpose_requirements(
-    read: Read, constraints: list[Constraint]
+    read: Read, constraints: list[Constraint], target: str
 ) -> bool:
     from ..wave.minimize_global_loads import is_transposed_read
     from ..wave.utils.general_utils import find_index_bounds
+
+    # Check if target architecture supports amdgpu.transpose_load
+    # Only gfx950 and newer architectures support this operation
+    if not target.startswith("gfx95") and not target.startswith("gfx12"):
+        return False
 
     if read.bounds is not None:
         return False
@@ -1982,11 +1987,11 @@ class Read(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
-        if read_meets_hw_transpose_requirements(self, constraints):
+        if read_meets_hw_transpose_requirements(self, constraints, target):
             return True
 
         if self.has_identity_mapping():
@@ -2344,7 +2349,7 @@ class Write(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
