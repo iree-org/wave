@@ -1385,7 +1385,7 @@ def handle_cbrt(source: Value, options: WaveCompileOptions) -> OpResult:
 @handle_op(conditional)
 def handle_conditional(emitter: WaveEmitter, node: fx.Node):
     try:
-        condition, subgraph, implicit_capture = node.args
+        condition, subgraph, implicit_capture, _ = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 

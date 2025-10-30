@@ -2147,6 +2147,7 @@ class Conditional(NestedRegionOp):
     condition: fx.Proxy | IndexExpr
     subgraph_name: str
     implicit_captures: Sequence[fx.Proxy]
+    nested_side_effect: bool = False
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2154,6 +2155,10 @@ class Conditional(NestedRegionOp):
             return get_custom(self.condition).indexing_dims
 
         return []
+
+    @property
+    def has_side_effects(self) -> bool:
+        return self.nested_side_effect
 
 
 @define_op("iterate")
@@ -3058,6 +3063,10 @@ class TensorLoadToLDS(CustomOp):
     shared_tile_index: int | dict[IndexSymbol, IndexSequence] = None
     global_tile_index: int | dict[IndexSymbol, IndexSequence] = None
     bounds: list[int] = field(default_factory=list)
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("gather_to_lds")
