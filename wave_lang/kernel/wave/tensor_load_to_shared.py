@@ -76,6 +76,7 @@ from .minimize_global_loads import (
 from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
+    infer_dim,
 )
 from .utils.symbol_utils import subs_idxc
 
@@ -183,9 +184,9 @@ def get_tensor_load_descriptor_config(
 
     # Descriptor always expect bounds for all dimensions so if no bounds are provided, set to full shape
     if bounds is None:
-        bounds = {v: v for v in symbolic_shape}
+        bounds = {infer_dim(v): v for v in symbolic_shape}
     else:
-        bounds = {v: bounds.get(v, v) for v in symbolic_shape}
+        bounds = {infer_dim(v): bounds.get(infer_dim(v), v) for v in symbolic_shape}
 
     distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape)
 
