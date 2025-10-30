@@ -913,6 +913,7 @@ class LaunchableWave(Launchable):
                     trace,
                     self.constraints,
                     scheduling_type,
+                    options.use_global_to_shared,
                 ),
                 partial(
                     minimize_shared_allocs,
