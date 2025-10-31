@@ -233,18 +233,18 @@ def emit_tensor_load_to_shared(
 
 
 def is_supported_padding(padding: int, unpadded_dim: IndexExpr) -> bool:
-    # padding mmust be divisible by DWORD (4 bytes) and at most 128 DWORDs
+    # Padding must be divisible by DWORD (4 bytes) and at most 128 DWORDs (512 bytes)
     if padding % 4 != 0 or padding > (128 * 4):
         return False
 
-    # Padded dim must be a constant
+    # Unpadded dim must be a constant
     unpadded_dim = subs_idxc(unpadded_dim)
     if not is_literal(unpadded_dim):
         return False
 
     unpadded_dim = int(unpadded_dim)
 
-    # Padded dimension must be power of 2 and at least 2 DWORDs and at most 256 DWORDs
+    # Unpadded dimension must be power of 2, at least 8 bytes (2 DWORDs), at most 1024 bytes (256 DWORDs)
     if not is_pow2(unpadded_dim) or unpadded_dim < (2 * 4) or unpadded_dim > (256 * 4):
         return False
 
