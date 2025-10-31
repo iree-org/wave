@@ -233,8 +233,8 @@ def emit_tensor_load_to_shared(
 
 
 def is_supported_padding(padding: int, unpadded_dim: IndexExpr) -> bool:
-    # padding mmust be divisible by DWORD (4 bytes)
-    if padding % 4 != 0:
+    # padding mmust be divisible by DWORD (4 bytes) and at most 128 DWORDs
+    if padding % 4 != 0 or padding > (128 * 4):
         return False
 
     # Padded dim must be a constant
@@ -260,11 +260,11 @@ def clear_padding(write: Write):
     if padding == 0:
         return
 
-    unpadded_dim = (
-        custom_memory.unpadded_shape[-1] * custom_memory.dtype.bitwidth() // 8
-    )
+    bytewidth = custom_memory.dtype.bitwidth() // 8
 
-    if is_supported_padding(padding, unpadded_dim):
+    unpadded_dim = custom_memory.unpadded_shape[-1] * bytewidth
+
+    if is_supported_padding(padding * bytewidth, unpadded_dim):
         return
 
     custom_memory.update_arg("padding", 0)
