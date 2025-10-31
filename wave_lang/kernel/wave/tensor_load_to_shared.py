@@ -220,9 +220,6 @@ def emit_tensor_load_to_shared(
         tensor_write = TensorLoadToLDS(read.memory, write.memory, *config).add_to_graph(
             write.graph, loc=write.location
         )
-        SharedMemoryBarrier(tensor_wait=True).add_to_graph(
-            write.graph, loc=tensor_write.location
-        )
 
     tensor_write.pre_expansion_id = id(tensor_write)
 

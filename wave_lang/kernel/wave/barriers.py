@@ -17,6 +17,7 @@ from ..ops.wave_ops import (
     AtomicOp,
     CustomOp,
     GatherToLDS,
+    TensorLoadToLDS,
     NestedRegionOp,
     Read,
     Iterate,
@@ -56,6 +57,8 @@ def is_shared_memory_op(node: CustomOp, depth: int) -> Optional[fx.Node]:
         return propagate_loop_carried_vars(node.rhs, depth)
     elif isinstance(node, GatherToLDS):
         return propagate_loop_carried_vars(node.dst, depth)
+    elif isinstance(node, TensorLoadToLDS):
+        return propagate_loop_carried_vars(node.dst, depth)
 
     return None
 
@@ -68,6 +71,8 @@ def get_memory_access_type(node: CustomOp) -> MemoryAccessType:
     elif isinstance(node, AtomicOp):
         return MemoryAccessType.READ_WRITE
     elif isinstance(node, GatherToLDS):
+        return MemoryAccessType.WRITE
+    elif isinstance(node, TensorLoadToLDS):
         return MemoryAccessType.WRITE
     else:
         return MemoryAccessType.NONE
@@ -93,6 +98,7 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
 @dataclass
 class SharedMemoryBarrierInfo:
     is_async: bool = False
+    is_tdm: bool = False
     last_node: Optional[fx.Node] = None
 
 
@@ -147,6 +153,13 @@ def add_shared_memory_barriers(
                         and not barrier.wait_async_ops
                     ):
                         barrier.update_arg("wait_async_ops", True)
+
+                    if (
+                        state.is_tdm
+                        and hasattr(barrier, "tensor_wait")
+                        and not barrier.tensor_wait
+                    ):
+                        barrier.update_arg("tensor_wait", True)
                 else:
                     # Synchronize after the write to shared memory before we read from it.
                     if split_barrier:
@@ -160,7 +173,7 @@ def add_shared_memory_barriers(
                         # other variants of dependencies will be handled in separate pass: add_signal_wait_to_subgraph
                         if producer.graph == consumer.graph:
                             add_shared_memory_split_barriers(
-                                producer, consumer, barId, state.is_async
+                                producer, consumer, barId, state.is_tdm
                             )
                     else:
                         with graph.inserting_before(node):
@@ -169,12 +182,15 @@ def add_shared_memory_barriers(
                             ).add_to_graph(graph, loc=custom.location)
 
                 state.is_async = False
+                state.is_tdm = False
 
             state.last_node = custom
             last_producer.update({barId: node})
 
             if isinstance(custom, GatherToLDS):
                 state.is_async = True
+            if isinstance(custom, TensorLoadToLDS):
+                state.is_tdm = True
 
         if isinstance(custom, NestedRegionOp):
             # the node items set is later used to compare if producers are updated in the next `add_shared_memory_barriers` recursive call.
@@ -216,7 +232,7 @@ def should_insert_split_barrier_for_nested_region_op(
 
 
 def add_shared_memory_split_barriers(
-    producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False
+    producer: fx.Node, consumer: fx.Node, barId: int = -1, is_tdm: bool = False
 ):
     """
     This function adds a signal barrier after a producer and a wait before a consumer with barrier: barId
@@ -225,7 +241,7 @@ def add_shared_memory_split_barriers(
 
     if producer:
         with producer.graph.inserting_after(producer):
-            _ = SharedMemoryBarrierSignal(barId, wait_async_ops=is_async).add_to_graph(
+            _ = SharedMemoryBarrierSignal(barId, tensor_wait=is_tdm).add_to_graph(
                 producer.graph, loc=get_custom(producer).location
             )
 
