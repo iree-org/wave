@@ -265,8 +265,15 @@ def propagate_scheduling_parameters_to_iter_args(
         custom = get_custom(node)
         if isinstance(custom, IterArg):
             iter_args.append(custom)
-
+    breakpoint()
     for custom in iter_args:
+        print(f"Custom: {custom.name}")
+        print(f"Users: {[x.name for x in custom.users]}")
+        # if custom.users is empty or x.scheduling_parameters is None, set a breakpoint
+        if not custom.users or any(
+            x.scheduling_parameters is None for x in custom.users
+        ):
+            breakpoint()
         cycle = min(x.scheduling_parameters["absolute_cycle"] for x in custom.users)
         custom.scheduling_parameters = {
             "absolute_cycle": cycle,

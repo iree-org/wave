@@ -90,6 +90,7 @@ def add_nodes_by_schedule(
     fill_or_drain = pipelining_stage in [PipelineStage.PROLOGUE, PipelineStage.EPILOGUE]
 
     for cycle in range(initiation_interval):
+        print(f"    Cycle {cycle}:")
         logger.debug(f"Cycle: {cycle}")
         # Interleave the instructions that are scheduled at the same cycle.
         interleaved_instructions = []
@@ -107,6 +108,12 @@ def add_nodes_by_schedule(
             logger.debug(f"Node: {node}, Stage: {stage}, Iteration: {iteration}")
             custom_node = get_custom(node)
             logger.debug(f"Node args: {node.args}")
+            k_val = (
+                current_induction_variables[iteration]
+                if iteration < len(current_induction_variables)
+                else "?"
+            )
+            print(f"      Stage {stage} (k={k_val}): {node.name}")
             preferred_stage = (
                 stage if pipelining_stage == PipelineStage.KERNEL else None
             )
@@ -347,6 +354,10 @@ def construct_prologue(
     logger.debug("=====================================")
     logger.debug("Constructing prologue.")
     logger.debug("=====================================")
+    print("\n" + "=" * 80)
+    print(f"PROLOGUE CONSTRUCTION: {num_stages} stages, II={initiation_interval}")
+    print(f"Fill schedule: {stages}")
+    print("=" * 80)
 
     arg_context = ArgumentContext(
         reduction.outputs(reduction_subgraph),
@@ -367,6 +378,10 @@ def construct_prologue(
     push_placeholders(reduction.implicit_captures, reduction_subgraph, arg_context)
     with reduction.graph.inserting_before(reduction.fx_node):
         for i in range(num_stages - 1):
+            print(
+                f"\n-> Prologue iteration {i}: Active stages = {[s for s in stages[i] if s is not None]}"
+            )
+            print(f"  Induction vars: {new_induction_variables}")
             add_nodes_by_schedule(
                 reduction,
                 reduction.graph,
@@ -503,6 +518,11 @@ def construct_kernel(
     use_scheduling_barriers: bool = False,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
 ) -> tuple[Iterate, fx.Graph]:
+    print("\n" + "=" * 80)
+    print(f"KERNEL CONSTRUCTION (Steady State): {num_stages} stages active")
+    print(f"Stages active: {list(range(num_stages))}")
+    print(f"Induction vars per stage: {new_induction_variables}")
+    print("=" * 80)
     """
     Construct the kernel of the pipelined loop.
     First, we construct a new reduction op with an empty graph.
@@ -636,6 +656,11 @@ def construct_epilogue(
     logger.debug("=====================================")
     logger.debug("Constructing epilogue.")
     logger.debug("=====================================")
+    print("\n" + "=" * 80)
+    print(f"EPILOGUE CONSTRUCTION: {num_stages} stages, II={initiation_interval}")
+    print(f"Drain schedule: {stages}")
+    print(f"Induction vars: {new_induction_variables}")
+    print("=" * 80)
 
     arg_context = ArgumentContext(
         reduction.outputs(reduction_subgraph),
@@ -786,6 +811,7 @@ def construct_pipelined_loop(
     Given a graph annotated with scheduling parameters, construct a pipelined loop
     with a prologue, kernel and epilogue.
     """
+    breakpoint()
     induction_variable = get_induction_variable(reduction, constraints)
     num_rotating_registers = liveness_analysis(graph)
     multi_buffer_count = compute_multi_buffer_count(
@@ -802,6 +828,21 @@ def construct_pipelined_loop(
     }
 
     partitioned_graph = partition_graph_by_stage(graph, num_stages)
+
+    print("\n" + "=" * 40)
+    print(f"PIPELINED LOOP OVERVIEW")
+    print(f"  Total iterations (K): {max_induction_variable}")
+    print(f"  Num stages: {num_stages}")
+    print(f"  Initiation interval: {initiation_interval}")
+    print(f"  Fill schedule: {create_fill_stage_schedule(num_stages)}")
+    print(f"  Drain schedule: {create_drain_stage_schedule(num_stages)}")
+    print(
+        f"  Main loop will run: {max_induction_variable - (num_stages - 1)} iterations"
+    )
+    print(f"  Prologue iters: {num_stages - 1}")
+    print(f"  Epilogue iters: {num_stages - 1}")
+    print("=" * 40 + "\n")
+
     # Construct prologue.
     construct_prologue(
         graph,
