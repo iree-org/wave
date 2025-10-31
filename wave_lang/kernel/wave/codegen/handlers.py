@@ -53,6 +53,7 @@ from ...compiler.builder import IRProxyValue
 from ...ops.wave_ops import (
     MMABase,
     abs,
+    advance_work_tile,
     allocate,
     apply_expr,
     atan2,
@@ -71,6 +72,7 @@ from ...ops.wave_ops import (
     extract,
     extract_slice,
     ge,
+    get_current_work_tile,
     get_custom,
     get_result,
     gt,
@@ -83,7 +85,9 @@ from ...ops.wave_ops import (
     minimum,
     mma,
     ne,
+    Placeholder,
     permute,
+    persistent_tile_scheduler,
     powf,
     remf,
     reciprocal,
@@ -1421,6 +1425,8 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
         axis, init_args, subgraph, implicit_capture, step, start, condition = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
+    if axis == PERSISTENT:
+        return handle_iterate_persistent_while(emitter, node)
 
     if start:
         return handle_iterate_while(emitter, node)
@@ -2120,3 +2126,176 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
             # Kill the wave.
             llvm_d.intr_trap()
             scf_d.YieldOp([])
+
+
+@handle_op(persistent_tile_scheduler)
+def handle_persistent_tile_scheduler(emitter: WaveEmitter, node: fx.Node):
+    try:
+        global_dims, block_dims = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    i32_type = IntegerType.get_signless(32)
+
+    block_x_idx = gpu_d.block_id(gpu_d.Dimension.x)
+    tile_idx = arith_d.index_cast(i32_type, block_x_idx)
+
+    emitter.bind_node_proxy(node, IRProxyValue(tile_idx))
+
+
+@handle_op(get_current_work_tile)
+def handle_get_current_work_tile(emitter: WaveEmitter, node: fx.Node):
+    try:
+        args = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    if args[1] is None:
+        (scheduler_node,) = (args[0],)
+        tile_idx = cast_py_value(emitter, scheduler_node).ir_value
+    else:
+        scheduler_node, tile_idx_arg = args
+        tile_idx = cast_py_value(emitter, tile_idx_arg).ir_value
+
+    scheduler_custom = get_custom(scheduler_node)
+
+    # replace placeholder w/ lifted value
+    if isinstance(scheduler_custom, Placeholder):
+        assert "lifted" in scheduler_node.meta
+        scheduler_node = scheduler_node.meta["lifted"]
+        scheduler_custom = get_custom(scheduler_node)
+
+    M, N, K = scheduler_custom.global_dims
+    BLOCK_M, BLOCK_N, BLOCK_K = scheduler_custom.block_dims
+
+    subs = emitter.options.subs
+    M = int(M.subs(subs))
+    N = int(N.subs(subs))
+    BLOCK_M = int(BLOCK_M.subs(subs))
+    BLOCK_N = int(BLOCK_N.subs(subs))
+
+    m_tiles = (M + BLOCK_M - 1) // BLOCK_M
+    n_tiles = (N + BLOCK_N - 1) // BLOCK_N
+    k_tiles = (K + BLOCK_K - 1) // BLOCK_K
+    num_output_tiles = m_tiles * n_tiles
+
+    i32_type = IntegerType.get_signless(32)
+
+    num_tiles_i32 = arith_d.constant(i32_type, num_output_tiles)
+    is_valid = arith_d.cmpi(arith_d.CmpIPredicate.ult, tile_idx, num_tiles_i32)
+
+    n_tiles_i32 = arith_d.constant(i32_type, n_tiles)
+    tile_m_coord = arith_d.divui(tile_idx, n_tiles_i32)
+    tile_n_coord = arith_d.remui(tile_idx, n_tiles_i32)
+
+    block_m_i32 = arith_d.constant(i32_type, BLOCK_M)
+    block_n_i32 = arith_d.constant(i32_type, BLOCK_N)
+    m_offset = arith_d.muli(tile_m_coord, block_m_i32)
+    n_offset = arith_d.muli(tile_n_coord, block_n_i32)
+
+    emitter.bind_node_proxies(
+        node,
+        [
+            IRProxyValue(m_offset),
+            IRProxyValue(n_offset),
+            IRProxyValue(tile_idx),
+            IRProxyValue(is_valid),
+        ],
+    )
+
+
+@handle_op(advance_work_tile)
+def handle_advance_work_tile(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (tile_idx_node,) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    tile_idx_values = emitter.lookup_node_values(tile_idx_node)
+
+    if len(tile_idx_values) == 1:
+        tile_idx = tile_idx_values[0]
+    elif len(tile_idx_values) == 4:
+        tile_idx = tile_idx_values[2]
+
+    i32_type = IntegerType.get_signless(32)
+
+    # Stride each CTA's work_tile_idx by grid_dim_x (num of CTAs)
+    stride = arith_d.index_cast(i32_type, gpu_d.grid_dim(gpu_d.Dimension.x))
+    new_tile_idx = arith_d.addi(tile_idx, stride)
+
+    emitter.bind_node_proxy(node, IRProxyValue(new_tile_idx))
+
+
+def handle_iterate_persistent_while(emitter: WaveEmitter, node: fx.Node):
+    try:
+        axis, init_args, subgraph, implicit_capture, step, start, condition = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+    if not hasattr(emitter, "tile_offsets"):
+        emitter.tile_offsets = {}
+
+    i32_type = IntegerType.get_signless(32)
+    i1_type = IntegerType.get_signless(1)
+
+    init_work_tile = init_args[0]
+
+    # get WorkTileInfo: m_offset, n_offset, tile_idx, is_valid (from the current work_tile)
+    init_values = emitter.lookup_node_values(init_work_tile)
+
+    init_m_offset = init_values[0]
+    init_n_offset = init_values[1]
+    init_work_tile_idx = init_values[2]
+    init_is_valid = init_values[3]
+
+    init_args = [init_m_offset, init_n_offset, init_work_tile_idx, init_is_valid]
+    init_arg_types = [i32_type, i32_type, i32_type, i1_type]
+    whileOp = scf_d.WhileOp(init_arg_types, init_args)
+    whileOp.before.blocks.append(*init_arg_types)
+    whileOp.after.blocks.append(*init_arg_types)
+
+    # Before block: condition check
+    current_values = whileOp.before.blocks[0].arguments
+    with InsertionPoint(whileOp.before.blocks[0]):
+        is_valid_work_tile = current_values[3]
+        scf_d.ConditionOp(is_valid_work_tile, current_values)
+
+    # After block: loop body
+    current_values = whileOp.after.blocks[0].arguments
+    with InsertionPoint(whileOp.after.blocks[0]):
+        emitter.tile_offsets["M"] = current_values[0]
+        emitter.tile_offsets["N"] = current_values[1]
+
+        subgraph = emitter.trace.get_subgraph(subgraph)
+
+        # Map the iteration arguments to the current loop values
+        iter_args = get_custom(node).iter_args(subgraph)
+        emitter.bind_node_proxies(
+            iter_args[0],
+            [
+                IRProxyValue(current_values[0]),  # m_offset
+                IRProxyValue(current_values[1]),  # n_offset
+                IRProxyValue(current_values[2]),  # tile_idx
+                IRProxyValue(current_values[3]),  # is_valid
+            ],
+        )
+
+        # Map the captured variables from the root graph to the subgraph
+        for root_v, subgraph_v in zip(
+            implicit_capture, get_custom(node).captured_vars(subgraph)
+        ):
+            emitter._node_values[subgraph_v] = emitter.lookup_node_values(root_v)
+
+        # Emit the subgraph
+        return_values = emitter._emit_graph(subgraph)
+
+        # Get new iter_args from the return
+        new_work_tile_values = emitter.lookup_node_values(return_values[-1])
+        new_m_offset = new_work_tile_values[0]
+        new_n_offset = new_work_tile_values[1]
+        new_tile_idx = new_work_tile_values[2]
+        new_is_valid = new_work_tile_values[3]
+
+        scf_d.YieldOp([new_m_offset, new_n_offset, new_tile_idx, new_is_valid])
+
+    emitter.bind_node_proxies(node, [IRProxyValue(v) for v in whileOp.results_])

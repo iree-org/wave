@@ -264,3 +264,69 @@ def get_gemm_prefetch_kernel_and_schedule(
     )
 
     return gemm_prefetch, prefetch_schedule, options
+
+
+def get_gemm_persistent_kernel(
+    shape: tuple[int, int, int] = (2048, 2048, 2048),
+    mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,
+    compile_to_mlir: bool = True,
+):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(threads_per_wave=64, mma_type=mfma_variant),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_persistent(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        scheduler = tkw.persistent_tile_scheduler(
+            (M, N, K), (BLOCK_M, BLOCK_N, BLOCK_K)
+        )
+        work_tile = tkw.get_current_work_tile(scheduler)
+
+        @tkw.iterate(axis=PERSISTENT, init_args=[work_tile])
+        def work_tile_loop(work_tile_state):
+            c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+            @tkw.iterate(axis=K, init_args=[c_reg])
+            def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+                a_reg = tkw.read(a)
+                b_reg = tkw.read(b)
+                acc = tkw.mma(a_reg, b_reg, acc)
+                return acc
+
+            tkw.write(repeat, c)
+            new_tile_idx = tkw.advance_work_tile(work_tile_state)
+            next_work_tile_info = tkw.get_current_work_tile(scheduler, new_tile_idx)
+            return next_work_tile_info
+
+    M_val, N_val, K_val = shape
+    options = WaveCompileOptions(
+        subs={
+            M: M_val,
+            N: N_val,
+            K: K_val,
+            BLOCK_M: 64,
+            BLOCK_N: 256,
+            BLOCK_K: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+    )
+
+    return gemm_persistent, options

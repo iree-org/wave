@@ -642,6 +642,7 @@ class WorkgroupConstraint(DistributionConstraint):
     primary: Optional[bool] = True
     iters: Optional[IndexExpr | int] = None
     per_device_dim: Optional[IndexExpr] = None
+    is_persistent: bool = False
 
     def __post_init__(self):
         self.wg_dim = None
@@ -674,6 +675,8 @@ class WorkgroupConstraint(DistributionConstraint):
         self.per_device_dim = per_device_dim
 
     def apply(self) -> IndexSequence:
+        if self.is_persistent:
+            return IndexSequence(0, 1)
         if self.apply_fn:
             return IndexSequence(self.apply_fn(self.wg_dim), 1)
         return IndexSequence(self.wg_dim * self.tile_size, 1)

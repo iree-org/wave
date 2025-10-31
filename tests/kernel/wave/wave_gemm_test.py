@@ -42,6 +42,7 @@ from wave_lang.kernel.wave.templates.gemm import (
 )
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
+    get_gemm_persistent_kernel,
 )
 from wave_lang.kernel.lang import DataType
 import os
@@ -2565,4 +2566,34 @@ def testGemmTransposeAB(
     torch_ref = torch.matmul(a.T, b)
     assert_close(
         c.to(torch.float16), torch_ref, atol=1e-3, rtol=1e-3, check_device=False
+    )
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", [(2048, 2048, 2048)])
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [MMAType.F32_16x16x16_F16],
+)
+def test_persistent_gemm(
+    shape: tuple[int],
+    mfma_variant: MMAType,
+):
+    gemm, options = get_gemm_persistent_kernel(
+        shape,
+        mfma_variant,
+    )
+
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, gemm)
+
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_zeros(shape[0], shape[1], device="cuda", dtype=torch.float32)
+    asm = gemm(a, b, c)
+
+    torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
+    assert_close(
+        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
     )

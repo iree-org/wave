@@ -2128,3 +2128,91 @@ def test_gemm_with_transpose_a_b_gfx950():
     # Ensure that the transpose loads and mma are present.
     # CHECK-COUNT-8:    amdgpu.transpose_load {{.*}} : memref<{{.*}}xf16, #gpu.address_space<workgroup>> -> vector<{{.*}}xf16>
     # CHECK-COUNT-8:    amdgpu.mfma {{.*}} * {{.*}} + {{.*}} blgp = none : vector<{{.*}}xf16>, vector<{{.*}}xf16>, vector<{{.*}}xf32>
+
+
+@run_test
+def test_persistent_gemm():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def persistent_gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        scheduler = tkw.persistent_tile_scheduler(
+            (M, N, K), (BLOCK_M, BLOCK_N, BLOCK_K)
+        )
+        work_tile = tkw.get_current_work_tile(scheduler)
+
+        @tkw.iterate(axis=PERSISTENT, init_args=[work_tile])
+        def work_tile_loop(work_tile_state):
+            c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+            @tkw.iterate(axis=K, init_args=[c_reg])
+            def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+                a_reg = tkw.read(a)
+                b_reg = tkw.read(b)
+                acc = tkw.mma(a_reg, b_reg, acc)
+                return acc
+
+            tkw.write(repeat, c)
+            new_tile_idx = tkw.advance_work_tile(work_tile_state)
+            next_work_tile_info = tkw.get_current_work_tile(scheduler, new_tile_idx)
+            return next_work_tile_info
+
+    options = WaveCompileOptions(
+        subs={
+            M: 2048,
+            N: 2048,
+            K: 2048,
+            BLOCK_M: 64,
+            BLOCK_N: 256,
+            BLOCK_K: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    persistent_gemm = wave_compile(options, persistent_gemm)
+    print(persistent_gemm.asm)
+
+    # CHECK-LABEL:    test_persistent_gemm
+    # CHECK:          func.func @persistent_gemm
+    # CHECK-SAME:       (%[[ARG0:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG1:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION:.+]]} {
+
+    # CHECK:            %[[BLOCK_ID_X:.+]] = gpu.block_id  x
+    # CHECK:            %[[BLOCK_ID_CAST:.+]] = arith.index_cast %[[BLOCK_ID_X]] : index to i32
+
+    # Tile offsets for persistent CTA
+    # CHECK:            %[[TILE_CHECK:.+]] = arith.cmpi ult, %[[BLOCK_ID_CAST]], %{{.*}} : i32
+    # CHECK:            %[[TILE_M:.+]] = arith.divui %[[BLOCK_ID_CAST]], %{{.*}} : i32
+    # CHECK:            %[[TILE_N:.+]] = arith.remui %[[BLOCK_ID_CAST]], %{{.*}} : i32
+    # CHECK:            %[[OFFSET_M:.+]] = arith.muli %[[TILE_M]], %{{.*}} : i32
+    # CHECK:            %[[OFFSET_N:.+]] = arith.muli %[[TILE_N]], %{{.*}} : i32
+
+    # Persistent loop
+    # CHECK:            %[[GRID_DIM_X:.+]] = gpu.grid_dim  x
+    # CHECK:            %[[GRID_CAST:.+]] = arith.index_cast %[[GRID_DIM_X]] : index to i32
+    # CHECK:            %{{.*}}:3 = scf.while (%{{.*}} = %[[OFFSET_M]], %{{.*}} = %[[OFFSET_N]], %{{.*}} = %[[BLOCK_ID_CAST]], %{{.*}} = %[[TILE_CHECK]]) : (i32, i32, i32, i1) -> (i32, i32, i32) {
+    # CHECK:              scf.condition(%{{.*}}) %{{.*}}, %{{.*}}, %{{.*}} : i32, i32, i32
+    # CHECK:            } do {
+
+    # Advance to next work tile
+    # CHECK:              %{{.*}} = arith.addi %{{.*}}, %[[GRID_CAST]] : i32
+    # CHECK:              scf.yield {{.*}} : i32, i32, i32, i1
+    # CHECK:            }
+    # CHECK:            return

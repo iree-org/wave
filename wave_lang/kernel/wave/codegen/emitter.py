@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from collections import namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from os import environ
 from typing import Any, Callable, ClassVar, List, Optional, Type
 
@@ -89,6 +89,7 @@ class WaveEmitter:
     grid: list[IndexExpr]
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
     _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}
+    tile_offsets: dict[str, Value] = field(default_factory=dict)
 
     def __post_init__(self):
         self.dynamic_symbols = self.options.dynamic_symbols

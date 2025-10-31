@@ -192,6 +192,47 @@ def _build_mask(
     return mask
 
 
+def _build_mask_from_indices(
+    emitter: WaveEmitter,
+    start_indices: tuple[Value],
+    output_shape: tuple,
+    elements_per_thread: int,
+    bounds: Optional[dict],
+) -> Optional[Value]:
+
+    if bounds is None:
+        return None
+
+    i32_type = IntegerType.get_signless(32)
+    i1_type = IntegerType.get_signless(1)
+
+    last_dim_idx = len(output_shape) - 1
+    last_dim = output_shape[last_dim_idx]
+
+    if last_dim not in bounds:
+        return None
+
+    bound_expr = bounds[last_dim]
+    bound_value = int(safe_subs(bound_expr, emitter.options.subs))
+    bound_i32 = arith_d.constant(i32_type, bound_value)
+
+    base_idx = start_indices[last_dim_idx]
+    base_idx_i32 = arith_d.index_cast(i32_type, base_idx)
+
+    mask_elements = []
+    # apply masking during runtime
+    for i in range(elements_per_thread):
+        element_offset = arith_d.constant(i32_type, i)
+        element_idx = arith_d.addi(base_idx_i32, element_offset)
+        in_bounds = arith_d.cmpi(arith_d.CmpIPredicate.ult, element_idx, bound_i32)
+        mask_elements.append(in_bounds)
+
+    mask_vec_type = VectorType.get([elements_per_thread], i1_type)
+    mask = vector_d.from_elements(mask_vec_type, mask_elements)
+
+    return mask
+
+
 def _get_splat_const(vec_type: IrType, value: Any) -> Value:
     splat = DenseElementsAttr.get_splat(
         vec_type, get_constant_attr(value, vec_type.element_type)
@@ -404,6 +445,34 @@ def _cast_buffer_and_encode_stride(
     return ptr
 
 
+def _add_tile_offset(emitter, start_indices, memory):
+    # don't add offset to indices when writing to shared memory
+    if memory.type.address_space == SHARED_ADDRESS_SPACE:
+        return start_indices
+
+    symbolic_shape = memory.type.symbolic_shape
+    start_indices_with_tile_offset = list(start_indices)
+
+    for idx, dim in enumerate(symbolic_shape):
+        dim_str = str(dim)
+        if dim_str == "M":
+            offset_index = arith_d.index_cast(
+                IndexType.get(), emitter.tile_offsets["M"]
+            )
+            start_indices_with_tile_offset[idx] = arith_d.addi(
+                start_indices_with_tile_offset[idx], offset_index
+            )
+        elif dim_str == "N":
+            offset_index = arith_d.index_cast(
+                IndexType.get(), emitter.tile_offsets["N"]
+            )
+            start_indices_with_tile_offset[idx] = arith_d.addi(
+                start_indices_with_tile_offset[idx], offset_index
+            )
+
+    return start_indices_with_tile_offset
+
+
 def _create_vec_read_write(
     emitter: WaveEmitter,
     symbolic_shape: tuple[IndexExpr, ...],
@@ -603,6 +672,14 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
+
+    # make sure to add tile_offsets for corresponding wg in persistence
+    if emitter.tile_offsets:
+        start_indices = _add_tile_offset(emitter, start_indices, get_custom(memory))
+        mask = _build_mask_from_indices(
+            emitter, start_indices, input_shape, elements_per_thread, bounds
+        )
+
     if read_meets_hw_transpose_requirements(
         get_custom(node), emitter.constraints, emitter.options.target
     ):
@@ -673,6 +750,14 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
+
+    # make sure to add tile_offsets for corresponding wg in persistence
+    if emitter.tile_offsets:
+        start_indices = _add_tile_offset(emitter, start_indices, get_custom(memory))
+        mask = _build_mask_from_indices(
+            emitter, start_indices, input_shape, elements_per_thread, bounds
+        )
+
     _create_vec_read_write(
         emitter,
         output_shape,

@@ -134,6 +134,8 @@ def hoist_loop_invariant_ops(trace: CapturedTrace, constraints: list[Constraint]
         custom_node = get_custom(node)
         match custom_node:
             case Iterate():
+                if custom_node.axis == PERSISTENT:
+                    continue
                 with root_graph.inserting_before(custom_node.fx_node):
                     induction_variable = get_induction_variable(
                         custom_node, constraints

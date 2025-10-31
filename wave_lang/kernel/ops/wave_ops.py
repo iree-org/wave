@@ -2534,7 +2534,9 @@ class GetResult(CustomOp):
 
     @property
     def indexing_dims(self) -> list[IndexExpr]:
-        has_multiple_value = lambda x: all(isinstance(el, list) for el in x)
+        has_multiple_value = lambda x: len(x) > 0 and all(
+            isinstance(el, list) for el in x
+        )
         is_valid_indexing_dim = lambda x: isinstance(src_indexing, list) and all(
             isinstance(el, IndexExpr) for el in x
         )
@@ -3126,3 +3128,40 @@ class ScatterAdd(CustomOp):
     @property
     def has_side_effects(self) -> bool:
         return True
+
+
+@define_op("persistent_tile_scheduler")
+@dataclass
+class PersistentTileScheduler(CustomOp):
+    global_dims: tuple[IndexSymbol, IndexSymbol, IndexSymbol]
+    block_dims: tuple[IndexSymbol, IndexSymbol, IndexSymbol]
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        return []
+
+    def infer_type(self, *args):
+        self.type = i32
+
+
+@define_op("get_current_work_tile")
+@dataclass
+class GetCurrentWorkTile(CustomOp):
+    tile_scheduler: fx.Node
+    tile_idx: Optional[fx.Node] = None
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        return []
+
+    def infer_type(self, *args):
+        self.type = i32
+
+
+@define_op("advance_work_tile")
+@dataclass
+class AdvanceWorkTile(CustomOp):
+    tile_idx: fx.Node
+
+    def infer_type(self, *args):
+        self.type = i32

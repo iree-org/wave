@@ -14,6 +14,7 @@ from torch import fx
 
 from wave_lang.support.logging import get_logger
 
+from wave_lang.kernel.lang.global_symbols import PERSISTENT
 from ..._support.dtype import DataType
 from ..._support.indexing import IndexingContext, IndexSymbol
 from ..._support.tracing import CapturedTrace
@@ -702,6 +703,8 @@ def fixup_iterate_nodes(
     iterate_nodes = trace.walk(lambda x: isinstance(get_custom(x), Iterate))
     for iterate in reversed(iterate_nodes):
         iterate = get_custom(iterate)
+        if iterate.axis == PERSISTENT:
+            continue
         reduction_subgraph = trace.get_subgraph(iterate.subgraph_name)
         output = get_custom(get_last(reduction_subgraph.nodes))
         if all(x is None for x in output.return_vals):
