@@ -56,7 +56,6 @@ from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     CustomOp,
     TensorLoadToLDS,
-    SharedMemoryBarrier,
     IndexSequence,
     Read,
     Write,
