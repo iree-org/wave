@@ -50,7 +50,7 @@ from dataclasses import dataclass
 
 import torch.fx as fx
 
-from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
+from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr, is_literal
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -77,6 +77,7 @@ from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
     infer_dim,
+    is_pow2,
 )
 from .utils.symbol_utils import subs_idxc
 
@@ -231,6 +232,47 @@ def emit_tensor_load_to_shared(
     return tensor_writes
 
 
+def is_supported_padding(padding: int, unpadded_dim: IndexExpr) -> bool:
+    # padding mmust be divisible by DWORD (4 bytes)
+    if padding % 4 != 0:
+        return False
+
+    # Padded dim must be a constant
+    unpadded_dim = subs_idxc(unpadded_dim)
+    if not is_literal(unpadded_dim):
+        return False
+
+    unpadded_dim = int(unpadded_dim)
+
+    # Padded dimension must be power of 2 and at least 2 DWORDs and at most 256 DWORDs
+    if not is_pow2(unpadded_dim) or unpadded_dim < (2 * 4) or unpadded_dim > (256 * 4):
+        return False
+
+    return True
+
+
+def clear_padding(write: Write):
+    """
+    Clear shared memory padding if it's not supported by tensor op.
+    """
+    custom_memory = get_custom(write.memory)
+    padding = custom_memory.padding
+    if padding == 0:
+        return
+
+    unpadded_dim = (
+        custom_memory.unpadded_shape[-1] * custom_memory.dtype.bitwidth() // 8
+    )
+
+    if is_supported_padding(padding, unpadded_dim):
+        return
+
+    custom_memory.update_arg("padding", 0)
+    new_distributed_shape = list(custom_memory.distributed_shape)
+    new_distributed_shape[-1] -= padding
+    custom_memory.update_arg("distributed_shape", tuple(new_distributed_shape))
+
+
 def get_allocation_offsets(trace) -> dict[fx.Node, int]:
     allocs, _, alloc_info = get_alloc_info(trace)
     offsets, allocation_size = determine_allocations_offsets(alloc_info)
@@ -295,16 +337,9 @@ def tensor_load_to_shared(
         if isinstance(c, TilingConstraint) or isinstance(c, WorkgroupConstraint)
     }
 
-    # clear all padding
     for _writes in id_to_read_write.values():
         _, write = _writes[0]
-        custom_memory = get_custom(write.memory)
-        padding = custom_memory.padding
-        if padding != 0:
-            custom_memory.update_arg("padding", 0)
-            new_distributed_shape = list(custom_memory.distributed_shape)
-            new_distributed_shape[-1] -= padding
-            custom_memory.update_arg("distributed_shape", tuple(new_distributed_shape))
+        clear_padding(write)
 
     allocate_offsets = get_allocation_offsets(trace)
 
