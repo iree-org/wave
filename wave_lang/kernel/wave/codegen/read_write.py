@@ -846,14 +846,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     data_size_val = lshift(data_size, 16)
 
     if padding := dst_memory.padding:
-        unpadded_dim = (
-            int(subs_idxc(dst_memory.unpadded_shape[-1]))
-            * dst_memory.dtype.bitwidth()
-            // 8
-        )
+        bytewidth = element_type.bitwidth() // 8
+        unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
         pad_enable = 1 << 20
         pad_interval = int(math.log2((unpadded_dim // 4) - 1)) << 22
-        pad_amount = ((padding // 4) - 1) << 25
+        pad_amount = ((padding * bytewidth) // 4 - 1) << 25
         pad_packed = pad_enable | pad_interval | pad_amount
         data_size_val = arith_d.ori(data_size_val, arith_d.constant(i32, pad_packed))
 
