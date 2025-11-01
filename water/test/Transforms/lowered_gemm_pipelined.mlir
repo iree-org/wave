@@ -55,8 +55,8 @@ module attributes {transform.with_named_sequence} {
           %58 = vector.load %view[%5, %7] : memref<64x36xbf16, #gpu.address_space<workgroup>>, vector<8xbf16>
           %59 = vector.load %view_4[%8, %6] : memref<64x36xbf16, #gpu.address_space<workgroup>>, vector<8xbf16>
           %60 = vector.load %view_4[%8, %7] : memref<64x36xbf16, #gpu.address_space<workgroup>>, vector<8xbf16>
-          %61 = amdgpu.mfma %59 * %57 + %arg4 {blocks = 1 : i32, k = 16 : i32, m = 32 : i32, n = 32 : i32} blgp =  none : vector<8xbf16>, vector<8xbf16>, vector<16xf32>
-          %62 = amdgpu.mfma %60 * %58 + %61 {blocks = 1 : i32, k = 16 : i32, m = 32 : i32, n = 32 : i32} blgp =  none : vector<8xbf16>, vector<8xbf16>, vector<16xf32>
+          %61 = amdgpu.mfma 32x32x16 %59 * %57 + %arg4 {blocks = 1 : i32} blgp =  none : vector<8xbf16>, vector<8xbf16>, vector<16xf32>
+          %62 = amdgpu.mfma 32x32x16 %60 * %58 + %61 {blocks = 1 : i32} blgp =  none : vector<8xbf16>, vector<8xbf16>, vector<16xf32>
           scf.yield %62, %arg7, %arg8, %55, %56 : vector<16xf32>, vector<8xbf16>, vector<8xbf16>, vector<8xbf16>, vector<8xbf16>
         }
         %16 = vector.extract_strided_slice %15#0 {offsets = [0], sizes = [1], strides = [1]} : vector<16xf32> to vector<1xf32>
