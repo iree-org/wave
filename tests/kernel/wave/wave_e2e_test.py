@@ -1976,6 +1976,64 @@ def test_scalar_cond_copy(shape, run_bench):
 @pytest.mark.parametrize(
     "shape",
     [
+        (27,),
+        (51,),
+        (64,),
+        (65,),
+        (128,),
+        (256,),
+        (500,),
+        (512,),
+    ],
+)
+def test_1d_scanop_cumsum(shape, run_bench):
+    N = tkl.sym.N
+    wave_size = 64
+    num_warps = 1
+    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={N: BLOCK_N // num_warps},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+        c: tkl.Memory[N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+    ):
+        lhs = tkw.read(a)
+        res = tkw.cumsum(lhs, dim=N)
+        tkw.write(res, c)
+
+    torch.manual_seed(1)
+    input = device_randint(low=1, high=5, size=shape, dtype=torch.int32)
+    output = device_zeros(shape, dtype=torch.int32)
+    torch_ref = torch.cumsum((input), dim=-1, dtype=torch.int32)
+    options = WaveCompileOptions(
+        subs={
+            N: shape[0],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(input, output)
+    assert_close(torch_ref, output, atol=1e-03, rtol=1e-05)
+
+
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
         (1, 27),
         (1, 64),
         (51, 64),
@@ -1985,7 +2043,7 @@ def test_scalar_cond_copy(shape, run_bench):
         (64, 500),
     ],
 )
-def test_scanop_cumsum(shape, run_bench):
+def test_2d_scanop_cumsum(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     wave_size = 64
@@ -2335,6 +2393,7 @@ def test_self_index(shape, run_bench, threads_per_wave):
     test = wave_compile(options, test)
 
     test(a, result_self_index)
+
     assert_close(ref, result_self_index[0, 0, :])
 
 
