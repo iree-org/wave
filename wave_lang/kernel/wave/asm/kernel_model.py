@@ -59,3 +59,4 @@ class KernelInfo:
     tid_ub_x: int = 64
     # optional: remember last affine map for comments
     affine_map_attr: Optional[object] = None
+    lds_size_bytes: int = 0
