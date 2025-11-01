@@ -342,6 +342,10 @@ def clamp(x: int, min_val: int, max_val: int) -> int:
     return max(min_val, min(x, max_val))
 
 
+def is_pow2(x: int) -> bool:
+    return x > 0 and (x & (x - 1)) == 0
+
+
 def all_equal(input_list: list[Any]) -> bool:
     if len(input_list) == 0:
         return True
