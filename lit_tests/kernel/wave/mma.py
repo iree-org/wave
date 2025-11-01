@@ -591,7 +591,7 @@ def test_wmma_f32_16x16x32_f16():
     # CHECK-LABEL: test_wmma_f32_16x16x32_f16
     # CHECK:          func.func @mma
 
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16"({{.*}}) : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    # CHECK:            rocdl.wmma.f32.16x16x32.f16 {{.*}} : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
 
 
 @run_test
@@ -677,4 +677,4 @@ def test_wmma_with_tensor_load():
     # CHECK:        amdgpu.lds_barrier
 
     ### wmma
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16"({{.*}}) : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    # CHECK:        rocdl.wmma.f32.16x16x32.f16 {{.*}} : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
