@@ -64,9 +64,9 @@ def test_topk():
     # CHECK-DAG: %[[C64_I32:.*]] = arith.constant 64 : i32
     # CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
 
-    # CHECK-DAG: %[[INPUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%[[C0]]], sizes: [32, 64], strides: [64, 1] : memref<f16> to memref<32x64xf16, strided<[64, 1], offset: ?>>
-    # CHECK-DAG: %[[VALUES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%[[C0]]], sizes: [32, 2], strides: [2, 1] : memref<f16> to memref<32x2xf16, strided<[2, 1], offset: ?>>
-    # CHECK-DAG: %[[INDICES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [%[[C0]]], sizes: [32, 2], strides: [2, 1] : memref<i32> to memref<32x2xi32, strided<[2, 1], offset: ?>>
+    # CHECK-DAG: %[[INPUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [32, 64], strides: [64, 1] : memref<f16> to memref<32x64xf16, strided<[64, 1]>>
+    # CHECK-DAG: %[[VALUES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [32, 2], strides: [2, 1] : memref<f16> to memref<32x2xf16, strided<[2, 1]>>
+    # CHECK-DAG: %[[INDICES_OUT:.*]] = memref.reinterpret_cast %{{.*}} to offset: [0], sizes: [32, 2], strides: [2, 1] : memref<i32> to memref<32x2xi32, strided<[2, 1]>>
 
     # Check for read operation
     # CHECK: %[[LOADED:.*]] = vector.load %[[INPUT]]

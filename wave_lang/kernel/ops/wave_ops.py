@@ -48,10 +48,15 @@ IGNORED_KEYWORDS = ["tag"]
 
 
 def read_meets_hw_transpose_requirements(
-    read: Read, constraints: list[Constraint]
+    read: Read, constraints: list[Constraint], target: str
 ) -> bool:
     from ..wave.minimize_global_loads import is_transposed_read
     from ..wave.utils.general_utils import find_index_bounds
+
+    # Check if target architecture supports amdgpu.transpose_load
+    # Only gfx950 and newer architectures support this operation
+    if not target.startswith("gfx95") and not target.startswith("gfx12"):
+        return False
 
     if read.bounds is not None:
         return False
@@ -282,6 +287,9 @@ def powf(lhs: "Register", rhs: "Register") -> "Register": ...
 def mod(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
+def remf(lhs: "Register", rhs: "Register") -> "Register": ...
+
+
 def cbrt(src: "Register") -> "Register": ...
 
 
@@ -391,6 +399,17 @@ def scatter_add(
     mapping: IndexMapping,
     elements_per_thread: Optional[int] = 1,
 ) -> "Register": ...
+
+
+def tensor_load_to_lds(
+    src: Memory,
+    dst: Memory,
+    element_type: DataType,
+    distributed_shape: list[IndexExpr],
+    shared_tile_index: int,
+    global_tile_index: dict[IndexSymbol, IndexSequence],
+    bounds: dict[IndexSymbol, IndexExpr],
+): ...
 
 
 def gather_to_lds(
@@ -1041,6 +1060,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_interface_op("minimum")
 @define_interface_op("atan2")
 @define_interface_op("powf")
+@define_interface_op("remf")
 @dataclass
 class BinaryPyOp(BinaryOpBase, ABC):
     def infer_type(self, *args):
@@ -1463,6 +1483,7 @@ class SharedMemoryBarrier(CustomOp):
     """
 
     wait_async_ops: bool = False
+    tensor_wait: bool = False
 
     @property
     def has_side_effects(self) -> bool:
@@ -1964,11 +1985,11 @@ class Read(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
-        if read_meets_hw_transpose_requirements(self, constraints):
+        if read_meets_hw_transpose_requirements(self, constraints, target):
             return True
 
         if self.has_identity_mapping():
@@ -2326,7 +2347,7 @@ class Write(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
@@ -3021,6 +3042,18 @@ class Reshape(CustomOp, ABC):
 
     def infer_type(self, *args):
         self.type = get_custom(_to_sequence(self.args)[0]).type
+
+
+@define_op("tensor_load_to_lds")
+@dataclass
+class TensorLoadToLDS(CustomOp):
+    src: Memory
+    dst: Memory
+    element_type: DataType
+    distributed_shape: list[IndexExpr]
+    shared_tile_index: int
+    global_tile_index: dict[IndexSymbol, IndexSequence]
+    bounds: dict[IndexSymbol, IndexExpr]
 
 
 @define_op("gather_to_lds")

@@ -8,11 +8,10 @@
 import copy
 import sympy
 
-from .utils.general_utils import get_hardware_constraint
+from .utils.general_utils import get_hardware_constraint, make_index_uniform_per_wave
 from .utils.symbol_utils import safe_subs
 
 from .global_to_shared_gathers import update_read_mapping_dynamic_values
-from ..lang.global_symbols import THREAD_0
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     Read,
@@ -105,22 +104,50 @@ def fetch_delinearized_indices(shape, dtype_width, thread_id, threads_per_wave):
     return compute_transpose_indices(shape, dtype_width, thread_id, threads_per_wave)
 
 
-def modify_index(index, elems_per_thread, delinearized):
-    new_index = {key: index[key].subs({THREAD_0: 0}) for key in index}
+def modify_index(
+    index, elems_per_thread, delinearized, threads_per_wave, waves_per_block
+):
+    """
+    The hardware transpose instruction requires a specific, structured offset
+    for each thread, which conflicts with the existing index offset used in the
+    original Read operation.  To resolve this conflict, this function first
+    collapses the index to the starting thread of the current wave before
+    applying a new, transpose-compatible offset.  This transformation guarantees
+    that the hardware instruction retrieves the same final data that a
+    conventional strided read would have, effectively bridging the index
+    difference.
+    """
 
+    # Make revised index to be wave-uniform by doing (THREAD_0 // 64) * 64
+    # This modification is only applied if there is more than one wave along
+    # that dimension.
+    new_index = make_index_uniform_per_wave(index, threads_per_wave, waves_per_block)
+
+    # Apply delinearized offset and set size/stride
     for i, key in enumerate(index.keys()):
         new_index[key].start += delinearized[i]
+        # Set the size and stride. Only the inner-most loop (the last key)
+        # gets the full number of elements per thread. Others have a size of 1.
         new_index[key].size = elems_per_thread if i == len(index.keys()) - 1 else 1
         new_index[key].stride = 1
+
     return new_index
 
 
-def rewrite_node(read, custom_node, elems_per_thread, delinearized):
+def rewrite_node(
+    read, custom_node, elems_per_thread, delinearized, threads_per_wave, waves_per_block
+):
     bits = custom_node.elements_per_thread * custom_node.type.dtype.bitwidth()
 
     # If a single transpose operation will suffice, then just modify the index
     if bits == 64:
-        custom_node.index = modify_index(read.index, elems_per_thread, delinearized)
+        custom_node.index = modify_index(
+            read.index,
+            elems_per_thread,
+            delinearized,
+            threads_per_wave,
+            waves_per_block,
+        )
         return
 
     # Otherwise, generate smaller read operations, each of which will read 64 bits
@@ -155,7 +182,9 @@ def rewrite_node(read, custom_node, elems_per_thread, delinearized):
         custom_op.infer_type()
         if custom_node.mapping_dynamic_vals:
             update_read_mapping_dynamic_values(custom_op)
-        custom_op.index = modify_index(op.index, elems_per_thread, delinearized)
+        custom_op.index = modify_index(
+            op.index, elems_per_thread, delinearized, threads_per_wave, waves_per_block
+        )
 
     concat = Reshape(read_ops, read.vector_shapes).add_to_graph(
         custom_node.graph, loc=custom_node.location
@@ -187,7 +216,9 @@ def mark_hardware_transpose_candidates(
 
     for read in trace.walk(is_read):
         custom_node = get_custom(read)
-        if not read_meets_hw_transpose_requirements(custom_node, constraints):
+        if not read_meets_hw_transpose_requirements(
+            custom_node, constraints, options.target
+        ):
             continue
 
         mem_type = custom_node.memory_type
@@ -201,4 +232,13 @@ def mark_hardware_transpose_candidates(
 
         with custom_node.graph.inserting_before(read):
             elems_per_thread = hardware_constraint.max_elems_per_load(mem_type.dtype)
-            rewrite_node(read, custom_node, elems_per_thread, maybe_indices)
+            threads_per_wave = hardware_constraint.threads_per_wave
+            waves_per_block = hardware_constraint.waves_per_block
+            rewrite_node(
+                read,
+                custom_node,
+                elems_per_thread,
+                maybe_indices,
+                threads_per_wave,
+                waves_per_block,
+            )

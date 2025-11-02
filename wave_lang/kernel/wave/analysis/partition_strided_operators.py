@@ -389,7 +389,9 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
             custom.graph.erase_node(custom.fx_node)
 
 
-def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint]):
+def partition_gather_like_ops(
+    trace: CapturedTrace, constraints: list[Constraint], target: str
+):
     """
     This pass partitions gather-like operations (reads/writes with non-contiguous access patterns) into
     multiple contiguous operations.
@@ -413,7 +415,7 @@ def partition_gather_like_ops(trace: CapturedTrace, constraints: list[Constraint
         """
         custom = get_custom(node)
         if isinstance(custom, (Read, Write)):
-            return not custom.is_contiguous_vec(constraints)
+            return not custom.is_contiguous_vec(constraints, target)
 
         return False
 

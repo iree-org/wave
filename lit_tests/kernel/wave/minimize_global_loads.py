@@ -341,7 +341,7 @@ def test_materialized_shape_padding():
     # CHECK:          func.func @gemm
     # CHECK:            %{{.*}} = arith.constant dense<17> : vector<8xindex>
     # CHECK:            %{{.*}} = arith.constant dense<[0, 1, 2, 3, 4, 5, 6, 7]> : vector<8xindex>
-    # CHECK:            %{{.*}} = vector.maskedload %{{.*}}[%{{.*}}, %{{.*}}], %{{.*}}, %{{.*}}: memref<16x17xf16, strided<[17, 1], offset: ?>>, vector<8xi1>, vector<8xf16> into vector<8xf16>
+    # CHECK:            %{{.*}} = vector.maskedload %{{.*}}[%{{.*}}, %{{.*}}], %{{.*}}, %{{.*}}: memref<16x17xf16, strided<[17, 1]>>, vector<8xi1>, vector<8xf16> into vector<8xf16>
 
 
 if __name__ == "__main__":

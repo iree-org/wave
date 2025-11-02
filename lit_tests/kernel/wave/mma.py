@@ -79,29 +79,24 @@ def test_mma():
     # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1280]]][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x20xf16, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[D12:.+]] = vector.load %[[ALLOC]][{{.*}}, {{.*}}] : memref<32x20xf16,
     # CHECK-DAG:        %[[D20:.+]] = vector.load %[[ALLOC_0]][{{.*}}, {{.*}}] : memref<32x20xf16,
-    # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 16 : i32, m = 16 :
-    # CHECK-SAME:         i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+    # CHECK:            %[[D21:.+]] = amdgpu.mfma 16x16x16 %[[D20]] * %[[D12]] + %[[CST]] blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
     # CHECK:            %[[D22:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
 
     # CHECK:            %[[OFF0:.*]] = affine.apply #[[MAP0]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D22]], {{.*}}[%[[OFF0]], {{.*}}]  : memref<64x128xf32, strided<[128, 1], offset:
-    # CHECK-SAME:         ?>>, vector<1xf32>
+    # CHECK:            vector.store %[[D22]], {{.*}}[%[[OFF0]], {{.*}}]  : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
     # CHECK:            %[[D26:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [1], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
     # CHECK:            %[[OFF1:.*]] = affine.apply #[[MAP1]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D26]], {{.*}}[%[[OFF1]], {{.*}}] : memref<64x128xf32, strided<[128, 1], offset:
-    # CHECK-SAME:         ?>>, vector<1xf32>
+    # CHECK:            vector.store %[[D26]], {{.*}}[%[[OFF1]], {{.*}}] : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
     # CHECK:            %[[D28:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [2], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
     # CHECK:            %[[OFF2:.*]] = affine.apply #[[MAP2]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D28]], {{.*}}[%[[OFF2]], {{.*}}] : memref<64x128xf32, strided<[128, 1], offset:
-    # CHECK-SAME:         ?>>, vector<1xf32>
+    # CHECK:            vector.store %[[D28]], {{.*}}[%[[OFF2]], {{.*}}] : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
     # CHECK:            %[[D30:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [3], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
     # CHECK:            %[[OFF3:.*]] = affine.apply #[[MAP3]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
-    # CHECK:            vector.store %[[D30]], {{.*}}[%[[OFF3]], {{.*}}] : memref<64x128xf32, strided<[128, 1], offset:
-    # CHECK-SAME:         ?>>, vector<1xf32>
+    # CHECK:            vector.store %[[D30]], {{.*}}[%[[OFF3]], {{.*}}] : memref<64x128xf32, strided<[128, 1]>>, vector<1xf32>
 
 
 @run_test
@@ -174,13 +169,12 @@ def test_mma_32x32x8():
     # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
     # CHECK-DAG:        %[[C1536:.+]] = arith.constant 1536 : index
     # CHECK-DAG:        %[[SUBSPAN:.*]] = stream.binding.subspan %arg2[%[[C0]]] : !stream.binding -> memref<f32>
-    # CHECK-DAG:        %[[DST:.*]] = memref.reinterpret_cast %[[SUBSPAN]] to offset: [%[[C0]]], sizes: [128, 128], strides: [128, 1] : memref<f32> to memref<128x128xf32, strided<[128, 1], offset: ?>>
+    # CHECK-DAG:        %[[DST:.*]] = memref.reinterpret_cast %[[SUBSPAN]] to offset: [0], sizes: [128, 128], strides: [128, 1] : memref<f32> to memref<128x128xf32, strided<[128, 1]>>
     # CHECK-DAG:        %[[ALLOC:.+]] = memref.view %[[BASE_ALLOC]][%[[C0]]][] : memref<3072xi8, #gpu.address_space<workgroup>> to memref<64x12xf16, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1536]]][] : memref<3072xi8, #gpu.address_space<workgroup>> to memref<64x12xf16, #gpu.address_space<workgroup>>
     # CHECK:            %[[D12:.+]] = vector.load %[[ALLOC]]{{.*}} : memref<64x12xf16,
     # CHECK:            %[[D20:.+]] = vector.load %[[ALLOC_0]]{{.*}} : memref<64x12xf16,
-    # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 8 : i32, m = 32 :
-    # CHECK-SAME:         i32, n = 32 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+    # CHECK:            %[[D21:.+]] = amdgpu.mfma 32x32x8 %[[D20]] * %[[D12]] + %[[CST]] blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
     # CHECK:            %[[VAL0:.*]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
 
     # CHECK:            %[[OFF0:.*]] = affine.apply #[[MAP0]]()[%[[workgroup_id_0]], %[[thread_id_x]]]
@@ -303,8 +297,7 @@ def test_mma_32x32x16():
     # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1536]]][] : memref<3072xi8, #gpu.address_space<workgroup>> to memref<64x24xf8E4M3FNUZ, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[D12:.+]] = vector.load %[[ALLOC]]{{.*}} : memref<64x24xf8E4M3FNUZ,
     # CHECK:            %[[D20:.+]] = vector.load %[[ALLOC_0]]{{.*}} : memref<64x24xf8E4M3FNUZ,
-    # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 16 : i32, m = 32 :
-    # CHECK-SAME:         i32, n = 32 : i32} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
+    # CHECK:            %[[D21:.+]] = amdgpu.mfma 32x32x16 %[[D20]] * %[[D12]] + %[[CST]] blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
     # CHECK:            %[[D22:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<16xf32> to vector<1xf32>
 
@@ -370,8 +363,7 @@ def test_mma_16x16x32():
     # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1280]]][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x40xf8E4M3FNUZ, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[D12:.+]] = vector.load %[[ALLOC]][{{.*}}, {{.*}}] : memref<32x40xf8E4M3FNUZ,
     # CHECK-DAG:        %[[D20:.+]] = vector.load %[[ALLOC_0]][{{.*}}, {{.*}}] : memref<32x40xf8E4M3FNUZ,
-    # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 32 : i32, m = 16 :
-    # CHECK-SAME:         i32, n = 16 : i32} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>
+    # CHECK:            %[[D21:.+]] = amdgpu.mfma 16x16x32 %[[D20]] * %[[D12]] + %[[CST]] blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>
     # CHECK:            %[[D22:.+]] = vector.extract_strided_slice %[[D21]] {offsets = [0], sizes = [1], strides = [1]} :
     # CHECK-SAME:         vector<4xf32> to vector<1xf32>
 
@@ -437,8 +429,7 @@ def test_mma_with_linear_shared_access():
     # CHECK-DAG:        %[[LINEAR_ALLOC:.+]] = memref.reinterpret_cast %[[ALLOC]] to offset: [0], sizes: [640], strides: [1] : memref<32x20xf16, #gpu.address_space<workgroup>> to memref<640xf16, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[D12:.+]] = vector.load %[[LINEAR_ALLOC]][{{.*}}] : memref<640xf16,
     # CHECK-DAG:        %[[D20:.+]] = vector.load %[[LINEAR_ALLOC_0]][{{.*}}] : memref<640xf16,
-    # CHECK:            %[[D21:.+]] = amdgpu.mfma %[[D20]] * %[[D12]] + %[[CST]] {blocks = 1 : i32, k = 16 : i32, m = 16 :
-    # CHECK-SAME:         i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+    # CHECK:            %[[D21:.+]] = amdgpu.mfma 16x16x16 %[[D20]] * %[[D12]] + %[[CST]] blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
 
 
 @run_test
@@ -517,7 +508,7 @@ def test_wmma_f32_16x16x16_f16_w32():
     # CHECK-DAG:        %[[R3:.+]] = vector.load %[[VIEW0]][%[[V8]], %[[V2]]] {{.*}} vector<8xf16>
     # CHECK-DAG:        %[[R4:.+]] = vector.load %[[VIEW1]][%[[V4]], %[[V2]]] {{.*}} vector<8xf16>
 
-    # CHECK-DAG:        %[[V11:.+]] = amdgpu.wmma %[[R4]] * %[[R3]] + %[[CST]] : vector<8xf16>, vector<8xf16>, vector<8xf32>
+    # CHECK-DAG:        %[[V11:.+]] = amdgpu.wmma 16x16x16 %[[R4]] * %[[R3]] + %[[CST]] : vector<8xf16>, vector<8xf16>, vector<8xf32>
 
     # CHECK-DAG:        %[[E1:.+]] = vector.extract_strided_slice %[[V11]] {offsets = [0], sizes = [1], strides = [1]} : vector<8xf32> to vector<1xf32>
 
@@ -600,4 +591,90 @@ def test_wmma_f32_16x16x32_f16():
     # CHECK-LABEL: test_wmma_f32_16x16x32_f16
     # CHECK:          func.func @mma
 
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16"({{.*}}) : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    # CHECK:            rocdl.wmma.f32.16x16x32.f16 {{.*}} : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+
+
+@run_test
+def test_wmma_with_tensor_load():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32, mma_type=tkw.MMAType.GFX1250_F32_16x16x32_F16
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a)
+        b_reg = tkw.read(b)
+        acc = tkw.mma(a_reg, b_reg, c_reg)
+        tkw.write(acc, c)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 128,
+            K: 32,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            BLOCK_K: 16,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx1250",
+        use_global_to_shared=True,
+    )
+    mma = wave_compile(compile_options, mma)
+    print(mma.asm)
+
+    # CHECK-LABEL: test_wmma_with_tensor_load
+    # CHECK:          func.func @mma
+
+    ### global buffer is bound to %0, %1 and %2 : MK, NK, MN
+    # CHECK:        %[[SUBSPAN0:.*]] = stream.binding.subspan
+    # CHECK:        %[[SUBSPAN1:.*]] = stream.binding.subspan
+    # CHECK:        %[[SUBSPAN2:.*]] = stream.binding.subspan
+
+    # CHECK:        %[[CAST_0:.*]] = memref.reinterpret_cast %[[SUBSPAN0]]
+    # CHECK:        %[[CAST_1:.*]] = memref.reinterpret_cast %[[SUBSPAN1]]
+    # CHECK:        %[[CAST_2:.*]] = memref.reinterpret_cast %[[SUBSPAN2]]
+
+    ### shared memory alloc
+    # CHECK:        %[[SMEM:.+]] = memref.alloc()
+    # CHECK:        %[[VIEW0:.+]] = memref.view
+    # CHECK:        %[[VIEW1:.+]] = memref.view
+
+    ### get global buffer pointer
+    # CHECK:        %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
+
+    ### get shared buffer pointer
+    # CHECK:        %[[CAST_3:.*]] = memref.reinterpret_cast %[[VIEW1]]
+    # CHECK:        %[[INT_PTR_1:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_3]]
+
+    ### pack descriptors and invoke tensor load
+    # CHECK:        %[[D0:.*]] = vector.from_elements
+    # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK:        amdgpu.lds_barrier
+
+    ### pack descriptors and invoke tensor load
+    # CHECK:        %[[D1:.*]] = vector.from_elements
+    # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D1]], %[[TENSOR_DESC_1]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK:        amdgpu.lds_barrier
+
+    ### wmma
+    # CHECK:        rocdl.wmma.f32.16x16x32.f16 {{.*}} : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
