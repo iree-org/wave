@@ -111,6 +111,15 @@ func.func @index_attr_not_dict(%arg0: f32) {
 
 // -----
 
+// 'index' array elements must be dictionaries mapping to WaveIndexMappingAttr values.
+func.func @index_attr_wrong_value_type(%arg0: f32) {
+  // expected-error @below {{'index' attribute value for key "M" must be WaveIndexMappingAttr, got 42 : i64}}
+  "wave.register"(%arg0) { index = [{ M = 42 }] } : (f32) -> vector<4xf32>
+  return
+}
+
+// -----
+
 func.func @mismatch_shape_binary(%lhs: !wave.tensor<[@A, @B] of f32>, %rhs: !wave.tensor<[@B, @C] of f32>) {
   // expected-error @below {{expected operand #1 dimension #0 (#wave.symbol<"B">) to match operand #0 dimension #0 (#wave.symbol<"A">)}}
   wave.add %lhs, %rhs : (!wave.tensor<[@A, @B] of f32>, !wave.tensor<[@B, @C] of f32>) -> !wave.tensor<any of f32>

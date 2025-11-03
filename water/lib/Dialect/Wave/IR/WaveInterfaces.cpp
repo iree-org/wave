@@ -38,12 +38,12 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
     dicts.push_back(dict);
   }
 
-  for (auto dictAttr : dicts) {
+  for (DictionaryAttr dictAttr : dicts) {
     for (auto named : dictAttr) {
       auto val = named.getValue();
       if (!isa<wave::WaveIndexMappingAttr>(val))
-        return op->emitError(
-                   "index attribute values must be WaveIndexMappingAttr, got ")
+        return op->emitError("'index' attribute value for key ")
+               << named.getName() << " must be WaveIndexMappingAttr, got "
                << val;
 
       auto mapping = cast<wave::WaveIndexMappingAttr>(val);
