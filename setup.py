@@ -1,5 +1,4 @@
-# Copyright 2023 Advanced Micro Devices, Inc.
-# Copyright 2024 The IREE Authors
+# Copyright 2025 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
@@ -18,6 +17,7 @@ from setuptools_rust import RustExtension
 
 THIS_DIR = os.path.realpath(os.path.dirname(__file__))
 REPO_ROOT = THIS_DIR
+WAVE_IS_STABLE_REL = int(os.getenv("WAVE_IS_STABLE_REL", "0"))
 
 
 class CMakeExtension(Extension):
@@ -104,12 +104,13 @@ def load_requirement_pins(requirements_file: str):
     requirement_pins.update(dict(pin_pairs))
 
 
-load_requirement_pins("requirements.txt")
+if WAVE_IS_STABLE_REL:
+    load_requirement_pins("requirements-iree-stable.txt")
 
 
 def get_version_spec(dep: str):
     if dep in requirement_pins:
-        return f">={requirement_pins[dep]}"
+        return f"=={requirement_pins[dep]}"
     else:
         return ""
 
