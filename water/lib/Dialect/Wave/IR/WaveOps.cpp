@@ -323,7 +323,7 @@ LogicalResult MmaOp::verify() {
 // non-unit dimension) and its correspondence with the explicit elements per
 // thread, if provided, and with the number of elements in the vector type.
 static LogicalResult
-verifyIndexElementsPerThread(Operation *op, mlir::DictionaryAttr indexDict,
+verifyIndexElementsPerThread(Operation *op, mlir::ArrayAttr indexAttr,
                              std::optional<int64_t> elementsPerThread,
                              wave::WaveTensorType tensorType,
                              Type maybeVectorType) {
@@ -339,6 +339,17 @@ verifyIndexElementsPerThread(Operation *op, mlir::DictionaryAttr indexDict,
            << *elementsPerThread << "), got " << vectorType.getDimSize(0);
   }
 
+  // The 'index' attribute is optional. For non-MMA ops (read/write), we only
+  // use a single index expression, which is stored as the first (and only)
+  // dictionary inside the array attribute.
+  ArrayAttr arr = dyn_cast_or_null<ArrayAttr>(indexAttr);
+  if (!arr)
+    return success();
+  if (!llvm::hasSingleElement(arr.getValue()))
+    return op->emitError() << "'index' attribute must contain exactly one "
+                              "dictionary for this op, got "
+                           << arr.size();
+  DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(arr[0]);
   if (!indexDict)
     return success();
 

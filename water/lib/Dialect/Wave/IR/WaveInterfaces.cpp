@@ -27,46 +27,57 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   if (!attribute)
     return success();
 
-  auto dictAttr = dyn_cast<DictionaryAttr>(attribute);
-  if (!dictAttr)
-    return op->emitError("'index' attribute must be a dictionary");
+  auto arr = dyn_cast<ArrayAttr>(attribute);
+  if (!arr)
+    return op->emitError("'index' attribute must be an array of dictionaries");
+  SmallVector<DictionaryAttr> dicts;
+  dicts.reserve(arr.size());
+  for (Attribute nestedAttr : arr) {
+    auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
+    if (!dict)
+      return op->emitError("'index' array elements must be dictionaries");
+    dicts.push_back(dict);
+  }
 
-  for (auto named : dictAttr) {
-    auto val = named.getValue();
-    if (!isa<wave::WaveIndexMappingAttr>(val))
-      return op->emitError(
-                 "index attribute values must be WaveIndexMappingAttr, got ")
-             << val;
+  for (DictionaryAttr dictAttr : dicts) {
+    for (auto named : dictAttr) {
+      auto val = named.getValue();
+      if (!isa<wave::WaveIndexMappingAttr>(val))
+        return op->emitError("'index' attribute value for key ")
+               << named.getName() << " must be WaveIndexMappingAttr, got "
+               << val;
 
-    auto mapping = cast<wave::WaveIndexMappingAttr>(val);
-    auto checkNoDims = [&](AffineMap map, StringRef which) -> LogicalResult {
-      if (map.getNumDims() != 0)
+      auto mapping = cast<wave::WaveIndexMappingAttr>(val);
+      auto checkNoDims = [&](AffineMap map, StringRef which) -> LogicalResult {
+        if (map.getNumDims() != 0)
+          return op->emitError(
+                     "wave indexing " + which +
+                     " map should have no dimensions, only symbols, got ")
+                 << map.getNumDims() << " dimensions for symbol "
+                 << named.getName();
+        return success();
+      };
+
+      AffineMap startMap = mapping.getStart();
+      AffineMap stepMap = mapping.getStep();
+      AffineMap strideMap = mapping.getStride();
+      if (failed(checkNoDims(startMap, "start")) ||
+          failed(checkNoDims(stepMap, "step")) ||
+          failed(checkNoDims(strideMap, "stride")))
+        return failure();
+
+      unsigned declared = mapping.getSymbolNames().size();
+      if (startMap.getNumSymbols() != declared ||
+          stepMap.getNumSymbols() != declared ||
+          strideMap.getNumSymbols() != declared)
         return op->emitError(
-                   "wave indexing " + which +
-                   " map should have no dimensions, only symbols, got ")
-               << map.getNumDims() << " dimensions for symbol "
-               << named.getName();
-      return success();
-    };
-
-    AffineMap startMap = mapping.getStart();
-    AffineMap stepMap = mapping.getStep();
-    AffineMap strideMap = mapping.getStride();
-    if (failed(checkNoDims(startMap, "start")) ||
-        failed(checkNoDims(stepMap, "step")) ||
-        failed(checkNoDims(strideMap, "stride")))
-      return failure();
-
-    unsigned declared = mapping.getSymbolNames().size();
-    if (startMap.getNumSymbols() != declared ||
-        stepMap.getNumSymbols() != declared ||
-        strideMap.getNumSymbols() != declared)
-      return op->emitError("inconsistent symbol count between symbol_names and "
-                           "affine maps for index symbol '")
-             << named.getName() << "' (expected " << declared
-             << ", got start=" << startMap.getNumSymbols()
-             << ", step=" << stepMap.getNumSymbols()
-             << ", stride=" << strideMap.getNumSymbols() << ")";
+                   "inconsistent symbol count between symbol_names and "
+                   "affine maps for index symbol '")
+               << named.getName() << "' (expected " << declared
+               << ", got start=" << startMap.getNumSymbols()
+               << ", step=" << stepMap.getNumSymbols()
+               << ", stride=" << strideMap.getNumSymbols() << ")";
+    }
   }
   return success();
 }
@@ -76,48 +87,64 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
 //-----------------------------------------------------------------------------
 
 // ODS custom directive: parseWaveIndexDict/printWaveIndexDict
-ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, DictionaryAttr &out) {
-  llvm::SmallVector<NamedAttribute, 4> mappingDict;
-  if (parser.parseLBrace())
-    return failure();
-
-  auto parseOne = [&]() -> ParseResult {
-    llvm::StringRef symbolName;
-    if (parser.parseKeyword(&symbolName) || parser.parseColon())
+ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, ArrayAttr &out) {
+  auto parseSingleDict = [&](DictionaryAttr &out) -> ParseResult {
+    SmallVector<NamedAttribute, 4> entries;
+    if (parser.parseLBrace())
       return failure();
-
-    // Parse WaveIndexMappingAttr using its custom parser to allow concise
-    // syntax.
-    auto indexMapping = wave::WaveIndexMappingAttr::parse(parser, Type{});
-    if (!indexMapping)
+    auto parseEntry = [&]() -> ParseResult {
+      StringRef symbolName;
+      if (parser.parseKeyword(&symbolName) || parser.parseColon())
+        return failure();
+      Attribute mapping = wave::WaveIndexMappingAttr::parse(parser, Type{});
+      if (!mapping)
+        return failure();
+      entries.emplace_back(parser.getBuilder().getStringAttr(symbolName),
+                           mapping);
+      return success();
+    };
+    if (parser.parseCommaSeparatedList(parseEntry) || parser.parseRBrace())
       return failure();
-
-    mappingDict.emplace_back(parser.getBuilder().getStringAttr(symbolName),
-                             indexMapping);
+    out = parser.getBuilder().getDictionaryAttr(entries);
     return success();
   };
 
-  if (parser.parseCommaSeparatedList(parseOne) || parser.parseRBrace())
+  SmallVector<Attribute> dicts;
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square,
+                                     [&]() -> ParseResult {
+                                       DictionaryAttr dict;
+                                       if (failed(parseSingleDict(dict)))
+                                         return failure();
+                                       dicts.push_back(dict);
+                                       return success();
+                                     }))
     return failure();
-
-  out = parser.getBuilder().getDictionaryAttr(mappingDict);
+  out = parser.getBuilder().getArrayAttr(dicts);
   return success();
 }
 
 void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
-                              DictionaryAttr dict) {
-  printer.getStream() << "{";
-  llvm::interleaveComma(
-      dict, printer.getStream(), [&](NamedAttribute namedAttr) {
-        printer.getStream() << namedAttr.getName().getValue() << " : ";
-        if (auto mappingAttr = llvm::dyn_cast<wave::WaveIndexMappingAttr>(
-                namedAttr.getValue())) {
-          mappingAttr.print(printer);
-        } else {
-          printer.printAttribute(namedAttr.getValue());
-        }
-      });
-  printer.getStream() << "}";
+                              ArrayAttr arr) {
+  auto printOne = [&](DictionaryAttr dict) {
+    printer.getStream() << "{";
+    llvm::interleaveComma(
+        dict, printer.getStream(), [&](NamedAttribute namedAttr) {
+          printer.getStream() << namedAttr.getName().getValue() << " : ";
+          if (auto mappingAttr = llvm::dyn_cast<wave::WaveIndexMappingAttr>(
+                  namedAttr.getValue())) {
+            mappingAttr.print(printer);
+          } else {
+            printer.printAttribute(namedAttr.getValue());
+          }
+        });
+    printer.getStream() << "}";
+  };
+  // Always print as an array to match the parser syntax.
+  printer.getStream() << "[";
+  llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
+    printOne(llvm::cast<DictionaryAttr>(a));
+  });
+  printer.getStream() << "]";
 }
 
 //-----------------------------------------------------------------------------

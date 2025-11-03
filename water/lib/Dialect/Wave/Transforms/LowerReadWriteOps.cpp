@@ -371,10 +371,16 @@ static FailureOr<MemAccessInfo> createMemoryIndicesAndMask(
   // This logic operates after the "expansion" pass that usually unrolls all
   // tensor dimensions but one so the extent along them is 1. The dimension
   // with non-unit extent is considered to be vectorized.
-  DictionaryAttr indexDict = op.getIndexAttr();
-  if (!indexDict)
+
+  // Read/Write ops only carry a single index expression: the first (and only)
+  // dictionary inside the array attribute.
+  ArrayAttr indexArr = op.getIndexAttr();
+  if (!indexArr)
     return rewriter.notifyMatchFailure(
         op, "cannot lower without 'index' attribute");
+  assert(llvm::hasSingleElement(indexArr.getValue()) &&
+         "'index' must be an array with exactly one dictionary");
+  DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
   std::optional<int64_t> vectorizedDim =
       wave::getPositionOfVectorizedDim(orderedSyms, indexDict, hyper);
 
