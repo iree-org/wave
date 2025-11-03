@@ -275,7 +275,7 @@ def clear_padding(write: Write):
 
 def get_allocation_offsets(trace) -> dict[fx.Node, int]:
     allocs, _, alloc_info = get_alloc_info(trace)
-    offsets, allocation_size = determine_allocations_offsets(alloc_info)
+    offsets, _ = determine_allocations_offsets(alloc_info)
     allocs_to_offsets = {allocs[i]: offsets[i] for i in range(len(allocs))}
     return allocs_to_offsets
 
