@@ -30,7 +30,8 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   auto arr = dyn_cast<ArrayAttr>(attribute);
   if (!arr)
     return op->emitError("'index' attribute must be an array of dictionaries");
-  SmallVector<DictionaryAttr, 3> dicts;
+  SmallVector<DictionaryAttr> dicts;
+  dicts.reserve(arr.size());
   for (Attribute nestedAttr : arr) {
     auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
     if (!dict)
