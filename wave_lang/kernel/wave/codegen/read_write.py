@@ -847,6 +847,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     if padding := dst_memory.padding:
         unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
+        assert (
+            unpadded_dim >= 8
+        ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
         pad_enable = 1 << 20
         pad_interval = int(math.log2((unpadded_dim // 4) - 1)) << 22
         pad_amount = ((padding * bytewidth) // 4 - 1) << 25
