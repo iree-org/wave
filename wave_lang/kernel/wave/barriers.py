@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from enum import Enum, auto
 from dataclasses import dataclass
 from collections import defaultdict
 from typing import Optional
@@ -12,82 +11,20 @@ from typing import Optional
 import torch.fx as fx
 
 from .._support.tracing import CapturedTrace
-from ..lang.global_symbols import SHARED_ADDRESS_SPACE
 from ..ops.wave_ops import (
-    AtomicOp,
-    CustomOp,
     GatherToLDS,
     NestedRegionOp,
-    Read,
     Iterate,
     Conditional,
     SharedMemoryBarrier,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
-    Write,
     get_custom,
 )
 from .utils.graph_utils import (
     is_barrier_between,
     is_iterate_subgraph,
-    propagate_loop_carried_vars,
 )
-
-
-class MemoryAccessType(Enum):
-    """Enum to classify memory access operations."""
-
-    NONE = auto()
-    READ = auto()
-    WRITE = auto()
-    READ_WRITE = auto()
-
-
-def is_shared_memory_op(node: CustomOp, depth: int) -> Optional[fx.Node]:
-    if (
-        isinstance(node, (Read, Write))
-        and node.memory_type.address_space == SHARED_ADDRESS_SPACE
-    ):
-        return propagate_loop_carried_vars(node.memory, depth)
-    if (
-        isinstance(node, AtomicOp)
-        and node.memory_type.address_space == SHARED_ADDRESS_SPACE
-    ):
-        return propagate_loop_carried_vars(node.rhs, depth)
-    elif isinstance(node, GatherToLDS):
-        return propagate_loop_carried_vars(node.dst, depth)
-
-    return None
-
-
-def get_memory_access_type(node: CustomOp) -> MemoryAccessType:
-    if isinstance(node, Read):
-        return MemoryAccessType.READ
-    elif isinstance(node, Write):
-        return MemoryAccessType.WRITE
-    elif isinstance(node, AtomicOp):
-        return MemoryAccessType.READ_WRITE
-    elif isinstance(node, GatherToLDS):
-        return MemoryAccessType.WRITE
-    else:
-        return MemoryAccessType.NONE
-
-
-def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
-    access_type1 = get_memory_access_type(node1)
-    if access_type1 == MemoryAccessType.NONE:
-        return False
-    access_type2 = get_memory_access_type(node2)
-    if access_type2 == MemoryAccessType.NONE:
-        return False
-
-    if access_type1 != access_type2:
-        return True
-
-    if access_type1 == MemoryAccessType.READ_WRITE:
-        return True
-
-    return False
 
 
 @dataclass
