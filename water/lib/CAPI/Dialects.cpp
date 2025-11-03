@@ -16,6 +16,13 @@
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Wave, wave, ::wave::WaveDialect)
 
 //===---------------------------------------------------------------------===//
+// Wave Dialect Constants
+//===---------------------------------------------------------------------===//
+
+const char *const mlirWaveDialectConstraintsAttrName =
+    wave::WaveDialect::kWaveConstraintsAttrName.data();
+
+//===---------------------------------------------------------------------===//
 // WaveSymbolAttr
 //===---------------------------------------------------------------------===//
 
@@ -225,7 +232,7 @@ bool mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr) {
 
 MlirAttribute
 mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
-                              unsigned *wavesPerBlock, size_t wavesPerBlockSize,
+                              size_t wavesPerBlockSize, unsigned *wavesPerBlock,
                               MlirAttribute mmaType, MlirAttribute vectorShapes,
                               unsigned maxBitsPerLoad) {
   mlir::MLIRContext *ctx = unwrap(mlirCtx);

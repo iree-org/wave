@@ -15,6 +15,9 @@ try:
     with ir.Context() as ctx:
         wave.register_dialect(ctx)
 
+        # CHECK: wave.constraints
+        print(wave.WAVE_CONSTRAINTS_ATTR_NAME)
+
         # CHECK: #wave.symbol<"test">
         print(wave.WaveSymbolAttr.get("test"))
 

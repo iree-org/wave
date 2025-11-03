@@ -16,6 +16,13 @@ extern "C" {
 MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Wave, wave);
 
 //===---------------------------------------------------------------------===//
+// Wave Dialect Constants
+//===---------------------------------------------------------------------===//
+
+/// The attribute name for wave constraints.
+MLIR_CAPI_EXPORTED extern const char *const mlirWaveDialectConstraintsAttrName;
+
+//===---------------------------------------------------------------------===//
 // WaveSymbolAttr
 //===---------------------------------------------------------------------===//
 
@@ -164,8 +171,8 @@ mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr);
 
 /// Creates a new HardwareConstraintAttr
 MLIR_CAPI_EXPORTED MlirAttribute mlirHardwareConstraintAttrGet(
-    MlirContext mlirCtx, unsigned threadsPerWave, unsigned *wavesPerBlock,
-    size_t wavesPerBlockSize, MlirAttribute mmaType, MlirAttribute vectorShapes,
+    MlirContext mlirCtx, unsigned threadsPerWave, size_t wavesPerBlockSize,
+    unsigned *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
     unsigned maxBitsPerLoad);
 
 /// Returns the typeID of a HardwareConstraintAttr.
