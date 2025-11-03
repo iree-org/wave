@@ -772,8 +772,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_value = global_mem.ir_value
     shared_value = shared_mem.ir_value
 
-    element_byte = 1 << descriptor_type(element_type)
-    element_byte_index = arith_d.constant(IndexType.get(), element_byte)
+    bytewidth = element_type.bitwidth() // 8
+    element_byte_index = arith_d.constant(IndexType.get(), bytewidth)
 
     # calculcate global address
     # 0. breakdown index sequence to WG & TH offsets : ele
@@ -846,7 +846,6 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     data_size_val = lshift(data_size, 16)
 
     if padding := dst_memory.padding:
-        bytewidth = element_type.bitwidth() // 8
         unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
         pad_enable = 1 << 20
         pad_interval = int(math.log2((unpadded_dim // 4) - 1)) << 22
