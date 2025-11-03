@@ -199,6 +199,16 @@ class CapturedTrace:
                     nodes.append(node)
         return nodes
 
+    def walk_graph(
+        self, name: str, filter: Optional[Callable[[fx.Node], bool]] = None
+    ) -> list[fx.Node]:
+        nodes: list[fx.Node] = []
+        graph = self.get_subgraph(name)
+        for node in graph.nodes:
+            if filter is None or filter(node):
+                nodes.append(node)
+        return nodes
+
     def snapshot_node_state(self) -> None:
         # Snapshot supplemental node fields for pickling
         for node in self.walk():

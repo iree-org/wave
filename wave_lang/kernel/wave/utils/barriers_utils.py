@@ -10,29 +10,34 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 
 import torch.fx as fx
 
-from ..lang.global_symbols import SHARED_ADDRESS_SPACE
-from ..ops.wave_ops import (
+from .graph_utils import propagate_loop_carried_vars
+
+from ...lang.global_symbols import SHARED_ADDRESS_SPACE
+from ...ops.wave_ops import (
     AtomicOp,
     CustomOp,
     GatherToLDS,
     Read,
-    Iterate,
-    Conditional,
+    NestedRegionOp,
     Write,
     get_custom,
 )
 
 
-class BarrierMode(str, Enum):
-    """
-    LEGACY: Single shared memory barrier
-    SPLIT: Simple Split barriers without named barriers
-    SPLIT_NAMED: Split barriers with named barriers
-    """
+@dataclass
+class TargetConfig:
+    target: str
+    has_split_barriers: bool = False
+    has_named_barriers: bool = False
+    max_named_barriers: int = 0
 
-    LEGACY = "legacy"
-    SPLIT = "split"
-    SPLIT_NAMED = "split_named"
+    def __post_init__(self):
+        if "gfx12" in self.target:
+            self.has_split_barriers = True
+
+        if "gfx1250" in self.target:
+            self.has_named_barriers = True
+            self.max_named_barriers = 16
 
 
 @dataclass
@@ -44,7 +49,7 @@ class SyncRequirement:
     resource: Any
     producers: Sequence[Any]
     consumers: Sequence[Any]
-    next_iter: bool = False
+    is_loop: bool = False
     prod_region: Set[Any] = field(default_factory=set)
     cons_region: Set[Any] = field(default_factory=set)
 
@@ -52,9 +57,9 @@ class SyncRequirement:
 class EpisodeState:
     __slots__ = ("producers", "consumers")
 
-    def __init__(self):
-        self.producers = List[Any] = []
-        self.consumers = List[Any] = []
+    def __init__(self, producers: List[Any] = [], consumers: List[Any] = []):
+        self.producers: List[Any] = producers
+        self.consumers: List[Any] = consumers
 
 
 class MemoryAccessType(Enum):
@@ -92,7 +97,7 @@ def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
         return MemoryAccessType.NONE
 
 
-def get_shared_memory_from_op(op: CustomOp, depth: int) -> Optional[fx.Node]:
+def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> Optional[fx.Node]:
     """
     Given a customOp, returns whether it operates on a shared memory region.
     """
@@ -136,28 +141,51 @@ def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
 
 def add_sync_requirements(
     results: List[SyncRequirement], resource: fx.Node, state: EpisodeState
-):
+) -> bool:
     """
     Add cut (Synchronization requirements) to the state (in between last producer nodes and first consumer nodes)
+    Returns whether the sync requirement is cross-iter bounds.
     """
+    cross_iter = False
     last_prod = state.producers[-1]
     first_con = state.consumers[0]
+
+    if resource:
+        last_prod_loc = last_prod._topo_location
+        first_con_loc = first_con._topo_location
+        cross_iter = last_prod_loc > first_con_loc
 
     req = SyncRequirement(
         resource=resource,
         producers=list(state.producers),
         consumers=list(state.consumers),
-        loop=False,  # this will be update when handling iterate subgraph
+        is_loop=cross_iter,  # when producer appear after consumer, we identify a loop
         prod_region={last_prod},
         cons_region={first_con},
     )
 
+    if req in results:
+        return False
     results.append(req)
 
+    return cross_iter
 
-def handle_hazard(results, states, nodes, producer_kinds, consumer_kinds):
-    states = Dict[Hashable, EpisodeState] = defaultdict(EpisodeState)
 
+def handle_hazard(
+    results, nodes, producer_kinds, consumer_kinds, is_nested: bool = False
+):
+    states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
+
+    # duplicate nodes to find cross-iter dependencies
+    # e.g.,
+    # loop[w1:0, w2:1, r1:2, r2:3] -> flat[w1:0, w2:1, r1:2, r2:3, w1:0, w2:1, r1:2, r2:3]
+    # dependencies for smem region 1:
+    # - w1:0 -> r1:2
+    # - r1:2 -> w1:0 ** cross-iter dep
+    if is_nested:
+        nodes = nodes * 2
+
+    cross_iter = False
     for node in nodes:
         op = get_custom(node)
         access_kind = get_memory_access_type(op)
@@ -170,7 +198,8 @@ def handle_hazard(results, states, nodes, producer_kinds, consumer_kinds):
 
         if access_kind in producer_kinds:
             if state.producers and state.consumers:
-                add_sync_requirements(results, resource, state)
+                cross_iter |= add_sync_requirements(results, resource, state)
+
                 state.producers.clear()
                 state.consumers.clear()
             state.producers.append(node)
@@ -179,29 +208,29 @@ def handle_hazard(results, states, nodes, producer_kinds, consumer_kinds):
             if state.producers:
                 state.consumers.append(node)
 
-    for resrouce, state in states.items():
+    for resource, state in states.items():
         if state.producers and state.consumers:
-            add_sync_requirements(results, resource, state)
+            cross_iter |= add_sync_requirements(results, resource, state)
+
+    return cross_iter
 
 
-def get_barriers_analysis(trace, graph, options):
+def get_barriers_analysis(trace, graph):
 
     is_shared_memory_node = lambda node: (
         True if get_shared_memory_from_op(get_custom(node)) is not None else False
     )
     is_subgraph_node = lambda node: (
-        True
-        if isinstance(get_custom(node), Iterate)
-        or isinstance(get_custom(node), Conditional)
-        else False
+        True if isinstance(get_custom(node), NestedRegionOp) else False
     )
 
-    smem_nodes = trace.walk(is_shared_memory_node)
+    root_graph_name = trace.root_graph
+    smem_nodes = trace.walk_graph(name=root_graph_name, filter=is_shared_memory_node)
     subgraph_nodes = trace.walk(is_subgraph_node)
 
     assign_preorder_index(smem_nodes)
 
-    results = List[SyncRequirement] = []
+    results: List[SyncRequirement] = []
 
     # RAW
     handle_hazard(
@@ -209,6 +238,7 @@ def get_barriers_analysis(trace, graph, options):
         smem_nodes,
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
         {MemoryAccessType.READ},
+        is_nested=False,
     )
 
     # WAR
@@ -217,8 +247,39 @@ def get_barriers_analysis(trace, graph, options):
         smem_nodes,
         {MemoryAccessType.READ},
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+        is_nested=False,
     )
 
-    # handle subgraph requirements
+    # handle nested subgraph
+    for regionNode in reversed(subgraph_nodes):
+        regionOp = get_custom(regionNode)
+        smem_nodes = trace.walk_graph(
+            name=regionOp.subgraph_name, filter=is_shared_memory_node
+        )
+        assign_preorder_index(smem_nodes)
+        cross_iter = False
+
+        # RAW
+        cross_iter |= handle_hazard(
+            results,
+            smem_nodes,
+            {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+            {MemoryAccessType.READ},
+            is_nested=True,
+        )
+
+        # WAR
+        cross_iter |= handle_hazard(
+            results,
+            smem_nodes,
+            {MemoryAccessType.READ},
+            {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+            is_nested=True,
+        )
+
+        if cross_iter:
+            add_sync_requirements(
+                results, None, EpisodeState([regionNode.prev], [regionNode.next])
+            )
 
     return results
