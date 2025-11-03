@@ -21,15 +21,18 @@ from wave_lang.support.ir_imports import (
     Block,
     BlockArgument,
     Context,
+    IndexType,
+    InsertionPoint,
+    IntegerAttr,
+    Location,
+    MemRefType,
     Module,
     Operation,
-    InsertionPoint,
-    stream_d,
-    IndexType,
-    IntegerAttr,
     arith_d,
-    MemRefType,
+    stream_d,
 )
+from .scheduling.schedule_enums import SchedulingType
+from .wave_schedule import WaveSchedule
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
 from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
@@ -83,6 +86,7 @@ from .decompose_scan_ops import decompose_scan_ops
 from .decompose_topk_ops import decompose_topk_ops
 from .decompose_vmma_ops import decompose_vmma_ops
 from .expansion.expansion import add_get_results, expand_graph
+from .tensor_load_to_shared import tensor_load_to_shared
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
@@ -290,6 +294,9 @@ def _rewrite_module_for_iree_stream_abi(
                     target_block, old_arg, target_args[i], i
                 )
                 arg_mapping[old_arg] = new_subspan
+            else:
+                # Map scalar arguments to their corresponding arguments directly.
+                arg_mapping[old_arg] = target_args[i]
 
         # Move operations
         ops_to_move = list(source_block)
@@ -696,16 +703,18 @@ class LaunchableWave(Launchable):
         # Only emit MLIR if we don't have a module yet.
         if not module_op:
             emitter = WaveEmitter(
-                dispatch_entrypoint, trace, self.constraints, options, self.grid_type
+                dispatch_entrypoint,
+                trace,
+                self.constraints,
+                options,
+                self.grid_type.dims,
             )
-            try:
+            with mb.module_op.context, Location.unknown():
+                module_op = Module.create()
+
+            with InsertionPoint(module_op.body), Location.unknown():
                 emitter.emit(trace.get_root_graph())
-            except:
-                logger.info("Error in emitter")
-                asm = mb.module_op.get_asm()
-                logger.info(asm)
-                raise
-            emitter.finish()
+
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave
         # pipeline.
@@ -713,12 +722,12 @@ class LaunchableWave(Launchable):
         # to move the ops from existing module to inside `dispatch_entrypoint`.
         # Also we'll need to update the uses of the memref arguments (from the
         # existing module) to be compatible with the new stream.binding arguments.
-        else:
-            assert not any(
-                isinstance(op, stream_d.ExecutableOp)
-                for op in module_op.operation.regions[0].blocks[0]
-            ), "expected overriding module to contain only upstream MLIR ops"
-            _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
+
+        assert not any(
+            isinstance(op, stream_d.ExecutableOp)
+            for op in module_op.operation.regions[0].blocks[0]
+        ), "expected overriding module to contain only upstream MLIR ops"
+        _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
@@ -784,6 +793,7 @@ class LaunchableWave(Launchable):
     def _trace_and_get_kernel_signature(
         self,
         options: WaveCompileOptions,
+        schedule: Optional[WaveSchedule] = None,
         context: Optional[Context] = None,
         module_op: Optional[Operation] = None,
     ) -> tuple[
@@ -848,6 +858,7 @@ class LaunchableWave(Launchable):
         if options.optimization_level:
             graph_passes += [
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
+                partial(tensor_load_to_shared, trace, self.constraints, options),
                 partial(gather_to_shared, trace, self.constraints, options),
                 partial(gather_to_shared_swizzling, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints, options),
@@ -874,21 +885,26 @@ class LaunchableWave(Launchable):
             partial(decompose_topk_ops, trace, self.constraints),
         ]
 
-        # Schedule the reduction ops.
+        # Schedule the iterate ops.
         scheduling_type = options.schedule
-        use_scheduling_barriers = options.use_scheduling_barriers
-        graph_passes.append(
-            partial(
-                schedule_graph,
-                trace,
-                self.constraints,
-                use_scheduling_barriers,
-                scheduling_type,
-                options.override_schedule,
-                options.dump_schedule,
-                options.multi_buffer_count,
+        if options.schedule == SchedulingType.MANUAL:
+            graph_passes.append(
+                partial(self.run_manual_schedule, trace, self.constraints, schedule)
             )
-        )
+        else:
+            use_scheduling_barriers = options.use_scheduling_barriers
+            graph_passes.append(
+                partial(
+                    schedule_graph,
+                    trace,
+                    self.constraints,
+                    use_scheduling_barriers,
+                    scheduling_type,
+                    options.override_schedule,
+                    options.dump_schedule,
+                    options.multi_buffer_count,
+                )
+            )
 
         if options.optimization_level:
             graph_passes += [
@@ -897,6 +913,7 @@ class LaunchableWave(Launchable):
                     trace,
                     self.constraints,
                     scheduling_type,
+                    options.use_global_to_shared,
                 ),
                 partial(
                     minimize_shared_allocs,
@@ -905,9 +922,9 @@ class LaunchableWave(Launchable):
                 ),
             ]
         graph_passes += [
-            partial(add_shared_memory_barriers, trace),
+            partial(add_shared_memory_barriers, trace, target=options.target),
             partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
-            partial(partition_gather_like_ops, trace, self.constraints),
+            partial(partition_gather_like_ops, trace, self.constraints, options.target),
             partial(generate_bounds_exprs, trace, self.constraints),
         ]
 
@@ -994,3 +1011,14 @@ class LaunchableWave(Launchable):
 
     def __repr__(self):
         return f"tk.wave @{self._name}[{self.grid_type}]"
+
+    def run_manual_schedule(
+        self,
+        trace: CapturedTrace,
+        constraints: list[Constraint],
+        schedule: WaveSchedule,
+    ):
+        """
+        Runs the manual schedule provided by the user.
+        """
+        schedule.trace(kernel_trace=trace, constraints=constraints)

@@ -48,7 +48,7 @@ def WaveDialect : Dialect {
         "wave.normal_form";
 
     // Name of the inherent attribute for op index expressions;
-    const static constexpr ::llvm::StringLiteral kIndexExprAttrName = "index";
+    const static constexpr ::llvm::StringLiteral kIndexWaveExprListAttrName = "index";
 
     // Name of the attribute specifying the number of elements per thread.
     const static constexpr ::llvm::StringLiteral kElementsPerThreadAttrName =

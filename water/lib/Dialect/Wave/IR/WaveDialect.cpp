@@ -92,13 +92,20 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
   // TODO: we need a first-class attribute for this mapping, at which point this
   // special-casing will disappear as the walker below would also visit symbols
   // used as dictionary keys.
-  if (namedAttr.getName().strref() == wave::WaveDialect::kIndexExprAttrName) {
-    auto dictionary =
-        llvm::dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
-    // Skip verification if not a dictionary, op-level verifiers will detect
-    // this and complain.
-    if (dictionary) {
-      for (const mlir::NamedAttribute &entry : dictionary) {
+  if (namedAttr.getName().strref() ==
+      wave::WaveDialect::kIndexWaveExprListAttrName) {
+    auto attr = namedAttr.getValue();
+    // Skip verification if not an array of dictionaries, op-level verifiers
+    // will detect this and complain.
+    auto arrayDict = llvm::dyn_cast<mlir::ArrayAttr>(attr);
+    if (!arrayDict)
+      return llvm::success();
+
+    for (mlir::Attribute a : arrayDict) {
+      auto dict = llvm::dyn_cast<mlir::DictionaryAttr>(a);
+      if (!dict)
+        continue;
+      for (const mlir::NamedAttribute &entry : dict) {
         usedSymbols.insert(entry.getName().strref());
 
         if (hyperparam.getMapping().contains(entry.getName().strref()))
@@ -115,14 +122,15 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
 
   // TODO: somehow get rid of these hardcoded magic names.
   static llvm::SmallVector<llvm::StringRef> fixmeMagicNames = {
-      "_T0", "_T1", "_T2", "_WG0", "_WG1", "_WG2"};
+      "_GPR_NUM", "_T0", "_T1", "_T2", "_WG0", "_WG1", "_WG2"};
 
   mlir::WalkResult walkResult =
       namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
         usedSymbols.insert(symbolAttr.getName());
 
         if (hyperparam.getMapping().contains(symbolAttr.getName()) ||
-            llvm::is_contained(fixmeMagicNames, symbolAttr.getName()))
+            llvm::is_contained(fixmeMagicNames, symbolAttr.getName()) ||
+            symbolAttr.getName().starts_with("_ARG"))
           return mlir::WalkResult::advance();
 
         mlir::InFlightDiagnostic diag = emitError()
@@ -188,9 +196,9 @@ verifyConstraints(mlir::ArrayAttr constraints,
   // * The number of devices should be greater than or equal to one.
   for (auto &&[symbol, constraint] : deviceConstraints) {
     std::optional<llvm::SmallVector<int64_t>> evaluated =
-        wave::evaluateMapWithHyperparams(
-            constraint.getTileSize().getMap(),
-            constraint.getTileSize().getSymbolNames(), hyperparams);
+        wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for device constraint");
     assert(evaluated->size() == 1 &&
@@ -236,9 +244,9 @@ verifyConstraints(mlir::ArrayAttr constraints,
     }
 
     std::optional<llvm::SmallVector<int64_t>> evaluated =
-        wave::evaluateMapWithHyperparams(
-            constraint.getTileSize().getMap(),
-            constraint.getTileSize().getSymbolNames(), hyperparams);
+        wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for workgroup constraint");
     assert(evaluated->size() == 1 &&
@@ -281,9 +289,9 @@ verifyConstraints(mlir::ArrayAttr constraints,
     }
 
     std::optional<llvm::SmallVector<int64_t>> evaluated =
-        wave::evaluateMapWithHyperparams(
-            constraint.getTileSize().getMap(),
-            constraint.getTileSize().getSymbolNames(), hyperparams);
+        wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for wave constraint");
     assert(evaluated->size() == 1 &&
@@ -301,9 +309,9 @@ verifyConstraints(mlir::ArrayAttr constraints,
   // * The number of tiles should be greater than or equal to one.
   for (auto &&[symbol, constraint] : tilingConstraints) {
     std::optional<llvm::SmallVector<int64_t>> evaluated =
-        wave::evaluateMapWithHyperparams(
-            constraint.getTileSize().getMap(),
-            constraint.getTileSize().getSymbolNames(), hyperparams);
+        wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for tiling constraint");
     assert(evaluated->size() == 1 &&

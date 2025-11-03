@@ -271,12 +271,15 @@ class WaveCacheManager(object):
         cur_vmfb_path = cur_cache_basefile.with_suffix(".vmfb")
         cur_module_path = cur_cache_basefile.with_suffix(".mlir")
         cur_kernelsig_path = cur_cache_basefile.with_suffix(".json")
-        cur_vmfb_path.write_bytes(vmfb)
+
+        # Only write VMFB if it exists (ASM backend doesn't generate VMFB)
+        if vmfb is not None:
+            cur_vmfb_path.write_bytes(vmfb)
         cur_module_path.write_text(module_str)
         kernel_sig_str = json.dumps([usage.name for usage in kernel_sig])
         cur_kernelsig_path.write_text(kernel_sig_str)
+        # Copy the hsaco file to the cache directory only if it exists
         cur_hsaco_path = glob.glob(str(get_temp_binary_dir() / "*.hsaco"))
-        # Copy the hsaco file to the cache directory only if it exists.
         if cur_hsaco_path:
             cur_hsaco_path = cur_hsaco_path[0]
             shutil.copy(cur_hsaco_path, cur_cache_basefile.with_suffix(".hsaco"))
@@ -305,7 +308,12 @@ class WaveCacheManager(object):
         cur_vmfb_path = cur_cache_basefile.with_suffix(".vmfb")
         cur_kernelsig_path = cur_cache_basefile.with_suffix(".json")
         cur_asm_path = cur_cache_basefile.with_suffix(".mlir")
-        vmfb = cur_vmfb_path.read_bytes()
+
+        # Only read VMFB if it exists (ASM backend doesn't generate VMFB)
+        if cur_vmfb_path.exists():
+            vmfb = cur_vmfb_path.read_bytes()
+        else:
+            vmfb = None
         kernel_sig_str = json.loads(cur_kernelsig_path.read_text())
         kernel_sig = [KernelBufferUsage[usage] for usage in kernel_sig_str]
         asm = cur_asm_path.read_text()

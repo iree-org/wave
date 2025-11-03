@@ -15,7 +15,7 @@ from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
-from ..ops.wave_ops import Read, Write, GatherToLDS, get_custom
+from ..ops.wave_ops import Read, Write, GatherToLDS, TensorLoadToLDS, get_custom
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
@@ -85,7 +85,7 @@ def construct_min_global_access_pattern(
 def materialize_shape(
     constraint_tile_size: dict[IndexSymbol, int],
     symbolic_shape: list[IndexSymbol],
-    vector_shapes,
+    vector_shapes=None,
 ) -> list[int]:
     materialized_shape = []
     for dim_expr in symbolic_shape:
@@ -239,7 +239,7 @@ def add_optimized_nodes(
         for i in range(expected_number_of_loads):
             with custom.graph.inserting_before(custom.fx_node):
                 read = Read(memory, load_elems_per_thread, custom.mapping).add_to_graph(
-                    custom.graph, loc=custom.location
+                    custom.graph, loc=custom.location, tag=custom.tag
                 )
                 read.pre_expansion_id = custom.pre_expansion_id
                 read.vector_shapes = custom.vector_shapes
@@ -272,7 +272,9 @@ def add_optimized_nodes(
                     ):
                         write = Write(
                             read, custom_user.memory, load_elems_per_thread
-                        ).add_to_graph(custom.graph, loc=custom.location)
+                        ).add_to_graph(
+                            custom.graph, loc=custom.location, tag=custom.tag
+                        )
                         write.index = read.index
                         write.pre_expansion_id = custom.pre_expansion_id
                         optimized_writes[custom_user.memory].append(write)
@@ -337,6 +339,8 @@ def update_write_dependencies(
             if is_shared_write(custom) and custom.memory == memory:
                 return True
             if isinstance(custom, GatherToLDS) and custom.dst == memory:
+                return True
+            if isinstance(custom, TensorLoadToLDS) and custom.dst == memory:
                 return True
             return False
 

@@ -46,6 +46,7 @@ from .common.utils import (
     require_cdna3,
     require_e2e,
     require_cdna_2_or_3_or_4,
+    require_cdna4,
     require_rdna4,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
@@ -246,6 +247,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
 
 
 @require_e2e
+@require_cdna_2_or_3_or_4
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 def test_bound_check(shape, use_buffer_ops, run_bench):
@@ -458,6 +460,96 @@ def test_transpose_write(shape, use_buffer_ops, run_bench):
     ):
         res = tkw.read(a)
         tkw.write(res, b, mapping=mapping)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape[::-1], dtype=torch.float16)
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+        use_buffer_ops=use_buffer_ops,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(a, b)
+    assert_close(a.T, b)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize(
+    "shape",
+    [
+        # Square matrices
+        (64, 64),
+        (256, 256),
+        (512, 512),
+        (1024, 1024),
+        # Rectangular (power of 2)
+        (512, 256),
+        (256, 512),
+        (1024, 512),
+        (512, 1024),
+        (2048, 1024),
+        # Aligned but not power of 2 (meet Tm%4==0, Tk%4==0 for f16)
+        (384, 256),  # 3*128 x 256
+        (768, 512),  # 3*256 x 512
+        (1280, 512),  # 5*256 x 512
+        (512, 768),  # 512 x 3*256
+        # Extreme aspect ratios
+        (64, 1024),  # Very wide (1:16 ratio)
+        (1024, 64),  # Very tall (16:1 ratio)
+        (128, 2048),  # Ultra-wide (1:16 ratio)
+        (2048, 128),  # Ultra-tall (16:1 ratio)
+    ],
+)
+@param_bool("use_buffer_ops", "buf_ops")
+def test_arbitrary_transpose(shape, use_buffer_ops, run_bench):
+    """
+    Test transposing arbitrary shaped 2D tensors using transpose read.
+
+    This test validates the unified transpose formula works correctly for:
+    - Aligned and unaligned matrix dimensions
+    - Various aspect ratios (square, wide, tall)
+    - Edge cases and boundary conditions
+    """
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    wave_size = 64
+    BLOCK_N = 1
+    BLOCK_M = sympy.Max(sympy.Min(M, 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={N: BLOCK_N, M: BLOCK_M},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+    mapping = tkw.IndexMapping(
+        num_iterators=2, inputs={N: i, M: j}, outputs={N: i, M: j}
+    )
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, M, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a, mapping=mapping)
+        tkw.write(res, b)
 
     a = device_randn(shape, dtype=torch.float16)
     b = device_zeros(shape[::-1], dtype=torch.float16)
@@ -1884,6 +1976,64 @@ def test_scalar_cond_copy(shape, run_bench):
 @pytest.mark.parametrize(
     "shape",
     [
+        (27,),
+        (51,),
+        (64,),
+        (65,),
+        (128,),
+        (256,),
+        (500,),
+        (512,),
+    ],
+)
+def test_1d_scanop_cumsum(shape, run_bench):
+    N = tkl.sym.N
+    wave_size = 64
+    num_warps = 1
+    BLOCK_N = sympy.ceiling(N / wave_size) * wave_size
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            vector_shapes={N: BLOCK_N // num_warps},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+        c: tkl.Memory[N, GLOBAL_ADDRESS_SPACE, tkl.i32],
+    ):
+        lhs = tkw.read(a)
+        res = tkw.cumsum(lhs, dim=N)
+        tkw.write(res, c)
+
+    torch.manual_seed(1)
+    input = device_randint(low=1, high=5, size=shape, dtype=torch.int32)
+    output = device_zeros(shape, dtype=torch.int32)
+    torch_ref = torch.cumsum((input), dim=-1, dtype=torch.int32)
+    options = WaveCompileOptions(
+        subs={
+            N: shape[0],
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(input, output)
+    assert_close(torch_ref, output, atol=1e-03, rtol=1e-05)
+
+
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
         (1, 27),
         (1, 64),
         (51, 64),
@@ -1893,7 +2043,7 @@ def test_scalar_cond_copy(shape, run_bench):
         (64, 500),
     ],
 )
-def test_scanop_cumsum(shape, run_bench):
+def test_2d_scanop_cumsum(shape, run_bench):
     M = tkl.sym.M
     N = tkl.sym.N
     wave_size = 64
@@ -2144,6 +2294,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
             shape=(M, N),
             distributed_shape=(1, BLOCK_N),
             dtype=tkl.i32,
+            address_space=SHARED_ADDRESS_SPACE,
         )
         inf_reg = tkl.Register[M, N, tkl.i32](1e6)
         tkw.write(inf_reg, shmem)
@@ -2160,6 +2311,7 @@ def test_atomic_min(shape, use_buffer_ops, run_bench):
             M: shape[0],
             N: shape[1],
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+            SHARED_ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
         },
         canonicalize=True,
         run_bench=run_bench,
@@ -2241,6 +2393,7 @@ def test_self_index(shape, run_bench, threads_per_wave):
     test = wave_compile(options, test)
 
     test(a, result_self_index)
+
     assert_close(ref, result_self_index[0, 0, :])
 
 
@@ -2458,8 +2611,10 @@ def test_debug_log_core(dynamic_dims: bool):
 @pytest.mark.parametrize(
     "mfma_variant, threads_per_wave",
     [
-        pytest.param(tkw.MMAType.F32_16x16x16_F16, 64),
-        pytest.param(tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32),
+        pytest.param(tkw.MMAType.F32_16x16x16_F16, 64, marks=require_cdna_2_or_3_or_4),
+        pytest.param(
+            tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4
+        ),
     ],
 )
 def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
@@ -2480,7 +2635,7 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
         tkw.WaveConstraint(M, BLOCK_M / 2),
         tkw.WaveConstraint(N, BLOCK_N / 2),
         tkw.HardwareConstraint(
-            threads_per_wave=64, mma_type=tkw.MMAType.F32_16x16x16_F16
+            threads_per_wave=threads_per_wave, mma_type=mfma_variant
         ),
     ]
 
@@ -2496,17 +2651,17 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
         b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
         c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
     ):
-        c_reg = Register[M, N, tkl.f32](0.0)
+        c_reg = tkw.Register[M, N, tkl.f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: Register[M, N, tkl.f32]) -> Register[M, N, tkl.f32]:
+        def repeat(acc: tkw.Register[M, N, tkl.f32]) -> tkw.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a)
             b_reg = tkw.read(b)
             acc = tkw.mma(a_reg, b_reg, acc)
-            debug_log(
+            tkw.debug_log(
                 acc,
                 "acc",
-                extra_iteration_dimensions=[(tkl.sym.iter, k, iterations)],
+                extra_iteration_dimensions=[(tkl.sym.iter, K, iterations)],
                 handler=handler,
             )
             return acc
@@ -2546,6 +2701,8 @@ def test_debug_log_iteration_dims(mfma_variant, threads_per_wave):
         assert torch.equal(debug_logs["acc"]["value"][-1], c)
         # Meanwhile the first element should be quite different.
         assert not torch.allclose(debug_logs["acc"]["value"][0], c)
+
+    test_gemm()
 
 
 @require_e2e

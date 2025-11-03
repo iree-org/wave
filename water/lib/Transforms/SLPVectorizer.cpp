@@ -1129,7 +1129,7 @@ SLPGraph::vectorize(IRRewriter &rewriter,
             assert(vecType.getRank() <= 1);
             if (vecType.getRank() == 0) {
               elem = rewriter.create<vector::ExtractOp>(loc, newResult, offset);
-              elem = rewriter.create<vector::SplatOp>(loc, vecType, elem);
+              elem = rewriter.create<vector::BroadcastOp>(loc, vecType, elem);
             } else {
               elem = rewriter.create<vector::ExtractStridedSliceOp>(
                   loc, newResult, offset, vecType.getNumElements(), 1);
