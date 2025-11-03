@@ -94,12 +94,18 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
   // used as dictionary keys.
   if (namedAttr.getName().strref() ==
       wave::WaveDialect::kIndexWaveExprListAttrName) {
-    auto dictionary =
-        llvm::dyn_cast<mlir::DictionaryAttr>(namedAttr.getValue());
-    // Skip verification if not a dictionary, op-level verifiers will detect
-    // this and complain.
-    if (dictionary) {
-      for (const mlir::NamedAttribute &entry : dictionary) {
+    auto attr = namedAttr.getValue();
+    // Skip verification if not an array of dictionaries, op-level verifiers
+    // will detect this and complain.
+    auto arrayDict = llvm::dyn_cast<mlir::ArrayAttr>(attr);
+    if (!arrayDict)
+      return llvm::success();
+
+    for (mlir::Attribute a : arrayDict) {
+      auto dict = llvm::dyn_cast<mlir::DictionaryAttr>(a);
+      if (!dict)
+        continue;
+      for (const mlir::NamedAttribute &entry : dict) {
         usedSymbols.insert(entry.getName().strref());
 
         if (hyperparam.getMapping().contains(entry.getName().strref()))
