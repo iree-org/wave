@@ -1,3 +1,4 @@
+# REQUIRES: water_python
 # RUN: env PYTHONPATH=%py_pkg_root:%PYTHONPATH %python %s | FileCheck %s
 
 try:
@@ -141,7 +142,7 @@ try:
         M = wave.WaveSymbolAttr.get("M")
         print(M)
 
-        # CHECK: #wave.expr_list<[M, BLOCK_M] -> (M / BLOCK_M)>
+        # CHECK: #wave.expr_list<[M, BLOCK_M] -> (M floordiv BLOCK_M)>
         symbol_names = ["M", "BLOCK_M"]
         s0 = ir.AffineSymbolExpr.get(0)
         s1 = ir.AffineSymbolExpr.get(1)
@@ -154,14 +155,14 @@ try:
         int_expr_attr = wave.WaveExprListAttr.get([], int_expr_map)
         print(int_expr_attr)
 
-        # CHECK: {M = #wave.expr_list<[] -> (512)>, N = #wave.expr_list<[] -> (512)>}
+        # CHECK: {M = 512 : i64, N = 512 : i64}
         i64 = ir.IntegerType.get_signless(64)
         shape_dict = ir.DictAttr.get(
             {"M": ir.IntegerAttr.get(i64, 512), "N": ir.IntegerAttr.get(i64, 512)}
         )
         print(shape_dict)
 
-        # CHECK: #wave.hardware_constraint<threads_per_wave = 64, mma_type = #wave.mma_kind<f32_16x16x16_f16>>
+        # CHECK: #wave.hardware_constraint<threads_per_wave = 64, mma_type = <f32_16x16x16_f16>>
         print(
             wave.HardwareConstraintAttr.get(
                 threads_per_wave=64, mma_type=mma_type_attr, max_bits_per_load=128
@@ -185,10 +186,10 @@ try:
             )
         )
 
-        # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[M / BLOCK_M] -> (M / BLOCK_M)>, device_dim = 0>
+        # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, device_dim = 0>
         print(wave.DeviceConstraintAttr.get(dim="M", tile_size=expr_attr, device_dim=0))
 
-        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M / BLOCK_M] -> (M / BLOCK_M)>, workgroup_dim = 0>
+        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>
         wg_constraint = wave.WorkgroupConstraintAttr.get(
             dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x
         )
