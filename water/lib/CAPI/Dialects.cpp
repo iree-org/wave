@@ -229,9 +229,9 @@ mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
                               MlirAttribute mmaType, MlirAttribute vectorShapes,
                               unsigned maxBitsPerLoad) {
   mlir::MLIRContext *ctx = unwrap(mlirCtx);
-  auto mmaTypeAttr = llvm::cast<wave::WaveMmaKindAttr>(unwrap(mmaType));
+  auto mmaTypeAttr = llvm::dyn_cast_or_null<wave::WaveMmaKindAttr>(unwrap(mmaType));
   auto vectorShapesAttr =
-      llvm::cast<mlir::DictionaryAttr>(unwrap(vectorShapes));
+      llvm::dyn_cast_or_null<mlir::DictionaryAttr>(unwrap(vectorShapes));
 
   return wrap(wave::HardwareConstraintAttr::get(
       ctx, threadsPerWave, llvm::ArrayRef(wavesPerBlock, wavesPerBlockSize),
@@ -308,7 +308,7 @@ MlirAttribute mlirWaveConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
   auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dim));
   auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
   auto wgConstraintAttr =
-      llvm::cast<wave::WorkgroupConstraintAttr>(unwrap(wgConstraint));
+      llvm::dyn_cast_or_null<wave::WorkgroupConstraintAttr>(unwrap(wgConstraint));
 
   return wrap(wave::WaveConstraintAttr::get(ctx, dimAttr, tileSizeAttr,
                                             wgConstraintAttr));
