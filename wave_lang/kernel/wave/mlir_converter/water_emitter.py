@@ -14,10 +14,13 @@ from typing import TYPE_CHECKING, Callable, Sequence
 import sympy
 import argparse
 
+from wave_lang.kernel.wave.constraints import HardwareConstraint
+
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
     from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+    from wave_lang.kernel.wave.constraints import Constraint
     from wave_lang.kernel.lang.wave_types import Memory, Register
     from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
@@ -146,11 +149,12 @@ def _type_to_wave_mlir(
     raise RuntimeError(f"Unsupported wave type for MLIR conversion: {type_}")
 
 
-def _parse_input() -> tuple[CapturedTrace, WaveCompileOptions, str]:
+def _parse_input() -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions, str]:
     """Parses and returns the pickled trace, options, and pipeline from stdin.
 
     The input is expected to be a dill-serialized dict with keys:
     - "trace": CapturedTrace object
+    - "constraints": list[Constraint]
     - "options": WaveCompileOptions
     - "pipeline": A string containing the transform dialect pass pipeline
 
@@ -161,6 +165,7 @@ def _parse_input() -> tuple[CapturedTrace, WaveCompileOptions, str]:
     except Exception as e:
         raise SystemExit(f"FATAL: failed to unpickle: {e}")
     trace = unpickled.get("trace") if isinstance(unpickled, dict) else None
+    constraints = unpickled.get("constraints") if isinstance(unpickled, dict) else None
     options = unpickled.get("options") if isinstance(unpickled, dict) else None
     pipeline = unpickled.get("pipeline") if isinstance(unpickled, dict) else None
 
@@ -168,10 +173,18 @@ def _parse_input() -> tuple[CapturedTrace, WaveCompileOptions, str]:
     #       clashes with IREE bindings.
     from wave_lang.kernel._support.tracing import CapturedTrace
     from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+    from wave_lang.kernel.wave.constraints import Constraint
 
     if not isinstance(trace, CapturedTrace):
         raise SystemExit(
             f"FATAL: unpickled object is not CapturedTrace (got {type(trace)})"
+        )
+
+    if not isinstance(constraints, list) and not all(
+        isinstance(c, Constraint) for c in constraints
+    ):
+        raise SystemExit(
+            f"FATAL: unpickled object is not list of Constraints (got {type(constraints)})"
         )
 
     if not isinstance(options, WaveCompileOptions):
@@ -184,7 +197,7 @@ def _parse_input() -> tuple[CapturedTrace, WaveCompileOptions, str]:
 
     # Restore supplemental node fields captured in the meta field
     trace.restore_node_state()
-    return trace, options, pipeline
+    return trace, constraints, options, pipeline
 
 
 def _convert_sympy_expr_to_affine_map(
@@ -286,8 +299,18 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
 
+def _convert_sympy_expr_to_expr_list_attr(expr: sympy.Expr | int):
+    if isinstance(expr, int):
+        symbol_mapping = {}
+    else:
+        symbol_mapping = _preprocess_symbols(expr.free_symbols)
+    affine_map = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
+    symbol_attrs = [sym.name for sym in symbol_mapping.values()]
+    return wave.WaveExprListAttr.get(symbol_attrs, affine_map)
+
+
 def _convert_to_wave_expr_list_tuple(
-    exprs: Sequence[sympy.Expr], ctx: ir.Context
+    exprs: Sequence[sympy.Expr | int], ctx: ir.Context
 ) -> WaveExprListAttr:
     """
     Returns a WaveExprListAttr from a sequence of wave IndexExpr.
@@ -455,11 +478,13 @@ def _emit_ops_from_graph(
 
 def _emit_from_captured_trace(
     trace: "CapturedTrace",
+    constraints: list[Constraint],
     options: WaveCompileOptions,
     pipeline: str,
     test_diagnostics=False,
 ) -> int:
     from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
+    from wave_lang.kernel.wave.constraints import WorkgroupConstraint
 
     # keep track of which emitted value stems from what node to wire
     # arguments correctly
@@ -519,6 +544,53 @@ def _emit_from_captured_trace(
                     {str(k): v for k, v in options.subs.items() if isinstance(v, int)}
                 )
             )
+
+            wave_constraints = []
+            for constraint in constraints:
+                if isinstance(constraint, HardwareConstraint):
+                    mma_type_attr = None
+                    if constraint.mma_type:
+                        mma_type_attr = wave.WaveMmaKindAttr.get(
+                            wave.WaveMmaKind(constraint.mma_type.value)
+                        )
+
+                    shape_dict = None
+                    if constraint.vector_shapes:
+                        i64 = ir.IntegerType.get_signless(64)
+                        dict = {
+                            k.name: ir.IntegerAttr.get(i64, v)
+                            for k, v in constraint.vector_shapes.items()
+                        }
+                        shape_dict = ir.DictAttr.get(dict)
+
+                    attr = wave.HardwareConstraintAttr.get(
+                        threads_per_wave=constraint.threads_per_wave,
+                        waves_per_block=constraint.waves_per_block,
+                        mma_type=mma_type_attr,
+                        vector_shapes=shape_dict,
+                        max_bits_per_load=constraint.max_bits_per_load,
+                    )
+                    wave_constraints.append(attr)
+                elif isinstance(constraint, WorkgroupConstraint):
+                    size = _convert_sympy_expr_to_expr_list_attr(constraint.tile_size)
+                    wg_dim = wave.WaveWorkgroupDimAttr.get(constraint.workgroup_dim)
+                    attr = wave.WorkgroupConstraintAttr.get(
+                        dim=constraint.dim.name, tile_size=size, workgroup_dim=wg_dim
+                    )
+                    wave_constraints.append(attr)
+                # elif isinstance(constraint, WaveConstraint):
+                #     wave_constraints.append(wave.WaveConstraintAttr.get(constraint.dim, constraint.tile_size, constraint.wg_constraint))
+                # elif isinstance(constraint, TilingConstraint):
+                #     wave_constraints.append(wave.TilingConstraintAttr.get(constraint.dim, constraint.tile_size))
+                # elif isinstance(constraint, DeviceConstraint):
+                # TODO...
+                # else:
+                #     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
+
+            func_op.operation.attributes["wave.constraints"] = ir.ArrayAttr.get(
+                wave_constraints
+            )
+
             entry_block = ir.Block.create_at_start(func_op.regions[0], arg_types)
 
             # Map placeholders to function arguments
@@ -573,9 +645,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    trace, options, pipeline = _parse_input()
+    trace, constraints, options, pipeline = _parse_input()
     sys.exit(
         _emit_from_captured_trace(
-            trace, options, pipeline, args.test_diagnostic_emission
+            trace, constraints, options, pipeline, args.test_diagnostic_emission
         )
     )

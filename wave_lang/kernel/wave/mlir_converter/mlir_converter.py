@@ -23,10 +23,14 @@ from pathlib import Path
 import dill
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+from wave_lang.kernel.wave.constraints import Constraint
 
 
 def emit_wave_dialect(
-    trace: CapturedTrace, options: WaveCompileOptions, test_diagnostic_emission: bool
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    test_diagnostic_emission: bool,
 ) -> tuple[str, list[str]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
@@ -52,11 +56,20 @@ def emit_wave_dialect(
     )
 
     output, err = proc.communicate(
-        dill.dumps({"trace": trace, "options": options, "pipeline": ""})
+        dill.dumps(
+            {
+                "trace": trace,
+                "constraints": constraints,
+                "options": options,
+                "pipeline": "",
+            }
+        )
     )
 
     if proc.returncode != 0:
-        raise RuntimeError(f"water_emitter failed (code {proc.returncode}):\n{err}")
+        raise RuntimeError(
+            f"water_emitter failed (code {proc.returncode}):\n{err}\n{output}"
+        )
 
     try:
         unpickled = dill.loads(output)
