@@ -17,7 +17,7 @@ from setuptools_rust import RustExtension
 
 THIS_DIR = os.path.realpath(os.path.dirname(__file__))
 REPO_ROOT = THIS_DIR
-IS_STABLE_REL = int(os.getenv("IS_STABLE_REL", "0"))
+WAVE_IS_STABLE_REL = int(os.getenv("WAVE_IS_STABLE_REL", "0"))
 
 
 class CMakeExtension(Extension):
@@ -104,7 +104,7 @@ def load_requirement_pins(requirements_file: str):
     requirement_pins.update(dict(pin_pairs))
 
 
-if IS_STABLE_REL:
+if WAVE_IS_STABLE_REL:
     load_requirement_pins("requirements-iree-stable.txt")
 
 
