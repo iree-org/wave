@@ -375,13 +375,13 @@ static FailureOr<MemAccessInfo> createMemoryIndicesAndMask(
   // Read/Write ops only carry a single index expression: the first (and only)
   // dictionary inside the array attribute.
   ArrayAttr indexArr = op.getIndexAttr();
-  if (!indexArr || indexArr.size() != 1)
-    return rewriter.notifyMatchFailure(
-        op, "'index' must be an array with exactly one dictionary");
-  DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(indexArr[0]);
-  if (!indexDict)
+  if (!indexArr)
     return rewriter.notifyMatchFailure(
         op, "cannot lower without 'index' attribute");
+  assert(llvm::hasSingleElement(indexArr.getValue()) &&
+         "'index' must be an array with exactly one dictionary");
+  DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(indexArr[0]);
+  assert(indexDict && "expected 'index' element to be a dictionary");
   std::optional<int64_t> vectorizedDim =
       wave::getPositionOfVectorizedDim(orderedSyms, indexDict, hyper);
 

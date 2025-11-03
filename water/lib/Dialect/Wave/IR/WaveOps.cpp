@@ -343,8 +343,12 @@ verifyIndexElementsPerThread(Operation *op, mlir::ArrayAttr indexAttr,
   // use a single index expression, which is stored as the first (and only)
   // dictionary inside the array attribute.
   ArrayAttr arr = dyn_cast_or_null<ArrayAttr>(indexAttr);
-  if (!arr || arr.empty())
+  if (!arr)
     return success();
+  if (!llvm::hasSingleElement(arr.getValue()))
+    return op->emitError() << "'index' attribute must contain exactly one "
+                              "dictionary for this op, got "
+                           << arr.size();
   DictionaryAttr indexDict = dyn_cast<DictionaryAttr>(arr[0]);
   if (!indexDict)
     return success();
