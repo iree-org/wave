@@ -404,13 +404,11 @@ def scatter_add(
 def tensor_load_to_lds(
     src: Memory,
     dst: Memory,
-    tensor_shapes: list[IndexExpr] = field(default_factory=list),
-    tensor_strides: list[int] = field(default_factory=list),
-    element_type: DataType = None,
-    tensor_tile_shapes: list[int] = field(default_factory=list),
-    shared_tile_index: int | dict[IndexExpr, IndexSequence] = None,
-    global_tile_index: int | dict[IndexExpr, IndexSequence] = None,
-    bounds: list[int] = field(default_factory=list),
+    element_type: DataType,
+    distributed_shape: list[IndexExpr],
+    shared_tile_index: int,
+    global_tile_index: dict[IndexSymbol, IndexSequence],
+    bounds: dict[IndexSymbol, IndexExpr],
 ): ...
 
 
@@ -3051,13 +3049,11 @@ class Reshape(CustomOp, ABC):
 class TensorLoadToLDS(CustomOp):
     src: Memory
     dst: Memory
-    tensor_shapes: list[IndexExpr] = field(default_factory=list)
-    tensor_strides: list[int] = field(default_factory=list)
-    element_type: DataType = None
-    tensor_tile_shapes: list[int] = field(default_factory=list)
-    shared_tile_index: int | dict[IndexSymbol, IndexSequence] = None
-    global_tile_index: int | dict[IndexSymbol, IndexSequence] = None
-    bounds: list[int] = field(default_factory=list)
+    element_type: DataType
+    distributed_shape: list[IndexExpr]
+    shared_tile_index: int
+    global_tile_index: dict[IndexSymbol, IndexSequence]
+    bounds: dict[IndexSymbol, IndexExpr]
 
 
 @define_op("gather_to_lds")

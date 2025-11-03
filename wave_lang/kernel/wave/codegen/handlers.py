@@ -381,13 +381,11 @@ def emit_wmma(
         f = arith_d.constant(IntegerType.get_signless(1), 0)
         t = arith_d.constant(IntegerType.get_signless(1), 1)
         i16 = arith_d.constant(IntegerType.get_signless(16), 0)
-        return llvm_d.call_intrinsic(
-            acc.type,
-            "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16",
-            [f, source_a, f, source_b, i16, acc, f, t],
-            [],
-            [],
+        v16f32 = VectorType.get((8,), F32Type.get())
+        res = rocdl_d.wmma_f32_16x16x32_f16(
+            v16f32, [f, source_a, f, source_b, i16, acc, f, t]
         )
+        return res.result
 
     return amdgpu_d.wmma(m, n, k, source_a, source_b, acc)
 
