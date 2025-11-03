@@ -27,16 +27,15 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
   if (!attribute)
     return success();
 
-  SmallVector<DictionaryAttr, 3> dicts;
-  if (auto arr = dyn_cast<ArrayAttr>(attribute)) {
-    for (Attribute nestedAttr : arr) {
-      auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
-      if (!dict)
-        return op->emitError("'index' array elements must be dictionaries");
-      dicts.push_back(dict);
-    }
-  } else {
+  auto arr = dyn_cast<ArrayAttr>(attribute);
+  if (!arr)
     return op->emitError("'index' attribute must be an array of dictionaries");
+  SmallVector<DictionaryAttr, 3> dicts;
+  for (Attribute nestedAttr : arr) {
+    auto dict = dyn_cast<DictionaryAttr>(nestedAttr);
+    if (!dict)
+      return op->emitError("'index' array elements must be dictionaries");
+    dicts.push_back(dict);
   }
 
   for (auto dictAttr : dicts) {
