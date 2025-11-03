@@ -1995,13 +1995,16 @@ def gemm_schedule_test(is_debug=False):
         local_write_rhs_proxies = create_schedule_proxy(
             region_graph, local_write_rhs, f"local_write_rhs"
         )
+
         breakpoint()
         # Create a pipeline with 2 stages and specify the operations that are overlapping.
         with tkw.pipeline(k_loop) as pipelined_loop:
             pipelined_loop.set_stage(
                 [
-                    (global_load_lhs_proxies, global_load_rhs_proxies),
-                    (local_write_lhs_proxies, local_write_rhs_proxies),
+                    (global_load_rhs_proxies, global_load_lhs_proxies),
+                    (),
+                    (local_write_rhs_proxies, local_write_lhs_proxies),
+                    (),
                 ],
             )
             pipelined_loop.set_stage(
@@ -2009,16 +2012,11 @@ def gemm_schedule_test(is_debug=False):
                     (
                         sliced_local_load_lhs_proxies[0],
                         sliced_local_load_rhs_proxies[0],
-                    ),
-                    (sliced_mma_proxies[0],),
-                ],
-            )
-            pipelined_loop.set_stage(
-                [
-                    (
                         sliced_local_load_lhs_proxies[1],
                         sliced_local_load_rhs_proxies[1],
                     ),
+                    (sliced_mma_proxies[0],),
+                    (),
                     (sliced_mma_proxies[1],),
                 ],
             )
