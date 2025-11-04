@@ -85,7 +85,7 @@ def print_grouped_statistics(grouped_kernels, num_warmup=0):
     Print statistics grouped by kernel name
     """
     print("\nGROUPED KERNEL STATISTICS:")
-    print("=" * 100)
+    print("=" * 120)
 
     # Sort by kernel name for consistent output
     sorted_kernels = sorted(grouped_kernels.items())
@@ -119,7 +119,7 @@ def print_comparison(grouped_kernels, num_warmup=0):
     """
     print("\n\nKERNEL COMPARISON (after warmup):")
     print("=" * 100)
-    print(f"{'Kernel Name':<80} {'Count':>6} {'Median':>10} {'Mean':>10} {'Min':>10} {'Max':>10} {'StdDev':>10}")
+    print(f"{'Kernel Name':<100} {'Count':>6} {'Median':>10} {'Mean':>10} {'Min':>10} {'Max':>10} {'StdDev':>10}")
     print("-" * 100)
 
     sorted_kernels = sorted(grouped_kernels.items())
@@ -136,9 +136,9 @@ def print_comparison(grouped_kernels, num_warmup=0):
 
         if stats:
             # Truncate kernel name if too long
-            display_name = kernel_name if len(kernel_name) <= 80 else kernel_name[:77] + "..."
+            display_name = kernel_name if len(kernel_name) <= 100 else kernel_name[:97] + "..."
 
-            print(f"{display_name:<80} {stats['count']:>6} {stats['median']:>9.3f}  {stats['mean']:>9.3f}  "
+            print(f"{display_name:<100} {stats['count']:>6} {stats['median']:>9.3f}  {stats['mean']:>9.3f}  "
                   f"{stats['min']:>9.3f}  {stats['max']:>9.3f}  {stats['stdev']:>9.3f}")
 
             # Track baseline (first kernel, usually Triton)
@@ -146,7 +146,7 @@ def print_comparison(grouped_kernels, num_warmup=0):
                 baseline_median = stats['median']
             else:
                 slowdown = (stats['median'] / baseline_median - 1) * 100
-                print(f"{'':>80} {'':>6} {slowdown:>9.1f}% slower than baseline")
+                print(f"{'':>100} {'':>6} {slowdown:>9.1f}% slower than baseline")
 
 def main():
     csv_file = sys.argv[1]
