@@ -12,6 +12,22 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 // -----
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_exp2
+  func.func @lower_exp2() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.exp2
+    // CHECK:     %[[CST:.*]] = arith.constant 0.000000e+00 : f32
+    // CHECK:     %[[REG:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    // CHECK:     math.exp2 %[[REG]] : vector<4xf32>
+    %cst = arith.constant 0.0 : f32
+    %0 = wave.register %cst : vector<4xf32>
+    %1 = wave.exp2 %0 : (vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
   // CHECK-LABEL: func.func @lower_register
   func.func @lower_register() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.register
