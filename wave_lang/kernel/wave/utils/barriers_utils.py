@@ -6,7 +6,7 @@
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Union
 
 import torch.fx as fx
 
@@ -117,12 +117,17 @@ def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> Optional[fx.Node]
     return None
 
 
-def need_barrier(node1: CustomOp, node2: CustomOp) -> bool:
+def need_barrier(
+    node1: Union[fx.Node, CustomOp], node2: Union[fx.Node, CustomOp]
+) -> bool:
     """
     Check if node1 and node2 have different memory access types.
     If so, we need a barrier in between.
     Else, we don't need a barrier.
     """
+    node1 = get_custom(node1) if isinstance(node1, fx.Node) else node1
+    node2 = get_custom(node2) if isinstance(node2, fx.Node) else node2
+
     access_type1 = get_memory_access_type(node1)
     if access_type1 == MemoryAccessType.NONE:
         return False
@@ -150,7 +155,13 @@ def add_sync_requirements(
     last_prod = state.producers[-1]
     first_con = state.consumers[0]
 
-    if resource:
+    assert get_shared_memory_from_op(last_prod) == get_shared_memory_from_op(
+        first_con
+    ), "Bug"
+
+    if resource is not None:
+        if not need_barrier(last_prod, first_con):
+            return False
         last_prod_loc = last_prod._topo_location
         first_con_loc = first_con._topo_location
         cross_iter = last_prod_loc > first_con_loc
@@ -174,6 +185,10 @@ def add_sync_requirements(
 def handle_hazard(
     results, nodes, producer_kinds, consumer_kinds, is_nested: bool = False
 ):
+    """
+    Scans the graph and append SyncRequirements to results if any.
+    Returns if barriers are required for NestedRegionOps
+    """
     states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
 
     # duplicate nodes to find cross-iter dependencies
@@ -186,6 +201,7 @@ def handle_hazard(
         nodes = nodes * 2
 
     cross_iter = False
+    cross_graph = False
     for node in nodes:
         op = get_custom(node)
         access_kind = get_memory_access_type(op)
@@ -199,20 +215,19 @@ def handle_hazard(
         if access_kind in producer_kinds:
             if state.producers and state.consumers:
                 cross_iter |= add_sync_requirements(results, resource, state)
-
+                cross_graph |= state.producers[-1].graph != state.consumers[0].graph
                 state.producers.clear()
                 state.consumers.clear()
             state.producers.append(node)
-
         if access_kind in consumer_kinds:
-            if state.producers:
-                state.consumers.append(node)
+            state.consumers.append(node)
 
     for resource, state in states.items():
         if state.producers and state.consumers:
             cross_iter |= add_sync_requirements(results, resource, state)
 
-    return cross_iter
+    # barriers are needed if cross iteration dependencies exist and no producers from outside the subgraph.
+    return cross_iter and not cross_graph
 
 
 def get_barriers_analysis(trace, graph):

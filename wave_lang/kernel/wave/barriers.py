@@ -4,16 +4,13 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from dataclasses import dataclass
 from collections import defaultdict
-from typing import Optional, Sequence
+from typing import Sequence
 
-import torch.fx as fx
 
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     GatherToLDS,
-    NestedRegionOp,
     Iterate,
     Conditional,
     SharedMemoryBarrier,
@@ -23,11 +20,9 @@ from ..ops.wave_ops import (
 )
 from .utils.graph_utils import (
     is_barrier_between,
-    is_iterate_subgraph,
 )
 
 from .utils.barriers_utils import (
-    need_barrier,
     TargetConfig,
     SyncRequirement,
     get_barriers_analysis,
@@ -107,7 +102,6 @@ def add_shared_memory_barriers(
     emitter.emit(sync_requests)
 
 
-
 # --- unused func (for reference) ---
 def should_insert_split_barrier_for_nested_region_op(
     split_barrier: bool, checking_next_iter: bool, producers_in_subgraph: bool
@@ -116,29 +110,6 @@ def should_insert_split_barrier_for_nested_region_op(
     # 1) it is a reduction graph and we are not checking for next_iterations, or
     # 2) it is a conditional subgraph and a producer is inside the graph.
     return split_barrier and producers_in_subgraph and not checking_next_iter
-
-
-def add_shared_memory_split_barriers(
-    producer: fx.Node, consumer: fx.Node, barId: int = -1, is_async: bool = False
-):
-    """
-    This function adds a signal barrier after a producer and a wait before a consumer with barrier: barId
-    for circular dependencies introduced by reduction graphs, it will be handled by add_signal_wait_to_subgraph pass.
-    """
-
-    if producer:
-        with producer.graph.inserting_after(producer):
-            _ = SharedMemoryBarrierSignal(barId, wait_async_ops=is_async).add_to_graph(
-                producer.graph, loc=get_custom(producer).location
-            )
-
-    if consumer:
-        with consumer.graph.inserting_before(consumer):
-            _ = SharedMemoryBarrierWait(barId).add_to_graph(
-                consumer.graph, loc=get_custom(consumer).location
-            )
-
-    return producer.graph != consumer.graph
 
 
 def add_signal_wait_to_subgraph(trace, graph, custom):
