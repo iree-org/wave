@@ -592,6 +592,7 @@ def transform_two_PP_clusters(
     assert len(sliced_mma_nodes) == len(sliced_local_load_lhs)
     assert len(sliced_mma_nodes) == num_slices
 
+    breakpoint()
     context_location = mma_nodes and mma_nodes[0].location
 
     clusters = []
@@ -1009,7 +1010,7 @@ def schedule_reordering(
         if reorder_strategy == SchedReorderStrategy.NONE:
             continue
         elif reorder_strategy == SchedReorderStrategy.TWO_PP_CLUSTER:
-            breakpoint()
+            # breakpoint()
             print("mma_nodes", mma_nodes)
             print("local_load_lhs", local_load_lhs)
             print("local_load_rhs", local_load_rhs)
@@ -1017,8 +1018,8 @@ def schedule_reordering(
             print("global_load_rhs", global_load_rhs)
             print("local_write_lhs", local_write_lhs)
             print("local_write_rhs", local_write_rhs)
-            print("BEFORE", graph)
-            breakpoint()
+            # print("BEFORE", graph)
+            # breakpoint()
             clusters = transform_two_PP_clusters(
                 mma_nodes,
                 local_load_lhs,
@@ -1061,13 +1062,19 @@ def schedule_reordering(
         # Skip to next Iterate if fail to reorder graph.
         if reordered_graph is None:
             continue
+
         reordered_graph.parent_op = graph.parent_op
-        reordered_subgraph_name = f"reoredered_{custom_iterate.subgraph_name}"
-        breakpoint()
-        print("AFTER", reordered_graph)
+        original_subgraph_name = custom_iterate.subgraph_name
+        reordered_subgraph_name = f"reoredered_{original_subgraph_name}"
+        # breakpoint()
+        # print("AFTER", reordered_graph)
         trace.add_subgraph(reordered_subgraph_name, reordered_graph)
         trace.get_root_graph().subgraphs[reordered_subgraph_name] = reordered_graph
         custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
+
+        del trace.region_graph.subgraphs[original_subgraph_name]
+        del trace.get_root_graph().subgraphs[original_subgraph_name]
+
         if is_pingpong_strategy(reorder_strategy):
             add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
 
