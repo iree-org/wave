@@ -15,7 +15,9 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/LogicalResult.h"
 
 #define DEBUG_TYPE "wave-lowering"
 #define LDBG() llvm::dbgs() << "[" DEBUG_TYPE "] "
@@ -88,6 +90,10 @@ materializeAffine(Location loc, ArrayRef<wave::WaveSymbolAttr> symbols,
       v = blockId(gpu::Dimension::y);
     else if (name == "_WG2")
       v = blockId(gpu::Dimension::z);
+    else if (llvm::is_contained({"_DD0", "_DD1", "_DD2"}, name))
+      return rewriter.notifyMatchFailure(
+          loc, "materialization of affine expressions containing device "
+               "dimension symbols is not implemented.");
     else if (std::optional<int64_t> value = hyper.getSymbolValue(name)) {
       v = rewriter.create<arith::ConstantIndexOp>(loc, *value);
     } else {
