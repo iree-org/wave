@@ -26,6 +26,7 @@ from .utils.barriers_utils import (
     TargetConfig,
     SyncRequirement,
     get_barriers_analysis,
+    minimize_placement_strategy,
 )
 
 
@@ -42,14 +43,25 @@ class BarrierEmitter:
             assert True, "Should not reach here for now"
 
     def emit(self, sync_reqs: Sequence[SyncRequirement]) -> None:
+        sync_reqs = self.optimize(sync_reqs)
         for req in sync_reqs:
             self.place_barrier(req)
 
     def place_barrier(self, req: SyncRequirement) -> None:
         raise NotImplementedError
 
+    def optimize(
+        self, sync_reqs: Sequence[SyncRequirement]
+    ) -> Sequence[SyncRequirement]:
+        raise NotImplementedError
+
 
 class LegacyBarrierEmitter(BarrierEmitter):
+    def optimize(
+        self, sync_reqs: Sequence[SyncRequirement]
+    ) -> Sequence[SyncRequirement]:
+        return minimize_placement_strategy(sync_reqs)
+
     def place_barrier(self, req: SyncRequirement) -> None:
         is_async_op = lambda node: (
             True if isinstance(get_custom(node), GatherToLDS) else False
@@ -71,6 +83,11 @@ class LegacyBarrierEmitter(BarrierEmitter):
 
 
 class BasicSplitBarrierEmitter(BarrierEmitter):
+    def optimize(
+        self, sync_reqs: Sequence[SyncRequirement]
+    ) -> Sequence[SyncRequirement]:
+        return minimize_placement_strategy(sync_reqs)
+
     def place_barrier(self, req: SyncRequirement) -> None:
         barId = -1
         producer = next(iter(req.prod_region))

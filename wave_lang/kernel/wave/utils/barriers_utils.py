@@ -258,7 +258,6 @@ def get_barriers_analysis(trace, graph):
         smem_nodes,
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
         {MemoryAccessType.READ},
-        is_nested=False,
     )
 
     # WAR
@@ -267,7 +266,6 @@ def get_barriers_analysis(trace, graph):
         smem_nodes,
         {MemoryAccessType.READ},
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-        is_nested=False,
     )
 
     # handle nested iterate graph
@@ -332,5 +330,39 @@ def get_barriers_analysis(trace, graph):
         add_sync_requirements(
             results, None, EpisodeState([regionNode], [regionNode.next])
         )
+
+    return results
+
+
+def minimize_placement_strategy(
+    sync_reqs: Sequence[SyncRequirement],
+) -> Sequence[SyncRequirement]:
+
+    get_topo_location = lambda x: getattr(next(iter(x)), "_topo_location", 0)
+
+    if len(sync_reqs) == 0:
+        return sync_reqs
+    placements = []
+    results = []
+
+    # 1) sort barrier placement location from pos low to high
+    ascending_reqs = sorted(
+        sync_reqs,
+        key=lambda req: (
+            get_topo_location(req.prod_region),
+            get_topo_location(req.cons_region),
+        ),
+    )
+
+    # 2) add to result if no barriers are placed in between topo_region
+    for req in ascending_reqs:
+        start = get_topo_location(req.prod_region)
+        end = get_topo_location(req.cons_region)
+        if start < end:
+            if any([p in range(start, end) for p in placements]):
+                continue
+
+        results.append(req)
+        placements.append(end)
 
     return results
