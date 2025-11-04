@@ -262,6 +262,8 @@ def get_barriers_analysis(trace, graph):
     nodes = trace.walk()
     assign_preorder_index(nodes)
 
+    get_topo_location = lambda x: getattr(next(iter(x)), "_topo_location", 0)
+
     is_shared_memory_node = lambda node: (
         True if get_shared_memory_from_op(get_custom(node)) is not None else False
     )
@@ -272,6 +274,7 @@ def get_barriers_analysis(trace, graph):
         True if isinstance(get_custom(node), Conditional) else False
     )
 
+    # root graph
     root_graph_name = trace.root_graph
     smem_nodes = trace.walk_graph(name=root_graph_name, filter=is_shared_memory_node)
     iterate_nodes = trace.walk(is_iterate_node)
@@ -384,9 +387,8 @@ def minimize_placement_strategy(
     for req in ascending_reqs:
         start = get_topo_location(req.prod_region)
         end = get_topo_location(req.cons_region)
-        if start < end:
-            if any([p in range(start, end) for p in placements]):
-                continue
+        if any([p in range(start + 1, end) for p in placements]):
+            continue
 
         results.append(req)
         placements.append(end)
@@ -405,4 +407,24 @@ def find_smallest_interval_strategy(
 
     placements = []
     results = []
-    return sync_reqs
+
+    # 1) sort barrier placement location from pos low to high
+    ascending_reqs = sorted(
+        sync_reqs,
+        key=lambda req: (
+            get_topo_location(req.cons_region),
+            get_topo_location(req.prod_region),
+        ),
+    )
+
+    # 2) add to result if no barriers are placed in between topo_region
+    for req in ascending_reqs:
+        start = get_topo_location(req.prod_region)
+        end = get_topo_location(req.cons_region)
+        if any([p in range(start + 1, end) for p in placements]):
+            continue
+
+        results.append(req)
+        placements.append(end)
+
+    return results

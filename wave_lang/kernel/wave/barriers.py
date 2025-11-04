@@ -36,6 +36,9 @@ class BarrierEmitter:
             return LegacyBarrierEmitter(self.cfg)
         elif not self.cfg.has_named_barriers:
             return BasicSplitBarrierEmitter(self.cfg)
+        elif self.cfg.has_named_barriers:
+            # TODO(megan.kuo) use basic split barriers for gfx12 for now.
+            return BasicSplitBarrierEmitter(self.cfg)
         else:
             assert True, "Should not reach here for now"
 
