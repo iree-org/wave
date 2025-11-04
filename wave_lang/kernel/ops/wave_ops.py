@@ -1409,7 +1409,11 @@ class Allocate(CustomOp):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        return list(self.shape)
+        from ..wave.utils.general_utils import infer_dim
+
+        shape = list(self.shape)
+        dims = [infer_dim(expr) for expr in shape]
+        return dims
 
     @property
     def type(self) -> "Memory":
