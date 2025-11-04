@@ -124,6 +124,8 @@ def has_scaled_indices(node: fx.Node):
     """
     if isinstance(get_custom(node), (Iterate, Output)):
         return False
+    if isinstance(get_custom(node), (Allocate)):
+        return False
     node_type = node.type
     if not node_type:
         return False
