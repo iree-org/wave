@@ -131,6 +131,10 @@ def fix_manual_allocate_dependencies(trace: CapturedTrace):
         == SHARED_ADDRESS_SPACE
     )
 
+    # if no writes to an allocate, then there is nothing to fix
+    if len(write_nodes) == 0:
+        return
+
     # Group writes by which allocate they target
     writes_by_allocate = {}
     for node in write_nodes:
@@ -140,11 +144,10 @@ def fix_manual_allocate_dependencies(trace: CapturedTrace):
     root_graph = trace.get_root_graph()
     for subgraph in root_graph.subgraphs.values():
         node_list = list(subgraph.nodes)
-        # set write dependencies on reads from those allocates
-        for read_idx, node in enumerate(node_list):
+        read_nodes = [x for x in node_list if isinstance(get_custom(x), Read)]
+        for node in read_nodes:
+            read_idx = node_list.index(node)
             custom = get_custom(node)
-            if not isinstance(custom, Read):
-                continue
             if custom._write_dependency is not None:
                 continue
             if custom.memory not in writes_by_allocate:
