@@ -26,12 +26,18 @@ from wave_lang.kernel.wave.schedule_reordering import (
 )
 from wave_lang.kernel.ops.wave_schedule_ops import (
     get_proxy_result,
+    get_custom,
     create_schedule_proxy,
 )
 from wave_lang.kernel._support.tracing import ScheduleContext
 
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
+)
+
+from wave_lang.kernel.ops.wave_ops import (
+    SetWavePrio,
+    SharedMemoryBarrier,
 )
 
 # Define symbolic dimensions for our matrices
@@ -1967,6 +1973,38 @@ def gemm_schedule_test(is_debug=False):
 
         current_context = ScheduleContext.current()
         region_graph = current_context.region_graph
+
+        k_loop_result = get_proxy_result(k_loop)
+        custom_iterate = get_custom(k_loop_result[0])
+        kernel_trace = current_context.kernel_trace
+        subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
+
+        context_location = mma_nodes and mma_nodes[0].location
+
+        # Create SetWavePrio operations
+        prio_op_1_0 = SetWavePrio(1).add_to_graph(subgraph)
+        prio_op_1_0.location = context_location
+        prio_op_0_0 = SetWavePrio(0).add_to_graph(subgraph)
+        prio_op_0_0.location = context_location
+        prio_op_1_1 = SetWavePrio(1).add_to_graph(subgraph)
+        prio_op_1_1.location = context_location
+        prio_op_0_1 = SetWavePrio(0).add_to_graph(subgraph)
+        prio_op_0_1.location = context_location
+
+        # Create Shared memory barriers
+        shared_barrier_0 = SharedMemoryBarrier().add_to_graph(subgraph)
+        shared_barrier_0.location = context_location
+
+        # Wrap MMA chunks with priority and barriers
+        sliced_mma_nodes[0].insert(0, prio_op_1_0)
+        sliced_mma_nodes[0].append(prio_op_0_0)
+        # sliced_mma_nodes[0].append(shared_barrier_0)
+
+        sliced_mma_nodes[1].insert(0, prio_op_1_1)
+        sliced_mma_nodes[1].append(prio_op_0_1)
+
+        breakpoint()
+
         for i in range(num_slice):
             sliced_mma_proxies.append(
                 create_schedule_proxy(
@@ -1996,6 +2034,10 @@ def gemm_schedule_test(is_debug=False):
             region_graph, local_write_rhs, f"local_write_rhs"
         )
 
+        shared_barrier_0_proxy = create_schedule_proxy(
+            region_graph, shared_barrier_0, f"shared_barrier_0"
+        )
+
         breakpoint()
         # Create a pipeline with 2 stages and specify the operations that are overlapping.
         with tkw.pipeline(k_loop) as pipelined_loop:
@@ -2015,7 +2057,7 @@ def gemm_schedule_test(is_debug=False):
                         sliced_local_load_lhs_proxies[1],
                         sliced_local_load_rhs_proxies[1],
                     ),
-                    (sliced_mma_proxies[0],),
+                    (sliced_mma_proxies[0], shared_barrier_0_proxy),
                     (),
                     (sliced_mma_proxies[1],),
                 ],
@@ -2065,6 +2107,7 @@ def gemm_schedule_test(is_debug=False):
 
     # Run the kernel
     gemm_prefetch(a, b, c)
+    print(gemm_prefetch.asm)
 
     expected = torch.matmul(a, b.t()).to(torch.float32)
     assert torch.allclose(c, expected, rtol=1e-2, atol=1e-2)
