@@ -190,10 +190,11 @@ try:
         print(wave.DeviceConstraintAttr.get(dim="M", tile_size=expr_attr, device_dim=0))
 
         # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>
-        wg_constraint = wave.WorkgroupConstraintAttr.get(
-            dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x
+        print(
+            wave.WorkgroupConstraintAttr.get(
+                dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x
+            )
         )
-        print(wg_constraint)
 
         # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
         print(
@@ -204,13 +205,6 @@ try:
 
         # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>>
         print(wave.WaveConstraintAttr.get(dim="M", tile_size=expr_attr))
-
-        # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, wg_constraint = <dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>>
-        print(
-            wave.WaveConstraintAttr.get(
-                dim="M", tile_size=expr_attr, wg_constraint=wg_constraint
-            )
-        )
 
         # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>>
         print(wave.TilingConstraintAttr.get(dim="M", tile_size=expr_attr))

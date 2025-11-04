@@ -19,16 +19,6 @@ func.func private @test_num_dimensions_mismatch2() attributes { wave.constraints
 // -----
 
 #hyperparams = #wave.hyperparameters<{M = 1024, K = 1024, BLOCK_M = 128, BLOCK_K = 128}>
-#wg_constraint1 = #wave.workgroup_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
-#wg_constraint2 = #wave.workgroup_constraint<dim = <"K">, tile_size = <[BLOCK_K] -> (BLOCK_K)>, workgroup_dim = <x>>
-// expected-error @below {{the dimension of the workgroup constraint in wg_constraint: #wave.symbol<"K"> should match the dimension of the wave constraint: #wave.symbol<"M">}}
-#wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>,
-                                       wg_constraint = #wg_constraint2>
-func.func private @test_wrong_wg_attr() attributes { wave.hyperparameters = #hyperparams, wave.constraints = [#wg_constraint1, #wg_constraint2, #wv_constraint] }
-
-// -----
-
-#hyperparams = #wave.hyperparameters<{M = 1024, K = 1024, BLOCK_M = 128, BLOCK_K = 128}>
 #wg_constraint = #wave.workgroup_constraint<dim = <"K">, tile_size = <[BLOCK_K] -> (BLOCK_K)>, workgroup_dim = <x>>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>>
 // expected-error @below {{missing corresponding workgroup constraint for dimension: #wave.symbol<"M">}}

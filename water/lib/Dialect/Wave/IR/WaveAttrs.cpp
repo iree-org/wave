@@ -327,16 +327,7 @@ WorkgroupConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult
 WaveConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                           WaveSymbolAttr dim, WaveExprListAttr tile_size,
-                           WorkgroupConstraintAttr wg_constraint) {
-  if (wg_constraint && wg_constraint.getDim() != dim)
-    return emitError()
-           << "the dimension of the workgroup constraint in wg_constraint: "
-           << wg_constraint.getDim()
-           << " should match the dimension of the wave "
-              "constraint: "
-           << dim;
-
+                           WaveSymbolAttr dim, WaveExprListAttr tile_size) {
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size, expected 1";
   }

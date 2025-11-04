@@ -56,14 +56,6 @@ func.func private @test_tiling() attributes { wave.hyperparameters = #tl_hyperpa
 #wv_hyperparams = #wave.hyperparameters<{M = 1024, BLOCK_M = 128}>
 func.func private @test_wave1() attributes { wave.hyperparameters = #wv_hyperparams, wave.constraints = [#wg_constraint1, #wv_constraint1] }
 
-// CHECK-LABEL: @test_wave2
-// CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>,
-// CHECK:   wg_constraint = <dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
-#wv_constraint2 = #wave.wave_constraint<dim = <"M">,
-                                        tile_size = <[BLOCK_M] -> (BLOCK_M floordiv 4)>,
-                                        wg_constraint = #wg_constraint1>
-func.func private @test_wave2() attributes { wave.hyperparameters = #wv_hyperparams, wave.constraints = [#wg_constraint2, #wv_constraint2] }
-
 // CHECK-LABEL: @test_device
 // CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
 #dv_constraint = #wave.device_constraint<dim = <"M">, tile_size = <[DEVICE_M] -> (DEVICE_M)>, device_dim = 0>

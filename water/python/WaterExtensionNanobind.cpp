@@ -431,17 +431,13 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, const std::string &dim,
-             MlirAttribute tileSize, std::optional<MlirAttribute> wgConstraint,
-             MlirContext context) {
+             MlirAttribute tileSize, MlirContext context) {
             MlirStringRef dimStrRef =
                 mlirStringRefCreate(dim.c_str(), dim.size());
             MlirAttribute dimAttr = mlirWaveSymbolAttrGet(context, dimStrRef);
-            return cls(mlirWaveConstraintAttrGet(
-                context, dimAttr, tileSize,
-                wgConstraint.value_or(MlirAttribute())));
+            return cls(mlirWaveConstraintAttrGet(context, dimAttr, tileSize));
           },
           nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
-          nb::arg("wg_constraint") = nb::none(),
           nb::arg("context") = nb::none(),
           "Gets a wave.WaveConstraintAttr from parameters.");
 

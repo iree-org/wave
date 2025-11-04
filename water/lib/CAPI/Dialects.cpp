@@ -303,16 +303,11 @@ bool mlirAttributeIsAWaveConstraintAttr(MlirAttribute attr) {
 }
 
 MlirAttribute mlirWaveConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
-                                        MlirAttribute tileSize,
-                                        MlirAttribute wgConstraint) {
+                                        MlirAttribute tileSize) {
   mlir::MLIRContext *ctx = unwrap(mlirCtx);
   auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dim));
   auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
-  auto wgConstraintAttr = llvm::cast_if_present<wave::WorkgroupConstraintAttr>(
-      unwrap(wgConstraint));
-
-  return wrap(wave::WaveConstraintAttr::get(ctx, dimAttr, tileSizeAttr,
-                                            wgConstraintAttr));
+  return wrap(wave::WaveConstraintAttr::get(ctx, dimAttr, tileSizeAttr));
 }
 
 MlirTypeID mlirWaveConstraintAttrGetTypeID() {

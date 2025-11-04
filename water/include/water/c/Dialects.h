@@ -211,9 +211,8 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirWorkgroupConstraintAttrGetTypeID();
 MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveConstraintAttr(MlirAttribute attr);
 
 /// Creates a new WaveConstraintAttr
-MLIR_CAPI_EXPORTED MlirAttribute
-mlirWaveConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
-                          MlirAttribute tileSize, MlirAttribute wgConstraint);
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveConstraintAttrGet(
+    MlirContext mlirCtx, MlirAttribute dim, MlirAttribute tileSize);
 
 /// Returns the typeID of a WaveConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveConstraintAttrGetTypeID();

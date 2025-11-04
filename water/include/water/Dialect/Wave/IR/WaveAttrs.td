@@ -225,9 +225,7 @@ def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
   let description = [{
     A constraint of the form:
     ```mlir
-    #wave.wave_constraint<dim = <"K">,
-                          tile_size = <[WAVE_K] -> (WAVE_K)>,
-                          wg_constraint = #wg_constraint>
+    #wave.wave_constraint<dim = <"K">, tile_size = <[WAVE_K] -> (WAVE_K)>>
     ```
 
     that we want distribute the K dimension among multiple waves with
@@ -238,8 +236,7 @@ def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
     is given by BLOCK_K // WAVE_K.
   }];
   let parameters = (ins "::wave::WaveSymbolAttr":$dim,
-                        "::wave::WaveExprListAttr":$tile_size,
-                        OptionalParameter<"::wave::WorkgroupConstraintAttr">:$wg_constraint);
+                        "::wave::WaveExprListAttr":$tile_size);
 
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
