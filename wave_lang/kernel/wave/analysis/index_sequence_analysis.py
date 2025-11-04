@@ -124,8 +124,6 @@ def has_scaled_indices(node: fx.Node):
     """
     if isinstance(get_custom(node), (Iterate, Output)):
         return False
-    if isinstance(get_custom(node), (Allocate)):
-        return False
     node_type = node.type
     if not node_type:
         return False
@@ -645,9 +643,7 @@ def add_nodes_to_sources(
             break
         for arg in args:
             custom = get_custom(arg)
-            if isinstance(custom, (Allocate, Placeholder)) and not isinstance(
-                custom, IterArg
-            ):
+            if isinstance(custom, Placeholder) and not isinstance(custom, IterArg):
                 continue
             vector_shapes = (
                 custom.vector_shapes if custom.vector_shapes else source_vector_shapes
