@@ -70,8 +70,9 @@ class LegacyBarrierEmitter(BarrierEmitter):
                     consumer.graph, loc=get_custom(consumer).location
                 )
         else:
+            barrierOp = get_custom(barrier)
             if is_async_op(producer) or is_async_op(consumer):
-                barrier.update_arg("wait_async_ops", True)
+                barrierOp.update_arg("wait_async_ops", True)
 
 
 class BasicSplitBarrierEmitter(BarrierEmitter):
