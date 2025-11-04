@@ -4,15 +4,12 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from collections import defaultdict
 from typing import Sequence
 
 
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     GatherToLDS,
-    Iterate,
-    Conditional,
     SharedMemoryBarrier,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
@@ -117,4 +114,3 @@ def add_shared_memory_barriers(
     handle = BarrierEmitter(target_arch)
     emitter = handle.dispatch()
     emitter.emit(sync_requests)
-

@@ -56,11 +56,15 @@ class SyncRequirement:
 
 
 class EpisodeState:
-    __slots__ = ("producers", "consumers")
+    def __init__(
+        self, producers: List[fx.Node] = None, consumers: List[fx.Node] = None
+    ):
+        self.producers: List[fx.Node] = producers if producers is not None else []
+        self.consumers: List[fx.Node] = consumers if consumers is not None else []
 
-    def __init__(self, producers: List[Any] = [], consumers: List[Any] = []):
-        self.producers: List[Any] = producers
-        self.consumers: List[Any] = consumers
+    def reset(self):
+        self.producers = []
+        self.consumers = []
 
 
 class MemoryAccessType(Enum):
@@ -145,8 +149,28 @@ def need_barrier(
     return False
 
 
+def update_topo_location(last_prod, first_con, offset: int = 0):
+    """
+    prod has topo_location > consumer topo_location iff an iterate exist.
+    arange the topo_location of a consumer as
+    new_consumer_location =  producer_location + (producer_location - old_cons_loc)
+    """
+    prod_loc = last_prod._topo_location
+    cons_loc = first_con._topo_location
+
+    # valid
+    if prod_loc < cons_loc:
+        return
+
+    setattr(first_con, "_topo_location", cons_loc + offset)
+    return
+
+
 def add_sync_requirements(
-    results: List[SyncRequirement], resource: fx.Node, state: EpisodeState
+    results: List[SyncRequirement],
+    resource: fx.Node,
+    state: EpisodeState,
+    offset: int = 0,
 ) -> bool:
     """
     Add cut (Synchronization requirements) to the state (in between last producer nodes and first consumer nodes)
@@ -167,6 +191,7 @@ def add_sync_requirements(
         first_con_loc = first_con._topo_location
         cross_iter = last_prod_loc > first_con_loc
 
+    update_topo_location(last_prod, first_con, offset)
     req = SyncRequirement(
         resource=resource,
         producers=list(state.producers),
@@ -203,6 +228,8 @@ def handle_hazard(
 
     cross_iter = False
     cross_graph = False
+    offset = len(nodes)
+
     for node in nodes:
         op = get_custom(node)
         access_kind = get_memory_access_type(op)
@@ -215,23 +242,25 @@ def handle_hazard(
 
         if access_kind in producer_kinds:
             if state.producers and state.consumers:
-                cross_iter |= add_sync_requirements(results, resource, state)
+                cross_iter |= add_sync_requirements(results, resource, state, offset)
                 cross_graph |= state.producers[-1].graph != state.consumers[0].graph
-                state.producers.clear()
-                state.consumers.clear()
+                state.reset()
             state.producers.append(node)
         if access_kind in consumer_kinds:
-            state.consumers.append(node)
+            if state.producers:
+                state.consumers.append(node)
 
     for resource, state in states.items():
         if state.producers and state.consumers:
-            cross_iter |= add_sync_requirements(results, resource, state)
+            cross_iter |= add_sync_requirements(results, resource, state, offset)
 
     # barriers are needed if cross iteration dependencies exist and no producers from outside the subgraph.
     return cross_iter and not cross_graph
 
 
 def get_barriers_analysis(trace, graph):
+    nodes = trace.walk()
+    assign_preorder_index(nodes)
 
     is_shared_memory_node = lambda node: (
         True if get_shared_memory_from_op(get_custom(node)) is not None else False
@@ -247,8 +276,6 @@ def get_barriers_analysis(trace, graph):
     smem_nodes = trace.walk_graph(name=root_graph_name, filter=is_shared_memory_node)
     iterate_nodes = trace.walk(is_iterate_node)
     condition_nodes = trace.walk(is_condition_node)
-
-    assign_preorder_index(smem_nodes)
 
     results: List[SyncRequirement] = []
 
@@ -274,7 +301,6 @@ def get_barriers_analysis(trace, graph):
         smem_nodes = trace.walk_graph(
             name=regionOp.subgraph_name, filter=is_shared_memory_node
         )
-        assign_preorder_index(smem_nodes)
         need_iterate_barriers = False
 
         # RAW
@@ -306,7 +332,6 @@ def get_barriers_analysis(trace, graph):
         smem_nodes = trace.walk_graph(
             name=regionOp.subgraph_name, filter=is_shared_memory_node
         )
-        assign_preorder_index(smem_nodes)
 
         # RAW
         handle_hazard(
@@ -342,6 +367,7 @@ def minimize_placement_strategy(
 
     if len(sync_reqs) == 0:
         return sync_reqs
+
     placements = []
     results = []
 
@@ -349,8 +375,8 @@ def minimize_placement_strategy(
     ascending_reqs = sorted(
         sync_reqs,
         key=lambda req: (
-            get_topo_location(req.prod_region),
             get_topo_location(req.cons_region),
+            get_topo_location(req.prod_region),
         ),
     )
 
@@ -366,3 +392,17 @@ def minimize_placement_strategy(
         placements.append(end)
 
     return results
+
+
+def find_smallest_interval_strategy(
+    sync_reqs: Sequence[SyncRequirement],
+) -> Sequence[SyncRequirement]:
+
+    get_topo_location = lambda x: getattr(next(iter(x)), "_topo_location", 0)
+
+    if len(sync_reqs) == 0:
+        return sync_reqs
+
+    placements = []
+    results = []
+    return sync_reqs
