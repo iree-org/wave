@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.testing import assert_close
 
-import wave_lang.dynamo.backend
+import wave_lang.dynamo.register_backend
 
 
 def test_wave_dynamo_backend():
