@@ -146,7 +146,7 @@ namespace {
 /// Generic lowering for Wave unary ops to a target unary op operating on a
 /// float-like operand.
 template <typename WaveOp, typename TargetOp>
-class UnaryOpLoweringPattern : public OpConversionPattern<WaveOp> {
+class UnaryFPOpLoweringPattern : public OpConversionPattern<WaveOp> {
 public:
   using OpConversionPattern<WaveOp>::OpConversionPattern;
 
@@ -174,9 +174,9 @@ public:
 
 } // namespace
 
-void wave::populateWaveUnaryOpLoweringPatterns(WaveTypeConverter &typeConverter,
-                                               RewritePatternSet &patterns) {
-  patterns.add<UnaryOpLoweringPattern<wave::Exp2Op, mlir::math::Exp2Op>>(
+void wave::populateWaveUnaryFPOpLoweringPatterns(
+    WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
+  patterns.add<UnaryFPOpLoweringPattern<wave::Exp2Op, mlir::math::Exp2Op>>(
       typeConverter, patterns.getContext());
 }
 

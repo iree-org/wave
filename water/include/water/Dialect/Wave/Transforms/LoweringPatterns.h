@@ -60,8 +60,8 @@ void populateWaveReadWriteLoweringPatterns(WaveTypeConverter &typeConverter,
                                            mlir::RewritePatternSet &patterns);
 
 // Adds pattern that lowers wave unary ops to upstream MLIR ops.
-void populateWaveUnaryOpLoweringPatterns(WaveTypeConverter &typeConverter,
-                                         mlir::RewritePatternSet &patterns);
+void populateWaveUnaryFPOpLoweringPatterns(WaveTypeConverter &typeConverter,
+                                           mlir::RewritePatternSet &patterns);
 
 } // namespace wave
 
