@@ -248,7 +248,8 @@ def test_mma():
     # CHECK:              ds_read_b64 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
     # CHECK:              ds_read_b64 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
     # CHECK:              v_mfma_f32_16x16x16_f16 a[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], 0
-    # CHECK:              s_nop 6
+    # CHECK:              # MFMA issued, latency ~{{[0-9]+}} cycles
+    # CHECK:              s_nop {{[0-9]+}}
     # CHECK:              v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
     # CHECK:              v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
     # CHECK:              v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}

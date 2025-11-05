@@ -603,6 +603,54 @@ This placement hides memory latency behind independent address/index computation
 and reduces the number of waits (and their strictness) compared to always using
 ``vmcnt(0)`` immediately after each load.
 
+Latency-Aware Scheduling (Database-driven)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Beyond VMEM wait placement, the ASM backend employs a database-driven, latency-aware
+scheduler to minimize stalls across VMEM, LGKM (LDS/scalar), VALU and MFMA pipelines.
+
+- **Latency Database** (``latency_db/gfx942.json``): Versioned, per-architecture JSON
+  containing instruction latencies and throughputs, plus hazard-specific distances
+  (e.g. ``mfma_to_agpr_read``). Each entry has a measurement source:
+  - ``isa_manual``: From AMD ISA documentation
+  - ``llvm_codegen``: From LLVM's proven codegen patterns
+  - ``measured`` / ``profiled``: From microbenchmarks or profiling (future-ready)
+
+- **Latency Provider** (``latency_provider.py``): Query interface used by the emitter/handlers
+  to retrieve latency/throughput and hazard distances. All values come from the JSON database;
+  there are no hardcoded latencies in the code path.
+
+- **Scoreboard** (``scoreboard.py``): Tracks outstanding instructions and their readiness,
+  detects RAW/WAW hazards, and recommends minimal waits/NOPs. It also integrates with the
+  ticket-based VMEM/LGKM model.
+
+- **Always-On Integration** (``asm_emitter.py``): The emitter unconditionally initializes
+  the Latency Provider and Scoreboard. Latency-aware scheduling is always enabled.
+
+MFMA Readiness Example
+^^^^^^^^^^^^^^^^^^^^^^
+
+For MFMA→AGPR-read sequences, the database distinguishes the full MFMA execution latency
+(e.g., 8 cycles for ``v_mfma_f32_16x16x16_f16`` on gfx942) from the minimal hazard distance
+before ``v_accvgpr_read_b32`` can safely issue (``mfma_to_agpr_read = 6`` cycles from LLVM
+codegen patterns). The scheduler inserts the minimal NOPs needed, at the first use:
+
+.. code-block:: asm
+
+   v_mfma_f32_16x16x16_f16 a[0:3], v[26:27], v[24:25], 0
+   # MFMA issued, latency ~8 cycles
+   s_nop 6                    # from DB: mfma_to_agpr_read = 6 cycles
+   v_accvgpr_read_b32 v28, a0
+   v_accvgpr_read_b32 v29, a1
+
+Benefits
+^^^^^^^^
+
+- Minimal waits and NOPs derived from a single source of truth (the database)
+- Architecture-specific values without code changes
+- Matches LLVM’s proven patterns where applicable (e.g., MFMA→AGPR read)
+- Ready to adopt measured data in the future
+
 Best Practices
 ~~~~~~~~~~~~~~
 

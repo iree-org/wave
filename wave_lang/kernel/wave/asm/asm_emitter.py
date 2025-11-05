@@ -7,7 +7,7 @@
 Assembly emitter for generating AMDGCN assembly instructions.
 """
 
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Optional, Set
 
 from wave_lang.support.ir_imports import (
     func_d,
@@ -38,6 +38,11 @@ from .instructions import (
     emit_kernargs,
 )
 
+# Import latency-aware scheduling infrastructure
+from .latency_provider import LatencyProvider
+from .scoreboard import Scoreboard
+from .ticketing import Ticketing
+
 
 def get_register_granularity(target: str) -> Tuple[int, int]:
     """
@@ -58,7 +63,11 @@ def get_register_granularity(target: str) -> Tuple[int, int]:
 class AsmEmitter:
     SRD127_96 = "0x20000"  # data_format=4 for gfx9xx
 
-    def __init__(self, targetid: str, codeobj: str):
+    def __init__(
+        self,
+        targetid: str,
+        codeobj: str,
+    ):
         self.targetid = targetid
         self.codeobj = codeobj
         self.lines: List[str] = []
@@ -73,11 +82,16 @@ class AsmEmitter:
         self.current_agpr_quad = None  # Track current AGPR quad allocated for MFMA
         # Track pinned VGPRs for future lifetime management (API surface)
         self._pinned_vgprs = set()
-        # VMEM ticket tracking for optimal vmcnt placement
-        self._vmem_last_ticket = -1  # last issued VMEM ticket
-        self._vmem_last_wait_threshold = (
-            None  # last vmcnt(N) emitted, to coalesce waits
-        )
+
+        # Ticket-based VMEM/LGKM tracking for optimal wait placement
+        self.ticketing = Ticketing()
+
+        # MFMA tracking (matrix operations have fixed latency)
+        self._mfma_last_cycle = None  # cycle when last MFMA was issued
+
+        # Latency-aware scheduling
+        self.latency_provider = LatencyProvider(arch=targetid)
+        self.scoreboard = Scoreboard(latency_provider=self.latency_provider)
 
     @classmethod
     def from_mlir_string(
@@ -142,7 +156,25 @@ class AsmEmitter:
         self.lines.append(s)
 
     def emit_instruction(self, instr):
-        """Emit an instruction object directly."""
+        """
+        Emit an instruction object directly.
+
+        Automatically issues VMEM/LGKM tickets for memory operations based on
+        instruction categorization. This ensures uniform, centralized ticketing
+        for all emitted instructions.
+        """
+        # Import here to avoid circular dependency
+        from .instruction_categories import InstructionCategory, categorize_instruction
+
+        # Issue tickets for memory operations based on instruction category
+        if hasattr(instr, "mnemonic") and instr.mnemonic:
+            category = categorize_instruction(instr.mnemonic)
+
+            if category == InstructionCategory.VMEM:
+                self.ticketing.next_vmem_ticket()
+            elif category == InstructionCategory.LGKM:
+                self.ticketing.next_lgkm_ticket()
+
         self.lines.append(str(instr))
 
     # ---- high-level sections ----
@@ -320,38 +352,134 @@ amdhsa.kernels:
         """Unmark a VGPR as pinned."""
         self._pinned_vgprs.discard(vreg)
 
-    # ========= VMEM ticket tracking for optimal vmcnt placement =========
-    def _next_vmem_ticket(self) -> int:
-        """Issue next VMEM ticket for a buffer load operation."""
-        self._vmem_last_ticket += 1
-        # Reset wait threshold since a new load invalidates previous waits
-        self._vmem_last_wait_threshold = None
-        return self._vmem_last_ticket
-
-    def wait_for_vmem_ticket(self, min_required_ticket: int) -> None:
+    # ========= MFMA tracking for matrix operations =========
+    def track_mfma(self, mfma_instruction: str) -> None:
         """
-        Emit minimal s_waitcnt vmcnt(N) to ensure ticket is ready.
-
-        Computes threshold to allow newer loads to remain in-flight while
-        guaranteeing min_required_ticket is complete.
+        Track MFMA instruction issue for latency-aware scheduling.
 
         Args:
-            min_required_ticket: Ticket that must be ready before proceeding
+            mfma_instruction: MFMA instruction name (e.g., "v_mfma_f32_16x16x16_f16")
         """
-        # Compute threshold: allow (last_ticket - min_required_ticket) newer loads
-        threshold = max(0, self._vmem_last_ticket - min_required_ticket)
+        if self.scoreboard is not None:
+            self._mfma_last_cycle = self.scoreboard.current_cycle
+            latency = self.latency_provider.get_latency(mfma_instruction)
+            if latency:
+                self.emit(f"    # MFMA issued, latency ~{latency:.0f} cycles")
 
-        # Coalesce: only emit if stricter than last wait (or first wait)
-        if (
-            self._vmem_last_wait_threshold is None
-            or threshold < self._vmem_last_wait_threshold
-        ):
-            self.emit_instruction(SWaitcnt(f"vmcnt({threshold})"))
-            self._vmem_last_wait_threshold = threshold
+    def wait_for_mfma_ready(self) -> None:
+        """
+        Ensure MFMA result is ready before consuming it.
+
+        Inserts s_nop if needed based on MFMA→AGPR read latency from database.
+        """
+        if self.scoreboard is None or self._mfma_last_cycle is None:
+            return
+
+        # Check if enough cycles have elapsed
+        elapsed = self.scoreboard.current_cycle - self._mfma_last_cycle
+
+        # Get MFMA→AGPR read latency from database
+        mfma_to_agpr_read_latency = self.latency_provider.get_latency(
+            "mfma_to_agpr_read"
+        )
+        if mfma_to_agpr_read_latency is None:
+            return
+
+        if elapsed < mfma_to_agpr_read_latency:
+            cycles_needed = mfma_to_agpr_read_latency - elapsed
+            nops = min(int(cycles_needed), 15)
+            if nops > 0:
+                from .instructions import SNop
+
+                self.emit_instruction(SNop(nops))
+                self.scoreboard.advance(nops)
+
+    # ========= Scoreboard-based hazard detection (optional) =========
+    def track_instruction(
+        self,
+        instruction: str,
+        writes: Optional[Set[str]] = None,
+        reads: Optional[Set[str]] = None,
+        ticket: Optional[int] = None,
+    ) -> None:
+        """
+        Track an instruction in the scoreboard for hazard detection.
+
+        Args:
+            instruction: Instruction name (e.g., "buffer_load_dwordx4")
+            writes: Set of resources written (e.g., {"v0", "v1"})
+            reads: Set of resources read
+            ticket: Optional VMEM/LGKM ticket
+        """
+        if self.scoreboard is not None:
+            self.scoreboard.issue(
+                instruction, writes=writes, reads=reads, ticket=ticket
+            )
+
+    def check_and_insert_wait(
+        self,
+        reads: Optional[Set[str]] = None,
+        writes: Optional[Set[str]] = None,
+        instruction: Optional[str] = None,
+    ) -> None:
+        """
+        Check for hazards and insert wait if needed.
+
+        Args:
+            reads: Resources to be read by upcoming instruction
+            writes: Resources to be written by upcoming instruction
+            instruction: Optional instruction name for better wait selection
+        """
+        if self.scoreboard is None:
+            return
+
+        hazard = self.scoreboard.check_hazard(reads=reads, writes=writes)
+        if hazard:
+            hazard_type, cycles_needed = hazard
+            # For now, emit conservative wait
+            # Future: could insert nops or try to reorder independent instructions
+            if cycles_needed > 0:
+                self.emit(
+                    f"    # Hazard detected: {hazard_type}, {cycles_needed:.0f} cycles"
+                )
+                # Insert s_nop if < 10 cycles, otherwise s_waitcnt
+                if cycles_needed < 10:
+                    nops = min(int(cycles_needed), 15)
+                    from .instructions import SNop
+
+                    self.emit_instruction(SNop(nops))
+                else:
+                    # Insert wait for pending operations
+                    self.emit_instruction(SWaitcnt("vmcnt(0) lgkmcnt(0)"))
 
     # ---- synchronization and LDS helpers ----
     def emit_barrier(self):
-        self.emit_instruction(SWaitcnt("lgkmcnt(0)"))
+        """
+        Emit a shared memory barrier with optimal LGKM wait coalescing.
+
+        This drains all outstanding LGKM operations (lgkmcnt(0)) only if needed,
+        then emits the workgroup barrier (s_barrier).
+
+        Coalescing: If no LGKM operations are outstanding or we've already
+        drained to lgkmcnt(0) since the last LGKM producer, we skip the wait.
+        """
+        # Check if there are outstanding LGKM operations that need draining
+        # _lgkm_last_ticket >= 0 means at least one LGKM op has been issued
+        # _lgkm_last_wait_threshold != 0 means we haven't already drained to 0
+        has_outstanding_lgkm = (
+            self.ticketing._lgkm_last_ticket >= 0
+            and self.ticketing._lgkm_last_wait_threshold != 0
+        )
+
+        # Emit lgkmcnt(0) only if there are outstanding LGKM operations
+        if has_outstanding_lgkm:
+            self.emit_instruction(SWaitcnt("lgkmcnt(0)"))
+
+        # Always record that we've observed an lgkmcnt(0) at this barrier
+        # This prevents redundant waits after the barrier until new LGKM ops occur
+        self.ticketing.observe_lgkm_wait(0)
+
+        # Emit the workgroup synchronization barrier
         self.emit_instruction(SBarrier())
 
     def emit_lds_write_b32(self, addr_vreg: int, src_vreg: int):
@@ -379,8 +507,9 @@ amdhsa.kernels:
         Emit MFMA instruction with dynamically allocated AGPR result.
 
         Allocates an AGPR quad for the MFMA result and records it for later spilling.
+        The latency-aware scheduler will insert necessary NOPs if needed.
         """
-        from .instructions import VMfmaF32_16x16x16F16, SNop, SWaitcnt
+        from .instructions import VMfmaF32_16x16x16F16, SWaitcnt
 
         # Wait for LDS reads to complete before MFMA
         self.emit_instruction(SWaitcnt("lgkmcnt(0)"))
@@ -391,7 +520,9 @@ amdhsa.kernels:
 
         # Emit MFMA into allocated AGPR quad
         self.emit_instruction(VMfmaF32_16x16x16F16(agpr_base, a_pair, b_pair, 0))
-        self.emit_instruction(SNop(6))
+        # Track MFMA for latency-aware scheduling
+        self.track_mfma("v_mfma_f32_16x16x16_f16")
+        # Latency-aware scheduler will handle MFMA→AGPR read hazards automatically
 
     def spill_agprs_to_vgprs(
         self, dst_v_quad: Tuple[int, int, int, int] = None
@@ -415,6 +546,9 @@ amdhsa.kernels:
             raise RuntimeError(
                 "No AGPR quad allocated; call emit_mfma_16x16x16_f16 first"
             )
+
+        # Wait for MFMA to complete before reading AGPRs
+        self.wait_for_mfma_ready()
 
         for i in range(4):
             self.emit_instruction(
@@ -640,7 +774,6 @@ amdhsa.kernels:
             memref_ssa
         ]
         register_list = []
-        ticket = self._next_vmem_ticket()  # Issue ticket for this load
         self.emit(f"    # load {vector_bytes}B from {memref_ssa}")
         if vector_bytes == 8:
             # Allocate a pair of VGPRs using the allocator
@@ -667,6 +800,8 @@ amdhsa.kernels:
                 )
                 self.emit_instruction(load_instruction)
                 # Don't wait immediately - let caller decide when to wait
+        # Return the current VMEM ticket (the last one issued by the loads above)
+        ticket = self.ticketing._vmem_last_ticket
         return register_list, ticket
 
     def emit_store_with_regs(

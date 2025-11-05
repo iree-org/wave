@@ -695,7 +695,13 @@ class OperationHandlers:
         )
         # Wait for VMEM load to complete before extracting/using loaded data
         if self.walker.last_vmem_ticket is not None:
-            self.walker.emitter.wait_for_vmem_ticket(self.walker.last_vmem_ticket)
+            threshold = self.walker.emitter.ticketing.compute_vmem_wait(
+                self.walker.last_vmem_ticket
+            )
+            if threshold is not None:
+                from .instructions import SWaitcnt
+
+                self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({threshold})"))
         src_regs = self._extract_source_registers(vector_bytes)
         self._emit_ds_write_and_track(memref_ssa, addr_v, src_regs, vector_bytes)
 
@@ -783,7 +789,13 @@ class OperationHandlers:
         # Wait for VMEM load to complete before using loaded data
         # (stores may come from prior loads, e.g., copy kernels)
         if self.walker.last_vmem_ticket is not None:
-            self.walker.emitter.wait_for_vmem_ticket(self.walker.last_vmem_ticket)
+            threshold = self.walker.emitter.ticketing.compute_vmem_wait(
+                self.walker.last_vmem_ticket
+            )
+            if threshold is not None:
+                from .instructions import SWaitcnt
+
+                self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({threshold})"))
 
         if num_elements == 1:
             # Scalar store: pop register from queue, emit, free
