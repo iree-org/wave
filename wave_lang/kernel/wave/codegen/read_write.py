@@ -36,7 +36,13 @@ from .ir_utils import (
     is_float_type,
 )
 
-from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, IndexSymbol
+from ..._support.indexing import (
+    IndexExpr,
+    IndexingContext,
+    IndexSequence,
+    IndexSymbol,
+    subs_idxc,
+)
 from ...compiler.base import ValidationError
 from ...compiler.builder import IRProxyValue
 from ...compiler.utils import strides_from_symbolic_shape
@@ -715,6 +721,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
+    dst_memory = get_custom(dst)
+
     symbolic_shape = _get_symbolic_shape(src)
     local_bounds = [bounds[s] - global_tile_index[s].start for s in symbolic_shape]
     subs = add_emitter_subs(emitter)
@@ -764,8 +772,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_value = global_mem.ir_value
     shared_value = shared_mem.ir_value
 
-    element_byte = 1 << descriptor_type(element_type)
-    element_byte_index = arith_d.constant(IndexType.get(), element_byte)
+    bytewidth = element_type.bitwidth() // 8
+    element_byte_index = arith_d.constant(IndexType.get(), bytewidth)
 
     # calculcate global address
     # 0. breakdown index sequence to WG & TH offsets : ele
@@ -836,6 +844,18 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # get data size val packed to i32
     data_size_val = lshift(data_size, 16)
+
+    if padding := dst_memory.padding:
+        unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
+        assert (
+            unpadded_dim >= 8
+        ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
+        pad_enable = 1 << 20
+        pad_interval = int(math.log2((unpadded_dim // 4) - 1)) << 22
+        pad_amount = ((padding * bytewidth) // 4 - 1) << 25
+        pad_packed = pad_enable | pad_interval | pad_amount
+        data_size_val = arith_d.ori(data_size_val, arith_d.constant(i32, pad_packed))
+
     d1 = vector_d.insert(data_size_val, d1, static_position=[0], dynamic_position=[])
 
     # get lower 16 bit from tensor dim 0 and pack to i32

@@ -1426,7 +1426,7 @@ class Allocate(CustomOp):
         ) // 8
 
     @property
-    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+    def unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
         from ..wave.utils.general_utils import is_scaled_dim, infer_dim
 
         unpadded_dim = {}
@@ -1441,6 +1441,11 @@ class Allocate(CustomOp):
             sym_type = infer_dim(sym_type) if is_scaled_dim(sym_type) else sym_type
             unpadded_dim[sym_type] = self.distributed_shape[idx]
         return unpadded_dim
+
+    @property
+    def unpadded_shape(self) -> tuple[IndexExpr]:
+        unpadded_dims = self.unpadded_dims
+        return tuple(unpadded_dims[s] for s in self.shape)
 
 
 @define_op("self_index")

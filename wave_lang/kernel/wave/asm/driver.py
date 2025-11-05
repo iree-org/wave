@@ -70,6 +70,7 @@ def main():
                     kernel_info.wg_size[0],
                     kernel_info.subgroup_size,
                     len(kernel_info.arg_ssa_order),
+                    kernel_info.lds_size_bytes,
                 )
 
                 all_kernels.append(kernel_info.name)
