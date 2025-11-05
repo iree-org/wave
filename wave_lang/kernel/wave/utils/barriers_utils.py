@@ -157,7 +157,7 @@ def add_sync_requirements(
     results: List[SyncRequirement],
     resource: fx.Node,
     state: EpisodeState,
-    graph_info: List[int] = None,
+    graph_info: List[int],
 ) -> bool:
     """
     Add cut (Synchronization requirements) to the state (in between last producer nodes and first consumer nodes)
@@ -201,7 +201,7 @@ def add_sync_requirements(
 
 def handle_hazard(
     results, nodes, producer_kinds, consumer_kinds, is_nested: bool = False
-):
+) -> bool:
     """
     Scans the graph and append SyncRequirements to results if any.
     Returns if barriers are required for NestedRegionOps
@@ -216,6 +216,9 @@ def handle_hazard(
     # - r1:2 -> w1:0 ** cross-iter dep
     if is_nested:
         nodes = nodes * 2
+
+    if len(nodes) == 0:
+        return False
 
     graph_info = [nodes[0]._topo_location, nodes[-1]._topo_location]
 
@@ -300,6 +303,7 @@ def get_barriers_analysis(trace, graph, target_arch):
             name=regionOp.subgraph_name, filter=is_shared_memory_node
         )
         need_iterate_barriers = False
+        graph_info = [smem_nodes[0]._topo_location, smem_nodes[-1]._topo_location]
 
         # RAW
         need_iterate_barriers |= handle_hazard(
@@ -321,7 +325,10 @@ def get_barriers_analysis(trace, graph, target_arch):
 
         if target_arch.has_split_barriers and need_iterate_barriers:
             add_sync_requirements(
-                results, None, EpisodeState([regionNode.prev], [regionNode.next])
+                results,
+                None,
+                EpisodeState([regionNode.prev], [regionNode.next]),
+                graph_info=graph_info,
             )
 
     # handle conditional graph
@@ -330,6 +337,7 @@ def get_barriers_analysis(trace, graph, target_arch):
         smem_nodes = trace.preorder_walk(
             name=regionOp.subgraph_name, filter=is_shared_memory_node
         )
+        graph_info = [smem_nodes[0]._topo_location, smem_nodes[-1]._topo_location]
 
         # RAW
         handle_hazard(
@@ -349,10 +357,16 @@ def get_barriers_analysis(trace, graph, target_arch):
 
         if target_arch.has_split_barriers:
             add_sync_requirements(
-                results, None, EpisodeState([regionNode.prev], [regionNode])
+                results,
+                None,
+                EpisodeState([regionNode.prev], [regionNode]),
+                graph_info=graph_info,
             )
             add_sync_requirements(
-                results, None, EpisodeState([regionNode], [regionNode.next])
+                results,
+                None,
+                EpisodeState([regionNode], [regionNode.next]),
+                graph_info=graph_info,
             )
 
     return results
