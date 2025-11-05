@@ -3,7 +3,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from enum import Enum, auto
+from enum import Enum, IntFlag, auto
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Sequence, Set, Union
@@ -41,6 +41,17 @@ class TargetConfig:
             self.max_named_barriers = 16
 
 
+class BarrierType(IntFlag):
+    """
+    For RAW Write -> Read: guard fill
+    For WAR Read -> Write: guard ready
+    """
+
+    NONE = auto()
+    READY = auto()
+    FILL = auto()
+
+
 @dataclass
 class SyncRequirement:
     """
@@ -57,6 +68,7 @@ class SyncRequirement:
     cons_topo_location: int = -1
     graph_start: int = -1
     graph_end: int = -1
+    barrier_type: BarrierType = BarrierType.NONE
 
 
 class EpisodeState:
@@ -158,6 +170,7 @@ def add_sync_requirements(
     resource: fx.Node,
     state: EpisodeState,
     graph_info: List[int],
+    barrier_type: BarrierType.NONE,
 ) -> bool:
     """
     Add cut (Synchronization requirements) to the state (in between last producer nodes and first consumer nodes)
@@ -190,6 +203,7 @@ def add_sync_requirements(
         cons_topo_location=first_con_loc,
         graph_start=graph_info[0],
         graph_end=graph_info[1],
+        barrier_type=barrier_type,
     )
 
     if req in results:
@@ -200,8 +214,13 @@ def add_sync_requirements(
 
 
 def handle_hazard(
-    results, nodes, producer_kinds, consumer_kinds, is_nested: bool = False
-) -> bool:
+    results,
+    nodes,
+    producer_kinds,
+    consumer_kinds,
+    barrier_type,
+    is_nested: bool = False,
+) -> BarrierType:
     """
     Scans the graph and append SyncRequirements to results if any.
     Returns if barriers are required for NestedRegionOps
@@ -218,7 +237,7 @@ def handle_hazard(
         nodes = nodes * 2
 
     if len(nodes) == 0:
-        return False
+        return BarrierType.NONE
 
     graph_info = [nodes[0]._topo_location, nodes[-1]._topo_location]
 
@@ -238,7 +257,11 @@ def handle_hazard(
         if access_kind in producer_kinds:
             if state.producers and state.consumers:
                 cross_iter |= add_sync_requirements(
-                    results, resource, state, graph_info=graph_info
+                    results,
+                    resource,
+                    state,
+                    graph_info=graph_info,
+                    barrier_type=barrier_type,
                 )
                 cross_graph |= state.producers[-1].graph != state.consumers[0].graph
                 state.reset()
@@ -250,12 +273,16 @@ def handle_hazard(
     for resource, state in states.items():
         if state.producers and state.consumers:
             cross_iter |= add_sync_requirements(
-                results, resource, state, graph_info=graph_info
+                results,
+                resource,
+                state,
+                graph_info=graph_info,
+                barrier_type=barrier_type,
             )
             cross_graph |= state.producers[-1].graph != state.consumers[0].graph
 
     # barriers are needed if cross iteration dependencies exist and no producers from outside the subgraph.
-    return cross_iter and not cross_graph
+    return barrier_type if cross_iter and not cross_graph else BarrierType.NONE
 
 
 def get_barriers_analysis(trace, graph, target_arch):
@@ -286,6 +313,7 @@ def get_barriers_analysis(trace, graph, target_arch):
         smem_nodes,
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
         {MemoryAccessType.READ},
+        barrier_type=BarrierType.FILL,
     )
 
     # WAR
@@ -294,6 +322,7 @@ def get_barriers_analysis(trace, graph, target_arch):
         smem_nodes,
         {MemoryAccessType.READ},
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+        barrier_type=BarrierType.READY,
     )
 
     # handle nested iterate graph
@@ -302,7 +331,7 @@ def get_barriers_analysis(trace, graph, target_arch):
         smem_nodes = trace.preorder_walk(
             name=regionOp.subgraph_name, filter=is_shared_memory_node
         )
-        need_iterate_barriers = False
+        need_iterate_barriers = BarrierType.NONE
         graph_info = [smem_nodes[0]._topo_location, smem_nodes[-1]._topo_location]
 
         # RAW
@@ -312,6 +341,7 @@ def get_barriers_analysis(trace, graph, target_arch):
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
             {MemoryAccessType.READ},
             is_nested=True,
+            barrier_type=BarrierType.FILL,
         )
 
         # WAR
@@ -321,14 +351,16 @@ def get_barriers_analysis(trace, graph, target_arch):
             {MemoryAccessType.READ},
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
             is_nested=True,
+            barrier_type=BarrierType.READY,
         )
 
-        if target_arch.has_split_barriers and need_iterate_barriers:
+        if target_arch.has_split_barriers and need_iterate_barriers != BarrierType.NONE:
             add_sync_requirements(
                 results,
                 None,
                 EpisodeState([regionNode.prev], [regionNode.next]),
                 graph_info=graph_info,
+                barrier_type=need_iterate_barriers,
             )
 
     # handle conditional graph
@@ -345,6 +377,7 @@ def get_barriers_analysis(trace, graph, target_arch):
             smem_nodes,
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
             {MemoryAccessType.READ},
+            barrier_type=BarrierType.FILL,
         )
 
         # WAR
@@ -353,6 +386,7 @@ def get_barriers_analysis(trace, graph, target_arch):
             smem_nodes,
             {MemoryAccessType.READ},
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+            barrier_type=BarrierType.READY,
         )
 
         if target_arch.has_split_barriers:
@@ -379,7 +413,7 @@ def minimize_placement_strategy(
     if len(sync_reqs) == 0:
         return sync_reqs
 
-    placements = []
+    placements: List[Tuple[int, BarrierType]] = []
     results = []
     cross_iters = []
 
@@ -399,17 +433,24 @@ def minimize_placement_strategy(
             continue
 
         start, end = get_location(req)
+        btype = req.barrier_type
 
-        if any([p in range(start, end + 1) for p in placements]):
+        if any(
+            [
+                pos in range(start, end + 1) and btype == bexist
+                for pos, bexist in placements
+            ]
+        ):
             continue
 
         results.append(req)
-        placements.append(end)
+        placements.append((end, btype))
 
     # 3) handle cross iteration sync req separately (they have producer loc > consumer loc)
     for req in cross_iters:
         start, end = get_location(req)
         graph_start, graph_end = req.graph_start, req.graph_end
+        btype = req.barrier_type
 
         assert (
             start > end
@@ -417,14 +458,39 @@ def minimize_placement_strategy(
         assert graph_start < graph_end, "graph start < graph end."
 
         # 3.1) if graph start ~ sync request start has barrier placements: skip
-        if any([p in range(graph_start, end) for p in placements]):
+        if any(
+            [
+                p in range(graph_start, end) and btype == bexist
+                for p, bexist in placements
+            ]
+        ):
             continue
 
         # 3.2) if graph start ~ sync request start has barrier placements: skip
-        if any([p in range(start, graph_end) for p in placements]):
+        if any(
+            [
+                p in range(start, graph_end) and btype == bexist
+                for p, bexist in placements
+            ]
+        ):
             continue
 
-        # 3.3) else valid placements
+        # 3.3) if cross-iter requiers both RAW and WAR guards
+        if btype in (BarrierType.FILL | BarrierType.READY):
+            if any(
+                [
+                    p in range(graph_start, end) and btype == bexist
+                    for p, bexist in placements
+                ]
+            ) and any(
+                [
+                    p in range(start, graph_end) and btype == bexist
+                    for p, bexist in placements
+                ]
+            ):
+                continue
+
+        # 3.4) else valid placements
         results.append(req)
         placements.append(end)
 
