@@ -110,13 +110,14 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
             len(lonely_waits) == 0
         ), "Wait barrier appear more than once before any signals, this is a serious bug."
         assert (
-            sum(signals.values()) <= 1
-        ), "More than one signal exists without corresponding waits; this indicates a serious bug."
+            len(signals) == 0
+        ), "All signals and waits should be paired, exist some leftover signals, this is a serious bug."
 
     def optimize(
         self, sync_reqs: Sequence[SyncRequirement]
     ) -> Sequence[SyncRequirement]:
         return minimize_placement_strategy(sync_reqs)
+        # return find_smallest_interval_strategy(sync_reqs)
 
     def place_barrier(self, req: SyncRequirement) -> None:
         barId = -1

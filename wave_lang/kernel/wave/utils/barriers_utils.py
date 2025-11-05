@@ -55,6 +55,8 @@ class SyncRequirement:
     cons_region: Set[Any] = field(default_factory=set)
     prod_topo_location: int = -1
     cons_topo_location: int = -1
+    graph_start: int = -1
+    graph_end: int = -1
 
 
 class EpisodeState:
@@ -155,7 +157,7 @@ def add_sync_requirements(
     results: List[SyncRequirement],
     resource: fx.Node,
     state: EpisodeState,
-    offset: int = 0,
+    graph_info: List[int] = None,
 ) -> bool:
     """
     Add cut (Synchronization requirements) to the state (in between last producer nodes and first consumer nodes)
@@ -169,14 +171,13 @@ def add_sync_requirements(
         first_con
     ), "Bug"
 
-    if not need_barrier(last_prod, first_con):
+    if resource is not None and not need_barrier(last_prod, first_con):
+        # resource is None when we force-add barriers surrounding iterate and conditional nodes
         return False
+
     last_prod_loc = last_prod._topo_location
     first_con_loc = first_con._topo_location
     cross_iter = last_prod_loc > first_con_loc
-
-    if cross_iter:
-        first_con_loc += offset
 
     req = SyncRequirement(
         resource=resource,
@@ -187,6 +188,8 @@ def add_sync_requirements(
         cons_region={first_con},
         prod_topo_location=last_prod_loc,
         cons_topo_location=first_con_loc,
+        graph_start=graph_info[0],
+        graph_end=graph_info[1],
     )
 
     if req in results:
@@ -214,9 +217,10 @@ def handle_hazard(
     if is_nested:
         nodes = nodes * 2
 
+    graph_info = [nodes[0]._topo_location, nodes[-1]._topo_location]
+
     cross_iter = False
     cross_graph = False
-    offset = len(nodes)
 
     for node in nodes:
         op = get_custom(node)
@@ -230,7 +234,9 @@ def handle_hazard(
 
         if access_kind in producer_kinds:
             if state.producers and state.consumers:
-                cross_iter |= add_sync_requirements(results, resource, state, offset)
+                cross_iter |= add_sync_requirements(
+                    results, resource, state, graph_info=graph_info
+                )
                 cross_graph |= state.producers[-1].graph != state.consumers[0].graph
                 state.reset()
             state.producers.append(node)
@@ -240,7 +246,10 @@ def handle_hazard(
 
     for resource, state in states.items():
         if state.producers and state.consumers:
-            cross_iter |= add_sync_requirements(results, resource, state, offset)
+            cross_iter |= add_sync_requirements(
+                results, resource, state, graph_info=graph_info
+            )
+            cross_graph |= state.producers[-1].graph != state.consumers[0].graph
 
     # barriers are needed if cross iteration dependencies exist and no producers from outside the subgraph.
     return cross_iter and not cross_graph
@@ -263,8 +272,8 @@ def get_barriers_analysis(trace, graph, target_arch):
     # root graph
     # handle linear dependencies
     smem_nodes = trace.preorder_walk(filter=is_shared_memory_node)
-    iterate_nodes = trace.walk(is_iterate_node)
-    condition_nodes = trace.walk(is_condition_node)
+    iterate_nodes = trace.preorder_walk(filter=is_iterate_node)
+    condition_nodes = trace.preorder_walk(filter=is_condition_node)
 
     results: List[SyncRequirement] = []
 
@@ -358,6 +367,10 @@ def minimize_placement_strategy(
 
     placements = []
     results = []
+    cross_iters = []
+
+    # helper
+    get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
 
     # 1) sort barrier placement location from pos low to high
     ascending_reqs = sorted(
@@ -367,11 +380,37 @@ def minimize_placement_strategy(
 
     # 2) add to result if no barriers are placed in between topo_region
     for req in ascending_reqs:
-        start = req.prod_topo_location
-        end = req.cons_topo_location
-        if any([p in range(start + 1, end) for p in placements]):
+        if req.is_loop:
+            cross_iters.append(req)
             continue
 
+        start, end = get_location(req)
+
+        if any([p in range(start, end + 1) for p in placements]):
+            continue
+
+        results.append(req)
+        placements.append(end)
+
+    # 3) handle cross iteration sync req separately (they have producer loc > consumer loc)
+    for req in cross_iters:
+        start, end = get_location(req)
+        graph_start, graph_end = req.graph_start, req.graph_end
+
+        assert (
+            start > end
+        ), "Got producer location < consumer location but identified as cross-iter loop."
+        assert graph_start > graph_end, "graph start < graph end."
+
+        # 3.1) if graph start ~ sync request start has barrier placements: skip
+        if any([p in range(graph_start, start) for p in placements]):
+            continue
+
+        # 3.2) if graph start ~ sync request start has barrier placements: skip
+        if any([p in range(end, graph_end + 1) for p in placements]):
+            continue
+
+        # 3.3) else valid placements
         results.append(req)
         placements.append(end)
 
@@ -402,7 +441,7 @@ def find_smallest_interval_strategy(
     prev = ascending_reqs[0]
     run_lo, run_hi = get_location(prev)
     run_len = 1
-    sigal = get_prod(prev)
+    signal = get_prod(prev)
     wait = get_cons(prev)
 
     for cur in ascending_reqs[1:]:
