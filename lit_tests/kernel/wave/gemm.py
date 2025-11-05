@@ -2128,3 +2128,100 @@ def test_gemm_with_transpose_a_b_gfx950():
     # Ensure that the transpose loads and mma are present.
     # CHECK-COUNT-8:    amdgpu.transpose_load {{.*}} : memref<{{.*}}xf16, #gpu.address_space<workgroup>> -> vector<{{.*}}xf16>
     # CHECK-COUNT-8:    amdgpu.mfma {{.*}} * {{.*}} + {{.*}} blgp = none : vector<{{.*}}xf16>, vector<{{.*}}xf16>, vector<{{.*}}xf32>
+
+
+@run_test
+def test_explicit_shared_gemm():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        # Allocate shared memory explicitly
+        a_shared = tkw.allocate(
+            (M, K), (BLOCK_M, BLOCK_K), tkl.f16, SHARED_ADDRESS_SPACE
+        )
+        b_shared = tkw.allocate(
+            (N, K), (BLOCK_N, BLOCK_K), tkl.f16, SHARED_ADDRESS_SPACE
+        )
+
+        c_acc = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_acc])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_global = tkw.read(a)
+            b_global = tkw.read(b)
+
+            tkw.write(a_global, a_shared)
+            tkw.write(b_global, b_shared)
+
+            tkw.shared_memory_barrier()
+
+            a_reg = tkw.read(a_shared)
+            b_reg = tkw.read(b_shared)
+
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 128,
+            K: 64,
+            BLOCK_M: 64,
+            BLOCK_N: 64,
+            BLOCK_K: 32,
+            ADDRESS_SPACE: GLOBAL_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        minimize_shared_allocs=False,
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+
+    # CHECK-LABEL:    test_explicit_shared_gemm
+    # CHECK:          func.func @gemm
+    # CHECK-SAME:       (%[[ARG0:.*]]: !stream.binding, %[[ARG1:.*]]: !stream.binding, %[[ARG2:.*]]: !stream.binding)
+    # CHECK-DAG:        %[[GLOBAL_A:.+]] = memref.reinterpret_cast %{{.*}} to offset: [{{.*}}], sizes: [64, 64], strides: [64, 1] : memref<f16> to memref<64x64xf16{{.*}}>
+    # CHECK-DAG:        %[[GLOBAL_B:.+]] = memref.reinterpret_cast %{{.*}} to offset: [{{.*}}], sizes: [128, 64], strides: [64, 1] : memref<f16> to memref<128x64xf16{{.*}}>
+    # CHECK-DAG:        %[[GLOBAL_C:.+]] = memref.reinterpret_cast %{{.*}} to offset: [{{.*}}], sizes: [64, 128], strides: [128, 1] : memref<f32> to memref<64x128xf32{{.*}}>
+    # Verify explicit shared memory allocations (two separate allocs)
+    # CHECK:            %[[ALLOC_A:.+]] = memref.alloc() : memref<{{.*}}xf16, #gpu.address_space<workgroup>>
+    # CHECK:            %[[ALLOC_B:.+]] = memref.alloc() : memref<{{.*}}xf16, #gpu.address_space<workgroup>>
+    # CHECK:            scf.for
+    # Verify load from global memory (A)
+    # CHECK:              vector.load %[[GLOBAL_A]]
+    # Verify barrier before shared memory writes
+    # CHECK:              amdgpu.lds_barrier
+    # Verify write to shared memory
+    # CHECK:              vector.store %{{.*}}, %[[ALLOC_A]]
+    # CHECK:              vector.load %[[GLOBAL_B]]
+    # CHECK:              vector.store %{{.*}}, %[[ALLOC_B]]
+    # Verify barrier before shared memory reads
+    # CHECK:              amdgpu.lds_barrier
+    # Verify read from shared memory
+    # CHECK:              vector.load %[[ALLOC_A]]
+    # CHECK:              vector.load %[[ALLOC_B]]
+    # Verify MMA operation
+    # CHECK:              amdgpu.mfma
+    # Verify write to global memory (outside loop)
+    # CHECK:            vector.store %{{.*}}, %[[GLOBAL_C]]
