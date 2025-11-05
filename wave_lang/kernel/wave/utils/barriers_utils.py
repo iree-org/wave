@@ -324,10 +324,10 @@ def get_barriers_analysis(trace, graph):
             is_nested=True,
         )
 
-        if need_iterate_barriers:
-            add_sync_requirements(
-                results, None, EpisodeState([regionNode.prev], [regionNode.next])
-            )
+        # if need_iterate_barriers:
+        # add_sync_requirements(
+        # results, None, EpisodeState([regionNode.prev], [regionNode.next])
+        # )
 
     # handle conditional graph
     for regionNode in condition_nodes:
@@ -352,12 +352,31 @@ def get_barriers_analysis(trace, graph):
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
         )
 
-        add_sync_requirements(
-            results, None, EpisodeState([regionNode.prev], [regionNode])
-        )
-        add_sync_requirements(
-            results, None, EpisodeState([regionNode], [regionNode.next])
-        )
+        # add_sync_requirements(
+        # results, None, EpisodeState([regionNode.prev], [regionNode])
+        # )
+        # add_sync_requirements(
+        # results, None, EpisodeState([regionNode], [regionNode.next])
+        # )
+
+    # handle cross graph dependencies
+    smem_nodes = trace.preorder_walk(filter=is_shared_memory_node)
+
+    # RAW
+    handle_hazard(
+        results,
+        smem_nodes,
+        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+        {MemoryAccessType.READ},
+    )
+
+    # WAR
+    handle_hazard(
+        results,
+        smem_nodes,
+        {MemoryAccessType.READ},
+        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+    )
 
     return results
 

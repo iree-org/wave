@@ -22,7 +22,7 @@ from ..lang.wave_types import IndexMapping, SymbolBind
 from ..ops.base import (
     OpDispatcher,
 )
-from ..ops.wave_ops import CustomOp
+from ..ops.wave_ops import CustomOp, get_custom
 from ..ops.wave_schedule_ops import CustomScheduleOp
 from ..wave.constraints import Constraint
 from . import context
@@ -207,6 +207,20 @@ class CapturedTrace:
         for node in graph.nodes:
             if filter is None or filter(node):
                 nodes.append(node)
+        return nodes
+
+    def preorder_walk(
+        self, name: str = "", filter: Optional[Callable[[fx.Node], bool]] = None
+    ) -> list[fx.Node]:
+        nodes: list[fx.Node] = []
+        if name == "":
+            name = self.root_graph
+        graph = self.get_subgraph(name)
+        for node in graph.nodes:
+            if filter is None or filter(node):
+                nodes.append(node)
+            if hasattr(get_custom(node), "subgraph_name"):
+                nodes.extend(self.preorder_walk(get_custom(node).subgraph_name, filter))
         return nodes
 
     def snapshot_node_state(self) -> None:
