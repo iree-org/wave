@@ -222,33 +222,51 @@ def _preprocess_symbols(
     }
 
 
+def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
+    """
+    Convert a Wave index dictionary into a DictionaryAttr of WaveIndexMappingAttr.
+
+    For MMA, multiple DictAttr objects are assembled into an ArrayAttr
+    (one per operand). For all other nodes a single-element ArrayAttr is used.
+    """
+    index_mappings: dict[str, ir.Attribute] = {}
+    for dim, exprs in index.items():
+        all_symbols = list(
+            set().union(
+                *[
+                    expr.free_symbols
+                    for expr in [exprs.start, exprs.size, exprs.stride]
+                    if isinstance(expr, sympy.Expr)
+                ]
+            )
+        )
+        symbol_mapping = _preprocess_symbols(all_symbols)
+        start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
+        size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
+        stride = _convert_sympy_expr_to_affine_map(exprs.stride, symbol_mapping)
+        index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
+            [sym.name for sym in symbol_mapping.values()], start, size, stride
+        )
+    return ir.DictAttr.get(index_mappings)
+
+
 def _attach_attributes(node: CustomOp, op: ir.Operation):
     from wave_lang.kernel.ops.wave_ops import MMA
 
-    if isinstance(node, MMA):
-        # TODO: Have special handling for MMA index as it uses Piecewise.
-        return
-
     if getattr(node, "index", None) and isinstance(node.index, dict):
-        index_mappings = {}
-        for dim, exprs in node.index.items():
-            all_symbols = list(
-                set().union(
-                    *[
-                        expr.free_symbols
-                        for expr in [exprs.start, exprs.size, exprs.stride]
-                        if isinstance(expr, sympy.Expr)
-                    ]
-                )
-            )
-            symbol_mapping = _preprocess_symbols(all_symbols)
-            start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
-            size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
-            stride = _convert_sympy_expr_to_affine_map(exprs.stride, symbol_mapping)
-            index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
-                [sym.name for sym in symbol_mapping.values()], start, size, stride
-            )
-        op.attributes["index"] = ir.DictAttr.get(index_mappings)
+        dict_attrs: list[ir.DictAttr] = []
+        if isinstance(node, MMA):
+            # Build one index mapping dict per operand for MMA nodes
+            if lhs_index := getattr(node, "lhs_index", None):
+                dict_attrs.append(_build_index_mapping_dict(lhs_index))
+            if rhs_index := getattr(node, "rhs_index", None):
+                dict_attrs.append(_build_index_mapping_dict(rhs_index))
+            if acc_index := getattr(node, "acc_index", None):
+                dict_attrs.append(_build_index_mapping_dict(acc_index))
+        else:
+            dict_attrs.append(_build_index_mapping_dict(node.index))
+
+        op.attributes["index"] = ir.ArrayAttr.get(dict_attrs)
 
     if getattr(node, "elements_per_thread", None):
         op.attributes["wave.elements_per_thread"] = ir.IntegerAttr.get(

@@ -23,6 +23,7 @@ from ...ops.wave_ops import (
     Allocate,
     CustomOp,
     GatherToLDS,
+    TensorLoadToLDS,
     Iterate,
     Read,
     Write,
@@ -39,6 +40,21 @@ from ..constraints import (
 )
 from .graph_utils import propagate_loop_carried_vars
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
+
+
+def make_index_uniform_per_wave(index, threads_per_wave, waves_per_block):
+    # Make LDS write index to be wave-uniform by doing (THREAD_0 // 64) * 64
+    wave_subs = {
+        THREAD_0: (
+            ((THREAD_0 // threads_per_wave) * threads_per_wave)
+            if waves_per_block[0] > 1
+            else 0
+        ),
+        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
+        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
+    }
+
+    return {k: v.subs(wave_subs) for k, v in index.items()}
 
 
 def run_test(func: Callable[[], None]) -> Callable[[], None]:
@@ -326,6 +342,10 @@ def clamp(x: int, min_val: int, max_val: int) -> int:
     return max(min_val, min(x, max_val))
 
 
+def is_pow2(x: int) -> bool:
+    return x > 0 and (x & (x - 1)) == 0
+
+
 def all_equal(input_list: list[Any]) -> bool:
     if len(input_list) == 0:
         return True
@@ -474,6 +494,8 @@ def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
     if is_shared_read(custom) or is_shared_write(custom):
         return custom.memory
     if isinstance(custom, GatherToLDS):
+        return custom.dst
+    if isinstance(custom, TensorLoadToLDS):
         return custom.dst
 
     return None

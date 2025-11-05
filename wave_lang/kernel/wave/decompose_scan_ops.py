@@ -4,7 +4,7 @@ from typing import Callable, Optional
 
 import torch.fx as fx
 
-from wave_lang.kernel._support.indexing import IndexSymbol
+from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
 from wave_lang.kernel.wave.utils.general_utils import all_equal
 from wave_lang.kernel.wave.utils.symbol_utils import subs_idxc
 
@@ -53,7 +53,6 @@ def emit_local_inclusive_scan(
             for i in range(elements_per_thread)
         ]
         values[0].index = node.index
-
         for i in range(1, elements_per_thread):
             values[i] = get_graph_node(
                 binary_fn(values[i], values[i - 1]), graph, location
@@ -117,9 +116,9 @@ def emit_global_scan(
     scanop_result = local_scan[-1][-1]
     last_local_scan_node = get_custom(scanop_result)
 
-    target_shape = list(src.type.symbolic_shape)
-    target_shape.pop(target_shape.index(scan_dim))
-    scanop_result.index = {target_shape[0]: get_custom(src).index[target_shape[0]]}
+    # Set the index to the scan_dim with size 1. The size 1 here is because
+    # when running the shuffle_xor we are only picking one element per thread.
+    scanop_result.index = {scan_dim: IndexSequence(0, 1, 1)}
 
     num_steps = int(math.log2(float(subgroup_size)))
     for idx in range(num_steps):

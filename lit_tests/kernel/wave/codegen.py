@@ -2763,7 +2763,7 @@ def test_transposed_load():
     # CHECK-LABEL:    test_transposed_load
     # CHECK:          func.func @gemm
     # CHECK:            %[[TRANSPOSE:.*]] = amdgpu.transpose_load {{.*}} : memref<16x20xf16, #gpu.address_space<workgroup>> -> vector<4xf16>
-    #                   amdgpu.mfma %{{.*}} * %[[TRANSPOSE]] + %{{.*}} {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+    # CHECK:            amdgpu.mfma 16x16x16 %{{.*}} * %[[TRANSPOSE]] + %{{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
 
 
 @run_test

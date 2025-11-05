@@ -6,6 +6,7 @@
 
 import logging
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass
 from math import prod
 from typing import Optional
@@ -41,6 +42,7 @@ from .utils.general_utils import (
     find_index_bounds,
     get_hardware_constraint,
     infer_dim,
+    make_index_uniform_per_wave,
     remove_thread_indexing,
     remove_global_indexing,
 )
@@ -126,9 +128,11 @@ def get_gather_to_shared_config(
         f"store_elems_per_thread={store_elems_per_thread}, "
         f"max_elements_per_store={max_elements_per_store}"
     )
+    bounds = {infer_dim(v): v for v in symbolic_shape}
+    ordered_shape = [bounds[dim] for dim in read.indexing_dims]
     vector_shapes = read.vector_shapes
     materialized_shape = materialize_shape(
-        constraint_tile_size, symbolic_shape, vector_shapes
+        constraint_tile_size, ordered_shape, vector_shapes
     )
     logger.info(f"materialized_shape={materialized_shape}")
 
@@ -201,16 +205,16 @@ def emit_global_to_lds(
     expected_number_of_loads: int,
     total_number_of_threads: int,
     thread_id: IndexExpr,
-    symbolic_shape: list[IndexSymbol],
     bounds: dict[IndexSymbol, IndexExpr],
-    wave_subs: dict[IndexSymbol, IndexExpr],
     element_type: "DataType",
+    waves_per_block: tuple[int, int, int],
+    threads_per_wave: int,
 ) -> defaultdict[fx.Node, list[Write]]:
     """
     Emit `GatherToLDS` for the given read and write.
     """
-    elements_per_wave = elements_per_thread * total_number_of_threads
-    logger.info(f"elements_per_wave={elements_per_wave}")
+    elements_per_block = elements_per_thread * total_number_of_threads
+    logger.info(f"elements_per_block={elements_per_block}")
 
     # For index delinearization, assume our shape in `elements_per_thread` chunks.
     materialized_shape_adjusted = list(materialized_shape)
@@ -218,10 +222,12 @@ def emit_global_to_lds(
 
     logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
 
-    # GatherToLDS writes `elements_per_wave` elements contiguously to LDS, so we
+    # GatherToLDS writes `elements_per_block` elements contiguously to LDS, so we
     # cannot have any padding if it crosses a array row boundary.
-    drop_padding = materialized_shape[-1] % elements_per_wave != 0
-    tail_padding = elements_per_wave - prod(materialized_shape) % elements_per_wave
+    drop_padding = materialized_shape[-1] % elements_per_block != 0
+    tail_padding = sympy.ceiling(
+        prod(materialized_shape) / elements_per_block
+    ) * elements_per_block - prod(materialized_shape)
     logger.info(f"tail_padding={tail_padding}")
 
     global_index = remove_thread_indexing(read.index)
@@ -237,8 +243,8 @@ def emit_global_to_lds(
         nd_index = delinearize_index(thread_id_adjusted, materialized_shape_adjusted)
         logger.info(f"nd_index={nd_index}")
         write_index = {}
-        for bound_expr, idx in zip(symbolic_shape, nd_index):
-            last = bound_expr == symbolic_shape[-1]
+        for bound_expr, idx in zip(read.indexing_dims, nd_index):
+            last = bound_expr == read.indexing_dims[-1]
             dim = infer_dim(bound_expr)
 
             idx = idx * elements_per_thread if last else idx
@@ -250,11 +256,34 @@ def emit_global_to_lds(
 
         # GatherToLDS only uses write index from the first thread in wave,
         # so make the index wave-uniform, simplifying the calculation.
-        write_index = {k: v.subs(wave_subs) for k, v in write_index.items()}
+        write_index = make_index_uniform_per_wave(
+            write_index, threads_per_wave, waves_per_block
+        )
 
-        logger.info(f"read_index={read_index}")
-        logger.info(f"write_index={write_index}")
         with write.graph.inserting_before(write.fx_node):
+            # Update the index fof the mapping dynamic vals to match the newly
+            # created offsets in `read_index`.  We can't modify the index of the
+            # indirect load, since the indirect load may be used elsewhere, so
+            # we create a duplicate indirect load with the new index.  This
+            # duplicate load is removed by the DCE pass.
+            new_dyn_vals = []
+            for dyn_val in read.mapping_dynamic_vals:
+                custom = get_custom(dyn_val)
+                new_read = Read(
+                    custom.memory,
+                    1,
+                    custom.mapping,
+                    custom.mapping_dynamic_vals,
+                ).add_to_graph(custom.graph, loc=custom.location)
+                new_dyn_vals.append(new_read)
+
+                new_read.index = deepcopy(custom.index)
+                new_read.pre_expansion_id = custom.pre_expansion_id
+                new_read.vector_shapes = custom.vector_shapes
+                for dim in read_index:
+                    if dim in dyn_val.index:
+                        new_read.index[dim] = read_index[dim]
+
             new_write = GatherToLDS(
                 read.memory,
                 write.memory,
@@ -265,7 +294,7 @@ def emit_global_to_lds(
                 read.mapping,
                 write.mapping,
                 bounds,
-                read.mapping_dynamic_vals,
+                new_dyn_vals,
                 write.mapping_dynamic_vals,
             ).add_to_graph(write.graph, loc=write.location)
 
@@ -372,17 +401,6 @@ def gather_to_shared(
 
     thread_id = hardware_constraint.linearized_thread_id
 
-    # Make LDS write index to be wave-uniform by doing (THREAD_0 // 64) * 64
-    wave_subs = {
-        THREAD_0: (
-            ((THREAD_0 // threads_per_wave) * threads_per_wave)
-            if waves_per_block[0] > 1
-            else 0
-        ),
-        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
-        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
-    }
-
     supported_load_widths = [32]
 
     if "gfx95" in options.target:
@@ -444,10 +462,10 @@ def gather_to_shared(
             expected_number_of_loads,
             total_number_of_threads,
             thread_id,
-            symbolic_shape,
             bounds,
-            wave_subs,
             element_type,
+            waves_per_block,
+            threads_per_wave,
         )
 
         update_write_dependencies(new_writes, trace)

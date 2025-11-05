@@ -12,6 +12,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
@@ -36,6 +37,7 @@ struct LowerWaveToMLIRPass
         // clang-format off
       affine::AffineDialect,
       arith::ArithDialect,
+      math::MathDialect,
       gpu::GPUDialect,
       memref::MemRefDialect,
       vector::VectorDialect
@@ -59,12 +61,13 @@ struct LowerWaveToMLIRPass
         // clang-format off
       affine::AffineDialect,
       arith::ArithDialect,
+      math::MathDialect,
       gpu::GPUDialect,
       memref::MemRefDialect,
       vector::VectorDialect
         // clang-format on
         >();
-    target.addIllegalOp<wave::AllocateOp, wave::RegisterOp>();
+    target.addIllegalOp<wave::AllocateOp, wave::RegisterOp, wave::Exp2Op>();
     ConversionConfig config;
     config.allowPatternRollback = false;
 
@@ -91,6 +94,7 @@ struct LowerWaveToMLIRPass
           wave::populateWaveBinaryOpLoweringPatterns(typeConverter, patterns);
           wave::populateWaveAllocateOpLoweringPatterns(typeConverter, patterns);
           wave::populateWaveReadWriteLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveUnaryFPOpLoweringPatterns(typeConverter, patterns);
 
           if (failed(applyPartialConversion(op, target, std::move(patterns),
                                             config))) {

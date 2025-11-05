@@ -36,7 +36,13 @@ from .ir_utils import (
     is_float_type,
 )
 
-from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, IndexSymbol
+from ..._support.indexing import (
+    IndexExpr,
+    IndexingContext,
+    IndexSequence,
+    IndexSymbol,
+    subs_idxc,
+)
 from ...compiler.base import ValidationError
 from ...compiler.builder import IRProxyValue
 from ...compiler.utils import strides_from_symbolic_shape
@@ -45,6 +51,7 @@ from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
     CustomOp,
     gather_to_lds,
+    tensor_load_to_lds,
     get_custom,
     read,
     write,
@@ -602,7 +609,9 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
-    if read_meets_hw_transpose_requirements(get_custom(node), emitter.constraints):
+    if read_meets_hw_transpose_requirements(
+        get_custom(node), emitter.constraints, emitter.options.target
+    ):
         result = amdgpu_d.transpose_load(vector_type, kb_src, start_indices)
     else:
         result = _create_vec_read_write(
@@ -697,6 +706,206 @@ def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
     return res
 
 
+@handle_op(tensor_load_to_lds)
+def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
+    try:
+        (
+            src,
+            dst,
+            element_type,
+            distributed_shape,
+            shared_tile_index,
+            global_tile_index,
+            bounds,
+        ) = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    dst_memory = get_custom(dst)
+
+    symbolic_shape = _get_symbolic_shape(src)
+    local_bounds = [bounds[s] - global_tile_index[s].start for s in symbolic_shape]
+    subs = add_emitter_subs(emitter)
+    local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
+
+    strides = strides_from_symbolic_shape(
+        IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
+    )
+    # Descriptor assumes rightmost stride 1 and expect last stride as full data size
+    strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
+    strides = [gen_sympy_index(subs, s) for s in strides]
+
+    distributed_shape = [gen_sympy_index(subs, s) for s in distributed_shape]
+
+    # construct default descriptors
+    i32 = IntegerType.get_signless(32)
+    i48 = IntegerType.get_signless(48)
+    i57 = IntegerType.get_signless(57)
+
+    vec_type_4 = VectorType.get((4,), i32)
+    vec_type_8 = VectorType.get((8,), i32)
+
+    c0 = arith_d.constant(i32, 0)
+
+    d0 = vector_d.broadcast(vec_type_4, c0)
+    d1 = vector_d.broadcast(vec_type_8, c0)
+    d2 = vector_d.broadcast(vec_type_4, c0)
+    d3 = vector_d.broadcast(vec_type_4, c0)
+
+    # descriptor properties
+    mode = 2  # vimage
+    valid = 1
+    dim_stride_1 = arith_d.index_cast(i48, strides[0])
+    dim_stride_0 = arith_d.index_cast(i48, strides[1])
+    tile_size_1 = arith_d.index_cast(i32, distributed_shape[0])
+    tile_size_0 = arith_d.index_cast(i32, distributed_shape[1])
+    dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
+    dim_size_0 = arith_d.index_cast(i32, local_bounds[1])
+
+    # 0: 1 byte; 1: 2 byte; 2: 4 byte; 3: 8 byte
+    descriptor_type = lambda x: int(math.log2(x.bitwidth() >> 3))
+    data_size = cast_py_value(emitter, descriptor_type(element_type), i32).ir_value
+
+    global_mem = cast_py_value(emitter, src)
+    shared_mem = cast_py_value(emitter, dst)
+
+    global_value = global_mem.ir_value
+    shared_value = shared_mem.ir_value
+
+    bytewidth = element_type.bitwidth() // 8
+    element_byte_index = arith_d.constant(IndexType.get(), bytewidth)
+
+    # calculcate global address
+    # 0. breakdown index sequence to WG & TH offsets : ele
+    # 1. uniform per wave access : ele
+    # 2. linearize global memory buffer
+    # 3. offset = X + Y * tensor dim 0 stride : ele
+    # 4. offset_byte = offset * element byte : byte
+    # 5. get global memory pointer
+    # 6. move global memory pointer by offset_byte to get global address of a tile : byte
+    index, _, _ = _build_start_indices(emitter, global_tile_index)
+
+    wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
+    wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
+
+    stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
+    y_offset = arith_d.muli(wave_index_y, stride0)
+    global_base_offset = arith_d.addi(wave_index_x, y_offset)
+    global_index_offset = arith_d.muli(global_base_offset, element_byte_index)
+
+    global_ptr = memref_d.extract_aligned_pointer_as_index(global_value)
+    global_byte_address = arith_d.addi(global_ptr, global_index_offset)
+
+    # calculate shared address
+    # 0. get allocation space offset in descriptor
+    # 1. get shared memory pointer
+    # 2. move shared memory pointer by offset_byte to get shared memory address of a tile.
+    shared_buffer = _linearize_shared_mem(shared_value)
+
+    shared_byte_offset = arith_d.constant(i32, shared_tile_index)
+
+    shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
+    shared_ptr = arith_d.index_cast(i32, shared_ptr)
+    shared_byte_address = arith_d.addi(shared_ptr, shared_byte_offset)
+
+    # assume no mapping
+    def lshift(value, bits):
+        sh = arith_d.constant(value.type, bits)
+        val = arith_d.shli(value, sh)
+        return val
+
+    def rshift(value, bits):
+        sh = arith_d.constant(value.type, bits)
+        val = arith_d.shrui(value, sh)
+        return val
+
+    # pack global address of a tile
+    # 1. get lower 32 bit from global value
+    global_val = arith_d.index_cast(i57, global_byte_address)  # i57
+    global_val_lower = arith_d.trunci(i32, global_val)
+    d0 = vector_d.insert(global_val_lower, d0, static_position=[2], dynamic_position=[])
+    # 2. get rest of the upper 25 bit from global value and cast to i32
+    global_val_rest = rshift(global_val, 32)
+    global_val_upper = arith_d.trunci(i32, global_val_rest)
+    # 3. pack with image mode bit
+    mode = arith_d.constant(i32, mode)
+    image_mode = lshift(mode, 30)
+    pack = arith_d.ori(image_mode, global_val_upper)
+    d0 = vector_d.insert(pack, d0, static_position=[3], dynamic_position=[])
+
+    # insert shared addreess to descriptor 0
+    d0 = vector_d.insert(
+        shared_byte_address, d0, static_position=[1], dynamic_position=[]
+    )
+
+    # valid tensor
+    valid_tensor = arith_d.constant(i32, valid)
+    d0 = vector_d.insert(valid_tensor, d0, static_position=[0], dynamic_position=[])
+
+    # get data size val packed to i32
+    data_size_val = lshift(data_size, 16)
+
+    if padding := dst_memory.padding:
+        unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
+        assert (
+            unpadded_dim >= 8
+        ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
+        pad_enable = 1 << 20
+        pad_interval = int(math.log2((unpadded_dim // 4) - 1)) << 22
+        pad_amount = ((padding * bytewidth) // 4 - 1) << 25
+        pad_packed = pad_enable | pad_interval | pad_amount
+        data_size_val = arith_d.ori(data_size_val, arith_d.constant(i32, pad_packed))
+
+    d1 = vector_d.insert(data_size_val, d1, static_position=[0], dynamic_position=[])
+
+    # get lower 16 bit from tensor dim 0 and pack to i32
+    tensor_dim_0_lower = lshift(dim_size_0, 16)
+    d1 = vector_d.insert(
+        tensor_dim_0_lower, d1, static_position=[1], dynamic_position=[]
+    )
+
+    # get upper 16 bit from tensor dim 0 and lower 16 bit from tensor dim 1, pack to i32
+    tensor_dim_0_upper = rshift(dim_size_0, 16)
+    tensor_dim_1_lower = lshift(dim_size_1, 16)
+    pack = arith_d.ori(tensor_dim_1_lower, tensor_dim_0_upper)
+    d1 = vector_d.insert(pack, d1, static_position=[2], dynamic_position=[])
+
+    # get upper 16 bit from tensor dim 1, packed with tile size 0
+    tensor_dim_1_upper = rshift(dim_size_1, 16)
+    tile_size_0_shift = lshift(tile_size_0, 16)
+    pack = arith_d.ori(tensor_dim_1_upper, tile_size_0_shift)
+    d1 = vector_d.insert(pack, d1, static_position=[3], dynamic_position=[])
+
+    # tile size 1 is in good form
+    d1 = vector_d.insert(tile_size_1, d1, static_position=[4], dynamic_position=[])
+
+    # truncate upper 16 bit from dim stride 0 -> i48 to i32
+    dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0)
+    d1 = vector_d.insert(
+        dim_stride_0_trunc, d1, static_position=[5], dynamic_position=[]
+    )
+
+    # get upper 16 bit from dim stride 0, get lower 16 bit from dim stride 1, packed to i32
+    dim_stride_0_upper = rshift(dim_stride_0, 32)
+    dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0_upper)
+    dim_stride_1_lower = arith_d.trunci(i32, dim_stride_1)
+    dim_stride_1_trunc = lshift(dim_stride_1_lower, 16)
+    pack = arith_d.ori(dim_stride_0_trunc, dim_stride_1_trunc)
+    d1 = vector_d.insert(pack, d1, static_position=[6], dynamic_position=[])
+
+    # shift dim stride 1 to get upper 32 bit and pack to i32
+    dim_stride_1_sh = rshift(dim_stride_1, 16)
+    pack = arith_d.trunci(i32, dim_stride_1_sh)
+    d1 = vector_d.insert(pack, d1, static_position=[7], dynamic_position=[])
+
+    # cpol
+    cpol = arith_d.constant(i32, 0)
+
+    return llvm_d.call_intrinsic(
+        None, "llvm.amdgcn.tensor.load.to.lds", [d0, d1, d2, d3, cpol], [], []
+    )
+
+
 @handle_op(gather_to_lds)
 def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -748,27 +957,34 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     src = src.ir_value
     dst = dst.ir_value
-    dynamic_vals_map_start = {}
+    src_dynamic_vals_map_start = {}
+    dst_dynamic_vals_map_start = {}
 
     if src_mapping:
         dyn_vals = tuple(
             cast_vector(emitter, reg, element_type=IndexType.get())
             for reg in src_mapping_dyn_vals
         )
-        src_idx = transform_index_on_mapping(src_mapping, src_symbolic_shape, src_idx)
-        dynamic_vals_map_start = _build_dyn_vals_map(src_mapping, dyn_vals)
+        new_src_idx = transform_index_on_mapping(
+            src_mapping, src_symbolic_shape, src_idx, is_read=True
+        )
+        src_dynamic_vals_map_start = _build_dyn_vals_map(src_mapping, dyn_vals)
+    else:
+        new_src_idx = src_idx
     if dst_mapping:
         dyn_vals = tuple(
             cast_vector(emitter, reg, element_type=IndexType.get())
             for reg in dst_mapping_dyn_vals
         )
-        dst_idx = transform_index_on_mapping(dst_mapping, dst_symbolic_shape, dst_idx)
-        dynamic_vals_map_start = _build_dyn_vals_map(dst_mapping, dyn_vals)
+        dst_idx = transform_index_on_mapping(
+            dst_mapping, dst_symbolic_shape, dst_idx, is_read=False
+        )
+        dst_dynamic_vals_map_start = _build_dyn_vals_map(dst_mapping, dyn_vals)
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
     src_index, src_index_wg, src_index_th = _build_start_indices(
-        emitter, src_idx, dynamic_vals_map_start
+        emitter, new_src_idx, src_dynamic_vals_map_start
     )
 
     ip = InsertionPoint.current
@@ -784,7 +1000,9 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             ip = InsertionPoint(ip.block.owner)
 
     with ip:
-        dst_index, _, _ = _build_start_indices(emitter, dst_idx, dynamic_vals_map_start)
+        dst_index, _, _ = _build_start_indices(
+            emitter, dst_idx, dst_dynamic_vals_map_start
+        )
         # We are indexing shared mem so i32 is enough.
         i32 = IntegerType.get_signless(32)
         dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
@@ -792,7 +1010,10 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     strides = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
     )
-    strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in strides]
+    strides = [
+        gen_sympy_index(add_emitter_subs(emitter, src_dynamic_vals_map_start), s)
+        for s in strides
+    ]
 
     src, offset_th = _linearize_memref(src, src_index_wg, src_index_th, strides)
     src = _cast_buffer_and_encode_stride(src, strides, element_type, emitter)
@@ -804,7 +1025,7 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         src_idx,
         elements_per_thread=1,
         bounds=src_bounds,
-        dynamic_values=dynamic_vals_map_start,
+        dynamic_values=src_dynamic_vals_map_start,
     )
     if mask:
         mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])

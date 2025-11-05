@@ -1,4 +1,4 @@
-# Copyright 2024 The IREE Authors
+# Copyright 2025 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,21 @@
 name: Build and release packages
 
 on:
+  push:
+    tags:
+      - "v*" # tagged (stable) builds
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Force channel (default auto-detect from ref)"
+        required: false
+        type: choice
+        options: [nightly, stable]
+      dry_run:
+        description: "Build only (skip releases)"
+        required: false
+        type: boolean
+        default: true
   schedule:
     # Runs at 05:00 AM UTC, which is 9:00 PM PST (UTC-8) / 10:00 PM PDT (UTC-7)
     # This lines up with https://github.com/iree-org/iree/blob/main/.github/workflows/schedule_candidate_release.yml
@@ -24,6 +38,18 @@ jobs:
       contents: write
     env:
       OUTPUT_DIR: "${{ github.workspace }}/bindist"
+
+      # Auto-select channel:
+      # - tag v*, it is stable
+      # - else it is nightly
+      IREE_CHANNEL: ${{ github.event.inputs.channel != '' && github.event.inputs.channel
+                      || (github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && 'stable' || 'nightly') }}
+
+      IREE_REQ: ${{ (
+                      (github.event.inputs.channel != '' && github.event.inputs.channel == 'stable')
+                      || (github.event.inputs.channel == '' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v'))
+                    ) && 'requirements-iree-stable.txt' || 'requirements-iree-pinned.txt' }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -67,12 +93,66 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - id: decide
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.channel }}" ]; then
+            channel="${{ github.event.inputs.channel }}"
+          elif [ "${{ github.ref_type }}" = "tag" ] && [[ "${{ github.ref_name }}" == v* ]]; then
+            channel="stable"
+          else
+            channel="nightly"
+          fi
+
+          if [ "$channel" = "stable" ]; then
+            is_stable=1
+            req_file="requirements-iree-stable.txt"
+          else
+            is_stable=0
+            req_file="requirements-iree-pinned.txt"
+          fi
+
+          echo "channel=$channel"   >> "$GITHUB_OUTPUT"
+          echo "req_file=$req_file" >> "$GITHUB_OUTPUT"
+          echo "is_stable=$is_stable" >> "$GITHUB_OUTPUT"
+
+      - name: Print channel selection
+        run: |
+          echo "ref_type=${{ github.ref_type }}"
+          echo "ref_name=${{ github.ref_name }}"
+          echo "IREE_CHANNEL=${{ steps.decide.outputs.channel }}"
+          echo "IREE_REQ=${{ steps.decide.outputs.req_file }}"
+          echo "WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}"
+
       - name: Build wheels
         uses: pypa/cibuildwheel@9c00cb4f6b517705a3794b22395aedc36257242c # v3.2.1
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-${{ matrix.platform }}
           CIBW_BEFORE_ALL_LINUX: curl -sSf https://sh.rustup.rs | sh -s -- -y
-          CIBW_ENVIRONMENT_LINUX: "PATH=$HOME/.cargo/bin:$PATH"
+
+          CIBW_ENVIRONMENT_LINUX: 'PATH=$HOME/.cargo/bin:$PATH IREE_CHANNEL=${{ steps.decide.outputs.channel }} IREE_REQ=${{ steps.decide.outputs.req_file }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
+          CIBW_ENVIRONMENT: 'IREE_CHANNEL=${{ steps.decide.outputs.channel }} IREE_REQ=${{ steps.decide.outputs.req_file }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
+          CIBW_ENVIRONMENT_WINDOWS: 'IREE_CHANNEL=${{ steps.decide.outputs.channel }} IREE_REQ=${{ steps.decide.outputs.req_file }} WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}'
+
+          # Install the right IREE deps *inside each isolated build env* before building.
+          CIBW_BEFORE_BUILD: |
+            set -euxo pipefail
+            echo "IREE_CHANNEL=${IREE_CHANNEL}"
+            echo "IREE_REQ=${IREE_REQ}"
+            echo "WAVE_IS_STABLE_REL=${WAVE_IS_STABLE_REL}"
+            [ -n "${IREE_REQ:-}" ] || { echo "IREE_REQ is empty"; exit 2; }
+            [ -f "${IREE_REQ}" ] || { echo "Missing ${IREE_REQ}"; pwd; ls -la; exit 3; }
+            python -m pip install -U pip
+            python -m pip install -r "${IREE_REQ}"
+
+          CIBW_BEFORE_BUILD_WINDOWS: |
+            echo IREE_CHANNEL=%IREE_CHANNEL%
+            echo IREE_REQ=%IREE_REQ%
+            echo WAVE_IS_STABLE_REL=%WAVE_IS_STABLE_REL%
+            if not defined IREE_REQ ( echo IREE_REQ is empty & exit /b 2 )
+            if not exist "%IREE_REQ%" ( dir & echo Missing %IREE_REQ% & exit /b 3 )
+            python -m pip install -U pip
+            python -m pip install -r "%IREE_REQ%"
 
       - name: Upload python wheels
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -81,9 +161,10 @@ jobs:
           name: snapshot-${{ matrix.package }}-${{ matrix.python-version }}-${{ matrix.platform }}
           path: ./wheelhouse/*.whl
 
-  release_packages:
+  # Rolling dev release
+  release_dev:
     needs: build_packages
-    if: ${{ success() && (github.repository_owner == 'iree-org' || github.event_name != 'schedule') }}
+    if: ${{ success() && (github.repository_owner == 'iree-org' || github.event_name != 'schedule') && !(github.ref_type == 'tag' && startsWith(github.ref_name, 'v')) && (github.event.inputs.dry_run != 'true') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write # Create/update a release
@@ -96,7 +177,7 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Release python wheels
+      - name: Release python wheels (rolling dev-wheels)
         uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
         with:
           artifacts: dist/*.whl
@@ -107,3 +188,29 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
           makeLatest: false
+
+  # Tagged/stable release
+  release_tag:
+    needs: build_packages
+    if: ${{ success() && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && (github.event.inputs.dry_run != 'true') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: snapshot-*
+          merge-multiple: true
+          path: dist
+
+      - name: Release python wheels (tagged stable)
+        uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
+        with:
+          artifacts: dist/*.whl
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: "Release wheels for ${{ github.ref_name }}."
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true

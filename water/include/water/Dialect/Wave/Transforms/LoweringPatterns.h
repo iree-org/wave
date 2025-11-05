@@ -59,6 +59,10 @@ void populateWaveAllocateOpLoweringPatterns(WaveTypeConverter &typeConverter,
 void populateWaveReadWriteLoweringPatterns(WaveTypeConverter &typeConverter,
                                            mlir::RewritePatternSet &patterns);
 
+// Adds pattern that lowers wave unary ops to upstream MLIR ops.
+void populateWaveUnaryFPOpLoweringPatterns(WaveTypeConverter &typeConverter,
+                                           mlir::RewritePatternSet &patterns);
+
 } // namespace wave
 
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_TRANSFORMS_H

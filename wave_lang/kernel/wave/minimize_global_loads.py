@@ -15,7 +15,7 @@ from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import *
 from ..lang.wave_types import IndexMapping
-from ..ops.wave_ops import Read, Write, GatherToLDS, get_custom
+from ..ops.wave_ops import Read, Write, GatherToLDS, TensorLoadToLDS, get_custom
 from ..wave.constraints import (
     Constraint,
     HardwareConstraint,
@@ -85,7 +85,7 @@ def construct_min_global_access_pattern(
 def materialize_shape(
     constraint_tile_size: dict[IndexSymbol, int],
     symbolic_shape: list[IndexSymbol],
-    vector_shapes,
+    vector_shapes=None,
 ) -> list[int]:
     materialized_shape = []
     for dim_expr in symbolic_shape:
@@ -339,6 +339,8 @@ def update_write_dependencies(
             if is_shared_write(custom) and custom.memory == memory:
                 return True
             if isinstance(custom, GatherToLDS) and custom.dst == memory:
+                return True
+            if isinstance(custom, TensorLoadToLDS) and custom.dst == memory:
                 return True
             return False
 

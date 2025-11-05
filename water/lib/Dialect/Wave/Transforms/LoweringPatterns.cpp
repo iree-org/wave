@@ -8,7 +8,9 @@
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
@@ -133,6 +135,49 @@ void wave::populateWaveBinaryOpLoweringPatterns(
            BinaryOpLoweringPattern<wave::MulOp, arith::MulFOp, arith::MulIOp>,
            BinaryOpLoweringPattern<wave::DivOp, arith::DivFOp, arith::DivSIOp>>(
           typeConverter, patterns.getContext());
+}
+
+//===----------------------------------------------------------------------===//
+// Unary ops
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Generic lowering for Wave unary ops to a target unary op operating on a
+/// float-like operand.
+template <typename WaveOp, typename TargetOp>
+class UnaryFPOpLoweringPattern : public OpConversionPattern<WaveOp> {
+public:
+  using OpConversionPattern<WaveOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WaveOp op, typename WaveOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type convertedType =
+        this->getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(
+          op, "type conversion failed for unary op result");
+
+    // Require float-like result (scalar float, vector-of-float, or
+    // tensor-of-float).
+    Type elemType = mlir::getElementTypeOrSelf(convertedType);
+    if (!isa<FloatType>(elemType))
+      return rewriter.notifyMatchFailure(
+          op, "unary op requires float-like result type after conversion");
+
+    rewriter.replaceOpWithNewOp<TargetOp>(op, convertedType,
+                                          adaptor.getArgument());
+    return success();
+  }
+};
+
+} // namespace
+
+void wave::populateWaveUnaryFPOpLoweringPatterns(
+    WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
+  patterns.add<UnaryFPOpLoweringPattern<wave::Exp2Op, mlir::math::Exp2Op>>(
+      typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//

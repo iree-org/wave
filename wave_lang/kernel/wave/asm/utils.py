@@ -4,9 +4,9 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-import sympy as sp
+import sympy
 
 from wave_lang.support.ir_imports import (
     gpu_d,
@@ -19,6 +19,9 @@ from wave_lang.support.ir_imports import (
     IntegerAttr,
     Attribute,
 )
+
+if TYPE_CHECKING:
+    from .kernel_model import KernelInfo, MemRefInfo
 
 
 def parse_vector_type(s: str) -> Tuple[int, int, str]:
@@ -127,7 +130,9 @@ def tid_upper_bound_from_thread_id(op: gpu_d.ThreadIdOp) -> Optional[int]:
     return None
 
 
-def _apply_floor_division_pattern(expression: sp.Expr, tid_upper_bound: int) -> sp.Expr:
+def _apply_floor_division_pattern(
+    expression: sympy.Expr, tid_upper_bound: int
+) -> sympy.Expr:
     """Apply floor division simplification pattern: if x < N, then floor(x/N) = 0."""
     if tid_upper_bound is None or tid_upper_bound <= 0:
         return expression
@@ -142,11 +147,11 @@ def _apply_floor_division_pattern(expression: sp.Expr, tid_upper_bound: int) -> 
 
             # Find floor(x/N) patterns where N >= tid_upper_bound
             def find_floor_substitutions(expr):
-                if isinstance(expr, sp.floor):
+                if isinstance(expr, sympy.floor):
                     # Check if this is floor(symbol/N) where N >= upper_bound
                     if len(expr.args) == 1:
                         arg = expr.args[0]
-                        if isinstance(arg, sp.Mul) and len(arg.args) == 2:
+                        if isinstance(arg, sympy.Mul) and len(arg.args) == 2:
                             # Check if it's symbol * (1/N) or (1/N) * symbol
                             for i, factor in enumerate(arg.args):
                                 if factor == symbol:
@@ -154,14 +159,14 @@ def _apply_floor_division_pattern(expression: sp.Expr, tid_upper_bound: int) -> 
                                     other_factor = arg.args[1 - i]
 
                                     # Handle Rational (like 1/64)
-                                    if isinstance(other_factor, sp.Rational):
+                                    if isinstance(other_factor, sympy.Rational):
                                         divisor = other_factor.denominator
                                         if int(divisor) >= tid_upper_bound:
                                             floor_substitutions[expr] = 0
 
                                     # Handle Pow with -1 exponent (like 1/N)
                                     elif (
-                                        isinstance(other_factor, sp.Pow)
+                                        isinstance(other_factor, sympy.Pow)
                                         and other_factor.exp == -1
                                     ):
                                         divisor = other_factor.base
@@ -181,8 +186,8 @@ def _apply_floor_division_pattern(expression: sp.Expr, tid_upper_bound: int) -> 
 
 
 def _apply_simplification_patterns(
-    expression: sp.Expr, tid_upper_bound: int
-) -> sp.Expr:
+    expression: sympy.Expr, tid_upper_bound: int
+) -> sympy.Expr:
     """Apply a list of simplification patterns to the expression."""
     # List of pattern functions to apply
     pattern_functions = [
@@ -197,32 +202,34 @@ def _apply_simplification_patterns(
     return expression
 
 
-def _create_dimension_substitutions(dimension_values: List) -> Dict[sp.Symbol, sp.Expr]:
+def _create_dimension_substitutions(
+    dimension_values: List,
+) -> Dict[sympy.Symbol, sympy.Expr]:
     """Create substitutions for dimension values (d0, d1, ...)."""
     substitutions = {}
 
     for i, value in enumerate(dimension_values):
-        dimension_symbol = sp.Symbol(f"d{i}")
+        dimension_symbol = sympy.Symbol(f"d{i}")
         if isinstance(value, int):
-            substitutions[dimension_symbol] = sp.Integer(value)
+            substitutions[dimension_symbol] = sympy.Integer(value)
         elif value in ["tid.x", "tid.y", "tid.z"]:
-            substitutions[dimension_symbol] = sp.Symbol(
+            substitutions[dimension_symbol] = sympy.Symbol(
                 value.replace(".", "_"), nonnegative=True
             )
 
     return substitutions
 
 
-def _create_symbol_substitutions(symbol_values: List) -> Dict[sp.Symbol, sp.Expr]:
+def _create_symbol_substitutions(symbol_values: List) -> Dict[sympy.Symbol, sympy.Expr]:
     """Create substitutions for symbol values (s0, s1, ...)."""
     substitutions = {}
 
     for i, value in enumerate(symbol_values):
-        symbol_symbol = sp.Symbol(f"s{i}")
+        symbol_symbol = sympy.Symbol(f"s{i}")
         if isinstance(value, int):
-            substitutions[symbol_symbol] = sp.Integer(value)
+            substitutions[symbol_symbol] = sympy.Integer(value)
         elif value in ["tid.x", "tid.y", "tid.z"]:
-            substitutions[symbol_symbol] = sp.Symbol(
+            substitutions[symbol_symbol] = sympy.Symbol(
                 value.replace(".", "_"), nonnegative=True
             )
 
@@ -234,7 +241,7 @@ def simplify_expression(
     tid_upper_bound: int,
     dim_values: List = None,
     symbol_values: List = None,
-) -> Optional[sp.Expr]:
+) -> Optional[sympy.Expr]:
     """Simplify affine map expression using SymPy and return the simplified expression."""
     if not isinstance(map_attr, AffineMapAttr):
         return None
@@ -278,7 +285,7 @@ def simplify_expression(
         sympy_expr = _apply_simplification_patterns(sympy_expr, tid_upper_bound)
 
         # Return the simplified expression
-        return sp.simplify(sympy_expr)
+        return sympy.simplify(sympy_expr)
 
     except Exception:
         # If SymPy conversion fails, return None
@@ -286,15 +293,18 @@ def simplify_expression(
 
 
 def _emit_constant_expression(
-    expression: sp.Expr, emitter, kernel_info, destination_register: str
+    expression: sympy.Expr, emitter, kernel_info, destination_register: str
 ) -> str:
     """Emit ASM for a constant expression."""
     from .instructions import VMovB32
 
     try:
         constant_value = int(expression)
-        emitter.emit_instruction(VMovB32(2, constant_value))
-        emitter.register_file.v_used.add(2)
+        # Parse destination vreg index from string like "v2"
+        assert destination_register.startswith("v")
+        dst_v = int(destination_register[1:])
+        emitter.emit_instruction(VMovB32(dst_v, constant_value))
+        emitter.register_file.v_used.add(dst_v)
         return destination_register
     except:
         # If evaluation fails, throw an error
@@ -303,83 +313,34 @@ def _emit_constant_expression(
         )
 
 
-def _emit_simple_thread_id_expression(emitter, kernel_info) -> str:
-    """Emit ASM for a simple tid_x expression."""
-    emitter.ensure_lane_id(kernel_info.subgroup_size)
-    return "v0"  # lane ID register
-
-
-def _emit_linear_thread_id_expression(
-    expression: sp.Expr, emitter, kernel_info, destination_register: str
-) -> str:
-    """Emit ASM for linear expressions of the form a*tid_x + b."""
-    from .instructions import VMovB32, VAddU32, VMulLoU32
-
-    tid_x_symbol = sp.Symbol("tid_x", nonnegative=True)
-
-    if not expression.is_polynomial(tid_x_symbol):
-        return None
-
-    coefficients = sp.Poly(expression, tid_x_symbol).coeffs()
-    if len(coefficients) != 2:  # Not linear
-        return None
-
-    coefficient_a, coefficient_b = coefficients
-
-    # Ensure lane ID is available
-    emitter.ensure_lane_id(kernel_info.subgroup_size)
-
-    if coefficient_a == 1 and coefficient_b == 0:
-        # tid_x -> use lane ID directly
-        return "v0"
-    elif coefficient_a == 1:
-        # tid_x + b -> add constant
-        if coefficient_b != 0:
-            emitter.emit_instruction(VMovB32(1, int(coefficient_b)))
-            emitter.rf.v_used.add(1)
-            emitter.emit_instruction(VAddU32(2, 0, 1))
-            emitter.rf.v_used.add(2)
-        return destination_register
-    elif coefficient_a != 0:
-        # a*tid_x + b -> multiply by a, add b
-        if coefficient_a != 1:
-            emitter.emit_instruction(VMovB32(1, int(coefficient_a)))
-            emitter.rf.v_used.add(1)
-            emitter.emit_instruction(VMulLoU32(2, 0, 1))
-            emitter.rf.v_used.add(2)
-        if coefficient_b != 0:
-            emitter.emit_instruction(VMovB32(1, int(coefficient_b)))
-            emitter.rf.v_used.add(1)
-            emitter.emit_instruction(VAddU32(2, 2, 1))
-        return destination_register
-
-    return None
-
-
 def _emit_thread_id_expression(
-    expression: sp.Expr, emitter, kernel_info, destination_register: str
+    expression: sympy.Expr, emitter, kernel_info, destination_register: str
 ) -> str:
-    """Emit ASM for expressions involving thread ID symbols."""
-    tid_x_symbol = sp.Symbol("tid_x", nonnegative=True)
+    """
+    Emit ASM for expressions involving thread ID symbols.
 
-    # Handle simple case: just tid_x
-    if expression == tid_x_symbol:
-        return _emit_simple_thread_id_expression(emitter, kernel_info)
+    Uses the generic ExprEmitter visitor to walk the expression tree and emit
+    appropriate AMDGCN instructions.
 
-    # Handle linear expressions: a*tid_x + b
-    linear_result = _emit_linear_thread_id_expression(
-        expression, emitter, kernel_info, destination_register
-    )
-    if linear_result is not None:
-        return linear_result
+    Supports:
+    - Constants and tid_x
+    - Additive chains (left-to-right accumulation)
+    - Multiplication by integer (power-of-two -> shift, else mul)
+    - Mod(expr, 2^k) -> VAndB32
+    - floor(expr / 2^k) -> VLshrrevB32
+    - Combinations of the above
 
-    # If we can't handle this expression, throw an error
-    raise ValueError(
-        f"Cannot emit ASM for thread ID expression: {expression}. Only simple tid_x and linear expressions of the form a*tid_x + b are supported."
-    )
+    Raises ValueError on:
+    - Non-power-of-two mod/div
+    - Products of two dynamic sub-expressions
+    """
+    from .expression_emitter import ExprEmitter
+
+    visitor = ExprEmitter(emitter, kernel_info)
+    return visitor.emit(expression, destination_register)
 
 
-def emit_expression_asm(expr: sp.Expr, emitter, ki, dst_reg: str = "v2") -> str:
+def emit_expression_asm(expr: sympy.Expr, emitter, ki, dst_reg: str = "v2") -> str:
     """Emit ASM instructions for a simplified SymPy expression."""
     # Get all free symbols in the expression
     free_symbols = expr.free_symbols
@@ -407,14 +368,14 @@ def emit_expression_asm(expr: sp.Expr, emitter, ki, dst_reg: str = "v2") -> str:
     )
 
 
-def _mlir_affine_to_sympy(expr) -> Optional[sp.Expr]:
+def _mlir_affine_to_sympy(expr) -> Optional[sympy.Expr]:
     """Convert MLIR affine expression to SymPy expression by parsing the string representation."""
     try:
         expr_str = str(expr)
 
         # Handle simple cases first
         if expr_str.isdigit():
-            return sp.Integer(int(expr_str))
+            return sympy.Integer(int(expr_str))
 
         # Replace MLIR-specific operators with Python equivalents
         python_expr = (
@@ -438,14 +399,140 @@ def _mlir_affine_to_sympy(expr) -> Optional[sp.Expr]:
         )
 
 
-def affine_map_simplifies_to_tid_x(
-    map_attr: AffineMapAttr, tid_upper_bound: int
-) -> bool:
-    """Check if affine map simplifies to tid.x using SymPy for expression analysis."""
-    simplified = simplify_expression(map_attr, tid_upper_bound)
-    if simplified is None:
-        return False
+def build_memref_byte_offset_expr(
+    indices_ssa: List[str], kernel_info: "KernelInfo", memref_info: "MemRefInfo"
+) -> sympy.Expr:
+    """
+    Build a symbolic byte-offset expression from MLIR indices and memref strides.
 
-    # Check if the simplified expression is just tid_x
-    tid_x = sp.Symbol("tid_x", nonnegative=True)
-    return simplified == tid_x
+    Computes: sum(index[i] * stride[i]) * elem_bytes
+
+    Args:
+        indices_ssa: List of SSA value strings representing indices
+        kernel_info: Kernel information containing index environment
+        memref_info: Memref information containing shape, strides, and element size
+
+    Returns:
+        SymPy expression representing the byte offset
+
+    Raises:
+        ValueError: If an index SSA is not found or has an unsupported type
+    """
+    # Mapping for thread ID strings to SymPy symbols
+    TID_SYMBOLS = {
+        "tid.x": sympy.Symbol("tid_x", nonnegative=True),
+        "tid.y": sympy.Symbol("tid_y", nonnegative=True),
+        "tid.z": sympy.Symbol("tid_z", nonnegative=True),
+    }
+
+    def to_sympy(value) -> sympy.Expr:
+        """Convert index value to SymPy expression."""
+        if isinstance(value, sympy.Expr):
+            return value
+        if isinstance(value, int):
+            return sympy.Integer(value)
+        if isinstance(value, str):
+            if value in TID_SYMBOLS:
+                return TID_SYMBOLS[value]
+            raise ValueError(f"Unknown thread ID string: {value}")
+        raise ValueError(f"Unsupported index type: {type(value)}")
+
+    # Build element index expression: sum(index[i] * stride[i])
+    elem_index_expr = sum(
+        (to_sympy(kernel_info.index_env[idx_ssa]) * memref_info.strides_elems[dim])
+        for dim, idx_ssa in enumerate(indices_ssa)
+        if idx_ssa in kernel_info.index_env
+    )
+
+    # Verify all indices were found
+    missing = [idx for idx in indices_ssa if idx not in kernel_info.index_env]
+    if missing:
+        raise ValueError(f"Index SSAs not found in kernel_info.index_env: {missing}")
+
+    # Convert to byte offset
+    return elem_index_expr * memref_info.elem_bytes
+
+
+def split_const_dynamic(expr: sympy.Expr) -> Tuple[int, sympy.Expr]:
+    """
+    Split a SymPy expression into constant and dynamic parts.
+
+    This is useful for GPU addressing modes that support base + voffset + instoffset,
+    where instoffset is an immediate constant.
+
+    Args:
+        expr: SymPy expression to split (e.g., tid_x * 4 + 128)
+
+    Returns:
+        Tuple of (constant_term, dynamic_expr)
+        - constant_term: Integer constant part (e.g., 128)
+        - dynamic_expr: Remaining dynamic SymPy expression (e.g., tid_x * 4)
+
+    Example:
+        >>> split_const_dynamic(tid_x * 4 + 128)
+        (128, tid_x * 4)
+    """
+    # Use SymPy's built-in as_coeff_Add which returns (const, rest)
+    const, rest = expr.as_coeff_Add()
+
+    # Convert constant to integer
+    const_term = int(const) if const.is_number else 0
+
+    # If rest is just the constant part, dynamic is zero
+    dynamic_expr = rest if rest != const else sympy.Integer(0)
+
+    return const_term, dynamic_expr
+
+
+def build_element_byte_offset_exprs(
+    value_vector_type,
+    indices_ssa: List[str],
+    kernel_info: "KernelInfo",
+    memref_info: "MemRefInfo",
+) -> List[sympy.Expr]:
+    """
+    Build per-element byte-offset expressions for a vector store.
+
+    For a vector store of vector<NxT> to a memref, this computes the byte offset
+    for each of the N elements by deriving everything from MLIR affine maps and indices.
+
+    The MLIR indices already encode any complex layout patterns (e.g., MFMA layouts),
+    so we just need to compute the base offset from the indices and add contiguous
+    element offsets.
+
+    Args:
+        value_vector_type: The MLIR vector type being stored (e.g., vector<4xf32>)
+        indices_ssa: List of SSA value strings representing store indices
+        kernel_info: Kernel information containing index environment with affine maps
+        memref_info: Memref information containing shape, strides, and element size
+
+    Returns:
+        List of SymPy expressions, one per vector element, representing byte offsets
+
+    Raises:
+        ValueError: If vector is not 1-D or indices are not found in environment
+    """
+    # Parse vector type to get number of elements
+    num_elements, elem_bytes, _ = parse_vector_type_from_obj(value_vector_type)
+
+    # Build base offset from MLIR indices (which include affine maps encoding layout)
+    base_expr = build_memref_byte_offset_expr(indices_ssa, kernel_info, memref_info)
+
+    # Determine element stride in bytes (innermost dimension)
+    if len(memref_info.strides_elems) > 0:
+        elem_stride_elems = memref_info.strides_elems[-1]
+    else:
+        elem_stride_elems = 1
+    elem_stride_bytes = elem_stride_elems * memref_info.elem_bytes
+
+    # Build list of expressions: base + k * elem_stride_bytes for k in 0..num_elements-1
+    # The affine maps in indices_ssa already encode any complex access patterns
+    exprs = []
+    for k in range(num_elements):
+        if k == 0:
+            exprs.append(base_expr)
+        else:
+            offset_expr = base_expr + sympy.Integer(k * elem_stride_bytes)
+            exprs.append(offset_expr)
+
+    return exprs

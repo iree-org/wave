@@ -311,6 +311,7 @@ def test_split_barriers():
     }
 
     enable_scheduling = SchedulingType.MODULO
+    use_global_to_shared = False
 
     with IndexingContext() as idxc:
         idxc.subs = subs
@@ -329,7 +330,7 @@ def test_split_barriers():
         tweak_index(graph)
         hoist_loop_invariant_ops(trace, constraints)
         schedule_graph(trace, constraints, True, enable_scheduling)
-        schedule_reordering(trace, constraints, enable_scheduling)
+        schedule_reordering(trace, constraints, enable_scheduling, use_global_to_shared)
         add_shared_memory_barriers(trace, target="gfx1201")
         print_trace(trace, False)
 

@@ -10,6 +10,9 @@ from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
+from wave_lang.kernel.wave.templates.gemm import (
+    get_gemm_kernel_transpose_a_b,
+)
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -492,7 +495,7 @@ def test_cdna2_int_gemm():
     # CHECK:                vector.store %[[REG_1]], %[[ALLOC_0]]
     # CHECK:                %[[RHS:.+]] = vector.load %[[ALLOC_0]]{{.*}} : memref<32x24xi8, #gpu.address_space<workgroup>>, vector<4xi8>
     # CHECK:                %[[LHS:.+]] = vector.load %[[ALLOC_1]]{{.*}} : memref<32x24xi8, #gpu.address_space<workgroup>>, vector<4xi8>
-    # CHECK:                %[[MMA:.+]] = amdgpu.mfma %[[LHS]] * %[[RHS]] + %[[ACC]]  {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xi8>, vector<4xi8>, vector<4xi32>
+    # CHECK:                %[[MMA:.+]] = amdgpu.mfma 16x16x16 %[[LHS]] * %[[RHS]] + %[[ACC]] blgp =  none : vector<4xi8>, vector<4xi8>, vector<4xi32>
     # CHECK:                scf.yield %[[MMA]] : vector<4xi32>
 
 
@@ -566,7 +569,7 @@ def test_cdna3_int_gemm():
     # CHECK:                vector.store %[[REG_1]], %[[ALLOC_0]]
     # CHECK:                %[[RHS:.+]] = vector.load %[[ALLOC_0]]{{.*}} : memref<32x40xi8, #gpu.address_space<workgroup>>, vector<8xi8>
     # CHECK:                %[[LHS:.+]] = vector.load %[[ALLOC_1]]{{.*}} : memref<32x40xi8, #gpu.address_space<workgroup>>, vector<8xi8>
-    # CHECK:                %[[MMA:.+]] = amdgpu.mfma %[[LHS]] * %[[RHS]] + %[[ACC]]  {blocks = 1 : i32, k = 32 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<8xi8>, vector<8xi8>, vector<4xi32>
+    # CHECK:                %[[MMA:.+]] = amdgpu.mfma 16x16x32 %[[LHS]] * %[[RHS]] + %[[ACC]] blgp =  none : vector<8xi8>, vector<8xi8>, vector<4xi32>
     # CHECK:                scf.yield %[[MMA]] : vector<4xi32>
 
 
@@ -996,8 +999,8 @@ def test_chained_gemm_32x32x16():
     # 2nd MMA
     # CHECK:               %[[QK_REG_0:.+]] = vector.extract_strided_slice {{.*}} {offsets = [0], sizes = [8], strides = [1]}
     # CHECK:               %[[QK_REG_1:.+]] = vector.extract_strided_slice {{.*}} {offsets = [8], sizes = [8], strides = [1]}
-    # CHECK:                amdgpu.mfma %[[QK_REG_0]] * %[[V_REG_F8_0]]{{.*}} {blocks = 1 : i32, k = 16 : i32, m = 32 : i32, n = 32 : i32} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
-    # CHECK:                amdgpu.mfma %[[QK_REG_1]] * %[[V_REG_F8_1]]{{.*}} {blocks = 1 : i32, k = 16 : i32, m = 32 : i32, n = 32 : i32} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
+    # CHECK:                amdgpu.mfma 32x32x16 %[[QK_REG_0]] * %[[V_REG_F8_0]]{{.*}} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
+    # CHECK:                amdgpu.mfma 32x32x16 %[[QK_REG_1]] * %[[V_REG_F8_1]]{{.*}} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
     # CHECK:             scf.yield
 
 
@@ -1366,7 +1369,7 @@ def test_gemm_four_stage():
     # CHECK: scf.for %[[ARG3:.*]] = %c0 to %c5 step %c1 iter_args({{.*}}, %[[LVIEW3:.*]] = %[[VIEW3]], %[[LVIEW2:.*]] = %[[VIEW2]], %[[LVIEW1:.*]] = %[[VIEW1]], %[[LVIEW0:.*]] = %[[VIEW0]])
 
     # Verify MFMA exists
-    # CHECK: amdgpu.mfma %{{.*}} * %{{.*}} + %{{.*}}
+    # CHECK: amdgpu.mfma 16x16x16 %{{.*}} * %{{.*}} + %{{.*}}
 
     # CHECK-COUNT-4: vector.load %[[LVIEW0]]
     # CHECK-COUNT-4: vector.load %[[LVIEW2]]
@@ -1694,7 +1697,7 @@ def test_gemm_with_gpr_offsets():
     # CHECK:            %[[LHS:.+]] = vector.insert_strided_slice %[[LHS_1]], %[[LHS_INSERT_0]] {offsets = [4], strides = [1]} : vector<4xf16> into vector<8xf16>
     # CHECK:            %[[LHS_F8:.+]] = arith.truncf %[[LHS]] : vector<8xf16> to vector<8xf8E4M3FNUZ>
     # CHECK:            %[[RHS_F8:.+]] = arith.truncf %[[RHS]] : vector<8xf16> to vector<8xf8E4M3FNUZ>
-    # CHECK:            amdgpu.mfma %[[LHS_F8]] * %[[RHS_F8]]
+    # CHECK:            amdgpu.mfma 16x16x32 %[[LHS_F8]] * %[[RHS_F8]]
 
 
 # This test is used to check three things
@@ -1771,7 +1774,7 @@ def test_gemm_and_reduce():
     # CHECK-COUNT: vector.load{{.*}} memref<32x20xf16, strided<[20, 1], offset: 640>, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-2: gpu.shuffle  xor
     #         CHECK: %[[MAX:.+]] = arith.maximumf %[[ACC0]], %{{.*}}
-    #         CHECK: %[[MMA:.+]] = amdgpu.mfma %{{.*}} * %{{.*}} + %[[ACC1]]
+    #         CHECK: %[[MMA:.+]] = amdgpu.mfma 16x16x16 %{{.*}} * %{{.*}} + %[[ACC1]]
     #         CHECK: scf.yield %[[MAX]], %[[MMA]] : vector<1xf16>, vector<4xf32>
     # CHECK: %[[LOOP_VAL:.+]] = vector.extract %[[LOOP]]#0[0] : f16 from vector<1xf16>
     # CHECK: %[[MAX_EXT:.+]] = arith.extf %[[LOOP_VAL]] : f16 to f32
@@ -1857,11 +1860,11 @@ def test_gemm_with_maximized_shared_read_32x32x16():
     # CHECK:            %[[LHS_SHARED_READ:.+]] = vector.load %[[ALLOC_0]][{{.+}}] : memref<64x20xf16, #gpu.address_space<workgroup>>, vector<8xf16>
     # CHECK:            %[[LHS_SLICE_0:.+]] = vector.extract_strided_slice %[[LHS_SHARED_READ]] {offsets = [0], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
     # CHECK:            %[[RHS_SLICE_0:.+]] = vector.extract_strided_slice %[[RHS_SHARED_READ]] {offsets = [0], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-    # CHECK:            %[[MMA_SLICE_0:.+]] = amdgpu.mfma %[[LHS_SLICE_0]] * %[[RHS_SLICE_0]] + %{{..+}} {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+    # CHECK:            %[[MMA_SLICE_0:.+]] = amdgpu.mfma 32x32x8 %[[LHS_SLICE_0]] * %[[RHS_SLICE_0]] + %{{..+}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
 
     # CHECK:            %[[LHS_SLICE_1:.+]] = vector.extract_strided_slice %[[LHS_SHARED_READ]] {offsets = [4], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
     # CHECK:            %[[RHS_SLICE_1:.+]] = vector.extract_strided_slice %[[RHS_SHARED_READ]] {offsets = [4], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-    # CHECK:            %[[MMA_SLICE_1:.+]] = amdgpu.mfma %[[LHS_SLICE_1]] * %[[RHS_SLICE_1]] + %[[MMA_SLICE_0]] {blocks = 1 : i32, k = 8 : i32, m = 32 : i32, n = 32 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+    # CHECK:            %[[MMA_SLICE_1:.+]] = amdgpu.mfma 32x32x8 %[[LHS_SLICE_1]] * %[[RHS_SLICE_1]] + %[[MMA_SLICE_0]] blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
     # CHECK:            scf.yield %[[MMA_SLICE_1]] : vector<16xf32>
 
 
@@ -1944,11 +1947,11 @@ def test_gemm_with_maximized_shared_read_16x16x32():
     # CHECK:            %[[LHS_SHARED_READ:.+]] = vector.load %[[ALLOC_0]][{{.+}}] : memref<32x36xf16, #gpu.address_space<workgroup>>, vector<8xf16>
     # CHECK:            %[[LHS_SLICE_0:.+]] = vector.extract_strided_slice %[[LHS_SHARED_READ]] {offsets = [0], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
     # CHECK:            %[[RHS_SLICE_0:.+]] = vector.extract_strided_slice %[[RHS_SHARED_READ]] {offsets = [0], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-    # CHECK:            %[[MMA_SLICE_0:.+]] = amdgpu.mfma %[[LHS_SLICE_0]] * %[[RHS_SLICE_0]] + %{{..+}} {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+    # CHECK:            %[[MMA_SLICE_0:.+]] = amdgpu.mfma 16x16x16 %[[LHS_SLICE_0]] * %[[RHS_SLICE_0]] + %{{..+}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
 
     # CHECK:            %[[LHS_SLICE_1:.+]] = vector.extract_strided_slice %[[LHS_SHARED_READ]] {offsets = [4], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
     # CHECK:            %[[RHS_SLICE_1:.+]] = vector.extract_strided_slice %[[RHS_SHARED_READ]] {offsets = [4], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-    # CHECK:            %[[MMA_SLICE_1:.+]] = amdgpu.mfma %[[LHS_SLICE_1]] * %[[RHS_SLICE_1]] + %[[MMA_SLICE_0]] {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+    # CHECK:            %[[MMA_SLICE_1:.+]] = amdgpu.mfma 16x16x16 %[[LHS_SLICE_1]] * %[[RHS_SLICE_1]] + %[[MMA_SLICE_0]] blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
     # CHECK:            scf.yield %[[MMA_SLICE_1]] : vector<4xf32>
 
 
@@ -2103,3 +2106,25 @@ def test_batched_gemm_with_permute():
     # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
     # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
     # CHECK: vector.store %{{.*}}, %{{.*}}[%{{.*}}, %[[WG]], %{{.*}}]
+
+
+@run_test
+def test_gemm_with_transpose_a_b_gfx950():
+    gemm, hyperparams, _ = get_gemm_kernel_transpose_a_b(
+        shape=(64, 256, 64),
+        dynamic_dims=False,
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+    )
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx950",
+    )
+    gemm = wave_compile(options, gemm)
+    print(gemm.asm)
+    # CHECK-LABEL:    test_gemm_with_transpose_a_b
+    # CHECK:          func.func @gemm
+    # Ensure that the transpose loads and mma are present.
+    # CHECK-COUNT-8:    amdgpu.transpose_load {{.*}} : memref<{{.*}}xf16, #gpu.address_space<workgroup>> -> vector<{{.*}}xf16>
+    # CHECK-COUNT-8:    amdgpu.mfma {{.*}} * {{.*}} + {{.*}} blgp = none : vector<{{.*}}xf16>, vector<{{.*}}xf16>, vector<{{.*}}xf32>
