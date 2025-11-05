@@ -13,6 +13,7 @@ add_mlir_dialect_library(MLIRWaveTransforms
   MLIRWaterWavePassesIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAMDGPUDialect
   MLIRArithDialect
   MLIRFuncDialect
   MLIRGPUDialect

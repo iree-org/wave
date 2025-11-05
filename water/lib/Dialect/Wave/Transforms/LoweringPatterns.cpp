@@ -11,6 +11,9 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
@@ -21,7 +24,6 @@ using namespace mlir;
 //===----------------------------------------------------------------------===//
 
 namespace {
-
 class AllocateOpLoweringPattern : public OpConversionPattern<wave::AllocateOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -242,4 +244,54 @@ public:
 void wave::populateWaveRegisterLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
   patterns.add<RegisterOpLoweringPattern>(typeConverter, patterns.getContext());
+}
+
+//===----------------------------------------------------------------------===//
+// MmaOp
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+class MmaOpLoweringPattern : public OpConversionPattern<wave::MmaOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::MmaOp op, wave::MmaOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Value lhs = adaptor.getLhs();
+    Value rhs = adaptor.getRhs();
+    Value acc = adaptor.getAccumulator();
+
+    auto lhsType = cast<VectorType>(lhs.getType());
+    auto rhsType = cast<VectorType>(rhs.getType());
+    auto accType = cast<VectorType>(acc.getType());
+    assert(lhsType.getRank() == 1 && rhsType.getRank() == 1 &&
+           accType.getRank() == 1 &&
+           "only 1-D vectors supported for mma lowering");
+
+    wave::WaveMmaKind kind = op.getKind();
+    auto [M, N, K] =
+        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), kind);
+
+    // TODO: Extend lowering for ops beyond MFMA, e.g. WMMA
+    auto mfma = rewriter.create<mlir::amdgpu::MFMAOp>(
+        loc, acc.getType(),
+        /*m=*/M,
+        /*n=*/N,
+        /*k=*/K,
+        /*blocks=*/1,
+        /*sourceA=*/lhs, /*sourceB=*/rhs, /*destC=*/acc);
+    rewriter.replaceOp(op, mfma.getResult());
+    return success();
+  }
+};
+
+} // namespace
+
+void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
+                                           RewritePatternSet &patterns) {
+  patterns.add<MmaOpLoweringPattern>(typeConverter, patterns.getContext());
 }

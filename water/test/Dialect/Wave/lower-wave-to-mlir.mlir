@@ -28,6 +28,163 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 // -----
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_mma_f16_f32
+  func.func @lower_mma_f16_f32() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %cst_f16 = arith.constant 0.0 : f16
+    // CHECK: %[[LHS:.*]] = arith.constant dense<0.000000e+00> : vector<4xf16>
+    %lhs = wave.register %cst_f16 : vector<4xf16>
+
+    %cst_f16_b = arith.constant 1.0 : f16
+    // CHECK: %[[RHS:.*]] = arith.constant dense<1.000000e+00> : vector<4xf16>
+    %rhs = wave.register %cst_f16_b : vector<4xf16>
+
+    %cst_f32 = arith.constant 0.0 : f32
+    // CHECK: %[[ACC:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+    %acc = wave.register %cst_f32 : vector<4xf32>
+
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma %[[LHS]] * %[[RHS]] + %[[ACC]]
+    // CHECK-SAME: blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: blgp =  none
+    // CHECK-SAME: vector<4xf16>, vector<4xf16>, vector<4xf32>
+    %res = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_all_mmas
+  func.func @lower_all_mmas() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // Common scalars
+    %cst_f16_0 = arith.constant 0.0 : f16
+    %cst_f16_1 = arith.constant 1.0 : f16
+    %cst_bf16_0 = arith.constant 0.0 : bf16
+    %cst_bf16_1 = arith.constant 1.0 : bf16
+    %cst_f32_0 = arith.constant 0.0 : f32
+    %cst_i8_0 = arith.constant 0 : i8
+    %cst_i8_1 = arith.constant 1 : i8
+    %cst_i32_0 = arith.constant 0 : i32
+    %cst_f8_0 = arith.constant 0.0 : f8E4M3FNUZ
+    %cst_f8_1 = arith.constant 1.0 : f8E4M3FNUZ
+
+    // Vectors per element type
+    %lhs_f16 = wave.register %cst_f16_0 : vector<4xf16>
+    %rhs_f16 = wave.register %cst_f16_1 : vector<4xf16>
+    %lhs_f16_w8 = wave.register %cst_f16_0 : vector<8xf16>
+    %rhs_f16_w8 = wave.register %cst_f16_1 : vector<8xf16>
+    %lhs_bf16 = wave.register %cst_bf16_0 : vector<8xbf16>
+    %rhs_bf16 = wave.register %cst_bf16_1 : vector<8xbf16>
+    %lhs_f8 = wave.register %cst_f8_0 : vector<8xf8E4M3FNUZ>
+    %rhs_f8 = wave.register %cst_f8_1 : vector<8xf8E4M3FNUZ>
+    %lhs_i8 = wave.register %cst_i8_0 : vector<4xi8>
+    %rhs_i8 = wave.register %cst_i8_1 : vector<4xi8>
+    %lhs_i8_w8 = wave.register %cst_i8_0 : vector<8xi8>
+    %rhs_i8_w8 = wave.register %cst_i8_1 : vector<8xi8>
+
+    // Accumulators
+    %acc_f32_4 = wave.register %cst_f32_0 : vector<4xf32>
+    %acc_f32_16 = wave.register %cst_f32_0 : vector<16xf32>
+    %acc_i32_4 = wave.register %cst_i32_0 : vector<4xi32>
+    %acc_i32_16 = wave.register %cst_i32_0 : vector<16xi32>
+
+    // f16 kinds
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 16 : i32, n = 16 : i32
+    %0 = wave.mma %lhs_f16, %rhs_f16, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x16_f16>}
+      : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 8 : i32, m = 32 : i32, n = 32 : i32
+    %1 = wave.mma %lhs_f16, %rhs_f16, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x8_f16>}
+      : (vector<4xf16>, vector<4xf16>, vector<16xf32>) -> vector<16xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    %2 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_k8_f16>}
+      : (vector<8xf16>, vector<8xf16>, vector<4xf32>) -> vector<4xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    %3 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_k8_f16>}
+      : (vector<8xf16>, vector<8xf16>, vector<16xf32>) -> vector<16xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    %4 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_f16>}
+      : (vector<8xf16>, vector<8xf16>, vector<16xf32>) -> vector<16xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    %5 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_f16>}
+      : (vector<8xf16>, vector<8xf16>, vector<4xf32>) -> vector<4xf32>
+
+    // bf16 kinds
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    %6 = wave.mma %lhs_bf16, %rhs_bf16, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_bf16>}
+      : (vector<8xbf16>, vector<8xbf16>, vector<16xf32>) -> vector<16xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    %7 = wave.mma %lhs_bf16, %rhs_bf16, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_bf16>}
+      : (vector<8xbf16>, vector<8xbf16>, vector<4xf32>) -> vector<4xf32>
+
+    // f8 kinds
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    %8 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_f8>}
+      : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>) -> vector<4xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    %9 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_f8>}
+      : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>) -> vector<16xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    %10 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_k4_f8>}
+      : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>) -> vector<4xf32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    %11 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_k4_f8>}
+      : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>) -> vector<16xf32>
+
+    // i8 kinds
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 16 : i32, n = 16 : i32
+    %12 = wave.mma %lhs_i8, %rhs_i8, %acc_i32_4 {kind = #wave.mma_kind<i32_16x16x16_i8>}
+      : (vector<4xi8>, vector<4xi8>, vector<4xi32>) -> vector<4xi32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 8 : i32, m = 32 : i32, n = 32 : i32
+    %13 = wave.mma %lhs_i8, %rhs_i8, %acc_i32_16 {kind = #wave.mma_kind<i32_32x32x8_i8>}
+      : (vector<4xi8>, vector<4xi8>, vector<16xi32>) -> vector<16xi32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    %14 = wave.mma %lhs_i8_w8, %rhs_i8_w8, %acc_i32_4 {kind = #wave.mma_kind<i32_16x16x32_i8>}
+      : (vector<8xi8>, vector<8xi8>, vector<4xi32>) -> vector<4xi32>
+    // CHECK-NOT: wave.mma
+    // CHECK: amdgpu.mfma
+    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    %15 = wave.mma %lhs_i8_w8, %rhs_i8_w8, %acc_i32_16 {kind = #wave.mma_kind<i32_32x32x16_i8>}
+      : (vector<8xi8>, vector<8xi8>, vector<16xi32>) -> vector<16xi32>
+
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
   // CHECK-LABEL: func.func @lower_register
   func.func @lower_register() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.register

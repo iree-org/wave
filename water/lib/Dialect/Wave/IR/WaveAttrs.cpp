@@ -370,6 +370,82 @@ void wave::WaveDialect::registerAttributes() {
       >();
 }
 
+//-----------------------------------------------------------------------------
+// WaveMmaKindAttr
+//-----------------------------------------------------------------------------
+
+// MMA spec mapping — we adopt IREE’s 0xABCD encoding.
+// AB encodes vendor/arch, C encodes a type-class (e.g. f16/bf16, fp8),
+// D is a variant. This code is not sufficient to derive M/N/K or exact operand
+// types in a uniform way across families. We therefore use an explicit switch
+// to return the exact (M,N,K) and concrete element types. For generic
+// fp8/packed encodings we default lhs and rhs to Float8E4M3FNUZ and
+// accumulator to f32.
+
+wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
+                                                 wave::WaveMmaKind kind) {
+  auto f16 = [&]() -> mlir::Type { return mlir::Float16Type::get(ctx); };
+  auto bf16 = [&]() -> mlir::Type { return mlir::BFloat16Type::get(ctx); };
+  auto f32 = [&]() -> mlir::Type { return mlir::Float32Type::get(ctx); };
+  auto i8 = [&]() -> mlir::Type { return mlir::IntegerType::get(ctx, 8); };
+  auto i32 = [&]() -> mlir::Type { return mlir::IntegerType::get(ctx, 32); };
+  auto fp8 = [&]() -> mlir::Type { return mlir::Float8E4M3FNUZType::get(ctx); };
+
+  switch (kind) {
+  // CDNA1
+  case wave::WaveMmaKind::F32_16x16x16_F16:
+    return {16, 16, 16, f16(), f16(), f32()};
+  case wave::WaveMmaKind::F32_32x32x8_F16:
+    return {32, 32, 8, f16(), f16(), f32()};
+  case wave::WaveMmaKind::F32_16x16x32_K8_F16:
+    return {16, 16, 32, f16(), f16(), f32()};
+  case wave::WaveMmaKind::F32_32x32x16_K8_F16:
+    return {32, 32, 16, f16(), f16(), f32()};
+  case wave::WaveMmaKind::I32_16x16x16_I8:
+    return {16, 16, 16, i8(), i8(), i32()};
+  case wave::WaveMmaKind::I32_32x32x8_I8:
+    return {32, 32, 8, i8(), i8(), i32()};
+
+  // CDNA3
+  case wave::WaveMmaKind::F32_16x16x32_F8:
+    return {16, 16, 32, fp8(), fp8(), f32()};
+  case wave::WaveMmaKind::F32_32x32x16_F8:
+    return {32, 32, 16, fp8(), fp8(), f32()};
+  case wave::WaveMmaKind::F32_16x16x32_K4_F8:
+    return {16, 16, 32, fp8(), fp8(), f32()};
+  case wave::WaveMmaKind::F32_32x32x16_K4_F8:
+    return {32, 32, 16, fp8(), fp8(), f32()};
+  case wave::WaveMmaKind::I32_16x16x32_I8:
+    return {16, 16, 32, i8(), i8(), i32()};
+  case wave::WaveMmaKind::I32_32x32x16_I8:
+    return {32, 32, 16, i8(), i8(), i32()};
+
+  // CDNA4
+  case wave::WaveMmaKind::F32_16x16x128_F8F6F4:
+    return {16, 16, 128, fp8(), fp8(), f32()};
+  case wave::WaveMmaKind::F32_32x32x64_F8F6F4:
+    return {32, 32, 64, fp8(), fp8(), f32()};
+  case wave::WaveMmaKind::F32_16x16x32_F16:
+    return {16, 16, 32, f16(), f16(), f32()};
+  case wave::WaveMmaKind::F32_32x32x16_F16:
+    return {32, 32, 16, f16(), f16(), f32()};
+  case wave::WaveMmaKind::F32_16x16x32_BF16:
+    return {16, 16, 32, bf16(), bf16(), f32()};
+  case wave::WaveMmaKind::F32_32x32x16_BF16:
+    return {32, 32, 16, bf16(), bf16(), f32()};
+  }
+
+  llvm_unreachable("unhandled WaveMmaKind in WaveMmaKindAttr::getSpec");
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t>
+wave::WaveMmaKindAttr::getShape(mlir::MLIRContext *ctx,
+                                wave::WaveMmaKind kind) {
+  wave::WaveMmaSpec spec = wave::WaveMmaKindAttr::getSpec(ctx, kind);
+  return {static_cast<uint32_t>(spec.m), static_cast<uint32_t>(spec.n),
+          static_cast<uint32_t>(spec.k)};
+}
+
 // Verify that wave tensor types in the given range are fully specified. Emit a
 // diagnostic with the given message at the location provided, if present,
 // otherwise just return failure.

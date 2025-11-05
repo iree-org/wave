@@ -37,6 +37,10 @@ def WaveAddressSpaceAttr
 // MMA kind enum and attribute
 //-----------------------------------------------------------------------------
 
+// WaveMmaKind encoding is adopted from IREE's 0xABCD scheme:
+// A:vendor, B:architecture, C:type-class group, D=variant.
+// See IREE docs/tests for full details: https://github.com/iree-org/iree/blob/c65dc6dc28491b4768a72ff9d563edeb377627a9/compiler/src/iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUEnums.td#L136
+
 def WaveMmaKindEnum
     : I32EnumAttr<"WaveMmaKind",
                   "Matrix multiply/accumulate module configuration", [
@@ -59,10 +63,10 @@ def WaveMmaKindEnum
   // Configurations introduced in CDNA4.
   I32EnumAttrCase<"F32_16x16x128_F8F6F4", 0x1340, "f32_16x16x128_f8f6f4">,
   I32EnumAttrCase<"F32_32x32x64_F8F6F4", 0x1341, "f32_32x32x64_f8f6f4">,
-  I32EnumAttrCase<"F32_32x32x16_BF16", 0x1320, "f32_32x32x16_bf16">,
-  I32EnumAttrCase<"F32_16x16x32_BF16", 0x1321, "f32_16x16x32_bf16">,
-  I32EnumAttrCase<"F32_32x32x16_F16", 0x1322, "f32_32x32x16_f16">,
-  I32EnumAttrCase<"F32_16x16x32_F16", 0x1323, "f32_16x16x32_f16">,
+  I32EnumAttrCase<"F32_16x16x32_F16", 0x1320, "f32_16x16x32_f16">,
+  I32EnumAttrCase<"F32_32x32x16_F16", 0x1321, "f32_32x32x16_f16">,
+  I32EnumAttrCase<"F32_16x16x32_BF16", 0x1322, "f32_16x16x32_bf16">,
+  I32EnumAttrCase<"F32_32x32x16_BF16", 0x1323, "f32_32x32x16_bf16">,
 
 ]> {
   let cppNamespace = "::wave";
@@ -71,6 +75,15 @@ def WaveMmaKindEnum
 
 def WaveMmaKindAttr : EnumAttr<WaveDialect, WaveMmaKindEnum, "mma_kind"> {
   let assemblyFormat = "`<` $value `>`";
+  let extraClassDeclaration = [{
+    /// Returns the MMA specification (MNK tile sizes and element types)
+    /// for the given kind.
+    static ::wave::WaveMmaSpec getSpec(::mlir::MLIRContext *ctx,
+                                       ::wave::WaveMmaKind kind);
+    /// Returns the (M,N,K) shape for the given kind.
+    static ::std::tuple<uint32_t, uint32_t, uint32_t>
+    getShape(::mlir::MLIRContext *ctx, ::wave::WaveMmaKind kind);
+  }];
 }
 
 //-----------------------------------------------------------------------------

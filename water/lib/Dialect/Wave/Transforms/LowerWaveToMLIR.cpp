@@ -8,6 +8,7 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -39,6 +40,7 @@ struct LowerWaveToMLIRPass
       arith::ArithDialect,
       math::MathDialect,
       gpu::GPUDialect,
+      amdgpu::AMDGPUDialect,
       memref::MemRefDialect,
       vector::VectorDialect
         // clang-format on
@@ -63,6 +65,7 @@ struct LowerWaveToMLIRPass
       arith::ArithDialect,
       math::MathDialect,
       gpu::GPUDialect,
+      amdgpu::AMDGPUDialect,
       memref::MemRefDialect,
       vector::VectorDialect
         // clang-format on
@@ -93,6 +96,7 @@ struct LowerWaveToMLIRPass
           wave::populateWaveRegisterLoweringPatterns(typeConverter, patterns);
           wave::populateWaveBinaryOpLoweringPatterns(typeConverter, patterns);
           wave::populateWaveAllocateOpLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveMmaLoweringPatterns(typeConverter, patterns);
           wave::populateWaveReadWriteLoweringPatterns(typeConverter, patterns);
           wave::populateWaveUnaryFPOpLoweringPatterns(typeConverter, patterns);
 
