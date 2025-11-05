@@ -53,6 +53,8 @@ class SyncRequirement:
     is_loop: bool = False
     prod_region: Set[Any] = field(default_factory=set)
     cons_region: Set[Any] = field(default_factory=set)
+    prod_topo_location: int = -1
+    cons_topo_location: int = -1
 
 
 class EpisodeState:
@@ -149,23 +151,6 @@ def need_barrier(
     return False
 
 
-def update_topo_location(last_prod, first_con, offset: int = 0):
-    """
-    prod has topo_location > consumer topo_location iff an iterate exist.
-    arange the topo_location of a consumer as
-    new_consumer_location =  producer_location + (producer_location - old_cons_loc)
-    """
-    prod_loc = last_prod._topo_location
-    cons_loc = first_con._topo_location
-
-    # valid
-    if prod_loc < cons_loc:
-        return
-
-    setattr(first_con, "_topo_location", cons_loc + offset)
-    return
-
-
 def add_sync_requirements(
     results: List[SyncRequirement],
     resource: fx.Node,
@@ -191,7 +176,9 @@ def add_sync_requirements(
         first_con_loc = first_con._topo_location
         cross_iter = last_prod_loc > first_con_loc
 
-    update_topo_location(last_prod, first_con, offset)
+    if cross_iter:
+        first_con_loc += offset
+
     req = SyncRequirement(
         resource=resource,
         producers=list(state.producers),
@@ -199,6 +186,8 @@ def add_sync_requirements(
         is_loop=cross_iter,  # when producer appear after consumer, we identify a loop
         prod_region={last_prod},
         cons_region={first_con},
+        prod_topo_location=last_prod_loc,
+        cons_topo_location=first_con_loc,
     )
 
     if req in results:
@@ -275,8 +264,8 @@ def get_barriers_analysis(trace, graph):
     )
 
     # root graph
-    root_graph_name = trace.root_graph
-    smem_nodes = trace.walk_graph(name=root_graph_name, filter=is_shared_memory_node)
+    # handle linear dependencies
+    smem_nodes = trace.preorder_walk(filter=is_shared_memory_node)
     iterate_nodes = trace.walk(is_iterate_node)
     condition_nodes = trace.walk(is_condition_node)
 
@@ -301,7 +290,7 @@ def get_barriers_analysis(trace, graph):
     # handle nested iterate graph
     for regionNode in reversed(iterate_nodes):
         regionOp = get_custom(regionNode)
-        smem_nodes = trace.walk_graph(
+        smem_nodes = trace.preorder_walk(
             name=regionOp.subgraph_name, filter=is_shared_memory_node
         )
         need_iterate_barriers = False
@@ -332,7 +321,7 @@ def get_barriers_analysis(trace, graph):
     # handle conditional graph
     for regionNode in condition_nodes:
         regionOp = get_custom(regionNode)
-        smem_nodes = trace.walk_graph(
+        smem_nodes = trace.preorder_walk(
             name=regionOp.subgraph_name, filter=is_shared_memory_node
         )
 
@@ -359,33 +348,12 @@ def get_barriers_analysis(trace, graph):
         # results, None, EpisodeState([regionNode], [regionNode.next])
         # )
 
-    # handle cross graph dependencies
-    smem_nodes = trace.preorder_walk(filter=is_shared_memory_node)
-
-    # RAW
-    handle_hazard(
-        results,
-        smem_nodes,
-        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-        {MemoryAccessType.READ},
-    )
-
-    # WAR
-    handle_hazard(
-        results,
-        smem_nodes,
-        {MemoryAccessType.READ},
-        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-    )
-
     return results
 
 
 def minimize_placement_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
-
-    get_topo_location = lambda x: getattr(next(iter(x)), "_topo_location", 0)
 
     if len(sync_reqs) == 0:
         return sync_reqs
@@ -396,16 +364,13 @@ def minimize_placement_strategy(
     # 1) sort barrier placement location from pos low to high
     ascending_reqs = sorted(
         sync_reqs,
-        key=lambda req: (
-            get_topo_location(req.cons_region),
-            get_topo_location(req.prod_region),
-        ),
+        key=lambda req: (req.cons_topo_location, req.prod_topo_location),
     )
 
     # 2) add to result if no barriers are placed in between topo_region
     for req in ascending_reqs:
-        start = get_topo_location(req.prod_region)
-        end = get_topo_location(req.cons_region)
+        start = req.prod_topo_location
+        end = req.cons_topo_location
         if any([p in range(start + 1, end) for p in placements]):
             continue
 
@@ -419,8 +384,6 @@ def find_smallest_interval_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
 
-    get_topo_location = lambda x: getattr(next(iter(x)), "_topo_location", 0)
-
     if len(sync_reqs) == 0:
         return sync_reqs
 
@@ -430,16 +393,13 @@ def find_smallest_interval_strategy(
     # 1) sort barrier placement location from pos low to high
     ascending_reqs = sorted(
         sync_reqs,
-        key=lambda req: (
-            get_topo_location(req.cons_region),
-            get_topo_location(req.prod_region),
-        ),
+        key=lambda req: (req.cons_topo_location, req.prod_topo_location),
     )
 
     # 2) add to result if no barriers are placed in between topo_region
     for req in ascending_reqs:
-        start = get_topo_location(req.prod_region)
-        end = get_topo_location(req.cons_region)
+        start = req.prod_topo_location
+        end = req.cons_topo_location
         if any([p in range(start + 1, end) for p in placements]):
             continue
 
