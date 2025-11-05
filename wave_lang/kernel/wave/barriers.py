@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from typing import Sequence
-
+from collections import defaultdict
 
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
@@ -55,8 +55,12 @@ class BarrierEmitter:
     ) -> Sequence[SyncRequirement]:
         raise NotImplementedError
 
+    def verify(self, graph):
+        pass
+
 
 class LegacyBarrierEmitter(BarrierEmitter):
+
     def optimize(
         self, sync_reqs: Sequence[SyncRequirement]
     ) -> Sequence[SyncRequirement]:
@@ -69,23 +73,46 @@ class LegacyBarrierEmitter(BarrierEmitter):
 
         producer = next(iter(req.prod_region))
         consumer = next(iter(req.cons_region))
-        barrier = is_barrier_between(producer, consumer)
 
         wait_async = False
-        if barrier is None:
-            if is_async_op(producer) or is_async_op(consumer):
-                wait_async = True
-            with consumer.graph.inserting_before(consumer):
-                SharedMemoryBarrier(wait_async_ops=wait_async).add_to_graph(
-                    consumer.graph, loc=get_custom(consumer).location
-                )
-        else:
-            barrierOp = get_custom(barrier)
-            if is_async_op(producer) or is_async_op(consumer):
-                barrierOp.update_arg("wait_async_ops", True)
+        if is_async_op(producer) or is_async_op(consumer):
+            wait_async = True
+        with consumer.graph.inserting_before(consumer):
+            SharedMemoryBarrier(wait_async_ops=wait_async).add_to_graph(
+                consumer.graph, loc=get_custom(consumer).location
+            )
 
 
 class BasicSplitBarrierEmitter(BarrierEmitter):
+    def verify(self, trace) -> None:
+        """
+        For difference scheduling such as Prefetch / Modulo, LR and LW may appear at prolog or epilog of a subgraph.
+        This function checks if there are waits before any signals.
+        """
+        signals = defaultdict(bool)  # barId : signal exist
+        lonely_waits = set()
+        nodes = trace.preorder_walk()
+
+        for node in nodes:
+            custom = get_custom(node)
+            if isinstance(custom, SharedMemoryBarrierSignal):
+                assert (
+                    signals[custom.barId] is False
+                ), "Bug: signal the same barId twice before any waits."
+                signals.update({custom.barId: True})
+            if isinstance(custom, SharedMemoryBarrierWait):
+                if not signals[custom.barId]:
+                    lonely_waits.add(custom)
+                else:
+                    signals.update({custom.barId: False})
+
+        assert (
+            len(lonely_waits) == 0
+        ), "Wait barrier appear more than once before any signals, this is a serious bug."
+        assert (
+            sum(signals.values()) <= 1
+        ), "More than one signal exists without corresponding waits; this indicates a serious bug."
+
     def optimize(
         self, sync_reqs: Sequence[SyncRequirement]
     ) -> Sequence[SyncRequirement]:
@@ -115,8 +142,9 @@ def add_shared_memory_barriers(
     target_arch = TargetConfig(target)
     graph = trace.get_root_graph()
 
-    sync_requests = get_barriers_analysis(trace, graph)
+    sync_requests = get_barriers_analysis(trace, graph, target_arch)
 
     handle = BarrierEmitter(target_arch)
     emitter = handle.dispatch()
     emitter.emit(sync_requests)
+    emitter.verify(trace)

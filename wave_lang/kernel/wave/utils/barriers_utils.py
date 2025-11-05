@@ -47,9 +47,9 @@ class SyncRequirement:
     Syncrhonization requirements in between producers and consumers.
     """
 
-    resource: Any
-    producers: Sequence[Any]
-    consumers: Sequence[Any]
+    resource: Any = None
+    producers: Sequence[Any] = None
+    consumers: Sequence[Any] = None
     is_loop: bool = False
     prod_region: Set[Any] = field(default_factory=set)
     cons_region: Set[Any] = field(default_factory=set)
@@ -169,12 +169,11 @@ def add_sync_requirements(
         first_con
     ), "Bug"
 
-    if resource is not None:
-        if not need_barrier(last_prod, first_con):
-            return False
-        last_prod_loc = last_prod._topo_location
-        first_con_loc = first_con._topo_location
-        cross_iter = last_prod_loc > first_con_loc
+    if not need_barrier(last_prod, first_con):
+        return False
+    last_prod_loc = last_prod._topo_location
+    first_con_loc = first_con._topo_location
+    cross_iter = last_prod_loc > first_con_loc
 
     if cross_iter:
         first_con_loc += offset
@@ -247,11 +246,9 @@ def handle_hazard(
     return cross_iter and not cross_graph
 
 
-def get_barriers_analysis(trace, graph):
-    nodes = trace.walk()
+def get_barriers_analysis(trace, graph, target_arch):
+    nodes = trace.preorder_walk()
     assign_preorder_index(nodes)
-
-    get_topo_location = lambda x: getattr(next(iter(x)), "_topo_location", 0)
 
     is_shared_memory_node = lambda node: (
         True if get_shared_memory_from_op(get_custom(node)) is not None else False
@@ -313,10 +310,10 @@ def get_barriers_analysis(trace, graph):
             is_nested=True,
         )
 
-        # if need_iterate_barriers:
-        # add_sync_requirements(
-        # results, None, EpisodeState([regionNode.prev], [regionNode.next])
-        # )
+        if target_arch.has_split_barriers and need_iterate_barriers:
+            add_sync_requirements(
+                results, None, EpisodeState([regionNode.prev], [regionNode.next])
+            )
 
     # handle conditional graph
     for regionNode in condition_nodes:
@@ -341,12 +338,13 @@ def get_barriers_analysis(trace, graph):
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
         )
 
-        # add_sync_requirements(
-        # results, None, EpisodeState([regionNode.prev], [regionNode])
-        # )
-        # add_sync_requirements(
-        # results, None, EpisodeState([regionNode], [regionNode.next])
-        # )
+        if target_arch.has_split_barriers:
+            add_sync_requirements(
+                results, None, EpisodeState([regionNode.prev], [regionNode])
+            )
+            add_sync_requirements(
+                results, None, EpisodeState([regionNode], [regionNode.next])
+            )
 
     return results
 
@@ -384,6 +382,10 @@ def find_smallest_interval_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
 
+    get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
+    get_prod = lambda req: next(iter(req.prod_region))
+    get_cons = lambda req: next(iter(req.cons_region))
+
     if len(sync_reqs) == 0:
         return sync_reqs
 
@@ -393,17 +395,60 @@ def find_smallest_interval_strategy(
     # 1) sort barrier placement location from pos low to high
     ascending_reqs = sorted(
         sync_reqs,
-        key=lambda req: (req.cons_topo_location, req.prod_topo_location),
+        key=lambda req: (req.prod_topo_location, req.cons_topo_location),
     )
 
-    # 2) add to result if no barriers are placed in between topo_region
-    for req in ascending_reqs:
-        start = req.prod_topo_location
-        end = req.cons_topo_location
-        if any([p in range(start + 1, end) for p in placements]):
-            continue
+    # 2) variables
+    prev = ascending_reqs[0]
+    run_lo, run_hi = get_location(prev)
+    run_len = 1
+    sigal = get_prod(prev)
+    wait = get_cons(prev)
 
-        results.append(req)
-        placements.append(end)
+    for cur in ascending_reqs[1:]:
+        cur_lo, cur_hi = get_location(cur)
+
+        lo, hi = max(run_lo, cur_lo), min(run_hi, cur_hi)
+        signal = get_prod(cur) if run_lo < cur_lo else signal
+        wait = get_cons(cur) if run_hi > cur_hi else wait
+
+        if lo <= hi:
+            run_lo, run_hi = lo, hi
+            run_len += 1
+            prev = cur
+        else:
+            req = SyncRequirement(
+                prod_region={signal},
+                cons_region={wait},
+                prod_topo_location=run_lo,
+                cons_topo_location=run_hi,
+            )
+            results.append(req if run_len > 1 else prev)
+
+            prev_loc = get_location(prev)
+            cur_loc = get_location(cur)
+
+            signal = get_prod(cur) if prev_loc[0] < cur_loc[0] else get_prod(prev)
+            wait = get_cons(cur) if prev_loc[1] > cur_loc[1] else get_cons(prev)
+
+            lo_update, hi_update = max(prev_loc[0], cur_loc[0]), min(
+                prev_loc[1], cur_loc[1]
+            )
+            if lo_update <= hi_update:
+                run_lo, run_hi = lo_update, hi_update
+                run_len = 2
+            else:
+                run_lo, run_hi = cur_loc
+                run_len = 1
+
+            prev = cur
+
+    req = SyncRequirement(
+        prod_region={signal},
+        cons_region={wait},
+        prod_topo_location=run_lo,
+        cons_topo_location=run_hi,
+    )
+    results.append(req)
 
     return results
