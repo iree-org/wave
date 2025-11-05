@@ -38,6 +38,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
 from wave_lang.kernel.ops.wave_ops import (
     SetWavePrio,
     SharedMemoryBarrier,
+    WorkgroupBarrier,
 )
 
 # Define symbolic dimensions for our matrices
@@ -1996,6 +1997,11 @@ def gemm_schedule_test(is_debug=False):
         shared_barrier_0 = SharedMemoryBarrier().add_to_graph(subgraph)
         shared_barrier_0.location = context_location
 
+        workgroup_barrier_0 = WorkgroupBarrier().add_to_graph(subgraph)
+        workgroup_barrier_0.location = context_location
+        workgroup_barrier_1 = WorkgroupBarrier().add_to_graph(subgraph)
+        workgroup_barrier_1.location = context_location
+
         # Wrap MMA chunks with priority and barriers
         sliced_mma_nodes[0].insert(0, prio_op_1_0)
         sliced_mma_nodes[0].append(prio_op_0_0)
@@ -2003,6 +2009,9 @@ def gemm_schedule_test(is_debug=False):
 
         sliced_mma_nodes[1].insert(0, prio_op_1_1)
         sliced_mma_nodes[1].append(prio_op_0_1)
+
+        global_load_rhs.append(workgroup_barrier_0)
+        local_write_rhs.append(workgroup_barrier_1)
 
         breakpoint()
 
@@ -2053,9 +2062,10 @@ def gemm_schedule_test(is_debug=False):
         with tkw.pipeline(k_loop) as pipelined_loop:
             pipelined_loop.set_stage(
                 [
-                    (global_load_rhs_proxies, global_load_lhs_proxies),
+                    (global_load_lhs_proxies,),
+                    (global_load_rhs_proxies,),
                     (),
-                    (local_write_rhs_proxies, local_write_lhs_proxies),
+                    (local_write_lhs_proxies, local_write_rhs_proxies),
                     (),
                 ],
             )
@@ -2064,6 +2074,8 @@ def gemm_schedule_test(is_debug=False):
                     (
                         sliced_local_load_lhs_proxies[0],
                         sliced_local_load_rhs_proxies[0],
+                    ),
+                    (
                         sliced_local_load_lhs_proxies[1],
                         sliced_local_load_rhs_proxies[1],
                     ),
@@ -2132,7 +2144,10 @@ def gemm_schedule_test(is_debug=False):
 
     # Run the kernel
     gemm_prefetch(a, b, c)
-    print(gemm_prefetch.asm)
+
+    if is_debug:
+        with open("gemm_prefetch.mlir", "w") as f:
+            f.write(gemm_prefetch.asm)
 
     expected = torch.matmul(a, b.t()).to(torch.float32)
     assert torch.allclose(c, expected, rtol=1e-2, atol=1e-2)
