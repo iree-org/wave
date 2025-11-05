@@ -37,8 +37,6 @@ from wave_lang.kernel.wave.utils.general_utils import (
 
 from wave_lang.kernel.ops.wave_ops import (
     SetWavePrio,
-    SharedMemoryBarrier,
-    WorkgroupBarrier,
 )
 
 # Define symbolic dimensions for our matrices
@@ -1993,27 +1991,12 @@ def gemm_schedule_test(is_debug=False):
         prio_op_0_1 = SetWavePrio(0).add_to_graph(subgraph)
         prio_op_0_1.location = context_location
 
-        # Create Shared memory barriers
-        shared_barrier_0 = SharedMemoryBarrier().add_to_graph(subgraph)
-        shared_barrier_0.location = context_location
-
-        workgroup_barrier_0 = WorkgroupBarrier().add_to_graph(subgraph)
-        workgroup_barrier_0.location = context_location
-        workgroup_barrier_1 = WorkgroupBarrier().add_to_graph(subgraph)
-        workgroup_barrier_1.location = context_location
-
         # Wrap MMA chunks with priority and barriers
         sliced_mma_nodes[0].insert(0, prio_op_1_0)
         sliced_mma_nodes[0].append(prio_op_0_0)
-        sliced_mma_nodes[0].append(shared_barrier_0)
 
         sliced_mma_nodes[1].insert(0, prio_op_1_1)
         sliced_mma_nodes[1].append(prio_op_0_1)
-
-        global_load_rhs.append(workgroup_barrier_0)
-        local_write_rhs.append(workgroup_barrier_1)
-
-        breakpoint()
 
         for i in range(num_slice):
             sliced_mma_proxies.append(
@@ -2044,19 +2027,6 @@ def gemm_schedule_test(is_debug=False):
             region_graph, local_write_rhs, f"local_write_rhs"
         )
 
-        shared_barrier_0_proxy = create_schedule_proxy(
-            region_graph, shared_barrier_0, f"shared_barrier_0"
-        )
-
-        cluster0 = (
-            sliced_local_load_lhs_proxies[0],
-            sliced_local_load_rhs_proxies[0],
-            sliced_local_load_lhs_proxies[1],
-            sliced_local_load_rhs_proxies[1],
-            global_load_rhs_proxies,
-            global_load_lhs_proxies,
-        )
-
         breakpoint()
         # Create a pipeline with 2 stages and specify the operations that are overlapping.
         with tkw.pipeline(k_loop) as pipelined_loop:
@@ -2085,6 +2055,37 @@ def gemm_schedule_test(is_debug=False):
                 ],
             )
 
+            # This replaces manual barrier insertion into node lists
+            pipelined_loop.insert_barrier_after(
+                sliced_local_load_rhs_proxies[0], barrier_type="scheduling"
+            )
+            pipelined_loop.insert_barrier_after(
+                global_load_lhs_proxies, barrier_type="scheduling"
+            )
+            pipelined_loop.insert_barrier_after(
+                sliced_local_load_rhs_proxies[1], barrier_type="scheduling"
+            )
+            pipelined_loop.insert_barrier_after(
+                global_load_rhs_proxies, barrier_type="scheduling"
+            )
+            pipelined_loop.insert_barrier_after(
+                global_load_rhs_proxies, barrier_type="workgroup"
+            )
+            pipelined_loop.insert_barrier_after(
+                sliced_mma_proxies[0], barrier_type="scheduling"
+            )
+            pipelined_loop.insert_barrier_after(
+                sliced_mma_proxies[0], barrier_type="shared_memory"
+            )
+            pipelined_loop.insert_barrier_after(
+                local_write_rhs_proxies, barrier_type="scheduling"
+            )
+            pipelined_loop.insert_barrier_after(
+                local_write_rhs_proxies, barrier_type="workgroup"
+            )
+            pipelined_loop.insert_barrier_after(
+                sliced_mma_proxies[1], barrier_type="scheduling"
+            )
         # cluster0 = (global_load_rhs_proxies, global_load_lhs_proxies)
         # cluster1 = (sliced_local_load_lhs_proxies[0], sliced_local_load_rhs_proxies[0])
         # cluster2 = (sliced_mma_proxies[0],)
