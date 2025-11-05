@@ -113,7 +113,7 @@ def simple_gemm_test(is_debug=False):
         tkw.write(repeat, c)
 
     # Create test matrices
-    m, n, k = 64, 64, 64  # Small dimensions for testing
+    m, n, k = 128, 256, 1024
 
     # Initialize input matrices with random values
     torch.manual_seed(0)
@@ -137,6 +137,7 @@ def simple_gemm_test(is_debug=False):
     # Compile the kernel
     options = WaveCompileOptions(
         subs=hyperparams,
+        schedule=SchedulingType.PREFETCH,
         print_ir_after="all" if is_debug else [],
     )
     options = set_default_run_config(options)
@@ -1884,7 +1885,7 @@ def gemm_schedule_test(is_debug=False):
     Returns:
         tuple: (kernel_function, schedule_function, compile_options)
     """
-    shape: tuple[int, int, int] = (128, 256, 128)
+    shape: tuple[int, int, int] = (128, 256, 1024)
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16
 
     # Symbol definitions
@@ -1998,7 +1999,7 @@ def gemm_schedule_test(is_debug=False):
         # Wrap MMA chunks with priority and barriers
         sliced_mma_nodes[0].insert(0, prio_op_1_0)
         sliced_mma_nodes[0].append(prio_op_0_0)
-        # sliced_mma_nodes[0].append(shared_barrier_0)
+        sliced_mma_nodes[0].append(shared_barrier_0)
 
         sliced_mma_nodes[1].insert(0, prio_op_1_1)
         sliced_mma_nodes[1].append(prio_op_0_1)
@@ -2038,6 +2039,15 @@ def gemm_schedule_test(is_debug=False):
             region_graph, shared_barrier_0, f"shared_barrier_0"
         )
 
+        cluster0 = (
+            sliced_local_load_lhs_proxies[0],
+            sliced_local_load_rhs_proxies[0],
+            sliced_local_load_lhs_proxies[1],
+            sliced_local_load_rhs_proxies[1],
+            global_load_rhs_proxies,
+            global_load_lhs_proxies,
+        )
+
         breakpoint()
         # Create a pipeline with 2 stages and specify the operations that are overlapping.
         with tkw.pipeline(k_loop) as pipelined_loop:
@@ -2057,11 +2067,27 @@ def gemm_schedule_test(is_debug=False):
                         sliced_local_load_lhs_proxies[1],
                         sliced_local_load_rhs_proxies[1],
                     ),
-                    (sliced_mma_proxies[0], shared_barrier_0_proxy),
+                    (sliced_mma_proxies[0],),
                     (),
                     (sliced_mma_proxies[1],),
                 ],
             )
+
+        # cluster0 = (global_load_rhs_proxies, global_load_lhs_proxies)
+        # cluster1 = (sliced_local_load_lhs_proxies[0], sliced_local_load_rhs_proxies[0])
+        # cluster2 = (sliced_mma_proxies[0],)
+        # cluster3 = (lasjfslajfl)
+
+        # with tkw.pipeline(k_loop) as pipelined_loop:
+        #     pipelined_loop.set_stage(
+        #         [
+        #             (cluster0, cluster1,),
+        #         ],
+        #     )
+        #     pipelined_loop.set_stage(
+        #         [
+        #             (cluster2, cluster3,),
+        #     )
 
     # Define compile options
     M_val, N_val, K_val = shape
@@ -2090,7 +2116,6 @@ def gemm_schedule_test(is_debug=False):
         },
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
-        use_scheduling_barriers=True,
         print_ir_after="all" if is_debug else [],
     )
 
@@ -2193,6 +2218,18 @@ def ref_gemm_prefetch(is_debug=False):
                     (mma,),
                 ],
             )
+
+    # // Ping-pong gemm
+    # pipelined_loop.stagger()
+    # pipelined_loop.body.define_clusters(
+    #     (...),
+    #     (...),
+    # )
+
+    # // No ping-pong gemm
+    # pipelined_loop.body.reorder(
+
+    # )
 
     # Define compile options
     M_val, N_val, K_val = shape
