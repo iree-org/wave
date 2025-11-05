@@ -492,7 +492,7 @@ def minimize_placement_strategy(
 
         # 3.4) else valid placements
         results.append(req)
-        placements.append(end)
+        placements.append((end, btype))
 
     return results
 
