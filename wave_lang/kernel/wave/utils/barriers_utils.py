@@ -417,11 +417,11 @@ def minimize_placement_strategy(
         assert graph_start < graph_end, "graph start < graph end."
 
         # 3.1) if graph start ~ sync request start has barrier placements: skip
-        if any([p in range(graph_start, start) for p in placements]):
+        if any([p in range(graph_start, end) for p in placements]):
             continue
 
         # 3.2) if graph start ~ sync request start has barrier placements: skip
-        if any([p in range(end, graph_end + 1) for p in placements]):
+        if any([p in range(start, graph_end) for p in placements]):
             continue
 
         # 3.3) else valid placements
