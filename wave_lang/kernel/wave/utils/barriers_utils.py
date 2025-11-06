@@ -22,6 +22,7 @@ from ...ops.wave_ops import (
     get_custom,
     Iterate,
     Conditional,
+    NestedRegionOp,
 )
 
 
@@ -221,13 +222,14 @@ def handle_hazard(
     consumer_kinds,
     barrier_type,
     is_nested: bool = False,
+    update: int = 0,
 ) -> BarrierType:
     """
     Scans the graph and append SyncRequirements to results if any.
-    Returns if barriers are required for NestedRegionOps
+    Returns if barriers are required for NestedRegionOp
     """
     states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
-    depth = 0
+    change_iter_cut = len(nodes)
 
     # duplicate nodes to find cross-iter dependencies
     # e.g.,
@@ -237,22 +239,19 @@ def handle_hazard(
     # - r1:2 -> w1:0 ** cross-iter dep
     if is_nested:
         nodes = nodes * 2
-        depth = 1
 
     if len(nodes) == 0:
         return BarrierType.NONE
 
     graph_info = [nodes[0]._topo_location, nodes[-1]._topo_location]
 
-    cross_iter = False
-    cross_graph = False
-
-    for node in nodes:
+    for idx, node in enumerate(nodes):
         op = get_custom(node)
         access_kind = get_memory_access_type(op)
         if access_kind == MemoryAccessType.NONE:
             continue
 
+        depth = idx // change_iter_cut if update == 0 else int(idx < update)
         resource = get_shared_memory_from_op(op, depth)
         assert resource is not None, "op has not smem access"
 
@@ -260,14 +259,13 @@ def handle_hazard(
 
         if access_kind in producer_kinds:
             if state.producers and state.consumers:
-                cross_iter |= add_sync_requirements(
+                add_sync_requirements(
                     results,
                     resource,
                     state,
                     graph_info=graph_info,
                     barrier_type=barrier_type,
                 )
-                cross_graph |= state.producers[-1].graph != state.consumers[0].graph
                 state.reset()
             state.producers.append(node)
         if access_kind in consumer_kinds:
@@ -276,17 +274,24 @@ def handle_hazard(
 
     for resource, state in states.items():
         if state.producers and state.consumers:
-            cross_iter |= add_sync_requirements(
+            add_sync_requirements(
                 results,
                 resource,
                 state,
                 graph_info=graph_info,
                 barrier_type=barrier_type,
             )
-            cross_graph |= state.producers[-1].graph != state.consumers[0].graph
 
-    # barriers are needed if cross iteration dependencies exist and no producers from outside the subgraph.
-    return barrier_type if cross_iter and not cross_graph else BarrierType.NONE
+    return barrier_type
+
+
+def get_subgraph_nodes(trace, node: fx.Node) -> List[fx.Node]:
+    op = get_custom(node)
+    if not isinstance(op, NestedRegionOp):
+        return []
+
+    subgraph_name = op.subgraph_name
+    return trace.walk_graph(name=subgraph_name)
 
 
 def get_barriers_analysis(trace, graph, target_arch):
@@ -304,108 +309,49 @@ def get_barriers_analysis(trace, graph, target_arch):
     )
 
     # root graph
-    # handle linear dependencies
-    smem_nodes = trace.preorder_walk(filter=is_shared_memory_node)
-    iterate_nodes = trace.preorder_walk(filter=is_iterate_node)
-    condition_nodes = trace.preorder_walk(filter=is_condition_node)
-
     results: List[SyncRequirement] = []
+    collections: List[SyncRequirement] = []
+    nodes = trace.walk_graph(trace.root_graph)
 
-    # RAW
-    handle_hazard(
-        results,
-        smem_nodes,
-        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-        {MemoryAccessType.READ},
-        barrier_type=BarrierType.FILL,
-    )
+    def dfs(nodes, collections, results, is_nested: bool = False, update: int = 0):
+        for node in nodes:
+            if is_shared_memory_node(node):
+                collections.append(node)
 
-    # WAR
-    handle_hazard(
-        results,
-        smem_nodes,
-        {MemoryAccessType.READ},
-        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-        barrier_type=BarrierType.READY,
-    )
+            if is_iterate_node(node):
+                subgraph_nodes = get_subgraph_nodes(trace, node)
+                dfs(subgraph_nodes, collections, results)
+                collections = []
+                dfs(subgraph_nodes, collections, results, is_nested=True)
+                update = sum([is_shared_memory_node(node) for node in subgraph_nodes])
 
-    # handle nested iterate graph
-    for regionNode in reversed(iterate_nodes):
-        regionOp = get_custom(regionNode)
-        smem_nodes = trace.preorder_walk(
-            name=regionOp.subgraph_name, filter=is_shared_memory_node
-        )
-        need_iterate_barriers = BarrierType.NONE
-        graph_info = [smem_nodes[0]._topo_location, smem_nodes[-1]._topo_location]
-
-        # RAW
-        need_iterate_barriers |= handle_hazard(
-            results,
-            smem_nodes,
-            {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-            {MemoryAccessType.READ},
-            is_nested=True,
-            barrier_type=BarrierType.FILL,
-        )
-
-        # WAR
-        need_iterate_barriers |= handle_hazard(
-            results,
-            smem_nodes,
-            {MemoryAccessType.READ},
-            {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-            is_nested=True,
-            barrier_type=BarrierType.READY,
-        )
-
-        if target_arch.has_split_barriers and need_iterate_barriers != BarrierType.NONE:
-            add_sync_requirements(
-                results,
-                None,
-                EpisodeState([regionNode.prev], [regionNode.next]),
-                graph_info=graph_info,
-                barrier_type=need_iterate_barriers,
-            )
-
-    # handle conditional graph
-    for regionNode in condition_nodes:
-        regionOp = get_custom(regionNode)
-        smem_nodes = trace.preorder_walk(
-            name=regionOp.subgraph_name, filter=is_shared_memory_node
-        )
-        graph_info = [smem_nodes[0]._topo_location, smem_nodes[-1]._topo_location]
+            if is_condition_node(node):
+                subgraph_nodes = get_subgraph_nodes(trace, node)
+                dfs(subgraph_nodes, collections, results)
 
         # RAW
         handle_hazard(
             results,
-            smem_nodes,
+            collections,
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
             {MemoryAccessType.READ},
             barrier_type=BarrierType.FILL,
+            is_nested=is_nested,
+            update=update,
         )
 
         # WAR
         handle_hazard(
             results,
-            smem_nodes,
+            collections,
             {MemoryAccessType.READ},
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
             barrier_type=BarrierType.READY,
+            is_nested=is_nested,
+            update=update,
         )
 
-        if target_arch.has_split_barriers:
-            add_sync_requirements(
-                results,
-                None,
-                EpisodeState([regionNode.prev], [regionNode]),
-                graph_info=graph_info,
-            )
-            add_sync_requirements(
-                results,
-                None,
-                EpisodeState([regionNode], [regionNode.next]),
-                graph_info=graph_info,
-            )
+    dfs(nodes, collections, results, update=False)
 
     return results
 
