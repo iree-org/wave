@@ -208,6 +208,7 @@ def add_sync_requirements(
 
     if req in results:
         return False
+
     results.append(req)
 
     return cross_iter
@@ -226,6 +227,7 @@ def handle_hazard(
     Returns if barriers are required for NestedRegionOps
     """
     states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
+    depth = 0
 
     # duplicate nodes to find cross-iter dependencies
     # e.g.,
@@ -235,6 +237,7 @@ def handle_hazard(
     # - r1:2 -> w1:0 ** cross-iter dep
     if is_nested:
         nodes = nodes * 2
+        depth = 1
 
     if len(nodes) == 0:
         return BarrierType.NONE
@@ -249,9 +252,10 @@ def handle_hazard(
         access_kind = get_memory_access_type(op)
         if access_kind == MemoryAccessType.NONE:
             continue
-        resource = get_shared_memory_from_op(op)
-        if resource is None:
-            continue
+
+        resource = get_shared_memory_from_op(op, depth)
+        assert resource is not None, "op has not smem access"
+
         state = states[resource]
 
         if access_kind in producer_kinds:
@@ -476,17 +480,33 @@ def minimize_placement_strategy(
             continue
 
         # 3.3) if cross-iter requiers both RAW and WAR guards
-        if btype in (BarrierType.FILL | BarrierType.READY):
-            if any(
-                [
-                    p in range(graph_start, end) and btype == bexist
-                    for p, bexist in placements
-                ]
-            ) and any(
-                [
-                    p in range(start, graph_end) and btype == bexist
-                    for p, bexist in placements
-                ]
+        if btype == (BarrierType.FILL | BarrierType.READY):
+            if (
+                any(
+                    [
+                        p in range(graph_start, end) and bexist == BarrierType.FILL
+                        for p, bexist in placements
+                    ]
+                )
+                or any(
+                    [
+                        p in range(start, graph_end) and bexist == BarrierType.FILL
+                        for p, bexist in placements
+                    ]
+                )
+            ) and (
+                any(
+                    [
+                        p in range(graph_start, end) and bexist == BarrierType.READY
+                        for p, bexist in placements
+                    ]
+                )
+                or any(
+                    [
+                        p in range(start, graph_end) and bexist == BarrierType.READY
+                        for p, bexist in placements
+                    ]
+                )
             ):
                 continue
 
