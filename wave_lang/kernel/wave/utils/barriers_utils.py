@@ -385,12 +385,7 @@ def minimize_placement_strategy(
         start, end = get_location(req)
         btype = req.barrier_type
 
-        if any(
-            [
-                pos in range(start, end + 1) and btype == bexist
-                for pos, bexist in placements
-            ]
-        ):
+        if any([pos in range(start, end + 1) for pos, _ in placements]):
             continue
 
         results.append(req)
@@ -408,53 +403,12 @@ def minimize_placement_strategy(
         assert graph_start < graph_end, "graph start < graph end."
 
         # 3.1) if graph start ~ sync request start has barrier placements: skip
-        if any(
-            [
-                p in range(graph_start, end) and btype == bexist
-                for p, bexist in placements
-            ]
-        ):
+        if any([p in range(graph_start, end + 1) for p, bexist in placements]):
             continue
 
         # 3.2) if graph start ~ sync request start has barrier placements: skip
-        if any(
-            [
-                p in range(start, graph_end) and btype == bexist
-                for p, bexist in placements
-            ]
-        ):
+        if any([p in range(start, graph_end + 1) for p, bexist in placements]):
             continue
-
-        # 3.3) if cross-iter requiers both RAW and WAR guards
-        if btype == (BarrierType.FILL | BarrierType.READY):
-            if (
-                any(
-                    [
-                        p in range(graph_start, end) and bexist == BarrierType.FILL
-                        for p, bexist in placements
-                    ]
-                )
-                or any(
-                    [
-                        p in range(start, graph_end) and bexist == BarrierType.FILL
-                        for p, bexist in placements
-                    ]
-                )
-            ) and (
-                any(
-                    [
-                        p in range(graph_start, end) and bexist == BarrierType.READY
-                        for p, bexist in placements
-                    ]
-                )
-                or any(
-                    [
-                        p in range(start, graph_end) and bexist == BarrierType.READY
-                        for p, bexist in placements
-                    ]
-                )
-            ):
-                continue
 
         # 3.4) else valid placements
         results.append(req)
