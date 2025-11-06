@@ -1561,8 +1561,10 @@ def test_gemm_two_cluster_pingpong():
     # 1st cluster interleaved local and global reads.
 
     # 1st Cluster: First slice of Local read lhs and rhs
-    # CHECK-COUNT-4:    vector.load %[[VIEW_1]]{{.*}} : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-16:   vector.load %[[VIEW_0]]{{.*}} : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K0:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K1:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K0]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K1]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
 
     # 1st Cluster: Global load LHS
@@ -1570,8 +1572,10 @@ def test_gemm_two_cluster_pingpong():
     # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
-    # CHECK-COUNT-4:    vector.load %[[VIEW_1]]{{.*}} : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK-COUNT-16:   vector.load %[[VIEW_0]]{{.*}} : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K2:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K3:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K2]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K3]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
 
     # 1st Cluster: Global load RHS
@@ -1612,6 +1616,137 @@ def test_gemm_two_cluster_pingpong():
     # CHECK-COUNT-32: vector.load %[[VIEW_0]]
     # CHECK-COUNT-8:  vector.load %[[VIEW_1]]
     # CHECK-COUNT-64: amdgpu.mfma
+
+
+@run_test
+def test_gemm_two_async_cluster_pingpong():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_two_async_cluster_pingpong(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 4096,
+            N: 4096,
+            K: 4096,
+            BLOCK_M: 128,
+            BLOCK_N: 128,
+            BLOCK_K: 64,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            READ_SHARED_DELAY: 1,
+            WRITE_SHARED_DELAY: 1,
+            READ_GLOBAL_DELAY: 2,
+            WRITE_GLOBAL_DELAY: 2,
+            GLOBAL_TO_SHARED_DELAY: 2,
+            MMA_DELAY: 1,
+            VALU_DELAY: 1,
+            SHUFFLE_DELAY: 1,
+            SHARED_MEMORY_UNITS: 4,
+            GLOBAL_MEMORY_UNITS: 4,
+            MMA_UNITS: 4,
+            VALU_UNITS: 8,
+            SHUFFLE_UNITS: 8,
+        },
+        target="gfx950",
+        canonicalize=True,
+        schedule=SchedulingType.PREFETCH,
+        compile_to_mlir=True,
+        use_global_to_shared=True,
+    )
+
+    gemm_two_async_cluster_pingpong = wave_compile(
+        options, gemm_two_async_cluster_pingpong
+    )
+    print(gemm_two_async_cluster_pingpong.asm)
+    # CHECK-LABEL:  gemm_two_async_cluster_pingpong
+    # CHECK-DAG:      #[[MAP:.+]] = affine_map<()[s0, s1] -> (s1 * 4 + s0 floordiv 64)>
+    # CHECK:          func.func @gemm_two_async_cluster_pingpong
+
+    # Warp High and Warp Lo computation
+    # CHECK:         %[[FLAT_WAVE_ID:.+]] = affine.apply #[[MAP]]()[%thread_id_x, %thread_id_y]
+    # CHECK:         %[[FLAT_WAVE_ID_I32:.+]] = arith.index_cast %[[FLAT_WAVE_ID]] : index to i32
+    # CHECK:         %[[WARP_HI:.+]] = arith.cmpi sge, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
+    # CHECK:         %[[WARP_LO:.+]] = arith.cmpi slt, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
+
+    # cond_barrier on warp hi to brings assymetry between 2 wave in same SIMD and Block.
+    # CHECK:          scf.if %[[WARP_HI]] {
+    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK-NEXT:     }
+
+    # Steady State
+    # CHECK:          scf.for
+
+    # 1st cluster interleaved local and global reads.
+
+    # 1st Cluster: First slice of Local read lhs and rhs
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER:.+]][{{.*}}, %[[K0:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K1:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER:.+]][{{.*}}, %[[K0]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K1]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+
+    # 1st Cluster: Global load to shared
+    # CHECK-COUNT-4:    amdgpu.gather_to_lds
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+
+    # First dot slice
+    # CHECK:            rocdl.s.setprio 1
+    # CHECK-COUNT-16:   amdgpu.mfma
+    # CHECK:            rocdl.s.setprio 0
+    # CHECK:            amdgpu.lds_barrier
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # 2nd cluster second slice of local read lhs and rhs.
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K2:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K3:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K2]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K3]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # Second dot slice:
+    # CHECK:            rocdl.s.setprio 1
+    # CHECK-COUNT-16:   amdgpu.mfma
+    # CHECK:            rocdl.s.setprio 0
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # Final LDS barrier to synchronize shared writes.
+    # CHECK:            amdgpu.lds_barrier
+    # CHECK:            scf.yield
+    # CHECK:          }
+
+    # Prologue
+
+    # cond_barrier on warp low to even out assymetry between 2 wave in same SIMD and Block.
+    # CHECK:          scf.if %[[WARP_LO]] {
+    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK-NEXT:     }
 
 
 # This test that our stack is able to handle MMA layout with interleaved VGPR offsets/chunks

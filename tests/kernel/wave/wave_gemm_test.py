@@ -559,6 +559,7 @@ def testNonTransposeGemm(
 
 @require_e2e
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
+@param_bool("use_global_to_shared", "global_to_shared")
 @pytest.mark.parametrize(
     "mfma_variant, threads_per_wave",
     [
@@ -569,6 +570,7 @@ def testNonTransposeGemm(
 )
 def testPingPongGemm(
     shape: tuple[int],
+    use_global_to_shared: bool,
     mfma_variant: MMAType,
     threads_per_wave: int,
     run_bench,
@@ -647,6 +649,7 @@ def testPingPongGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_global_to_shared=use_global_to_shared,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)

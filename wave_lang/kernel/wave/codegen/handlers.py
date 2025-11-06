@@ -1633,9 +1633,6 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if wait_async_ops:
-        waitcnt(0)
-
     if tensor_wait:
         # TODO(megan.kuo): Use rocdl intrinsic when iree has support
         c0 = arith_d.constant(IntegerType.get_signless(16), 0)

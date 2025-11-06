@@ -75,6 +75,7 @@ Values: 0xAB where:
 class SchedReorderStrategy(Enum):
     NONE = 0x00
     TWO_PP_CLUSTER = 0x220
+    ASYNC_TWO_PP_CLUSTER = 0x2201
     MXFP4_PP_CLUSTER = 0x101
 
 
@@ -98,7 +99,8 @@ class CompatibleBlockSize:
     mma_type: type
 
 
-twoPPConfig = CompatibleBlockSize(128, 256, 64, 16, False, MMA)
+twoPPConfig = CompatibleBlockSize(128, 128, 64, 16, False, MMA)
+asyncTwoPPConfig = CompatibleBlockSize(128, 128, 64, 16, True, MMA)
 MXFP4PPConfig = CompatibleBlockSize(256, 128, 256, 4, False, ScaledMMA)
 
 
@@ -328,7 +330,7 @@ def _slice_node_list(node_list, reduction_expand_size, num_slices, reduction_dim
         start_idx = lower_bound_k_id * nodes_per_k_dim
         end_idx = upper_bound_k_id * nodes_per_k_dim
 
-        sliced_nodes.append(node_list[start_idx:end_idx])
+        sliced_nodes.append(sorted_nodes[start_idx:end_idx])
 
     return sliced_nodes
 
@@ -550,6 +552,16 @@ def select_reorder_strategy(
     ):
         return SchedReorderStrategy.TWO_PP_CLUSTER
     elif is_compatible_strategy(
+        mTile,
+        nTile,
+        kTile,
+        mma_bitwidth,
+        use_global_to_shared,
+        mma_type,
+        asyncTwoPPConfig,
+    ):
+        return SchedReorderStrategy.ASYNC_TWO_PP_CLUSTER
+    elif is_compatible_strategy(
         mTile, nTile, kTile, mma_bitwidth, use_global_to_shared, mma_type, MXFP4PPConfig
     ):
         return SchedReorderStrategy.MXFP4_PP_CLUSTER
@@ -626,6 +638,92 @@ def transform_two_PP_clusters(
     barrier_op = WorkgroupBarrier().add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, local_write_rhs))
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+
+    # 4th cluster mma_slice[1].
+    prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
+    prio_op.location = context_location
+    clusters.append(insert_op_before(prio_op, sliced_mma_nodes[1]))
+    clusters.append(sliced_mma_nodes[1])
+    prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
+    prio_op.location = context_location
+    clusters.append(insert_op_after(prio_op, sliced_mma_nodes[1]))
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+
+    return clusters
+
+
+def transform_async_two_PP_clusters(
+    mma_nodes,
+    local_load_lhs,
+    local_load_rhs,
+    global_to_shared_lhs,
+    global_to_shared_rhs,
+):
+    num_slices = 2
+    sliced_mma_nodes, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
+        mma_nodes, local_load_lhs, local_load_rhs, num_slice=num_slices
+    )
+    # Check that we have valid slice size for local_loads and mmas.
+    assert len(sliced_mma_nodes) == len(sliced_local_load_rhs)
+    assert len(sliced_mma_nodes) == len(sliced_local_load_lhs)
+    assert len(sliced_mma_nodes) == num_slices
+
+    context_location = mma_nodes and mma_nodes[0].location
+
+    clusters = []
+    tmp_graph = fx.Graph()
+    # 1st cluster interleaved local and global reads.
+    clusters.append(sliced_local_load_lhs[0])
+    clusters.append(sliced_local_load_rhs[0])
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, sliced_local_load_rhs[0]))
+
+    clusters.append(global_to_shared_lhs)
+    clusters.append(global_to_shared_rhs)
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, global_to_shared_rhs))
+
+    barrier_op = WorkgroupBarrier().add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+
+    # 2nd cluster mma_slice[0].
+    prio_op = SetWavePrio(1).add_to_graph(tmp_graph)
+    prio_op.location = context_location
+    clusters.append(insert_op_before(prio_op, sliced_mma_nodes[0]))
+    clusters.append(sliced_mma_nodes[0])
+    prio_op = SetWavePrio(0).add_to_graph(tmp_graph)
+    prio_op.location = context_location
+    clusters.append(insert_op_after(prio_op, sliced_mma_nodes[0]))
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+    barrier_op = SharedMemoryBarrier().add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+
+    # 3rd cluster local load 2nd slice.
+    clusters.append(sliced_local_load_lhs[1])
+    clusters.append(sliced_local_load_rhs[1])
+    barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, sliced_local_load_rhs[1]))
+    barrier_op = SharedMemoryBarrier().add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, clusters[-1].op))
@@ -808,6 +906,16 @@ def schedule_reordering(
         ):
             continue
 
+        # Early exit if cannot find either operand's local write or global loads.
+        if use_global_to_shared and any(
+            not memory_op
+            for memory_op in [
+                global_to_shared_lhs,
+                global_to_shared_rhs,
+            ]
+        ):
+            continue
+
         local_load_lhs_scale = None
         local_load_rhs_scale = None
         local_write_lhs_scale = None
@@ -886,6 +994,16 @@ def schedule_reordering(
                 global_load_rhs,
                 local_write_lhs,
                 local_write_rhs,
+            )
+            insert_prefetch_loop_barriers(custom_iterate, graph, clusters)
+        elif reorder_strategy == SchedReorderStrategy.ASYNC_TWO_PP_CLUSTER:
+            # continue
+            clusters = transform_async_two_PP_clusters(
+                mma_nodes,
+                local_load_lhs,
+                local_load_rhs,
+                global_to_shared_lhs,
+                global_to_shared_rhs,
             )
             insert_prefetch_loop_barriers(custom_iterate, graph, clusters)
         elif reorder_strategy == SchedReorderStrategy.MXFP4_PP_CLUSTER:

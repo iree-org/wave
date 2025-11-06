@@ -464,7 +464,6 @@ def packed_mxfp4_global_to_lds_test():
 
     # Steady State
     # CHECK:          scf.for
-    # CHECK:            rocdl.s.waitcnt
     # CHECK:            amdgpu.lds_barrier
 
     # Steady state local loads
