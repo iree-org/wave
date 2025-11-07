@@ -122,6 +122,10 @@ def insert_after(nodes: Any, op: Any): ...
 
 
 @define_schedule_op
+def reorder_graph(loop: Any, clusters: Any): ...
+
+
+@define_schedule_op
 def pipeline(iterate: Sequence[fx.Node]): ...
 
 
@@ -334,6 +338,105 @@ class InsertAfter(CustomScheduleOp):
             result_nodes,
             cls.schedule_op_name,
         )
+
+
+@dataclass
+class ReorderGraph(CustomScheduleOp):
+    loop: Any
+    clusters: Any
+    schedule_op_name = "reorder_graph"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        loop: Any,
+        clusters: Any,
+    ):
+        from ..wave.schedule_reordering import reorder_graph as reorder_graph_impl
+
+        breakpoint()
+        # Get the iterate node from the proxy
+        assert hasattr(
+            loop, "node"
+        ), f"Expected 'loop' to be a proxy object with a 'node' attribute, but got type: {type(loop).__name__}"
+        loop_result = get_proxy_result(loop.node)
+        assert loop_result is not None, "Loop must have a result"
+        assert len(loop_result) > 0, "Loop must have at least one element"
+
+        # Get the iterate's subgraph (this will be the KERNEL stage after pipelining)
+        iterate_node = loop_result[0]
+        custom_iterate = get_custom(iterate_node)
+        subgraph_name = custom_iterate.subgraph_name
+
+        # Validate that we're operating on a pipelined kernel
+        # After pipelining, the kernel subgraph is always named "pipelined_iterate"
+        if subgraph_name != "pipelined_iterate":
+            logger.warning(
+                f"reorder_graph expects a pipelined loop with subgraph name 'pipelined_iterate', "
+                f"but got '{subgraph_name}'. This may be an unpipelined loop or a reordered subgraph. "
+                f"Make sure you've called pipeline() before reorder_graph()."
+            )
+            # Allow it to proceed anyway for flexibility, but warn the user
+
+        subgraph = kernel_trace.get_subgraph(subgraph_name)
+        logger.info(
+            f"Reordering subgraph: {subgraph_name} (nodes in subgraph: {len(list(subgraph.nodes))})"
+        )
+
+        # Extract the actual cluster nodes from proxies
+        # clusters should be a list of nodes/operations
+        cluster_nodes = []
+        if hasattr(clusters, "node"):
+            # If clusters is a single proxy
+            clusters_result = get_proxy_result(clusters.node)
+            if clusters_result:
+                cluster_nodes = clusters_result
+        elif isinstance(clusters, (list, tuple)):
+            # If clusters is a list of proxies or nodes
+            for item in clusters:
+                if hasattr(item, "node"):
+                    result = get_proxy_result(item.node)
+                    if result:
+                        cluster_nodes.append(result)
+                else:
+                    cluster_nodes.append(item)
+        else:
+            raise ValueError(f"Unexpected clusters type: {type(clusters)}")
+
+        logger.info(f"Reordering with {len(cluster_nodes)} cluster items")
+
+        # Apply the reordering to the subgraph
+        breakpoint()
+        reordered_subgraph = reorder_graph_impl(subgraph, cluster_nodes)
+
+        if reordered_subgraph is None:
+            logger.warning("Failed to reorder graph, skipping reordering")
+            return empty_proxy("reorder_graph_failed")
+
+        # Replace the old subgraph with the reordered one
+        reordered_subgraph.parent_op = subgraph.parent_op
+        original_subgraph_name = subgraph_name
+        reordered_subgraph_name = f"reordered_{original_subgraph_name}"
+
+        # Add the new subgraph and update references
+        kernel_trace.add_subgraph(reordered_subgraph_name, reordered_subgraph)
+        kernel_trace.get_root_graph().subgraphs[
+            reordered_subgraph_name
+        ] = reordered_subgraph
+        custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
+
+        # Remove the old subgraph
+        del kernel_trace.region_graph.subgraphs[original_subgraph_name]
+        del kernel_trace.get_root_graph().subgraphs[original_subgraph_name]
+
+        logger.info(
+            f"Successfully reordered graph: {original_subgraph_name} -> {reordered_subgraph_name}"
+        )
+
+        return empty_proxy("reorder_graph_success")
 
 
 @dataclass
