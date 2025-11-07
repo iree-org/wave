@@ -106,6 +106,10 @@ def get_node_by_tag_and_type(tag: str, node_type: Any): ...
 
 
 @define_schedule_op
+def get_nodes_in_subgraph(loop: Any, tag: str = None, node_type: Any = None): ...
+
+
+@define_schedule_op
 def partition_by_address_space(node: Any, address_space: Any): ...
 
 
@@ -163,6 +167,70 @@ class GetNodeByTag(CustomScheduleOp):
         return create_schedule_proxy(
             region_graph,
             real_result,
+            cls.schedule_op_name,
+        )
+
+
+@dataclass
+class GetNodesInSubgraph(CustomScheduleOp):
+    loop: Any
+    tag: str = None
+    node_type: Any = None
+    schedule_op_name = "get_nodes_in_subgraph"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        loop: Any,
+        tag: str = None,
+        node_type: Any = None,
+    ):
+        # Get the iterate node from the proxy
+        assert hasattr(
+            loop, "node"
+        ), f"Expected 'loop' to be a proxy object with a 'node' attribute"
+        loop_result = get_proxy_result(loop.node)
+        assert loop_result is not None, "Loop must have a result"
+        assert len(loop_result) > 0, "Loop must have at least one element"
+
+        iterate_node = loop_result[0]
+        custom_iterate = get_custom(iterate_node)
+        subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
+
+        # Filter nodes in the subgraph
+        if tag and node_type:
+            nodes = [
+                node
+                for node in subgraph.nodes
+                if hasattr(get_custom(node), "tag")
+                and get_custom(node).tag == tag
+                and isinstance(get_custom(node), node_type)
+            ]
+        elif tag:
+            nodes = [
+                node
+                for node in subgraph.nodes
+                if hasattr(get_custom(node), "tag") and get_custom(node).tag == tag
+            ]
+        elif node_type:
+            nodes = [
+                node
+                for node in subgraph.nodes
+                if isinstance(get_custom(node), node_type)
+            ]
+        else:
+            nodes = list(subgraph.nodes)
+
+        logger.info(
+            f"Found {len(nodes)} nodes in subgraph '{custom_iterate.subgraph_name}' with tag='{tag}', type={node_type}"
+        )
+
+        return create_schedule_proxy(
+            region_graph,
+            nodes,
             cls.schedule_op_name,
         )
 
@@ -369,22 +437,7 @@ class ReorderGraph(CustomScheduleOp):
         # Get the iterate's subgraph (this will be the KERNEL stage after pipelining)
         iterate_node = loop_result[0]
         custom_iterate = get_custom(iterate_node)
-        subgraph_name = custom_iterate.subgraph_name
-
-        # Validate that we're operating on a pipelined kernel
-        # After pipelining, the kernel subgraph is always named "pipelined_iterate"
-        if subgraph_name != "pipelined_iterate":
-            logger.warning(
-                f"reorder_graph expects a pipelined loop with subgraph name 'pipelined_iterate', "
-                f"but got '{subgraph_name}'. This may be an unpipelined loop or a reordered subgraph. "
-                f"Make sure you've called pipeline() before reorder_graph()."
-            )
-            # Allow it to proceed anyway for flexibility, but warn the user
-
-        subgraph = kernel_trace.get_subgraph(subgraph_name)
-        logger.info(
-            f"Reordering subgraph: {subgraph_name} (nodes in subgraph: {len(list(subgraph.nodes))})"
-        )
+        subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
 
         # Extract the actual cluster nodes from proxies
         # clusters should be a list of nodes/operations
@@ -418,7 +471,7 @@ class ReorderGraph(CustomScheduleOp):
 
         # Replace the old subgraph with the reordered one
         reordered_subgraph.parent_op = subgraph.parent_op
-        original_subgraph_name = subgraph_name
+        original_subgraph_name = custom_iterate.subgraph_name
         reordered_subgraph_name = f"reordered_{original_subgraph_name}"
 
         # Add the new subgraph and update references
