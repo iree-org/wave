@@ -109,8 +109,9 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
         assert (
             len(lonely_waits) == 0
         ), "Wait barrier appear more than once before any signals, this is a serious bug."
-        assert (
-            len(signals) == 0
+        assert len(signals) <= 1, "Only -1 barrier ID is supported on gfx120x."
+        assert not signals.get(
+            -1
         ), "All signals and waits should be paired, exist some leftover signals, this is a serious bug."
 
     def optimize(
@@ -126,9 +127,9 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
         barrier = is_barrier_between(producer, consumer, barId)
 
         if barrier is None:
-            with producer.graph.inserting_after(producer):
+            with consumer.graph.inserting_before(consumer):
                 SharedMemoryBarrierSignal(barId).add_to_graph(
-                    producer.graph, loc=get_custom(producer).location
+                    consumer.graph, loc=get_custom(consumer).location
                 )
             with consumer.graph.inserting_before(consumer):
                 SharedMemoryBarrierWait(barId).add_to_graph(
