@@ -11,6 +11,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
     run_test,
 )
 from wave_lang.kernel.wave.templates.gemm import (
+    get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
 )
 
@@ -1620,60 +1621,20 @@ def test_gemm_two_cluster_pingpong():
 
 @run_test
 def test_gemm_two_async_cluster_pingpong():
-    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
-
-    constraints += [
-        tkw.HardwareConstraint(
-            threads_per_wave=64,
-            mma_type=tkw.MMAType.F32_16x16x16_F16,
-        )
-    ]
-
-    @tkw.wave(constraints)
-    def gemm_two_async_cluster_pingpong(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
-    ):
-        c_reg = tkl.Register[M, N, tkl.f32](0.0)
-
-        @tkw.iterate(K, init_args=[c_reg])
-        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            a_reg = tkw.read(a)
-            b_reg = tkw.read(b)
-            acc = tkw.mma(a_reg, b_reg, acc)
-            return acc
-
-        tkw.write(repeat, c)
-
+    shape = (4096, 4096, 4096)
+    dynamic_dims = None
+    mfma_variant = tkw.MMAType.F32_16x16x16_F16
+    block_shape = (128, 128, 64)
+    waves_per_block = (4, 2)
+    gemm, hyperparams, _ = get_gemm_kernel(
+        shape,
+        dynamic_dims,
+        mfma_variant,
+        block_shape=block_shape,
+        waves_per_block=waves_per_block,
+    )
     options = WaveCompileOptions(
-        subs={
-            M: 4096,
-            N: 4096,
-            K: 4096,
-            BLOCK_M: 128,
-            BLOCK_N: 128,
-            BLOCK_K: 64,
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-            READ_SHARED_DELAY: 1,
-            WRITE_SHARED_DELAY: 1,
-            READ_GLOBAL_DELAY: 2,
-            WRITE_GLOBAL_DELAY: 2,
-            GLOBAL_TO_SHARED_DELAY: 2,
-            MMA_DELAY: 1,
-            VALU_DELAY: 1,
-            SHUFFLE_DELAY: 1,
-            SHARED_MEMORY_UNITS: 4,
-            GLOBAL_MEMORY_UNITS: 4,
-            MMA_UNITS: 4,
-            VALU_UNITS: 8,
-            SHUFFLE_UNITS: 8,
-        },
+        subs=hyperparams,
         target="gfx950",
         canonicalize=True,
         schedule=SchedulingType.PREFETCH,
@@ -1681,13 +1642,11 @@ def test_gemm_two_async_cluster_pingpong():
         use_global_to_shared=True,
     )
 
-    gemm_two_async_cluster_pingpong = wave_compile(
-        options, gemm_two_async_cluster_pingpong
-    )
+    gemm_two_async_cluster_pingpong = wave_compile(options, gemm)
     print(gemm_two_async_cluster_pingpong.asm)
     # CHECK-LABEL:  gemm_two_async_cluster_pingpong
     # CHECK-DAG:      #[[MAP:.+]] = affine_map<()[s0, s1] -> (s1 * 4 + s0 floordiv 64)>
-    # CHECK:          func.func @gemm_two_async_cluster_pingpong
+    # CHECK:          func.func @gemm
 
     # Warp High and Warp Lo computation
     # CHECK:         %[[FLAT_WAVE_ID:.+]] = affine.apply #[[MAP]]()[%thread_id_x, %thread_id_y]

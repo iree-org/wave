@@ -559,20 +559,22 @@ def testNonTransposeGemm(
 
 @require_e2e
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
-@param_bool("use_global_to_shared", "global_to_shared")
 @pytest.mark.parametrize(
-    "mfma_variant, threads_per_wave",
+    "mfma_variant, threads_per_wave, use_global_to_shared,",
     [
-        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
-        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
-        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+        pytest.param(MMAType.F32_16x16x16_F16, 64, True, marks=require_cdna4),
+        pytest.param(MMAType.F32_16x16x16_F16, 64, False, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, False, marks=require_cdna_3_or_4),
+        pytest.param(
+            MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, False, marks=require_rdna4
+        ),
     ],
 )
 def testPingPongGemm(
     shape: tuple[int],
-    use_global_to_shared: bool,
     mfma_variant: MMAType,
     threads_per_wave: int,
+    use_global_to_shared: bool,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,

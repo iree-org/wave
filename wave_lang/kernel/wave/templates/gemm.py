@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import torch
-from typing import Sequence
+from typing import Sequence, Optional
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -23,9 +23,22 @@ def get_gemm_kernel(
     mfma_variant: MMAType,
     dtype: torch.dtype = torch.float16,
     threads_per_wave: int = 64,
+    block_shape: Optional[tuple[int, int, int]] = None,
+    waves_per_block: Optional[tuple[int, int, int]] = None,
 ):
     if not isinstance(dynamic_dims, Sequence):
         dynamic_dims = (dynamic_dims,) * 3
+
+    if not block_shape:
+        # BLOCK_M, BLOCK_N, BLOCK_K
+        block_shape = (64, 64, 32)
+
+    if not waves_per_block:
+        # WAVE_M, WAVE_N
+        waves_per_block = (2, 2)
+
+    assert len(block_shape) == 3, "block_shape needs to be rank 3 for M, N, K."
+    assert len(waves_per_block) == 2, "waves_per_block neds to be rank 2 for M, N."
 
     # Input sizes
     M = tkl.sym.M
@@ -42,8 +55,8 @@ def get_gemm_kernel(
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / waves_per_block[0])]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / waves_per_block[1])]
 
     constraints += [
         tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
@@ -85,9 +98,9 @@ def get_gemm_kernel(
 
     hyperparams = {
         ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-        BLOCK_K: 32,
+        BLOCK_M: block_shape[0],
+        BLOCK_N: block_shape[1],
+        BLOCK_K: block_shape[2],
         M: shape[0],
         N: shape[1],
         K: shape[2],
