@@ -2084,7 +2084,7 @@ def ref_gemm_prefetch(is_debug=False):
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
     constraints += [
@@ -2146,21 +2146,25 @@ def ref_gemm_prefetch(is_debug=False):
                 ],
             )
 
-        breakpoint()
-
-        # now get all the point again, but since it is pipelined, we only want something from the pipeline_stage.KERNEL
+        # now get all the nodes again, but only from the pipelined kernel subgraph
         k_loop = tkw.get_node_by_tag("k_loop")
-        load_a = tkw.get_node_by_tag_and_type("read_a", tkw.Read)
+
+        # Use get_nodes_in_subgraph to get nodes only from the KERNEL stage
+        load_a = tkw.get_nodes_in_subgraph(k_loop, tag="read_a", node_type=tkw.Read)
         global_load_a, shared_load_a = tkw.partition_by_address_space(
             load_a, GLOBAL_ADDRESS_SPACE
         )
-        shared_write_a = tkw.get_node_by_tag_and_type("read_a", tkw.Write)
-        load_b = tkw.get_node_by_tag_and_type("read_b", tkw.Read)
+        shared_write_a = tkw.get_nodes_in_subgraph(
+            k_loop, tag="read_a", node_type=tkw.Write
+        )
+        load_b = tkw.get_nodes_in_subgraph(k_loop, tag="read_b", node_type=tkw.Read)
         global_load_b, shared_load_b = tkw.partition_by_address_space(
             load_b, GLOBAL_ADDRESS_SPACE
         )
-        shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
-        mma = tkw.get_node_by_tag("mma")
+        shared_write_b = tkw.get_nodes_in_subgraph(
+            k_loop, tag="read_b", node_type=tkw.Write
+        )
+        mma = tkw.get_nodes_in_subgraph(k_loop, tag="mma")
 
         # Partition and wrap MMA operations
         mma_0, mma_1 = tkw.partition_by_dim(mma, dim=K, factor=2)
@@ -2171,27 +2175,37 @@ def ref_gemm_prefetch(is_debug=False):
             shared_load_b, dim=K, factor=2
         )
 
-        # Wrap with priority operations
-        mma_0 = tkw.insert_before(mma_0, tkw.SetWavePrio(1))
-        mma_0 = tkw.insert_after(mma_0, tkw.SetWavePrio(0))
-        mma_1 = tkw.insert_before(mma_1, tkw.SetWavePrio(1))
-        mma_1 = tkw.insert_after(mma_1, tkw.SetWavePrio(0))
-
         # Create cluster ordering (similar to two_pp_cluster)
+        # Note: B loads should come before A loads for optimal scheduling
+        # Bare scheduling operations are automatically inserted after the previous operation
+        # Use tkw.insert_before() for operations that need to go before (like SetWavePrio before MMA)
         clusters = [
             shared_load_a_0,
             shared_load_b_0,
+            tkw.SchedulingBarrier([]),
             global_load_a,
+            tkw.SchedulingBarrier([]),
             shared_load_a_1,
             shared_load_b_1,
+            tkw.SchedulingBarrier([]),
             global_load_b,
+            tkw.WorkgroupBarrier(),
+            tkw.SchedulingBarrier([]),
+            tkw.insert_before(mma_0, tkw.SetWavePrio(1)),
             mma_0,
+            tkw.SetWavePrio(0),
+            tkw.SharedMemoryBarrier(),
+            tkw.SchedulingBarrier([]),
             shared_write_a,
             shared_write_b,
+            tkw.WorkgroupBarrier(),
+            tkw.SchedulingBarrier([]),
+            tkw.insert_before(mma_1, tkw.SetWavePrio(1)),
             mma_1,
+            tkw.SetWavePrio(0),
+            tkw.SchedulingBarrier([]),
         ]
 
-        breakpoint()
         # Apply reordering to the KERNEL stage only
         tkw.reorder_graph(k_loop, clusters)
 
