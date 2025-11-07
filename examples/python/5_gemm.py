@@ -18,26 +18,11 @@ from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
-from wave_lang.kernel.wave.schedule_reordering import (
-    get_local_loads,
-    get_local_writes,
-    get_global_loads,
-    slice_mma,
-)
-from wave_lang.kernel.ops.wave_schedule_ops import (
-    get_proxy_result,
-    get_custom,
-    create_schedule_proxy,
-)
-from wave_lang.kernel._support.tracing import ScheduleContext
 
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
 )
 
-from wave_lang.kernel.ops.wave_ops import (
-    SetWavePrio,
-)
 
 # Define symbolic dimensions for our matrices
 M = sym.M  # Rows of A and C
@@ -1948,144 +1933,70 @@ def gemm_schedule_test(is_debug=False):
         shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
         mma = tkw.get_node_by_tag("mma")
 
-        # Get the actual fx.Nodes from the Proxies
-        mma_nodes = get_proxy_result(mma)
-        local_load_lhs, local_load_rhs = get_local_loads(mma_nodes)
-        local_write_lhs = get_local_writes(local_load_lhs)
-        local_write_rhs = get_local_writes(local_load_rhs)
-        global_load_lhs = get_global_loads(local_write_lhs)
-        global_load_rhs = get_global_loads(local_write_rhs)
-
-        # Slice MMAs by K iteration
-        num_slice = 2
-        sliced_mma_nodes, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
-            mma_nodes, local_load_lhs, local_load_rhs, num_slice
+        mma_0, mma_1 = tkw.partition_by_dim(mma, dim=K, factor=2)
+        shared_load_a_0, shared_load_a_1 = tkw.partition_by_dim(
+            shared_load_a, dim=K, factor=2
+        )
+        shared_load_b_0, shared_load_b_1 = tkw.partition_by_dim(
+            shared_load_b, dim=K, factor=2
         )
 
-        # Create Proxies for the sliced lists so set_stage can use them
-        sliced_mma_proxies = []
-        sliced_local_load_lhs_proxies = []
-        sliced_local_load_rhs_proxies = []
-        global_load_lhs_proxies = []
-        global_load_rhs_proxies = []
-        local_write_lhs_proxies = []
-        local_write_rhs_proxies = []
+        # Wrap MMA nodes with wave priority operations using the new API
+        mma_0 = tkw.insert_before(mma_0, tkw.SetWavePrio(1))
+        mma_0 = tkw.insert_after(mma_0, tkw.SetWavePrio(0))
 
-        current_context = ScheduleContext.current()
-        region_graph = current_context.region_graph
-
-        k_loop_result = get_proxy_result(k_loop)
-        custom_iterate = get_custom(k_loop_result[0])
-        kernel_trace = current_context.kernel_trace
-        subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
-
-        context_location = mma_nodes and mma_nodes[0].location
-
-        # Create SetWavePrio operations
-        prio_op_1_0 = SetWavePrio(1).add_to_graph(subgraph)
-        prio_op_1_0.location = context_location
-        prio_op_0_0 = SetWavePrio(0).add_to_graph(subgraph)
-        prio_op_0_0.location = context_location
-        prio_op_1_1 = SetWavePrio(1).add_to_graph(subgraph)
-        prio_op_1_1.location = context_location
-        prio_op_0_1 = SetWavePrio(0).add_to_graph(subgraph)
-        prio_op_0_1.location = context_location
-
-        # Wrap MMA chunks with priority and barriers
-        sliced_mma_nodes[0].insert(0, prio_op_1_0)
-        sliced_mma_nodes[0].append(prio_op_0_0)
-
-        sliced_mma_nodes[1].insert(0, prio_op_1_1)
-        sliced_mma_nodes[1].append(prio_op_0_1)
-
-        for i in range(num_slice):
-            sliced_mma_proxies.append(
-                create_schedule_proxy(
-                    region_graph, sliced_mma_nodes[i], f"sliced_mma_{i}"
-                )
-            )
-            sliced_local_load_lhs_proxies.append(
-                create_schedule_proxy(
-                    region_graph, sliced_local_load_lhs[i], f"sliced_local_load_lhs_{i}"
-                )
-            )
-            sliced_local_load_rhs_proxies.append(
-                create_schedule_proxy(
-                    region_graph, sliced_local_load_rhs[i], f"sliced_local_load_rhs_{i}"
-                )
-            )
-        global_load_lhs_proxies = create_schedule_proxy(
-            region_graph, global_load_lhs, f"global_load_lhs"
-        )
-        global_load_rhs_proxies = create_schedule_proxy(
-            region_graph, global_load_rhs, f"global_load_rhs"
-        )
-        local_write_lhs_proxies = create_schedule_proxy(
-            region_graph, local_write_lhs, f"local_write_lhs"
-        )
-        local_write_rhs_proxies = create_schedule_proxy(
-            region_graph, local_write_rhs, f"local_write_rhs"
-        )
-
-        breakpoint()
+        mma_1 = tkw.insert_before(mma_1, tkw.SetWavePrio(1))
+        mma_1 = tkw.insert_after(mma_1, tkw.SetWavePrio(0))
         # Create a pipeline with 2 stages and specify the operations that are overlapping.
         with tkw.pipeline(k_loop) as pipelined_loop:
             pipelined_loop.set_stage(
                 [
-                    (global_load_lhs_proxies,),
-                    (global_load_rhs_proxies,),
+                    (global_load_a,),
+                    (global_load_b,),
                     (),
-                    (local_write_lhs_proxies, local_write_rhs_proxies),
+                    (shared_write_a, shared_write_b),
                     (),
                 ],
             )
             pipelined_loop.set_stage(
                 [
                     (
-                        sliced_local_load_lhs_proxies[0],
-                        sliced_local_load_rhs_proxies[0],
+                        shared_load_a_0,
+                        shared_load_b_0,
                     ),
                     (
-                        sliced_local_load_lhs_proxies[1],
-                        sliced_local_load_rhs_proxies[1],
+                        shared_load_a_1,
+                        shared_load_b_1,
                     ),
-                    (sliced_mma_proxies[0],),
+                    (mma_0,),
                     (),
-                    (sliced_mma_proxies[1],),
+                    (mma_1,),
                 ],
             )
 
             # This replaces manual barrier insertion into node lists
             pipelined_loop.insert_barrier_after(
-                sliced_local_load_rhs_proxies[0], barrier_type="scheduling"
+                shared_load_b_0, barrier_type="scheduling"
             )
             pipelined_loop.insert_barrier_after(
-                global_load_lhs_proxies, barrier_type="scheduling"
+                global_load_a, barrier_type="scheduling"
             )
             pipelined_loop.insert_barrier_after(
-                sliced_local_load_rhs_proxies[1], barrier_type="scheduling"
+                shared_load_b_1, barrier_type="scheduling"
             )
             pipelined_loop.insert_barrier_after(
-                global_load_rhs_proxies, barrier_type="scheduling"
+                global_load_b, barrier_type="scheduling"
+            )
+            pipelined_loop.insert_barrier_after(global_load_b, barrier_type="workgroup")
+            pipelined_loop.insert_barrier_after(mma_0, barrier_type="scheduling")
+            pipelined_loop.insert_barrier_after(mma_0, barrier_type="shared_memory")
+            pipelined_loop.insert_barrier_after(
+                shared_write_b, barrier_type="scheduling"
             )
             pipelined_loop.insert_barrier_after(
-                global_load_rhs_proxies, barrier_type="workgroup"
+                shared_write_b, barrier_type="workgroup"
             )
-            pipelined_loop.insert_barrier_after(
-                sliced_mma_proxies[0], barrier_type="scheduling"
-            )
-            pipelined_loop.insert_barrier_after(
-                sliced_mma_proxies[0], barrier_type="shared_memory"
-            )
-            pipelined_loop.insert_barrier_after(
-                local_write_rhs_proxies, barrier_type="scheduling"
-            )
-            pipelined_loop.insert_barrier_after(
-                local_write_rhs_proxies, barrier_type="workgroup"
-            )
-            pipelined_loop.insert_barrier_after(
-                sliced_mma_proxies[1], barrier_type="scheduling"
-            )
+            pipelined_loop.insert_barrier_after(mma_1, barrier_type="scheduling")
         # cluster0 = (global_load_rhs_proxies, global_load_lhs_proxies)
         # cluster1 = (sliced_local_load_lhs_proxies[0], sliced_local_load_rhs_proxies[0])
         # cluster2 = (sliced_mma_proxies[0],)
@@ -2235,17 +2146,25 @@ def ref_gemm_prefetch(is_debug=False):
                 ],
             )
 
-    # // Ping-pong gemm
-    # pipelined_loop.stagger()
-    # pipelined_loop.body.define_clusters(
-    #     (...),
-    #     (...),
-    # )
+        breakpoint()
 
-    # // No ping-pong gemm
-    # pipelined_loop.body.reorder(
+        # now get all the point again, but since it is pipelined, we only want something from the pipeline_stage.KERNEL
+        k_loop = tkw.get_node_by_tag("k_loop")
+        load_a = tkw.get_node_by_tag_and_type("read_a", tkw.Read)
+        global_load_a, shared_load_a = tkw.partition_by_address_space(
+            load_a, GLOBAL_ADDRESS_SPACE
+        )
+        shared_write_a = tkw.get_node_by_tag_and_type("read_a", tkw.Write)
+        load_b = tkw.get_node_by_tag_and_type("read_b", tkw.Read)
+        global_load_b, shared_load_b = tkw.partition_by_address_space(
+            load_b, GLOBAL_ADDRESS_SPACE
+        )
+        shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
+        mma = tkw.get_node_by_tag("mma")
 
-    # )
+        mma_0, mma_1 = tkw.parition_by_dim(mma, dim=K, factor=2)
+        # now reorder the loop
+        cluster = []
 
     # Define compile options
     M_val, N_val, K_val = shape
