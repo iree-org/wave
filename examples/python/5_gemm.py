@@ -2068,7 +2068,7 @@ def gemm_schedule_test(is_debug=False):
 
 
 def ref_gemm_prefetch(is_debug=False):
-    shape: tuple[int, int, int] = (128, 128, 128)
+    shape: tuple[int, int, int] = (128, 256, 1024)
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16
     # Symbol definitions
     M = tkl.sym.M
@@ -2162,9 +2162,38 @@ def ref_gemm_prefetch(is_debug=False):
         shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
         mma = tkw.get_node_by_tag("mma")
 
-        mma_0, mma_1 = tkw.parition_by_dim(mma, dim=K, factor=2)
-        # now reorder the loop
-        cluster = []
+        # Partition and wrap MMA operations
+        mma_0, mma_1 = tkw.partition_by_dim(mma, dim=K, factor=2)
+        shared_load_a_0, shared_load_a_1 = tkw.partition_by_dim(
+            shared_load_a, dim=K, factor=2
+        )
+        shared_load_b_0, shared_load_b_1 = tkw.partition_by_dim(
+            shared_load_b, dim=K, factor=2
+        )
+
+        # Wrap with priority operations
+        mma_0 = tkw.insert_before(mma_0, tkw.SetWavePrio(1))
+        mma_0 = tkw.insert_after(mma_0, tkw.SetWavePrio(0))
+        mma_1 = tkw.insert_before(mma_1, tkw.SetWavePrio(1))
+        mma_1 = tkw.insert_after(mma_1, tkw.SetWavePrio(0))
+
+        # Create cluster ordering (similar to two_pp_cluster)
+        clusters = [
+            shared_load_a_0,
+            shared_load_b_0,
+            global_load_a,
+            shared_load_a_1,
+            shared_load_b_1,
+            global_load_b,
+            mma_0,
+            shared_write_a,
+            shared_write_b,
+            mma_1,
+        ]
+
+        breakpoint()
+        # Apply reordering to the KERNEL stage only
+        tkw.reorder_graph(k_loop, clusters)
 
     # Define compile options
     M_val, N_val, K_val = shape
@@ -2173,9 +2202,9 @@ def ref_gemm_prefetch(is_debug=False):
             M: M_val,
             N: N_val,
             K: K_val,
-            BLOCK_M: 64,
-            BLOCK_N: 64,
-            BLOCK_K: 32,
+            BLOCK_M: 128,
+            BLOCK_N: 256,
+            BLOCK_K: 64,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
             READ_SHARED_DELAY: 1,
@@ -2210,6 +2239,10 @@ def ref_gemm_prefetch(is_debug=False):
 
     # Run the kernel
     gemm_prefetch(a, b, c)
+
+    if is_debug:
+        with open("gemm_prefetch_ref.mlir", "w") as f:
+            f.write(gemm_prefetch.asm)
 
     expected = torch.matmul(a, b.t()).to(torch.float32)
     assert torch.allclose(c, expected, rtol=1e-2, atol=1e-2)
