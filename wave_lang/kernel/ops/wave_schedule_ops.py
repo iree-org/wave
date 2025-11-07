@@ -110,6 +110,10 @@ def partition_by_address_space(node: Any, address_space: Any): ...
 
 
 @define_schedule_op
+def partition_by_dim(nodes: Any, dim: Any, factor: int): ...
+
+
+@define_schedule_op
 def pipeline(iterate: Sequence[fx.Node]): ...
 
 
@@ -220,6 +224,71 @@ class PartitionByAddressSpace(CustomScheduleOp):
         return create_schedule_proxy(
             region_graph,
             (matched, unmatched),
+            cls.schedule_op_name,
+        )
+
+
+@dataclass
+class PartitionByDim(CustomScheduleOp):
+    nodes: Any
+    dim: Any
+    factor: int
+    schedule_op_name = "partition_by_dim"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        nodes: Any,
+        dim: Any,
+        factor: int,
+    ):
+        # Get the actual nodes from the proxy
+        assert hasattr(
+            nodes, "node"
+        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
+        nodes_list = get_proxy_result(nodes.node)
+        assert nodes_list is not None, "Nodes must have a result"
+        assert len(nodes_list) > 0, "Nodes must have at least one element"
+
+        partitioned_nodes = [[] for _ in range(factor)]
+
+        # Get all unique dimension IDs for the specified dimension
+        dim_ids = set()
+        for node in nodes_list:
+            custom = get_custom(node)
+            if custom.expanded_dims and dim in custom.expanded_dims:
+                dim_ids.add(custom.expanded_dims[dim])
+
+        # Validate that the dimension can be partitioned by the factor
+        dim_expand_size = len(dim_ids)
+        assert dim_expand_size >= factor and dim_expand_size % factor == 0, (
+            f"Dimension {dim} has size {dim_expand_size} which cannot be evenly "
+            f"partitioned by factor {factor}"
+        )
+        assert all(
+            x in dim_ids for x in range(dim_expand_size)
+        ), f"Dimension {dim} IDs are not contiguous: {sorted(dim_ids)}"
+
+        size_of_partition = dim_expand_size // factor
+        for node in nodes_list:
+            custom = get_custom(node)
+            if custom.expanded_dims and dim in custom.expanded_dims:
+                dim_id = custom.expanded_dims[dim]
+                partition_id = dim_id // size_of_partition
+                partitioned_nodes[partition_id].append(node)
+            else:
+                # If node doesn't have the dimension, add to all partitions
+                # This matches behavior for nodes that aren't expanded along this dim
+                for partition in partitioned_nodes:
+                    partition.append(node)
+
+        # Return tuple of partitioned node lists
+        return create_schedule_proxy(
+            region_graph,
+            tuple(partitioned_nodes),
             cls.schedule_op_name,
         )
 
