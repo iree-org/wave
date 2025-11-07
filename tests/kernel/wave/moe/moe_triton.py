@@ -15724,7 +15724,7 @@ def compare_once_block_m_64(M, N, K):
     moe_gemm_triton(a, b, c_tri, sorted_ids, expert_ids, num_tokens_post_pad, topk,
                     block_m=block_m, block_n=block_n, block_k=block_k, group_m=8)
 
-  # verify(c_tri)
+    verify(c_tri)
 
     gemm_kernel, symbols = get_moe_gemm_kernel(
         M,
@@ -15743,7 +15743,6 @@ def compare_once_block_m_64(M, N, K):
     print(expert_ids.shape, expert_ids)
     print(max_num_tokens_padded, max_num_m_blocks)
     print(num_tokens_post_pad)
-    abort()
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15762,7 +15761,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16 = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15778,10 +15777,10 @@ def compare_once_block_m_64(M, N, K):
     )
     options = set_default_run_config(options)
 
- #  mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store = wave_compile(options, gemm_kernel)
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
- #  verify(mlir_c)
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15835,10 +15834,10 @@ def compare_once_block_m_64(M, N, K):
     )
     options = set_default_run_config(options)
 
- #  mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids = wave_compile(options, gemm_kernel)
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
- #  verify(mlir_c)
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15854,10 +15853,10 @@ def compare_once_block_m_64(M, N, K):
     )
     options = set_default_run_config(options)
 
- #  mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db = wave_compile(options, gemm_kernel)
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
- #  verify(mlir_c)
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15873,10 +15872,10 @@ def compare_once_block_m_64(M, N, K):
     )
     options = set_default_run_config(options)
 
-  # mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-  # gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched = wave_compile(options, gemm_kernel)
-  # gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15895,7 +15894,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96 = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15949,10 +15948,10 @@ def compare_once_block_m_64(M, N, K):
     )
     options = set_default_run_config(options)
 
- #  mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb = wave_compile(options, gemm_kernel)
- #  gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
- #  verify(mlir_c)
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15971,7 +15970,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_68 = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_68(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -15987,10 +15986,10 @@ def compare_once_block_m_64(M, N, K):
     )
     options = set_default_run_config(options)
 
-  # mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-  # gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding = wave_compile(options, gemm_kernel)
-  # gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -16009,7 +16008,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8 = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -16028,7 +16027,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -16047,7 +16046,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_34 = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_34(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -16066,7 +16065,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_16_4_waves_padding_40 = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_16_4_waves_padding_40(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -16085,7 +16084,7 @@ def compare_once_block_m_64(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_40 = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_40(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -16101,10 +16100,10 @@ def compare_once_block_m_64(M, N, K):
     )
     options = set_default_run_config(options)
 
-  # mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-  # gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering = wave_compile(options, gemm_kernel)
-  # gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-  # verify(mlir_c)
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
 
     num_warmups = 3
     for i in range(1, num_warmups + 1):
@@ -16112,85 +16111,85 @@ def compare_once_block_m_64(M, N, K):
         c_tri = torch.zeros(M, topk, N, dtype=dtype, device="cuda")
         moe_gemm_triton(a, b, c_tri, sorted_ids, expert_ids, num_tokens_post_pad, topk,
                         block_m=block_m, block_n=block_n, block_k=block_k, group_m=8)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_96(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_130_block_n_128_2_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_130_block_n_128_block_k_64_2_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_68(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_34(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_40(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_16_4_waves_padding_40(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
 
-    num_measurements = 10
+    num_measurements = 20
     for i in range(1, num_measurements + 1):
         print(f"MEASUREMENT {i}/{num_measurements}")
         c_tri = torch.zeros(M, topk, N, dtype=dtype, device="cuda")
         moe_gemm_triton(a, b, c_tri, sorted_ids, expert_ids, num_tokens_post_pad, topk,
                         block_m=block_m, block_n=block_n, block_k=block_k, group_m=8)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_db(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64_lds_sorted_tok_ids(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_96(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_block_k_64(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_130_block_n_128_2_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_130_block_n_128_block_k_64_2_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_96_sched(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_lds_68(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_16_16_16_padding_masked_store(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_34(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_40(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-        mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+        mlir_c.zero_()
         gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_16_4_waves_padding_40(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    #   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    #   gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        mlir_c.zero_()
+        gemm_dtype0_32768_6144_8_64_2_16384_mfma_32_32_8_4_waves_padding_double_buffering(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
 
 
 asm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered = (
@@ -21863,6 +21862,2369 @@ scf.if %out_valid {
     %4 = hal.tensor.import wait(%arg6) => %arg4 : !hal.buffer_view -> tensor<1xi32>
     %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<16384x2x32768xf16>
     %6 = flow.dispatch @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered::@fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered(%0, %1, %2, %3, %4, %5) : (tensor<16384x6144xf16>, tensor<8x32768x6144xf16>, tensor<33911xi32>, tensor<265xi32>, tensor<1xi32>, tensor<16384x2x32768xf16>) -> %5
+    %7 = hal.tensor.barrier join(%6 : tensor<16384x2x32768xf16>) => %arg7 : !hal.fence
+    %8 = hal.tensor.export %7 : tensor<16384x2x32768xf16> -> !hal.buffer_view
+    return %8 : !hal.buffer_view
+  }
+}
+    """
+)
+
+asm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2 = (
+    """
+#translation = #iree_codegen.translation_info<pipeline = None workgroup_size = [256, 1, 1] subgroup_size = 64>
+
+#map_load_row = affine_map<()[s0] -> ((s0 mod 64) mod 16)>
+#map_load_col = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
+
+#map_store_col = affine_map<()[s0] -> ((s0 mod 64) mod 16)>
+#map_store_row = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
+
+module attributes {transform.with_named_sequence} {
+  stream.executable private @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2 {
+    stream.executable.export public @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2 workgroups() -> (index, index, index) {
+      %c67840 = arith.constant 67840 : index
+      %c1 = arith.constant 1 : index
+      stream.return %c67840, %c1, %c1 : index, index, index
+    }
+    builtin.module {
+      func.func @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2(
+          %arg0: !stream.binding,
+          %arg1: !stream.binding,
+          %arg2: !stream.binding,
+          %arg3: !stream.binding,
+          %arg4: !stream.binding,
+          %arg5: !stream.binding
+      ) attributes {translation_info = #translation} {
+        %N = arith.constant 32768 : index
+        %K = arith.constant 6144 : index
+        %EM = arith.constant 33911 : index
+        %top_k = arith.constant 2 : index
+        %num_valid_tokens = arith.constant 32768 : index
+        %GROUP_SIZE_M = arith.constant 8 : index
+        %BLOCK_SIZE_M = arith.constant 128 : index
+        %BLOCK_SIZE_N = arith.constant 128 : index
+        %BLOCK_SIZE_K = arith.constant 64 : index
+
+        %c64 = arith.constant 64 : index
+        %c128 = arith.constant 128 : index
+        %c0 = arith.constant 0 : index
+        %c1 = arith.constant 1 : index
+        %c2 = arith.constant 2 : index
+        %c3 = arith.constant 3 : index
+        %c16 = arith.constant 16 : index
+        %c32 = arith.constant 32 : index
+        %c48 = arith.constant 48 : index
+        %f0 = arith.constant 0.0 : f32
+        %f0_f16 = arith.constant 0.0 : f16
+        %cst_mfma = arith.constant dense<0.000000e+00> : vector<4xf32>
+        %c0_i32 = arith.constant 0 : i32
+
+        %a_ptr = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<16384x6144xf16>
+        %b_ptr = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<8x32768x6144xf16>
+        %c_ptr = stream.binding.subspan %arg5[%c0] : !stream.binding -> memref<16384x2x32768xf16>
+        %sorted_token_ids_ptr = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<33911xi32>
+        %expert_ids_ptr = stream.binding.subspan %arg3[%c0] : !stream.binding -> memref<265xi32>
+        %num_tokens_post_padded_ptr = stream.binding.subspan %arg4[%c0] : !stream.binding -> memref<1xi32>
+
+        // Program ID mapping
+        %pid = gpu.block_id x
+        %num_pid_m = arith.ceildivui %EM, %BLOCK_SIZE_M : index
+        %num_pid_n = arith.ceildivui %N, %BLOCK_SIZE_N : index
+        %num_pid_in_group = arith.muli %GROUP_SIZE_M, %num_pid_n : index
+        %group_id = arith.divui %pid, %num_pid_in_group : index
+        %first_pid_m = arith.muli %group_id, %GROUP_SIZE_M : index
+        %min_group_size_m = arith.subi %num_pid_m, %first_pid_m : index
+        %group_size_m = arith.minui %GROUP_SIZE_M, %min_group_size_m : index
+        %0 = arith.remsi %pid, %num_pid_in_group : index
+        %1 = arith.remsi %0, %group_size_m : index
+        %pid_m = arith.addi %first_pid_m, %1 : index
+        %pid_n = arith.divui %0, %group_size_m : index
+
+        %thread_id = gpu.thread_id x upper_bound 256
+
+        // Early exit check
+        %2 = memref.load %num_tokens_post_padded_ptr[%c0] : memref<1xi32>
+        %num_tokens_post_padded = arith.index_cast %2 : i32 to index
+        %pid_m_offset = arith.muli %pid_m, %BLOCK_SIZE_M : index
+        %should_exit = arith.cmpi sge, %pid_m_offset, %num_tokens_post_padded : index
+        scf.if %should_exit {
+          scf.yield
+        } else {
+          // Determine wave ID (0 or 1)
+          %wave_id = arith.divui %thread_id, %c64 : index
+          %thread_in_wave = arith.remui %thread_id, %c64 : index
+          
+// 2x2 wave layout: wave_m ∈ {0,1}, wave_n ∈ {0,1}
+%wave_m = arith.divui %wave_id, %c2 : index
+%wave_n = arith.remui %wave_id, %c2 : index
+
+// Wave offset for M dimension (0 or 64)
+%wave_offset_m_compute = arith.muli %wave_m, %c64 : index
+
+// Wave offset for N dimension (0 or 64)
+%wave_offset_n = arith.muli %wave_n, %c64 : index
+
+          // Load expert ID
+          %expert_id_val = memref.load %expert_ids_ptr[%pid_m] : memref<265xi32>
+          %expert_id = arith.index_cast %expert_id_val : i32 to index
+
+          // Allocate shared memory with padding
+          // shared_a: 128x68 = 17,408 bytes
+          // shared_b: 128x68 = 17,408 bytes
+          // shared_output: 128x130 = 33,280 bytes
+          // Total: 68,096 bytes (~66.5 KB)
+          %c17408 = arith.constant 17408 : index
+          %c34816 = arith.constant 34816 : index  // 17408 + 17408
+
+          %alloc = memref.alloc() : memref<68096xi8, #gpu.address_space<workgroup>>
+
+          %shared_a = memref.view %alloc[%c0][] : memref<68096xi8, #gpu.address_space<workgroup>>
+            to memref<128x68xf16, #gpu.address_space<workgroup>>
+          %shared_b = memref.view %alloc[%c17408][] : memref<68096xi8, #gpu.address_space<workgroup>>
+            to memref<128x68xf16, #gpu.address_space<workgroup>>
+          %shared_output = memref.view %alloc[%c34816][] : memref<68096xi8, #gpu.address_space<workgroup>>
+            to memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          // Thread-level indices for MFMA loading (within wave)
+          %load_col_base = affine.apply #map_load_col()[%thread_in_wave]
+          %load_row = affine.apply #map_load_row()[%thread_in_wave]
+          %load_row_1 = arith.addi %load_row, %c16 : index
+          %load_row_2 = arith.addi %load_row, %c32 : index
+          %load_row_3 = arith.addi %load_row, %c48 : index
+
+          // Add wave offset for M dimension when loading from shared memory
+          %load_row_wave = arith.addi %load_row, %wave_offset_m_compute : index
+          %load_row_1_wave = arith.addi %load_row_1, %wave_offset_m_compute : index
+          %load_row_2_wave = arith.addi %load_row_2, %wave_offset_m_compute : index
+          %load_row_3_wave = arith.addi %load_row_3, %wave_offset_m_compute : index
+
+          %b_load_row_0 = arith.addi %load_row, %wave_offset_n : index
+          %b_load_row_1 = arith.addi %load_row_1, %wave_offset_n : index
+          %b_load_row_2 = arith.addi %load_row_2, %wave_offset_n : index
+          %b_load_row_3 = arith.addi %load_row_3, %wave_offset_n : index
+
+          // Compute column indices for K dimension (split 64 into 4x16)
+          %load_col_k1 = arith.addi %load_col_base, %c16 : index
+          %load_col_k2 = arith.addi %load_col_base, %c32 : index
+          %load_col_k3 = arith.addi %load_col_base, %c48 : index
+
+          // =========================================================================
+          // PROLOGUE: Load first iteration (K=0)
+          // ALL 256 THREADS COOPERATE TO LOAD A AND B
+          // =========================================================================
+          %k_start_0 = arith.constant 0 : index
+
+          // A loading: 256 threads load 128 rows × 64 cols
+          // Layout: thread_id / 2 = row (0-127), thread_id % 2 = column group (0-1)
+          // Each thread loads 32 elements (half of the 64 columns)
+          %thread_row_a = arith.divui %thread_id, %c2 : index
+          %thread_col_group_a = arith.remui %thread_id, %c2 : index
+          %thread_col_offset_a = arith.muli %thread_col_group_a, %c32 : index
+
+          // Compute token IDs and validity
+          %offs_token_id_base = arith.muli %pid_m, %BLOCK_SIZE_M : index
+          %thread_token_id = arith.addi %offs_token_id_base, %thread_row_a : index
+          %token_id_val = memref.load %sorted_token_ids_ptr[%thread_token_id] : memref<33911xi32>
+          %token_id = arith.index_cast %token_id_val : i32 to index
+          %a_row = arith.divui %token_id, %top_k : index
+
+          // Compute validity mask
+          %token_valid = arith.cmpi slt, %token_id, %num_valid_tokens : index
+          %mask_a = vector.broadcast %token_valid : i1 to vector<32xi1>
+
+          %k_col_start_a = arith.addi %k_start_0, %thread_col_offset_a : index
+
+          // Load A - 32 elements per thread
+          %a_row_vec_0 = vector.transfer_read %a_ptr[%a_row, %k_col_start_a], %f0_f16, %mask_a :
+            memref<16384x6144xf16>, vector<32xf16>
+
+          // Store to shared memory
+vector.store %a_row_vec_0, %shared_a[%thread_row_a, %thread_col_offset_a] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+
+          // B loading: 256 threads load 128 rows × 64 cols
+          // Same layout as A
+          %thread_row_b = arith.divui %thread_id, %c2 : index
+          %thread_col_group_b = arith.remui %thread_id, %c2 : index
+          %thread_col_offset_b = arith.muli %thread_col_group_b, %c32 : index
+
+          %offs_bn_base = arith.muli %pid_n, %BLOCK_SIZE_N : index
+          %b_row_global = arith.addi %offs_bn_base, %thread_row_b : index
+
+          %k_col_start_b = arith.addi %k_start_0, %thread_col_offset_b : index
+
+          // Load B - 32 elements per thread
+          %b_row_vec_0 = vector.transfer_read %b_ptr[%expert_id, %b_row_global, %k_col_start_b], %f0_f16 :
+            memref<8x32768x6144xf16>, vector<32xf16>
+
+          // Store to shared memory
+          vector.store %b_row_vec_0, %shared_b[%thread_row_b, %thread_col_offset_b] :
+            memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+
+          %num_blocks = arith.ceildivui %K, %BLOCK_SIZE_K : index
+          %num_blocks_minus_1 = arith.subi %num_blocks, %c1 : index
+
+          // =========================================================================
+          // MAIN LOOP - 8 MFMAs per wave (4 M-tiles × 2 N-tiles)
+          // =========================================================================
+%result:16 = scf.for %k_block = %c0 to %num_blocks_minus_1 step %c1
+    iter_args(%a00=%cst_mfma, %a01=%cst_mfma, %a02=%cst_mfma, %a03=%cst_mfma,
+              %a10=%cst_mfma, %a11=%cst_mfma, %a12=%cst_mfma, %a13=%cst_mfma,
+              %a20=%cst_mfma, %a21=%cst_mfma, %a22=%cst_mfma, %a23=%cst_mfma,
+              %a30=%cst_mfma, %a31=%cst_mfma, %a32=%cst_mfma, %a33=%cst_mfma)
+    -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>,
+        vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>,
+        vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>,
+        vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+
+            // =========================================================================
+            // FIRST HALF: K[0:16] - Load from shared memory
+            // =========================================================================
+
+            amdgpu.lds_barrier
+
+            // Load A vectors - each wave loads from its M-tile offset
+            %a0 = vector.load %shared_a[%load_row_wave, %load_col_base] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a1 = vector.load %shared_a[%load_row_1_wave, %load_col_base] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a2 = vector.load %shared_a[%load_row_2_wave, %load_col_base] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a3 = vector.load %shared_a[%load_row_3_wave, %load_col_base] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+            // Load B vectors - each wave loads from different N-tiles (only 2 N-tiles per wave now)
+            %b0 = vector.load %shared_b[%b_load_row_0, %load_col_base] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %b1 = vector.load %shared_b[%b_load_row_1, %load_col_base] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b2 = vector.load %shared_b[%b_load_row_2, %load_col_base] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3 = vector.load %shared_b[%b_load_row_3, %load_col_base] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // PREFETCH NEXT ITERATION - ALL THREADS COOPERATE
+            // =========================================================================
+            %k_start = arith.muli %k_block, %BLOCK_SIZE_K : index
+            %k_start_next = arith.addi %k_start, %BLOCK_SIZE_K : index
+            %k_col_start_next_a = arith.addi %k_start_next, %thread_col_offset_a : index
+            %k_col_start_next_b = arith.addi %k_start_next, %thread_col_offset_b : index
+
+            // Prefetch A - 32 elements per thread
+            %a_row_vec_next = vector.transfer_read %a_ptr[%a_row, %k_col_start_next_a], %f0_f16, %mask_a :
+              memref<16384x6144xf16>, vector<32xf16>
+
+            // Prefetch B - 32 elements per thread
+            %b_row_vec_next = vector.transfer_read %b_ptr[%expert_id, %b_row_global, %k_col_start_next_b], %f0_f16 :
+              memref<8x32768x6144xf16>, vector<32xf16>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // LOAD K[16:32] from shared memory
+            // =========================================================================
+            %a0k1 = vector.load %shared_a[%load_row_wave, %load_col_k1] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a1k1 = vector.load %shared_a[%load_row_1_wave, %load_col_k1] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a2k1 = vector.load %shared_a[%load_row_2_wave, %load_col_k1] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a3k1 = vector.load %shared_a[%load_row_3_wave, %load_col_k1] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+            %b0k1 = vector.load %shared_b[%b_load_row_0, %load_col_k1] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %b1k1 = vector.load %shared_b[%b_load_row_1, %load_col_k1] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+%b2k1 = vector.load %shared_b[%b_load_row_2, %load_col_k1] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3k1 = vector.load %shared_b[%b_load_row_3, %load_col_k1] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // MFMA OPERATIONS - FIRST HALF (K[0:16])
+            // =========================================================================
+
+            // M-tile 0, N-tiles 0-1
+            %r00_0 = amdgpu.mfma %a0 * %b0 + %a00 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r01_0 = amdgpu.mfma %a0 * %b1 + %a01 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            // M-tile 1, N-tiles 0-1
+            %r10_0 = amdgpu.mfma %a1 * %b0 + %a10 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r11_0 = amdgpu.mfma %a1 * %b1 + %a11 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            // M-tile 2, N-tiles 0-1
+            %r20_0 = amdgpu.mfma %a2 * %b0 + %a20 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r21_0 = amdgpu.mfma %a2 * %b1 + %a21 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            // M-tile 3, N-tiles 0-1
+            %r30_0 = amdgpu.mfma %a3 * %b0 + %a30 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r31_0 = amdgpu.mfma %a3 * %b1 + %a31 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+// M-tile 0, N-tiles 2-3
+%r02_0 = amdgpu.mfma %a0 * %b2 + %a02 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03_0 = amdgpu.mfma %a0 * %b3 + %a03 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+// M-tile 1, N-tiles 2-3
+%r12_0 = amdgpu.mfma %a1 * %b2 + %a12 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13_0 = amdgpu.mfma %a1 * %b3 + %a13 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+// M-tile 2, N-tiles 2-3
+%r22_0 = amdgpu.mfma %a2 * %b2 + %a22 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23_0 = amdgpu.mfma %a2 * %b3 + %a23 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+// M-tile 3, N-tiles 2-3
+%r32_0 = amdgpu.mfma %a3 * %b2 + %a32 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33_0 = amdgpu.mfma %a3 * %b3 + %a33 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // LOAD K[32:48] from shared memory
+            // =========================================================================
+            %a0k2 = vector.load %shared_a[%load_row_wave, %load_col_k2] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a1k2 = vector.load %shared_a[%load_row_1_wave, %load_col_k2] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a2k2 = vector.load %shared_a[%load_row_2_wave, %load_col_k2] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a3k2 = vector.load %shared_a[%load_row_3_wave, %load_col_k2] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+            %b0k2 = vector.load %shared_b[%b_load_row_0, %load_col_k2] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %b1k2 = vector.load %shared_b[%b_load_row_1, %load_col_k2] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+%b2k2 = vector.load %shared_b[%b_load_row_2, %load_col_k2] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3k2 = vector.load %shared_b[%b_load_row_3, %load_col_k2] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // MFMA K[16:32]
+            // =========================================================================
+            %r00_1 = amdgpu.mfma %a0k1 * %b0k1 + %r00_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r01_1 = amdgpu.mfma %a0k1 * %b1k1 + %r01_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r10_1 = amdgpu.mfma %a1k1 * %b0k1 + %r10_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r11_1 = amdgpu.mfma %a1k1 * %b1k1 + %r11_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r20_1 = amdgpu.mfma %a2k1 * %b0k1 + %r20_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r21_1 = amdgpu.mfma %a2k1 * %b1k1 + %r21_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r30_1 = amdgpu.mfma %a3k1 * %b0k1 + %r30_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r31_1 = amdgpu.mfma %a3k1 * %b1k1 + %r31_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r02_1 = amdgpu.mfma %a0k1 * %b2k1 + %r02_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03_1 = amdgpu.mfma %a0k1 * %b3k1 + %r03_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r12_1 = amdgpu.mfma %a1k1 * %b2k1 + %r12_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13_1 = amdgpu.mfma %a1k1 * %b3k1 + %r13_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r22_1 = amdgpu.mfma %a2k1 * %b2k1 + %r22_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23_1 = amdgpu.mfma %a2k1 * %b3k1 + %r23_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r32_1 = amdgpu.mfma %a3k1 * %b2k1 + %r32_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33_1 = amdgpu.mfma %a3k1 * %b3k1 + %r33_0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // LOAD K[48:64] from shared memory
+            // =========================================================================
+            %a0k3 = vector.load %shared_a[%load_row_wave, %load_col_k3] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a1k3 = vector.load %shared_a[%load_row_1_wave, %load_col_k3] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a2k3 = vector.load %shared_a[%load_row_2_wave, %load_col_k3] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %a3k3 = vector.load %shared_a[%load_row_3_wave, %load_col_k3] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+            %b0k3 = vector.load %shared_b[%b_load_row_0, %load_col_k3] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %b1k3 = vector.load %shared_b[%b_load_row_1, %load_col_k3] :
+                memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+%b2k3 = vector.load %shared_b[%b_load_row_2, %load_col_k3] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3k3 = vector.load %shared_b[%b_load_row_3, %load_col_k3] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+
+            // =========================================================================
+            // MFMA K[32:48]
+            // =========================================================================
+            %r00_2 = amdgpu.mfma %a0k2 * %b0k2 + %r00_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r01_2 = amdgpu.mfma %a0k2 * %b1k2 + %r01_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r10_2 = amdgpu.mfma %a1k2 * %b0k2 + %r10_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r11_2 = amdgpu.mfma %a1k2 * %b1k2 + %r11_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r20_2 = amdgpu.mfma %a2k2 * %b0k2 + %r20_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r21_2 = amdgpu.mfma %a2k2 * %b1k2 + %r21_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r30_2 = amdgpu.mfma %a3k2 * %b0k2 + %r30_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r31_2 = amdgpu.mfma %a3k2 * %b1k2 + %r31_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r02_2 = amdgpu.mfma %a0k2 * %b2k2 + %r02_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03_2 = amdgpu.mfma %a0k2 * %b3k2 + %r03_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r12_2 = amdgpu.mfma %a1k2 * %b2k2 + %r12_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13_2 = amdgpu.mfma %a1k2 * %b3k2 + %r13_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r22_2 = amdgpu.mfma %a2k2 * %b2k2 + %r22_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23_2 = amdgpu.mfma %a2k2 * %b3k2 + %r23_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r32_2 = amdgpu.mfma %a3k2 * %b2k2 + %r32_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33_2 = amdgpu.mfma %a3k2 * %b3k2 + %r33_1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // STORE PREFETCHED DATA
+            // =========================================================================
+            amdgpu.lds_barrier
+
+            // Store A - 32 elements per thread
+vector.store %a_row_vec_next, %shared_a[%thread_row_a, %thread_col_offset_a] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+
+            // Store B - 32 elements per thread
+            vector.store %b_row_vec_next, %shared_b[%thread_row_b, %thread_col_offset_b] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+
+llvm.call_intrinsic "llvm.amdgcn.sched.barrier"(%c0_i32) : (i32) -> ()
+
+            // =========================================================================
+            // MFMA K[48:64] - Final accumulation
+            // =========================================================================
+            %r00 = amdgpu.mfma %a0k3 * %b0k3 + %r00_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r01 = amdgpu.mfma %a0k3 * %b1k3 + %r01_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r10 = amdgpu.mfma %a1k3 * %b0k3 + %r10_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r11 = amdgpu.mfma %a1k3 * %b1k3 + %r11_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r20 = amdgpu.mfma %a2k3 * %b0k3 + %r20_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r21 = amdgpu.mfma %a2k3 * %b1k3 + %r21_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+            %r30 = amdgpu.mfma %a3k3 * %b0k3 + %r30_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %r31 = amdgpu.mfma %a3k3 * %b1k3 + %r31_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r02 = amdgpu.mfma %a0k3 * %b2k3 + %r02_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03 = amdgpu.mfma %a0k3 * %b3k3 + %r03_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r12 = amdgpu.mfma %a1k3 * %b2k3 + %r12_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13 = amdgpu.mfma %a1k3 * %b3k3 + %r13_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r22 = amdgpu.mfma %a2k3 * %b2k3 + %r22_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23 = amdgpu.mfma %a2k3 * %b3k3 + %r23_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r32 = amdgpu.mfma %a3k3 * %b2k3 + %r32_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33 = amdgpu.mfma %a3k3 * %b3k3 + %r33_2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+scf.yield %r00, %r01, %r02, %r03, %r10, %r11, %r12, %r13,
+          %r20, %r21, %r22, %r23, %r30, %r31, %r32, %r33 :
+    vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>,
+    vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>,
+    vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>,
+    vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+
+          }
+
+          // =========================================================================
+          // EPILOGUE
+          // =========================================================================
+
+          amdgpu.lds_barrier
+
+          %a0_last = vector.load %shared_a[%load_row_wave, %load_col_base] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a1_last = vector.load %shared_a[%load_row_1_wave, %load_col_base] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a2_last = vector.load %shared_a[%load_row_2_wave, %load_col_base] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a3_last = vector.load %shared_a[%load_row_3_wave, %load_col_base] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          %b0_last = vector.load %shared_b[%b_load_row_0, %load_col_base] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %b1_last = vector.load %shared_b[%b_load_row_1, %load_col_base] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+%b2_last = vector.load %shared_b[%b_load_row_2, %load_col_base] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3_last = vector.load %shared_b[%b_load_row_3, %load_col_base] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          %a0_k1_last = vector.load %shared_a[%load_row_wave, %load_col_k1] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a1_k1_last = vector.load %shared_a[%load_row_1_wave, %load_col_k1] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a2_k1_last = vector.load %shared_a[%load_row_2_wave, %load_col_k1] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a3_k1_last = vector.load %shared_a[%load_row_3_wave, %load_col_k1] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          %b0_k1_last = vector.load %shared_b[%b_load_row_0, %load_col_k1] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %b1_k1_last = vector.load %shared_b[%b_load_row_1, %load_col_k1] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+%b2_k1_last = vector.load %shared_b[%b_load_row_2, %load_col_k1] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3_k1_last = vector.load %shared_b[%b_load_row_3, %load_col_k1] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          %a0_k2_last = vector.load %shared_a[%load_row_wave, %load_col_k2] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a1_k2_last = vector.load %shared_a[%load_row_1_wave, %load_col_k2] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a2_k2_last = vector.load %shared_a[%load_row_2_wave, %load_col_k2] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a3_k2_last = vector.load %shared_a[%load_row_3_wave, %load_col_k2] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          %b0_k2_last = vector.load %shared_b[%b_load_row_0, %load_col_k2] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %b1_k2_last = vector.load %shared_b[%b_load_row_1, %load_col_k2] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+%b2_k2_last = vector.load %shared_b[%b_load_row_2, %load_col_k2] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3_k2_last = vector.load %shared_b[%b_load_row_3, %load_col_k2] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          %a0_k3_last = vector.load %shared_a[%load_row_wave, %load_col_k3] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a1_k3_last = vector.load %shared_a[%load_row_1_wave, %load_col_k3] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a2_k3_last = vector.load %shared_a[%load_row_2_wave, %load_col_k3] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %a3_k3_last = vector.load %shared_a[%load_row_3_wave, %load_col_k3] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          %b0_k3_last = vector.load %shared_b[%b_load_row_0, %load_col_k3] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %b1_k3_last = vector.load %shared_b[%b_load_row_1, %load_col_k3] :
+              memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+%b2_k3_last = vector.load %shared_b[%b_load_row_2, %load_col_k3] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+%b3_k3_last = vector.load %shared_b[%b_load_row_3, %load_col_k3] :
+    memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+
+          // Compute K[0:16]
+          %r00_0_last = amdgpu.mfma %a0_last * %b0_last + %result#0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r01_0_last = amdgpu.mfma %a0_last * %b1_last + %result#1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r10_0_last = amdgpu.mfma %a1_last * %b0_last + %result#4 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r11_0_last = amdgpu.mfma %a1_last * %b1_last + %result#5 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r20_0_last = amdgpu.mfma %a2_last * %b0_last + %result#8 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r21_0_last = amdgpu.mfma %a2_last * %b1_last + %result#9 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r30_0_last = amdgpu.mfma %a3_last * %b0_last + %result#12 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r31_0_last = amdgpu.mfma %a3_last * %b1_last + %result#13 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r02_0_last = amdgpu.mfma %a0_last * %b2_last + %result#2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03_0_last = amdgpu.mfma %a0_last * %b3_last + %result#3 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r12_0_last = amdgpu.mfma %a1_last * %b2_last + %result#6 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13_0_last = amdgpu.mfma %a1_last * %b3_last + %result#7 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r22_0_last = amdgpu.mfma %a2_last * %b2_last + %result#10 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23_0_last = amdgpu.mfma %a2_last * %b3_last + %result#11 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r32_0_last = amdgpu.mfma %a3_last * %b2_last + %result#14 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33_0_last = amdgpu.mfma %a3_last * %b3_last + %result#15 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          // Compute K[16:32]
+          %r00_1_last = amdgpu.mfma %a0_k1_last * %b0_k1_last + %r00_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r01_1_last = amdgpu.mfma %a0_k1_last * %b1_k1_last + %r01_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r10_1_last = amdgpu.mfma %a1_k1_last * %b0_k1_last + %r10_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r11_1_last = amdgpu.mfma %a1_k1_last * %b1_k1_last + %r11_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r20_1_last = amdgpu.mfma %a2_k1_last * %b0_k1_last + %r20_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r21_1_last = amdgpu.mfma %a2_k1_last * %b1_k1_last + %r21_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r30_1_last = amdgpu.mfma %a3_k1_last * %b0_k1_last + %r30_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r31_1_last = amdgpu.mfma %a3_k1_last * %b1_k1_last + %r31_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r02_1_last = amdgpu.mfma %a0_k1_last * %b2_k1_last + %r02_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03_1_last = amdgpu.mfma %a0_k1_last * %b3_k1_last + %r03_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r12_1_last = amdgpu.mfma %a1_k1_last * %b2_k1_last + %r12_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13_1_last = amdgpu.mfma %a1_k1_last * %b3_k1_last + %r13_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r22_1_last = amdgpu.mfma %a2_k1_last * %b2_k1_last + %r22_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23_1_last = amdgpu.mfma %a2_k1_last * %b3_k1_last + %r23_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r32_1_last = amdgpu.mfma %a3_k1_last * %b2_k1_last + %r32_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33_1_last = amdgpu.mfma %a3_k1_last * %b3_k1_last + %r33_0_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          // Compute K[32:48]
+          %r00_2_last = amdgpu.mfma %a0_k2_last * %b0_k2_last + %r00_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r01_2_last = amdgpu.mfma %a0_k2_last * %b1_k2_last + %r01_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r10_2_last = amdgpu.mfma %a1_k2_last * %b0_k2_last + %r10_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r11_2_last = amdgpu.mfma %a1_k2_last * %b1_k2_last + %r11_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r20_2_last = amdgpu.mfma %a2_k2_last * %b0_k2_last + %r20_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r21_2_last = amdgpu.mfma %a2_k2_last * %b1_k2_last + %r21_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r30_2_last = amdgpu.mfma %a3_k2_last * %b0_k2_last + %r30_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r31_2_last = amdgpu.mfma %a3_k2_last * %b1_k2_last + %r31_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r02_2_last = amdgpu.mfma %a0_k2_last * %b2_k2_last + %r02_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03_2_last = amdgpu.mfma %a0_k2_last * %b3_k2_last + %r03_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r12_2_last = amdgpu.mfma %a1_k2_last * %b2_k2_last + %r12_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13_2_last = amdgpu.mfma %a1_k2_last * %b3_k2_last + %r13_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r22_2_last = amdgpu.mfma %a2_k2_last * %b2_k2_last + %r22_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23_2_last = amdgpu.mfma %a2_k2_last * %b3_k2_last + %r23_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r32_2_last = amdgpu.mfma %a3_k2_last * %b2_k2_last + %r32_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33_2_last = amdgpu.mfma %a3_k2_last * %b3_k2_last + %r33_1_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          // Compute K[48:64] - Final results
+          %r00_final = amdgpu.mfma %a0_k3_last * %b0_k3_last + %r00_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r01_final = amdgpu.mfma %a0_k3_last * %b1_k3_last + %r01_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r10_final = amdgpu.mfma %a1_k3_last * %b0_k3_last + %r10_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r11_final = amdgpu.mfma %a1_k3_last * %b1_k3_last + %r11_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r20_final = amdgpu.mfma %a2_k3_last * %b0_k3_last + %r20_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r21_final = amdgpu.mfma %a2_k3_last * %b1_k3_last + %r21_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          %r30_final = amdgpu.mfma %a3_k3_last * %b0_k3_last + %r30_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %r31_final = amdgpu.mfma %a3_k3_last * %b1_k3_last + %r31_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r02_final = amdgpu.mfma %a0_k3_last * %b2_k3_last + %r02_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r03_final = amdgpu.mfma %a0_k3_last * %b3_k3_last + %r03_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r12_final = amdgpu.mfma %a1_k3_last * %b2_k3_last + %r12_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r13_final = amdgpu.mfma %a1_k3_last * %b3_k3_last + %r13_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r22_final = amdgpu.mfma %a2_k3_last * %b2_k3_last + %r22_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r23_final = amdgpu.mfma %a2_k3_last * %b3_k3_last + %r23_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+%r32_final = amdgpu.mfma %a3_k3_last * %b2_k3_last + %r32_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+%r33_final = amdgpu.mfma %a3_k3_last * %b3_k3_last + %r33_2_last {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+          // =========================================================================
+          // STORE RESULTS
+          // =========================================================================
+
+          %r00_f16 = arith.truncf %r00_final : vector<4xf32> to vector<4xf16>
+          %r01_f16 = arith.truncf %r01_final : vector<4xf32> to vector<4xf16>
+          %r10_f16 = arith.truncf %r10_final : vector<4xf32> to vector<4xf16>
+          %r11_f16 = arith.truncf %r11_final : vector<4xf32> to vector<4xf16>
+          %r20_f16 = arith.truncf %r20_final : vector<4xf32> to vector<4xf16>
+          %r21_f16 = arith.truncf %r21_final : vector<4xf32> to vector<4xf16>
+          %r30_f16 = arith.truncf %r30_final : vector<4xf32> to vector<4xf16>
+          %r31_f16 = arith.truncf %r31_final : vector<4xf32> to vector<4xf16>
+
+%r02_f16 = arith.truncf %r02_final : vector<4xf32> to vector<4xf16>
+%r03_f16 = arith.truncf %r03_final : vector<4xf32> to vector<4xf16>
+%r12_f16 = arith.truncf %r12_final : vector<4xf32> to vector<4xf16>
+%r13_f16 = arith.truncf %r13_final : vector<4xf32> to vector<4xf16>
+%r22_f16 = arith.truncf %r22_final : vector<4xf32> to vector<4xf16>
+%r23_f16 = arith.truncf %r23_final : vector<4xf32> to vector<4xf16>
+%r32_f16 = arith.truncf %r32_final : vector<4xf32> to vector<4xf16>
+%r33_f16 = arith.truncf %r33_final : vector<4xf32> to vector<4xf16>
+
+          // Store indices (wave-aware) - add wave M offset
+          %store_col_base = affine.apply #map_store_col()[%thread_in_wave]
+          %store_row_0_0 = affine.apply #map_store_row()[%thread_in_wave]
+          %store_row_0_0_wave = arith.addi %store_row_0_0, %wave_offset_m_compute : index
+          %store_row_0_1 = arith.addi %store_row_0_0_wave, %c1 : index
+          %store_row_0_2 = arith.addi %store_row_0_0_wave, %c2 : index
+          %store_row_0_3 = arith.addi %store_row_0_0_wave, %c3 : index
+          %store_row_16_0 = arith.addi %store_row_0_0_wave, %c16 : index
+          %store_row_16_1 = arith.addi %store_row_16_0, %c1 : index
+          %store_row_16_2 = arith.addi %store_row_16_0, %c2 : index
+          %store_row_16_3 = arith.addi %store_row_16_0, %c3 : index
+          %store_row_32_0 = arith.addi %store_row_0_0_wave, %c32 : index
+          %store_row_32_1 = arith.addi %store_row_32_0, %c1 : index
+          %store_row_32_2 = arith.addi %store_row_32_0, %c2 : index
+          %store_row_32_3 = arith.addi %store_row_32_0, %c3 : index
+          %store_row_48_0 = arith.addi %store_row_0_0_wave, %c48 : index
+          %store_row_48_1 = arith.addi %store_row_48_0, %c1 : index
+          %store_row_48_2 = arith.addi %store_row_48_0, %c2 : index
+          %store_row_48_3 = arith.addi %store_row_48_0, %c3 : index
+
+          %store_col_0 = arith.addi %store_col_base, %wave_offset_n : index
+          %store_col_1 = arith.addi %store_col_0, %c16 : index
+
+%store_col_2 = arith.addi %store_col_0, %c32 : index
+%store_col_3 = arith.addi %store_col_0, %c48 : index
+
+          // Extract and store
+          %r00_0 = vector.extract %r00_f16[0] : f16 from vector<4xf16>
+          %r00_1 = vector.extract %r00_f16[1] : f16 from vector<4xf16>
+          %r00_2 = vector.extract %r00_f16[2] : f16 from vector<4xf16>
+          %r00_3 = vector.extract %r00_f16[3] : f16 from vector<4xf16>
+
+          %r01_0 = vector.extract %r01_f16[0] : f16 from vector<4xf16>
+          %r01_1 = vector.extract %r01_f16[1] : f16 from vector<4xf16>
+          %r01_2 = vector.extract %r01_f16[2] : f16 from vector<4xf16>
+          %r01_3 = vector.extract %r01_f16[3] : f16 from vector<4xf16>
+
+          %r10_0 = vector.extract %r10_f16[0] : f16 from vector<4xf16>
+          %r10_1 = vector.extract %r10_f16[1] : f16 from vector<4xf16>
+          %r10_2 = vector.extract %r10_f16[2] : f16 from vector<4xf16>
+          %r10_3 = vector.extract %r10_f16[3] : f16 from vector<4xf16>
+
+          %r11_0 = vector.extract %r11_f16[0] : f16 from vector<4xf16>
+          %r11_1 = vector.extract %r11_f16[1] : f16 from vector<4xf16>
+          %r11_2 = vector.extract %r11_f16[2] : f16 from vector<4xf16>
+          %r11_3 = vector.extract %r11_f16[3] : f16 from vector<4xf16>
+
+          %r20_0 = vector.extract %r20_f16[0] : f16 from vector<4xf16>
+          %r20_1 = vector.extract %r20_f16[1] : f16 from vector<4xf16>
+          %r20_2 = vector.extract %r20_f16[2] : f16 from vector<4xf16>
+          %r20_3 = vector.extract %r20_f16[3] : f16 from vector<4xf16>
+
+          %r21_0 = vector.extract %r21_f16[0] : f16 from vector<4xf16>
+          %r21_1 = vector.extract %r21_f16[1] : f16 from vector<4xf16>
+          %r21_2 = vector.extract %r21_f16[2] : f16 from vector<4xf16>
+          %r21_3 = vector.extract %r21_f16[3] : f16 from vector<4xf16>
+
+          %r30_0 = vector.extract %r30_f16[0] : f16 from vector<4xf16>
+          %r30_1 = vector.extract %r30_f16[1] : f16 from vector<4xf16>
+          %r30_2 = vector.extract %r30_f16[2] : f16 from vector<4xf16>
+          %r30_3 = vector.extract %r30_f16[3] : f16 from vector<4xf16>
+
+          %r31_0 = vector.extract %r31_f16[0] : f16 from vector<4xf16>
+          %r31_1 = vector.extract %r31_f16[1] : f16 from vector<4xf16>
+          %r31_2 = vector.extract %r31_f16[2] : f16 from vector<4xf16>
+          %r31_3 = vector.extract %r31_f16[3] : f16 from vector<4xf16>
+
+%r02_0 = vector.extract %r02_f16[0] : f16 from vector<4xf16>
+%r02_1 = vector.extract %r02_f16[1] : f16 from vector<4xf16>
+%r02_2 = vector.extract %r02_f16[2] : f16 from vector<4xf16>
+%r02_3 = vector.extract %r02_f16[3] : f16 from vector<4xf16>
+
+%r03_0 = vector.extract %r03_f16[0] : f16 from vector<4xf16>
+%r03_1 = vector.extract %r03_f16[1] : f16 from vector<4xf16>
+%r03_2 = vector.extract %r03_f16[2] : f16 from vector<4xf16>
+%r03_3 = vector.extract %r03_f16[3] : f16 from vector<4xf16>
+
+%r12_0 = vector.extract %r12_f16[0] : f16 from vector<4xf16>
+%r12_1 = vector.extract %r12_f16[1] : f16 from vector<4xf16>
+%r12_2 = vector.extract %r12_f16[2] : f16 from vector<4xf16>
+%r12_3 = vector.extract %r12_f16[3] : f16 from vector<4xf16>
+
+%r13_0 = vector.extract %r13_f16[0] : f16 from vector<4xf16>
+%r13_1 = vector.extract %r13_f16[1] : f16 from vector<4xf16>
+%r13_2 = vector.extract %r13_f16[2] : f16 from vector<4xf16>
+%r13_3 = vector.extract %r13_f16[3] : f16 from vector<4xf16>
+
+%r22_0 = vector.extract %r22_f16[0] : f16 from vector<4xf16>
+%r22_1 = vector.extract %r22_f16[1] : f16 from vector<4xf16>
+%r22_2 = vector.extract %r22_f16[2] : f16 from vector<4xf16>
+%r22_3 = vector.extract %r22_f16[3] : f16 from vector<4xf16>
+
+%r23_0 = vector.extract %r23_f16[0] : f16 from vector<4xf16>
+%r23_1 = vector.extract %r23_f16[1] : f16 from vector<4xf16>
+%r23_2 = vector.extract %r23_f16[2] : f16 from vector<4xf16>
+%r23_3 = vector.extract %r23_f16[3] : f16 from vector<4xf16>
+
+%r32_0 = vector.extract %r32_f16[0] : f16 from vector<4xf16>
+%r32_1 = vector.extract %r32_f16[1] : f16 from vector<4xf16>
+%r32_2 = vector.extract %r32_f16[2] : f16 from vector<4xf16>
+%r32_3 = vector.extract %r32_f16[3] : f16 from vector<4xf16>
+
+%r33_0 = vector.extract %r33_f16[0] : f16 from vector<4xf16>
+%r33_1 = vector.extract %r33_f16[1] : f16 from vector<4xf16>
+%r33_2 = vector.extract %r33_f16[2] : f16 from vector<4xf16>
+%r33_3 = vector.extract %r33_f16[3] : f16 from vector<4xf16>
+
+          // Store to shared memory (M-tile 0)
+          memref.store %r00_0, %shared_output[%store_row_0_0_wave, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r01_0, %shared_output[%store_row_0_0_wave, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r00_1, %shared_output[%store_row_0_1, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r01_1, %shared_output[%store_row_0_1, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r00_2, %shared_output[%store_row_0_2, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r01_2, %shared_output[%store_row_0_2, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r00_3, %shared_output[%store_row_0_3, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r01_3, %shared_output[%store_row_0_3, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 0, N-tile 2
+memref.store %r02_0, %shared_output[%store_row_0_0_wave, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r02_1, %shared_output[%store_row_0_1, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r02_2, %shared_output[%store_row_0_2, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r02_3, %shared_output[%store_row_0_3, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 0, N-tile 3
+memref.store %r03_0, %shared_output[%store_row_0_0_wave, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r03_1, %shared_output[%store_row_0_1, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r03_2, %shared_output[%store_row_0_2, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r03_3, %shared_output[%store_row_0_3, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          // M-tile 1
+          memref.store %r10_0, %shared_output[%store_row_16_0, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r11_0, %shared_output[%store_row_16_0, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r10_1, %shared_output[%store_row_16_1, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r11_1, %shared_output[%store_row_16_1, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r10_2, %shared_output[%store_row_16_2, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r11_2, %shared_output[%store_row_16_2, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r10_3, %shared_output[%store_row_16_3, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r11_3, %shared_output[%store_row_16_3, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 1, N-tile 2
+memref.store %r12_0, %shared_output[%store_row_16_0, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r12_1, %shared_output[%store_row_16_1, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r12_2, %shared_output[%store_row_16_2, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r12_3, %shared_output[%store_row_16_3, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 1, N-tile 3
+memref.store %r13_0, %shared_output[%store_row_16_0, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r13_1, %shared_output[%store_row_16_1, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r13_2, %shared_output[%store_row_16_2, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r13_3, %shared_output[%store_row_16_3, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          // M-tile 2
+          memref.store %r20_0, %shared_output[%store_row_32_0, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r21_0, %shared_output[%store_row_32_0, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r20_1, %shared_output[%store_row_32_1, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r21_1, %shared_output[%store_row_32_1, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r20_2, %shared_output[%store_row_32_2, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r21_2, %shared_output[%store_row_32_2, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r20_3, %shared_output[%store_row_32_3, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r21_3, %shared_output[%store_row_32_3, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 2, N-tile 2
+memref.store %r22_0, %shared_output[%store_row_32_0, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r22_1, %shared_output[%store_row_32_1, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r22_2, %shared_output[%store_row_32_2, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r22_3, %shared_output[%store_row_32_3, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 2, N-tile 3
+memref.store %r23_0, %shared_output[%store_row_32_0, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r23_1, %shared_output[%store_row_32_1, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r23_2, %shared_output[%store_row_32_2, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r23_3, %shared_output[%store_row_32_3, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          // M-tile 3
+          memref.store %r30_0, %shared_output[%store_row_48_0, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r31_0, %shared_output[%store_row_48_0, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r30_1, %shared_output[%store_row_48_1, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r31_1, %shared_output[%store_row_48_1, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r30_2, %shared_output[%store_row_48_2, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r31_2, %shared_output[%store_row_48_2, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          memref.store %r30_3, %shared_output[%store_row_48_3, %store_col_0] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %r31_3, %shared_output[%store_row_48_3, %store_col_1] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 3, N-tile 2
+memref.store %r32_0, %shared_output[%store_row_48_0, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r32_1, %shared_output[%store_row_48_1, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r32_2, %shared_output[%store_row_48_2, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r32_3, %shared_output[%store_row_48_3, %store_col_2] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+// M-tile 3, N-tile 3
+memref.store %r33_0, %shared_output[%store_row_48_0, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r33_1, %shared_output[%store_row_48_1, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r33_2, %shared_output[%store_row_48_2, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+memref.store %r33_3, %shared_output[%store_row_48_3, %store_col_3] : memref<128x130xf16, #gpu.address_space<workgroup>>
+
+          amdgpu.lds_barrier
+
+// Write to global memory - all 256 threads cooperate
+%c_flat = memref.collapse_shape %c_ptr [[0, 1, 2]] : memref<16384x2x32768xf16> into memref<1073741824xf16>
+
+// Each thread writes 64 elements (one full row)
+// Threads 0-127 write rows 0-127
+// Threads 128-255 also write rows 0-127 (different columns)
+%thread_row = arith.remui %thread_id, %c128 : index
+%thread_wave_pair = arith.divui %thread_id, %c128 : index  // 0 or 1
+
+%out_token = arith.addi %offs_token_id_base, %thread_row : index
+%tok_id_i32 = memref.load %sorted_token_ids_ptr[%out_token] : memref<33911xi32>
+%tok_id = arith.index_cast %tok_id_i32 : i32 to index
+%out_valid = arith.cmpi slt, %tok_id, %num_valid_tokens : index
+
+// ALL threads execute this code, but only valid threads write
+// Threads 0-127 write columns 0-63, threads 128-255 write columns 64-127
+%col_offset_in_shared = arith.muli %thread_wave_pair, %c64 : index
+
+// Load 64 elements from shared memory (all threads)
+%row_data_0 = vector.load %shared_output[%thread_row, %col_offset_in_shared] :
+  memref<128x130xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+%col_offset_in_shared_1 = arith.addi %col_offset_in_shared, %c32 : index
+%row_data_1 = vector.load %shared_output[%thread_row, %col_offset_in_shared_1] :
+  memref<128x130xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+
+// Compute output addresses (all threads)
+%out_base = arith.muli %tok_id, %N : index
+%out_col_base_global = arith.muli %pid_n, %BLOCK_SIZE_N : index
+%out_col_base = arith.addi %out_base, %out_col_base_global : index
+
+// Compute write addresses
+%out_col_0 = arith.addi %out_col_base, %col_offset_in_shared : index
+%out_col_1 = arith.addi %out_col_0, %c32 : index
+
+// Create mask for valid writes
+%mask_32 = vector.broadcast %out_valid : i1 to vector<32xi1>
+
+// Write with mask - only valid threads actually write
+vector.transfer_write %row_data_0, %c_flat[%out_col_0], %mask_32 {in_bounds = [true]} :
+  vector<32xf16>, memref<1073741824xf16>
+vector.transfer_write %row_data_1, %c_flat[%out_col_1], %mask_32 {in_bounds = [true]} :
+  vector<32xf16>, memref<1073741824xf16>
+
+        }
+        return
+      }
+    }
+  }
+  func.func @isolated_benchmark$async(%arg0: !hal.buffer_view, %arg1: !hal.buffer_view, %arg2: !hal.buffer_view, %arg3: !hal.buffer_view, %arg4: !hal.buffer_view, %arg5: !hal.buffer_view, %arg6: !hal.fence, %arg7: !hal.fence) -> !hal.buffer_view {
+    %0 = hal.tensor.import wait(%arg6) => %arg0 : !hal.buffer_view -> tensor<16384x6144xf16>
+    %1 = hal.tensor.import wait(%arg6) => %arg1 : !hal.buffer_view -> tensor<8x32768x6144xf16>
+    %2 = hal.tensor.import wait(%arg6) => %arg2 : !hal.buffer_view -> tensor<33911xi32>
+    %3 = hal.tensor.import wait(%arg6) => %arg3 : !hal.buffer_view -> tensor<265xi32>
+    %4 = hal.tensor.import wait(%arg6) => %arg4 : !hal.buffer_view -> tensor<1xi32>
+    %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<16384x2x32768xf16>
+    %6 = flow.dispatch @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2::@fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2(%0, %1, %2, %3, %4, %5) : (tensor<16384x6144xf16>, tensor<8x32768x6144xf16>, tensor<33911xi32>, tensor<265xi32>, tensor<1xi32>, tensor<16384x2x32768xf16>) -> %5
+    %7 = hal.tensor.barrier join(%6 : tensor<16384x2x32768xf16>) => %arg7 : !hal.fence
+    %8 = hal.tensor.export %7 : tensor<16384x2x32768xf16> -> !hal.buffer_view
+    return %8 : !hal.buffer_view
+  }
+}
+    """
+)
+
+asm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled = (
+    """
+#map = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
+#map1 = affine_map<()[s0] -> (s0 mod 16)>
+#translation = #iree_codegen.translation_info<pipeline = None workgroup_size = [256, 1, 1] subgroup_size = 64>
+module attributes {transform.with_named_sequence} {
+  stream.executable private @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled {
+    stream.executable.export public @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled workgroups() -> (index, index, index) {
+      %c67840 = arith.constant 67840 : index
+      %c1 = arith.constant 1 : index
+      stream.return %c67840, %c1, %c1 : index, index, index
+    }
+    builtin.module {
+      func.func @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding, %arg5: !stream.binding) attributes {translation_info = #translation} {
+        %c32768 = arith.constant 32768 : index
+        %c6144 = arith.constant 6144 : index
+        %c33911 = arith.constant 33911 : index
+        %c2 = arith.constant 2 : index
+        %c32768_0 = arith.constant 32768 : index
+        %c8 = arith.constant 8 : index
+        %c128 = arith.constant 128 : index
+        %c128_1 = arith.constant 128 : index
+        %c64 = arith.constant 64 : index
+        %c64_2 = arith.constant 64 : index
+        %c128_3 = arith.constant 128 : index
+        %c0 = arith.constant 0 : index
+        %c1 = arith.constant 1 : index
+        %c2_4 = arith.constant 2 : index
+        %c3 = arith.constant 3 : index
+        %c16 = arith.constant 16 : index
+        %c32 = arith.constant 32 : index
+        %c48 = arith.constant 48 : index
+        %cst = arith.constant 0.000000e+00 : f32
+        %cst_5 = arith.constant 0.000000e+00 : f16
+        %cst_6 = arith.constant dense<0.000000e+00> : vector<4xf32>
+        %c0_i32 = arith.constant 0 : i32
+        %0 = stream.binding.subspan %arg0[%c0] : !stream.binding -> memref<16384x6144xf16>
+        %1 = stream.binding.subspan %arg1[%c0] : !stream.binding -> memref<8x32768x6144xf16>
+        %2 = stream.binding.subspan %arg5[%c0] : !stream.binding -> memref<16384x2x32768xf16>
+        %3 = stream.binding.subspan %arg2[%c0] : !stream.binding -> memref<33911xi32>
+        %4 = stream.binding.subspan %arg3[%c0] : !stream.binding -> memref<265xi32>
+        %5 = stream.binding.subspan %arg4[%c0] : !stream.binding -> memref<1xi32>
+        %block_id_x = gpu.block_id  x
+        %6 = arith.ceildivui %c33911, %c128 : index
+        %7 = arith.ceildivui %c32768, %c128_1 : index
+        %8 = arith.muli %c8, %7 : index
+        %9 = arith.divui %block_id_x, %8 : index
+        %10 = arith.muli %9, %c8 : index
+        %11 = arith.subi %6, %10 : index
+        %12 = arith.minui %c8, %11 : index
+        %13 = arith.remsi %block_id_x, %8 : index
+        %14 = arith.remsi %13, %12 : index
+        %15 = arith.addi %10, %14 : index
+        %16 = arith.divui %13, %12 : index
+        %thread_id_x = gpu.thread_id  x upper_bound 256
+        %17 = memref.load %5[%c0] : memref<1xi32>
+        %18 = arith.index_cast %17 : i32 to index
+        %19 = arith.muli %15, %c128 : index
+        %20 = arith.cmpi sge, %19, %18 : index
+        scf.if %20 {
+        } else {
+          %21 = arith.divui %thread_id_x, %c64_2 : index
+          %22 = arith.remui %thread_id_x, %c64_2 : index
+          %23 = arith.divui %21, %c2_4 : index
+          %24 = arith.remui %21, %c2_4 : index
+          %25 = arith.muli %23, %c64_2 : index
+          %26 = arith.muli %24, %c64_2 : index
+          %27 = memref.load %4[%15] : memref<265xi32>
+          %28 = arith.index_cast %27 : i32 to index
+          %c17408 = arith.constant 17408 : index
+          %c34816 = arith.constant 34816 : index
+          %alloc = memref.alloc() : memref<68096xi8, #gpu.address_space<workgroup>>
+          %view = memref.view %alloc[%c0][] : memref<68096xi8, #gpu.address_space<workgroup>> to memref<128x68xf16, #gpu.address_space<workgroup>>
+          %view_7 = memref.view %alloc[%c17408][] : memref<68096xi8, #gpu.address_space<workgroup>> to memref<128x68xf16, #gpu.address_space<workgroup>>
+          %view_8 = memref.view %alloc[%c34816][] : memref<68096xi8, #gpu.address_space<workgroup>> to memref<128x130xf16, #gpu.address_space<workgroup>>
+          %29 = affine.apply #map()[%22]
+          %30 = affine.apply #map1()[%22]
+          %31 = arith.addi %30, %c16 : index
+          %32 = arith.addi %30, %c32 : index
+          %33 = arith.addi %30, %c48 : index
+          %34 = arith.addi %30, %25 : index
+          %35 = arith.addi %31, %25 : index
+          %36 = arith.addi %32, %25 : index
+          %37 = arith.addi %33, %25 : index
+          %38 = arith.addi %30, %26 : index
+          %39 = arith.addi %31, %26 : index
+          %40 = arith.addi %32, %26 : index
+          %41 = arith.addi %33, %26 : index
+          %42 = arith.addi %29, %c16 : index
+          %43 = arith.addi %29, %c32 : index
+          %44 = arith.addi %29, %c48 : index
+          %c0_9 = arith.constant 0 : index
+          %45 = arith.divui %thread_id_x, %c2_4 : index
+          %46 = arith.remui %thread_id_x, %c2_4 : index
+          %47 = arith.muli %46, %c32 : index
+          %48 = arith.muli %15, %c128 : index
+          %49 = arith.addi %48, %45 : index
+          %50 = memref.load %3[%49] : memref<33911xi32>
+          %51 = arith.index_cast %50 : i32 to index
+          %52 = arith.divui %51, %c2 : index
+          %53 = arith.cmpi slt, %51, %c32768_0 : index
+          %54 = vector.broadcast %53 : i1 to vector<32xi1>
+          %55 = arith.addi %c0_9, %47 : index
+          %56 = vector.transfer_read %0[%52, %55], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+          vector.store %56, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+          %57 = arith.divui %thread_id_x, %c2_4 : index
+          %58 = arith.remui %thread_id_x, %c2_4 : index
+          %59 = arith.muli %58, %c32 : index
+          %60 = arith.muli %16, %c128_1 : index
+          %61 = arith.addi %60, %57 : index
+          %62 = arith.addi %c0_9, %59 : index
+          %63 = vector.transfer_read %1[%28, %61, %62], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+          vector.store %63, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+          %64 = arith.ceildivui %c6144, %c64 : index
+          %65 = arith.subi %64, %c1 : index
+          %66 = arith.subi %65, %c0 : index
+          %c1_10 = arith.constant 1 : index
+          %67 = arith.subi %c1, %c1_10 : index
+          %68 = arith.addi %66, %67 : index
+          %69 = arith.divui %68, %c1 : index
+          %c8_11 = arith.constant 8 : index
+          %70 = arith.remsi %69, %c8_11 : index
+          %71 = arith.subi %69, %70 : index
+          %72 = arith.muli %71, %c1 : index
+          %73 = arith.addi %c0, %72 : index
+          %74 = arith.muli %c1, %c8_11 : index
+          %75:16 = scf.for %arg6 = %c0 to %73 step %74 iter_args(%arg7 = %cst_6, %arg8 = %cst_6, %arg9 = %cst_6, %arg10 = %cst_6, %arg11 = %cst_6, %arg12 = %cst_6, %arg13 = %cst_6, %arg14 = %cst_6, %arg15 = %cst_6, %arg16 = %cst_6, %arg17 = %cst_6, %arg18 = %cst_6, %arg19 = %cst_6, %arg20 = %cst_6, %arg21 = %cst_6, %arg22 = %cst_6) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+            amdgpu.lds_barrier
+            %281 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %282 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %283 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %284 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %285 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %286 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %287 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %288 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %289 = arith.muli %arg6, %c64 : index
+            %290 = arith.addi %289, %c64 : index
+            %291 = arith.addi %290, %47 : index
+            %292 = arith.addi %290, %59 : index
+            %293 = vector.transfer_read %0[%52, %291], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %294 = vector.transfer_read %1[%28, %61, %292], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %295 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %296 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %297 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %298 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %299 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %300 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %301 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %302 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %303 = amdgpu.mfma %281 * %285 + %arg7 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %304 = amdgpu.mfma %281 * %286 + %arg8 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %305 = amdgpu.mfma %282 * %285 + %arg11 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %306 = amdgpu.mfma %282 * %286 + %arg12 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %307 = amdgpu.mfma %283 * %285 + %arg15 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %308 = amdgpu.mfma %283 * %286 + %arg16 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %309 = amdgpu.mfma %284 * %285 + %arg19 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %310 = amdgpu.mfma %284 * %286 + %arg20 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %311 = amdgpu.mfma %281 * %287 + %arg9 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %312 = amdgpu.mfma %281 * %288 + %arg10 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %313 = amdgpu.mfma %282 * %287 + %arg13 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %314 = amdgpu.mfma %282 * %288 + %arg14 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %315 = amdgpu.mfma %283 * %287 + %arg17 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %316 = amdgpu.mfma %283 * %288 + %arg18 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %317 = amdgpu.mfma %284 * %287 + %arg21 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %318 = amdgpu.mfma %284 * %288 + %arg22 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %319 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %320 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %321 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %322 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %323 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %324 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %325 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %326 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %327 = amdgpu.mfma %295 * %299 + %303 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %328 = amdgpu.mfma %295 * %300 + %304 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %329 = amdgpu.mfma %296 * %299 + %305 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %330 = amdgpu.mfma %296 * %300 + %306 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %331 = amdgpu.mfma %297 * %299 + %307 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %332 = amdgpu.mfma %297 * %300 + %308 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %333 = amdgpu.mfma %298 * %299 + %309 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %334 = amdgpu.mfma %298 * %300 + %310 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %335 = amdgpu.mfma %295 * %301 + %311 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %336 = amdgpu.mfma %295 * %302 + %312 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %337 = amdgpu.mfma %296 * %301 + %313 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %338 = amdgpu.mfma %296 * %302 + %314 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %339 = amdgpu.mfma %297 * %301 + %315 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %340 = amdgpu.mfma %297 * %302 + %316 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %341 = amdgpu.mfma %298 * %301 + %317 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %342 = amdgpu.mfma %298 * %302 + %318 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %343 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %344 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %345 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %346 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %347 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %348 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %349 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %350 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %351 = amdgpu.mfma %319 * %323 + %327 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %352 = amdgpu.mfma %319 * %324 + %328 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %353 = amdgpu.mfma %320 * %323 + %329 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %354 = amdgpu.mfma %320 * %324 + %330 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %355 = amdgpu.mfma %321 * %323 + %331 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %356 = amdgpu.mfma %321 * %324 + %332 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %357 = amdgpu.mfma %322 * %323 + %333 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %358 = amdgpu.mfma %322 * %324 + %334 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %359 = amdgpu.mfma %319 * %325 + %335 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %360 = amdgpu.mfma %319 * %326 + %336 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %361 = amdgpu.mfma %320 * %325 + %337 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %362 = amdgpu.mfma %320 * %326 + %338 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %363 = amdgpu.mfma %321 * %325 + %339 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %364 = amdgpu.mfma %321 * %326 + %340 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %365 = amdgpu.mfma %322 * %325 + %341 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %366 = amdgpu.mfma %322 * %326 + %342 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %293, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %294, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %367 = amdgpu.mfma %343 * %347 + %351 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %368 = amdgpu.mfma %343 * %348 + %352 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %369 = amdgpu.mfma %344 * %347 + %353 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %370 = amdgpu.mfma %344 * %348 + %354 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %371 = amdgpu.mfma %345 * %347 + %355 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %372 = amdgpu.mfma %345 * %348 + %356 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %373 = amdgpu.mfma %346 * %347 + %357 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %374 = amdgpu.mfma %346 * %348 + %358 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %375 = amdgpu.mfma %343 * %349 + %359 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %376 = amdgpu.mfma %343 * %350 + %360 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %377 = amdgpu.mfma %344 * %349 + %361 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %378 = amdgpu.mfma %344 * %350 + %362 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %379 = amdgpu.mfma %345 * %349 + %363 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %380 = amdgpu.mfma %345 * %350 + %364 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %381 = amdgpu.mfma %346 * %349 + %365 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %382 = amdgpu.mfma %346 * %350 + %366 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %c1_12 = arith.constant 1 : index
+            %383 = arith.muli %c1, %c1_12 : index
+            %384 = arith.addi %arg6, %383 : index
+            amdgpu.lds_barrier
+            %385 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %386 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %387 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %388 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %389 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %390 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %391 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %392 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %393 = arith.muli %384, %c64 : index
+            %394 = arith.addi %393, %c64 : index
+            %395 = arith.addi %394, %47 : index
+            %396 = arith.addi %394, %59 : index
+            %397 = vector.transfer_read %0[%52, %395], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %398 = vector.transfer_read %1[%28, %61, %396], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %399 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %400 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %401 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %402 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %403 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %404 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %405 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %406 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %407 = amdgpu.mfma %385 * %389 + %367 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %408 = amdgpu.mfma %385 * %390 + %368 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %409 = amdgpu.mfma %386 * %389 + %369 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %410 = amdgpu.mfma %386 * %390 + %370 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %411 = amdgpu.mfma %387 * %389 + %371 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %412 = amdgpu.mfma %387 * %390 + %372 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %413 = amdgpu.mfma %388 * %389 + %373 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %414 = amdgpu.mfma %388 * %390 + %374 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %415 = amdgpu.mfma %385 * %391 + %375 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %416 = amdgpu.mfma %385 * %392 + %376 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %417 = amdgpu.mfma %386 * %391 + %377 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %418 = amdgpu.mfma %386 * %392 + %378 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %419 = amdgpu.mfma %387 * %391 + %379 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %420 = amdgpu.mfma %387 * %392 + %380 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %421 = amdgpu.mfma %388 * %391 + %381 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %422 = amdgpu.mfma %388 * %392 + %382 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %423 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %424 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %425 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %426 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %427 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %428 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %429 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %430 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %431 = amdgpu.mfma %399 * %403 + %407 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %432 = amdgpu.mfma %399 * %404 + %408 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %433 = amdgpu.mfma %400 * %403 + %409 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %434 = amdgpu.mfma %400 * %404 + %410 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %435 = amdgpu.mfma %401 * %403 + %411 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %436 = amdgpu.mfma %401 * %404 + %412 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %437 = amdgpu.mfma %402 * %403 + %413 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %438 = amdgpu.mfma %402 * %404 + %414 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %439 = amdgpu.mfma %399 * %405 + %415 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %440 = amdgpu.mfma %399 * %406 + %416 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %441 = amdgpu.mfma %400 * %405 + %417 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %442 = amdgpu.mfma %400 * %406 + %418 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %443 = amdgpu.mfma %401 * %405 + %419 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %444 = amdgpu.mfma %401 * %406 + %420 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %445 = amdgpu.mfma %402 * %405 + %421 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %446 = amdgpu.mfma %402 * %406 + %422 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %447 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %448 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %449 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %450 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %451 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %452 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %453 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %454 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %455 = amdgpu.mfma %423 * %427 + %431 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %456 = amdgpu.mfma %423 * %428 + %432 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %457 = amdgpu.mfma %424 * %427 + %433 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %458 = amdgpu.mfma %424 * %428 + %434 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %459 = amdgpu.mfma %425 * %427 + %435 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %460 = amdgpu.mfma %425 * %428 + %436 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %461 = amdgpu.mfma %426 * %427 + %437 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %462 = amdgpu.mfma %426 * %428 + %438 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %463 = amdgpu.mfma %423 * %429 + %439 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %464 = amdgpu.mfma %423 * %430 + %440 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %465 = amdgpu.mfma %424 * %429 + %441 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %466 = amdgpu.mfma %424 * %430 + %442 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %467 = amdgpu.mfma %425 * %429 + %443 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %468 = amdgpu.mfma %425 * %430 + %444 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %469 = amdgpu.mfma %426 * %429 + %445 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %470 = amdgpu.mfma %426 * %430 + %446 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %397, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %398, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %471 = amdgpu.mfma %447 * %451 + %455 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %472 = amdgpu.mfma %447 * %452 + %456 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %473 = amdgpu.mfma %448 * %451 + %457 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %474 = amdgpu.mfma %448 * %452 + %458 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %475 = amdgpu.mfma %449 * %451 + %459 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %476 = amdgpu.mfma %449 * %452 + %460 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %477 = amdgpu.mfma %450 * %451 + %461 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %478 = amdgpu.mfma %450 * %452 + %462 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %479 = amdgpu.mfma %447 * %453 + %463 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %480 = amdgpu.mfma %447 * %454 + %464 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %481 = amdgpu.mfma %448 * %453 + %465 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %482 = amdgpu.mfma %448 * %454 + %466 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %483 = amdgpu.mfma %449 * %453 + %467 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %484 = amdgpu.mfma %449 * %454 + %468 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %485 = amdgpu.mfma %450 * %453 + %469 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %486 = amdgpu.mfma %450 * %454 + %470 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %c2_13 = arith.constant 2 : index
+            %487 = arith.muli %c1, %c2_13 : index
+            %488 = arith.addi %arg6, %487 : index
+            amdgpu.lds_barrier
+            %489 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %490 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %491 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %492 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %493 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %494 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %495 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %496 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %497 = arith.muli %488, %c64 : index
+            %498 = arith.addi %497, %c64 : index
+            %499 = arith.addi %498, %47 : index
+            %500 = arith.addi %498, %59 : index
+            %501 = vector.transfer_read %0[%52, %499], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %502 = vector.transfer_read %1[%28, %61, %500], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %503 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %504 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %505 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %506 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %507 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %508 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %509 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %510 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %511 = amdgpu.mfma %489 * %493 + %471 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %512 = amdgpu.mfma %489 * %494 + %472 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %513 = amdgpu.mfma %490 * %493 + %473 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %514 = amdgpu.mfma %490 * %494 + %474 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %515 = amdgpu.mfma %491 * %493 + %475 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %516 = amdgpu.mfma %491 * %494 + %476 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %517 = amdgpu.mfma %492 * %493 + %477 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %518 = amdgpu.mfma %492 * %494 + %478 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %519 = amdgpu.mfma %489 * %495 + %479 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %520 = amdgpu.mfma %489 * %496 + %480 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %521 = amdgpu.mfma %490 * %495 + %481 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %522 = amdgpu.mfma %490 * %496 + %482 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %523 = amdgpu.mfma %491 * %495 + %483 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %524 = amdgpu.mfma %491 * %496 + %484 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %525 = amdgpu.mfma %492 * %495 + %485 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %526 = amdgpu.mfma %492 * %496 + %486 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %527 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %528 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %529 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %530 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %531 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %532 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %533 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %534 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %535 = amdgpu.mfma %503 * %507 + %511 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %536 = amdgpu.mfma %503 * %508 + %512 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %537 = amdgpu.mfma %504 * %507 + %513 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %538 = amdgpu.mfma %504 * %508 + %514 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %539 = amdgpu.mfma %505 * %507 + %515 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %540 = amdgpu.mfma %505 * %508 + %516 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %541 = amdgpu.mfma %506 * %507 + %517 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %542 = amdgpu.mfma %506 * %508 + %518 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %543 = amdgpu.mfma %503 * %509 + %519 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %544 = amdgpu.mfma %503 * %510 + %520 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %545 = amdgpu.mfma %504 * %509 + %521 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %546 = amdgpu.mfma %504 * %510 + %522 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %547 = amdgpu.mfma %505 * %509 + %523 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %548 = amdgpu.mfma %505 * %510 + %524 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %549 = amdgpu.mfma %506 * %509 + %525 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %550 = amdgpu.mfma %506 * %510 + %526 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %551 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %552 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %553 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %554 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %555 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %556 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %557 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %558 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %559 = amdgpu.mfma %527 * %531 + %535 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %560 = amdgpu.mfma %527 * %532 + %536 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %561 = amdgpu.mfma %528 * %531 + %537 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %562 = amdgpu.mfma %528 * %532 + %538 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %563 = amdgpu.mfma %529 * %531 + %539 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %564 = amdgpu.mfma %529 * %532 + %540 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %565 = amdgpu.mfma %530 * %531 + %541 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %566 = amdgpu.mfma %530 * %532 + %542 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %567 = amdgpu.mfma %527 * %533 + %543 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %568 = amdgpu.mfma %527 * %534 + %544 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %569 = amdgpu.mfma %528 * %533 + %545 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %570 = amdgpu.mfma %528 * %534 + %546 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %571 = amdgpu.mfma %529 * %533 + %547 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %572 = amdgpu.mfma %529 * %534 + %548 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %573 = amdgpu.mfma %530 * %533 + %549 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %574 = amdgpu.mfma %530 * %534 + %550 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %501, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %502, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %575 = amdgpu.mfma %551 * %555 + %559 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %576 = amdgpu.mfma %551 * %556 + %560 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %577 = amdgpu.mfma %552 * %555 + %561 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %578 = amdgpu.mfma %552 * %556 + %562 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %579 = amdgpu.mfma %553 * %555 + %563 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %580 = amdgpu.mfma %553 * %556 + %564 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %581 = amdgpu.mfma %554 * %555 + %565 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %582 = amdgpu.mfma %554 * %556 + %566 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %583 = amdgpu.mfma %551 * %557 + %567 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %584 = amdgpu.mfma %551 * %558 + %568 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %585 = amdgpu.mfma %552 * %557 + %569 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %586 = amdgpu.mfma %552 * %558 + %570 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %587 = amdgpu.mfma %553 * %557 + %571 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %588 = amdgpu.mfma %553 * %558 + %572 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %589 = amdgpu.mfma %554 * %557 + %573 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %590 = amdgpu.mfma %554 * %558 + %574 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %c3_14 = arith.constant 3 : index
+            %591 = arith.muli %c1, %c3_14 : index
+            %592 = arith.addi %arg6, %591 : index
+            amdgpu.lds_barrier
+            %593 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %594 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %595 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %596 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %597 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %598 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %599 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %600 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %601 = arith.muli %592, %c64 : index
+            %602 = arith.addi %601, %c64 : index
+            %603 = arith.addi %602, %47 : index
+            %604 = arith.addi %602, %59 : index
+            %605 = vector.transfer_read %0[%52, %603], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %606 = vector.transfer_read %1[%28, %61, %604], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %607 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %608 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %609 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %610 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %611 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %612 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %613 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %614 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %615 = amdgpu.mfma %593 * %597 + %575 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %616 = amdgpu.mfma %593 * %598 + %576 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %617 = amdgpu.mfma %594 * %597 + %577 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %618 = amdgpu.mfma %594 * %598 + %578 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %619 = amdgpu.mfma %595 * %597 + %579 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %620 = amdgpu.mfma %595 * %598 + %580 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %621 = amdgpu.mfma %596 * %597 + %581 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %622 = amdgpu.mfma %596 * %598 + %582 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %623 = amdgpu.mfma %593 * %599 + %583 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %624 = amdgpu.mfma %593 * %600 + %584 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %625 = amdgpu.mfma %594 * %599 + %585 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %626 = amdgpu.mfma %594 * %600 + %586 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %627 = amdgpu.mfma %595 * %599 + %587 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %628 = amdgpu.mfma %595 * %600 + %588 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %629 = amdgpu.mfma %596 * %599 + %589 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %630 = amdgpu.mfma %596 * %600 + %590 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %631 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %632 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %633 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %634 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %635 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %636 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %637 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %638 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %639 = amdgpu.mfma %607 * %611 + %615 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %640 = amdgpu.mfma %607 * %612 + %616 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %641 = amdgpu.mfma %608 * %611 + %617 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %642 = amdgpu.mfma %608 * %612 + %618 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %643 = amdgpu.mfma %609 * %611 + %619 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %644 = amdgpu.mfma %609 * %612 + %620 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %645 = amdgpu.mfma %610 * %611 + %621 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %646 = amdgpu.mfma %610 * %612 + %622 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %647 = amdgpu.mfma %607 * %613 + %623 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %648 = amdgpu.mfma %607 * %614 + %624 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %649 = amdgpu.mfma %608 * %613 + %625 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %650 = amdgpu.mfma %608 * %614 + %626 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %651 = amdgpu.mfma %609 * %613 + %627 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %652 = amdgpu.mfma %609 * %614 + %628 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %653 = amdgpu.mfma %610 * %613 + %629 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %654 = amdgpu.mfma %610 * %614 + %630 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %655 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %656 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %657 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %658 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %659 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %660 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %661 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %662 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %663 = amdgpu.mfma %631 * %635 + %639 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %664 = amdgpu.mfma %631 * %636 + %640 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %665 = amdgpu.mfma %632 * %635 + %641 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %666 = amdgpu.mfma %632 * %636 + %642 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %667 = amdgpu.mfma %633 * %635 + %643 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %668 = amdgpu.mfma %633 * %636 + %644 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %669 = amdgpu.mfma %634 * %635 + %645 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %670 = amdgpu.mfma %634 * %636 + %646 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %671 = amdgpu.mfma %631 * %637 + %647 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %672 = amdgpu.mfma %631 * %638 + %648 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %673 = amdgpu.mfma %632 * %637 + %649 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %674 = amdgpu.mfma %632 * %638 + %650 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %675 = amdgpu.mfma %633 * %637 + %651 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %676 = amdgpu.mfma %633 * %638 + %652 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %677 = amdgpu.mfma %634 * %637 + %653 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %678 = amdgpu.mfma %634 * %638 + %654 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %605, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %606, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %679 = amdgpu.mfma %655 * %659 + %663 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %680 = amdgpu.mfma %655 * %660 + %664 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %681 = amdgpu.mfma %656 * %659 + %665 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %682 = amdgpu.mfma %656 * %660 + %666 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %683 = amdgpu.mfma %657 * %659 + %667 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %684 = amdgpu.mfma %657 * %660 + %668 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %685 = amdgpu.mfma %658 * %659 + %669 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %686 = amdgpu.mfma %658 * %660 + %670 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %687 = amdgpu.mfma %655 * %661 + %671 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %688 = amdgpu.mfma %655 * %662 + %672 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %689 = amdgpu.mfma %656 * %661 + %673 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %690 = amdgpu.mfma %656 * %662 + %674 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %691 = amdgpu.mfma %657 * %661 + %675 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %692 = amdgpu.mfma %657 * %662 + %676 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %693 = amdgpu.mfma %658 * %661 + %677 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %694 = amdgpu.mfma %658 * %662 + %678 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %c4 = arith.constant 4 : index
+            %695 = arith.muli %c1, %c4 : index
+            %696 = arith.addi %arg6, %695 : index
+            amdgpu.lds_barrier
+            %697 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %698 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %699 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %700 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %701 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %702 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %703 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %704 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %705 = arith.muli %696, %c64 : index
+            %706 = arith.addi %705, %c64 : index
+            %707 = arith.addi %706, %47 : index
+            %708 = arith.addi %706, %59 : index
+            %709 = vector.transfer_read %0[%52, %707], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %710 = vector.transfer_read %1[%28, %61, %708], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %711 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %712 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %713 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %714 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %715 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %716 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %717 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %718 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %719 = amdgpu.mfma %697 * %701 + %679 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %720 = amdgpu.mfma %697 * %702 + %680 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %721 = amdgpu.mfma %698 * %701 + %681 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %722 = amdgpu.mfma %698 * %702 + %682 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %723 = amdgpu.mfma %699 * %701 + %683 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %724 = amdgpu.mfma %699 * %702 + %684 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %725 = amdgpu.mfma %700 * %701 + %685 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %726 = amdgpu.mfma %700 * %702 + %686 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %727 = amdgpu.mfma %697 * %703 + %687 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %728 = amdgpu.mfma %697 * %704 + %688 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %729 = amdgpu.mfma %698 * %703 + %689 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %730 = amdgpu.mfma %698 * %704 + %690 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %731 = amdgpu.mfma %699 * %703 + %691 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %732 = amdgpu.mfma %699 * %704 + %692 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %733 = amdgpu.mfma %700 * %703 + %693 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %734 = amdgpu.mfma %700 * %704 + %694 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %735 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %736 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %737 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %738 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %739 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %740 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %741 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %742 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %743 = amdgpu.mfma %711 * %715 + %719 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %744 = amdgpu.mfma %711 * %716 + %720 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %745 = amdgpu.mfma %712 * %715 + %721 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %746 = amdgpu.mfma %712 * %716 + %722 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %747 = amdgpu.mfma %713 * %715 + %723 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %748 = amdgpu.mfma %713 * %716 + %724 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %749 = amdgpu.mfma %714 * %715 + %725 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %750 = amdgpu.mfma %714 * %716 + %726 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %751 = amdgpu.mfma %711 * %717 + %727 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %752 = amdgpu.mfma %711 * %718 + %728 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %753 = amdgpu.mfma %712 * %717 + %729 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %754 = amdgpu.mfma %712 * %718 + %730 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %755 = amdgpu.mfma %713 * %717 + %731 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %756 = amdgpu.mfma %713 * %718 + %732 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %757 = amdgpu.mfma %714 * %717 + %733 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %758 = amdgpu.mfma %714 * %718 + %734 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %759 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %760 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %761 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %762 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %763 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %764 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %765 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %766 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %767 = amdgpu.mfma %735 * %739 + %743 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %768 = amdgpu.mfma %735 * %740 + %744 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %769 = amdgpu.mfma %736 * %739 + %745 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %770 = amdgpu.mfma %736 * %740 + %746 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %771 = amdgpu.mfma %737 * %739 + %747 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %772 = amdgpu.mfma %737 * %740 + %748 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %773 = amdgpu.mfma %738 * %739 + %749 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %774 = amdgpu.mfma %738 * %740 + %750 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %775 = amdgpu.mfma %735 * %741 + %751 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %776 = amdgpu.mfma %735 * %742 + %752 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %777 = amdgpu.mfma %736 * %741 + %753 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %778 = amdgpu.mfma %736 * %742 + %754 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %779 = amdgpu.mfma %737 * %741 + %755 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %780 = amdgpu.mfma %737 * %742 + %756 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %781 = amdgpu.mfma %738 * %741 + %757 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %782 = amdgpu.mfma %738 * %742 + %758 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %709, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %710, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %783 = amdgpu.mfma %759 * %763 + %767 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %784 = amdgpu.mfma %759 * %764 + %768 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %785 = amdgpu.mfma %760 * %763 + %769 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %786 = amdgpu.mfma %760 * %764 + %770 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %787 = amdgpu.mfma %761 * %763 + %771 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %788 = amdgpu.mfma %761 * %764 + %772 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %789 = amdgpu.mfma %762 * %763 + %773 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %790 = amdgpu.mfma %762 * %764 + %774 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %791 = amdgpu.mfma %759 * %765 + %775 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %792 = amdgpu.mfma %759 * %766 + %776 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %793 = amdgpu.mfma %760 * %765 + %777 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %794 = amdgpu.mfma %760 * %766 + %778 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %795 = amdgpu.mfma %761 * %765 + %779 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %796 = amdgpu.mfma %761 * %766 + %780 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %797 = amdgpu.mfma %762 * %765 + %781 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %798 = amdgpu.mfma %762 * %766 + %782 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %c5 = arith.constant 5 : index
+            %799 = arith.muli %c1, %c5 : index
+            %800 = arith.addi %arg6, %799 : index
+            amdgpu.lds_barrier
+            %801 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %802 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %803 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %804 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %805 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %806 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %807 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %808 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %809 = arith.muli %800, %c64 : index
+            %810 = arith.addi %809, %c64 : index
+            %811 = arith.addi %810, %47 : index
+            %812 = arith.addi %810, %59 : index
+            %813 = vector.transfer_read %0[%52, %811], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %814 = vector.transfer_read %1[%28, %61, %812], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %815 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %816 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %817 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %818 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %819 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %820 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %821 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %822 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %823 = amdgpu.mfma %801 * %805 + %783 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %824 = amdgpu.mfma %801 * %806 + %784 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %825 = amdgpu.mfma %802 * %805 + %785 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %826 = amdgpu.mfma %802 * %806 + %786 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %827 = amdgpu.mfma %803 * %805 + %787 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %828 = amdgpu.mfma %803 * %806 + %788 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %829 = amdgpu.mfma %804 * %805 + %789 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %830 = amdgpu.mfma %804 * %806 + %790 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %831 = amdgpu.mfma %801 * %807 + %791 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %832 = amdgpu.mfma %801 * %808 + %792 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %833 = amdgpu.mfma %802 * %807 + %793 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %834 = amdgpu.mfma %802 * %808 + %794 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %835 = amdgpu.mfma %803 * %807 + %795 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %836 = amdgpu.mfma %803 * %808 + %796 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %837 = amdgpu.mfma %804 * %807 + %797 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %838 = amdgpu.mfma %804 * %808 + %798 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %839 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %840 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %841 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %842 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %843 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %844 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %845 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %846 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %847 = amdgpu.mfma %815 * %819 + %823 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %848 = amdgpu.mfma %815 * %820 + %824 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %849 = amdgpu.mfma %816 * %819 + %825 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %850 = amdgpu.mfma %816 * %820 + %826 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %851 = amdgpu.mfma %817 * %819 + %827 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %852 = amdgpu.mfma %817 * %820 + %828 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %853 = amdgpu.mfma %818 * %819 + %829 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %854 = amdgpu.mfma %818 * %820 + %830 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %855 = amdgpu.mfma %815 * %821 + %831 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %856 = amdgpu.mfma %815 * %822 + %832 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %857 = amdgpu.mfma %816 * %821 + %833 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %858 = amdgpu.mfma %816 * %822 + %834 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %859 = amdgpu.mfma %817 * %821 + %835 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %860 = amdgpu.mfma %817 * %822 + %836 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %861 = amdgpu.mfma %818 * %821 + %837 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %862 = amdgpu.mfma %818 * %822 + %838 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %863 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %864 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %865 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %866 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %867 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %868 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %869 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %870 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %871 = amdgpu.mfma %839 * %843 + %847 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %872 = amdgpu.mfma %839 * %844 + %848 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %873 = amdgpu.mfma %840 * %843 + %849 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %874 = amdgpu.mfma %840 * %844 + %850 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %875 = amdgpu.mfma %841 * %843 + %851 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %876 = amdgpu.mfma %841 * %844 + %852 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %877 = amdgpu.mfma %842 * %843 + %853 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %878 = amdgpu.mfma %842 * %844 + %854 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %879 = amdgpu.mfma %839 * %845 + %855 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %880 = amdgpu.mfma %839 * %846 + %856 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %881 = amdgpu.mfma %840 * %845 + %857 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %882 = amdgpu.mfma %840 * %846 + %858 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %883 = amdgpu.mfma %841 * %845 + %859 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %884 = amdgpu.mfma %841 * %846 + %860 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %885 = amdgpu.mfma %842 * %845 + %861 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %886 = amdgpu.mfma %842 * %846 + %862 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %813, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %814, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %887 = amdgpu.mfma %863 * %867 + %871 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %888 = amdgpu.mfma %863 * %868 + %872 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %889 = amdgpu.mfma %864 * %867 + %873 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %890 = amdgpu.mfma %864 * %868 + %874 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %891 = amdgpu.mfma %865 * %867 + %875 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %892 = amdgpu.mfma %865 * %868 + %876 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %893 = amdgpu.mfma %866 * %867 + %877 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %894 = amdgpu.mfma %866 * %868 + %878 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %895 = amdgpu.mfma %863 * %869 + %879 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %896 = amdgpu.mfma %863 * %870 + %880 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %897 = amdgpu.mfma %864 * %869 + %881 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %898 = amdgpu.mfma %864 * %870 + %882 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %899 = amdgpu.mfma %865 * %869 + %883 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %900 = amdgpu.mfma %865 * %870 + %884 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %901 = amdgpu.mfma %866 * %869 + %885 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %902 = amdgpu.mfma %866 * %870 + %886 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %c6 = arith.constant 6 : index
+            %903 = arith.muli %c1, %c6 : index
+            %904 = arith.addi %arg6, %903 : index
+            amdgpu.lds_barrier
+            %905 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %906 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %907 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %908 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %909 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %910 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %911 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %912 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %913 = arith.muli %904, %c64 : index
+            %914 = arith.addi %913, %c64 : index
+            %915 = arith.addi %914, %47 : index
+            %916 = arith.addi %914, %59 : index
+            %917 = vector.transfer_read %0[%52, %915], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %918 = vector.transfer_read %1[%28, %61, %916], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %919 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %920 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %921 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %922 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %923 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %924 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %925 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %926 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %927 = amdgpu.mfma %905 * %909 + %887 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %928 = amdgpu.mfma %905 * %910 + %888 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %929 = amdgpu.mfma %906 * %909 + %889 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %930 = amdgpu.mfma %906 * %910 + %890 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %931 = amdgpu.mfma %907 * %909 + %891 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %932 = amdgpu.mfma %907 * %910 + %892 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %933 = amdgpu.mfma %908 * %909 + %893 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %934 = amdgpu.mfma %908 * %910 + %894 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %935 = amdgpu.mfma %905 * %911 + %895 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %936 = amdgpu.mfma %905 * %912 + %896 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %937 = amdgpu.mfma %906 * %911 + %897 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %938 = amdgpu.mfma %906 * %912 + %898 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %939 = amdgpu.mfma %907 * %911 + %899 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %940 = amdgpu.mfma %907 * %912 + %900 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %941 = amdgpu.mfma %908 * %911 + %901 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %942 = amdgpu.mfma %908 * %912 + %902 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %943 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %944 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %945 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %946 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %947 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %948 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %949 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %950 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %951 = amdgpu.mfma %919 * %923 + %927 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %952 = amdgpu.mfma %919 * %924 + %928 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %953 = amdgpu.mfma %920 * %923 + %929 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %954 = amdgpu.mfma %920 * %924 + %930 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %955 = amdgpu.mfma %921 * %923 + %931 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %956 = amdgpu.mfma %921 * %924 + %932 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %957 = amdgpu.mfma %922 * %923 + %933 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %958 = amdgpu.mfma %922 * %924 + %934 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %959 = amdgpu.mfma %919 * %925 + %935 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %960 = amdgpu.mfma %919 * %926 + %936 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %961 = amdgpu.mfma %920 * %925 + %937 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %962 = amdgpu.mfma %920 * %926 + %938 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %963 = amdgpu.mfma %921 * %925 + %939 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %964 = amdgpu.mfma %921 * %926 + %940 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %965 = amdgpu.mfma %922 * %925 + %941 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %966 = amdgpu.mfma %922 * %926 + %942 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %967 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %968 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %969 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %970 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %971 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %972 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %973 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %974 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %975 = amdgpu.mfma %943 * %947 + %951 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %976 = amdgpu.mfma %943 * %948 + %952 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %977 = amdgpu.mfma %944 * %947 + %953 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %978 = amdgpu.mfma %944 * %948 + %954 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %979 = amdgpu.mfma %945 * %947 + %955 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %980 = amdgpu.mfma %945 * %948 + %956 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %981 = amdgpu.mfma %946 * %947 + %957 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %982 = amdgpu.mfma %946 * %948 + %958 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %983 = amdgpu.mfma %943 * %949 + %959 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %984 = amdgpu.mfma %943 * %950 + %960 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %985 = amdgpu.mfma %944 * %949 + %961 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %986 = amdgpu.mfma %944 * %950 + %962 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %987 = amdgpu.mfma %945 * %949 + %963 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %988 = amdgpu.mfma %945 * %950 + %964 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %989 = amdgpu.mfma %946 * %949 + %965 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %990 = amdgpu.mfma %946 * %950 + %966 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %917, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %918, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %991 = amdgpu.mfma %967 * %971 + %975 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %992 = amdgpu.mfma %967 * %972 + %976 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %993 = amdgpu.mfma %968 * %971 + %977 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %994 = amdgpu.mfma %968 * %972 + %978 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %995 = amdgpu.mfma %969 * %971 + %979 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %996 = amdgpu.mfma %969 * %972 + %980 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %997 = amdgpu.mfma %970 * %971 + %981 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %998 = amdgpu.mfma %970 * %972 + %982 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %999 = amdgpu.mfma %967 * %973 + %983 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1000 = amdgpu.mfma %967 * %974 + %984 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1001 = amdgpu.mfma %968 * %973 + %985 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1002 = amdgpu.mfma %968 * %974 + %986 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1003 = amdgpu.mfma %969 * %973 + %987 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1004 = amdgpu.mfma %969 * %974 + %988 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1005 = amdgpu.mfma %970 * %973 + %989 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1006 = amdgpu.mfma %970 * %974 + %990 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %c7 = arith.constant 7 : index
+            %1007 = arith.muli %c1, %c7 : index
+            %1008 = arith.addi %arg6, %1007 : index
+            amdgpu.lds_barrier
+            %1009 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1010 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1011 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1012 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1013 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1014 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1015 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1016 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1017 = arith.muli %1008, %c64 : index
+            %1018 = arith.addi %1017, %c64 : index
+            %1019 = arith.addi %1018, %47 : index
+            %1020 = arith.addi %1018, %59 : index
+            %1021 = vector.transfer_read %0[%52, %1019], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %1022 = vector.transfer_read %1[%28, %61, %1020], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %1023 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1024 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1025 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1026 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1027 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1028 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1029 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1030 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1031 = amdgpu.mfma %1009 * %1013 + %991 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1032 = amdgpu.mfma %1009 * %1014 + %992 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1033 = amdgpu.mfma %1010 * %1013 + %993 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1034 = amdgpu.mfma %1010 * %1014 + %994 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1035 = amdgpu.mfma %1011 * %1013 + %995 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1036 = amdgpu.mfma %1011 * %1014 + %996 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1037 = amdgpu.mfma %1012 * %1013 + %997 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1038 = amdgpu.mfma %1012 * %1014 + %998 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1039 = amdgpu.mfma %1009 * %1015 + %999 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1040 = amdgpu.mfma %1009 * %1016 + %1000 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1041 = amdgpu.mfma %1010 * %1015 + %1001 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1042 = amdgpu.mfma %1010 * %1016 + %1002 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1043 = amdgpu.mfma %1011 * %1015 + %1003 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1044 = amdgpu.mfma %1011 * %1016 + %1004 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1045 = amdgpu.mfma %1012 * %1015 + %1005 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1046 = amdgpu.mfma %1012 * %1016 + %1006 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1047 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1048 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1049 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1050 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1051 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1052 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1053 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1054 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1055 = amdgpu.mfma %1023 * %1027 + %1031 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1056 = amdgpu.mfma %1023 * %1028 + %1032 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1057 = amdgpu.mfma %1024 * %1027 + %1033 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1058 = amdgpu.mfma %1024 * %1028 + %1034 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1059 = amdgpu.mfma %1025 * %1027 + %1035 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1060 = amdgpu.mfma %1025 * %1028 + %1036 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1061 = amdgpu.mfma %1026 * %1027 + %1037 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1062 = amdgpu.mfma %1026 * %1028 + %1038 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1063 = amdgpu.mfma %1023 * %1029 + %1039 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1064 = amdgpu.mfma %1023 * %1030 + %1040 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1065 = amdgpu.mfma %1024 * %1029 + %1041 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1066 = amdgpu.mfma %1024 * %1030 + %1042 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1067 = amdgpu.mfma %1025 * %1029 + %1043 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1068 = amdgpu.mfma %1025 * %1030 + %1044 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1069 = amdgpu.mfma %1026 * %1029 + %1045 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1070 = amdgpu.mfma %1026 * %1030 + %1046 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1071 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1072 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1073 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1074 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1075 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1076 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1077 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1078 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %1079 = amdgpu.mfma %1047 * %1051 + %1055 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1080 = amdgpu.mfma %1047 * %1052 + %1056 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1081 = amdgpu.mfma %1048 * %1051 + %1057 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1082 = amdgpu.mfma %1048 * %1052 + %1058 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1083 = amdgpu.mfma %1049 * %1051 + %1059 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1084 = amdgpu.mfma %1049 * %1052 + %1060 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1085 = amdgpu.mfma %1050 * %1051 + %1061 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1086 = amdgpu.mfma %1050 * %1052 + %1062 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1087 = amdgpu.mfma %1047 * %1053 + %1063 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1088 = amdgpu.mfma %1047 * %1054 + %1064 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1089 = amdgpu.mfma %1048 * %1053 + %1065 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1090 = amdgpu.mfma %1048 * %1054 + %1066 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1091 = amdgpu.mfma %1049 * %1053 + %1067 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1092 = amdgpu.mfma %1049 * %1054 + %1068 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1093 = amdgpu.mfma %1050 * %1053 + %1069 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1094 = amdgpu.mfma %1050 * %1054 + %1070 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %1021, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %1022, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %1095 = amdgpu.mfma %1071 * %1075 + %1079 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1096 = amdgpu.mfma %1071 * %1076 + %1080 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1097 = amdgpu.mfma %1072 * %1075 + %1081 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1098 = amdgpu.mfma %1072 * %1076 + %1082 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1099 = amdgpu.mfma %1073 * %1075 + %1083 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1100 = amdgpu.mfma %1073 * %1076 + %1084 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1101 = amdgpu.mfma %1074 * %1075 + %1085 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1102 = amdgpu.mfma %1074 * %1076 + %1086 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1103 = amdgpu.mfma %1071 * %1077 + %1087 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1104 = amdgpu.mfma %1071 * %1078 + %1088 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1105 = amdgpu.mfma %1072 * %1077 + %1089 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1106 = amdgpu.mfma %1072 * %1078 + %1090 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1107 = amdgpu.mfma %1073 * %1077 + %1091 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1108 = amdgpu.mfma %1073 * %1078 + %1092 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1109 = amdgpu.mfma %1074 * %1077 + %1093 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %1110 = amdgpu.mfma %1074 * %1078 + %1094 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            scf.yield %1095, %1096, %1103, %1104, %1097, %1098, %1105, %1106, %1099, %1100, %1107, %1108, %1101, %1102, %1109, %1110 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+          }
+          %76:16 = scf.for %arg6 = %73 to %65 step %c1 iter_args(%arg7 = %75#0, %arg8 = %75#1, %arg9 = %75#2, %arg10 = %75#3, %arg11 = %75#4, %arg12 = %75#5, %arg13 = %75#6, %arg14 = %75#7, %arg15 = %75#8, %arg16 = %75#9, %arg17 = %75#10, %arg18 = %75#11, %arg19 = %75#12, %arg20 = %75#13, %arg21 = %75#14, %arg22 = %75#15) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+            amdgpu.lds_barrier
+            %281 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %282 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %283 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %284 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %285 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %286 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %287 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %288 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %289 = arith.muli %arg6, %c64 : index
+            %290 = arith.addi %289, %c64 : index
+            %291 = arith.addi %290, %47 : index
+            %292 = arith.addi %290, %59 : index
+            %293 = vector.transfer_read %0[%52, %291], %cst_5, %54 : memref<16384x6144xf16>, vector<32xf16>
+            %294 = vector.transfer_read %1[%28, %61, %292], %cst_5 : memref<8x32768x6144xf16>, vector<32xf16>
+            %295 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %296 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %297 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %298 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %299 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %300 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %301 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %302 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %303 = amdgpu.mfma %281 * %285 + %arg7 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %304 = amdgpu.mfma %281 * %286 + %arg8 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %305 = amdgpu.mfma %282 * %285 + %arg11 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %306 = amdgpu.mfma %282 * %286 + %arg12 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %307 = amdgpu.mfma %283 * %285 + %arg15 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %308 = amdgpu.mfma %283 * %286 + %arg16 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %309 = amdgpu.mfma %284 * %285 + %arg19 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %310 = amdgpu.mfma %284 * %286 + %arg20 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %311 = amdgpu.mfma %281 * %287 + %arg9 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %312 = amdgpu.mfma %281 * %288 + %arg10 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %313 = amdgpu.mfma %282 * %287 + %arg13 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %314 = amdgpu.mfma %282 * %288 + %arg14 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %315 = amdgpu.mfma %283 * %287 + %arg17 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %316 = amdgpu.mfma %283 * %288 + %arg18 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %317 = amdgpu.mfma %284 * %287 + %arg21 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %318 = amdgpu.mfma %284 * %288 + %arg22 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %319 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %320 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %321 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %322 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %323 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %324 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %325 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %326 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %327 = amdgpu.mfma %295 * %299 + %303 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %328 = amdgpu.mfma %295 * %300 + %304 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %329 = amdgpu.mfma %296 * %299 + %305 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %330 = amdgpu.mfma %296 * %300 + %306 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %331 = amdgpu.mfma %297 * %299 + %307 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %332 = amdgpu.mfma %297 * %300 + %308 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %333 = amdgpu.mfma %298 * %299 + %309 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %334 = amdgpu.mfma %298 * %300 + %310 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %335 = amdgpu.mfma %295 * %301 + %311 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %336 = amdgpu.mfma %295 * %302 + %312 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %337 = amdgpu.mfma %296 * %301 + %313 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %338 = amdgpu.mfma %296 * %302 + %314 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %339 = amdgpu.mfma %297 * %301 + %315 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %340 = amdgpu.mfma %297 * %302 + %316 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %341 = amdgpu.mfma %298 * %301 + %317 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %342 = amdgpu.mfma %298 * %302 + %318 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %343 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %344 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %345 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %346 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %347 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %348 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %349 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %350 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+            %351 = amdgpu.mfma %319 * %323 + %327 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %352 = amdgpu.mfma %319 * %324 + %328 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %353 = amdgpu.mfma %320 * %323 + %329 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %354 = amdgpu.mfma %320 * %324 + %330 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %355 = amdgpu.mfma %321 * %323 + %331 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %356 = amdgpu.mfma %321 * %324 + %332 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %357 = amdgpu.mfma %322 * %323 + %333 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %358 = amdgpu.mfma %322 * %324 + %334 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %359 = amdgpu.mfma %319 * %325 + %335 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %360 = amdgpu.mfma %319 * %326 + %336 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %361 = amdgpu.mfma %320 * %325 + %337 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %362 = amdgpu.mfma %320 * %326 + %338 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %363 = amdgpu.mfma %321 * %325 + %339 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %364 = amdgpu.mfma %321 * %326 + %340 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %365 = amdgpu.mfma %322 * %325 + %341 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %366 = amdgpu.mfma %322 * %326 + %342 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            amdgpu.lds_barrier
+            vector.store %293, %view[%45, %47] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            vector.store %294, %view_7[%57, %59] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %367 = amdgpu.mfma %343 * %347 + %351 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %368 = amdgpu.mfma %343 * %348 + %352 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %369 = amdgpu.mfma %344 * %347 + %353 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %370 = amdgpu.mfma %344 * %348 + %354 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %371 = amdgpu.mfma %345 * %347 + %355 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %372 = amdgpu.mfma %345 * %348 + %356 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %373 = amdgpu.mfma %346 * %347 + %357 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %374 = amdgpu.mfma %346 * %348 + %358 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %375 = amdgpu.mfma %343 * %349 + %359 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %376 = amdgpu.mfma %343 * %350 + %360 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %377 = amdgpu.mfma %344 * %349 + %361 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %378 = amdgpu.mfma %344 * %350 + %362 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %379 = amdgpu.mfma %345 * %349 + %363 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %380 = amdgpu.mfma %345 * %350 + %364 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %381 = amdgpu.mfma %346 * %349 + %365 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            %382 = amdgpu.mfma %346 * %350 + %366 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+            scf.yield %367, %368, %375, %376, %369, %370, %377, %378, %371, %372, %379, %380, %373, %374, %381, %382 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+          }
+          amdgpu.lds_barrier
+          %77 = vector.load %view[%34, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %78 = vector.load %view[%35, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %79 = vector.load %view[%36, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %80 = vector.load %view[%37, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %81 = vector.load %view_7[%38, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %82 = vector.load %view_7[%39, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %83 = vector.load %view_7[%40, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %84 = vector.load %view_7[%41, %29] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %85 = vector.load %view[%34, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %86 = vector.load %view[%35, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %87 = vector.load %view[%36, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %88 = vector.load %view[%37, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %89 = vector.load %view_7[%38, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %90 = vector.load %view_7[%39, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %91 = vector.load %view_7[%40, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %92 = vector.load %view_7[%41, %42] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %93 = vector.load %view[%34, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %94 = vector.load %view[%35, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %95 = vector.load %view[%36, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %96 = vector.load %view[%37, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %97 = vector.load %view_7[%38, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %98 = vector.load %view_7[%39, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %99 = vector.load %view_7[%40, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %100 = vector.load %view_7[%41, %43] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %101 = vector.load %view[%34, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %102 = vector.load %view[%35, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %103 = vector.load %view[%36, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %104 = vector.load %view[%37, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %105 = vector.load %view_7[%38, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %106 = vector.load %view_7[%39, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %107 = vector.load %view_7[%40, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %108 = vector.load %view_7[%41, %44] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+          %109 = amdgpu.mfma %77 * %81 + %76#0 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %110 = amdgpu.mfma %77 * %82 + %76#1 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %111 = amdgpu.mfma %78 * %81 + %76#4 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %112 = amdgpu.mfma %78 * %82 + %76#5 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %113 = amdgpu.mfma %79 * %81 + %76#8 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %114 = amdgpu.mfma %79 * %82 + %76#9 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %115 = amdgpu.mfma %80 * %81 + %76#12 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %116 = amdgpu.mfma %80 * %82 + %76#13 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %117 = amdgpu.mfma %77 * %83 + %76#2 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %118 = amdgpu.mfma %77 * %84 + %76#3 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %119 = amdgpu.mfma %78 * %83 + %76#6 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %120 = amdgpu.mfma %78 * %84 + %76#7 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %121 = amdgpu.mfma %79 * %83 + %76#10 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %122 = amdgpu.mfma %79 * %84 + %76#11 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %123 = amdgpu.mfma %80 * %83 + %76#14 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %124 = amdgpu.mfma %80 * %84 + %76#15 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %125 = amdgpu.mfma %85 * %89 + %109 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %126 = amdgpu.mfma %85 * %90 + %110 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %127 = amdgpu.mfma %86 * %89 + %111 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %128 = amdgpu.mfma %86 * %90 + %112 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %129 = amdgpu.mfma %87 * %89 + %113 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %130 = amdgpu.mfma %87 * %90 + %114 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %131 = amdgpu.mfma %88 * %89 + %115 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %132 = amdgpu.mfma %88 * %90 + %116 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %133 = amdgpu.mfma %85 * %91 + %117 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %134 = amdgpu.mfma %85 * %92 + %118 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %135 = amdgpu.mfma %86 * %91 + %119 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %136 = amdgpu.mfma %86 * %92 + %120 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %137 = amdgpu.mfma %87 * %91 + %121 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %138 = amdgpu.mfma %87 * %92 + %122 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %139 = amdgpu.mfma %88 * %91 + %123 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %140 = amdgpu.mfma %88 * %92 + %124 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %141 = amdgpu.mfma %93 * %97 + %125 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %142 = amdgpu.mfma %93 * %98 + %126 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %143 = amdgpu.mfma %94 * %97 + %127 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %144 = amdgpu.mfma %94 * %98 + %128 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %145 = amdgpu.mfma %95 * %97 + %129 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %146 = amdgpu.mfma %95 * %98 + %130 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %147 = amdgpu.mfma %96 * %97 + %131 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %148 = amdgpu.mfma %96 * %98 + %132 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %149 = amdgpu.mfma %93 * %99 + %133 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %150 = amdgpu.mfma %93 * %100 + %134 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %151 = amdgpu.mfma %94 * %99 + %135 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %152 = amdgpu.mfma %94 * %100 + %136 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %153 = amdgpu.mfma %95 * %99 + %137 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %154 = amdgpu.mfma %95 * %100 + %138 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %155 = amdgpu.mfma %96 * %99 + %139 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %156 = amdgpu.mfma %96 * %100 + %140 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %157 = amdgpu.mfma %101 * %105 + %141 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %158 = amdgpu.mfma %101 * %106 + %142 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %159 = amdgpu.mfma %102 * %105 + %143 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %160 = amdgpu.mfma %102 * %106 + %144 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %161 = amdgpu.mfma %103 * %105 + %145 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %162 = amdgpu.mfma %103 * %106 + %146 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %163 = amdgpu.mfma %104 * %105 + %147 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %164 = amdgpu.mfma %104 * %106 + %148 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %165 = amdgpu.mfma %101 * %107 + %149 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %166 = amdgpu.mfma %101 * %108 + %150 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %167 = amdgpu.mfma %102 * %107 + %151 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %168 = amdgpu.mfma %102 * %108 + %152 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %169 = amdgpu.mfma %103 * %107 + %153 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %170 = amdgpu.mfma %103 * %108 + %154 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %171 = amdgpu.mfma %104 * %107 + %155 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %172 = amdgpu.mfma %104 * %108 + %156 {blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %173 = arith.truncf %157 : vector<4xf32> to vector<4xf16>
+          %174 = arith.truncf %158 : vector<4xf32> to vector<4xf16>
+          %175 = arith.truncf %159 : vector<4xf32> to vector<4xf16>
+          %176 = arith.truncf %160 : vector<4xf32> to vector<4xf16>
+          %177 = arith.truncf %161 : vector<4xf32> to vector<4xf16>
+          %178 = arith.truncf %162 : vector<4xf32> to vector<4xf16>
+          %179 = arith.truncf %163 : vector<4xf32> to vector<4xf16>
+          %180 = arith.truncf %164 : vector<4xf32> to vector<4xf16>
+          %181 = arith.truncf %165 : vector<4xf32> to vector<4xf16>
+          %182 = arith.truncf %166 : vector<4xf32> to vector<4xf16>
+          %183 = arith.truncf %167 : vector<4xf32> to vector<4xf16>
+          %184 = arith.truncf %168 : vector<4xf32> to vector<4xf16>
+          %185 = arith.truncf %169 : vector<4xf32> to vector<4xf16>
+          %186 = arith.truncf %170 : vector<4xf32> to vector<4xf16>
+          %187 = arith.truncf %171 : vector<4xf32> to vector<4xf16>
+          %188 = arith.truncf %172 : vector<4xf32> to vector<4xf16>
+          %189 = affine.apply #map1()[%22]
+          %190 = affine.apply #map()[%22]
+          %191 = arith.addi %190, %25 : index
+          %192 = arith.addi %191, %c1 : index
+          %193 = arith.addi %191, %c2_4 : index
+          %194 = arith.addi %191, %c3 : index
+          %195 = arith.addi %191, %c16 : index
+          %196 = arith.addi %195, %c1 : index
+          %197 = arith.addi %195, %c2_4 : index
+          %198 = arith.addi %195, %c3 : index
+          %199 = arith.addi %191, %c32 : index
+          %200 = arith.addi %199, %c1 : index
+          %201 = arith.addi %199, %c2_4 : index
+          %202 = arith.addi %199, %c3 : index
+          %203 = arith.addi %191, %c48 : index
+          %204 = arith.addi %203, %c1 : index
+          %205 = arith.addi %203, %c2_4 : index
+          %206 = arith.addi %203, %c3 : index
+          %207 = arith.addi %189, %26 : index
+          %208 = arith.addi %207, %c16 : index
+          %209 = arith.addi %207, %c32 : index
+          %210 = arith.addi %207, %c48 : index
+          %211 = vector.extract %173[0] : f16 from vector<4xf16>
+          %212 = vector.extract %173[1] : f16 from vector<4xf16>
+          %213 = vector.extract %173[2] : f16 from vector<4xf16>
+          %214 = vector.extract %173[3] : f16 from vector<4xf16>
+          %215 = vector.extract %174[0] : f16 from vector<4xf16>
+          %216 = vector.extract %174[1] : f16 from vector<4xf16>
+          %217 = vector.extract %174[2] : f16 from vector<4xf16>
+          %218 = vector.extract %174[3] : f16 from vector<4xf16>
+          %219 = vector.extract %175[0] : f16 from vector<4xf16>
+          %220 = vector.extract %175[1] : f16 from vector<4xf16>
+          %221 = vector.extract %175[2] : f16 from vector<4xf16>
+          %222 = vector.extract %175[3] : f16 from vector<4xf16>
+          %223 = vector.extract %176[0] : f16 from vector<4xf16>
+          %224 = vector.extract %176[1] : f16 from vector<4xf16>
+          %225 = vector.extract %176[2] : f16 from vector<4xf16>
+          %226 = vector.extract %176[3] : f16 from vector<4xf16>
+          %227 = vector.extract %177[0] : f16 from vector<4xf16>
+          %228 = vector.extract %177[1] : f16 from vector<4xf16>
+          %229 = vector.extract %177[2] : f16 from vector<4xf16>
+          %230 = vector.extract %177[3] : f16 from vector<4xf16>
+          %231 = vector.extract %178[0] : f16 from vector<4xf16>
+          %232 = vector.extract %178[1] : f16 from vector<4xf16>
+          %233 = vector.extract %178[2] : f16 from vector<4xf16>
+          %234 = vector.extract %178[3] : f16 from vector<4xf16>
+          %235 = vector.extract %179[0] : f16 from vector<4xf16>
+          %236 = vector.extract %179[1] : f16 from vector<4xf16>
+          %237 = vector.extract %179[2] : f16 from vector<4xf16>
+          %238 = vector.extract %179[3] : f16 from vector<4xf16>
+          %239 = vector.extract %180[0] : f16 from vector<4xf16>
+          %240 = vector.extract %180[1] : f16 from vector<4xf16>
+          %241 = vector.extract %180[2] : f16 from vector<4xf16>
+          %242 = vector.extract %180[3] : f16 from vector<4xf16>
+          %243 = vector.extract %181[0] : f16 from vector<4xf16>
+          %244 = vector.extract %181[1] : f16 from vector<4xf16>
+          %245 = vector.extract %181[2] : f16 from vector<4xf16>
+          %246 = vector.extract %181[3] : f16 from vector<4xf16>
+          %247 = vector.extract %182[0] : f16 from vector<4xf16>
+          %248 = vector.extract %182[1] : f16 from vector<4xf16>
+          %249 = vector.extract %182[2] : f16 from vector<4xf16>
+          %250 = vector.extract %182[3] : f16 from vector<4xf16>
+          %251 = vector.extract %183[0] : f16 from vector<4xf16>
+          %252 = vector.extract %183[1] : f16 from vector<4xf16>
+          %253 = vector.extract %183[2] : f16 from vector<4xf16>
+          %254 = vector.extract %183[3] : f16 from vector<4xf16>
+          %255 = vector.extract %184[0] : f16 from vector<4xf16>
+          %256 = vector.extract %184[1] : f16 from vector<4xf16>
+          %257 = vector.extract %184[2] : f16 from vector<4xf16>
+          %258 = vector.extract %184[3] : f16 from vector<4xf16>
+          %259 = vector.extract %185[0] : f16 from vector<4xf16>
+          %260 = vector.extract %185[1] : f16 from vector<4xf16>
+          %261 = vector.extract %185[2] : f16 from vector<4xf16>
+          %262 = vector.extract %185[3] : f16 from vector<4xf16>
+          %263 = vector.extract %186[0] : f16 from vector<4xf16>
+          %264 = vector.extract %186[1] : f16 from vector<4xf16>
+          %265 = vector.extract %186[2] : f16 from vector<4xf16>
+          %266 = vector.extract %186[3] : f16 from vector<4xf16>
+          %267 = vector.extract %187[0] : f16 from vector<4xf16>
+          %268 = vector.extract %187[1] : f16 from vector<4xf16>
+          %269 = vector.extract %187[2] : f16 from vector<4xf16>
+          %270 = vector.extract %187[3] : f16 from vector<4xf16>
+          %271 = vector.extract %188[0] : f16 from vector<4xf16>
+          %272 = vector.extract %188[1] : f16 from vector<4xf16>
+          %273 = vector.extract %188[2] : f16 from vector<4xf16>
+          %274 = vector.extract %188[3] : f16 from vector<4xf16>
+          memref.store %211, %view_8[%191, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %215, %view_8[%191, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %212, %view_8[%192, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %216, %view_8[%192, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %213, %view_8[%193, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %217, %view_8[%193, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %214, %view_8[%194, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %218, %view_8[%194, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %243, %view_8[%191, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %244, %view_8[%192, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %245, %view_8[%193, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %246, %view_8[%194, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %247, %view_8[%191, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %248, %view_8[%192, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %249, %view_8[%193, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %250, %view_8[%194, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %219, %view_8[%195, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %223, %view_8[%195, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %220, %view_8[%196, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %224, %view_8[%196, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %221, %view_8[%197, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %225, %view_8[%197, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %222, %view_8[%198, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %226, %view_8[%198, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %251, %view_8[%195, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %252, %view_8[%196, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %253, %view_8[%197, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %254, %view_8[%198, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %255, %view_8[%195, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %256, %view_8[%196, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %257, %view_8[%197, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %258, %view_8[%198, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %227, %view_8[%199, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %231, %view_8[%199, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %228, %view_8[%200, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %232, %view_8[%200, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %229, %view_8[%201, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %233, %view_8[%201, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %230, %view_8[%202, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %234, %view_8[%202, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %259, %view_8[%199, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %260, %view_8[%200, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %261, %view_8[%201, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %262, %view_8[%202, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %263, %view_8[%199, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %264, %view_8[%200, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %265, %view_8[%201, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %266, %view_8[%202, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %235, %view_8[%203, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %239, %view_8[%203, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %236, %view_8[%204, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %240, %view_8[%204, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %237, %view_8[%205, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %241, %view_8[%205, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %238, %view_8[%206, %207] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %242, %view_8[%206, %208] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %267, %view_8[%203, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %268, %view_8[%204, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %269, %view_8[%205, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %270, %view_8[%206, %209] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %271, %view_8[%203, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %272, %view_8[%204, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %273, %view_8[%205, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          memref.store %274, %view_8[%206, %210] : memref<128x130xf16, #gpu.address_space<workgroup>>
+          amdgpu.lds_barrier
+          %collapse_shape = memref.collapse_shape %2 [[0, 1, 2]] : memref<16384x2x32768xf16> into memref<1073741824xf16>
+          %275 = arith.remui %thread_id_x, %c128_3 : index
+          %276 = arith.divui %thread_id_x, %c128_3 : index
+          %277 = arith.addi %48, %275 : index
+          %278 = memref.load %3[%277] : memref<33911xi32>
+          %279 = arith.index_cast %278 : i32 to index
+          %280 = arith.cmpi slt, %279, %c32768_0 : index
+          scf.if %280 {
+            %281 = arith.muli %276, %c64_2 : index
+            %282 = vector.load %view_8[%275, %281] : memref<128x130xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %283 = arith.addi %281, %c32 : index
+            %284 = vector.load %view_8[%275, %283] : memref<128x130xf16, #gpu.address_space<workgroup>>, vector<32xf16>
+            %285 = arith.muli %279, %c32768 : index
+            %286 = arith.muli %16, %c128_1 : index
+            %287 = arith.addi %285, %286 : index
+            %288 = arith.addi %287, %281 : index
+            vector.store %282, %collapse_shape[%288] : memref<1073741824xf16>, vector<32xf16>
+            %289 = arith.addi %288, %c32 : index
+            vector.store %284, %collapse_shape[%289] : memref<1073741824xf16>, vector<32xf16>
+          }
+        }
+        return
+      }
+    }
+  }
+  func.func @isolated_benchmark$async(%arg0: !hal.buffer_view, %arg1: !hal.buffer_view, %arg2: !hal.buffer_view, %arg3: !hal.buffer_view, %arg4: !hal.buffer_view, %arg5: !hal.buffer_view, %arg6: !hal.fence, %arg7: !hal.fence) -> !hal.buffer_view {
+    %0 = hal.tensor.import wait(%arg6) => %arg0 : !hal.buffer_view -> tensor<16384x6144xf16>
+    %1 = hal.tensor.import wait(%arg6) => %arg1 : !hal.buffer_view -> tensor<8x32768x6144xf16>
+    %2 = hal.tensor.import wait(%arg6) => %arg2 : !hal.buffer_view -> tensor<33911xi32>
+    %3 = hal.tensor.import wait(%arg6) => %arg3 : !hal.buffer_view -> tensor<265xi32>
+    %4 = hal.tensor.import wait(%arg6) => %arg4 : !hal.buffer_view -> tensor<1xi32>
+    %5 = hal.tensor.import wait(%arg6) => %arg5 : !hal.buffer_view -> tensor<16384x2x32768xf16>
+    %6 = flow.dispatch @fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled::@fused_moe_kernel_16x16x16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled(%0, %1, %2, %3, %4, %5) : (tensor<16384x6144xf16>, tensor<8x32768x6144xf16>, tensor<33911xi32>, tensor<265xi32>, tensor<1xi32>, tensor<16384x2x32768xf16>) -> %5
     %7 = hal.tensor.barrier join(%6 : tensor<16384x2x32768xf16>) => %arg7 : !hal.fence
     %8 = hal.tensor.export %7 : tensor<16384x2x32768xf16> -> !hal.buffer_view
     return %8 : !hal.buffer_view
@@ -31379,24 +33741,24 @@ def compare_once_block_m_128(M, N, K):
     )
     symbols.update(get_default_scheduling_params())
 
-    options = WaveCompileOptions(
-        subs=symbols,
-        canonicalize=True,
-        run_bench=False,
-        waves_per_eu=2,
-        denorm_fp_math_f32="preserve-sign",
-        schedule=SchedulingType.NONE,
-        wave_runtime=False,
-        use_scheduling_barriers=enable_scheduling_barriers,
- #      mlir_print_ir_after_all=True,
-        override_mlir=asm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb,
-    )
-    options = set_default_run_config(options)
+#   options = WaveCompileOptions(
+#       subs=symbols,
+#       canonicalize=True,
+#       run_bench=False,
+#       waves_per_eu=2,
+#       denorm_fp_math_f32="preserve-sign",
+#       schedule=SchedulingType.NONE,
+#       wave_runtime=False,
+#       use_scheduling_barriers=enable_scheduling_barriers,
+##      mlir_print_ir_after_all=True,
+#       override_mlir=asm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb,
+#   )
+#   options = set_default_run_config(options)
 
-    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
-    gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb = wave_compile(options, gemm_kernel)
-    gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
-    verify(mlir_c)
+#   mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+#   gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb = wave_compile(options, gemm_kernel)
+#   gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+#   verify(mlir_c)
 
     options = WaveCompileOptions(
         subs=symbols,
@@ -31491,6 +33853,25 @@ def compare_once_block_m_128(M, N, K):
     mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
     gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves = wave_compile(options, gemm_kernel)
     gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+    verify(mlir_c)
+
+    options = WaveCompileOptions(
+        subs=symbols,
+        canonicalize=True,
+        run_bench=False,
+        waves_per_eu=2,
+        denorm_fp_math_f32="preserve-sign",
+        schedule=SchedulingType.NONE,
+        wave_runtime=False,
+        use_scheduling_barriers=enable_scheduling_barriers,
+ #      mlir_print_ir_after_all=True,
+        override_mlir=asm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled,
+    )
+    options = set_default_run_config(options)
+
+    mlir_c = torch.zeros(M, topk, N, dtype=dtype, device='cuda')
+    gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled = wave_compile(options, gemm_kernel)
+    gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
     verify(mlir_c)
 
     options = WaveCompileOptions(
@@ -31674,8 +34055,10 @@ def compare_once_block_m_128(M, N, K):
         gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
         gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+#       mlir_c.zero_()
+#       gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
-        gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
         gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
@@ -31711,8 +34094,10 @@ def compare_once_block_m_128(M, N, K):
         gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered2(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
         gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_reordered(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+#       mlir_c.zero_()
+#       gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
-        gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_frb(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
+        gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves_unrolled(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
         gemm_dtype0_32768_6144_8_128_2_16384_mfma_16_16_16_padding_68_lds_130_block_n_128_block_k_64_2_waves(a, b, sorted_ids, expert_ids, num_tokens_post_pad, mlir_c)
         mlir_c.zero_()
