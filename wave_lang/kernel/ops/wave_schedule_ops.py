@@ -114,6 +114,14 @@ def partition_by_dim(nodes: Any, dim: Any, factor: int): ...
 
 
 @define_schedule_op
+def insert_before(nodes: Any, op: Any): ...
+
+
+@define_schedule_op
+def insert_after(nodes: Any, op: Any): ...
+
+
+@define_schedule_op
 def pipeline(iterate: Sequence[fx.Node]): ...
 
 
@@ -224,6 +232,106 @@ class PartitionByAddressSpace(CustomScheduleOp):
         return create_schedule_proxy(
             region_graph,
             (matched, unmatched),
+            cls.schedule_op_name,
+        )
+
+
+@dataclass
+class InsertBefore(CustomScheduleOp):
+    nodes: Any
+    op: Any
+    schedule_op_name = "insert_before"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        nodes: Any,
+        op: Any,
+    ):
+        # Get the actual nodes from the proxy
+        assert hasattr(
+            nodes, "node"
+        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
+        nodes_list = get_proxy_result(nodes.node)
+        assert nodes_list is not None, "Nodes must have a result"
+
+        if not isinstance(nodes_list, (list, tuple)):
+            nodes_list = [nodes_list]
+        assert len(nodes_list) > 0, "Nodes must have at least one element"
+
+        # Get the subgraph that these nodes belong to
+        first_node = nodes_list[0]
+        subgraph = first_node.graph
+
+        # Get location from first node for context
+        custom = get_custom(first_node)
+        context_location = custom.location if hasattr(custom, "location") else None
+
+        # Add the operation to the subgraph
+        # op should already be an initialized CustomOp instance
+        new_op = op.add_to_graph(subgraph)
+        if context_location:
+            new_op.location = context_location
+
+        # Return list with new op prepended
+        result_nodes = [new_op] + list(nodes_list)
+
+        return create_schedule_proxy(
+            region_graph,
+            result_nodes,
+            cls.schedule_op_name,
+        )
+
+
+@dataclass
+class InsertAfter(CustomScheduleOp):
+    nodes: Any
+    op: Any
+    schedule_op_name = "insert_after"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        nodes: Any,
+        op: Any,
+    ):
+        # Get the actual nodes from the proxy
+        assert hasattr(
+            nodes, "node"
+        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
+        nodes_list = get_proxy_result(nodes.node)
+        assert nodes_list is not None, "Nodes must have a result"
+
+        if not isinstance(nodes_list, (list, tuple)):
+            nodes_list = [nodes_list]
+        assert len(nodes_list) > 0, "Nodes must have at least one element"
+
+        # Get the subgraph that these nodes belong to
+        last_node = nodes_list[-1]
+        subgraph = last_node.graph
+
+        # Get location from last node for context
+        custom = get_custom(last_node)
+        context_location = custom.location if hasattr(custom, "location") else None
+
+        # Add the operation to the subgraph
+        # op should already be an initialized CustomOp instance
+        new_op = op.add_to_graph(subgraph)
+        if context_location:
+            new_op.location = context_location
+
+        # Return list with new op appended
+        result_nodes = list(nodes_list) + [new_op]
+
+        return create_schedule_proxy(
+            region_graph,
+            result_nodes,
             cls.schedule_op_name,
         )
 
