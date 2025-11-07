@@ -81,7 +81,7 @@ def WaveMmaKindAttr : EnumAttr<WaveDialect, WaveMmaKindEnum, "mma_kind"> {
     static ::wave::WaveMmaSpec getSpec(::mlir::MLIRContext *ctx,
                                        ::wave::WaveMmaKind kind);
     /// Returns the (M,N,K) shape for the given kind.
-    static ::std::tuple<uint32_t, uint32_t, uint32_t>
+    static std::tuple<uint32_t, uint32_t, uint32_t>
     getShape(::mlir::MLIRContext *ctx, ::wave::WaveMmaKind kind);
   }];
 }

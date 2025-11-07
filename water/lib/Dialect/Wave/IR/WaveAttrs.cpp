@@ -376,11 +376,13 @@ void wave::WaveDialect::registerAttributes() {
 
 // MMA spec mapping — we adopt IREE’s 0xABCD encoding.
 // AB encodes vendor/arch, C encodes a type-class (e.g. f16/bf16, fp8),
-// D is a variant. This code is not sufficient to derive M/N/K or exact operand
-// types in a uniform way across families. We therefore use an explicit switch
-// to return the exact (M,N,K) and concrete element types. For generic
-// fp8/packed encodings we default lhs and rhs to Float8E4M3FNUZ and
-// accumulator to f32.
+// D is a variant. This is not sufficient to derive M/N/K or exact operand
+// types uniformly across families, so we use an explicit switch to return
+// exact (M,N,K) and concrete element types. For fp8/packed encodings we
+// default accumulator to f32, lhs/rhs to Float8E4M3FNUZ (CDNA3) or Float8E4M3FN
+// (CDNA4).
+// TODO: Extend WaveMmaKind to avoid conflating fp8/f6/f4 variants (E4M3FN/E5M2,
+// etc.).
 
 wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
                                                  wave::WaveMmaKind kind) {
@@ -389,7 +391,12 @@ wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
   auto f32 = [&]() -> mlir::Type { return mlir::Float32Type::get(ctx); };
   auto i8 = [&]() -> mlir::Type { return mlir::IntegerType::get(ctx, 8); };
   auto i32 = [&]() -> mlir::Type { return mlir::IntegerType::get(ctx, 32); };
-  auto fp8 = [&]() -> mlir::Type { return mlir::Float8E4M3FNUZType::get(ctx); };
+  auto f8E4M3FNUZ = [&]() -> mlir::Type {
+    return mlir::Float8E4M3FNUZType::get(ctx);
+  };
+  auto f8E4M3FN = [&]() -> mlir::Type {
+    return mlir::Float8E4M3FNType::get(ctx);
+  };
 
   switch (kind) {
   // CDNA1
@@ -408,13 +415,13 @@ wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
 
   // CDNA3
   case wave::WaveMmaKind::F32_16x16x32_F8:
-    return {16, 16, 32, fp8(), fp8(), f32()};
+    return {16, 16, 32, f8E4M3FNUZ(), f8E4M3FNUZ(), f32()};
   case wave::WaveMmaKind::F32_32x32x16_F8:
-    return {32, 32, 16, fp8(), fp8(), f32()};
+    return {32, 32, 16, f8E4M3FNUZ(), f8E4M3FNUZ(), f32()};
   case wave::WaveMmaKind::F32_16x16x32_K4_F8:
-    return {16, 16, 32, fp8(), fp8(), f32()};
+    return {16, 16, 32, f8E4M3FNUZ(), f8E4M3FNUZ(), f32()};
   case wave::WaveMmaKind::F32_32x32x16_K4_F8:
-    return {32, 32, 16, fp8(), fp8(), f32()};
+    return {32, 32, 16, f8E4M3FNUZ(), f8E4M3FNUZ(), f32()};
   case wave::WaveMmaKind::I32_16x16x32_I8:
     return {16, 16, 32, i8(), i8(), i32()};
   case wave::WaveMmaKind::I32_32x32x16_I8:
@@ -422,9 +429,9 @@ wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
 
   // CDNA4
   case wave::WaveMmaKind::F32_16x16x128_F8F6F4:
-    return {16, 16, 128, fp8(), fp8(), f32()};
+    return {16, 16, 128, f8E4M3FN(), f8E4M3FN(), f32()};
   case wave::WaveMmaKind::F32_32x32x64_F8F6F4:
-    return {32, 32, 64, fp8(), fp8(), f32()};
+    return {32, 32, 64, f8E4M3FN(), f8E4M3FN(), f32()};
   case wave::WaveMmaKind::F32_16x16x32_F16:
     return {16, 16, 32, f16(), f16(), f32()};
   case wave::WaveMmaKind::F32_32x32x16_F16:
