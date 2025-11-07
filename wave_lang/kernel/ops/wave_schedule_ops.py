@@ -144,6 +144,74 @@ def get_node_by_tag_helper(kernel_trace, tag: str):
     return nodes
 
 
+def process_cluster_list_for_reordering(clusters, subgraph):
+    """
+    Process a cluster list and convert bare scheduling operations to InsertionPoints.
+
+    This allows users to write:
+        clusters = [
+            shared_load_a_0,
+            tkw.SchedulingBarrier([]),  # Inserted after shared_load_a_0
+            global_load_a,
+            tkw.WorkgroupBarrier(),     # Inserted after global_load_a
+            mma_0,
+            ...
+        ]
+    """
+    from ..wave.schedule_reordering import insert_op_after
+    from ..ops.wave_ops import SetWavePrio
+
+    cluster_nodes = []
+    prev_anchor_nodes = None  # Track previous non-scheduling nodes
+
+    for item in clusters:
+        # Case 1: Bare scheduling op - insert after previous operation
+        if isinstance(
+            item,
+            (SchedulingBarrier, WorkgroupBarrier, SharedMemoryBarrier, SetWavePrio),
+        ):
+            if prev_anchor_nodes is None:
+                raise ValueError(
+                    f"Cannot insert {type(item).__name__} without a previous operation. "
+                    "Add regular operations before scheduling operations in the cluster list."
+                )
+
+            # Get anchor node for location context
+            anchor_node = (
+                prev_anchor_nodes[-1]
+                if isinstance(prev_anchor_nodes, (list, tuple))
+                else prev_anchor_nodes
+            )
+            custom = get_custom(anchor_node)
+            context_location = custom.location if hasattr(custom, "location") else None
+
+            # Add scheduling op to subgraph and create InsertionPoint
+            new_op = item.add_to_graph(subgraph)
+            if context_location:
+                new_op.location = context_location
+
+            insertion_point = insert_op_after(new_op, prev_anchor_nodes)
+            cluster_nodes.append(insertion_point)
+
+            # Update prev_anchor_nodes so the next bare scheduling op is inserted after this one
+            # This creates a chain: op1 -> sched1 -> sched2 -> sched3
+            prev_anchor_nodes = new_op
+            continue
+
+        # Case 2: Proxy - extract result and add to cluster
+        if hasattr(item, "node"):
+            result = get_proxy_result(item.node)
+            if result:
+                cluster_nodes.append(result)
+                prev_anchor_nodes = result
+        # Case 3: Direct fx.Node
+        else:
+            cluster_nodes.append(item)
+            prev_anchor_nodes = item
+
+    return cluster_nodes
+
+
 @dataclass
 class CustomScheduleOp:
     """Base class for custom schedule operations."""
@@ -439,30 +507,21 @@ class ReorderGraph(CustomScheduleOp):
         custom_iterate = get_custom(iterate_node)
         subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
 
-        # Extract the actual cluster nodes from proxies
-        # clusters should be a list of nodes/operations
-        cluster_nodes = []
+        # Process cluster list to handle bare scheduling operations
+        # This converts bare ops like tkw.SchedulingBarrier([]) to InsertionPoints
         if hasattr(clusters, "node"):
-            # If clusters is a single proxy
-            clusters_result = get_proxy_result(clusters.node)
-            if clusters_result:
-                cluster_nodes = clusters_result
+            # Single proxy - just get the result
+            clusters_list = get_proxy_result(clusters.node)
         elif isinstance(clusters, (list, tuple)):
-            # If clusters is a list of proxies or nodes
-            for item in clusters:
-                if hasattr(item, "node"):
-                    result = get_proxy_result(item.node)
-                    if result:
-                        cluster_nodes.append(result)
-                else:
-                    cluster_nodes.append(item)
+            # List of items - process it
+            clusters_list = clusters
         else:
             raise ValueError(f"Unexpected clusters type: {type(clusters)}")
 
+        cluster_nodes = process_cluster_list_for_reordering(clusters_list, subgraph)
         logger.info(f"Reordering with {len(cluster_nodes)} cluster items")
 
         # Apply the reordering to the subgraph
-        breakpoint()
         reordered_subgraph = reorder_graph_impl(subgraph, cluster_nodes)
 
         if reordered_subgraph is None:
