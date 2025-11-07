@@ -997,7 +997,6 @@ def schedule_reordering(
             )
             insert_prefetch_loop_barriers(custom_iterate, graph, clusters)
         elif reorder_strategy == SchedReorderStrategy.ASYNC_TWO_PP_CLUSTER:
-            # continue
             clusters = transform_async_two_PP_clusters(
                 mma_nodes,
                 local_load_lhs,
