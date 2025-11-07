@@ -381,8 +381,8 @@ void wave::WaveDialect::registerAttributes() {
 // exact (M,N,K) and concrete element types. For fp8/packed encodings we
 // default accumulator to f32, lhs/rhs to Float8E4M3FNUZ (CDNA3) or Float8E4M3FN
 // (CDNA4).
-// TODO: Extend WaveMmaKind to avoid conflating fp8/f6/f4 variants (E4M3FN/E5M2,
-// etc.).
+// TODO: Extend WaveMmaKind to avoid conflating fp8/fp6/fp4 variants
+// (E4M3FN/E5M2,etc.).
 
 wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
                                                  wave::WaveMmaKind kind) {
