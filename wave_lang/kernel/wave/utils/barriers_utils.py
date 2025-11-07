@@ -222,7 +222,7 @@ def handle_hazard(
     consumer_kinds,
     barrier_type,
     is_nested: bool = False,
-    update: int = 0,
+    iterate_region: int = 0,
 ) -> BarrierType:
     """
     Scans the graph and append SyncRequirements to results if any.
@@ -251,7 +251,9 @@ def handle_hazard(
         if access_kind == MemoryAccessType.NONE:
             continue
 
-        depth = idx // change_iter_cut if update == 0 else int(idx < update)
+        depth = (
+            idx // change_iter_cut if iterate_region == 0 else int(idx < iterate_region)
+        )
         resource = get_shared_memory_from_op(op, depth)
         assert resource is not None, "op has not smem access"
 
@@ -313,7 +315,9 @@ def get_barriers_analysis(trace, graph, target_arch):
     collections: List[SyncRequirement] = []
     nodes = trace.walk_graph(trace.root_graph)
 
-    def dfs(nodes, collections, results, is_nested: bool = False, update: int = 0):
+    def dfs(
+        nodes, collections, results, is_nested: bool = False, iterate_region: int = 0
+    ):
         for node in nodes:
             if is_shared_memory_node(node):
                 collections.append(node)
@@ -323,7 +327,9 @@ def get_barriers_analysis(trace, graph, target_arch):
                 dfs(subgraph_nodes, collections, results)
                 collections = []
                 dfs(subgraph_nodes, collections, results, is_nested=True)
-                update = sum([is_shared_memory_node(node) for node in subgraph_nodes])
+                iterate_region = sum(
+                    [is_shared_memory_node(node) for node in subgraph_nodes]
+                )
 
             if is_condition_node(node):
                 subgraph_nodes = get_subgraph_nodes(trace, node)
@@ -337,7 +343,7 @@ def get_barriers_analysis(trace, graph, target_arch):
             {MemoryAccessType.READ},
             barrier_type=BarrierType.FILL,
             is_nested=is_nested,
-            update=update,
+            iterate_region=iterate_region,
         )
 
         # WAR
@@ -348,10 +354,10 @@ def get_barriers_analysis(trace, graph, target_arch):
             {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
             barrier_type=BarrierType.READY,
             is_nested=is_nested,
-            update=update,
+            iterate_region=iterate_region,
         )
 
-    dfs(nodes, collections, results, update=False)
+    dfs(nodes, collections, results, iterate_region=False)
 
     return results
 
