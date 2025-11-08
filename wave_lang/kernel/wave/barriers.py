@@ -24,6 +24,7 @@ from .utils.barriers_utils import (
     SyncRequirement,
     get_barriers_analysis,
     minimize_placement_strategy,
+    find_overlapping_interval_strategy,
 )
 
 
@@ -71,8 +72,8 @@ class LegacyBarrierEmitter(BarrierEmitter):
             True if isinstance(get_custom(node), GatherToLDS) else False
         )
 
-        producer = next(iter(req.prod_region))
-        consumer = next(iter(req.cons_region))
+        producer = req.prod_region
+        consumer = req.cons_region
 
         wait_async = False
         if is_async_op(producer) or is_async_op(consumer):
@@ -117,19 +118,19 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
     def optimize(
         self, sync_reqs: Sequence[SyncRequirement]
     ) -> Sequence[SyncRequirement]:
-        return minimize_placement_strategy(sync_reqs)
-        # return find_smallest_interval_strategy(sync_reqs)
+        # return minimize_placement_strategy(sync_reqs)
+        return find_overlapping_interval_strategy(sync_reqs)
 
     def place_barrier(self, req: SyncRequirement) -> None:
         barId = -1
-        producer = next(iter(req.prod_region))
-        consumer = next(iter(req.cons_region))
+        producer = req.prod_region
+        consumer = req.cons_region
         barrier = is_barrier_between(producer, consumer, barId)
 
         if barrier is None:
-            with consumer.graph.inserting_before(consumer):
+            with producer.graph.inserting_after(producer):
                 SharedMemoryBarrierSignal(barId).add_to_graph(
-                    consumer.graph, loc=get_custom(consumer).location
+                    producer.graph, loc=get_custom(producer).location
                 )
             with consumer.graph.inserting_before(consumer):
                 SharedMemoryBarrierWait(barId).add_to_graph(

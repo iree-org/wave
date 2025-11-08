@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from enum import Enum, IntFlag, auto
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Set, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import torch.fx as fx
 
@@ -63,12 +63,12 @@ class SyncRequirement:
     producers: Sequence[Any] = None
     consumers: Sequence[Any] = None
     is_loop: bool = False
-    prod_region: Set[Any] = field(default_factory=set)
-    cons_region: Set[Any] = field(default_factory=set)
+    prod_region: fx.Node = None
+    cons_region: fx.Node = None
     prod_topo_location: int = -1
     cons_topo_location: int = -1
-    graph_start: int = -1
-    graph_end: int = -1
+    graph_start: fx.Node = None
+    graph_end: fx.Node = None
     barrier_type: BarrierType = BarrierType.NONE
 
 
@@ -170,7 +170,7 @@ def add_sync_requirements(
     results: List[SyncRequirement],
     resource: fx.Node,
     state: EpisodeState,
-    graph_info: List[int],
+    graph_info: List[fx.Node],
     barrier_type: BarrierType.NONE,
 ) -> bool:
     """
@@ -198,8 +198,8 @@ def add_sync_requirements(
         producers=list(state.producers),
         consumers=list(state.consumers),
         is_loop=cross_iter,  # when producer appear after consumer, we identify a loop
-        prod_region={last_prod},
-        cons_region={first_con},
+        prod_region=last_prod,
+        cons_region=first_con,
         prod_topo_location=last_prod_loc,
         cons_topo_location=first_con_loc,
         graph_start=graph_info[0],
@@ -228,22 +228,32 @@ def handle_hazard(
     Scans the graph and append SyncRequirements to results if any.
     Returns if barriers are required for NestedRegionOp
     """
+    if len(nodes) == 0:
+        return
     states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
-    change_iter_cut = len(nodes)
+    n = len(nodes)
+    graph_info = [None, None]
 
     # duplicate nodes to find cross-iter dependencies
     # e.g.,
-    # loop[w1:0, w2:1, r1:2, r2:3] -> flat[w1:0, w2:1, r1:2, r2:3, w1:0, w2:1, r1:2, r2:3]
-    # dependencies for smem region 1:
-    # - w1:0 -> r1:2
-    # - r1:2 -> w1:0 ** cross-iter dep
+    #
+    # original loop has nodes
+    # [w1:0, w2:1, r1:0, r2:1]
+    #
+    # after duplication
+    # [w1:0, w2:1, r1:0, r2:1, w1:0, w2:1, r1:0, r2:1]
+    #
+    # after propagating depth
+    # [w1:0, w2:1, r1:0, r2:1, w1:1, w2:0, r1:1, r2:0]
+    #
+    # where is hazard ?
+    # - w1:0 -> r1:0
+    # - w2:1 -> r2:1
+    # - r2:1 -> w1:1 <- cross-iter dep
+    # - r1:0 -> w2:0 <- cross-iter dep
     if is_nested:
+        graph_info = [nodes[0], nodes[-1]]
         nodes = nodes * 2
-
-    if len(nodes) == 0:
-        return BarrierType.NONE
-
-    graph_info = [nodes[0]._topo_location, nodes[-1]._topo_location]
 
     for idx, node in enumerate(nodes):
         op = get_custom(node)
@@ -251,9 +261,7 @@ def handle_hazard(
         if access_kind == MemoryAccessType.NONE:
             continue
 
-        depth = (
-            idx // change_iter_cut if iterate_region == 0 else int(idx < iterate_region)
-        )
+        depth = idx // n if iterate_region == 0 else int(idx < iterate_region)
         resource = get_shared_memory_from_op(op, depth)
         assert resource is not None, "op has not smem access"
 
@@ -284,7 +292,7 @@ def handle_hazard(
                 barrier_type=barrier_type,
             )
 
-    return barrier_type
+    return
 
 
 def get_subgraph_nodes(trace, node: fx.Node) -> List[fx.Node]:
@@ -400,7 +408,10 @@ def minimize_placement_strategy(
     # 3) handle cross iteration sync req separately (they have producer loc > consumer loc)
     for req in cross_iters:
         start, end = get_location(req)
-        graph_start, graph_end = req.graph_start, req.graph_end
+        graph_start, graph_end = (
+            req.graph_start._topo_location,
+            req.graph_end._topo_location,
+        )
         btype = req.barrier_type
 
         assert (
@@ -409,11 +420,11 @@ def minimize_placement_strategy(
         assert graph_start < graph_end, "graph start < graph end."
 
         # 3.1) if graph start ~ sync request start has barrier placements: skip
-        if any([p in range(graph_start, end + 1) for p, bexist in placements]):
+        if any([p in range(graph_start, end + 1) for p, _ in placements]):
             continue
 
         # 3.2) if graph start ~ sync request start has barrier placements: skip
-        if any([p in range(start, graph_end + 1) for p, bexist in placements]):
+        if any([p in range(start, graph_end + 1) for p, _ in placements]):
             continue
 
         # 3.4) else valid placements
@@ -423,77 +434,198 @@ def minimize_placement_strategy(
     return results
 
 
-def find_smallest_interval_strategy(
+def find_overlapping_interval_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
+    """
+    The algorithm keep tracks of the current smallest wait position
+    update the signal position if a request has condition:
+    1) wait with larger position than track-recorded wait position
+    2) signal with larger position than track-recorded signal position
 
+    We add synchronization requirment when current signal position is larger than track-recorded wait position
+    """
     get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
-    get_prod = lambda req: next(iter(req.prod_region))
-    get_cons = lambda req: next(iter(req.cons_region))
 
     if len(sync_reqs) == 0:
         return sync_reqs
 
     placements = []
     results = []
+    cross_iters = []
 
     # 1) sort barrier placement location from pos low to high
     ascending_reqs = sorted(
         sync_reqs,
-        key=lambda req: (req.prod_topo_location, req.cons_topo_location),
+        key=lambda req: (req.cons_topo_location, req.prod_topo_location),
     )
 
-    # 2) variables
-    prev = ascending_reqs[0]
-    run_lo, run_hi = get_location(prev)
-    run_len = 1
-    signal = get_prod(prev)
-    wait = get_cons(prev)
+    # 2) define algorithm
+    def run_algorithm(reqs: List[SyncRequirement]) -> bool:
+        idx = 0
+        signal = None
+        wait = None
+        inter_graph = True
 
-    for cur in ascending_reqs[1:]:
-        cur_lo, cur_hi = get_location(cur)
-
-        lo, hi = max(run_lo, cur_lo), min(run_hi, cur_hi)
-        signal = get_prod(cur) if run_lo < cur_lo else signal
-        wait = get_cons(cur) if run_hi > cur_hi else wait
-
-        if lo <= hi:
-            run_lo, run_hi = lo, hi
-            run_len += 1
-            prev = cur
-        else:
-            req = SyncRequirement(
-                prod_region={signal},
-                cons_region={wait},
-                prod_topo_location=run_lo,
-                cons_topo_location=run_hi,
-            )
-            results.append(req if run_len > 1 else prev)
-
-            prev_loc = get_location(prev)
-            cur_loc = get_location(cur)
-
-            signal = get_prod(cur) if prev_loc[0] < cur_loc[0] else get_prod(prev)
-            wait = get_cons(cur) if prev_loc[1] > cur_loc[1] else get_cons(prev)
-
-            lo_update, hi_update = max(prev_loc[0], cur_loc[0]), min(
-                prev_loc[1], cur_loc[1]
-            )
-            if lo_update <= hi_update:
-                run_lo, run_hi = lo_update, hi_update
-                run_len = 2
+        # find the first non-cross-iter hazard
+        while idx < len(reqs):
+            req = reqs[idx]
+            if req.is_loop:
+                cross_iters.append(req)
+                idx += 1
+                continue
             else:
-                run_lo, run_hi = cur_loc
-                run_len = 1
+                signal = req.prod_region
+                wait = req.cons_region
+                break
+            idx += 1
 
-            prev = cur
+        if signal is None and wait is None:
+            return
 
-    req = SyncRequirement(
-        prod_region={signal},
-        cons_region={wait},
-        prod_topo_location=run_lo,
-        cons_topo_location=run_hi,
-    )
-    results.append(req)
+        # track-recorded positions
+        rec_signal_pos = req.prod_topo_location
+        rec_wait_pos = req.cons_topo_location
+
+        for req in reqs[idx:]:
+
+            if req.is_loop:
+                cross_iters.append(req)
+                continue
+
+            # current barrier request region
+            cur_signal_pos, cur_wait_pos = get_location(req)
+
+            # current signal position > recorded wait position
+            if cur_signal_pos > rec_wait_pos:
+                new_req = SyncRequirement(
+                    prod_region=signal,
+                    cons_region=wait,
+                )
+
+                if new_req not in results:
+                    inter_graph &= signal.graph == wait.graph
+                    results.append(new_req)
+
+                rec_signal_pos = cur_signal_pos
+                rec_wait_pos = cur_wait_pos
+                signal = req.prod_region
+                wait = req.cons_region
+            # update signal condition
+            else:
+                if cur_signal_pos > rec_signal_pos:
+                    rec_signal_pos = cur_signal_pos
+                    signal = req.prod_region
+                if cur_wait_pos < rec_wait_pos:
+                    rec_wait_pos = cur_wait_pos
+                    wait = req.cons_region
+
+        new_req = SyncRequirement(
+            prod_region=signal,
+            cons_region=wait,
+        )
+        if new_req not in results:
+            results.append(new_req)
+            inter_graph &= signal.graph == wait.graph
+
+        return inter_graph
+
+    run_algorithm(ascending_reqs)
+
+    # 3) handle cross iter
+    #    for cross iteration hazards, we will get dependencies like
+    #    producer: loc=55
+    #    consumer: loc=20
+    #    producer: loc=45
+    #    consumer: loc=25
+    #    -> where to place barrier? producer: 55, consumer: 20
+    #
+    #    we can reduce this problem and make it runnable by the algorithm
+    #    simply by adding offset to the consumer.
+    #    where offset = len(graph.nodes), we use 40 in this example
+    #
+    #    producer: loc 55
+    #    consumer: loc (20+40) 60
+    #    producer: loc 45
+    #    consumer: loc (25+40) 65
+    #    -> where to place barrier? producer: 55, consumer: 60
+    #
+    #    note for cross-iter special cases
+    #    0. ---------------
+    #           consumer
+    #           producer
+    #    1. ---------------
+    #       producer
+    #           consumer
+    #           producer
+    #       consumer
+    #    2. ---------------
+    #       producer
+    #           consumer
+    #           producer
+    #    3. ---------------
+    #           consumer
+    #           producer
+    #       consumer
+    #
+    cross_iter_reqs = defaultdict(list)
+    if len(cross_iters) != 0:
+        # collected nested region sync points
+        for req in cross_iters:
+            prod_loc, cons_loc = get_location(req)
+            assert req.prod_region.graph == req.cons_region.graph
+            assert prod_loc > cons_loc
+
+            req.is_loop = False
+            graph = req.prod_region.graph
+            graph_start, graph_end = (
+                req.graph_start._topo_location,
+                req.graph_end._topo_location,
+            )
+
+            # check for special cases
+            if any(
+                res.cons_region._topo_location in range(graph_start, cons_loc + 1)
+                for res in results
+            ) and any(
+                res.prod_region._topo_location in range(prod_loc, graph_end + 1)
+                for res in results
+            ):
+                continue
+            elif any(
+                res.cons_region._topo_location in range(graph_start, cons_loc + 1)
+                for res in results
+            ) and not any(
+                res.prod_region._topo_location in range(prod_loc, graph_end + 1)
+                for res in results
+            ):
+                req.cons_region = graph.parent_op.next
+                req.cons_topo_location = req.cons_region._topo_location
+                cross_iter_reqs[graph].append(req)
+                continue
+            elif not any(
+                res.cons_region._topo_location in range(graph_start, cons_loc + 1)
+                for res in results
+            ) and any(
+                res.prod_region._topo_location in range(prod_loc, graph_end + 1)
+                for res in results
+            ):
+                continue
+
+            n = len(graph.nodes)
+            req.cons_topo_location += n
+            cross_iter_reqs[graph].append(req)
+
+    for graph, reqs in cross_iter_reqs.items():
+        n_hazards = len(results)
+        inter_graph = run_algorithm(reqs)
+        if len(results) > n_hazards and inter_graph:
+            # this mean we add a cross iter signal and wait
+            iterateOp = graph.parent_op
+            new_req = SyncRequirement(
+                prod_region=iterateOp.prev,
+                cons_region=iterateOp.next,
+            )
+            results.append(new_req)
 
     return results

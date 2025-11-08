@@ -436,7 +436,7 @@ def test_bshd_attention_pipelined():
 
     # CHECK-DAG:    rocdl.s.wait.dscnt 0
     # CHECK-DAG:    rocdl.s.barrier.signal -1
-    # CHECK-NEXT:     scf.for
+    # CHECK-DAG:     scf.for
     # CHECK-DAG:        amdgpu.wmma
     # CHECK-DAG:        vector.load
 
