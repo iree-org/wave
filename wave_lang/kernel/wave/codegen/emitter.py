@@ -42,8 +42,6 @@ from wave_lang.support.ir_imports import (
     Operation,
     ShapedType,
     StridedLayoutAttr,
-    StringAttr,
-    SymbolRefAttr,
     TypeAttr,
     UnitAttr,
     Value,
@@ -259,11 +257,9 @@ class WaveEmitter:
         module_block = gpu_module.bodyRegion.blocks.append()
 
         with InsertionPoint(module_block), Location.name("wave-generated gpu module"):
-            kernel_func_wrapper = gpu_d.GPUFuncOp(TypeAttr.get(ftype))
-            kernel_func_wrapper.operation.attributes["sym_name"] = StringAttr.get(
-                self.kernel_name
+            kernel_func_wrapper = gpu_d.GPUFuncOp(
+                TypeAttr.get(ftype), sym_name=self.kernel_name, kernel=True
             )
-            kernel_func_wrapper.attributes["gpu.kernel"] = UnitAttr.get()
 
         kernel_entry_block = kernel_func_wrapper.body.blocks.append(
             *arg_types,
@@ -325,15 +321,10 @@ class WaveEmitter:
                 launch_args.append(buffer)
 
             gpu_d.launch_func(
-                async_token=None,
                 async_dependencies=[],
-                grid_size_x=grid[0],
-                grid_size_y=grid[1],
-                grid_size_z=grid[2],
-                block_size_x=threads[0],
-                block_size_y=threads[1],
-                block_size_z=threads[2],
-                kernel=SymbolRefAttr.get([gpu_module.sym_name.value, self.kernel_name]),
+                kernel=[gpu_module.sym_name.value, self.kernel_name],
+                grid_size=grid,
+                block_size=threads,
                 kernel_operands=launch_args,
             )
             func_d.return_([])
