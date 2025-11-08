@@ -3090,6 +3090,7 @@ class TensorLoadToLDS(CustomOp):
     shared_tile_index: dict[IndexSymbol, IndexSequence]
     global_tile_index: dict[IndexSymbol, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
+    multicast_mask: Optional[IndexExpr] = None
 
 
 @define_op("gather_to_lds")
