@@ -172,10 +172,9 @@ def add_sync_requirements(
     state: EpisodeState,
     graph_info: List[fx.Node],
     barrier_type: BarrierType.NONE,
-) -> bool:
+) -> None:
     """
-    Add cut (Synchronization requirements) to the state (in between last producer nodes and first consumer nodes)
-    Returns whether the sync requirement is cross-iter bounds.
+    Add a SyncRequirement to the results list.
     """
     cross_iter = False
     last_prod = state.producers[-1]
@@ -186,8 +185,7 @@ def add_sync_requirements(
     ), "Bug"
 
     if resource is not None and not need_barrier(last_prod, first_con):
-        # resource is None when we force-add barriers surrounding iterate and conditional nodes
-        return False
+        return
 
     last_prod_loc = last_prod._topo_location
     first_con_loc = first_con._topo_location
@@ -226,10 +224,11 @@ def handle_hazard(
 ) -> BarrierType:
     """
     Scans the graph and append SyncRequirements to results if any.
-    Returns if barriers are required for NestedRegionOp
+    The `states` dictionary tracks which producers and consumers are holding the resource.
     """
     if len(nodes) == 0:
         return
+
     states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
     n = len(nodes)
     graph_info = [None, None]
@@ -282,6 +281,7 @@ def handle_hazard(
             if state.producers:
                 state.consumers.append(node)
 
+    # final cleanup of each state.
     for resource, state in states.items():
         if state.producers and state.consumers:
             add_sync_requirements(
@@ -318,7 +318,6 @@ def get_barriers_analysis(trace, graph, target_arch):
         True if isinstance(get_custom(node), Conditional) else False
     )
 
-    # root graph
     results: List[SyncRequirement] = []
     collections: List[SyncRequirement] = []
     nodes = trace.walk_graph(trace.root_graph)
@@ -419,11 +418,11 @@ def minimize_placement_strategy(
         ), "Got producer location < consumer location but identified as cross-iter loop."
         assert graph_start < graph_end, "graph start < graph end."
 
-        # 3.1) if graph start ~ sync request start has barrier placements: skip
+        # 3.1) if graph start ~ sync request start already has barrier placements: skip
         if any([p in range(graph_start, end + 1) for p, _ in placements]):
             continue
 
-        # 3.2) if graph start ~ sync request start has barrier placements: skip
+        # 3.2) if graph start ~ sync request start already has barrier placements: skip
         if any([p in range(start, graph_end + 1) for p, _ in placements]):
             continue
 
@@ -438,12 +437,17 @@ def find_overlapping_interval_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
     """
-    The algorithm keep tracks of the current smallest wait position
-    update the signal position if a request has condition:
-    1) wait with larger position than track-recorded wait position
-    2) signal with larger position than track-recorded signal position
+    def position:
+    - node <- smallest
+    - node
+    - node <- largest
 
-    We add synchronization requirment when current signal position is larger than track-recorded wait position
+    The algorithm keep tracks of the smallest wait position, and
+    update the signal position if a request has
+    1) a wait with larger position than track-recorded wait position, and
+    2) a signal with larger position than track-recorded signal position
+
+    We add synchronization requirment to the result when current signal position is larger than track-recorded wait position
     """
     get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
 
@@ -454,7 +458,7 @@ def find_overlapping_interval_strategy(
     results = []
     cross_iters = []
 
-    # 1) sort barrier placement location from pos low to high
+    # 1) sort barrier placement location from pos small to large
     ascending_reqs = sorted(
         sync_reqs,
         key=lambda req: (req.cons_topo_location, req.prod_topo_location),
