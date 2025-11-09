@@ -33,18 +33,19 @@ find_package(nanobind CONFIG REQUIRED)
 # Build the core parts of nanobind once
 nanobind_build_library(nanobind SHARED)
 
-# TODO: Add LLVM and MLIR dependencies when implementing
-# find_package(LLVM REQUIRED CONFIG)
-# find_package(MLIR REQUIRED CONFIG)
-#
-# message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-# message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
-# message(STATUS "Found MLIR in: ${MLIR_DIR}")
-#
-# include_directories(${LLVM_INCLUDE_DIRS})
-# include_directories(${MLIR_INCLUDE_DIRS})
-#
-# add_definitions(${LLVM_DEFINITIONS})
+# Find LLVM and MLIR
+find_package(LLVM REQUIRED CONFIG)
+find_package(MLIR REQUIRED CONFIG)
+
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+message(STATUS "Found MLIR in: ${MLIR_DIR}")
+
+include_directories(${LLVM_INCLUDE_DIRS})
+include_directories(${MLIR_INCLUDE_DIRS})
+
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+add_definitions(${LLVM_DEFINITIONS_LIST})
 
 # Compile an extension library
 add_library(wave_execution_engine MODULE
@@ -58,20 +59,35 @@ target_include_directories(wave_execution_engine PRIVATE ${CMAKE_CURRENT_SOURCE_
 # Link against nanobind
 target_link_libraries(wave_execution_engine PRIVATE nanobind)
 
-# TODO: Link against LLVM and MLIR libraries when implementing
-# target_link_libraries(wave_execution_engine PRIVATE
-#   MLIRIR
-#   MLIRParser
-#   MLIRExecutionEngine
-#   MLIRTargetLLVMIRExport
-#   MLIRLLVMDialect
-#   LLVMCore
-#   LLVMSupport
-#   LLVMExecutionEngine
-#   LLVMJIT
-#   LLVMOrcJIT
-#   LLVMRuntimeDyld
-# )
+# Link against LLVM and MLIR libraries
+target_link_libraries(wave_execution_engine PRIVATE
+  # MLIR libraries
+  MLIRIR
+  MLIRCAPIIR
+  MLIRSupport
+  MLIRTargetLLVMIRExport
+
+  # LLVM libraries
+  LLVMCore
+  LLVMSupport
+  LLVMExecutionEngine
+  LLVMOrcJIT
+  LLVMRuntimeDyld
+  LLVMTarget
+  LLVMPasses
+  LLVMipo
+  LLVMTransformUtils
+  LLVMAnalysis
+  LLVMScalarOpts
+  LLVMInstCombine
+  LLVMAggressiveInstCombine
+  LLVMVectorize
+  LLVMMC
+  LLVMObject
+  LLVMBitWriter
+  LLVMBitReader
+  LLVMIRReader
+)
 
 set_target_properties(wave_execution_engine PROPERTIES LINK_WHAT_YOU_USE TRUE)
 

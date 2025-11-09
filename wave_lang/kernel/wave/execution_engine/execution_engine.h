@@ -3,94 +3,115 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef WAVE_EXECUTION_ENGINE_H
-#define WAVE_EXECUTION_ENGINE_H
+#pragma once
 
+#include <llvm/ExecutionEngine/Orc/Core.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/Support/CodeGen.h>
+#include <llvm/Support/Error.h>
+
+#include <functional>
 #include <memory>
-#include <string>
-#include <vector>
-#include <cstdint>
-
-// Forward declarations for LLVM types (to be implemented)
-// These will be replaced with actual LLVM includes when implementing
-namespace llvm {
-  class Module;
-  class ExecutionEngine;
-  class LLVMContext;
-}
 
 namespace mlir {
-  class MLIRContext;
-  class ModuleOp;
+class ModuleOp;
 }
 
+namespace llvm {
+template <typename T> class Expected;
+class JITEventListener;
+
+namespace orc {
+class LLJIT;
+class MangleAndInterner;
+} // namespace orc
+} // namespace llvm
+
 namespace wave {
+struct ExecutionEngineOptions {
+  /// `jitCodeGenOptLevel`, when provided, is used as the optimization level for
+  /// target code generation.
+  std::optional<llvm::CodeGenOptLevel> jitCodeGenOptLevel = std::nullopt;
 
-/// LLVM ExecutionEngine wrapper for Wave JIT compilation
-class WaveExecutionEngine {
-public:
-  WaveExecutionEngine();
-  ~WaveExecutionEngine();
+  /// If `enableObjectCache` is set, the JIT compiler will create one to store
+  /// the object generated for the given module. The contents of the cache can
+  /// be dumped to a file via the `dumpToObjectfile` method.
+  bool enableObjectCache = false;
 
-  // Disable copy and move operations
-  WaveExecutionEngine(const WaveExecutionEngine&) = delete;
-  WaveExecutionEngine& operator=(const WaveExecutionEngine&) = delete;
-  WaveExecutionEngine(WaveExecutionEngine&&) = delete;
-  WaveExecutionEngine& operator=(WaveExecutionEngine&&) = delete;
+  /// If enable `enableGDBNotificationListener` is set, the JIT compiler will
+  /// notify the llvm's global GDB notification listener.
+  bool enableGDBNotificationListener = true;
 
-  /// Initialize the execution engine with MLIR module
-  /// @param mlir_module_str MLIR module as a string
-  /// @throws std::runtime_error if initialization fails or already initialized
-  void initialize(const std::string& mlir_module_str);
+  /// If `enablePerfNotificationListener` is set, the JIT compiler will notify
+  /// the llvm's global Perf notification listener.
+  bool enablePerfNotificationListener = true;
 
-  /// Load a pre-compiled LLVM IR module
-  /// @param ir_str LLVM IR as a string
-  /// @throws std::runtime_error if loading fails
-  void load_llvm_ir(const std::string& ir_str);
+  /// Register symbols with this ExecutionEngine.
+  std::function<llvm::orc::SymbolMap(llvm::orc::MangleAndInterner)> symbolMap;
 
-  /// Lookup and invoke a function by name
-  /// @param func_name Name of the function to invoke
-  /// @param args Vector of arguments as uint64_t values
-  /// @throws std::runtime_error if engine not initialized or function not found
-  void invoke(const std::string& func_name, const std::vector<uint64_t>& args);
+  /// If `transformer` is provided, it will be called on the LLVM module during
+  /// JIT-compilation and can be used, e.g., for reporting or optimization.
+  std::function<llvm::Error(llvm::Module &)> transformer;
 
-  /// Get pointer to a function by name
-  /// @param func_name Name of the function
-  /// @return Address of the function
-  /// @throws std::runtime_error if engine not initialized or function not found
-  uintptr_t get_function_address(const std::string& func_name);
+  /// If `lateTransformer` is provided, it will be called on the LLVM module
+  /// just before final code generation and can be used, e.g., for reporting or
+  /// optimization.
+  std::function<llvm::Error(llvm::Module &)> lateTransformer;
 
-  /// Check if engine is initialized
-  /// @return true if initialized, false otherwise
-  bool is_initialized() const;
-
-  /// Optimize the module with given optimization level
-  /// @param opt_level Optimization level (0-3, default 2)
-  /// @throws std::runtime_error if engine not initialized
-  void optimize(int opt_level = 2);
-
-  /// Dump the current LLVM IR module for debugging
-  /// @return LLVM IR as a string
-  /// @throws std::runtime_error if engine not initialized
-  std::string dump_llvm_ir() const;
-
-private:
-  void cleanup();
-
-  bool initialized_;
-
-  // TODO: Add private members for:
-  // std::unique_ptr<llvm::LLVMContext> llvm_context_;
-  // std::unique_ptr<llvm::Module> llvm_module_;
-  // std::unique_ptr<llvm::ExecutionEngine> execution_engine_;
-  // std::unique_ptr<mlir::MLIRContext> mlir_context_;
+  /// If `asmPrinter` is provided, it will be called to print resulted assembly
+  /// just before final code generation.
+  std::function<void(llvm::StringRef)> asmPrinter;
 };
 
-/// Initialize LLVM and MLIR infrastructure
-/// Must be called before creating any WaveExecutionEngine instances
-/// @throws std::runtime_error if initialization fails
-void initialize_llvm_mlir();
+class ExecutionEngine {
+  class SimpleObjectCache;
 
+public:
+  using ModuleHandle = void *;
+
+  ExecutionEngine(const ExecutionEngineOptions &options);
+  ~ExecutionEngine();
+
+  /// Compiles given module, adds it to execution engine and run its contructors
+  /// if any.
+  llvm::Expected<ModuleHandle> loadModule(mlir::ModuleOp m);
+
+  /// Runs module desctructors and removes it from execution engine.
+  void releaseModule(ModuleHandle handle);
+
+  /// Looks up the original function with the given name and returns a
+  /// pointer to it. Propagates errors in case of failure.
+  llvm::Expected<void *> lookup(ModuleHandle handle,
+                                llvm::StringRef name) const;
+
+  /// Dump object code to output file `filename`.
+  void dumpToObjectFile(llvm::StringRef filename);
+
+private:
+  /// Ordering of llvmContext and jit is important for destruction purposes: the
+  /// jit must be destroyed before the context.
+  llvm::LLVMContext llvmContext;
+
+  /// Underlying LLJIT.
+  std::unique_ptr<llvm::orc::LLJIT> jit;
+
+  /// Underlying cache.
+  std::unique_ptr<SimpleObjectCache> cache;
+
+  /// GDB notification listener.
+  llvm::JITEventListener *gdbListener;
+
+  /// Perf notification listener.
+  llvm::JITEventListener *perfListener;
+
+  /// Callback to get additional symbol definitions.
+  std::function<llvm::orc::SymbolMap(llvm::orc::MangleAndInterner)> symbolMap;
+
+  /// If `transformer` is provided, it will be called on the LLVM module during
+  /// JIT-compilation and can be used, e.g., for reporting or optimization.
+  std::function<llvm::Error(llvm::Module &)> transformer;
+
+  /// Id for unique module name generation.
+  int uniqueNameCounter = 0;
+};
 } // namespace wave
-
-#endif // WAVE_EXECUTION_ENGINE_H

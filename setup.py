@@ -47,6 +47,19 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_BUILD_TYPE={'Debug' if self.debug else 'Release'}",
         ]
 
+        # Configure LLVM if WAVE_LLVM_DIR is set
+        wave_llvm_dir = os.getenv("WAVE_LLVM_DIR")
+        if wave_llvm_dir:
+            llvm_dir = os.path.join(wave_llvm_dir, "lib", "cmake", "llvm")
+            mlir_dir = os.path.join(wave_llvm_dir, "lib", "cmake", "mlir")
+            cmake_args += [
+                f"-DLLVM_DIR={llvm_dir}",
+                f"-DMLIR_DIR={mlir_dir}",
+            ]
+            print(f"Using LLVM from WAVE_LLVM_DIR: {wave_llvm_dir}")
+            print(f"  LLVM_DIR: {llvm_dir}")
+            print(f"  MLIR_DIR: {mlir_dir}")
+
         # Clang is required on Windows, since Wave runtime uses variable-length
         # arrays (VLAs) which not supported by MSVC
         if os.name == "nt":
@@ -167,7 +180,9 @@ setup(
     cmdclass={"build": BuildCommand, "build_ext": CMakeBuild},
     ext_modules=[
         CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime"),
-        CMakeExtension("wave_execution_engine", "wave_lang/kernel/wave/execution_engine"),
+        CMakeExtension(
+            "wave_execution_engine", "wave_lang/kernel/wave/execution_engine"
+        ),
     ],
     rust_extensions=[
         RustExtension("aplp_lib", "wave_lang/kernel/wave/scheduling/aplp/Cargo.toml")

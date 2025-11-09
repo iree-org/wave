@@ -5,76 +5,99 @@
 
 #include "execution_engine.h"
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
-#include <nanobind/stl/vector.h>
+
+#include <llvm/Support/Error.h>
+
+#include <mlir-c/IR.h>
+#include <mlir/CAPI/IR.h>
+#include <mlir/IR/BuiltinOps.h>
 
 namespace nb = nanobind;
+
+// Helper to convert llvm::Expected to Python (throw on error)
+template <typename T>
+static T unwrapExpected(llvm::Expected<T> expected, const char *context) {
+  if (!expected) {
+    std::string errorMessage;
+    llvm::raw_string_ostream os(errorMessage);
+    llvm::logAllUnhandledErrors(expected.takeError(), os);
+    throw std::runtime_error(std::string(context) + ": " + os.str());
+  }
+  return std::move(*expected);
+}
 
 // Nanobind module definition for Python bindings
 NB_MODULE(wave_execution_engine, m) {
   m.doc() = "LLVM ExecutionEngine bindings for Wave JIT compilation";
 
-  // Bind the WaveExecutionEngine class
-  nb::class_<wave::WaveExecutionEngine>(m, "ExecutionEngine")
-      .def(nb::init<>(),
-           "Create a new WaveExecutionEngine instance")
-      .def("initialize", &wave::WaveExecutionEngine::initialize,
-           nb::arg("mlir_module_str"),
-           "Initialize the execution engine with an MLIR module string.\n\n"
-           "Args:\n"
-           "    mlir_module_str: MLIR module as a string\n\n"
-           "Raises:\n"
-           "    RuntimeError: If initialization fails or already initialized")
-      .def("load_llvm_ir", &wave::WaveExecutionEngine::load_llvm_ir,
-           nb::arg("ir_str"),
-           "Load a pre-compiled LLVM IR module.\n\n"
-           "Args:\n"
-           "    ir_str: LLVM IR as a string\n\n"
-           "Raises:\n"
-           "    RuntimeError: If loading fails")
-      .def("invoke", &wave::WaveExecutionEngine::invoke,
-           nb::arg("func_name"), nb::arg("args"),
-           "Invoke a function by name with the given arguments.\n\n"
-           "Args:\n"
-           "    func_name: Name of the function to invoke\n"
-           "    args: List of arguments as uint64_t values\n\n"
-           "Raises:\n"
-           "    RuntimeError: If engine not initialized or function not found")
-      .def("get_function_address", &wave::WaveExecutionEngine::get_function_address,
-           nb::arg("func_name"),
-           "Get the address of a function by name.\n\n"
-           "Args:\n"
-           "    func_name: Name of the function\n\n"
-           "Returns:\n"
-           "    Address of the function as an integer\n\n"
-           "Raises:\n"
-           "    RuntimeError: If engine not initialized or function not found")
-      .def("is_initialized", &wave::WaveExecutionEngine::is_initialized,
-           "Check if the execution engine is initialized.\n\n"
-           "Returns:\n"
-           "    True if initialized, False otherwise")
-      .def("optimize", &wave::WaveExecutionEngine::optimize,
-           nb::arg("opt_level") = 2,
-           "Optimize the module with the given optimization level.\n\n"
-           "Args:\n"
-           "    opt_level: Optimization level (0-3, default 2)\n"
-           "               0 = No optimization\n"
-           "               1 = Basic optimizations\n"
-           "               2 = Standard optimizations (default)\n"
-           "               3 = Aggressive optimizations\n\n"
-           "Raises:\n"
-           "    RuntimeError: If engine not initialized or invalid opt_level")
-      .def("dump_llvm_ir", &wave::WaveExecutionEngine::dump_llvm_ir,
-           "Dump the current LLVM IR module as a string.\n\n"
-           "Returns:\n"
-           "    LLVM IR as a string\n\n"
-           "Raises:\n"
-           "    RuntimeError: If engine not initialized");
+  // Bind ExecutionEngineOptions
+  nb::class_<wave::ExecutionEngineOptions>(m, "ExecutionEngineOptions")
+      .def(nb::init<>(), "Create default ExecutionEngineOptions")
+      .def_rw("enable_object_cache",
+              &wave::ExecutionEngineOptions::enableObjectCache,
+              "Enable object cache for compiled code")
+      .def_rw("enable_gdb_notification_listener",
+              &wave::ExecutionEngineOptions::enableGDBNotificationListener,
+              "Enable GDB notification listener")
+      .def_rw("enable_perf_notification_listener",
+              &wave::ExecutionEngineOptions::enablePerfNotificationListener,
+              "Enable Perf notification listener");
 
-  // Bind the global initialization function
-  m.def("initialize_llvm_mlir", &wave::initialize_llvm_mlir,
-        "Initialize LLVM and MLIR infrastructure.\n\n"
-        "Must be called before creating any WaveExecutionEngine instances.\n\n"
-        "Raises:\n"
-        "    RuntimeError: If initialization fails");
+  // Bind ExecutionEngine class
+  nb::class_<wave::ExecutionEngine>(m, "ExecutionEngine")
+      .def(nb::init<const wave::ExecutionEngineOptions &>(), nb::arg("options"),
+           "Create a new ExecutionEngine with the given options.\n\n"
+           "Args:\n"
+           "    options: ExecutionEngineOptions to configure the engine")
+      .def(
+          "load_module",
+          [](wave::ExecutionEngine &self, MlirModule cModule) {
+            auto module = unwrap(cModule);
+            auto handle = unwrapExpected(self.loadModule(module),
+                                         "Failed to load module");
+            return reinterpret_cast<uintptr_t>(handle);
+          },
+          nb::arg("module"),
+          "Compile and load an MLIR module into the execution engine.\n\n"
+          "Args:\n"
+          "    module: MLIR module (MlirModule from MLIR C API)\n\n"
+          "Returns:\n"
+          "    Module handle as integer\n\n"
+          "Raises:\n"
+          "    RuntimeError: If compilation or loading fails")
+      .def(
+          "release_module",
+          [](wave::ExecutionEngine &self, uintptr_t handle) {
+            self.releaseModule(reinterpret_cast<void *>(handle));
+          },
+          nb::arg("handle"),
+          "Release a loaded module from the execution engine.\n\n"
+          "Args:\n"
+          "    handle: Module handle returned from load_module")
+      .def(
+          "lookup",
+          [](const wave::ExecutionEngine &self, uintptr_t handle,
+             const std::string &name) {
+            auto ptr = unwrapExpected(
+                self.lookup(reinterpret_cast<void *>(handle), name),
+                "Failed to lookup function");
+            return reinterpret_cast<uintptr_t>(ptr);
+          },
+          nb::arg("handle"), nb::arg("name"),
+          "Look up a function in a loaded module.\n\n"
+          "Args:\n"
+          "    handle: Module handle returned from load_module\n"
+          "    name: Name of the function to look up\n\n"
+          "Returns:\n"
+          "    Function address as integer\n\n"
+          "Raises:\n"
+          "    RuntimeError: If function lookup fails")
+      .def("dump_to_object_file", &wave::ExecutionEngine::dumpToObjectFile,
+           nb::arg("filename"),
+           "Dump compiled object code to a file.\n\n"
+           "Note: Object cache must be enabled in ExecutionEngineOptions.\n\n"
+           "Args:\n"
+           "    filename: Path to output file");
 }
