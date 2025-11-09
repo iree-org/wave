@@ -165,7 +165,10 @@ setup(
         ],
     },
     cmdclass={"build": BuildCommand, "build_ext": CMakeBuild},
-    ext_modules=[CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime")],
+    ext_modules=[
+        CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime"),
+        CMakeExtension("wave_execution_engine", "wave_lang/kernel/wave/execution_engine"),
+    ],
     rust_extensions=[
         RustExtension("aplp_lib", "wave_lang/kernel/wave/scheduling/aplp/Cargo.toml")
     ],
