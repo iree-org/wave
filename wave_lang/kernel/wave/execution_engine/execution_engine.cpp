@@ -4,139 +4,392 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "execution_engine.h"
-#include <stdexcept>
 
-namespace wave {
+#include <llvm/ExecutionEngine/JITEventListener.h>
+#include <llvm/ExecutionEngine/ObjectCache.h>
+#include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
+#include <llvm/ExecutionEngine/Orc/IRCompileLayer.h>
+#include <llvm/ExecutionEngine/Orc/IRTransformLayer.h>
+#include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
+#include <llvm/ExecutionEngine/SectionMemoryManager.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/Module.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/ToolOutputFile.h>
+#include <llvm/Target/TargetMachine.h>
 
-WaveExecutionEngine::WaveExecutionEngine() : initialized_(false) {}
+#include <mlir/IR/BuiltinOps.h>
+#include <mlir/Support/FileUtilities.h>
+#include <mlir/Target/LLVMIR/Export.h>
 
-WaveExecutionEngine::~WaveExecutionEngine() {
-  if (initialized_) {
-    cleanup();
+#include <llvm/IR/PassManager.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/StandardInstrumentations.h>
+
+#define DEBUG_TYPE "wave-execution-engine"
+
+static llvm::OptimizationLevel mapToLevel(llvm::CodeGenOptLevel level) {
+  unsigned optimizeSize = 0; // TODO: unhardcode
+
+  switch (level) {
+  default:
+    llvm_unreachable("Invalid optimization level!");
+
+  case llvm::CodeGenOptLevel::None:
+    return llvm::OptimizationLevel::O0;
+
+  case llvm::CodeGenOptLevel::Less:
+    return llvm::OptimizationLevel::O1;
+
+  case llvm::CodeGenOptLevel::Default:
+    switch (optimizeSize) {
+    default:
+      llvm_unreachable("Invalid optimization level for size!");
+
+    case 0:
+      return llvm::OptimizationLevel::O2;
+
+    case 1:
+      return llvm::OptimizationLevel::Os;
+
+    case 2:
+      return llvm::OptimizationLevel::Oz;
+    }
+
+  case llvm::CodeGenOptLevel::Aggressive:
+    return llvm::OptimizationLevel::O3;
   }
 }
 
-void WaveExecutionEngine::initialize(const std::string& mlir_module_str) {
-  if (initialized_) {
-    throw std::runtime_error("ExecutionEngine already initialized");
+static llvm::PipelineTuningOptions
+getPipelineTuningOptions(llvm::CodeGenOptLevel optLevelVal) {
+  llvm::PipelineTuningOptions pto;
+  auto level = static_cast<int>(optLevelVal);
+
+  pto.LoopUnrolling = level > 0;
+  pto.LoopVectorization = level > 1;
+  pto.SLPVectorization = level > 1;
+  return pto;
+}
+
+static void runOptimizationPasses(llvm::Module &M, llvm::TargetMachine &TM) {
+  llvm::CodeGenOptLevel optLevelVal = TM.getOptLevel();
+
+  llvm::LoopAnalysisManager lam;
+  llvm::FunctionAnalysisManager fam;
+  llvm::CGSCCAnalysisManager cgam;
+  llvm::ModuleAnalysisManager mam;
+
+  llvm::PassInstrumentationCallbacks pic;
+  llvm::PrintPassOptions ppo;
+  ppo.Indent = false;
+  ppo.SkipAnalyses = false;
+  llvm::StandardInstrumentations si(M.getContext(), /*debugLogging*/ false,
+                                    /*verifyEach*/ true, ppo);
+
+  si.registerCallbacks(pic, &mam);
+
+  llvm::PassBuilder pb(&TM, getPipelineTuningOptions(optLevelVal));
+
+  llvm::ModulePassManager mpm;
+
+  if (/*verify*/ true) {
+    pb.registerPipelineStartEPCallback(
+        [&](llvm::ModulePassManager &mpm, llvm::OptimizationLevel level) {
+          mpm.addPass(createModuleToFunctionPassAdaptor(llvm::VerifierPass()));
+        });
   }
 
-  // TODO: Implement MLIR module parsing and LLVM ExecutionEngine creation
-  // Steps:
-  // 1. Parse MLIR module from string
-  // 2. Convert MLIR to LLVM IR
-  // 3. Create LLVM ExecutionEngine
-  // 4. JIT compile the module
+  // Register all the basic analyses with the managers.
+  pb.registerModuleAnalyses(mam);
+  pb.registerCGSCCAnalyses(cgam);
+  pb.registerFunctionAnalyses(fam);
+  pb.registerLoopAnalyses(lam);
+  pb.crossRegisterProxies(lam, fam, cgam, mam);
 
-  throw std::runtime_error("ExecutionEngine initialization not yet implemented");
-}
+  llvm::OptimizationLevel level = mapToLevel(optLevelVal);
 
-void WaveExecutionEngine::load_llvm_ir(const std::string& ir_str) {
-  // TODO: Implement LLVM IR loading
-  // Steps:
-  // 1. Parse LLVM IR string
-  // 2. Create LLVM module from IR
-  // 3. Set up ExecutionEngine with the module
-  // 4. Finalize the module for execution
-
-  throw std::runtime_error("LLVM IR loading not yet implemented");
-}
-
-void WaveExecutionEngine::invoke(const std::string& func_name,
-                                 const std::vector<uint64_t>& args) {
-  if (!initialized_) {
-    throw std::runtime_error("ExecutionEngine not initialized");
+  if (optLevelVal == llvm::CodeGenOptLevel::None) {
+    mpm = pb.buildO0DefaultPipeline(level);
+  } else {
+    mpm = pb.buildPerModuleDefaultPipeline(level);
   }
 
-  // TODO: Implement function lookup and invocation
-  // Steps:
-  // 1. Look up function by name in ExecutionEngine
-  // 2. Get function pointer
-  // 3. Marshal arguments based on function signature
-  // 4. Invoke function with marshalled arguments
-  // 5. Return results (if any)
-
-  throw std::runtime_error("Function invocation not yet implemented");
+  mpm.run(M, mam);
 }
 
-uintptr_t WaveExecutionEngine::get_function_address(const std::string& func_name) {
-  if (!initialized_) {
-    throw std::runtime_error("ExecutionEngine not initialized");
+/// A simple object cache following Lang's LLJITWithObjectCache example.
+class wave::ExecutionEngine::SimpleObjectCache : public llvm::ObjectCache {
+public:
+  void notifyObjectCompiled(const llvm::Module *m,
+                            llvm::MemoryBufferRef objBuffer) override {
+    cachedObjects[m->getModuleIdentifier()] =
+        llvm::MemoryBuffer::getMemBufferCopy(objBuffer.getBuffer(),
+                                             objBuffer.getBufferIdentifier());
   }
 
-  // TODO: Implement function address lookup
-  // Steps:
-  // 1. Look up function by name in ExecutionEngine
-  // 2. Get function address using ExecutionEngine::getFunctionAddress()
-  // 3. Return the address as uintptr_t
-
-  throw std::runtime_error("Function address lookup not yet implemented");
-}
-
-bool WaveExecutionEngine::is_initialized() const {
-  return initialized_;
-}
-
-void WaveExecutionEngine::optimize(int opt_level) {
-  if (!initialized_) {
-    throw std::runtime_error("ExecutionEngine not initialized");
+  std::unique_ptr<llvm::MemoryBuffer>
+  getObject(const llvm::Module *m) override {
+    auto i = cachedObjects.find(m->getModuleIdentifier());
+    if (i == cachedObjects.end()) {
+      LLVM_DEBUG(llvm::dbgs() << "No object for " << m->getModuleIdentifier()
+                              << " in cache. Compiling.\n");
+      return nullptr;
+    }
+    LLVM_DEBUG(llvm::dbgs() << "Object for " << m->getModuleIdentifier()
+                            << " loaded from cache.\n");
+    return llvm::MemoryBuffer::getMemBuffer(i->second->getMemBufferRef());
   }
 
-  if (opt_level < 0 || opt_level > 3) {
-    throw std::runtime_error("Invalid optimization level. Must be 0-3");
+  /// Dump cached object to output file `filename`.
+  void dumpToObjectFile(llvm::StringRef outputFilename) {
+    // Set up the output file.
+    std::string errorMessage;
+    auto file = mlir::openOutputFile(outputFilename, &errorMessage);
+    if (!file) {
+      llvm::errs() << errorMessage << "\n";
+      return;
+    }
+
+    // Dump the object generated for a single module to the output file.
+    assert(cachedObjects.size() == 1 && "Expected only one object entry.");
+    auto &cachedObject = cachedObjects.begin()->second;
+    file->os() << cachedObject->getBuffer();
+    file->keep();
   }
 
-  // TODO: Implement module optimization
-  // Steps:
-  // 1. Create LLVM PassManager
-  // 2. Add optimization passes based on opt_level:
-  //    - O0: No optimization
-  //    - O1: Basic optimizations
-  //    - O2: Standard optimizations (default)
-  //    - O3: Aggressive optimizations
-  // 3. Run passes on the module
+private:
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> cachedObjects;
+};
 
-  throw std::runtime_error("Module optimization not yet implemented");
+/// Wrap a string into an llvm::StringError.
+static llvm::Error makeStringError(const llvm::Twine &message) {
+  return llvm::make_error<llvm::StringError>(message.str(),
+                                             llvm::inconvertibleErrorCode());
 }
 
-std::string WaveExecutionEngine::dump_llvm_ir() const {
-  if (!initialized_) {
-    throw std::runtime_error("ExecutionEngine not initialized");
+// Setup LLVM target triple from the current machine.
+static void setupModule(llvm::Module &M, llvm::TargetMachine &TM) {
+  M.setDataLayout(TM.createDataLayout());
+  M.setTargetTriple(TM.getTargetTriple().normalize());
+  for (auto &&func : M.functions()) {
+    if (!func.hasFnAttribute("target-cpu"))
+      func.addFnAttr("target-cpu", TM.getTargetCPU());
+
+    if (!func.hasFnAttribute("target-features")) {
+      auto featStr = TM.getTargetFeatureString();
+      if (!featStr.empty())
+        func.addFnAttr("target-features", featStr);
+    }
+  }
+}
+
+namespace {
+class CustomCompiler : public llvm::orc::SimpleCompiler {
+public:
+  using Transformer = std::function<llvm::Error(llvm::Module &)>;
+  using AsmPrinter = std::function<void(llvm::StringRef)>;
+
+  CustomCompiler(Transformer t, AsmPrinter a,
+                 std::unique_ptr<llvm::TargetMachine> TM,
+                 llvm::ObjectCache *ObjCache = nullptr)
+      : SimpleCompiler(*TM, ObjCache), TM(std::move(TM)),
+        transformer(std::move(t)), printer(std::move(a)) {}
+
+  llvm::Expected<CompileResult> operator()(llvm::Module &M) override {
+    if (transformer) {
+      auto err = transformer(M);
+      if (err)
+        return err;
+    }
+
+    setupModule(M, *TM);
+    runOptimizationPasses(M, *TM);
+
+    if (printer) {
+      llvm::SmallVector<char, 0> buffer;
+      llvm::raw_svector_ostream os(buffer);
+
+      llvm::legacy::PassManager PM;
+      if (TM->addPassesToEmitFile(PM, os, nullptr,
+                                  llvm::CodeGenFileType::AssemblyFile))
+        return makeStringError("Target does not support Asm emission");
+
+      PM.run(M);
+      printer(llvm::StringRef(buffer.data(), buffer.size()));
+    }
+
+    return llvm::orc::SimpleCompiler::operator()(M);
   }
 
-  // TODO: Implement LLVM IR dumping
-  // Steps:
-  // 1. Get the LLVM module from ExecutionEngine
-  // 2. Convert module to string using raw_string_ostream
-  // 3. Return the string representation
+private:
+  std::shared_ptr<llvm::TargetMachine> TM;
+  Transformer transformer;
+  AsmPrinter printer;
+};
+} // namespace
 
-  return "LLVM IR dump not yet implemented";
+wave::ExecutionEngine::ExecutionEngine(const ExecutionEngineOptions &options)
+    : cache(options.enableObjectCache ? new SimpleObjectCache() : nullptr),
+      gdbListener(options.enableGDBNotificationListener
+                      ? llvm::JITEventListener::createGDBRegistrationListener()
+                      : nullptr),
+      perfListener(nullptr) {
+  if (options.enablePerfNotificationListener) {
+    if (auto *listener = llvm::JITEventListener::createPerfJITEventListener())
+      perfListener = listener;
+    else if (auto *listener =
+                 llvm::JITEventListener::createIntelJITEventListener())
+      perfListener = listener;
+  }
+
+  // Callback to create the object layer with symbol resolution to current
+  // process and dynamically linked libraries.
+  auto objectLinkingLayerCreator = [this](llvm::orc::ExecutionSession &session,
+                                          const llvm::Triple &targetTriple) {
+    auto objectLayer =
+        std::make_unique<llvm::orc::RTDyldObjectLinkingLayer>(session, []() {
+          return std::make_unique<llvm::SectionMemoryManager>();
+        });
+
+    // Register JIT event listeners if they are enabled.
+    if (gdbListener)
+      objectLayer->registerJITEventListener(*gdbListener);
+    if (perfListener)
+      objectLayer->registerJITEventListener(*perfListener);
+
+    // COFF format binaries (Windows) need special handling to deal with
+    // exported symbol visibility.
+    // cf llvm/lib/ExecutionEngine/Orc/LLJIT.cpp LLJIT::createObjectLinkingLayer
+    if (targetTriple.isOSBinFormatCOFF()) {
+      objectLayer->setOverrideObjectFlagsWithResponsibilityFlags(true);
+      objectLayer->setAutoClaimResponsibilityForObjectSymbols(true);
+    }
+
+    return objectLayer;
+  };
+
+  // Callback to inspect the cache and recompile on demand. This follows Lang's
+  // LLJITWithObjectCache example.
+  auto compileFunctionCreator =
+      [this, jitCodeGenOptLevel = options.jitCodeGenOptLevel,
+       transformer = options.lateTransformer,
+       asmPrinter = options.asmPrinter](llvm::orc::JITTargetMachineBuilder jtmb)
+      -> llvm::Expected<
+          std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
+    if (jitCodeGenOptLevel)
+      jtmb.setCodeGenOptLevel(*jitCodeGenOptLevel);
+    auto tm = jtmb.createTargetMachine();
+    if (!tm)
+      return tm.takeError();
+    return std::make_unique<CustomCompiler>(transformer, asmPrinter,
+                                            std::move(*tm), cache.get());
+  };
+
+  auto tmBuilder =
+      llvm::cantFail(llvm::orc::JITTargetMachineBuilder::detectHost());
+
+  // Create the LLJIT by calling the LLJITBuilder with 2 callbacks.
+  jit = cantFail(llvm::orc::LLJITBuilder()
+                     .setCompileFunctionCreator(compileFunctionCreator)
+                     .setObjectLinkingLayerCreator(objectLinkingLayerCreator)
+                     .setJITTargetMachineBuilder(tmBuilder)
+                     .create());
+
+  symbolMap = std::move(options.symbolMap);
+  transformer = std::move(options.transformer);
 }
 
-void WaveExecutionEngine::cleanup() {
-  // TODO: Implement cleanup of LLVM resources
-  // Steps:
-  // 1. Clean up ExecutionEngine
-  // 2. Clean up LLVM module
-  // 3. Clean up LLVM context
-  // 4. Clean up MLIR context (if used)
+wave::ExecutionEngine::~ExecutionEngine() {}
 
-  initialized_ = false;
+llvm::Expected<wave::ExecutionEngine::ModuleHandle>
+wave::ExecutionEngine::loadModule(mlir::ModuleOp m) {
+  assert(m);
+
+  std::unique_ptr<llvm::LLVMContext> ctx(new llvm::LLVMContext);
+  auto llvmModule = mlir::translateModuleToLLVMIR(m, *ctx);
+  if (!llvmModule)
+    return makeStringError("could not convert to LLVM IR");
+
+  // Add a ThreadSafemodule to the engine and return.
+  llvm::orc::ThreadSafeModule tsm(std::move(llvmModule), std::move(ctx));
+  if (transformer)
+    cantFail(tsm.withModuleDo(
+        [this](llvm::Module &module) { return transformer(module); }));
+
+  llvm::orc::JITDylib *dylib;
+  while (true) {
+    auto uniqueName =
+        (llvm::Twine("module") + llvm::Twine(uniqueNameCounter++)).str();
+    if (jit->getJITDylibByName(uniqueName))
+      continue;
+
+    auto res = jit->createJITDylib(std::move(uniqueName));
+    if (!res)
+      return res.takeError();
+
+    dylib = &res.get();
+    break;
+  }
+  assert(dylib);
+
+  auto dataLayout = jit->getDataLayout();
+  dylib->addGenerator(
+      cantFail(llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+          dataLayout.getGlobalPrefix())));
+
+  if (symbolMap)
+    cantFail(
+        dylib->define(absoluteSymbols(symbolMap(llvm::orc::MangleAndInterner(
+            dylib->getExecutionSession(), jit->getDataLayout())))));
+
+  llvm::cantFail(jit->addIRModule(*dylib, std::move(tsm)));
+  llvm::cantFail(jit->initialize(*dylib));
+  return static_cast<ModuleHandle>(dylib);
 }
 
-void initialize_llvm_mlir() {
-  // TODO: Implement LLVM and MLIR initialization
-  // Steps:
-  // 1. Initialize LLVM targets:
-  //    - InitializeNativeTarget()
-  //    - InitializeNativeTargetAsmPrinter()
-  //    - InitializeNativeTargetAsmParser()
-  // 2. Register MLIR dialects (if needed):
-  //    - registerAllDialects()
-  //    - registerLLVMDialectTranslation()
-  // 3. Initialize LLVM passes (if needed)
-
-  throw std::runtime_error("LLVM/MLIR initialization not yet implemented");
+void wave::ExecutionEngine::releaseModule(ModuleHandle handle) {
+  assert(handle);
+  auto dylib = static_cast<llvm::orc::JITDylib *>(handle);
+  llvm::cantFail(jit->deinitialize(*dylib));
+  llvm::cantFail(jit->getExecutionSession().removeJITDylib(*dylib));
 }
 
-} // namespace wave
+llvm::Expected<void *>
+wave::ExecutionEngine::lookup(wave::ExecutionEngine::ModuleHandle handle,
+                              llvm::StringRef name) const {
+  assert(handle);
+  auto dylib = static_cast<llvm::orc::JITDylib *>(handle);
+  auto expectedSymbol = jit->lookup(*dylib, name);
+
+  // JIT lookup may return an Error referring to strings stored internally by
+  // the JIT. If the Error outlives the ExecutionEngine, it would want have a
+  // dangling reference, which is currently caught by an assertion inside JIT
+  // thanks to hand-rolled reference counting. Rewrap the error message into a
+  // string before returning. Alternatively, ORC JIT should consider copying
+  // the string into the error message.
+  if (!expectedSymbol) {
+    std::string errorMessage;
+    llvm::raw_string_ostream os(errorMessage);
+    llvm::handleAllErrors(expectedSymbol.takeError(),
+                          [&os](llvm::ErrorInfoBase &ei) { ei.log(os); });
+    return makeStringError(os.str());
+  }
+
+  if (void *fptr = expectedSymbol->toPtr<void *>())
+    return fptr;
+
+  return makeStringError("looked up function is null");
+}
+
+void wave::ExecutionEngine::dumpToObjectFile(llvm::StringRef filename) {
+  if (cache == nullptr) {
+    llvm::errs() << "cannot dump ExecutionEngine object code to file: "
+                    "object cache is disabled\n";
+    return;
+  }
+  cache->dumpToObjectFile(filename);
+}
