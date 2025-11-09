@@ -715,14 +715,18 @@ class LaunchableWave(Launchable):
 
             with InsertionPoint(module_op.body), Location.unknown():
                 func = emitter.emit(trace.get_root_graph())
-                host_func = emitter.emit_host_func(func)
+                if options.use_water_pipeline:
+                    host_func = emitter.emit_host_func(func)
 
-            print(module_op)
-            canonicalize_module(module_op)
-            from .water import water_lowering_pipeline
+            if options.use_water_pipeline:
+                print(module_op)
+                canonicalize_module(module_op)
+                from .water import water_lowering_pipeline
 
-            module_op = water_lowering_pipeline(module_op, options.target)
-            print(module_op)
+                module_op = water_lowering_pipeline(module_op, options.target)
+                print(module_op)
+            else:
+                canonicalize_module(module_op)
 
         module_op.operation.verify()
 
