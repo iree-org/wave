@@ -174,7 +174,7 @@ static llvm::Error makeStringError(const llvm::Twine &message) {
 // Setup LLVM target triple from the current machine.
 static void setupModule(llvm::Module &M, llvm::TargetMachine &TM) {
   M.setDataLayout(TM.createDataLayout());
-  M.setTargetTriple(TM.getTargetTriple().normalize());
+  M.setTargetTriple(TM.getTargetTriple());
   for (auto &&func : M.functions()) {
     if (!func.hasFnAttribute("target-cpu"))
       func.addFnAttr("target-cpu", TM.getTargetCPU());
@@ -246,14 +246,23 @@ wave::ExecutionEngine::ExecutionEngine(const ExecutionEngineOptions &options)
       perfListener = listener;
   }
 
+  auto tmBuilder =
+      llvm::cantFail(llvm::orc::JITTargetMachineBuilder::detectHost());
+
+  // Get the target triple from the builder
+  auto targetTriple = tmBuilder.getTargetTriple();
+
   // Callback to create the object layer with symbol resolution to current
   // process and dynamically linked libraries.
-  auto objectLinkingLayerCreator = [this](llvm::orc::ExecutionSession &session,
-                                          const llvm::Triple &targetTriple) {
-    auto objectLayer =
-        std::make_unique<llvm::orc::RTDyldObjectLinkingLayer>(session, []() {
-          return std::make_unique<llvm::SectionMemoryManager>();
-        });
+  auto objectLinkingLayerCreator =
+      [this, targetTriple](llvm::orc::ExecutionSession &session)
+      -> llvm::Expected<std::unique_ptr<llvm::orc::ObjectLayer>> {
+    auto GetMemMgr = [](const llvm::MemoryBuffer &) {
+      return std::make_unique<llvm::SectionMemoryManager>();
+    };
+
+    auto objectLayer = std::make_unique<llvm::orc::RTDyldObjectLinkingLayer>(
+        session, GetMemMgr);
 
     // Register JIT event listeners if they are enabled.
     if (gdbListener)
@@ -289,15 +298,13 @@ wave::ExecutionEngine::ExecutionEngine(const ExecutionEngineOptions &options)
                                             std::move(*tm), cache.get());
   };
 
-  auto tmBuilder =
-      llvm::cantFail(llvm::orc::JITTargetMachineBuilder::detectHost());
-
   // Create the LLJIT by calling the LLJITBuilder with 2 callbacks.
-  jit = cantFail(llvm::orc::LLJITBuilder()
-                     .setCompileFunctionCreator(compileFunctionCreator)
-                     .setObjectLinkingLayerCreator(objectLinkingLayerCreator)
-                     .setJITTargetMachineBuilder(tmBuilder)
-                     .create());
+  jit = llvm::cantFail(
+      llvm::orc::LLJITBuilder()
+          .setCompileFunctionCreator(compileFunctionCreator)
+          .setObjectLinkingLayerCreator(objectLinkingLayerCreator)
+          .setJITTargetMachineBuilder(tmBuilder)
+          .create());
 
   symbolMap = std::move(options.symbolMap);
   transformer = std::move(options.transformer);
