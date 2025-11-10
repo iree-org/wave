@@ -202,6 +202,9 @@ class CapturedTrace:
     def walk_graph(
         self, name: str, filter: Optional[Callable[[fx.Node], bool]] = None
     ) -> list[fx.Node]:
+        """
+        Traverse a graph without recursing into subgraphs. The granularity of this method is limited to a single graph.
+        """
         nodes: list[fx.Node] = []
         graph = self.get_subgraph(name)
         for node in graph.nodes:
@@ -212,6 +215,9 @@ class CapturedTrace:
     def preorder_walk(
         self, name: str = "", filter: Optional[Callable[[fx.Node], bool]] = None
     ) -> list[fx.Node]:
+        """
+        Pre-order traversal of a graph, if name of a graph is not provided, this method starts from the root graph.
+        """
         nodes: list[fx.Node] = []
         if name == "":
             name = self.root_graph

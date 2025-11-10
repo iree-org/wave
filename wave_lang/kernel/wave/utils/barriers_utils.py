@@ -6,7 +6,7 @@
 from enum import Enum, IntFlag, auto
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Union, Set
+from typing import Any, Dict, List, Optional, Sequence, Union, Set, Tuple
 
 import torch.fx as fx
 
@@ -122,7 +122,7 @@ def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
 
 def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> Optional[fx.Node]:
     """
-    Given a customOp, returns whether it operates on a shared memory region.
+    Given a customOp, returns the shared memory node if it operates on a shared memory region, otherwise None.
     """
     if (
         isinstance(op, (Read, Write))
@@ -172,7 +172,7 @@ def add_sync_requirements(
     resource: fx.Node,
     state: EpisodeState,
     graph_info: List[fx.Node],
-    barrier_type: BarrierType.NONE,
+    barrier_type: BarrierType = BarrierType.NONE,
 ) -> None:
     """
     Add a SyncRequirement to the results list.
@@ -180,10 +180,6 @@ def add_sync_requirements(
     cross_iter = False
     last_prod = state.producers[-1]
     first_con = state.consumers[0]
-
-    assert get_shared_memory_from_op(last_prod) == get_shared_memory_from_op(
-        first_con
-    ), f"BUG: {last_prod} and {first_con} reference different shared-memory regions. This indicates a bug in handle_hazard: producers and consumers should operate on the same region but are currently mismatched."
 
     if resource is not None and not need_barrier(last_prod, first_con):
         return
@@ -214,7 +210,7 @@ def add_sync_requirements(
 
 def handle_hazard(
     results: List[SyncRequirement],
-    nodes: List[SyncRequirement],
+    nodes: List[fx.Node],
     producer_kinds: Set[MemoryAccessType],
     consumer_kinds: Set[MemoryAccessType],
     barrier_type: BarrierType,
@@ -322,7 +318,7 @@ def get_barriers_analysis(
     is_condition_node = lambda node: isinstance(get_custom(node), Conditional)
 
     results: List[SyncRequirement] = []
-    collections: List[SyncRequirement] = []
+    collections: List[fx.Node] = []
     nodes = trace.walk_graph(trace.root_graph)
 
     def dfs(
@@ -339,7 +335,7 @@ def get_barriers_analysis(
             if is_iterate_node(node):
                 subgraph_nodes = get_subgraph_nodes(trace, node)
                 dfs(subgraph_nodes, collections, results)
-                collections = []
+                collections.clear()
                 dfs(subgraph_nodes, collections, results, is_nested=True)
                 iterate_region = sum(
                     [is_shared_memory_node(node) for node in subgraph_nodes]
@@ -424,22 +420,22 @@ def minimize_placement_strategy(
         ), "Got producer location < consumer location but identified as cross-iter loop."
         assert graph_start < graph_end, "graph start < graph end."
 
-        # 3.1) if graph start ~ sync request start already has barrier placements: skip
+        # 3.1) If graph start ~ sync request start already has barrier placements: skip
         if any([p in range(graph_start, end + 1) for p, _ in placements]):
             continue
 
-        # 3.2) if graph start ~ sync request start already has barrier placements: skip
+        # 3.2) If sync request end ~ graph end already has barrier placements: skip
         if any([p in range(start, graph_end + 1) for p, _ in placements]):
             continue
 
-        # 3.4) else valid placements
+        # 3.3) else valid placements
         results.append(req)
         placements.append((end, btype))
 
     return results
 
 
-def find_overlapping_interval_strategy(
+def find_intersecting_interval_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
     """
@@ -453,14 +449,13 @@ def find_overlapping_interval_strategy(
     1) a wait with larger position than track-recorded wait position, and
     2) a signal with larger position than track-recorded signal position
 
-    We add synchronization requirment to the result when current signal position is larger than track-recorded wait position
+    We add synchronization requirement to the result when current signal position is larger than track-recorded wait position
     """
     get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
 
     if len(sync_reqs) == 0:
         return sync_reqs
 
-    placements = []
     results = []
     cross_iters = []
 
@@ -483,15 +478,13 @@ def find_overlapping_interval_strategy(
             if req.is_loop:
                 cross_iters.append(req)
                 idx += 1
-                continue
             else:
                 signal = req.prod_region
                 wait = req.cons_region
                 break
-            idx += 1
 
         if signal is None and wait is None:
-            return
+            return False
 
         # track-recorded positions
         rec_signal_pos = req.prod_topo_location
@@ -572,11 +565,7 @@ def find_overlapping_interval_strategy(
     #       producer
     #           consumer
     #           producer
-    #    3. ---------------
-    #           consumer
-    #           producer
-    #       consumer
-    #
+
     cross_iter_reqs = defaultdict(list)
     if len(cross_iters) != 0:
         # collected nested region sync points

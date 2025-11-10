@@ -24,26 +24,34 @@ from .utils.barriers_utils import (
     SyncRequirement,
     get_barriers_analysis,
     minimize_placement_strategy,
-    find_overlapping_interval_strategy,
+    find_intersecting_interval_strategy,
 )
 
 
 class BarrierEmitter:
+    """
+    Base class of barrier emitters.
+    Derived classes should implement the optimize and emit methods and register handlers for the emitter to enable proper dispatching.
+    """
+
     def __init__(self, cfg: TargetConfig):
         self.cfg = cfg
 
-    def dispatch(self):
+    def dispatch(self) -> "BarrierEmitter":
+        """
+        Dispatch different types of emitters based on provided TargetConfig.
+        """
         if not self.cfg.has_split_barriers:
             return LegacyBarrierEmitter(self.cfg)
-        elif not self.cfg.has_named_barriers:
-            return BasicSplitBarrierEmitter(self.cfg)
-        elif self.cfg.has_named_barriers:
-            # TODO(megan.kuo) use basic split barriers for gfx12 for now.
-            return BasicSplitBarrierEmitter(self.cfg)
         else:
-            assert True, "Should not reach here for now"
+            return BasicSplitBarrierEmitter(self.cfg)
+
+        assert False, "Should not reach here for now"
 
     def emit(self, sync_reqs: Sequence[SyncRequirement]) -> None:
+        """
+        Optimize barrier placement using strategies defined in the derived class and place the resulting barriers accordingly.
+        """
         sync_reqs = self.optimize(sync_reqs)
         for req in sync_reqs:
             self.place_barrier(req)
@@ -61,6 +69,9 @@ class BarrierEmitter:
 
 
 class LegacyBarrierEmitter(BarrierEmitter):
+    """
+    This class emits amdgpu.lds_barrier using minimize_placement_strategy.
+    """
 
     def optimize(
         self, sync_reqs: Sequence[SyncRequirement]
@@ -85,6 +96,11 @@ class LegacyBarrierEmitter(BarrierEmitter):
 
 
 class BasicSplitBarrierEmitter(BarrierEmitter):
+    """
+    This class emits rocdl.s.barrier.signal and rocdl.s.barrier.wait using find_intersecting_interval_strategy,
+    and provide a verify method to ensure proper placement before invoking the runtime.
+    """
+
     def verify(self, trace) -> None:
         """
         For difference scheduling such as Prefetch / Modulo, LR and LW may appear at prolog or epilog of a subgraph.
@@ -119,7 +135,7 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
         self, sync_reqs: Sequence[SyncRequirement]
     ) -> Sequence[SyncRequirement]:
         # return minimize_placement_strategy(sync_reqs)
-        return find_overlapping_interval_strategy(sync_reqs)
+        return find_intersecting_interval_strategy(sync_reqs)
 
     def place_barrier(self, req: SyncRequirement) -> None:
         barId = -1
