@@ -382,6 +382,7 @@ def gemm_prefetch_reorder(is_debug=False):
         clusters = [
             tkw.cluster(
                 [
+                    tkw.SchedulingBarrier([]),
                     shared_load_a_0,
                     shared_load_b_0,
                     tkw.SchedulingBarrier([]),
@@ -391,31 +392,37 @@ def gemm_prefetch_reorder(is_debug=False):
                     shared_load_b_1,
                     tkw.SchedulingBarrier([]),
                     global_load_b,
+                    tkw.WorkgroupBarrier(),
+                    tkw.SchedulingBarrier([]),
                 ],
-                barriers_after="workgroup, scheduling",
             ),
             tkw.cluster(
                 [
+                    tkw.SchedulingBarrier([]),
                     tkw.SetWavePrio(1),
                     mma_0,
                     tkw.SetWavePrio(0),
+                    tkw.SharedMemoryBarrier(),
+                    tkw.SchedulingBarrier([]),
                 ],
-                barriers_after="shared, scheduling",
             ),
             tkw.cluster(
                 [
+                    tkw.SchedulingBarrier([]),
                     shared_write_a,
                     shared_write_b,
+                    tkw.WorkgroupBarrier(),
+                    tkw.SchedulingBarrier([]),
                 ],
-                barriers_after="workgroup, scheduling",
             ),
             tkw.cluster(
                 [
+                    tkw.SchedulingBarrier([]),
                     tkw.SetWavePrio(1),
                     mma_1,
                     tkw.SetWavePrio(0),
+                    tkw.SchedulingBarrier([]),
                 ],
-                barriers_after="scheduling",
             ),
         ]
 
