@@ -129,11 +129,37 @@ def pipeline(iterate: Sequence[fx.Node]): ...
 def getitem(obj: Any, index: int): ...
 
 
-def get_node_by_tag_helper(kernel_trace, tag: str):
-    logger.info(f"Getting node by tag: {tag}")
-    nodes = kernel_trace.walk(lambda x: get_custom(x).tag == tag)
+def get_node_by_tag_helper(kernel_trace, tag: str, subgraph_name: str = None):
+    """
+    Get nodes by tag, optionally filtering by subgraph.
+    """
+    if subgraph_name:
+        logger.info(f"Getting nodes by tag '{tag}' in subgraph '{subgraph_name}'")
+        target_subgraph = kernel_trace.get_subgraph(subgraph_name)
+        nodes = [
+            node
+            for node in target_subgraph.nodes
+            if hasattr(get_custom(node), "tag") and get_custom(node).tag == tag
+        ]
+    else:
+        logger.info(f"Getting nodes by tag '{tag}' across entire trace")
+        nodes = kernel_trace.walk(lambda x: get_custom(x).tag == tag)
+
     logger.info(f"Found {len(nodes)} nodes by tag: {tag}")
     return nodes
+
+
+def get_subgraph_name_from_proxy(proxy):
+    """
+    Extract subgraph name from a proxy result.
+    """
+    subgraph_result = get_proxy_result(proxy.node)
+    assert subgraph_result is not None, "Subgraph proxy must have a result"
+    assert len(subgraph_result) > 0, "Subgraph proxy must have at least one element"
+
+    parent_node = subgraph_result[0]
+    custom_parent = get_custom(parent_node)
+    return custom_parent.subgraph_name
 
 
 def add_op_before(op, subgraph: fx.Graph, anchor: fx.Node, location=None):
@@ -184,33 +210,16 @@ class GetNodeByTag(CustomScheduleOp):
         tag: str,
         subgraph: Any = None,
     ):
-        # If subgraph is provided, search within that subgraph
+        # Determine subgraph scope if provided
+        subgraph_name = None
         if subgraph is not None:
             assert hasattr(
                 subgraph, "node"
             ), f"Expected 'subgraph' to be a proxy object with a 'node' attribute"
-            subgraph_result = get_proxy_result(subgraph.node)
-            assert subgraph_result is not None, "Subgraph node must have a result"
-            assert (
-                len(subgraph_result) > 0
-            ), "Subgraph node must have at least one element"
+            subgraph_name = get_subgraph_name_from_proxy(subgraph)
 
-            parent_node = subgraph_result[0]
-            custom_parent = get_custom(parent_node)
-            target_subgraph = kernel_trace.get_subgraph(custom_parent.subgraph_name)
-
-            # Search within the subgraph
-            nodes = [
-                node
-                for node in target_subgraph.nodes
-                if hasattr(get_custom(node), "tag") and get_custom(node).tag == tag
-            ]
-            logger.info(
-                f"Found {len(nodes)} nodes in subgraph '{custom_parent.subgraph_name}' with tag='{tag}'"
-            )
-        else:
-            # Search the entire trace (original behavior)
-            nodes = get_node_by_tag_helper(kernel_trace, tag)
+        # Search for nodes with the given tag
+        nodes = get_node_by_tag_helper(kernel_trace, tag, subgraph_name)
 
         # Create a proxy that embeds the real result
         return create_schedule_proxy(
@@ -239,37 +248,21 @@ class GetNodeByTagAndType(CustomScheduleOp):
     ):
         assert constraints is not None, "Constraints are required"
 
-        # If subgraph is provided, search within that subgraph
+        # Determine subgraph scope if provided
+        subgraph_name = None
         if subgraph is not None:
             assert hasattr(
                 subgraph, "node"
             ), f"Expected 'subgraph' to be a proxy object with a 'node' attribute"
-            subgraph_result = get_proxy_result(subgraph.node)
-            assert subgraph_result is not None, "Subgraph node must have a result"
-            assert (
-                len(subgraph_result) > 0
-            ), "Subgraph node must have at least one element"
+            subgraph_name = get_subgraph_name_from_proxy(subgraph)
 
-            parent_node = subgraph_result[0]
-            custom_parent = get_custom(parent_node)
-            target_subgraph = kernel_trace.get_subgraph(custom_parent.subgraph_name)
+        # Search for nodes with the given tag, then filter by type
+        nodes = get_node_by_tag_helper(kernel_trace, tag, subgraph_name)
+        nodes = [node for node in nodes if isinstance(get_custom(node), node_type)]
 
-            # Search within the subgraph
-            nodes = [
-                node
-                for node in target_subgraph.nodes
-                if hasattr(get_custom(node), "tag")
-                and get_custom(node).tag == tag
-                and isinstance(get_custom(node), node_type)
-            ]
-            logger.info(
-                f"Found {len(nodes)} nodes in subgraph '{custom_parent.subgraph_name}' with tag='{tag}' and type: {node_type}"
-            )
-        else:
-            # Search the entire trace (original behavior)
-            nodes = get_node_by_tag_helper(kernel_trace, tag)
-            nodes = [node for node in nodes if isinstance(get_custom(node), node_type)]
-            logger.info(f"Found {len(nodes)} nodes by tag: {tag} and type: {node_type}")
+        logger.info(
+            f"Found {len(nodes)} nodes with tag='{tag}' and type={node_type.__name__}"
+        )
 
         return create_schedule_proxy(
             region_graph,
@@ -340,16 +333,8 @@ class Cluster(CustomScheduleOp):
         barriers_before: str = "",
         barriers_after: str = "",
     ):
-        from ..ops.wave_ops import SetWavePrio
 
         assert isinstance(ops, (list, tuple)), "ops must be a list"
-
-        # Helper: Check if item is a scheduling op
-        def is_scheduling_op(item):
-            return isinstance(
-                item,
-                (SchedulingBarrier, WorkgroupBarrier, SharedMemoryBarrier, SetWavePrio),
-            )
 
         # Find first proxy to get subgraph and context
         first_proxy_node = None
