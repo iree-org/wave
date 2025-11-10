@@ -63,6 +63,7 @@ try:
     from water_mlir.water_mlir.dialects import func
     from water_mlir.water_mlir.dialects import wave
     from water_mlir.water_mlir.dialects import amdgpu
+    from water_mlir.water_mlir.dialects import transform
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -557,11 +558,6 @@ def _emit_from_captured_trace(
     # arguments correctly
     value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
 
-    if pipeline:
-        raise NotImplementedError(
-            "Transform dialect pipelines are not implemented yet."
-        )
-
     # TODO: Forward locations properly
     with ir.Context() as ctx, ir.Location.unknown():
         ctx.allow_unregistered_dialects = False
@@ -652,6 +648,28 @@ def _emit_from_captured_trace(
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(str(e))
+
+        # If a transform script was provided, parse and apply it to the module.
+        # This expects a transform module with a named sequence as first operation.
+        if pipeline:
+            try:
+                transform_module = ir.Module.parse(pipeline)
+                ops = list(transform_module.body.operations)
+                if not ops:
+                    raise RuntimeError("Transform module is empty")
+                entry_op = ops[0]
+                # Require the first op to be a named sequence called "__transform_main".
+                if entry_op.operation.name != "transform.named_sequence":
+                    raise RuntimeError(
+                        f'Expected first op to be "transform.named_sequence", got "{entry_op.operation.name}"'
+                    )
+                transform.interpreter.apply_named_sequence(
+                    module,
+                    entry_op,
+                    transform_module,
+                )
+            except Exception as e:
+                diagnostics.append(f"Failed to apply transform script: {e}")
 
         output = dill.dumps({"diagnostics": diagnostics, "module": str(module)})
         sys.stdout.buffer.write(output)
