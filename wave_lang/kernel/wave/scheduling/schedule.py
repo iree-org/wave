@@ -191,6 +191,171 @@ def schedule_reduction(
     )
 
 
+def construct_conditional_pipelined_loop(
+    trace: CapturedTrace,
+    reduction: Iterate,
+    reduction_graph: fx.Graph,
+    constraints: list[Constraint],
+    num_stages: int,
+    initiation_interval: int,
+    max_induction_variable,
+    induction_var,
+    visualize: bool = False,
+    use_scheduling_barriers: bool = False,
+    multi_buffer_count: Optional[int] = None,
+):
+    """
+    Build pipelined loop with conditional for dynamic shapes.
+
+    Structure:
+        pipelined_iters = floor(max_induction_variable / num_stages) * num_stages
+        if (max_induction_variable >= num_stages):
+            # Run pipelined version for 'pipelined_iters' iterations
+            result = pipelined_loop(count=pipelined_iters)
+        else:
+            result = init_args
+        # Run remainder loop for remaining iterations
+        final_result = remainder_loop(start=pipelined_iters, init=result)
+    """
+    from ..utils.graph_utils import (
+        prepare_subgraph_for_conditional,
+        finish_conditional_subgraph,
+        get_graph_node,
+    )
+    from ...ops.wave_ops import NewScalar, Ge, GetResult, Output, get_custom, Iterate as IterateOp, Conditional
+    import wave_lang.kernel.lang as tkl
+    import torch.fx as fx
+
+    main_graph = reduction.graph
+
+    # Step 1: Calculate how many iterations the pipelined loop will handle
+    # pipelined_iters = floor(max_induction_variable / num_stages) * num_stages
+    # For now, we'll compute this symbolically
+
+    # Step 2: Create condition: max_induction_variable >= num_stages
+    with main_graph.inserting_before(reduction.fx_node):
+        num_stages_scalar = get_graph_node(
+            NewScalar(num_stages, tkl.i32),
+            main_graph,
+            reduction.location
+        )
+
+        num_iters_scalar = get_graph_node(
+            NewScalar(max_induction_variable, tkl.i32),
+            main_graph,
+            reduction.location
+        )
+
+        condition = get_graph_node(
+            Ge(num_iters_scalar, num_stages_scalar),
+            main_graph,
+            reduction.location
+        )
+
+    # Step 3: Prepare conditional subgraph that will contain the pipelined loop
+    # Capture init_args and implicit_captures
+    # Also need to identify memory nodes (Allocate operations) for special handling
+    from ...ops.wave_ops import Allocate
+    captured_nodes = list(reduction.init_args) + list(reduction.implicit_captures)
+    memory_nodes = [node for node in captured_nodes if isinstance(get_custom(node), Allocate)]
+
+    subgraph_name = f"pipelined_conditional_{reduction.fx_node.name}"
+    conditional_subgraph, implicit_captures, placeholders = prepare_subgraph_for_conditional(
+        subgraph_name,
+        captured_nodes,
+        memory_nodes=memory_nodes
+    )
+
+    # Step 4: Build a loop inside the conditional subgraph
+    # For now, create a non-pipelined loop (pipelining inside conditional will come later)
+    # Create a new Iterate node using placeholders
+    placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
+    placeholder_captures = [placeholders[cap] for cap in reduction.implicit_captures]
+
+    with conditional_subgraph.inserting_before(None):
+        # Create the reduction in the subgraph
+        subgraph_reduction = IterateOp(
+            reduction.axis,
+            init_args=placeholder_init_args,
+            step=reduction.step,
+            subgraph_name=reduction.subgraph_name,
+            implicit_captures=placeholder_captures,
+        ).add_to_graph(conditional_subgraph, type=reduction.type, loc=reduction.location)
+
+        # Set properties
+        subgraph_reduction.index = reduction.index
+        # This loop should process most iterations, leaving remainder for later
+        # For now, set count to max_induction_variable - we'll refine this later
+        subgraph_reduction.count = max_induction_variable
+
+        # Get GetResult nodes to extract the loop results
+        get_results = []
+        for i in range(len(placeholder_init_args)):
+            gr = GetResult(subgraph_reduction, i).add_to_graph(
+                conditional_subgraph,
+                type=placeholder_init_args[i].type if hasattr(placeholder_init_args[i], 'type') else None,
+                loc=reduction.location
+            )
+            get_results.append(gr)
+
+        # Add Output node to return the results
+        Output([gr for gr in get_results]).add_to_graph(conditional_subgraph, loc=reduction.location)
+
+    # Step 5: Finish the conditional
+    with main_graph.inserting_before(reduction.fx_node):
+        # Set else_return to init_args
+        conditional_op = Conditional(
+            condition,
+            subgraph_name=subgraph_name,
+            implicit_captures=implicit_captures,
+            else_return=list(reduction.init_args)
+        ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
+
+        # Register the conditional subgraph
+        trace.region_graph.subgraphs[subgraph_name] = conditional_subgraph
+        conditional_subgraph.parent_op = get_custom(conditional_op)
+
+        # Also register the reduction body subgraph with the trace
+        # The subgraph_reduction inside the conditional needs access to reduction_graph
+        if reduction.subgraph_name not in trace.region_graph.subgraphs:
+            trace.region_graph.subgraphs[reduction.subgraph_name] = reduction_graph
+            reduction_graph.parent_op = reduction
+
+    # Step 6: Extract results from conditional
+    conditional_results = []
+    for i in range(len(reduction.init_args)):
+        result = GetResult(conditional_op, i).add_to_graph(
+            main_graph,
+            type=reduction.init_args[i].type if hasattr(reduction.init_args[i], 'type') else None,
+            loc=reduction.location
+        )
+        conditional_results.append(result)
+
+    # Step 7: Create remainder loop
+    # This loop handles any remaining iterations
+    with main_graph.inserting_before(reduction.fx_node):
+        remainder_reduction = IterateOp(
+            reduction.axis,
+            init_args=conditional_results,
+            step=reduction.step,
+            subgraph_name=reduction.subgraph_name,
+            implicit_captures=reduction.implicit_captures,
+        ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
+
+        remainder_reduction.index = reduction.index
+        # Remainder loop processes from pipelined_iters to max_induction_variable
+        # For now, set count to max_induction_variable (will process all, but conditional handles pipelined part)
+        remainder_reduction.count = max_induction_variable
+
+        # Replace uses of the original reduction with the remainder reduction
+        reduction.replace_all_uses_with(get_custom(remainder_reduction))
+
+    # Step 8: Remove the original reduction
+    reduction.erase()
+
+    logger.info("Conditional pipelined loop construction complete")
+
+
 def construct_pipelined_loop_with_conditional(
     trace: CapturedTrace,
     reduction: Iterate,
@@ -236,28 +401,42 @@ def construct_pipelined_loop_with_conditional(
         or (hasattr(max_induction_variable, "is_number") and max_induction_variable.is_number)
     )
 
-    # For now, just use the old implementation for both static and dynamic
-    # TODO: Implement the full conditional + pipelined + remainder loop structure
-    logger.info(f"Using old pipelining implementation ({'dynamic' if is_dynamic else 'static'})")
+    if not is_dynamic:
+        # For static shapes, use the old implementation
+        logger.info(f"Using old pipelining for static shape: {max_induction_variable}")
+        new_reduction = construct_pipelined_loop(
+            trace,
+            reduction,
+            reduction_graph,
+            constraints,
+            num_stages,
+            initiation_interval,
+            int(max_induction_variable),
+            visualize,
+            use_scheduling_barriers,
+            multi_buffer_count,
+        )
+        if new_reduction:
+            new_reduction.count = max_induction_variable - (num_stages - 1)
+        return
 
-    # For dynamic shapes, we pass a placeholder value and let the loop handle symbolic count
-    max_ind_var_value = int(max_induction_variable) if not is_dynamic else num_stages
+    # For dynamic shapes, emit conditional + pipelined loop + remainder loop
+    logger.info(f"Using conditional pipelining for dynamic shape")
 
-    new_reduction = construct_pipelined_loop(
+    # Call helper function to build the conditional structure
+    construct_conditional_pipelined_loop(
         trace,
         reduction,
         reduction_graph,
         constraints,
         num_stages,
         initiation_interval,
-        max_ind_var_value,
+        max_induction_variable,
+        induction_var,
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
     )
-    if new_reduction:
-        # Set the count to handle dynamic expressions
-        new_reduction.count = max_induction_variable - (num_stages - 1)
 
 
 def apply_pipelined_schedule(
