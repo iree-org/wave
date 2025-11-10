@@ -57,14 +57,14 @@ try:
         WaveMmaKindAttr,
         WaveWorkgroupDimAttr,
     )
-    from water_mlir.water_mlir.sympy_to_affine_converter import (
+    from water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
     )
     from water_mlir.water_mlir.dialects import arith
     from water_mlir.water_mlir.dialects import func
     from water_mlir.water_mlir.dialects import wave
     from water_mlir.water_mlir.dialects import amdgpu
-    from water_mlir.water_mlir.dialects import transform
+    from water_mlir.water_mlir.dialects.transform import interpreter
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -739,7 +739,7 @@ def _emit_from_captured_trace(
                     raise RuntimeError(
                         f'Expected first op to be "transform.named_sequence", got "{entry_op.operation.name}"'
                     )
-                transform.interpreter.apply_named_sequence(
+                interpreter.apply_named_sequence(
                     module,
                     entry_op,
                     transform_module,

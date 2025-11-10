@@ -264,6 +264,7 @@ def mlir_converter_matmul():
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
+    assert len(diag) == 0
     # Print to stdout for FileCheck
     # CHECK-LABEL: mlir_converter_matmul
     print(transform_module)
