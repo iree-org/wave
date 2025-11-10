@@ -1610,9 +1610,10 @@ class SchedulingGroupBarrier(CustomOp):
 @dataclass
 class MemoryCounterWait(CustomOp):
     """
-    Wait for the specified counters to be less-than or equal-to 
+    Wait for the specified counters to be less-than or equal-to
     the provided values before continuing.
     """
+
     load: Optional[int] = None
     store: Optional[int] = None
     ds: Optional[int] = None

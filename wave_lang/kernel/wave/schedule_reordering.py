@@ -26,6 +26,7 @@ from ..ops.wave_ops import (
     Ge,
     Iterate,
     Lt,
+    MemoryCounterWait,
     NewScalar,
     ScaledMMA,
     SchedulingBarrier,
@@ -708,7 +709,15 @@ def transform_async_two_PP_clusters(
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, clusters[-1].op))
-    barrier_op = SharedMemoryBarrier().add_to_graph(tmp_graph)
+
+    independent_global_count = len(global_to_shared_lhs + global_to_shared_rhs)
+    barrier_op = MemoryCounterWait(load=independent_global_count).add_to_graph(
+        tmp_graph
+    )
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+
+    barrier_op = WorkgroupBarrier().add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, clusters[-1].op))
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
@@ -721,7 +730,12 @@ def transform_async_two_PP_clusters(
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, sliced_local_load_rhs[1]))
-    barrier_op = SharedMemoryBarrier().add_to_graph(tmp_graph)
+
+    barrier_op = MemoryCounterWait(load=0).add_to_graph(tmp_graph)
+    barrier_op.location = context_location
+    clusters.append(insert_op_after(barrier_op, clusters[-1].op))
+
+    barrier_op = WorkgroupBarrier().add_to_graph(tmp_graph)
     barrier_op.location = context_location
     clusters.append(insert_op_after(barrier_op, clusters[-1].op))
     barrier_op = SchedulingBarrier([]).add_to_graph(tmp_graph)
