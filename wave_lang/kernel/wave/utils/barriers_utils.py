@@ -6,12 +6,13 @@
 from enum import Enum, IntFlag, auto
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Union, Set
 
 import torch.fx as fx
 
 from .graph_utils import propagate_loop_carried_vars
 
+from ..._support.tracing import CapturedTrace
 from ...lang.global_symbols import SHARED_ADDRESS_SPACE
 from ...ops.wave_ops import (
     AtomicOp,
@@ -95,7 +96,7 @@ class MemoryAccessType(Enum):
     READ_WRITE = auto()
 
 
-def assign_preorder_index(nodes: List[fx.Node]):
+def assign_preorder_index(nodes: List[fx.Node]) -> None:
     """
     Given a list of nodes, assign `_topo_location` attribute to the node with enumeration order.
     """
@@ -212,19 +213,19 @@ def add_sync_requirements(
 
 
 def handle_hazard(
-    results,
-    nodes,
-    producer_kinds,
-    consumer_kinds,
-    barrier_type,
+    results: List[SyncRequirement],
+    nodes: List[SyncRequirement],
+    producer_kinds: Set[MemoryAccessType],
+    consumer_kinds: Set[MemoryAccessType],
+    barrier_type: BarrierType,
     is_nested: bool = False,
     iterate_region: int = 0,
-) -> BarrierType:
+) -> None:
     """
     Scans the graph and append SyncRequirements to results if any.
     The `states` dictionary tracks which producers and consumers are holding the resource.
     """
-    if len(nodes) == 0:
+    if not nodes:
         return
 
     states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
@@ -260,7 +261,7 @@ def handle_hazard(
 
         depth = idx // n if iterate_region == 0 else int(idx < iterate_region)
         resource = get_shared_memory_from_op(op, depth)
-        assert resource is not None, "op has not smem access"
+        assert resource is not None, "op has no smem access"
 
         state = states[resource]
 
@@ -290,10 +291,16 @@ def handle_hazard(
                 barrier_type=barrier_type,
             )
 
-    return
 
-
-def get_subgraph_nodes(trace, node: fx.Node) -> List[fx.Node]:
+def get_subgraph_nodes(trace: CapturedTrace, node: fx.Node) -> List[fx.Node]:
+    """
+    Returns the list of nodes in the subgraph associated with the given node.
+    Args:
+        - trace: The trace object containing the graph and walk_graph method.
+        - node (fx.Node): The node whose subgraph nodes are to be retrieved.
+    Returns:
+        List[fx.Node]: A list of nodes in the subgraph if the node is a NestedRegionOp, otherwise an empty list.
+    """
     op = get_custom(node)
     if not isinstance(op, NestedRegionOp):
         return []
@@ -302,27 +309,29 @@ def get_subgraph_nodes(trace, node: fx.Node) -> List[fx.Node]:
     return trace.walk_graph(name=subgraph_name)
 
 
-def get_barriers_analysis(trace, graph, target_arch):
+def get_barriers_analysis(
+    trace: CapturedTrace, graph: fx.Graph, target_arch: TargetConfig
+) -> List[SyncRequirement]:
     nodes = trace.preorder_walk()
     assign_preorder_index(nodes)
 
-    is_shared_memory_node = lambda node: (
-        True if get_shared_memory_from_op(get_custom(node)) is not None else False
+    is_shared_memory_node = (
+        lambda node: get_shared_memory_from_op(get_custom(node)) is not None
     )
-    is_iterate_node = lambda node: (
-        True if isinstance(get_custom(node), Iterate) else False
-    )
-    is_condition_node = lambda node: (
-        True if isinstance(get_custom(node), Conditional) else False
-    )
+    is_iterate_node = lambda node: isinstance(get_custom(node), Iterate)
+    is_condition_node = lambda node: isinstance(get_custom(node), Conditional)
 
     results: List[SyncRequirement] = []
     collections: List[SyncRequirement] = []
     nodes = trace.walk_graph(trace.root_graph)
 
     def dfs(
-        nodes, collections, results, is_nested: bool = False, iterate_region: int = 0
-    ):
+        nodes: List[fx.Node],
+        collections: List[fx.Node],
+        results: List[SyncRequirement],
+        is_nested: bool = False,
+        iterate_region: int = 0,
+    ) -> None:
         for node in nodes:
             if is_shared_memory_node(node):
                 collections.append(node)
@@ -362,7 +371,7 @@ def get_barriers_analysis(trace, graph, target_arch):
             iterate_region=iterate_region,
         )
 
-    dfs(nodes, collections, results, iterate_region=False)
+    dfs(nodes, collections, results)
 
     return results
 
