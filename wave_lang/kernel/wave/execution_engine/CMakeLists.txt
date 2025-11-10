@@ -23,6 +23,8 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+find_package(Python COMPONENTS Interpreter Development REQUIRED)
+
 # Detect the installed nanobind package and import it into CMake
 execute_process(
   COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
@@ -31,7 +33,7 @@ execute_process(
 find_package(nanobind CONFIG REQUIRED)
 
 # Build the core parts of nanobind once
-nanobind_build_library(nanobind SHARED)
+nanobind_build_library(nanobind STATIC)
 
 # Find LLVM and MLIR
 find_package(LLVM REQUIRED CONFIG)
@@ -53,43 +55,54 @@ add_library(wave_execution_engine MODULE
   bindings.cpp
 )
 
+# Disable RTTI for execution_engine.cpp to avoid typeinfo symbol dependencies
+# Only for GCC/Clang on Unix-like systems
+if(UNIX AND (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"))
+  set_source_files_properties(execution_engine.cpp PROPERTIES COMPILE_FLAGS "-fno-rtti")
+endif()
+
 # Include current directory for header files
 target_include_directories(wave_execution_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Link against nanobind
 target_link_libraries(wave_execution_engine PRIVATE nanobind)
 
+get_property(mlir_dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+get_property(mlir_conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
+get_property(mlir_extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
+
 # Link against LLVM and MLIR libraries
 target_link_libraries(wave_execution_engine PRIVATE
-  # MLIR libraries
-  MLIRIR
-  MLIRCAPIIR
-  MLIRSupport
-  MLIRTargetLLVMIRExport
+  Python::Python
+  Python::Module
 
-  # LLVM libraries
-  LLVMCore
-  LLVMSupport
-  LLVMExecutionEngine
+  LLVM${LLVM_NATIVE_ARCH}AsmParser
+  LLVM${LLVM_NATIVE_ARCH}CodeGen
+  LLVM${LLVM_NATIVE_ARCH}Desc
   LLVMOrcJIT
-  LLVMRuntimeDyld
   LLVMTarget
-  LLVMPasses
-  LLVMipo
-  LLVMTransformUtils
-  LLVMAnalysis
-  LLVMScalarOpts
-  LLVMInstCombine
-  LLVMAggressiveInstCombine
-  LLVMVectorize
-  LLVMMC
-  LLVMObject
-  LLVMBitWriter
-  LLVMBitReader
-  LLVMIRReader
+  MLIRCAPIDebug
+  MLIRCAPIIR
+  MLIRCAPIInterfaces
+  MLIRCAPITransforms
+  MLIRPass
+  MLIRToLLVMIRTranslationRegistration
+  ${mlir_dialect_libs}
+  ${mlir_conversion_libs}
+  ${mlir_extension_libs}
 )
 
 set_target_properties(wave_execution_engine PROPERTIES LINK_WHAT_YOU_USE TRUE)
+
+# Force all symbols to be resolved at compile time (Linux/Unix only)
+if(UNIX AND NOT APPLE)
+  target_link_options(wave_execution_engine PRIVATE
+    -Wl,--no-undefined
+    -Wl,-z,defs
+    # Use linker script to hide all symbols except Python module entry point
+    -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/wave_execution_engine.lds
+  )
+endif()
 
 # Enable size optimizations
 nanobind_opt_size(wave_execution_engine)
