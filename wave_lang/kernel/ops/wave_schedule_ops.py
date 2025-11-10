@@ -98,15 +98,11 @@ def empty_proxy(name: str = "empty_proxy"):
 
 # Stubs to enable type checking of the custom schedule ops - decorated with @define_op for dispatch
 @define_schedule_op
-def get_node_by_tag(tag: str): ...
+def get_node_by_tag(tag: str, subgraph: Any = None): ...
 
 
 @define_schedule_op
-def get_node_by_tag_and_type(tag: str, node_type: Any): ...
-
-
-@define_schedule_op
-def get_nodes_in_subgraph(loop: Any, tag: str = None, node_type: Any = None): ...
+def get_node_by_tag_and_type(tag: str, node_type: Any, subgraph: Any = None): ...
 
 
 @define_schedule_op
@@ -140,9 +136,19 @@ def get_node_by_tag_helper(kernel_trace, tag: str):
     return nodes
 
 
-def add_op_to_graph(op, subgraph: fx.Graph, location=None):
-    """Add a scheduling operation to a subgraph with optional location context."""
-    new_op = op.add_to_graph(subgraph)
+def add_op_before(op, subgraph: fx.Graph, anchor: fx.Node, location=None):
+    """Insert a scheduling operation before the anchor node."""
+    with subgraph.inserting_before(anchor):
+        new_op = op.add_to_graph(subgraph)
+    if location:
+        new_op.location = location
+    return new_op
+
+
+def add_op_after(op, subgraph: fx.Graph, anchor: fx.Node, location=None):
+    """Insert a scheduling operation after the anchor node."""
+    with subgraph.inserting_after(anchor):
+        new_op = op.add_to_graph(subgraph)
     if location:
         new_op.location = location
     return new_op
@@ -166,29 +172,8 @@ class CustomScheduleOp:
 @dataclass
 class GetNodeByTag(CustomScheduleOp):
     tag: str
+    subgraph: Any = None
     schedule_op_name = "get_node_by_tag"
-
-    @classmethod
-    def handle(
-        cls, region_graph, kernel_trace, constraints: list[Constraint], tag: str
-    ):
-        # Always execute the real logic during tracing to apply scheduling
-        real_result = get_node_by_tag_helper(kernel_trace, tag)
-
-        # Create a proxy that embeds the real result
-        return create_schedule_proxy(
-            region_graph,
-            real_result,
-            cls.schedule_op_name,
-        )
-
-
-@dataclass
-class GetNodesInSubgraph(CustomScheduleOp):
-    loop: Any
-    tag: str = None
-    node_type: Any = None
-    schedule_op_name = "get_nodes_in_subgraph"
 
     @classmethod
     def handle(
@@ -196,50 +181,38 @@ class GetNodesInSubgraph(CustomScheduleOp):
         region_graph,
         kernel_trace,
         constraints: list[Constraint],
-        loop: Any,
-        tag: str = None,
-        node_type: Any = None,
+        tag: str,
+        subgraph: Any = None,
     ):
-        # Get the iterate node from the proxy
-        assert hasattr(
-            loop, "node"
-        ), f"Expected 'loop' to be a proxy object with a 'node' attribute"
-        loop_result = get_proxy_result(loop.node)
-        assert loop_result is not None, "Loop must have a result"
-        assert len(loop_result) > 0, "Loop must have at least one element"
+        # If subgraph is provided, search within that subgraph
+        if subgraph is not None:
+            assert hasattr(
+                subgraph, "node"
+            ), f"Expected 'subgraph' to be a proxy object with a 'node' attribute"
+            subgraph_result = get_proxy_result(subgraph.node)
+            assert subgraph_result is not None, "Subgraph node must have a result"
+            assert (
+                len(subgraph_result) > 0
+            ), "Subgraph node must have at least one element"
 
-        iterate_node = loop_result[0]
-        custom_iterate = get_custom(iterate_node)
-        subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
+            parent_node = subgraph_result[0]
+            custom_parent = get_custom(parent_node)
+            target_subgraph = kernel_trace.get_subgraph(custom_parent.subgraph_name)
 
-        # Filter nodes in the subgraph
-        if tag and node_type:
+            # Search within the subgraph
             nodes = [
                 node
-                for node in subgraph.nodes
-                if hasattr(get_custom(node), "tag")
-                and get_custom(node).tag == tag
-                and isinstance(get_custom(node), node_type)
-            ]
-        elif tag:
-            nodes = [
-                node
-                for node in subgraph.nodes
+                for node in target_subgraph.nodes
                 if hasattr(get_custom(node), "tag") and get_custom(node).tag == tag
             ]
-        elif node_type:
-            nodes = [
-                node
-                for node in subgraph.nodes
-                if isinstance(get_custom(node), node_type)
-            ]
+            logger.info(
+                f"Found {len(nodes)} nodes in subgraph '{custom_parent.subgraph_name}' with tag='{tag}'"
+            )
         else:
-            nodes = list(subgraph.nodes)
+            # Search the entire trace (original behavior)
+            nodes = get_node_by_tag_helper(kernel_trace, tag)
 
-        logger.info(
-            f"Found {len(nodes)} nodes in subgraph '{custom_iterate.subgraph_name}' with tag='{tag}', type={node_type}"
-        )
-
+        # Create a proxy that embeds the real result
         return create_schedule_proxy(
             region_graph,
             nodes,
@@ -251,6 +224,7 @@ class GetNodesInSubgraph(CustomScheduleOp):
 class GetNodeByTagAndType(CustomScheduleOp):
     tag: str
     node_type: Any
+    subgraph: Any = None
     schedule_op_name = "get_node_by_tag_and_type"
 
     @classmethod
@@ -261,12 +235,41 @@ class GetNodeByTagAndType(CustomScheduleOp):
         constraints: list[Constraint],
         tag: str,
         node_type: Any,
+        subgraph: Any = None,
     ):
         assert constraints is not None, "Constraints are required"
 
-        nodes = get_node_by_tag_helper(kernel_trace, tag)
-        nodes = [node for node in nodes if isinstance(get_custom(node), node_type)]
-        logger.info(f"Found {len(nodes)} nodes by tag: {tag} and type: {node_type}")
+        # If subgraph is provided, search within that subgraph
+        if subgraph is not None:
+            assert hasattr(
+                subgraph, "node"
+            ), f"Expected 'subgraph' to be a proxy object with a 'node' attribute"
+            subgraph_result = get_proxy_result(subgraph.node)
+            assert subgraph_result is not None, "Subgraph node must have a result"
+            assert (
+                len(subgraph_result) > 0
+            ), "Subgraph node must have at least one element"
+
+            parent_node = subgraph_result[0]
+            custom_parent = get_custom(parent_node)
+            target_subgraph = kernel_trace.get_subgraph(custom_parent.subgraph_name)
+
+            # Search within the subgraph
+            nodes = [
+                node
+                for node in target_subgraph.nodes
+                if hasattr(get_custom(node), "tag")
+                and get_custom(node).tag == tag
+                and isinstance(get_custom(node), node_type)
+            ]
+            logger.info(
+                f"Found {len(nodes)} nodes in subgraph '{custom_parent.subgraph_name}' with tag='{tag}' and type: {node_type}"
+            )
+        else:
+            # Search the entire trace (original behavior)
+            nodes = get_node_by_tag_helper(kernel_trace, tag)
+            nodes = [node for node in nodes if isinstance(get_custom(node), node_type)]
+            logger.info(f"Found {len(nodes)} nodes by tag: {tag} and type: {node_type}")
 
         return create_schedule_proxy(
             region_graph,
@@ -351,12 +354,12 @@ class Cluster(CustomScheduleOp):
         # Find first proxy to get subgraph and context
         first_proxy_node = None
         for item in ops:
-            if isinstance(item, fx.Proxy):  # It's a proxy (anchor)
+            if isinstance(item, fx.Proxy):
                 first_proxy_node = extract_proxy_nodes(item)[0]
                 break
 
         if first_proxy_node is None:
-            raise ValueError("Cluster must have at least one anchor (proxy operation)")
+            raise ValueError("Cluster must have at least one proxy operation")
 
         subgraph = first_proxy_node.graph
         context_location = getattr(get_custom(first_proxy_node), "location", None)
@@ -368,36 +371,70 @@ class Cluster(CustomScheduleOp):
             "shared": lambda: SharedMemoryBarrier(),
         }
 
+        result_nodes = []
         barriers_before_list = []
         barriers_after_list = []
+
+        # Insert barriers_before BEFORE the first proxy node
+        prev_node = None
         for b in barriers_before.split(","):
             b = b.strip()
             if b:
                 assert b in barrier_map, f"Unknown barrier type: {b}"
-                barriers_before_list.append(
-                    add_op_to_graph(barrier_map[b](), subgraph, context_location)
-                )
+                # First barrier goes before the first proxy, rest chain after each other
+                if prev_node is None:
+                    new_node = add_op_before(
+                        barrier_map[b](), subgraph, first_proxy_node, context_location
+                    )
+                else:
+                    new_node = add_op_after(
+                        barrier_map[b](), subgraph, prev_node, context_location
+                    )
+                barriers_before_list.append(new_node)
+                prev_node = new_node
 
-        result_nodes = barriers_before_list[:]
+        result_nodes.extend(barriers_before_list)
 
+        # Track the last node for sequential insertion of ops
+        last_anchor = prev_node if prev_node else None
+        first_proxy_encountered = False
+
+        # Process ops sequentially, inserting scheduling ops relative to proxies
         for item in ops:
             if isinstance(item, fx.Proxy):
                 proxy_nodes = extract_proxy_nodes(item)
                 result_nodes.extend(proxy_nodes)
-                # update the context to the last proxy node, does not impact the outcome
+                # Update anchor to the last proxy node
+                last_anchor = proxy_nodes[-1]
+                first_proxy_encountered = True
+                # Update context location
                 context_location = getattr(
                     get_custom(proxy_nodes[-1]), "location", None
                 )
             else:
-                result_nodes.append(add_op_to_graph(item, subgraph, context_location))
+                # If we haven't encountered a proxy yet, insert before first proxy
+                # Otherwise, insert after the last anchor
+                if not first_proxy_encountered:
+                    new_node = add_op_before(
+                        item, subgraph, first_proxy_node, context_location
+                    )
+                else:
+                    new_node = add_op_after(
+                        item, subgraph, last_anchor, context_location
+                    )
+                result_nodes.append(new_node)
+                last_anchor = new_node
 
+        # Insert barriers_after AFTER the last operation
         for b in barriers_after.split(","):
             b = b.strip()
             if b:
                 assert b in barrier_map, f"Unknown barrier type: {b}"
-                barriers_after_list.append(
-                    add_op_to_graph(barrier_map[b](), subgraph, context_location)
+                new_node = add_op_after(
+                    barrier_map[b](), subgraph, last_anchor, context_location
                 )
+                barriers_after_list.append(new_node)
+                last_anchor = new_node
 
         result_nodes.extend(barriers_after_list)
 

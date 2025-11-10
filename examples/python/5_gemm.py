@@ -2149,22 +2149,22 @@ def ref_gemm_prefetch(is_debug=False):
         # now get all the nodes again, but only from the pipelined kernel subgraph
         k_loop = tkw.get_node_by_tag("k_loop")
 
-        # Use get_nodes_in_subgraph to get nodes only from the KERNEL stage
-        load_a = tkw.get_nodes_in_subgraph(k_loop, tag="read_a", node_type=tkw.Read)
+        # Use subgraph parameter to get nodes only from the KERNEL stage
+        load_a = tkw.get_node_by_tag_and_type("read_a", tkw.Read, subgraph=k_loop)
         global_load_a, shared_load_a = tkw.partition_by_address_space(
             load_a, GLOBAL_ADDRESS_SPACE
         )
-        shared_write_a = tkw.get_nodes_in_subgraph(
-            k_loop, tag="read_a", node_type=tkw.Write
+        shared_write_a = tkw.get_node_by_tag_and_type(
+            "read_a", tkw.Write, subgraph=k_loop
         )
-        load_b = tkw.get_nodes_in_subgraph(k_loop, tag="read_b", node_type=tkw.Read)
+        load_b = tkw.get_node_by_tag_and_type("read_b", tkw.Read, subgraph=k_loop)
         global_load_b, shared_load_b = tkw.partition_by_address_space(
             load_b, GLOBAL_ADDRESS_SPACE
         )
-        shared_write_b = tkw.get_nodes_in_subgraph(
-            k_loop, tag="read_b", node_type=tkw.Write
+        shared_write_b = tkw.get_node_by_tag_and_type(
+            "read_b", tkw.Write, subgraph=k_loop
         )
-        mma = tkw.get_nodes_in_subgraph(k_loop, tag="mma")
+        mma = tkw.get_node_by_tag("mma", subgraph=k_loop)
 
         # Partition and wrap MMA operations
         mma_0, mma_1 = tkw.partition_by_dim(mma, dim=K, factor=2)
