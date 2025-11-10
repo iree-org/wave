@@ -813,6 +813,8 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                 select_stack.append(expr)
                 continue
             case sympy.Piecewise():
+                # Last cond must be True
+                assert term.args and term.args[-1][1], f"Unsupported piecewise {term}"
                 # Number of (condition, expression) pairs
                 num_cases = len(term.args)
 
