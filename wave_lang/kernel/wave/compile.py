@@ -264,6 +264,18 @@ class WaveKernelWithProfile(WaveKernel):
         return invoke_with_profile(self.options, self.invoke, *args, **kwargs)
 
 
+class WaveKernel2:
+    def __init__(self, options: WaveCompileOptions, module: Module | bytes):
+        self.options = options
+        self.module = module
+
+    def __call__(self, *args, **kwargs):
+        return self.invoke(*args, **kwargs)
+
+    def invoke(self, *args, **kwargs):
+        raise NotImplementedError("invoke is not implemented for WaveKernel2")
+
+
 def wave_compile(
     options: WaveCompileOptions,
     kernel: "LaunchableWave",
@@ -393,20 +405,21 @@ def wave_compile(
         # don't want to cache the kernel in that case.
         trace = kernel._trace()
 
-        # Disable async dispatch for benchmarking.
-        is_async = options.iree_launch_async and not options.run_bench
-        host_codegen.isolated_test_call(
-            mb,
-            exe,
-            kernel_sig,
-            entrypoint_name,
-            options.func_name,
-            options.dynamic_symbols,
-            location_capture_config=options.location_capture_config,
-            async_dispatch=is_async,
-            device_layout=device_layout,
-            device_constraints=kernel.device_constraints,
-        )
+        if not options.use_water_pipeline:
+            # Disable async dispatch for benchmarking.
+            is_async = options.iree_launch_async and not options.run_bench
+            host_codegen.isolated_test_call(
+                mb,
+                exe,
+                kernel_sig,
+                entrypoint_name,
+                options.func_name,
+                options.dynamic_symbols,
+                location_capture_config=options.location_capture_config,
+                async_dispatch=is_async,
+                device_layout=device_layout,
+                device_constraints=kernel.device_constraints,
+            )
         mb.module_op.verify()
         asm = mb.module_op.get_asm(
             enable_debug_info=options.location_capture_config.level
@@ -445,6 +458,12 @@ def wave_compile(
             asm = _generate_asm_code(mb, options)
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
+        if options.use_water_pipeline:
+            from .water import water_lowering_pipeline
+
+            module = water_lowering_pipeline(mb.module_op, options.target)
+            return WaveKernel2(options, module)
+
         elif not options.compile_to_mlir:
             # LLVM flow: only compile to VMFB when not in MLIR-only mode
             compiled_wave_vmfb = compile_to_vmfb(asm, options)
