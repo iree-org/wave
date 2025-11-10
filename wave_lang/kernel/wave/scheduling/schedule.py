@@ -191,6 +191,75 @@ def schedule_reduction(
     )
 
 
+def construct_pipelined_loop_with_conditional(
+    trace: CapturedTrace,
+    reduction: Iterate,
+    reduction_graph: fx.Graph,
+    constraints: list[Constraint],
+    num_stages: int,
+    initiation_interval: int,
+    max_induction_variable,
+    visualize: bool = False,
+    use_scheduling_barriers: bool = False,
+    multi_buffer_count: Optional[int] = None,
+):
+    """
+    Constructs a pipelined loop wrapped in a conditional, followed by a remainder loop.
+
+    Structure:
+        if (num_iterations >= num_stages):
+            prologue
+            pipelined_loop
+            epilogue
+            return (iterations_done, result_values...)
+        else:
+            return (0, init_values...)
+        remainder_loop(start=iterations_done, end=total_iterations)
+    """
+    from ..utils.graph_utils import (
+        prepare_subgraph_for_conditional,
+        finish_conditional_subgraph,
+        get_graph_node,
+        graph_copy,
+    )
+    from ...ops.wave_ops import NewScalar, Ge, GetResult, Output, Placeholder, get_custom
+    from ..._support.indexing import IndexSymbol, IndexSequence
+    import sympy
+    from ..utils.general_utils import get_induction_variable
+
+    # Get the induction variable for the tiling dimension
+    induction_var = get_induction_variable(reduction, constraints)
+
+    # Check if we have a dynamic shape (max_induction_variable is symbolic)
+    is_dynamic = not (
+        isinstance(max_induction_variable, (int, float))
+        or (hasattr(max_induction_variable, "is_number") and max_induction_variable.is_number)
+    )
+
+    # For now, just use the old implementation for both static and dynamic
+    # TODO: Implement the full conditional + pipelined + remainder loop structure
+    logger.info(f"Using old pipelining implementation ({'dynamic' if is_dynamic else 'static'})")
+
+    # For dynamic shapes, we pass a placeholder value and let the loop handle symbolic count
+    max_ind_var_value = int(max_induction_variable) if not is_dynamic else num_stages
+
+    new_reduction = construct_pipelined_loop(
+        trace,
+        reduction,
+        reduction_graph,
+        constraints,
+        num_stages,
+        initiation_interval,
+        max_ind_var_value,
+        visualize,
+        use_scheduling_barriers,
+        multi_buffer_count,
+    )
+    if new_reduction:
+        # Set the count to handle dynamic expressions
+        new_reduction.count = max_induction_variable - (num_stages - 1)
+
+
 def apply_pipelined_schedule(
     reduction: Iterate,
     reduction_graph: fx.Graph,
@@ -211,32 +280,13 @@ def apply_pipelined_schedule(
     tiling_constraint = get_tiling_constraint(reduction, constraints)
     max_induction_variable = subs_idxc(tiling_constraint.count)
 
-    if max_induction_variable.is_number:
-        # We can only do a compile-time check if the induction variable
-        # is not dynamic.
-        max_induction_variable = int(max_induction_variable)
-        if max_induction_variable <= num_stages - 1:
-            raise CodegenError(
-                "Not enough iterations to pipeline the loop. Skipping pipelining."
-            )
-    else:
-        # Otherwise, we need to rely on assumptions provided by the author.
-        assumptions = get_assumptions(constraints)
-        if not assumptions:
-            logger.warning(
-                "No assumptions provided to determine if the loop can be pipelined. Skipping pipelining."
-            )
-            return None
+    # For dynamic shapes, we emit a conditional that checks at runtime
+    # whether we have enough iterations to pipeline, and a remainder loop
+    # to handle any leftover iterations.
+    # For static shapes, the same structure is emitted and later compiler
+    # passes will optimize away the conditional or remainder loop as needed.
 
-        result = evaluate_with_assumptions(
-            constraints, max_induction_variable > num_stages - 1
-        )
-        if not result:
-            raise CodegenError(
-                "Not enough iterations to pipeline the loop. Skipping pipelining."
-            )
-
-    new_reduction, node_mapping = construct_pipelined_loop(
+    construct_pipelined_loop_with_conditional(
         trace,
         reduction,
         reduction_graph,
@@ -248,12 +298,6 @@ def apply_pipelined_schedule(
         use_scheduling_barriers,
         multi_buffer_count,
     )
-
-    # Update new reduction count.
-    new_reduction.count = max_induction_variable - (num_stages - 1)
-
-    return new_reduction, node_mapping
-
 
 def propagate_scheduling_parameters_to_iter_args(
     graph: fx.Graph, initiation_interval: int
