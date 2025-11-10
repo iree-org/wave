@@ -398,7 +398,7 @@ def minimize_placement_strategy(
         start, end = get_location(req)
         btype = req.barrier_type
 
-        if any([pos in range(start, end + 1) for pos, _ in placements]):
+        if any([pos in range(start + 1, end + 1) for pos, _ in placements]):
             continue
 
         results.append(req)
