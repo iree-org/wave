@@ -232,19 +232,10 @@ def test_gemm_dynamic_pipelined_trace():
     # CHECK-NEXT: else
     # CHECK-NEXT: scf.yield %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}
     #
-    # After the pipelined conditional, there should be another conditional
-    # for the remainder loop
-    # CHECK: arith.cmpi sgt
-    # CHECK: scf.if
-    #
-    # Inside the remainder conditional, we should have:
-    # - A loop that processes remaining iterations
+    # After the pipelined conditional, we should have the iterate node that processes the remainder iterations as an scf.for
     # CHECK: scf.for
     # CHECK: amdgpu.mfma
     # CHECK: scf.yield %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}
-    # CHECK: scf.yield %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}
-    # CHECK-NEXT: else
-    # CHECK-NEXT: scf.yield %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}, %{{[a-zA-Z0-9_#]+}}
 
 
 if __name__ == "__main__":
