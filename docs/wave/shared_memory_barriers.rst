@@ -4,17 +4,21 @@ How are shared memory barriers inserted in wave
 We want to automatically insert shared-memory barriers so that read/write/atomics on the same LDS (shared memory) region are ordered correctly.
 To be more specific, cases like RAW (read after write), WAR (write after read), or touch memory via atomics, we must synchronize to avoid races and hangs. On gfx94, gfx95, we support basic shared memory barriers via `amdgpu.lds_barrier`; on gfx120x we prefer split barriers (Signal / Wait), split barriers are supported via lowering to `rocdl.s.wait_dscnt`, `rocdl.s.barrier.signal`, and `rocdl.s.barrier.wait`.
 
-Terminologies
+Glossary
 --------------------
-- Access types
+- Memory Access Types
     * Read (READ)
     * Write (WRITE)
     * Atomic (READ_WRITE)
-    * GatherToLDS (Write but async)
+    * GatherToLDS (READ_WRITE)
 
 - Nested region op types
     * Iterate
     * Conditional
+
+- Split barriers: two-part synchronization using signal (after producer) and wait (before consumer), supported on gfx12 targets.
+
+- RAW / WAR hazards: classic shared memory hazards (Write→Read and Read→Write), this is represented as a closed interval in the pass (SyncRequirement).
 
 **Note.** We will use producer to refer to an access type operator that takes ownership of a shared memory region for a period of time; consumer to refer to an access type operator that operates on the same shared memory region and therefore needs to synchronize before the producer releases it.
 
@@ -51,71 +55,65 @@ The above gif is an visual illustration for inserting shared memory barriers bet
 
 The above gif is an visual illustration for inserting split barriers between producers and consumers.
 
-Heuristic: add_shared_memory_barriers
+Public API:
 --------------------
-The heuristic walks the graph in pre-order and proceeds as follows:
+.. code-block:: python
 
-0. Walks the graph in pre-order, node by node, maintains a memory map (key: memory node, value: last node that is accessing the memory).
+   add_shared_memory_barriers(trace: CapturedTrace, target: str = "") -> None
 
-1. Is this a shared_memory_op?
-    * Yes: get a "memory key" (fx node object) representing the shared memory, this keeps track of the last op taking ownership of this memory region. - jump to step 2.
-    * No: thank you, next. - jump to 0.
+- Input: a captured FX trace and an optional target string.
+- Effect: analyzes the trace, generates synchronization requirements, and emits barriers appropriate for the target.
 
-2. Do we need a barrier relative to the last op on this memory?
-    * Yes:
-        * If a barrier already exists in between current node and its producer (query the memory map to get the last node accessing the memory).
-            * Yes:
-                * If the producer is an async op (GatherToLDS) -> we upgrade the barrier (setting ```wait_async_ops=True```).
-            * No: Does this target support split barriers?
-                * Yes:
-                    * Producer and consumer in a same graph: insert Signal after producer and wait before consumer.
-                    * Producer and consumer not in a same graph: defer split barrier insertion to the `add_signal_wait_to_subgraph` pass.
-                * No: insert a single SharedMemoryBarrier before the consumer. Set `wait_async_ops` if needed.
-    * No: noop
-- end of step 2, jump to step 3.
 
-3. Update memory map
-    * update the last op that is taking ownership of the memory region.
-    * if we just saw a `GatherToLDS` op, set `state.is_async` to True, otherwise, after inserting a barrier, set it back to False.
-- end of step 3, jump to step 4.
-
-4. Is this op of type NestedRegionOp (Iterate / Conditional)?
-    * Yes:
-        * Record a set of nodes that are currently taking ownership. This is used to compare if producers are updated in the subgraph.
-        * Recurse into its subgraph. - jump to step 0, recurse on the subgraph.
-        * After recursive call returns, there are some cases to consider: (ref. `should_insert_split_barrier_for_nested_region_op`)
-            * case 1: split barrier is not supported - jump to step 0
-            * case 2: producers are not updated in the subgraph - jump to step 0
-            * case 3: `next-iteration check` mode is set (by the Iterate node) - jump to step 0
-            * otherwise: calls `add_signal_wait_to_subgraph` pass for inserting signal at subgraph prolog and wait at subgraph epilog for synchronization.
-    * No: noop
-- end of step 4, jump to step 0.
-
-- end of step 0, jump to step 6.
-
-6. Is this graph an iterate graph? (ref. `is_iterate_subgraph`)
-    * Yes:
-        * If we are not already checking the next iteration (i.e. `next-iteration check` mode is unset) -> run the pass again with `checking_next_iter` flag set. (This makes is_shared_memory_op look one level deeper so we catch hazards like **iter i+1 reads what iter i writes** and insert the necessary barriers.)
-    * No: noop
-- end of step 6, the end of `add_shared_memory_barriers` call.
-
-Corner Cases for split barriers:
+Implementation:
 --------------------
-Adding shared memory barriers when producer appear before consumer is straightforward. Things get tricky when nested region ops are involved and dependencies exist between root graph and subgraphs.
-A table below shows how split barriers are inserted for those cases.
+### Target
+  TargetConfig describes what the backend can emit
 
-.. list-table::
-    :header-rows: 1
+### Analysis
+  We first compute a topological enumeration (_topo_location) across nodes, then scan for hazards over shared memory resources:
+    1. Identify shared-memory accesses (Read, Write, Atomic, GatherToLDS) and classify them as READ, WRTIE, or READ_WRITE.
+    2. Track producer/consumer "episodes" per memory resource.
+    3. Create SyncRequirement records capturing:
+        - the producer region and the consumer region
+        - their topological positions
+        - whether the hazard crosses an iteration boundary (is_loop)
+        - boundary nodes of the surrounding graph
+    4. RAW hazards are tagged with BarrierType.FILL, WAR with BarrierType.READY (for easier debugging and potential future guard usage)
+            
+   Cross-iteration hazards: The analysis duplicates node sequences and adjusts `depth` to propagate loop-carried variables, so it can spot dependencies like ```read(i) -> write(i+1)``` cleanly. The resulting SyncRequirement.is_loop distinguishes these from intra-iteration hazards.
 
-    * - NestedRegionOp
-      - Signal
-      - Wait
-      - When is barrier for subgraph inserted?
-    * - ``Iterate``
-      - subgraph prolog
-      - subgraph epilog
-      - when finish the second pass (exit check-next-iter mode)
-    * - ``Conditional``
-      - subgraph prolog / epilog
-      - subgraph epilog / epilog
-      - when producers or consumers are in the graph
+### Placement strategies
+We'll use `window` to refer to a SyncRequirement hazard interval, the interval is defined by the topological positions between a producer and a consumer.
+
+2 strategies are currently available; both take a list of SyncRequirement and return a reduced set of the SyncRequirement.
+    - Minimize placement (minimize_placement_strategy): 
+        - Intent: Use the fewest possible barriers, placed before consumers.
+        - Procedure:
+            1. Sort all SyncRequirements by their right endpoint. (earliest barrier requirements)
+            2. Walk all windows in 1. order and check
+                - If  
+
+    - Find intersecting intervals (find_intersecting_interval_strategy): an interval-merging approach for split barriers; it tracks smallest feasible wait positions and largest feasible signal positions and emits when needed.
+
+### Emission
+A small dispatcher selects an emitter based on TargetConfig:
+- LegacyEmitter (amdgpu.lds_barrier): emits monolithic SharedMemoryBarrier before the consumer. 
+- BasicSplitBarrierEmitter (rocdl.s.barrier.signal/rocdl.s.barrier.wait {barId: -1}) emits a signal after a producer and a wait before a consumer.
+    - Verification: Scanning the pre-order traversal of the full nested graph.
+        - no wait appears before its corresponding signal,
+        - only a single barrier ID is used (-1),
+        - no orphaned signals remain.
+
+End-to-End flow
+--------------------
+- Build TargetConfig from target string.
+- Walk the graph in the pre-order manner and assign _topo_location.
+- Run get_barriers_analysis function to get a list of SyncRequirements.
+- BarrierEmitter dispatch to chose Legacy or BasicSplit emitter.
+- Optimize placements, then emit barriers.
+- Run verify on the resulting graph to avoid GPU hangs.
+
+Known Limitations / TODO
+--------------------
+We are now propagting memory access of an op in the nested-region with `depth` set to 1
