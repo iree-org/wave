@@ -532,6 +532,78 @@ def is_barrier_between_same_graph(
     return None
 
 
+def _get_parent_chain(node: fx.Node) -> list[tuple[fx.Node, fx.Graph]]:
+    """
+    Get the chain of parent graphs and their parent_op nodes from node up to the root graph.
+    Returns a list of (parent_op, graph) tuples, ordered from innermost to outermost.
+    The node's own graph is not included, only its ancestors.
+    """
+    chain = []
+    current_graph = node.graph
+    while hasattr(current_graph, "parent_op"):
+        parent_op = current_graph.parent_op
+        parent_graph = parent_op.graph
+        chain.append((parent_op, parent_graph))
+        current_graph = parent_graph
+    return chain
+
+
+def _find_common_ancestor(
+    src: fx.Node, dst: fx.Node
+) -> tuple[Optional[fx.Graph], int, int]:
+    """
+    Find the closest common ancestor graph for src and dst nodes.
+    Returns (common_ancestor_graph, src_depth, dst_depth) where:
+    - common_ancestor_graph: The closest common ancestor graph (or None if src.graph == dst.graph)
+    - src_depth: Number of levels from src to common ancestor (0 if src is in common ancestor)
+    - dst_depth: Number of levels from dst to common ancestor (0 if dst is in common ancestor)
+    """
+    if src.graph == dst.graph:
+        return None, 0, 0
+
+    src_chain = _get_parent_chain(src)
+    dst_chain = _get_parent_chain(dst)
+
+    # Check if src is in dst's parent chain
+    for depth, (parent_op, parent_graph) in enumerate(dst_chain):
+        if src.graph == parent_graph:
+            return parent_graph, 0, depth + 1
+
+    # Check if dst is in src's parent chain
+    for depth, (parent_op, parent_graph) in enumerate(src_chain):
+        if dst.graph == parent_graph:
+            return parent_graph, depth + 1, 0
+
+    # Find common ancestor in both chains
+    # Reverse chains to go from root to leaf
+    src_chain_rev = list(reversed(src_chain))
+    dst_chain_rev = list(reversed(dst_chain))
+
+    # Find the deepest common graph
+    common_ancestor = None
+    common_depth = 0
+    for i, ((src_op, src_g), (dst_op, dst_g)) in enumerate(
+        zip(src_chain_rev, dst_chain_rev)
+    ):
+        if src_g == dst_g:
+            common_ancestor = src_g
+            common_depth = i
+        else:
+            break
+
+    if common_ancestor is None:
+        # No common ancestor found, they must be in different root graphs
+        return None, len(src_chain), len(dst_chain)
+
+    # Calculate depth from each node to the common ancestor
+    # common_depth is the index in the reversed chain where we found the common ancestor
+    # The depth is the total chain length minus the position of the common ancestor
+    src_depth = len(src_chain) - common_depth
+    dst_depth = len(dst_chain) - common_depth
+
+    return common_ancestor, src_depth, dst_depth
+
+
 def is_barrier_between(
     src: fx.Node, dst: fx.Node, barId: int = -1
 ) -> Optional[fx.Node]:
@@ -539,6 +611,7 @@ def is_barrier_between(
     Checks if there is a barrier between the source and destination nodes.
     """
     barriers = set()
+
     if src.graph == dst.graph:
         # The following cases are handled when src and dst are in same graph:
         # 1. src and dst is on the same iteration step and src < dst (topographic).
@@ -561,55 +634,61 @@ def is_barrier_between(
                 list(dst.graph.nodes)[0], dst, barId, barriers
             )
     else:
-        # The following cases are handled when src and dst are in different graphs:
-        # 1. src and dst graphs at the same nested level.
-        # 2. src nested level = dst nested level + 1.
-        # 3. dst nested level = src nested level + 1.
+        # General algorithm for nodes in different graphs:
+        # 1. Get parent chains and find common ancestor
+        # 2. Check from src up to common ancestor (src to graph outputs)
+        # 3. Check in common ancestor (between ancestor nodes)
+        # 4. Check from common ancestor down to dst (graph inputs to dst)
 
-        # Case 1:
-        if hasattr(src.graph, "parent_op") and hasattr(dst.graph, "parent_op"):
-            assert (
-                src.graph.parent_op.graph == dst.graph.parent_op.graph
-            ), "src and dst parent ops must be in the same graph"
-            # Check if there is a barrier in the src graph between src and output.
-            src_check = is_barrier_between_same_graph(
-                src, list(src.graph.nodes)[-1], barId, barriers
-            )
-            # Check if there is a barrier in the graph above between src root and dst root.
-            root_check = is_barrier_between_same_graph(
-                src.graph.parent_op, dst.graph.parent_op, barId, barriers
-            )
-            # Check if there is a barrier in the dst graph between the root and dst.
-            dst_check = is_barrier_between_same_graph(
-                list(dst.graph.nodes)[0], dst, barId, barriers
-            )
-            return src_check or root_check or dst_check
+        common_ancestor, src_depth, dst_depth = _find_common_ancestor(src, dst)
 
-        # Case 2:
-        if hasattr(src.graph, "parent_op") and not hasattr(dst.graph, "parent_op"):
-            # Check if there is a barrier in the src graph between src and output.
-            src_check = is_barrier_between_same_graph(
-                src, list(src.graph.nodes)[-1], barId, barriers
-            )
-            # Check if there is a barrier in the graph above between src root and dst.
-            root_check = is_barrier_between_same_graph(
-                src.graph.parent_op, dst, barId, barriers
-            )
-            return src_check or root_check
+        if common_ancestor is None:
+            return None
 
-        # Case 3:
-        if not hasattr(src.graph, "parent_op") and hasattr(dst.graph, "parent_op"):
-            # Check if there is a barrier in the graph above between src and dst root.
-            root_check = is_barrier_between_same_graph(
-                src, dst.graph.parent_op, barId, barriers
-            )
-            # Check if there is a barrier in the dst graph between the root and dst.
-            dst_check = is_barrier_between_same_graph(
-                list(dst.graph.nodes)[0], dst, barId, barriers
-            )
-            return dst_check or root_check
+        # Step 2: Check from src up to common ancestor
+        # For each nested graph containing src, check from src to output
+        current_node = src
+        current_graph = src.graph
+        src_chain = _get_parent_chain(src)
+        for depth in range(src_depth):
+            if node := is_barrier_between_same_graph(
+                current_node, list(current_graph.nodes)[-1], barId, barriers
+            ):
+                return node
+            if depth < len(src_chain):
+                parent_op, parent_graph = src_chain[depth]
+                current_node = parent_op
+                current_graph = parent_graph
 
-        assert False, "Unhandled case when src and dst are in different graphs"
+        # Step 3: Check in common ancestor graph
+        src_ancestor = (
+            current_node  # This is the node in common_ancestor representing src's path
+        )
+        dst_chain = _get_parent_chain(dst)
+
+        if dst_depth > 0:
+            dst_ancestor = dst_chain[dst_depth - 1][0]  # parent_op at the right level
+        else:
+            dst_ancestor = dst
+        if node := is_barrier_between_same_graph(
+            src_ancestor, dst_ancestor, barId, barriers
+        ):
+            return node
+
+        # Step 4: Check from common ancestor down to dst
+        current_node = dst
+        current_graph = dst.graph
+        for depth in range(dst_depth):
+            if node := is_barrier_between_same_graph(
+                list(current_graph.nodes)[0], current_node, barId, barriers
+            ):
+                return node
+            if depth < len(dst_chain):
+                parent_op, parent_graph = dst_chain[depth]
+                current_node = parent_op
+                current_graph = parent_graph
+
+    return None
 
 
 def update_sort_keys(

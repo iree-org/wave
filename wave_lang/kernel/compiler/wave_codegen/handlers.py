@@ -1518,14 +1518,26 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if start:
+    if start is not None and condition is not None:
         return handle_iterate_while(emitter, node)
 
     # Flatten init_args and get IR values for each of them.
     flat_init_args, _ = pytree.tree_flatten((init_args))
     flat_init_args = [cast_py_value(emitter, arg) for arg in flat_init_args]
 
-    start = arith_d.constant(IndexType.get(), int(0))
+    # Use provided start value if available, otherwise default to 0
+    if start is not None:
+        start_value = cast_py_value(emitter, start).ir_value
+        # Handle the case where start is a symbolic expression
+        if isinstance(start_value.type, VectorType):
+            start_value = vector_d.extract(
+                start_value, static_position=[0], dynamic_position=[]
+            )
+        if isinstance(start_value.type, IntegerType):
+            start_value = arith_d.index_cast(IndexType.get(), start_value)
+        start = start_value
+    else:
+        start = arith_d.constant(IndexType.get(), int(0))
 
     # For now, we assume that dimensions that have tiling constraints on them,
     # do not have any other constraints.

@@ -656,7 +656,7 @@ def construct_epilogue(
     visualize: bool = False,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
     node_mapping: dict[fx.Node, list[fx.Node]] = None,
-):
+) -> list[fx.Node]:
     """
     Construct the epilogue of the pipelined loop.
     The difference from the prologue is that we need to map the results
@@ -664,6 +664,11 @@ def construct_epilogue(
     no iteration is every completed and so we don't compute the final results)
     We emit GetResult nodes for the rotating registers and map them to
     the different epilogue stages.
+
+    Returns:
+        The list of nodes representing the final values after the epilogue completes.
+        These are the nodes that should be used as outputs for the overall
+        prologue+loop+epilogue package.
     """
     logger.debug("=====================================")
     logger.debug("Constructing epilogue.")
@@ -771,6 +776,9 @@ def construct_epilogue(
                 "epilogue.png",
             )
 
+        # Return the final result nodes that should be used as outputs
+        return new_results
+
 
 def create_multibuffered_allocs(
     graph: fx.Graph,
@@ -799,8 +807,9 @@ def erase_allocs(allocs: list[fx.Node]):
     DCE the allocs that are not used.
     """
     for alloc in allocs:
-        # Erase will assert that the alloc is still used.
-        get_custom(alloc).erase()
+        # Only erase if the alloc has no users
+        if not alloc.users:
+            get_custom(alloc).erase()
 
 
 def construct_pipelined_loop(
@@ -814,10 +823,15 @@ def construct_pipelined_loop(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
-) -> tuple[fx.Node, dict[fx.Node, list[fx.Node]]]:
+) -> tuple[fx.Node, dict[fx.Node, list[fx.Node]], list[fx.Node]]:
     """
     Given a graph annotated with scheduling parameters, construct a pipelined loop
     with a prologue, kernel and epilogue.
+
+    Returns:
+        pipelined_reduction: The pipelined loop node
+        node_mapping: Dictionary tracking mappings from original nodes to pipelined copies
+        final_results: List of nodes representing the final values after epilogue completes
     """
     induction_variable = get_induction_variable(reduction, constraints)
     num_rotating_registers = liveness_analysis(graph)
@@ -882,7 +896,7 @@ def construct_pipelined_loop(
     # Construct epilogue.
     # The epilogue induction variables must account for the step size.
     # With step > 1, each "iteration" covers step original iterations.
-    construct_epilogue(
+    final_results = construct_epilogue(
         graph,
         reduction,
         get_custom(pipelined_reduction),
@@ -912,4 +926,4 @@ def construct_pipelined_loop(
     if visualize:
         visualize_graph(pipelined_reduction.graph, "pipelined.png")
 
-    return pipelined_reduction, node_mapping
+    return pipelined_reduction, node_mapping, final_results
