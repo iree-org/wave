@@ -398,6 +398,13 @@ class KernelSignature:
                     ret.append(user)
                     continue
 
+                if custom.subgraph_name not in graph.subgraphs:
+                    import sys
+                    print(f"ERROR: subgraph '{custom.subgraph_name}' not found in graph.subgraphs", file=sys.stderr)
+                    print(f"  Available subgraphs: {list(graph.subgraphs.keys())}", file=sys.stderr)
+                    print(f"  Graph id: {id(graph)}", file=sys.stderr)
+                    print(f"  Custom: {custom}", file=sys.stderr)
+                    raise KeyError(custom.subgraph_name)
                 subgraph = graph.subgraphs[custom.subgraph_name]
                 nested_placeholders = filter_fx_graph(subgraph, is_placeholder)
                 for nested in nested_placeholders:

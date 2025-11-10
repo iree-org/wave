@@ -289,21 +289,45 @@ def construct_conditional_pipelined_loop(
         subgraph_reduction.count = max_induction_variable
 
         # Get GetResult nodes to extract the loop results
-        get_results = []
+        get_result_nodes = []
         for i in range(len(placeholder_init_args)):
             gr = GetResult(subgraph_reduction, i).add_to_graph(
                 conditional_subgraph,
                 type=placeholder_init_args[i].type if hasattr(placeholder_init_args[i], 'type') else None,
                 loc=reduction.location
             )
-            get_results.append(gr)
+            get_result_nodes.append(gr)
 
         # Add Output node to return the results
-        Output([gr for gr in get_results]).add_to_graph(conditional_subgraph, loc=reduction.location)
+        # Output needs fx.Node objects, not CustomOp objects
+        Output([gr for gr in get_result_nodes]).add_to_graph(conditional_subgraph, loc=reduction.location)
 
-    # Step 5: Finish the conditional
+    # Step 5: Register subgraphs before creating nodes
+    # fx.Graph doesn't have subgraphs by default, so initialize if needed
+    import sys
+    print(f"DEBUG: hasattr(main_graph, 'subgraphs'): {hasattr(main_graph, 'subgraphs')}", file=sys.stderr)
+    if hasattr(main_graph, 'subgraphs'):
+        print(f"DEBUG: Existing main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
+    else:
+        print(f"DEBUG: Creating new subgraphs dict", file=sys.stderr)
+        main_graph.subgraphs = {}
+
+    # Register the reduction body subgraph first
+    import sys
+    print(f"DEBUG: Registering subgraph '{reduction.subgraph_name}' in main_graph", file=sys.stderr)
+    if reduction.subgraph_name not in trace.region_graph.subgraphs:
+        trace.region_graph.subgraphs[reduction.subgraph_name] = reduction_graph
+        reduction_graph.parent_op = reduction.fx_node
+    main_graph.subgraphs[reduction.subgraph_name] = reduction_graph
+    print(f"DEBUG: main_graph.subgraphs keys after registration: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
+
+    # Also register in the conditional subgraph
+    if not hasattr(conditional_subgraph, 'subgraphs'):
+        conditional_subgraph.subgraphs = {}
+    conditional_subgraph.subgraphs[reduction.subgraph_name] = reduction_graph
+
+    # Step 6: Create the conditional node
     with main_graph.inserting_before(reduction.fx_node):
-        # Set else_return to init_args
         conditional_op = Conditional(
             condition,
             subgraph_name=subgraph_name,
@@ -311,28 +335,28 @@ def construct_conditional_pipelined_loop(
             else_return=list(reduction.init_args)
         ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
 
-        # Register the conditional subgraph
-        trace.region_graph.subgraphs[subgraph_name] = conditional_subgraph
-        conditional_subgraph.parent_op = get_custom(conditional_op)
+    # Register the conditional subgraph
+    print(f"DEBUG: Before adding conditional subgraph, keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
+    main_graph.subgraphs[subgraph_name] = conditional_subgraph
+    print(f"DEBUG: After adding conditional subgraph '{subgraph_name}', keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
+    trace.region_graph.subgraphs[subgraph_name] = conditional_subgraph
+    conditional_subgraph.parent_op = conditional_op
 
-        # Also register the reduction body subgraph with the trace
-        # The subgraph_reduction inside the conditional needs access to reduction_graph
-        if reduction.subgraph_name not in trace.region_graph.subgraphs:
-            trace.region_graph.subgraphs[reduction.subgraph_name] = reduction_graph
-            reduction_graph.parent_op = reduction
-
-    # Step 6: Extract results from conditional
+    # Step 7: Extract results from conditional
+    print(f"DEBUG: Before Step 7, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
     conditional_results = []
-    for i in range(len(reduction.init_args)):
-        result = GetResult(conditional_op, i).add_to_graph(
-            main_graph,
-            type=reduction.init_args[i].type if hasattr(reduction.init_args[i], 'type') else None,
-            loc=reduction.location
-        )
-        conditional_results.append(result)
+    with main_graph.inserting_before(reduction.fx_node):
+        for i in range(len(reduction.init_args)):
+            result = GetResult(conditional_op, i).add_to_graph(
+                main_graph,
+                type=reduction.init_args[i].type if hasattr(reduction.init_args[i], 'type') else None,
+                loc=reduction.location
+            )
+            conditional_results.append(result)
+    print(f"DEBUG: After Step 7, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
 
-    # Step 7: Create remainder loop
-    # This loop handles any remaining iterations
+    # Step 8: Create remainder loop
+    print(f"DEBUG: Before Step 8, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
     with main_graph.inserting_before(reduction.fx_node):
         remainder_reduction = IterateOp(
             reduction.axis,
@@ -341,18 +365,31 @@ def construct_conditional_pipelined_loop(
             subgraph_name=reduction.subgraph_name,
             implicit_captures=reduction.implicit_captures,
         ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
+        print(f"DEBUG: After add_to_graph for remainder, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
 
         remainder_reduction.index = reduction.index
+        print(f"DEBUG: After setting index, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
         # Remainder loop processes from pipelined_iters to max_induction_variable
         # For now, set count to max_induction_variable (will process all, but conditional handles pipelined part)
         remainder_reduction.count = max_induction_variable
+        print(f"DEBUG: After setting count, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
 
         # Replace uses of the original reduction with the remainder reduction
         reduction.replace_all_uses_with(get_custom(remainder_reduction))
+    print(f"DEBUG: After Step 8, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
 
-    # Step 8: Remove the original reduction
+    # Step 9: Remove the original reduction
+    print(f"DEBUG: Before Step 9, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
     reduction.erase()
+    print(f"DEBUG: After Step 9 erase, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
 
+    # Erasing the reduction removes its subgraph from main_graph.subgraphs, but we still need it
+    # for the remainder loop and the loop inside the conditional
+    main_graph.subgraphs[reduction.subgraph_name] = reduction_graph
+    print(f"DEBUG: After re-registering region_0, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
+
+    print(f"DEBUG: At end of construct_conditional_pipelined_loop, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
+    print(f"DEBUG: At end, main_graph id: {id(main_graph)}", file=sys.stderr)
     logger.info("Conditional pipelined loop construction complete")
 
 
