@@ -55,6 +55,13 @@ The above gif is an visual illustration for inserting shared memory barriers bet
 
 The above gif is an visual illustration for inserting split barriers between producers and consumers.
 
+Key Ideas:
+--------------------
+- A hazard is a producer–consumer relationship on shared memory that needs ordering.
+- A window is a safe span in the program where a barrier may be placed perserving the semantics.
+- Minimize placement strategy places the fewest shared memory barriers.
+- Find Intersecting placement strategy identifies the intersecting regions from several overlapping hazard windows.
+
 Public API:
 --------------------
 .. code-block:: python
@@ -72,7 +79,7 @@ Implementation:
 
 ### Analysis
   We first compute a topological enumeration (_topo_location) across nodes, then scan for hazards over shared memory resources:
-    1. Identify shared-memory accesses (Read, Write, Atomic, GatherToLDS) and classify them as READ, WRTIE, or READ_WRITE.
+    1. Identify shared-memory accesses (Read, Write, Atomic, GatherToLDS) and classify them as READ, WRITE, or READ_WRITE.
     2. Track producer/consumer "episodes" per memory resource.
     3. Create SyncRequirement records capturing:
         - the producer region and the consumer region
@@ -80,25 +87,35 @@ Implementation:
         - whether the hazard crosses an iteration boundary (is_loop)
         - boundary nodes of the surrounding graph
     4. RAW hazards are tagged with BarrierType.FILL, WAR with BarrierType.READY (for easier debugging and potential future guard usage)
-            
+
    Cross-iteration hazards: The analysis duplicates node sequences and adjusts `depth` to propagate loop-carried variables, so it can spot dependencies like ```read(i) -> write(i+1)``` cleanly. The resulting SyncRequirement.is_loop distinguishes these from intra-iteration hazards.
 
 ### Placement strategies
 We'll use `window` to refer to a SyncRequirement hazard interval, the interval is defined by the topological positions between a producer and a consumer.
 
 2 strategies are currently available; both take a list of SyncRequirement and return a reduced set of the SyncRequirement.
-    - Minimize placement (minimize_placement_strategy): 
+    - Minimize placement (minimize_placement_strategy):
         - Intent: Use the fewest possible barriers, placed before consumers.
         - Procedure:
-            1. Sort all SyncRequirements by their right endpoint. (earliest barrier requirements)
+            1. Sort all SyncRequirements by their endpoints. (earliest barrier requirements)
             2. Walk all windows in 1. order and check
-                - If  
+                - If a window is already covered by a previosly-placed barrier, skip it
+                - Otherwise, this is an uncovered region, so we place one barrier.
+            3. Finally for "cross-iteration" hazards, we check for barrier coverage from 1) the graph start position to the window endpoint, 2) the window start point to the graph end position.
 
-    - Find intersecting intervals (find_intersecting_interval_strategy): an interval-merging approach for split barriers; it tracks smallest feasible wait positions and largest feasible signal positions and emits when needed.
+    - Find intersecting intervals (find_intersecting_interval_strategy):
+        - Intent: Signal as early as safe, wait as late as safe.
+        - Procedure:
+            1. Sort all SyncRequirements by their startpoints and then their end points. 
+            2. Main algorithm
+                - Initialize tracking positions with the first valid producer-consumer pair.
+                - Traverse each synchronization request, updating signal and wait positions when:
+                    - The current producer position (`cur_signal_pos`) exceeds the recorded consumer position (`rec_wait_pos`).
+                - Append new synchronization requirements if conditions are met.
 
 ### Emission
 A small dispatcher selects an emitter based on TargetConfig:
-- LegacyEmitter (amdgpu.lds_barrier): emits monolithic SharedMemoryBarrier before the consumer. 
+- LegacyEmitter (amdgpu.lds_barrier): emits monolithic SharedMemoryBarrier before the consumer.
 - BasicSplitBarrierEmitter (rocdl.s.barrier.signal/rocdl.s.barrier.wait {barId: -1}) emits a signal after a producer and a wait before a consumer.
     - Verification: Scanning the pre-order traversal of the full nested graph.
         - no wait appears before its corresponding signal,
@@ -116,4 +133,4 @@ End-to-End flow
 
 Known Limitations / TODO
 --------------------
-We are now propagting memory access of an op in the nested-region with `depth` set to 1
+We are now propagating memory access of an op in the nested-region with `depth` set to 1
