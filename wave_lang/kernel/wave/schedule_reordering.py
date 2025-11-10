@@ -584,15 +584,11 @@ def transform_two_PP_clusters(
         mma_nodes, local_load_lhs, local_load_rhs, num_slice=num_slices
     )
 
-    print("sliced_mma_nodes", sliced_mma_nodes)
-    print("sliced_local_load_lhs", sliced_local_load_lhs)
-    print("sliced_local_load_rhs", sliced_local_load_rhs)
     # Check that we have valid slice size for local_loads and mmas.
     assert len(sliced_mma_nodes) == len(sliced_local_load_rhs)
     assert len(sliced_mma_nodes) == len(sliced_local_load_lhs)
     assert len(sliced_mma_nodes) == num_slices
 
-    breakpoint()
     context_location = mma_nodes and mma_nodes[0].location
 
     clusters = []
@@ -864,11 +860,6 @@ def schedule_reordering(
     scheduling_type: SchedulingType,
     use_global_to_shared: bool,
 ):
-
-    print("BEFORE schedule_reordering")
-    print_trace(trace)
-    breakpoint()
-
     """
     Ping Pong transformation is done by:
         1. Get Reduction/Iterate op
@@ -1010,16 +1001,6 @@ def schedule_reordering(
         if reorder_strategy == SchedReorderStrategy.NONE:
             continue
         elif reorder_strategy == SchedReorderStrategy.TWO_PP_CLUSTER:
-            # breakpoint()
-            print("mma_nodes", mma_nodes)
-            print("local_load_lhs", local_load_lhs)
-            print("local_load_rhs", local_load_rhs)
-            print("global_load_lhs", global_load_lhs)
-            print("global_load_rhs", global_load_rhs)
-            print("local_write_lhs", local_write_lhs)
-            print("local_write_rhs", local_write_rhs)
-            # print("BEFORE", graph)
-            # breakpoint()
             clusters = transform_two_PP_clusters(
                 mma_nodes,
                 local_load_lhs,
@@ -1066,8 +1047,6 @@ def schedule_reordering(
         reordered_graph.parent_op = graph.parent_op
         original_subgraph_name = custom_iterate.subgraph_name
         reordered_subgraph_name = f"reoredered_{original_subgraph_name}"
-        # breakpoint()
-        # print("AFTER", reordered_graph)
         trace.add_subgraph(reordered_subgraph_name, reordered_graph)
         trace.get_root_graph().subgraphs[reordered_subgraph_name] = reordered_graph
         custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
@@ -1077,9 +1056,6 @@ def schedule_reordering(
 
         if is_pingpong_strategy(reorder_strategy):
             add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
-
-    print("AFTER schedule_reordering")
-    print_trace(trace)
 
 
 def create_attention_clusters(
