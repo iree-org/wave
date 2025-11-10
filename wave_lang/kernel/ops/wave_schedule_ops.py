@@ -114,7 +114,7 @@ def partition_by_dim(nodes: Any, dim: Any, factor: int): ...
 
 
 @define_schedule_op
-def cluster(ops: Any, barriers_before: str = "", barriers_after: str = ""): ...
+def cluster(ops: Any): ...
 
 
 @define_schedule_op
@@ -319,8 +319,6 @@ class PartitionByAddressSpace(CustomScheduleOp):
 @dataclass
 class Cluster(CustomScheduleOp):
     ops: Any
-    barriers_before: str = ""
-    barriers_after: str = ""
     schedule_op_name = "cluster"
 
     @classmethod
@@ -330,8 +328,6 @@ class Cluster(CustomScheduleOp):
         kernel_trace,
         constraints: list[Constraint],
         ops: Any,
-        barriers_before: str = "",
-        barriers_after: str = "",
     ):
 
         assert isinstance(ops, (list, tuple)), "ops must be a list"
@@ -357,31 +353,9 @@ class Cluster(CustomScheduleOp):
         }
 
         result_nodes = []
-        barriers_before_list = []
-        barriers_after_list = []
-
-        # Insert barriers_before BEFORE the first proxy node
-        prev_node = None
-        for b in barriers_before.split(","):
-            b = b.strip()
-            if b:
-                assert b in barrier_map, f"Unknown barrier type: {b}"
-                # First barrier goes before the first proxy, rest chain after each other
-                if prev_node is None:
-                    new_node = add_op_before(
-                        barrier_map[b](), subgraph, first_proxy_node, context_location
-                    )
-                else:
-                    new_node = add_op_after(
-                        barrier_map[b](), subgraph, prev_node, context_location
-                    )
-                barriers_before_list.append(new_node)
-                prev_node = new_node
-
-        result_nodes.extend(barriers_before_list)
 
         # Track the last node for sequential insertion of ops
-        last_anchor = prev_node if prev_node else None
+        last_anchor = None
         first_proxy_encountered = False
 
         # Process ops sequentially, inserting scheduling ops relative to proxies
@@ -410,20 +384,6 @@ class Cluster(CustomScheduleOp):
                 result_nodes.append(new_node)
                 last_anchor = new_node
 
-        # Insert barriers_after AFTER the last operation
-        for b in barriers_after.split(","):
-            b = b.strip()
-            if b:
-                assert b in barrier_map, f"Unknown barrier type: {b}"
-                new_node = add_op_after(
-                    barrier_map[b](), subgraph, last_anchor, context_location
-                )
-                barriers_after_list.append(new_node)
-                last_anchor = new_node
-
-        result_nodes.extend(barriers_after_list)
-
-        # this works but probably sending the result back as a list is also okay
         return create_schedule_proxy(region_graph, result_nodes, cls.schedule_op_name)
 
 
