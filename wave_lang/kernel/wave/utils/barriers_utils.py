@@ -206,11 +206,9 @@ def add_sync_requirements(
     )
 
     if req in results:
-        return False
+        return
 
     results.append(req)
-
-    return cross_iter
 
 
 def handle_hazard(
@@ -372,7 +370,6 @@ def get_barriers_analysis(trace, graph, target_arch):
 def minimize_placement_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
-
     if len(sync_reqs) == 0:
         return sync_reqs
 
@@ -492,7 +489,6 @@ def find_overlapping_interval_strategy(
         rec_wait_pos = req.cons_topo_location
 
         for req in reqs[idx:]:
-
             if req.is_loop:
                 cross_iters.append(req)
                 continue
