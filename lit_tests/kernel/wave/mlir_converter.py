@@ -244,6 +244,7 @@ def mlir_converter_matmul():
     # pipeline.
     mlir_output, diag = emit_wave_dialect(trace, constraints, options, False, pipeline_asm)
 
+    assert len(diag) == 0
     # Print to stdout for FileCheck
     # CHECK-LABEL: mlir_converter_matmul
     print(transform_module)
