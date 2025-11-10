@@ -89,6 +89,7 @@ def test_gather_to_shared():
     # CHECK:              amdgpu.lds_barrier
     # CHECK:              amdgpu.gather_to_lds {{.*}}, %{{.*}}[%[[idx1]], %[[idx3]]] : vector<2xf16>
     # CHECK:              amdgpu.gather_to_lds {{.*}}, %{{.*}}[%[[idx5]], %[[idx7]]] : vector<2xf16>
+    # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-2:      vector.load
     # CHECK:              amdgpu.mfma
@@ -285,6 +286,7 @@ def test_gather_to_shared_scaled_dims():
     # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
     # CHECK-NOT:          vector.load
     # CHECK-NOT:          vector.store
+    # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-8:      vector.load
     # CHECK-COUNT-2:      amdgpu.scaled_mfma
@@ -364,6 +366,7 @@ def test_gather_to_shared_not_minimize_shared_allocs():
     # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
     # CHECK-NOT:          vector.load
     # CHECK-NOT:          vector.store
+    # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
     # CHECK-COUNT-8:      vector.load
     # CHECK-COUNT-2:      amdgpu.scaled_mfma
