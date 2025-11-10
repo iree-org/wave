@@ -2183,19 +2183,15 @@ class NestedRegionOp(CustomOp):
             if tag is not None:
                 node.fx_node.node.tag = tag
 
-            # Iterate-specific logic
-            if cls.__name__ == "Iterate" or cls.__name__ == "Conditional":
-                # Remember which placeholders are init args. This connection gets
-                # lost otherwise
-                for nested_node in graph.subgraphs[subgraph_name].nodes:
-                    if nested_node.op == "placeholder":
-                        if nested_node not in [
-                            var.node
-                            for var in graph.inner_freevars[
-                                graph.subgraphs[subgraph_name]
-                            ]
-                        ]:
-                            nested_node.tkw_op = IterArg
+            # Remember which placeholders are init args. This connection gets
+            # lost otherwise
+            for nested_node in graph.subgraphs[subgraph_name].nodes:
+                if nested_node.op == "placeholder":
+                    if nested_node not in [
+                        var.node
+                        for var in graph.inner_freevars[graph.subgraphs[subgraph_name]]
+                    ]:
+                        nested_node.tkw_op = IterArg
 
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
