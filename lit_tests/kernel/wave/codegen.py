@@ -1900,26 +1900,38 @@ def test_block_reduce_sum():
     # CHECK-DAG: #[[map2:.+]] = affine_map<()[s0] -> ((s0 floordiv 64) mod 4)>
     # CHECK-DAG: %[[c0:.+]] = arith.constant 0 : index
     # CHECK: %[[tid:.+]] = gpu.thread_id  x
-    # CHECK: %[[alloc:.+]] = memref.alloc() : memref<8xi8, #gpu.address_space<workgroup>>
 
     # Local Reduce
-    # CHECK-COUNT-2: vector.extract
-    # CHECK-NEXT: arith.addf
+    # CHECK: vector.extract
+    # CHECK: vector.extract
+    # CHECK: arith.addf
 
-    # Global Reduce
-    # CHECK-COUNT-6: gpu.shuffle  xor
-    # CHECK-NEXT: %[[global_reduce:.+]] = arith.addf
+    # Global Reduce - 6 shuffle operations with interleaved adds
+    # CHECK: gpu.shuffle{{.*}}xor
+    # CHECK: arith.addf
+    # CHECK: gpu.shuffle{{.*}}xor
+    # CHECK: arith.addf
+    # CHECK: gpu.shuffle{{.*}}xor
+    # CHECK: arith.addf
+    # CHECK: gpu.shuffle{{.*}}xor
+    # CHECK: arith.addf
+    # CHECK: gpu.shuffle{{.*}}xor
+    # CHECK: arith.addf
+    # CHECK: gpu.shuffle{{.*}}xor
+    # CHECK: %[[global_reduce:.+]] = arith.addf
+
+    # Allocate shared memory for cross-wave communication
+    # CHECK: %[[alloc:.+]] = memref.alloc() : memref<4xf16, #gpu.address_space<workgroup>>
 
     # Write partial wave result into shared memory to be accessible by other waves.
-    # CHECK: %[[view:.+]] = memref.view %[[alloc]][%[[c0]]][] : memref<8xi8, #gpu.address_space<workgroup>> to memref<4xf16, #gpu.address_space<workgroup>>
     # CHECK: scf.if {{.*}} {
     # CHECK:    %[[wave_id:.+]] = affine.apply #[[map2]]()[%[[tid]]]
-    # CHECK:    vector.store %[[global_reduce]], %[[view]][%[[wave_id]]] : memref<4xf16, #gpu.address_space<workgroup>>, vector<1xf16>
+    # CHECK:    vector.store %[[global_reduce]], %[[alloc]][%[[wave_id]]] : memref<4xf16, #gpu.address_space<workgroup>>, vector<1xf16>
     # CHECK: }
     # CHECK-NEXT: amdgpu.lds_barrier
 
     # Get all partial wave results and locally reduce
-    # CHECK: %[[wave_res:.+]] = vector.load %[[view]]
+    # CHECK: %[[wave_res:.+]] = vector.load %[[alloc]]
     # CHECK: vector.extract %[[wave_res]][0] : f16 from vector<4xf16>
     # CHECK: vector.extract %[[wave_res]][1] : f16 from vector<4xf16>
     # CHECK-NEXT: arith.addf

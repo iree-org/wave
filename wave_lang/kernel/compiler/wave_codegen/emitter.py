@@ -462,7 +462,7 @@ class WaveEmitter:
 
     def _emit_graph(self, graph: fx.Graph):
         """Emits the given graph at the current insertion point."""
-        for node in graph.nodes:
+        for i, node in enumerate(graph.nodes):
             if node.op == "call_function" or node.op == "call_method":
                 self._emit_function_call_node(node)
             if node.op == "output":
