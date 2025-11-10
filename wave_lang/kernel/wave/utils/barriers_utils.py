@@ -56,7 +56,7 @@ class BarrierType(IntFlag):
 @dataclass
 class SyncRequirement:
     """
-    Syncrhonization requirements in between producers and consumers.
+    Synchronization requirements in between producers and consumers.
     """
 
     resource: Any = None
