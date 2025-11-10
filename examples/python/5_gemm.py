@@ -2177,33 +2177,45 @@ def ref_gemm_prefetch(is_debug=False):
 
         # Create cluster ordering (similar to two_pp_cluster)
         # Note: B loads should come before A loads for optimal scheduling
-        # Bare scheduling operations are automatically inserted after the previous operation
-        # Use tkw.insert_before() for operations that need to go before (like SetWavePrio before MMA)
+        # Each cluster has an anchor (the main compute op) with optional scheduling ops and barriers
         clusters = [
-            shared_load_a_0,
-            shared_load_b_0,
-            tkw.SchedulingBarrier([]),
-            global_load_a,
-            tkw.SchedulingBarrier([]),
-            shared_load_a_1,
-            shared_load_b_1,
-            tkw.SchedulingBarrier([]),
-            global_load_b,
-            tkw.WorkgroupBarrier(),
-            tkw.SchedulingBarrier([]),
-            tkw.insert_before(mma_0, tkw.SetWavePrio(1)),
-            mma_0,
-            tkw.SetWavePrio(0),
-            tkw.SharedMemoryBarrier(),
-            tkw.SchedulingBarrier([]),
-            shared_write_a,
-            shared_write_b,
-            tkw.WorkgroupBarrier(),
-            tkw.SchedulingBarrier([]),
-            tkw.insert_before(mma_1, tkw.SetWavePrio(1)),
-            mma_1,
-            tkw.SetWavePrio(0),
-            tkw.SchedulingBarrier([]),
+            tkw.cluster(
+                [
+                    shared_load_a_0,
+                    shared_load_b_0,
+                    tkw.SchedulingBarrier([]),
+                    global_load_a,
+                    tkw.SchedulingBarrier([]),
+                    shared_load_a_1,
+                    shared_load_b_1,
+                    tkw.SchedulingBarrier([]),
+                    global_load_b,
+                ],
+                barriers_after="workgroup, scheduling",
+            ),
+            tkw.cluster(
+                [
+                    tkw.SetWavePrio(1),
+                    mma_0,
+                    tkw.SetWavePrio(0),
+                ],
+                barriers_after="shared, scheduling",
+            ),
+            tkw.cluster(
+                [
+                    shared_write_a,
+                    shared_write_b,
+                ],
+                barriers_after="workgroup, scheduling",
+            ),
+            tkw.cluster(
+                [
+                    tkw.SetWavePrio(1),
+                    mma_1,
+                    tkw.SetWavePrio(0),
+                ],
+                barriers_after="scheduling",
+            ),
         ]
 
         # Apply reordering to the KERNEL stage only

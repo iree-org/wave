@@ -118,11 +118,7 @@ def partition_by_dim(nodes: Any, dim: Any, factor: int): ...
 
 
 @define_schedule_op
-def insert_before(nodes: Any, op: Any): ...
-
-
-@define_schedule_op
-def insert_after(nodes: Any, op: Any): ...
+def cluster(ops: Any, barriers_before: str = "", barriers_after: str = ""): ...
 
 
 @define_schedule_op
@@ -144,72 +140,20 @@ def get_node_by_tag_helper(kernel_trace, tag: str):
     return nodes
 
 
-def process_cluster_list_for_reordering(clusters, subgraph):
-    """
-    Process a cluster list and convert bare scheduling operations to InsertionPoints.
+def add_op_to_graph(op, subgraph: fx.Graph, location=None):
+    """Add a scheduling operation to a subgraph with optional location context."""
+    new_op = op.add_to_graph(subgraph)
+    if location:
+        new_op.location = location
+    return new_op
 
-    This allows users to write:
-        clusters = [
-            shared_load_a_0,
-            tkw.SchedulingBarrier([]),  # Inserted after shared_load_a_0
-            global_load_a,
-            tkw.WorkgroupBarrier(),     # Inserted after global_load_a
-            mma_0,
-            ...
-        ]
-    """
-    from ..wave.schedule_reordering import insert_op_after
-    from ..ops.wave_ops import SetWavePrio
 
-    cluster_nodes = []
-    prev_anchor_nodes = None  # Track previous non-scheduling nodes
-
-    for item in clusters:
-        # Case 1: Bare scheduling op - insert after previous operation
-        if isinstance(
-            item,
-            (SchedulingBarrier, WorkgroupBarrier, SharedMemoryBarrier, SetWavePrio),
-        ):
-            if prev_anchor_nodes is None:
-                raise ValueError(
-                    f"Cannot insert {type(item).__name__} without a previous operation. "
-                    "Add regular operations before scheduling operations in the cluster list."
-                )
-
-            # Get anchor node for location context
-            anchor_node = (
-                prev_anchor_nodes[-1]
-                if isinstance(prev_anchor_nodes, (list, tuple))
-                else prev_anchor_nodes
-            )
-            custom = get_custom(anchor_node)
-            context_location = custom.location if hasattr(custom, "location") else None
-
-            # Add scheduling op to subgraph and create InsertionPoint
-            new_op = item.add_to_graph(subgraph)
-            if context_location:
-                new_op.location = context_location
-
-            insertion_point = insert_op_after(new_op, prev_anchor_nodes)
-            cluster_nodes.append(insertion_point)
-
-            # Update prev_anchor_nodes so the next bare scheduling op is inserted after this one
-            # This creates a chain: op1 -> sched1 -> sched2 -> sched3
-            prev_anchor_nodes = new_op
-            continue
-
-        # Case 2: Proxy - extract result and add to cluster
-        if hasattr(item, "node"):
-            result = get_proxy_result(item.node)
-            if result:
-                cluster_nodes.append(result)
-                prev_anchor_nodes = result
-        # Case 3: Direct fx.Node
-        else:
-            cluster_nodes.append(item)
-            prev_anchor_nodes = item
-
-    return cluster_nodes
+def extract_proxy_nodes(item):
+    """Extract fx.Node(s) from a proxy or return direct node."""
+    if isinstance(item, fx.Proxy):
+        result = get_proxy_result(item.node)
+        return result if isinstance(result, list) else [result]
+    return [item]
 
 
 @dataclass
@@ -377,10 +321,11 @@ class PartitionByAddressSpace(CustomScheduleOp):
 
 
 @dataclass
-class InsertBefore(CustomScheduleOp):
-    nodes: Any
-    op: Any
-    schedule_op_name = "insert_before"
+class Cluster(CustomScheduleOp):
+    ops: Any
+    barriers_before: str = ""
+    barriers_after: str = ""
+    schedule_op_name = "cluster"
 
     @classmethod
     def handle(
@@ -388,92 +333,76 @@ class InsertBefore(CustomScheduleOp):
         region_graph,
         kernel_trace,
         constraints: list[Constraint],
-        nodes: Any,
-        op: Any,
+        ops: Any,
+        barriers_before: str = "",
+        barriers_after: str = "",
     ):
-        # Get the actual nodes from the proxy
-        assert hasattr(
-            nodes, "node"
-        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
-        nodes_list = get_proxy_result(nodes.node)
-        assert nodes_list is not None, "Nodes must have a result"
+        from ..ops.wave_ops import SetWavePrio
 
-        if not isinstance(nodes_list, (list, tuple)):
-            nodes_list = [nodes_list]
-        assert len(nodes_list) > 0, "Nodes must have at least one element"
+        assert isinstance(ops, (list, tuple)), "ops must be a list"
 
-        # Get the subgraph that these nodes belong to
-        first_node = nodes_list[0]
-        subgraph = first_node.graph
+        # Helper: Check if item is a scheduling op
+        def is_scheduling_op(item):
+            return isinstance(
+                item,
+                (SchedulingBarrier, WorkgroupBarrier, SharedMemoryBarrier, SetWavePrio),
+            )
 
-        # Get location from first node for context
-        custom = get_custom(first_node)
-        context_location = custom.location if hasattr(custom, "location") else None
+        # Find first proxy to get subgraph and context
+        first_proxy_node = None
+        for item in ops:
+            if isinstance(item, fx.Proxy):  # It's a proxy (anchor)
+                first_proxy_node = extract_proxy_nodes(item)[0]
+                break
 
-        # Add the operation to the subgraph
-        # op should already be an initialized CustomOp instance
-        new_op = op.add_to_graph(subgraph)
-        if context_location:
-            new_op.location = context_location
+        if first_proxy_node is None:
+            raise ValueError("Cluster must have at least one anchor (proxy operation)")
 
-        # Return list with new op prepended
-        result_nodes = [new_op] + list(nodes_list)
+        subgraph = first_proxy_node.graph
+        context_location = getattr(get_custom(first_proxy_node), "location", None)
 
-        return create_schedule_proxy(
-            region_graph,
-            result_nodes,
-            cls.schedule_op_name,
-        )
+        # Parse barrier string: "scheduling, workgroup" -> [SchedulingBarrier(), WorkgroupBarrier()]
+        barrier_map = {
+            "scheduling": lambda: SchedulingBarrier([]),
+            "workgroup": lambda: WorkgroupBarrier(),
+            "shared": lambda: SharedMemoryBarrier(),
+        }
 
+        barriers_before_list = []
+        barriers_after_list = []
+        for b in barriers_before.split(","):
+            b = b.strip()
+            if b:
+                assert b in barrier_map, f"Unknown barrier type: {b}"
+                barriers_before_list.append(
+                    add_op_to_graph(barrier_map[b](), subgraph, context_location)
+                )
 
-@dataclass
-class InsertAfter(CustomScheduleOp):
-    nodes: Any
-    op: Any
-    schedule_op_name = "insert_after"
+        result_nodes = barriers_before_list[:]
 
-    @classmethod
-    def handle(
-        cls,
-        region_graph,
-        kernel_trace,
-        constraints: list[Constraint],
-        nodes: Any,
-        op: Any,
-    ):
-        # Get the actual nodes from the proxy
-        assert hasattr(
-            nodes, "node"
-        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
-        nodes_list = get_proxy_result(nodes.node)
-        assert nodes_list is not None, "Nodes must have a result"
+        for item in ops:
+            if isinstance(item, fx.Proxy):
+                proxy_nodes = extract_proxy_nodes(item)
+                result_nodes.extend(proxy_nodes)
+                # update the context to the last proxy node, does not impact the outcome
+                context_location = getattr(
+                    get_custom(proxy_nodes[-1]), "location", None
+                )
+            else:
+                result_nodes.append(add_op_to_graph(item, subgraph, context_location))
 
-        if not isinstance(nodes_list, (list, tuple)):
-            nodes_list = [nodes_list]
-        assert len(nodes_list) > 0, "Nodes must have at least one element"
+        for b in barriers_after.split(","):
+            b = b.strip()
+            if b:
+                assert b in barrier_map, f"Unknown barrier type: {b}"
+                barriers_after_list.append(
+                    add_op_to_graph(barrier_map[b](), subgraph, context_location)
+                )
 
-        # Get the subgraph that these nodes belong to
-        last_node = nodes_list[-1]
-        subgraph = last_node.graph
+        result_nodes.extend(barriers_after_list)
 
-        # Get location from last node for context
-        custom = get_custom(last_node)
-        context_location = custom.location if hasattr(custom, "location") else None
-
-        # Add the operation to the subgraph
-        # op should already be an initialized CustomOp instance
-        new_op = op.add_to_graph(subgraph)
-        if context_location:
-            new_op.location = context_location
-
-        # Return list with new op appended
-        result_nodes = list(nodes_list) + [new_op]
-
-        return create_schedule_proxy(
-            region_graph,
-            result_nodes,
-            cls.schedule_op_name,
-        )
+        # this works but probably sending the result back as a list is also okay
+        return create_schedule_proxy(region_graph, result_nodes, cls.schedule_op_name)
 
 
 @dataclass
@@ -493,7 +422,6 @@ class ReorderGraph(CustomScheduleOp):
     ):
         from ..wave.schedule_reordering import reorder_graph as reorder_graph_impl
 
-        breakpoint()
         # Get the iterate node from the proxy
         assert hasattr(
             loop, "node"
@@ -507,18 +435,13 @@ class ReorderGraph(CustomScheduleOp):
         custom_iterate = get_custom(iterate_node)
         subgraph = kernel_trace.get_subgraph(custom_iterate.subgraph_name)
 
-        # Process cluster list to handle bare scheduling operations
-        # This converts bare ops like tkw.SchedulingBarrier([]) to InsertionPoints
-        if hasattr(clusters, "node"):
-            # Single proxy - just get the result
-            clusters_list = get_proxy_result(clusters.node)
-        elif isinstance(clusters, (list, tuple)):
-            # List of items - process it
-            clusters_list = clusters
-        else:
-            raise ValueError(f"Unexpected clusters type: {type(clusters)}")
+        # Extract cluster nodes from proxies
+        cluster_nodes = []
 
-        cluster_nodes = process_cluster_list_for_reordering(clusters_list, subgraph)
+        assert isinstance(clusters, (list, tuple)), "Clusters must be a list or tuple"
+        for item in clusters:
+            cluster_nodes.extend(extract_proxy_nodes(item))
+
         logger.info(f"Reordering with {len(cluster_nodes)} cluster items")
 
         # Apply the reordering to the subgraph
@@ -789,7 +712,7 @@ class GetItem(CustomScheduleOp):
         obj: Any,
         index: int,
     ):
-        if hasattr(obj, "node"):
+        if isinstance(obj, fx.Proxy):
             source_result = get_proxy_result(obj.node)
             if isinstance(source_result, (list, tuple)) and len(source_result) > index:
                 real_result = source_result[index]
