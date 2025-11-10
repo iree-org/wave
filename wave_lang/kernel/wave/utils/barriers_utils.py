@@ -182,7 +182,7 @@ def add_sync_requirements(
 
     assert get_shared_memory_from_op(last_prod) == get_shared_memory_from_op(
         first_con
-    ), "Bug"
+    ), f"BUG: {last_prod} and {first_con} reference different shared-memory regions. This indicates a bug in handle_hazard: producers and consumers should operate on the same region but are currently mismatched."
 
     if resource is not None and not need_barrier(last_prod, first_con):
         return
