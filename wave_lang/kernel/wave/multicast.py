@@ -113,7 +113,7 @@ def multicast(
     The pass performs the following:
     1. Check if multicast is supported (cluster dimensions specified)
     2. Identify tensor load operations that can benefit from multicast
-    3. Transform eligible loads to use multicast operations
+    3. Add multicast_mask metadata to eligible loads
     """
     # Get hardware constraints
     hardware_constraint = get_hardware_constraint(constraints)
@@ -128,6 +128,12 @@ def multicast(
     cluster_size = math.prod(workgroups_per_cluster)
     if cluster_size <= 1:
         logger.info(f"Cluster size is {cluster_size}, skipping multicast optimization")
+        return
+
+    if cluster_size > 16:
+        logger.warning(
+            f"Cluster size {cluster_size} exceeds maximum supported size of 16; skipping multicast optimization"
+        )
         return
 
     logger.info(
