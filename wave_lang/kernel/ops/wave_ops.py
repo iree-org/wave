@@ -2245,33 +2245,6 @@ class Conditional(NestedRegionOp):
             return get_custom(self.condition).indexing_dims
         return []
 
-    def iter_args(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
-        iter_args = []
-        if graph is None:
-            graph = self.get_root_graph().subgraphs[self.subgraph_name]
-        for nested_node in graph.nodes:
-            custom = get_custom(nested_node)
-            if isinstance(custom, IterArg):
-                iter_args.append(nested_node)
-        # Sort by iter_idx.
-        iter_args = sorted(iter_args, key=lambda x: get_custom(x).iter_idx)
-        return iter_args
-
-    def infer_type(self, *args):
-        if self.else_return is not None:
-            res_types = [get_custom(x).type for x in self.else_return]
-            if len(res_types) == 1:
-                res_types = res_types[0]
-            self.type = res_types
-
-    def outputs(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
-        if graph is None:
-            graph = self.get_root_graph().subgraphs[self.subgraph_name]
-
-        output = get_custom(graph.output_node())
-        assert isinstance(output, Output), f"Expected Output, but got {output}"
-        return output.return_vals[0]
-
 
 @define_op("iterate")
 @dataclass
