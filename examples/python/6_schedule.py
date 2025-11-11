@@ -382,7 +382,6 @@ def gemm_prefetch_reorder(is_debug=False):
         clusters = [
             tkw.cluster(
                 [
-                    tkw.SchedulingBarrier([]),
                     shared_load_a_0,
                     shared_load_b_0,
                     tkw.SchedulingBarrier([]),
@@ -398,7 +397,6 @@ def gemm_prefetch_reorder(is_debug=False):
             ),
             tkw.cluster(
                 [
-                    tkw.SchedulingBarrier([]),
                     tkw.SetWavePrio(1),
                     mma_0,
                     tkw.SetWavePrio(0),
@@ -408,7 +406,6 @@ def gemm_prefetch_reorder(is_debug=False):
             ),
             tkw.cluster(
                 [
-                    tkw.SchedulingBarrier([]),
                     shared_write_a,
                     shared_write_b,
                     tkw.WorkgroupBarrier(),
@@ -417,7 +414,6 @@ def gemm_prefetch_reorder(is_debug=False):
             ),
             tkw.cluster(
                 [
-                    tkw.SchedulingBarrier([]),
                     tkw.SetWavePrio(1),
                     mma_1,
                     tkw.SetWavePrio(0),
@@ -426,8 +422,15 @@ def gemm_prefetch_reorder(is_debug=False):
             ),
         ]
 
+        # insert prefetch barriers before the loop
+        tkw.insert_before(k_loop, tkw.SharedMemoryBarrier())
+        output_node = tkw.output_node(k_loop)
+        tkw.insert_before(output_node, tkw.SharedMemoryBarrier())
+
         # Apply reordering to the KERNEL stage only
         tkw.reorder_graph(k_loop, clusters)
+        # Apply ping-pong scheduling (adds conditional barriers around loop)
+        tkw.pingpong(k_loop)
 
     # Define compile options
     M_val, N_val, K_val = shape
