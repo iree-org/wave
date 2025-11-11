@@ -19,6 +19,7 @@ Fusion candidates are identified based on:
 """
 
 import logging
+import math
 
 import torch.fx as fx
 
@@ -27,10 +28,29 @@ from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
 )
-from ..wave.constraints import Constraint
+from ..wave.constraints import Constraint, HardwareConstraint
 from ..wave.utils.graph_utils import DCE
+from ..wave.utils.print_utils import print_trace
 
 logger = logging.getLogger(__name__)
+
+
+def get_wave_count(constraints: list[Constraint]) -> int:
+    """
+    Extract the total number of waves from the hardware constraints.
+
+    Args:
+        constraints: List of constraints for the kernel
+
+    Returns:
+        Total number of waves (product of waves_per_block dimensions)
+    """
+    for constraint in constraints:
+        if isinstance(constraint, HardwareConstraint):
+            if constraint.waves_per_block is not None:
+                # Calculate total wave count as product of all dimensions
+                return math.prod(constraint.waves_per_block)
+    return 0
 
 
 def is_fusable_tensor_load(node: fx.Node) -> bool:
@@ -157,11 +177,30 @@ def fuse_tensor_loads(
     adjacent memory regions, reducing the number of memory operations and
     improving overall performance.
 
+    Fusion is only performed when we have an even number of waves, as this
+    is a requirement for correct fusion behavior.
+
     Args:
         trace: The captured trace to transform
         constraints: List of constraints for the kernel
     """
     logger.info("Running fuse_tensor_loads pass")
+    print_trace(trace)
+
+    # Check if we have an even number of waves (required for fusion)
+    wave_count = get_wave_count(constraints)
+    if wave_count == 0:
+        logger.info("No wave count found in constraints, skipping fusion")
+        return
+
+    if wave_count % 2 != 0:
+        logger.info(
+            f"Skipping tensor load fusion: odd number of waves ({wave_count}). "
+            "Fusion requires an even number of waves."
+        )
+        return
+
+    logger.info(f"Wave count is {wave_count} (even), proceeding with fusion")
 
     # Find pairs of adjacent loads that can be fused
     adjacent_pairs = find_adjacent_loads(trace)
