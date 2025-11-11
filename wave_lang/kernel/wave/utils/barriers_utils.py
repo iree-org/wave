@@ -49,7 +49,7 @@ class BarrierType(IntFlag):
     For WAR Read -> Write: guard ready
     """
 
-    NONE = auto()
+    NONE = 0
     READY = auto()
     FILL = auto()
 
@@ -115,7 +115,7 @@ def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
     elif isinstance(op, AtomicOp):
         return MemoryAccessType.READ_WRITE
     elif isinstance(op, GatherToLDS):
-        return MemoryAccessType.WRITE
+        return MemoryAccessType.READ_WRITE
     else:
         return MemoryAccessType.NONE
 
@@ -601,10 +601,7 @@ def find_intersecting_interval_strategy(
                 req.cons_topo_location = req.cons_region._topo_location
                 cross_iter_reqs[graph].append(req)
                 continue
-            elif not any(
-                res.cons_region._topo_location in range(graph_start, cons_loc + 1)
-                for res in results
-            ) and any(
+            elif any(
                 res.prod_region._topo_location in range(prod_loc, graph_end + 1)
                 for res in results
             ):
