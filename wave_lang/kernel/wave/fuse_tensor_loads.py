@@ -75,33 +75,130 @@ def is_fusable_tensor_load(node: fx.Node) -> bool:
     return True
 
 
+def has_side_effecting_ops_between(
+    subgraph: fx.Graph, load1_node: fx.Node, load2_node: fx.Node
+) -> bool:
+    """
+    Check if there are any side-effecting operations between two nodes.
+
+    Args:
+        subgraph: The subgraph containing the nodes
+        load1_node: The first load node (earlier in topological order)
+        load2_node: The second load node (later in topological order)
+
+    Returns:
+        True if there are side-effecting ops between the two nodes
+    """
+    for node in subgraph.nodes:
+        # Check if node is between load1_node and load2_node
+        if load1_node < node < load2_node:
+            custom = get_custom(node)
+            if custom.has_side_effects:
+                logger.debug(
+                    f"Found side-effecting op {node.name} ({type(custom).__name__}) "
+                    f"between {load1_node.name} and {load2_node.name}"
+                )
+                return True
+    return False
+
+
+def has_first_load_users_between(
+    subgraph: fx.Graph, load1_node: fx.Node, load2_node: fx.Node
+) -> bool:
+    """
+    Check if any users of the first load are between the two loads.
+
+    Args:
+        subgraph: The subgraph containing the nodes
+        load1_node: The first load node (earlier in topological order)
+        load2_node: The second load node (later in topological order)
+
+    Returns:
+        True if any users of load1_node are between the two nodes
+    """
+    for user in load1_node.users:
+        if load1_node < user < load2_node:
+            logger.debug(
+                f"User {user.name} of {load1_node.name} is between "
+                f"{load1_node.name} and {load2_node.name}"
+            )
+            return True
+    return False
+
+
 def find_adjacent_loads(
     trace: CapturedTrace,
-) -> list[tuple[TensorLoadToLDS, TensorLoadToLDS]]:
+) -> list[tuple[fx.Node, fx.Node]]:
     """
     Find pairs of adjacent TensorLoadToLDS operations that can be fused.
+
+    Fusion only occurs within the same subgraph to maintain correct program semantics.
+    Pairs are fusable if:
+    - They are in the same subgraph
+    - There are no side-effecting ops between them
+    - Users of the first op are not between them
 
     Args:
         trace: The captured trace to analyze
 
     Returns:
-        List of pairs of adjacent loads that can be fused
+        List of pairs (node1, node2) of adjacent loads that can be fused
     """
     fusable_pairs = []
 
-    # Collect all fusable tensor loads
-    tensor_loads = []
-    for node in trace.walk(is_fusable_tensor_load):
-        custom = get_custom(node)
-        tensor_loads.append((node, custom))
+    # Group tensor loads by subgraph to ensure fusion only happens within same subgraph
+    loads_by_subgraph = {}
+    for subgraph_name, subgraph in trace.region_graph.subgraphs.items():
+        subgraph_loads = []
+        for node in subgraph.nodes:
+            if is_fusable_tensor_load(node):
+                subgraph_loads.append(node)
 
-    # TODO: Implement adjacency detection logic
-    # - Check if loads target adjacent memory regions (global memory)
-    # - Check if loads target adjacent LDS regions (shared memory)
-    # - Check if loads have compatible bounds and shapes
-    # - Verify loads are in the same basic block
+        if subgraph_loads:
+            loads_by_subgraph[subgraph_name] = (subgraph, subgraph_loads)
+            logger.info(
+                f"Found {len(subgraph_loads)} fusable tensor loads in subgraph '{subgraph_name}'"
+            )
 
-    logger.info(f"Found {len(tensor_loads)} fusable tensor loads")
+    # Find fusable pairs within each subgraph
+    for subgraph_name, (subgraph, loads) in loads_by_subgraph.items():
+        # Check each consecutive pair of loads
+        for i in range(len(loads)):
+            for j in range(i + 1, len(loads)):
+                load1_node = loads[i]
+                load2_node = loads[j]
+
+                # Ensure load1 comes before load2
+                if not (load1_node < load2_node):
+                    continue
+
+                # Check if there are side-effecting ops between them
+                if has_side_effecting_ops_between(subgraph, load1_node, load2_node):
+                    logger.debug(
+                        f"Cannot fuse {load1_node.name} and {load2_node.name} in '{subgraph_name}': "
+                        "side-effecting ops in between"
+                    )
+                    continue
+
+                # Check if users of first load are between them
+                if has_first_load_users_between(subgraph, load1_node, load2_node):
+                    logger.debug(
+                        f"Cannot fuse {load1_node.name} and {load2_node.name} in '{subgraph_name}': "
+                        "users of first load are in between"
+                    )
+                    continue
+
+                # This pair is fusable
+                fusable_pairs.append((load1_node, load2_node))
+                logger.debug(
+                    f"Fusable pair found in '{subgraph_name}': {load1_node.name} and {load2_node.name}"
+                )
+
+    total_loads = sum(len(loads) for _, loads in loads_by_subgraph.values())
+    logger.info(
+        f"Found {total_loads} total fusable tensor loads across {len(loads_by_subgraph)} subgraphs, "
+        f"identified {len(fusable_pairs)} fusable pairs"
+    )
 
     return fusable_pairs
 
