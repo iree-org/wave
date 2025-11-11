@@ -589,7 +589,7 @@ class PipelinedLoop:
             subgraph,
             self.kernel_trace,
             self.constraints,
-            use_scheduling_barriers=True,
+            use_scheduling_barriers=False,
             num_stages=self.num_stages,
             initiation_interval=self.initiation_interval,
             scheduling_type=SchedulingType.MANUAL,
