@@ -262,28 +262,26 @@ class WaveKernelWithProfile(WaveKernel):
 
 
 class WaveKernel2:
-    def __init__(self, options: WaveCompileOptions, module: Module | bytes):
+    def __init__(self, options: WaveCompileOptions, module: Module | bytes | str):
         self.options = options
 
         self._engine = None
         self._module_handle = None
 
-        # Serialize MLIR module to bytecode if needed
-        if isinstance(module, bytes):
-            self.bytecode = module
+        # Serialize MLIR module to text if needed
+        # TODO: investigate why bytecode deserialization is not working
+        if isinstance(module, (bytes, str)):
+            # Assume it's already MLIR text
+            mlir_asm = module.decode() if isinstance(module, bytes) else module
         else:
-            # Serialize the MLIR module to bytecode
-            import io
-
-            bytecode_io = io.BytesIO()
-            module.operation.write_bytecode(bytecode_io)
-            self.bytecode = bytecode_io.getvalue()
+            # Serialize the MLIR module to text
+            mlir_asm = str(module)
 
         # Load module eagerly
         from wave_lang.kernel.wave.execution_engine import get_execution_engine
 
         self._engine = get_execution_engine()
-        self._module_handle = self._engine.load_module_from_bytecode(self.bytecode)
+        self._module_handle = self._engine.load_module_from_text(mlir_asm)
 
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
