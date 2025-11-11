@@ -17,6 +17,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Target/TargetMachine.h>
 
@@ -29,7 +30,18 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
 
+#include <mutex>
+
 #define DEBUG_TYPE "wave-execution-engine"
+
+// Ensure LLVM native target is initialized only once
+static std::once_flag llvmInitFlag;
+
+static void initializeLLVMTarget() {
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+  llvm::InitializeNativeTargetAsmParser();
+}
 
 static llvm::OptimizationLevel mapToLevel(llvm::CodeGenOptLevel level) {
   unsigned optimizeSize = 0; // TODO: unhardcode
@@ -245,6 +257,9 @@ wave::ExecutionEngine::ExecutionEngine(const ExecutionEngineOptions &options)
                  llvm::JITEventListener::createIntelJITEventListener())
       perfListener = listener;
   }
+
+  // Initialize LLVM native target (only once per process)
+  std::call_once(llvmInitFlag, initializeLLVMTarget);
 
   auto tmBuilder =
       llvm::cantFail(llvm::orc::JITTargetMachineBuilder::detectHost());
