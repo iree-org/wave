@@ -242,7 +242,9 @@ def mlir_converter_matmul():
 
     # Use the mlir_converter to emit wave MLIR dialect and apply the empty
     # pipeline.
-    mlir_output, diag = emit_wave_dialect(trace, constraints, options, False, pipeline_asm)
+    mlir_output, diag = emit_wave_dialect(
+        trace, constraints, options, False, pipeline_asm
+    )
 
     assert len(diag) == 0
     # Print to stdout for FileCheck

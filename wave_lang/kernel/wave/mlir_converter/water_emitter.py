@@ -23,14 +23,6 @@ if TYPE_CHECKING:
     from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
-from wave_lang.kernel.wave.constraints import (
-    WorkgroupConstraint,
-    HardwareConstraint,
-    WaveConstraint,
-    TilingConstraint,
-    DeviceConstraint,
-)
-
 try:
     from water_mlir.water_mlir import ir
     from water_mlir.water_mlir.dialects.wave import (
@@ -495,6 +487,14 @@ def _emit_ops_from_graph(
 
 
 def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
+    from wave_lang.kernel.wave.constraints import (
+        WorkgroupConstraint,
+        HardwareConstraint,
+        WaveConstraint,
+        TilingConstraint,
+        DeviceConstraint,
+    )
+
     if isinstance(constraint, HardwareConstraint):
         mma_type_attr = None
         if constraint.mma_type:
