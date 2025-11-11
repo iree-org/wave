@@ -61,8 +61,10 @@ def find_adjacent_loads(
     Fusion only occurs within the same subgraph to maintain correct program semantics.
     Pairs are fusable if:
     - They are in the same subgraph
+    - They have the same element type
     - There are no side-effecting ops between them
     - Users of the first op are not between them
+    - Each load appears in at most one pair
 
     Args:
         trace: The captured trace to analyze
@@ -104,6 +106,16 @@ def find_adjacent_loads(
                     continue
 
                 if not (load1 < load2):
+                    continue
+
+                # Check if both loads have the same element type
+                load1_custom = get_custom(load1)
+                load2_custom = get_custom(load2)
+                if load1_custom.element_type != load2_custom.element_type:
+                    logger.debug(
+                        f"Cannot fuse {load1.name} and {load2.name}: "
+                        f"different element types ({load1_custom.element_type} vs {load2_custom.element_type})"
+                    )
                     continue
 
                 # Check for side-effecting ops between the loads
