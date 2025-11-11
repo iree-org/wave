@@ -552,6 +552,14 @@ def _emit_ops_from_graph(
 
 
 def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
+    from wave_lang.kernel.wave.constraints import (
+        WorkgroupConstraint,
+        HardwareConstraint,
+        WaveConstraint,
+        TilingConstraint,
+        DeviceConstraint,
+    )
+
     if isinstance(constraint, HardwareConstraint):
         mma_type_attr = None
         if constraint.mma_type:
@@ -748,7 +756,7 @@ def _emit_from_captured_trace(
                 diagnostics.append(f"Failed to apply transform script: {e}")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
-        
+
         output = dill.dumps({"diagnostics": diagnostics, "module": module_str})
         sys.stdout.buffer.write(output)
         sys.stdout.flush()

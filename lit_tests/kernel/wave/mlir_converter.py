@@ -256,7 +256,9 @@ def mlir_converter_matmul():
 
     # Use the mlir_converter to emit wave MLIR dialect and apply the empty
     # pipeline.
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False, pipeline_asm)
+    mlir_output, diagnostics = emit_wave_dialect(
+        trace, constraints, options, False, pipeline_asm
+    )
 
     if diagnostics:
         print(diagnostics)
