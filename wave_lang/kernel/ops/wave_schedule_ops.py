@@ -142,7 +142,7 @@ def getitem(obj: Any, index: int): ...
 
 
 @define_schedule_op
-def pingpong(loop: Any): ...
+def stagger(loop: Any): ...
 
 
 def get_node_by_tag_helper(kernel_trace, tag: str, subgraph_name: str = None):
@@ -690,8 +690,8 @@ class Pipeline(CustomScheduleOp):
 
 
 @dataclass
-class PingPong(CustomScheduleOp):
-    schedule_op_name = "pingpong"
+class Stagger(CustomScheduleOp):
+    schedule_op_name = "stagger"
 
     @classmethod
     def handle(
@@ -702,9 +702,21 @@ class PingPong(CustomScheduleOp):
         loop: Any,
     ):
         """
-        Implements ping-pong scheduling by adding conditional barriers around a loop.
-        This allows overlapping computation and memory access by having different wave
-        groups execute at different phases of the loop.
+        Implements stagger scheduling by adding conditional barriers around a loop that blocks waves such that
+        waves execute clusters in a staggered manner for better overlap of computation and memory access.
+
+        For 2 waves (default):
+        at T0:
+           wave 0 runs cluster 0
+           wave 1 blocked
+        at T1:
+           wave 0 runs cluster 1
+           wave 1 runs cluster 0
+        at T2:
+           wave 0 runs cluster 2
+           wave 1 runs cluster 1
+
+        This pattern continues, allowing N waves to execute clusters in parallel with a stagger offset.
         """
         from ..wave.schedule_reordering import add_conditional_barriers_to_loop
         from ..wave.utils.general_utils import get_hardware_constraint
@@ -723,15 +735,15 @@ class PingPong(CustomScheduleOp):
         # Get hardware constraints
         hardware_constraint = get_hardware_constraint(constraints)
         if hardware_constraint is None:
-            raise ValueError("PingPong requires HardwareConstraint")
+            raise ValueError("Stagger requires HardwareConstraint")
 
         add_conditional_barriers_to_loop(
             custom_iterate, kernel_trace, hardware_constraint
         )
 
-        logger.info(f"Applied ping-pong scheduling to loop")
+        logger.info(f"Applied 2-way stagger scheduling to loop")
 
-        return empty_proxy("pingpong")
+        return empty_proxy("stagger")
 
 
 @dataclass

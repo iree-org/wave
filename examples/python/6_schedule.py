@@ -429,8 +429,8 @@ def gemm_prefetch_reorder(is_debug=False):
 
         # Apply reordering to the KERNEL stage only
         tkw.reorder_graph(k_loop, clusters)
-        # Apply ping-pong scheduling (adds conditional barriers around loop)
-        tkw.pingpong(k_loop)
+        # Apply 2-way stagger scheduling (adds conditional barriers around loop)
+        tkw.stagger(k_loop)
 
     # Define compile options
     M_val, N_val, K_val = shape
