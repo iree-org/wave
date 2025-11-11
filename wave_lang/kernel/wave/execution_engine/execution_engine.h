@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/Support/CodeGen.h>
@@ -14,8 +15,9 @@
 #include <memory>
 
 namespace mlir {
+class MLIRContext;
 class ModuleOp;
-}
+} // namespace mlir
 
 namespace llvm {
 template <typename T> class Expected;
@@ -76,6 +78,11 @@ public:
   /// if any.
   llvm::Expected<ModuleHandle> loadModule(mlir::ModuleOp m);
 
+  /// Deserializes MLIR bytecode from a memory buffer, compiles it, and loads
+  /// it into the execution engine.
+  llvm::Expected<ModuleHandle>
+  loadModuleFromBytecode(llvm::ArrayRef<char> bytecode);
+
   /// Runs module desctructors and removes it from execution engine.
   void releaseModule(ModuleHandle handle);
 
@@ -88,6 +95,9 @@ public:
   void dumpToObjectFile(llvm::StringRef filename);
 
 private:
+  /// MLIR context for deserializing bytecode.
+  std::unique_ptr<mlir::MLIRContext> mlirContext;
+
   /// Ordering of llvmContext and jit is important for destruction purposes: the
   /// jit must be destroyed before the context.
   llvm::LLVMContext llvmContext;

@@ -21,7 +21,12 @@
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Target/TargetMachine.h>
 
+#include <mlir/Bytecode/BytecodeReader.h>
 #include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/Location.h>
+#include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/OwningOpRef.h>
+#include <mlir/Parser/Parser.h>
 #include <mlir/Support/FileUtilities.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
@@ -371,6 +376,31 @@ wave::ExecutionEngine::loadModule(mlir::ModuleOp m) {
   llvm::cantFail(jit->addIRModule(*dylib, std::move(tsm)));
   llvm::cantFail(jit->initialize(*dylib));
   return static_cast<ModuleHandle>(dylib);
+}
+
+llvm::Expected<wave::ExecutionEngine::ModuleHandle>
+wave::ExecutionEngine::loadModuleFromBytecode(llvm::ArrayRef<char> bytecode) {
+  // Create MLIR context on demand if not already created
+  if (!mlirContext)
+    mlirContext = std::make_unique<mlir::MLIRContext>();
+
+  // Create memory buffer from bytecode
+  auto memoryBuffer = llvm::MemoryBuffer::getMemBuffer(
+      llvm::StringRef(bytecode.data(), bytecode.size()),
+      /*BufferName=*/"bytecode",
+      /*RequiresNullTerminator=*/false);
+
+  // Deserialize MLIR module from bytecode
+  mlir::OwningOpRef<mlir::ModuleOp> module(
+      mlir::ModuleOp::create(mlir::UnknownLoc::get(mlirContext.get())));
+
+  mlir::ParserConfig config(mlirContext.get());
+  if (mlir::failed(mlir::readBytecodeFile(memoryBuffer->getMemBufferRef(),
+                                          module->getBody(), config)))
+    return makeStringError("Failed to deserialize MLIR bytecode");
+
+  // Load the deserialized module
+  return loadModule(module.get());
 }
 
 void wave::ExecutionEngine::releaseModule(ModuleHandle handle) {
