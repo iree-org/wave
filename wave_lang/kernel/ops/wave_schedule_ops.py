@@ -118,6 +118,18 @@ def cluster(ops: Any): ...
 
 
 @define_schedule_op
+def insert_before(target: Any, op: Any): ...
+
+
+@define_schedule_op
+def insert_after(target: Any, op: Any): ...
+
+
+@define_schedule_op
+def output_node(loop: Any): ...
+
+
+@define_schedule_op
 def reorder_graph(loop: Any, clusters: Any): ...
 
 
@@ -127,6 +139,10 @@ def pipeline(iterate: Sequence[fx.Node]): ...
 
 @define_schedule_op
 def getitem(obj: Any, index: int): ...
+
+
+@define_schedule_op
+def pingpong(loop: Any): ...
 
 
 def get_node_by_tag_helper(kernel_trace, tag: str, subgraph_name: str = None):
@@ -660,3 +676,137 @@ class Pipeline(CustomScheduleOp):
 
         # For context manager support, return the real object
         return real_pipelined_loop
+
+
+@dataclass
+class PingPong(CustomScheduleOp):
+    schedule_op_name = "pingpong"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        loop: Any,
+    ):
+        """
+        Implements ping-pong scheduling by adding conditional barriers around a loop.
+        This allows overlapping computation and memory access by having different wave
+        groups execute at different phases of the loop.
+        """
+        from ..wave.schedule_reordering import add_conditional_barriers_to_loop
+        from ..wave.utils.general_utils import get_hardware_constraint
+
+        # Get the iterate node from the proxy
+        assert hasattr(
+            loop, "node"
+        ), f"Expected 'loop' to be a proxy object with a 'node' attribute"
+        loop_result = get_proxy_result(loop.node)
+        assert loop_result is not None, "Loop must have a result"
+        assert len(loop_result) > 0, "Loop must have at least one element"
+
+        iterate_node = loop_result[0]
+        custom_iterate = get_custom(iterate_node)
+
+        # Get hardware constraints
+        hardware_constraint = get_hardware_constraint(constraints)
+        if hardware_constraint is None:
+            raise ValueError("PingPong requires HardwareConstraint")
+
+        add_conditional_barriers_to_loop(
+            custom_iterate, kernel_trace, hardware_constraint
+        )
+
+        logger.info(f"Applied ping-pong scheduling to loop")
+
+        return empty_proxy("pingpong")
+
+
+@dataclass
+class OutputNode(CustomScheduleOp):
+    schedule_op_name = "output_node"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        loop: Any,
+    ):
+        """
+        Returns a proxy to the output node of a loop's subgraph.
+        Used with insert_before to insert operations at the end of the loop body.
+        """
+        # Get the loop's subgraph
+        nodes = get_proxy_result(loop.node)
+        custom = get_custom(nodes[0])
+        subgraph_name = custom.subgraph_name
+        subgraph = kernel_trace.get_subgraph(subgraph_name)
+        output_fx_node = subgraph.output_node()
+        return create_schedule_proxy(
+            region_graph, [output_fx_node], cls.schedule_op_name
+        )
+
+
+@dataclass
+class InsertBefore(CustomScheduleOp):
+    schedule_op_name = "insert_before"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        target: Any,
+        op: Any,
+    ):
+        """
+        Inserts an operation before the target node in the graph.
+
+        Args:
+            target: The target proxy (e.g., loop from get_node_by_tag)
+            op: The operation to insert (e.g., SharedMemoryBarrier, SchedulingBarrier)
+        """
+        # Get the iterate node from the proxy
+        nodes = get_proxy_result(target.node)
+        assert nodes is not None, "Nodes must have a result"
+        assert len(nodes) > 0, "Nodes must have at least one element"
+        custom = get_custom(nodes[0])
+
+        # Use the helper function
+        add_op_before(op, custom.graph, custom.fx_node, custom.location)
+
+        return empty_proxy("insert_before")
+
+
+@dataclass
+class InsertAfter(CustomScheduleOp):
+    schedule_op_name = "insert_after"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        target: Any,
+        op: Any,
+    ):
+        """
+        Inserts an operation after the target node in the graph.
+
+        Args:
+            target: The target proxy (e.g., loop from get_node_by_tag)
+            op: The operation to insert (e.g., SharedMemoryBarrier, SchedulingBarrier)
+        """
+        # Get the iterate node from the proxy
+        nodes = get_proxy_result(target.node)
+        custom = get_custom(nodes[0])
+
+        # Use the helper function
+        add_op_after(op, custom.graph, custom.fx_node, custom.location)
+
+        return empty_proxy("insert_after")
