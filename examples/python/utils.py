@@ -24,6 +24,7 @@ def parse_args():
 def list_tests(module_globals):
     """List all test functions in the module."""
     tests = [f for f in module_globals if f.startswith("test_")]
+    tests.extend([f for f in module_globals if f.endswith("_test")])
     print("Available tests:")
     for test in tests:
         print(f"  {test}")
