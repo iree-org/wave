@@ -218,8 +218,34 @@ def handle_hazard(
     iterate_region: int = 0,
 ) -> None:
     """
-    Scans the graph and appends SyncRequirements to results if any.
-    The `states` dictionary tracks which producers and consumers are holding the resource.
+    Scans the provided list of graph nodes for memory access hazards between producers and consumers,
+    and appends any required SyncRequirement objects to the `results` list.
+    This function analyzes the sequence of nodes to detect situations where synchronization barriers
+    are needed to ensure correct memory access ordering (e.g., between writes and reads to shared resources).
+    It handles cross-iteration dependencies by duplicating the node list to
+    simulate multiple loop iterations, allowing detection of hazards that span loop boundaries.
+
+    Parameters:
+        - results (List[SyncRequirement]): The list to which any detected SyncRequirement objects will be appended.
+        - nodes (List[fx.Node]): The ordered list of graph nodes to scan for hazards.
+        - producer_kinds (Set[Any]): The set of node kinds considered as producers (e.g., write operations).
+        - consumer_kinds (Set[Any]): The set of node kinds considered as consumers (e.g., read operations).
+        - barrier_type (BarrierType): The type of barrier to use if a hazard is detected.
+        - is_nested (bool, optional): Whether the scan is occurring within a nested region. Defaults to False.
+        - iterate_region (int, optional): A split index that marks where the "second" copy of an iterate body begins when we duplicate the body to detect cross-iter hazards.
+            Used for detecting cross-iteration dependencies. Defaults to 0 (no duplication).
+    Returns:
+        BarrierType: The type of barrier required, or BarrierType.NONE if no barrier is needed.
+
+    Algorithm:
+        - Duplicates the node list if `is_nested` flag is set.
+        - Iterates through the nodes, tracking producer and consumer episodes for each resource.
+        - When a hazard is detected, a SyncRequirement is created and appended to `results`.
+        - Uses a states dictionary to track the current set of producers and consumers for each resource.
+        - Handles both intra- and inter-iteration hazards.
+
+    Side Effects:
+        Modifies the `results` list in place by appending new SyncRequirement objects as needed.
     """
     if not nodes:
         return
@@ -305,9 +331,51 @@ def get_subgraph_nodes(trace: CapturedTrace, node: fx.Node) -> List[fx.Node]:
     return trace.walk_graph(name=subgraph_name)
 
 
+def get_all_hazards(
+    nodes: List[fx.Node],
+    is_nested: bool = False,
+    iterate_region: int = 0,
+) -> List[SyncRequirement]:
+    """
+    Get all possible hazards (RAW, WAR) from provided set of nodes.
+    """
+    results: List[SyncRequirement] = []
+
+    # RAW
+    handle_hazard(
+        results,
+        nodes,
+        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+        {MemoryAccessType.READ},
+        barrier_type=BarrierType.FILL,
+        is_nested=is_nested,
+        iterate_region=iterate_region,
+    )
+
+    # WAR
+    handle_hazard(
+        results,
+        nodes,
+        {MemoryAccessType.READ},
+        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
+        barrier_type=BarrierType.READY,
+        is_nested=is_nested,
+        iterate_region=iterate_region,
+    )
+
+    return results
+
+
 def get_barriers_analysis(
     trace: CapturedTrace, target_arch: TargetConfig
 ) -> List[SyncRequirement]:
+    """
+    Analyzes the given computational graph to determine synchronization (barrier) requirements for shared memory accesses, based on the target architecture.
+    Args:
+        - trace: The traced representation of the computation, expected to provide graph traversal methods such as `preorder_walk` and `walk_graph`.
+        - target_arch: The target architecture identifier (e.g., string) used to determine architecture-specific barrier handling.
+    Returns: List[SyncRequirement]: A list of synchronization requirements (barriers) needed to ensure correct ordering of shared memory accesses in the graph.
+    """
     nodes = trace.preorder_walk()
     assign_preorder_index(nodes)
 
@@ -317,59 +385,38 @@ def get_barriers_analysis(
     is_iterate_node = lambda node: isinstance(get_custom(node), Iterate)
     is_condition_node = lambda node: isinstance(get_custom(node), Conditional)
 
-    results: List[SyncRequirement] = []
-    collections: List[fx.Node] = []
-    nodes = trace.walk_graph(trace.root_graph)
-
     def dfs(
         nodes: List[fx.Node],
         collections: List[fx.Node],
-        results: List[SyncRequirement],
         is_nested: bool = False,
         iterate_region: int = 0,
     ) -> None:
+        results: List[SyncRequirement] = []
+
         for node in nodes:
             if is_shared_memory_node(node):
                 collections.append(node)
 
             if is_iterate_node(node):
                 subgraph_nodes = get_subgraph_nodes(trace, node)
-                dfs(subgraph_nodes, collections, results)
+                results.extend(dfs(subgraph_nodes, collections))
                 collections.clear()
-                dfs(subgraph_nodes, collections, results, is_nested=True)
+                results.extend(dfs(subgraph_nodes, collections, is_nested=True))
                 iterate_region = sum(
                     [is_shared_memory_node(node) for node in subgraph_nodes]
                 )
 
             if is_condition_node(node):
                 subgraph_nodes = get_subgraph_nodes(trace, node)
-                dfs(subgraph_nodes, collections, results)
+                results.extend(dfs(subgraph_nodes, collections))
 
-        # RAW
-        handle_hazard(
-            results,
-            collections,
-            {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-            {MemoryAccessType.READ},
-            barrier_type=BarrierType.FILL,
-            is_nested=is_nested,
-            iterate_region=iterate_region,
-        )
+        results.extend(get_all_hazards(collections, is_nested, iterate_region))
+        return results
 
-        # WAR
-        handle_hazard(
-            results,
-            collections,
-            {MemoryAccessType.READ},
-            {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-            barrier_type=BarrierType.READY,
-            is_nested=is_nested,
-            iterate_region=iterate_region,
-        )
+    collections: List[fx.Node] = []
+    nodes = trace.walk_graph(trace.root_graph)
 
-    dfs(nodes, collections, results)
-
-    return results
+    return dfs(nodes, collections)
 
 
 def minimize_placement_strategy(
