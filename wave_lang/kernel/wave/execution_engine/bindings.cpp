@@ -9,10 +9,14 @@
 #include <nanobind/stl/string.h>
 
 #include <llvm/Support/Error.h>
+#include <llvm/Support/MemoryBuffer.h>
 
 #include <mlir-c/IR.h>
+#include <mlir/Bytecode/BytecodeReader.h>
 #include <mlir/CAPI/IR.h>
 #include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/OwningOpRef.h>
 
 namespace nb = nanobind;
 
@@ -68,6 +72,23 @@ NB_MODULE(wave_execution_engine, m) {
           "    Module handle as integer\n\n"
           "Raises:\n"
           "    RuntimeError: If compilation or loading fails")
+      .def(
+          "load_module_from_bytecode",
+          [](wave::ExecutionEngine &self, nb::bytes bytecode) {
+            // Convert Python bytes to ArrayRef<char>
+            llvm::ArrayRef<char> data(bytecode.c_str(), bytecode.size());
+            auto handle = unwrapExpected(self.loadModuleFromBytecode(data),
+                                         "Failed to load module from bytecode");
+            return reinterpret_cast<uintptr_t>(handle);
+          },
+          nb::arg("bytecode"),
+          "Deserialize MLIR bytecode and load it into the execution engine.\n\n"
+          "Args:\n"
+          "    bytecode: MLIR module serialized as bytecode (bytes)\n\n"
+          "Returns:\n"
+          "    Module handle as integer\n\n"
+          "Raises:\n"
+          "    RuntimeError: If deserialization, compilation or loading fails")
       .def(
           "release_module",
           [](wave::ExecutionEngine &self, uintptr_t handle) {
