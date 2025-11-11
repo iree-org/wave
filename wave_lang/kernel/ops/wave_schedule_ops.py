@@ -126,7 +126,7 @@ def insert_after(target: Any, op: Any): ...
 
 
 @define_schedule_op
-def output_node(loop: Any): ...
+def get_output_node(loop: Any): ...
 
 
 @define_schedule_op
@@ -747,8 +747,8 @@ class Stagger(CustomScheduleOp):
 
 
 @dataclass
-class OutputNode(CustomScheduleOp):
-    schedule_op_name = "output_node"
+class GetOutputNode(CustomScheduleOp):
+    schedule_op_name = "get_output_node"
 
     @classmethod
     def handle(

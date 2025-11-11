@@ -424,7 +424,7 @@ def gemm_prefetch_reorder(is_debug=False):
 
         # insert prefetch barriers before the loop
         tkw.insert_before(k_loop, tkw.SharedMemoryBarrier())
-        output_node = tkw.output_node(k_loop)
+        output_node = tkw.get_output_node(k_loop)
         tkw.insert_before(output_node, tkw.SharedMemoryBarrier())
 
         # Apply reordering to the KERNEL stage only
