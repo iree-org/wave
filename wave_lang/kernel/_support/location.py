@@ -39,6 +39,22 @@ class FileLineColInfo:
         col_end = self.col[1] if col_is_range else self.col
         return Location.file(self.filename, line_start, col_start, line_end, col_end)
 
+    def to_water(self):
+        # Lazy import to avoid IREE dependency on module import
+        from water_mlir.water_mlir.ir import Context, Location
+
+        assert Context.current is not None, "Must be called under MLIR context manager."
+
+        line_is_range = isinstance(self.line, tuple)
+        col_is_range = isinstance(self.col, tuple)
+        if not line_is_range and not col_is_range:
+            return Location.file(self.filename, self.line, self.col)
+        line_start = self.line[0] if line_is_range else self.line
+        line_end = self.line[1] if line_is_range else self.line
+        col_start = self.col[0] if col_is_range else self.col
+        col_end = self.col[1] if col_is_range else self.col
+        return Location.file(self.filename, line_start, col_start, line_end, col_end)
+
     @staticmethod
     def capture_current_location():
         # Need to find a part of the call stack that doesn't belong to us.
@@ -83,6 +99,19 @@ class StackTraceInfo:
             return self.frames[0].to_mlir()
         return Location.callsite(
             self.frames[0].to_mlir(), [f.to_mlir() for f in self.frames[1:]]
+        )
+
+    def to_water(self):
+        # Lazy import to avoid IREE dependency on module import
+        from water_mlir.water_mlir.ir import Context, Location
+
+        assert Context.current is not None, "Must be called under MLIR context manager."
+        if not self.frames:
+            return Location.unknown()
+        if len(self.frames) == 1:
+            return self.frames[0].to_water()
+        return Location.callsite(
+            self.frames[0].to_water(), [f.to_water() for f in self.frames[1:]]
         )
 
     @staticmethod

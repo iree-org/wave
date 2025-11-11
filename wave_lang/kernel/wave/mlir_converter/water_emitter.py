@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
+from wave_lang.support.location_config import LocationCaptureLevel
 from wave_lang.kernel.wave.constraints import (
     WorkgroupConstraint,
     HardwareConstraint,
@@ -372,125 +373,143 @@ def _emit_ops_from_graph(
         # Ensure types are inferred
         node.infer_type()
 
-        # No MLIR ops are emitted for placeholder and output nodes
-        if isinstance(node, Placeholder | Output):
-            continue
+        with node.location.to_water() if node.location else ir.Location.current:
+            # No MLIR ops are emitted for placeholder and output nodes
+            if isinstance(node, Placeholder | Output):
+                continue
 
-        # Collect already emitted mlir values for the args of this node
-        mlir_operands = [
-            mlir_arg
-            for arg in fx_node.args
-            if (mlir_arg := value_map.get(arg)) is not None
-        ]
-        if isinstance(node, GetResult):
-            # Map to correct result of the corresponding iterate node
-            iterate_op = value_map[node.value].owner
-            # Create mapping to correct result
-            if node.res_idx >= len(iterate_op.results):
-                raise RuntimeError(
-                    f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
-                )
-            value_map[fx_node] = iterate_op.results[node.res_idx]
-            # additional handling for this op is not needed, skip rest
-            continue
-        if isinstance(node, SharedMemoryBarrier):
-            # TODO: For now we simply emit this here. This might need more careful handling in the future
-            amdgpu.lds_barrier()
-            # additional handling for this op is not needed, skip rest
-            continue
-
-        result_type = _type_to_wave_mlir(ctx, node.type)
-
-        mlir_op = None
-        if node.tkw_op_name in WAVE_OP_CONSTRUCTORS:
-            # The general case is to pass `result_type` followed by
-            # the unpacked operands. MLIR constructors that do not
-            # follow this structure need special casing.
-            # (e.g. operations like Write, which do not have results
-            # and thus don't take `result_type` as argument)
-            op_builder = WAVE_OP_CONSTRUCTORS[node.tkw_op_name]
-            # TODO: Add special handling for Iterate node
-            if isinstance(node, Write):
-                mlir_op = op_builder(value_map[node.register_], value_map[node.memory])
-            elif isinstance(node, NewRegister):
-                dtype = getattr(node, "dtype", None)
-                if dtype is None:
-                    raise RuntimeError("Register op missing dtype")
-                element_type = _dtype_to_mlir_scalar_type(dtype)
-                constant_op = arith.ConstantOp(result=element_type, value=node.value)
-                mlir_op = op_builder(result_type, constant_op.results[0])
-            elif isinstance(node, Iterate):
-                axis = wave.WaveSymbolAttr.get(node.axis.name)
-                carried_values = [value_map.get(arg) for arg in node.init_args]
-
-                result_types = []
-                outputs = node.outputs()
-                for fx_output in outputs:
-                    output = get_custom(fx_output)
-                    output.infer_type()
-                    result_types.append(_type_to_wave_mlir(ctx, output.type))
-
-                mlir_op = op_builder(result_types, axis, carried_values)
-                body = ir.Block.create_at_start(mlir_op.regions[0], result_types)
-
-                for idx, iter_arg in enumerate(node.iter_args()):
-                    iter_arg.iter_idx = idx
-
-                # add mapping for iter args
-                for wave_arg, mlir_arg in zip(node.iter_args(), body.arguments):
-                    value_map[wave_arg] = mlir_arg
-
-                # Emit subgraph of the iterate node
-                with ir.InsertionPoint(body):
-                    _emit_ops_from_graph(
-                        trace.get_subgraph(node.subgraph_name), trace, value_map, ctx
-                    )
-
-                    # create YieldOp
-                    YieldOp([value_map[output] for output in outputs])
-            elif isinstance(node, MMA):
-                if node.mma_type is None:
-                    raise RuntimeError("MMA op missing mma_type")
-                mma_kind = ir.Attribute.parse(
-                    f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
-                )
-                mlir_op = op_builder(result_type, *mlir_operands, mma_kind)
-            elif isinstance(node, Allocate):
-                mlir_op = op_builder(
-                    result_type,
-                    distributed_shape=_convert_to_wave_expr_list_tuple(
-                        node.distributed_shape, ctx
-                    ),
-                )
-            elif isinstance(node, ExtractSlice):
-                size = _convert_to_wave_expr_list_tuple(node.size, ctx)
-                stride = _convert_to_wave_expr_list_tuple(node.stride, ctx)
-                offset = _convert_to_wave_expr_list_tuple(node.offset, ctx)
-                mlir_op = op_builder(result_type, *mlir_operands, size, stride, offset)
-            else:
-                try:
-                    mlir_op = op_builder(result_type, *mlir_operands)
-                except Exception:
+            # Collect already emitted mlir values for the args of this node
+            mlir_operands = [
+                mlir_arg
+                for arg in fx_node.args
+                if (mlir_arg := value_map.get(arg)) is not None
+            ]
+            if isinstance(node, GetResult):
+                # Map to correct result of the corresponding iterate node
+                iterate_op = value_map[node.value].owner
+                # Create mapping to correct result
+                if node.res_idx >= len(iterate_op.results):
                     raise RuntimeError(
-                        f"Could not map arguments correctly for MLIR constructor of '{node.tkw_op_name}' operation"
+                        f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
+                    )
+                value_map[fx_node] = iterate_op.results[node.res_idx]
+                # additional handling for this op is not needed, skip rest
+                continue
+            if isinstance(node, SharedMemoryBarrier):
+                # TODO: For now we simply emit this here. This might need more careful handling in the future
+                amdgpu.lds_barrier()
+                # additional handling for this op is not needed, skip rest
+                continue
+
+            result_type = _type_to_wave_mlir(ctx, node.type)
+
+            mlir_op = None
+            if node.tkw_op_name in WAVE_OP_CONSTRUCTORS:
+                # The general case is to pass `result_type` followed by
+                # the unpacked operands. MLIR constructors that do not
+                # follow this structure need special casing.
+                # (e.g. operations like Write, which do not have results
+                # and thus don't take `result_type` as argument)
+                op_builder = WAVE_OP_CONSTRUCTORS[node.tkw_op_name]
+                # TODO: Add special handling for Iterate node
+                if isinstance(node, Write):
+                    mlir_op = op_builder(
+                        value_map[node.register_], value_map[node.memory]
+                    )
+                elif isinstance(node, NewRegister):
+                    dtype = getattr(node, "dtype", None)
+                    if dtype is None:
+                        raise RuntimeError("Register op missing dtype")
+                    element_type = _dtype_to_mlir_scalar_type(dtype)
+                    constant_op = arith.ConstantOp(
+                        result=element_type, value=node.value
+                    )
+                    mlir_op = op_builder(result_type, constant_op.results[0])
+                elif isinstance(node, Iterate):
+                    axis = wave.WaveSymbolAttr.get(node.axis.name)
+                    carried_values = [value_map.get(arg) for arg in node.init_args]
+
+                    result_types = []
+                    result_locs = []
+                    outputs = node.outputs()
+                    for fx_output in outputs:
+                        output = get_custom(fx_output)
+                        output.infer_type()
+                        result_types.append(_type_to_wave_mlir(ctx, output.type))
+                        result_locs.append(
+                            output.location.to_water()
+                            if output.location
+                            else ir.Location.current
+                        )
+
+                    mlir_op = op_builder(result_types, axis, carried_values)
+                    body = ir.Block.create_at_start(
+                        mlir_op.regions[0], result_types, result_locs
                     )
 
-        if mlir_op is None:
-            raise NotImplementedError(
-                f"Missing support for '{node.tkw_op_name}' operation"
-            )
+                    for idx, iter_arg in enumerate(node.iter_args()):
+                        iter_arg.iter_idx = idx
 
-        _attach_attributes(node, mlir_op.operation)
+                    # add mapping for iter args
+                    for wave_arg, mlir_arg in zip(node.iter_args(), body.arguments):
+                        value_map[wave_arg] = mlir_arg
 
-        # Add results to the value map in case they are used as
-        # operands later
-        if len(mlir_op.results) > 1:
-            # TODO: rework value_map to always map to a sequence of results
-            raise NotImplementedError(
-                f"Missing support for operations with multiple results"
-            )
-        for result in mlir_op.results:
-            value_map[fx_node] = result
+                    # Emit subgraph of the iterate node
+                    with ir.InsertionPoint(body):
+                        _emit_ops_from_graph(
+                            trace.get_subgraph(node.subgraph_name),
+                            trace,
+                            value_map,
+                            ctx,
+                        )
+
+                        # create YieldOp
+                        YieldOp([value_map[output] for output in outputs])
+                elif isinstance(node, MMA):
+                    if node.mma_type is None:
+                        raise RuntimeError("MMA op missing mma_type")
+                    mma_kind = ir.Attribute.parse(
+                        f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
+                    )
+                    mlir_op = op_builder(result_type, *mlir_operands, mma_kind)
+                elif isinstance(node, Allocate):
+                    mlir_op = op_builder(
+                        result_type,
+                        distributed_shape=_convert_to_wave_expr_list_tuple(
+                            node.distributed_shape, ctx
+                        ),
+                    )
+                elif isinstance(node, ExtractSlice):
+                    size = _convert_to_wave_expr_list_tuple(node.size, ctx)
+                    stride = _convert_to_wave_expr_list_tuple(node.stride, ctx)
+                    offset = _convert_to_wave_expr_list_tuple(node.offset, ctx)
+                    mlir_op = op_builder(
+                        result_type, *mlir_operands, size, stride, offset
+                    )
+                else:
+                    try:
+                        mlir_op = op_builder(result_type, *mlir_operands)
+                    except Exception:
+                        raise RuntimeError(
+                            f"Could not map arguments correctly for MLIR constructor of '{node.tkw_op_name}' operation"
+                        )
+
+            if mlir_op is None:
+                raise NotImplementedError(
+                    f"Missing support for '{node.tkw_op_name}' operation"
+                )
+
+            _attach_attributes(node, mlir_op.operation)
+
+            # Add results to the value map in case they are used as
+            # operands later
+            if len(mlir_op.results) > 1:
+                # TODO: rework value_map to always map to a sequence of results
+                raise NotImplementedError(
+                    f"Missing support for operations with multiple results"
+                )
+            for result in mlir_op.results:
+                value_map[fx_node] = result
 
 
 def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
@@ -562,8 +581,9 @@ def _emit_from_captured_trace(
             "Transform dialect pipelines are not implemented yet."
         )
 
-    # TODO: Forward locations properly
-    with ir.Context() as ctx, ir.Location.unknown():
+    with ir.Context() as ctx, (
+        trace.location.to_water() if trace.location else ir.Location.unknown()
+    ):
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
         module = ir.Module.create()
@@ -577,7 +597,7 @@ def _emit_from_captured_trace(
         ctx.attach_diagnostic_handler(diagnostics_handler)
 
         if test_diagnostics:
-            loc = ir.Location.unknown(ctx)
+            loc = ir.Location.current
             loc.emit_error("test error")
 
         # Collect placeholders from graph
@@ -593,10 +613,14 @@ def _emit_from_captured_trace(
 
         # Build function argument types from top-level placeholders
         arg_types = []
+        arg_locs = []
         for p in top_level_placeholders:
             c = get_custom(p)
             t = getattr(c, "_type", None) or getattr(c, "type", None)
             arg_types.append(_type_to_wave_mlir(ctx, t))
+            arg_locs.append(
+                c.location.to_water() if c.location else ir.Location.current
+            )
 
         # Return type of the function is always empty
         func_type = ir.FunctionType.get(arg_types, [])
@@ -616,7 +640,9 @@ def _emit_from_captured_trace(
             array_attr = ir.ArrayAttr.get(wave_constraints)
             func_op.operation.attributes[wave.WAVE_CONSTRAINTS_ATTR_NAME] = array_attr
 
-            entry_block = ir.Block.create_at_start(func_op.regions[0], arg_types)
+            entry_block = ir.Block.create_at_start(
+                func_op.regions[0], arg_types, arg_locs
+            )
 
             # Map placeholders to function arguments
             for i, fx_node in enumerate(top_level_placeholders):
@@ -653,7 +679,12 @@ def _emit_from_captured_trace(
         except ir.MLIRError as e:
             diagnostics.append(str(e))
 
-        output = dill.dumps({"diagnostics": diagnostics, "module": str(module)})
+        enable_debug_info = (
+            options.location_capture_config is not LocationCaptureLevel.NONE
+        )
+        module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
+
+        output = dill.dumps({"diagnostics": diagnostics, "module": module_str})
         sys.stdout.buffer.write(output)
         sys.stdout.flush()
     return 0
