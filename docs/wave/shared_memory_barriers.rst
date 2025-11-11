@@ -121,9 +121,9 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
                 - After the scan, emit the last pending pair.
             3. For cross-iteration hazards
                 - If wait is already covered from `graph start` to window end position and signal is already covered from `graph end` to window start position, skip.
-                - if wait is covered, but signal is not: add signal as normal, add wait at graph end.
+                - If wait is covered, but signal is not: add signal as normal, add wait at graph end.
                 - Otherwise, offset the consumer topological position and run the algorithm on cross-iter hazards.
-                In case when we did add a cross-iter barrier (wait has position before signal), we add a signal-wait pair surround the subgraph.
+                In case when we did add a cross-iter barrier (wait has position before signal), we add a signal-wait pair surrounding the subgraph.
 
 ### Emission
 A small dispatcher selects an emitter based on TargetConfig:

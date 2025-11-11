@@ -134,7 +134,7 @@ def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> Optional[fx.Node]
         and op.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
         return propagate_loop_carried_vars(op.rhs, depth)
-    elif isinstance(op, GatherToLDS):
+    if isinstance(op, GatherToLDS):
         return propagate_loop_carried_vars(op.dst, depth)
 
     return None
@@ -192,7 +192,7 @@ def add_sync_requirements(
         resource=resource,
         producers=list(state.producers),
         consumers=list(state.consumers),
-        is_loop=cross_iter,  # when producer appear after consumer, we identify a loop
+        is_loop=cross_iter,  # when producer appears after consumer, we identify a loop
         prod_region=last_prod,
         cons_region=first_con,
         prod_topo_location=last_prod_loc,
@@ -218,7 +218,7 @@ def handle_hazard(
     iterate_region: int = 0,
 ) -> None:
     """
-    Scans the graph and append SyncRequirements to results if any.
+    Scans the graph and appends SyncRequirements to results if any.
     The `states` dictionary tracks which producers and consumers are holding the resource.
     """
     if not nodes:
@@ -420,11 +420,11 @@ def minimize_placement_strategy(
         ), "Got producer location < consumer location but identified as cross-iter loop."
         assert graph_start < graph_end, "graph start < graph end."
 
-        # 3.1) If graph start ~ sync request start already has barrier placements: skip
+        # 3.1) If graph start ~ consumer location already has barrier placements: skip
         if any([p in range(graph_start, end + 1) for p, _ in placements]):
             continue
 
-        # 3.2) If sync request end ~ graph end already has barrier placements: skip
+        # 3.2) If producer location ~ graph end already has barrier placements: skip
         if any([p in range(start, graph_end + 1) for p, _ in placements]):
             continue
 
@@ -615,7 +615,7 @@ def find_intersecting_interval_strategy(
         n_hazards = len(results)
         inter_graph = run_algorithm(reqs)
         if len(results) > n_hazards and inter_graph:
-            # this mean we add a cross iter signal and wait
+            # this means we add a cross iter signal and wait, so signal-wait surrounding the nested-region is needed if only inter-graph dependencies exist (no producer from the outer graph).
             iterateOp = graph.parent_op
             new_req = SyncRequirement(
                 prod_region=iterateOp.prev,

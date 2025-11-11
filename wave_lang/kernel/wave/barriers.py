@@ -94,7 +94,7 @@ class LegacyBarrierEmitter(BarrierEmitter):
 class BasicSplitBarrierEmitter(BarrierEmitter):
     """
     This class emits rocdl.s.barrier.signal and rocdl.s.barrier.wait using find_intersecting_interval_strategy,
-    and provide a verify method to ensure proper placement before invoking the runtime.
+    and provides a verify method to ensure proper placement before invoking the runtime.
     """
 
     def verify(self, trace) -> None:
@@ -121,11 +121,11 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
 
         assert (
             len(lonely_waits) == 0
-        ), "Wait barrier appear more than once before any signals, this is a serious bug."
+        ), "Wait barrier appears more than once before any signals, this is a serious bug."
         assert len(signals) <= 1, "Only -1 barrier ID is supported on gfx120x."
         assert not signals.get(
             -1
-        ), "All signals and waits should be paired, exist some leftover signals, this is a serious bug."
+        ), "All signals and waits should be paired, there are some leftover signals, this is a serious bug."
 
     def optimize(
         self, sync_reqs: Sequence[SyncRequirement]
