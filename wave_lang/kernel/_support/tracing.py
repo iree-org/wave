@@ -276,11 +276,13 @@ class ScheduleContext(BaseContext):
         region_graph: RegionGraph,
         kernel_trace=None,
         constraints: list[Constraint] = None,
+        use_scheduling_barriers: bool = False,
     ):
         super().__init__(eager=False)
         self.region_graph = region_graph
         self.kernel_trace = kernel_trace
         self.constraints = constraints
+        self.use_scheduling_barriers = use_scheduling_barriers
         # Dictionary to maintain mapping from proxies to their results
         self.proxy_to_results: Dict[fx.Proxy, Any] = {}
 

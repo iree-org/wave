@@ -558,6 +558,15 @@ class PipelinedLoop:
         self.iterate = iterate
         self.kernel_trace = kernel_trace
         self.constraints = constraints
+
+        # Access options from the current ScheduleContext
+        from .._support.tracing import ScheduleContext
+
+        current_context = ScheduleContext.current()
+        self.use_scheduling_barriers = (
+            current_context.use_scheduling_barriers if current_context else False
+        )
+
         self.initiation_interval = None
         self.num_stages = 0
 
@@ -584,12 +593,13 @@ class PipelinedLoop:
             self.initiation_interval,
         )
 
+        # Get use_scheduling_barriers from options if available
         apply_pipelined_schedule(
             custom_iterate,
             subgraph,
             self.kernel_trace,
             self.constraints,
-            use_scheduling_barriers=False,
+            use_scheduling_barriers=self.use_scheduling_barriers,
             num_stages=self.num_stages,
             initiation_interval=self.initiation_interval,
             scheduling_type=SchedulingType.MANUAL,
