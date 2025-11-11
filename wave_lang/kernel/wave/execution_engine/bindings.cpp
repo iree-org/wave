@@ -46,7 +46,8 @@ NB_MODULE(wave_execution_engine, m) {
               "Enable Perf notification listener");
 
   // Bind ExecutionEngine class
-  nb::class_<wave::ExecutionEngine>(m, "ExecutionEngine")
+  nb::class_<wave::ExecutionEngine>(m, "ExecutionEngine",
+                                    nb::is_weak_referenceable())
       .def(nb::init<const wave::ExecutionEngineOptions &>(), nb::arg("options"),
            "Create a new ExecutionEngine with the given options.\n\n"
            "Args:\n"
