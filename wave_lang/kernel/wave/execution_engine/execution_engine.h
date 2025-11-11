@@ -83,6 +83,10 @@ public:
   llvm::Expected<ModuleHandle>
   loadModuleFromBytecode(llvm::ArrayRef<char> bytecode);
 
+  /// Parses MLIR text from a string, compiles it, and loads it into the
+  /// execution engine.
+  llvm::Expected<ModuleHandle> loadModuleFromText(llvm::StringRef mlirText);
+
   /// Runs module desctructors and removes it from execution engine.
   void releaseModule(ModuleHandle handle);
 

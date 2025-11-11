@@ -29,6 +29,7 @@
 #include <mlir/InitAllDialects.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Support/FileUtilities.h>
+#include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
 #include <llvm/IR/PassManager.h>
@@ -379,14 +380,19 @@ wave::ExecutionEngine::loadModule(mlir::ModuleOp m) {
   return static_cast<ModuleHandle>(dylib);
 }
 
+static mlir::DialectRegistry createMLIRContextRegistry() {
+  mlir::DialectRegistry registry;
+  mlir::registerAllDialects(registry);
+  mlir::registerAllToLLVMIRTranslations(registry);
+  return registry;
+}
+
 llvm::Expected<wave::ExecutionEngine::ModuleHandle>
 wave::ExecutionEngine::loadModuleFromBytecode(llvm::ArrayRef<char> bytecode) {
   // Create MLIR context on demand if not already created
-  if (!mlirContext) {
-    mlir::DialectRegistry registry;
-    mlir::registerAllDialects(registry);
-    mlirContext = std::make_unique<mlir::MLIRContext>(registry);
-  }
+  if (!mlirContext)
+    mlirContext =
+        std::make_unique<mlir::MLIRContext>(createMLIRContextRegistry());
 
   // Create memory buffer from bytecode
   auto memoryBuffer = llvm::MemoryBuffer::getMemBuffer(
@@ -404,6 +410,24 @@ wave::ExecutionEngine::loadModuleFromBytecode(llvm::ArrayRef<char> bytecode) {
     return makeStringError("Failed to deserialize MLIR bytecode");
 
   // Load the deserialized module
+  return loadModule(module.get());
+}
+
+llvm::Expected<wave::ExecutionEngine::ModuleHandle>
+wave::ExecutionEngine::loadModuleFromText(llvm::StringRef mlirText) {
+  // Create MLIR context on demand if not already created
+  if (!mlirContext)
+    mlirContext =
+        std::make_unique<mlir::MLIRContext>(createMLIRContextRegistry());
+
+  // Parse MLIR text
+  mlir::OwningOpRef<mlir::ModuleOp> module =
+      mlir::parseSourceString<mlir::ModuleOp>(mlirText, mlirContext.get());
+
+  if (!module)
+    return makeStringError("Failed to parse MLIR text");
+
+  // Load the parsed module
   return loadModule(module.get());
 }
 
