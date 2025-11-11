@@ -264,13 +264,48 @@ class WaveKernelWithProfile(WaveKernel):
 class WaveKernel2:
     def __init__(self, options: WaveCompileOptions, module: Module | bytes):
         self.options = options
-        self.module = module
+
+        self._engine = None
+        self._module_handle = None
+
+        # Serialize MLIR module to bytecode if needed
+        if isinstance(module, bytes):
+            self.bytecode = module
+        else:
+            # Serialize the MLIR module to bytecode
+            import io
+
+            bytecode_io = io.BytesIO()
+            module.operation.write_bytecode(bytecode_io)
+            self.bytecode = bytecode_io.getvalue()
+
+        # Load module eagerly
+        from wave_lang.kernel.wave.execution_engine import get_execution_engine
+
+        self._engine = get_execution_engine()
+        self._module_handle = self._engine.load_module_from_bytecode(self.bytecode)
 
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
 
     def invoke(self, *args, **kwargs):
-        raise NotImplementedError("invoke is not implemented for WaveKernel2")
+        """
+        Invokes the wave kernel with the given arguments using the ExecutionEngine.
+        """
+        # TODO: Implement argument marshalling and function invocation
+        # This will need to:
+        # 1. Convert Python/PyTorch arguments to C-compatible pointers
+        # 2. Look up the kernel function in the loaded module
+        # 3. Call the function with ctypes
+        # 4. Handle return values
+        raise NotImplementedError(
+            "WaveKernel2.invoke: argument marshalling not yet implemented"
+        )
+
+    def __del__(self):
+        """Clean up the loaded module when the kernel is destroyed."""
+        if self._module_handle is not None and self._engine is not None:
+            self._engine.release_module(self._module_handle)
 
 
 def wave_compile(
