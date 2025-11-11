@@ -46,8 +46,6 @@ class BarrierEmitter:
         else:
             return BasicSplitBarrierEmitter(self.cfg)
 
-        assert False, "Should not reach here for now"
-
     def emit(self, sync_reqs: Sequence[SyncRequirement]) -> None:
         """
         Optimize barrier placement using strategies defined in the derived class and place the resulting barriers accordingly.
@@ -79,9 +77,7 @@ class LegacyBarrierEmitter(BarrierEmitter):
         return minimize_placement_strategy(sync_reqs)
 
     def place_barrier(self, req: SyncRequirement) -> None:
-        is_async_op = lambda node: (
-            True if isinstance(get_custom(node), GatherToLDS) else False
-        )
+        is_async_op = lambda node: isinstance(get_custom(node), GatherToLDS)
 
         producer = req.prod_region
         consumer = req.cons_region
@@ -134,7 +130,7 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
     def optimize(
         self, sync_reqs: Sequence[SyncRequirement]
     ) -> Sequence[SyncRequirement]:
-        # return minimize_placement_strategy(sync_reqs)
+        # note. we can also change the approach to minimize_placement_strategy.
         return find_intersecting_interval_strategy(sync_reqs)
 
     def place_barrier(self, req: SyncRequirement) -> None:
@@ -159,9 +155,8 @@ def add_shared_memory_barriers(
     target: str = "",
 ):
     target_arch = TargetConfig(target)
-    graph = trace.get_root_graph()
 
-    sync_requests = get_barriers_analysis(trace, graph, target_arch)
+    sync_requests = get_barriers_analysis(trace, target_arch)
 
     handle = BarrierEmitter(target_arch)
     emitter = handle.dispatch()

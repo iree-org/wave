@@ -306,7 +306,7 @@ def get_subgraph_nodes(trace: CapturedTrace, node: fx.Node) -> List[fx.Node]:
 
 
 def get_barriers_analysis(
-    trace: CapturedTrace, graph: fx.Graph, target_arch: TargetConfig
+    trace: CapturedTrace, target_arch: TargetConfig
 ) -> List[SyncRequirement]:
     nodes = trace.preorder_walk()
     assign_preorder_index(nodes)

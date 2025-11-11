@@ -44,7 +44,7 @@ Visualization: add_shared_memory_barriers
     :alt: Basic barrier GIF
     :align: center
 
-The above gif is an visual illustration for inserting shared memory barriers between producers and consumers.
+The above gif is a visual illustration for inserting shared memory barriers between producers and consumers.
 
 - Split barrier
 
@@ -53,7 +53,7 @@ The above gif is an visual illustration for inserting shared memory barriers bet
     :alt: Split barrier GIF
     :align: center
 
-The above gif is an visual illustration for inserting split barriers between producers and consumers.
+The above gif is a visual illustration for inserting split barriers between producers and consumers.
 
 Key Ideas:
 --------------------
@@ -127,7 +127,7 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
 
 ### Emission
 A small dispatcher selects an emitter based on TargetConfig:
-- LegacyEmitter (amdgpu.lds_barrier): emits monolithic SharedMemoryBarrier before the consumer.
+- LegacyBarrierEmitter (amdgpu.lds_barrier): emits monolithic SharedMemoryBarrier before the consumer.
 - BasicSplitBarrierEmitter (rocdl.s.barrier.signal/rocdl.s.barrier.wait {barId: -1}) emits a signal after a producer and a wait before a consumer.
     - Verification: Scanning the pre-order traversal of the full nested graph.
         - no wait appears before its corresponding signal,
@@ -139,7 +139,7 @@ End-to-End flow
 - Build TargetConfig from target string.
 - Walk the graph in the pre-order manner and assign _topo_location.
 - Run get_barriers_analysis function to get a list of SyncRequirements.
-- BarrierEmitter dispatch to chose Legacy or BasicSplit emitter.
+- BarrierEmitter dispatch to choose Legacy or BasicSplit emitter.
 - Optimize placements, then emit barriers.
 - Run verify on the resulting graph to avoid GPU hangs.
 
