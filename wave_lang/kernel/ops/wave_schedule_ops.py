@@ -489,6 +489,17 @@ class PartitionByDim(CustomScheduleOp):
         dim: Any,
         factor: int,
     ):
+        """
+        Partition a list of nodes by dimension into equal-sized partitions.
+
+        This function sorts nodes by the specified dimension, then partitions them
+        into equal-sized groups. Each partition contains nodes with contiguous
+        dimension IDs.
+
+        For example, with M,N,K = 2,8,4 and factor=2, partitioning by K dimension
+        creates two partitions: first with K IDs 0-1, second with K IDs 2-3.
+
+        """
         # Get the actual nodes from the proxy
         assert hasattr(
             nodes, "node"
@@ -496,8 +507,6 @@ class PartitionByDim(CustomScheduleOp):
         nodes_list = get_proxy_result(nodes.node)
         assert nodes_list is not None, "Nodes must have a result"
         assert len(nodes_list) > 0, "Nodes must have at least one element"
-
-        partitioned_nodes = [[] for _ in range(factor)]
 
         # Get all unique dimension IDs for the specified dimension
         dim_ids = set()
@@ -509,25 +518,27 @@ class PartitionByDim(CustomScheduleOp):
         # Validate that the dimension can be partitioned by the factor
         dim_expand_size = len(dim_ids)
         assert dim_expand_size >= factor and dim_expand_size % factor == 0, (
-            f"Dimension {dim} has size {dim_expand_size} which cannot be evenly "
+            f"Dimension {dim} has {dim_expand_size} unique IDs which cannot be evenly "
             f"partitioned by factor {factor}"
         )
-        assert all(
-            x in dim_ids for x in range(dim_expand_size)
-        ), f"Dimension {dim} IDs are not contiguous: {sorted(dim_ids)}"
 
-        size_of_partition = dim_expand_size // factor
-        for node in nodes_list:
-            custom = get_custom(node)
-            if custom.expanded_dims and dim in custom.expanded_dims:
-                dim_id = custom.expanded_dims[dim]
-                partition_id = dim_id // size_of_partition
-                partitioned_nodes[partition_id].append(node)
-            else:
-                # If node doesn't have the dimension, add to all partitions
-                # This matches behavior for nodes that aren't expanded along this dim
-                for partition in partitioned_nodes:
-                    partition.append(node)
+        # Sort nodes by dimension and compute partition boundaries
+        sorted_nodes_list = sorted(
+            nodes_list, key=lambda x: get_custom(x).expanded_dims[dim]
+        )
+        nodes_per_dim = len(sorted_nodes_list) // dim_expand_size
+        partition_size = dim_expand_size // factor
+
+        # Partition nodes by dimension ID ranges
+        partitioned_nodes = []
+        for partition_id in range(factor):
+            lower_bound_dim_id = partition_id * partition_size
+            upper_bound_dim_id = (partition_id + 1) * partition_size
+
+            start_idx = lower_bound_dim_id * nodes_per_dim
+            end_idx = upper_bound_dim_id * nodes_per_dim
+
+            partitioned_nodes.append(sorted_nodes_list[start_idx:end_idx])
 
         # Return tuple of partitioned node lists
         return create_schedule_proxy(

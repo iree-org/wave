@@ -369,7 +369,7 @@ def gemm_prefetch_reorder(is_debug=False):
         )
         mma = tkw.get_node_by_tag("mma", subgraph=k_loop)
 
-        # Partition and wrap MMA operations
+        # Partition node lists by K dimension
         mma_0, mma_1 = tkw.partition_by_dim(mma, dim=K, factor=2)
         shared_load_a_0, shared_load_a_1 = tkw.partition_by_dim(
             shared_load_a, dim=K, factor=2
