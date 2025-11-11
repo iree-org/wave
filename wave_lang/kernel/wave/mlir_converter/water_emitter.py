@@ -57,7 +57,7 @@ try:
         WaveMmaKindAttr,
         WaveWorkgroupDimAttr,
     )
-    from water_mlir.sympy_to_affine_converter import (
+    from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
     )
     from water_mlir.water_mlir.dialects import arith
