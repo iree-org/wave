@@ -27,6 +27,7 @@
 #include <mlir/IR/OwningOpRef.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Support/FileUtilities.h>
+#include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
 #define DEBUG_TYPE "wave-execution-engine"
