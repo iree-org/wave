@@ -234,8 +234,6 @@ def handle_hazard(
         - is_nested (bool, optional): Whether the scan is occurring within a nested region. Defaults to False.
         - iterate_region (int, optional): A split index that marks where the "second" copy of an iterate body begins when we duplicate the body to detect cross-iter hazards.
             Used for detecting cross-iteration dependencies. Defaults to 0 (no duplication).
-    Returns:
-        BarrierType: The type of barrier required, or BarrierType.NONE if no barrier is needed.
 
     Algorithm:
         - Duplicates the node list if `is_nested` flag is set.
@@ -316,7 +314,6 @@ def handle_hazard(
 
 def get_subgraph_nodes(trace: CapturedTrace, node: fx.Node) -> List[fx.Node]:
     """
-    Returns the list of nodes in the subgraph associated with the given node.
     Args:
         - trace: The trace object containing the graph and walk_graph method.
         - node (fx.Node): The node whose subgraph nodes are to be retrieved.
@@ -390,7 +387,7 @@ def get_barriers_analysis(
         collections: List[fx.Node],
         is_nested: bool = False,
         iterate_region: int = 0,
-    ) -> None:
+    ) -> List[SyncRequirement]:
         results: List[SyncRequirement] = []
 
         for node in nodes:
@@ -465,7 +462,10 @@ def minimize_placement_strategy(
         assert (
             start > end
         ), "Got producer location < consumer location but identified as cross-iter loop."
-        assert graph_start < graph_end, "graph start < graph end."
+
+        assert (
+            graph_start < graph_end
+        ), f"Expected graph_start ({graph_start}) position to be less than graph_end ({graph_end}) position."
 
         # 3.1) If graph start ~ consumer location already has barrier placements: skip
         if any([p in range(graph_start, end + 1) for p, _ in placements]):
@@ -526,16 +526,18 @@ def find_intersecting_interval_strategy(
                 cross_iters.append(req)
                 idx += 1
             else:
+                # track-recorded nodes
                 signal = req.prod_region
                 wait = req.cons_region
+
+                # track-recorded positions
+                rec_signal_pos = req.prod_topo_location
+                rec_wait_pos = req.cons_topo_location
+
                 break
 
         if signal is None and wait is None:
             return False
-
-        # track-recorded positions
-        rec_signal_pos = req.prod_topo_location
-        rec_wait_pos = req.cons_topo_location
 
         for req in reqs[idx:]:
             if req.is_loop:

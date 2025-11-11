@@ -62,7 +62,7 @@ class BarrierEmitter:
     ) -> Sequence[SyncRequirement]:
         raise NotImplementedError
 
-    def verify(self, graph):
+    def verify(self, trace: CapturedTrace) -> None:
         pass
 
 
@@ -77,6 +77,9 @@ class LegacyBarrierEmitter(BarrierEmitter):
         return minimize_placement_strategy(sync_reqs)
 
     def place_barrier(self, req: SyncRequirement) -> None:
+        """
+        Places a single shared memory barrier between producer and consumer.
+        """
         is_async_op = lambda node: isinstance(get_custom(node), GatherToLDS)
 
         producer = req.prod_region
@@ -134,6 +137,9 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
         return find_intersecting_interval_strategy(sync_reqs)
 
     def place_barrier(self, req: SyncRequirement) -> None:
+        """
+        Place split barriers (signal/wait) for synchronization.
+        """
         barId = -1
         producer = req.prod_region
         consumer = req.cons_region

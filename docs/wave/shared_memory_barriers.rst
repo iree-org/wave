@@ -74,10 +74,12 @@ Public API:
 
 Implementation:
 --------------------
-### Target
+Target
+--------------------
   TargetConfig describes what barriers to emit (monothlitic or split).
 
-### Analysis
+Analysis
+--------------------
   We first compute a topological enumeration (_topo_location) across nodes, then scan for hazards over shared memory resources:
     - Core: implementation is defined in `handle_hazard` function. This function scans a linearized sequence of FX nodes, and discovers producer–consumer hazards on the same shared memory resource. For each resource, it groups accesses into episodes (a run of one or more producers followed by one or more consumers) and emits a SyncRequirement describing where synchronization is needed (RAW/WAR), including whether the hazard is cross iteration.
     - Procedure:
@@ -96,7 +98,8 @@ Implementation:
         - With this setup, a producer at position p and a consumer at position c will look like p < c for intra iteration hazards, and like p > c (i.e., is_loop=True) for cross iteration hazards. These are tagged in the requirement for placement to handle specially.
 
 
-### Placement strategies
+Placement strategies
+--------------------
 We'll use `window` to refer to a SyncRequirement hazard interval, the interval is defined by the topological positions between a producer and a consumer.
 
 2 strategies are currently available; both take a list of SyncRequirement and return a reduced set of barrier placement positions.
@@ -125,7 +128,8 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
                 - Otherwise, offset the consumer topological position and run the algorithm on cross-iter hazards.
                 In case when we did add a cross-iter barrier (wait has position before signal), we add a signal-wait pair surrounding the subgraph.
 
-### Emission
+Emission
+--------------------
 A small dispatcher selects an emitter based on TargetConfig:
 - LegacyBarrierEmitter (amdgpu.lds_barrier): emits monolithic SharedMemoryBarrier before the consumer.
 - BasicSplitBarrierEmitter (rocdl.s.barrier.signal/rocdl.s.barrier.wait {barId: -1}) emits a signal after a producer and a wait before a consumer.
