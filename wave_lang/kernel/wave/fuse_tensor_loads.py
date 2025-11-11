@@ -85,11 +85,23 @@ def find_adjacent_loads(
 
         logger.info(f"Found {len(loads)} tensor loads in subgraph '{subgraph_name}'")
 
+        # Track which loads have already been paired to avoid duplicates
+        paired_loads = set()
+
         # Check each pair of loads for fusability
         for i in range(len(loads)):
+            load1 = loads[i]
+
+            # Skip if this load is already in a pair
+            if load1 in paired_loads:
+                continue
+
             for j in range(i + 1, len(loads)):
-                load1 = loads[i]
                 load2 = loads[j]
+
+                # Skip if this load is already in a pair
+                if load2 in paired_loads:
+                    continue
 
                 if not (load1 < load2):
                     continue
@@ -114,8 +126,13 @@ def find_adjacent_loads(
                     )
                     continue
 
+                # This pair is fusable - add it and mark both loads as paired
                 fusable_pairs.append((load1, load2))
+                paired_loads.add(load1)
+                paired_loads.add(load2)
                 logger.debug(f"Fusable pair: {load1.name} and {load2.name}")
+                # Break to avoid pairing load1 with multiple loads
+                break
 
     logger.info(f"Identified {len(fusable_pairs)} fusable pairs")
     return fusable_pairs
