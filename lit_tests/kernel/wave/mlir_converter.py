@@ -267,7 +267,7 @@ def mlir_converter_matmul():
     assert len(diag) == 0
     # Print to stdout for FileCheck
     # CHECK-LABEL: mlir_converter_matmul
-    print(transform_module)
+    print(pipeline_asm)
     # CHECK: module
     # CHECK-NEXT: transform.named_sequence @__transform_main
     # CHECK-NEXT:   transform.yield

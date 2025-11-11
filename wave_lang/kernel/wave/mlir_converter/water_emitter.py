@@ -734,7 +734,7 @@ def _emit_from_captured_trace(
                 if not ops:
                     raise RuntimeError("Transform module is empty")
                 entry_op = ops[0]
-                # Require the first op to be a named sequence called "__transform_main".
+                # Require the first op to be a named sequence.
                 if entry_op.operation.name != "transform.named_sequence":
                     raise RuntimeError(
                         f'Expected first op to be "transform.named_sequence", got "{entry_op.operation.name}"'
