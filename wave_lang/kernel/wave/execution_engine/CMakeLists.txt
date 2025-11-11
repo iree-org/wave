@@ -86,6 +86,7 @@ target_link_libraries(wave_execution_engine PRIVATE
   MLIRCAPIInterfaces
   MLIRCAPITransforms
   MLIRPass
+  MLIRRegisterAllDialects
   MLIRToLLVMIRTranslationRegistration
   ${mlir_dialect_libs}
   ${mlir_conversion_libs}
