@@ -26,6 +26,7 @@
 #include <mlir/IR/Location.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/OwningOpRef.h>
+#include <mlir/InitAllDialects.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Support/FileUtilities.h>
 #include <mlir/Target/LLVMIR/Export.h>
@@ -381,8 +382,11 @@ wave::ExecutionEngine::loadModule(mlir::ModuleOp m) {
 llvm::Expected<wave::ExecutionEngine::ModuleHandle>
 wave::ExecutionEngine::loadModuleFromBytecode(llvm::ArrayRef<char> bytecode) {
   // Create MLIR context on demand if not already created
-  if (!mlirContext)
-    mlirContext = std::make_unique<mlir::MLIRContext>();
+  if (!mlirContext) {
+    mlir::DialectRegistry registry;
+    mlir::registerAllDialects(registry);
+    mlirContext = std::make_unique<mlir::MLIRContext>(registry);
+  }
 
   // Create memory buffer from bytecode
   auto memoryBuffer = llvm::MemoryBuffer::getMemBuffer(
