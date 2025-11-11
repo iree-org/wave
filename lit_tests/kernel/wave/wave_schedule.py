@@ -21,6 +21,8 @@ def test_gemm_with_wave_schedule():
         shape, mfma_variant, compile_to_mlir
     )
 
+    options.use_scheduling_barriers = True
+
     gemm_prefetch = wave_compile(options, gemm_prefetch, prefetch_schedule)
     print(gemm_prefetch.asm)
 
