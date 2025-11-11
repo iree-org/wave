@@ -58,9 +58,9 @@ The above gif is an visual illustration for inserting split barriers between pro
 Key Ideas:
 --------------------
 - A hazard is a producer–consumer relationship on shared memory that needs ordering.
-- A window is a safe span in the program where a barrier may be placed perserving the semantics.
-- Minimize placement strategy places the fewest shared memory barriers.
-- Find Intersecting placement strategy identifies the intersecting regions from several overlapping hazard windows.
+- We model hazards as intervals (windows).
+- minimize_placement_strategy is aimed at monolithic barriers (e.g., amdgpu.lds_barrier) and greedily places the fewest barriers before consumers by sorting on right endpoints.
+- find_intersecting_interval_strategy is designed for split barriers: it coalesces hazard windows into the smallest feasible intersection and emits signal/wait pairs only when necessary.
 
 Public API:
 --------------------
@@ -75,43 +75,55 @@ Public API:
 Implementation:
 --------------------
 ### Target
-  TargetConfig describes what the backend can emit
+  TargetConfig describes what barriers to emit (monothlitic or split).
 
 ### Analysis
   We first compute a topological enumeration (_topo_location) across nodes, then scan for hazards over shared memory resources:
-    1. Identify shared-memory accesses (Read, Write, Atomic, GatherToLDS) and classify them as READ, WRITE, or READ_WRITE.
-    2. Track producer/consumer "episodes" per memory resource.
-    3. Create SyncRequirement records capturing:
-        - the producer region and the consumer region
-        - their topological positions
-        - whether the hazard crosses an iteration boundary (is_loop)
-        - boundary nodes of the surrounding graph
-    4. RAW hazards are tagged with BarrierType.FILL, WAR with BarrierType.READY (for easier debugging and potential future guard usage)
+    - Core: implementation is defined in `handle_hazard` function. This function scans a linearized sequence of FX nodes, and discovers producer–consumer hazards on the same shared memory resource. For each resource, it groups accesses into episodes (a run of one or more producers followed by one or more consumers) and emits a SyncRequirement describing where synchronization is needed (RAW/WAR), including whether the hazard is cross iteration.
+    - Procedure:
+        1. Identify shared-memory accesses (Read, Write, Atomic, GatherToLDS) and classify them as READ, WRITE, or READ_WRITE.
+        2. Track producer/consumer "episodes" per memory resource.
+        3. Create SyncRequirement records capturing:
+            - the producer region and the consumer region
+            - their topological positions
+            - whether the hazard crosses an iteration boundary (is_loop)
+            - boundary nodes of the surrounding graph
+        4. RAW hazards are tagged with BarrierType.FILL, WAR with BarrierType.READY (for easier debugging and potential future guard usage)
 
-   Cross-iteration hazards: The analysis duplicates node sequences and adjusts `depth` to propagate loop-carried variables, so it can spot dependencies like ```read(i) -> write(i+1)``` cleanly. The resulting SyncRequirement.is_loop distinguishes these from intra-iteration hazards.
+    Cross-iteration hazards: For nested regions, hazards can connect iteration N to iteration N+1 (e.g., read(i+1) after write(i)). To catch these, handle_hazard:
+        - Duplicates the sequence (nodes = nodes * 2) so that “next iteration” uses of the same logical resource appear later in the stream.
+        - Computes a depth flag (0 or 1) for each occurrence so get_shared_memory_from_op can “shift” loop carried operands from iteration i to i+1.
+        - With this setup, a producer at position p and a consumer at position c will look like p < c for intra iteration hazards, and like p > c (i.e., is_loop=True) for cross iteration hazards. These are tagged in the requirement for placement to handle specially.
+
 
 ### Placement strategies
 We'll use `window` to refer to a SyncRequirement hazard interval, the interval is defined by the topological positions between a producer and a consumer.
 
-2 strategies are currently available; both take a list of SyncRequirement and return a reduced set of the SyncRequirement.
+2 strategies are currently available; both take a list of SyncRequirement and return a reduced set of barrier placement positions.
     - Minimize placement (minimize_placement_strategy):
         - Intent: Use the fewest possible barriers, placed before consumers.
         - Procedure:
             1. Sort all SyncRequirements by their endpoints. (earliest barrier requirements)
             2. Walk all windows in 1. order and check
-                - If a window is already covered by a previosly-placed barrier, skip it
+                - If a window is already covered by a previously-placed barrier, skip it
                 - Otherwise, this is an uncovered region, so we place one barrier.
             3. Finally for "cross-iteration" hazards, we check for barrier coverage from 1) the graph start position to the window endpoint, 2) the window start point to the graph end position.
 
     - Find intersecting intervals (find_intersecting_interval_strategy):
-        - Intent: Signal as early as safe, wait as late as safe.
+        - Intent: Given a set of synchronization requirements (“hazard windows”) between a producer and a consumer operating on the same LDS (shared) memory region, we want to place one signal (after the producer) and one wait (before the consumer) so that: 1) Every consumer that could race with a producer waits for a matching signal, 2) No wait can appear before its corresponding signal, and 3) We use as few split barrier pairs as possible without over serializing the schedule.
+        - Core: If two windows overlap, a single split barrier pair can satisfy both: signal after the latest producer seen so far (the largest L); wait before the earliest consumer (the smallest R).
         - Procedure:
-            1. Sort all SyncRequirements by their startpoints and then their end points. 
-            2. Main algorithm
-                - Initialize tracking positions with the first valid producer-consumer pair.
-                - Traverse each synchronization request, updating signal and wait positions when:
-                    - The current producer position (`cur_signal_pos`) exceeds the recorded consumer position (`rec_wait_pos`).
-                - Append new synchronization requirements if conditions are met.
+            1. Sort all SyncRequirements by their startpoints and then their end points.
+            2. Main algorithm: scan and intersect
+                - Maintain a running intersection `sig_pos` and `wait_pos`.
+                - For each window, update the intersection variables.
+                - If the intersection becomes empty (`sig_pos` >= `wait_pos`), we emit the previous pair and start a new intersection.
+                - After the scan, emit the last pending pair.
+            3. For cross-iteration hazards
+                - If wait is already covered from `graph start` to window end position and signal is already covered from `graph end` to window start position, skip.
+                - if wait is covered, but signal is not: add signal as normal, add wait at graph end.
+                - Otherwise, offset the consumer topological position and run the algorithm on cross-iter hazards.
+                In case when we did add a cross-iter barrier (wait has position before signal), we add a signal-wait pair surround the subgraph.
 
 ### Emission
 A small dispatcher selects an emitter based on TargetConfig:
