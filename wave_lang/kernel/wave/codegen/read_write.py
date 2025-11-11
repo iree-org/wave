@@ -875,6 +875,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         data_size_val = arith_d.ori(data_size_val, arith_d.constant(i32, pad_packed))
 
     if multicast_mask:
+        multicast_mask = sympy.simplify(subs_idxc(multicast_mask))
         multicast_mask_val = gen_sympy_index(subs, multicast_mask)
         multicast_mask_val = arith_d.index_cast(i32, multicast_mask_val)
         data_size_val = arith_d.ori(data_size_val, multicast_mask_val)
