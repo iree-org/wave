@@ -450,10 +450,15 @@ class WaveEmitter:
 
     def _emit_graph(self, graph: fx.Graph):
         """Emits the given graph at the current insertion point."""
-        for node in graph.nodes:
+        import sys
+        print(f"DEBUG: _emit_graph called, graph has {len(list(graph.nodes))} nodes", file=sys.stderr)
+        for i, node in enumerate(graph.nodes):
+            print(f"DEBUG: Node {i}: {node.name} op={node.op} target={node.target if hasattr(node, 'target') else 'N/A'}", file=sys.stderr)
             if node.op == "call_function" or node.op == "call_method":
                 self._emit_function_call_node(node)
+                print(f"DEBUG: After emitting {node.name}, _node_values has {len(self._node_values)} entries", file=sys.stderr)
             if node.op == "output":
+                print(f"DEBUG: Output node args: {node.args}", file=sys.stderr)
                 return node.args
 
     def _emit_function_call_node(self, node: fx.Node):
@@ -483,6 +488,9 @@ class WaveEmitter:
         assert NDEBUG or isinstance(node, fx.Node)
         values = self._node_values.get(node)
         if values is None:
+            import sys
+            print(f"DEBUG: Node {node} (name={node.name}, op={node.op}, target={node.target if hasattr(node, 'target') else 'N/A'}) has no IR Value", file=sys.stderr)
+            print(f"DEBUG: Available nodes in _node_values: {list(self._node_values.keys())[:10]}", file=sys.stderr)
             raise CodegenError(f"Node {node} has no IR Value")
 
         values = [v.ir_value if isinstance(v, IRProxyValue) else v for v in values]

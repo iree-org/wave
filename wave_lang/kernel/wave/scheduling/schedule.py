@@ -272,35 +272,57 @@ def construct_conditional_pipelined_loop(
     placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
     placeholder_captures = [placeholders[cap] for cap in reduction.implicit_captures]
 
-    with conditional_subgraph.inserting_before(None):
-        # Create the reduction in the subgraph
-        subgraph_reduction = IterateOp(
-            reduction.axis,
-            init_args=placeholder_init_args,
-            step=reduction.step,
-            subgraph_name=reduction.subgraph_name,
-            implicit_captures=placeholder_captures,
-        ).add_to_graph(conditional_subgraph, type=reduction.type, loc=reduction.location)
+    # Create the reduction in the subgraph (don't use inserting_before context)
+    import sys
+    print(f"DEBUG: Creating Iterate in conditional subgraph with subgraph_name='{reduction.subgraph_name}'", file=sys.stderr)
+    print(f"DEBUG: reduction.init_args = {[arg.name for arg in reduction.init_args]}", file=sys.stderr)
+    print(f"DEBUG: placeholder_init_args = {[arg.name for arg in placeholder_init_args]}", file=sys.stderr)
 
-        # Set properties
-        subgraph_reduction.index = reduction.index
-        # This loop should process most iterations, leaving remainder for later
-        # For now, set count to max_induction_variable - we'll refine this later
-        subgraph_reduction.count = max_induction_variable
+    # Check what's in the reduction's subgraph
+    red_subgraph = trace.get_subgraph(reduction.subgraph_name)
+    iter_arg_nodes = [node for node in red_subgraph.nodes if isinstance(get_custom(node), IterArg)]
+    print(f"DEBUG: IterArg nodes in '{reduction.subgraph_name}': {[node.name for node in iter_arg_nodes]}", file=sys.stderr)
 
-        # Get GetResult nodes to extract the loop results
-        get_result_nodes = []
-        for i in range(len(placeholder_init_args)):
-            gr = GetResult(subgraph_reduction, i).add_to_graph(
-                conditional_subgraph,
-                type=placeholder_init_args[i].type if hasattr(placeholder_init_args[i], 'type') else None,
-                loc=reduction.location
-            )
-            get_result_nodes.append(gr)
+    subgraph_reduction = IterateOp(
+        reduction.axis,
+        init_args=placeholder_init_args,
+        step=reduction.step,
+        subgraph_name=reduction.subgraph_name,
+        implicit_captures=placeholder_captures,
+    ).add_to_graph(conditional_subgraph, type=reduction.type, loc=reduction.location)
 
-        # Add Output node to return the results
-        # Output needs fx.Node objects, not CustomOp objects
-        Output([gr for gr in get_result_nodes]).add_to_graph(conditional_subgraph, loc=reduction.location)
+    # Set properties
+    subgraph_reduction.index = reduction.index
+    # This loop should process most iterations, leaving remainder for later
+    # For now, set count to max_induction_variable - we'll refine this later
+    subgraph_reduction.count = max_induction_variable
+
+    # Get GetResult nodes to extract the loop results
+    get_result_nodes = []
+    for i in range(len(placeholder_init_args)):
+        gr = GetResult(subgraph_reduction, i).add_to_graph(
+            conditional_subgraph,
+            type=placeholder_init_args[i].type if hasattr(placeholder_init_args[i], 'type') else None,
+            loc=reduction.location
+        )
+        get_result_nodes.append(gr)
+
+    # Add Output node to return the results
+    # Output needs fx.Node objects, not CustomOp objects
+    Output([gr for gr in get_result_nodes]).add_to_graph(conditional_subgraph, loc=reduction.location)
+
+    # Register region_0 with the conditional subgraph so it can be found during emission
+    if not hasattr(conditional_subgraph, 'subgraphs'):
+        conditional_subgraph.subgraphs = {}
+    conditional_subgraph.subgraphs[reduction.subgraph_name] = reduction_graph
+    print(f"DEBUG: Registered '{reduction.subgraph_name}' with conditional_subgraph", file=sys.stderr)
+
+    # Debug: Print nodes in conditional subgraph
+    import sys
+    print(f"DEBUG: Nodes in conditional subgraph '{subgraph_name}':", file=sys.stderr)
+    for i, node in enumerate(conditional_subgraph.nodes):
+        custom = get_custom(node) if hasattr(node, 'tkw_op') else node
+        print(f"  Node {i}: {node.name} op={node.op} type={type(custom).__name__}", file=sys.stderr)
 
     # Step 5: Register subgraphs before creating nodes
     # fx.Graph doesn't have subgraphs by default, so initialize if needed
@@ -378,15 +400,13 @@ def construct_conditional_pipelined_loop(
         reduction.replace_all_uses_with(get_custom(remainder_reduction))
     print(f"DEBUG: After Step 8, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
 
-    # Step 9: Remove the original reduction
-    print(f"DEBUG: Before Step 9, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
-    reduction.erase()
-    print(f"DEBUG: After Step 9 erase, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
-
-    # Erasing the reduction removes its subgraph from main_graph.subgraphs, but we still need it
-    # for the remainder loop and the loop inside the conditional
-    main_graph.subgraphs[reduction.subgraph_name] = reduction_graph
-    print(f"DEBUG: After re-registering region_0, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
+    # Step 9: Don't erase the original reduction
+    # Note: We don't erase the original reduction because erase() clears the associated
+    # subgraph (region_0), which is still needed by the Iterate nodes in the conditional
+    # and remainder loop. The original reduction becomes dead code (no users) and will be
+    # removed by later optimization passes if needed.
+    print(f"DEBUG: At Step 9, NOT erasing reduction to preserve region_0 subgraph", file=sys.stderr)
+    print(f"DEBUG: reduction_graph has {len(list(reduction_graph.nodes))} nodes", file=sys.stderr)
 
     print(f"DEBUG: At end of construct_conditional_pipelined_loop, main_graph.subgraphs keys: {list(main_graph.subgraphs.keys())}", file=sys.stderr)
     print(f"DEBUG: At end, main_graph id: {id(main_graph)}", file=sys.stderr)

@@ -1506,7 +1506,11 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
     with InsertionPoint(forOp.body):
         # Add mapping for iter args.
         subgraph: fx.Graph = emitter.trace.get_subgraph(subgraph)
+        import sys
+        print(f"DEBUG handle_iterate: Got subgraph '{get_custom(node).subgraph_name}', has {len(list(subgraph.nodes))} nodes", file=sys.stderr)
+        print(f"DEBUG handle_iterate: Subgraph nodes: {[n.name for n in list(subgraph.nodes)[:10]]}", file=sys.stderr)
         iter_args: list[fx.Node] = get_custom(node).iter_args(subgraph)
+        print(f"DEBUG handle_iterate: Found {len(iter_args)} iter_args", file=sys.stderr)
         assert len(iter_args) == len(forOp.inner_iter_args), (
             f"Len of reduction and for op iter args must match,"
             f" Reduction args: {iter_args};"
