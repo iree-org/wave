@@ -809,6 +809,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     linearized_index = {
         "linearized_idx": linearize_index(shared_tile_index, shared_strides)
     }
+
     # Calculate shared memory offset from tile indices
     shared_index, _, _ = _build_start_indices(emitter, linearized_index)
 
@@ -817,7 +818,12 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
     shared_ptr = arith_d.index_cast(i32, shared_ptr)
-    shared_byte_address = arith_d.addi(shared_ptr, shared_byte_offset)
+
+    shared_ptr_base_offset = memref_d.extract_strided_metadata(shared_buffer)[1]
+    shared_ptr_base_offset = arith_d.index_cast(i32, shared_ptr_base_offset)
+
+    shared_byte_address = arith_d.addi(shared_ptr_base_offset, shared_byte_offset)
+    shared_byte_address = arith_d.addi(shared_ptr, shared_byte_address)
 
     # assume no mapping
     def lshift(value, bits):
