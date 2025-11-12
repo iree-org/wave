@@ -42,7 +42,9 @@ from wave_lang.kernel.wave.templates.gemm import (
 )
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
-    get_gemm_prefetch_reorder_kernel_and_schedule,
+)
+from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
+    get_gemm_two_pp_cluster_schedule,
 )
 from wave_lang.kernel.lang import DataType
 import os
@@ -2446,7 +2448,7 @@ def test_gemm_prefetch_reorder_manual_schedule(
         gemm_prefetch_reorder,
         prefetch_reorder_schedule,
         options,
-    ) = get_gemm_prefetch_reorder_kernel_and_schedule(
+    ) = get_gemm_two_pp_cluster_schedule(
         shape=shape, mfma_variant=mfma_variant, compile_to_mlir=False
     )
 

@@ -5,7 +5,9 @@ from wave_lang.kernel.wave.utils.general_utils import run_test
 import wave_lang.kernel.wave as wave
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
-    get_gemm_prefetch_reorder_kernel_and_schedule,
+)
+from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
+    get_gemm_two_pp_cluster_schedule,
 )
 
 
@@ -72,9 +74,7 @@ def test_gemm_prefetch_reorder_stagger():
         gemm_prefetch_reorder,
         prefetch_reorder_schedule,
         options,
-    ) = get_gemm_prefetch_reorder_kernel_and_schedule(
-        shape, mfma_variant, compile_to_mlir
-    )
+    ) = get_gemm_two_pp_cluster_schedule(shape, mfma_variant, compile_to_mlir)
 
     gemm_prefetch_reorder = wave_compile(
         options, gemm_prefetch_reorder, prefetch_reorder_schedule
