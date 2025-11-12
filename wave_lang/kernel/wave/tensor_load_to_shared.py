@@ -76,6 +76,7 @@ from .utils.general_utils import (
     get_hardware_constraint,
     infer_dim,
     is_pow2,
+    remove_global_indexing,
 )
 from .utils.symbol_utils import subs_idxc
 
@@ -146,15 +147,16 @@ def get_global_element_offset(
 
 
 def get_shared_element_offset(
-    node: CustomOp, wave_subs
+    node: CustomOp, constraints: list[Constraint], wave_subs
 ) -> dict[IndexSymbol, IndexSequence]:
     """
     Shared memory address = shared mem buffer + tile offset
     This function returns the tile index by removing threads offset within a tile.
     """
     assert isinstance(node, Write), "Expect Write custom node as caller argument"
+    index = remove_global_indexing(node.index, constraints)
 
-    index = {k: v.subs(wave_subs) for k, v in node.index.items()}
+    index = {k: v.subs(wave_subs) for k, v in index.items()}
     return {key: IndexSequence(index[key].start, 1, 1) for key in index.keys()}
 
 
@@ -190,7 +192,7 @@ def get_tensor_load_descriptor_config(
     distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape)
 
     # get shared tile index
-    shared_tile_index = get_shared_element_offset(write, wave_subs)
+    shared_tile_index = get_shared_element_offset(write, constraints, wave_subs)
 
     # get global tile index
     global_tile_index = get_global_element_offset(read, wave_subs)
