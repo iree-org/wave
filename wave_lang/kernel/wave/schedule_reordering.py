@@ -548,10 +548,16 @@ def select_reorder_strategy(
     hardware_constraint,
 ):
     flat_wave_count = math.prod(hardware_constraint.waves_per_block)
-    # if flat_wave_count == 4 and is_compatible_strategy(
-    #     mTile, nTile, kTile, mma_bitwidth, use_global_to_shared, mma_type, fourWaveConfig
-    # ):
-    #     return SchedReorderStrategy.FOUR_WAVE_INTERWEAVE
+    if flat_wave_count == 4 and is_compatible_strategy(
+        mTile,
+        nTile,
+        kTile,
+        mma_bitwidth,
+        use_global_to_shared,
+        mma_type,
+        fourWaveConfig,
+    ):
+        return SchedReorderStrategy.FOUR_WAVE_INTERWEAVE
     if flat_wave_count != 8:
         return SchedReorderStrategy.NONE
     if is_compatible_strategy(
