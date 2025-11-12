@@ -236,10 +236,10 @@ def handle_hazard(
             Used for detecting cross-iteration dependencies. Defaults to 0 (no duplication).
 
     Algorithm:
-        - Duplicates the node list if `is_nested` flag is set.
-        - Iterates through the nodes, tracking producer and consumer episodes for each resource.
+        - Check for the 2nd iterations if `is_nested` flag is set.
+        - Iterates through the nodes, tracking producers and consumers for each resource.
         - When a hazard is detected, a SyncRequirement is created and appended to `results`.
-        - Uses a states dictionary to track the current set of producers and consumers for each resource.
+        - Uses a window dictionary to track the current set of resource accesses.
         - Handles both intra- and inter-iteration hazards.
 
     Side Effects:
@@ -248,68 +248,57 @@ def handle_hazard(
     if not nodes:
         return
 
-    states: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
     n = len(nodes)
-    graph_info = [None, None]
+    iters = 2 if is_nested else 1
+    graph_info = [nodes[0], nodes[-1]] if is_nested else [None, None]
+    windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
 
-    # duplicate nodes to find cross-iter dependencies
-    # e.g.,
-    #
-    # original loop has nodes
-    # [w1:0, w2:1, r1:0, r2:1]
-    #
-    # after duplication
-    # [w1:0, w2:1, r1:0, r2:1, w1:0, w2:1, r1:0, r2:1]
-    #
-    # after propagating depth
-    # [w1:0, w2:1, r1:0, r2:1, w1:1, w2:0, r1:1, r2:0]
-    #
-    # where is hazard ?
-    # - w1:0 -> r1:0
-    # - w2:1 -> r2:1
-    # - r2:1 -> w1:1 <- cross-iter dep
-    # - r1:0 -> w2:0 <- cross-iter dep
-    if is_nested:
-        graph_info = [nodes[0], nodes[-1]]
-        nodes = nodes * 2
+    def add_hazard_if_window_valid(
+        resource: fx.Node, window: ResourceAccessWindow
+    ) -> None:
+        if not (window.producers and window.consumers):
+            return
+        add_sync_requirements(
+            results,
+            resource,
+            window,
+            graph_info=graph_info,
+            barrier_type=barrier_type,
+        )
+        window.reset()
 
-    for idx, node in enumerate(nodes):
+    for i in range(n * iters):
+        idx = i % n
+        node = nodes[idx]
+
         op = get_custom(node)
         access_kind = get_memory_access_type(op)
         if access_kind == MemoryAccessType.NONE:
             continue
 
-        depth = idx // n if iterate_region == 0 else int(idx < iterate_region)
+        # Depth for loop-carried analysis:
+        # - If we don't know the split: iteration = i // n over the virtual 2x pass.
+        # - If we do know the split: second copy starts at iterate_region within the body.
+        depth = (i // n) if iterate_region == 0 else int(i < iterate_region)
         resource = get_shared_memory_from_op(op, depth)
         assert resource is not None, "op has no smem access"
 
-        state = states[resource]
+        hazard_window = windows[resource]
 
-        if access_kind in producer_kinds:
-            if state.producers and state.consumers:
-                add_sync_requirements(
-                    results,
-                    resource,
-                    state,
-                    graph_info=graph_info,
-                    barrier_type=barrier_type,
-                )
-                state.reset()
-            state.producers.append(node)
-        if access_kind in consumer_kinds:
-            if state.producers:
-                state.consumers.append(node)
+        is_prod = access_kind in producer_kinds
+        is_cons = access_kind in consumer_kinds
 
-    # final cleanup of each state.
-    for resource, state in states.items():
-        if state.producers and state.consumers:
-            add_sync_requirements(
-                results,
-                resource,
-                state,
-                graph_info=graph_info,
-                barrier_type=barrier_type,
-            )
+        if is_prod:
+            add_hazard_if_window_valid(resource, hazard_window)
+            hazard_window.producers.append(node)
+
+        # Consumers only count after at least one producer for this resource.
+        if is_cons and hazard_window.producers:
+            hazard_window.consumers.append(node)
+
+    # Final cleanup
+    for resource, hazard_window in windows.items():
+        add_hazard_if_window_valid(resource, hazard_window)
 
 
 def get_subgraph_nodes(trace: CapturedTrace, node: fx.Node) -> List[fx.Node]:

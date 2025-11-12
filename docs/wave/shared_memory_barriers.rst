@@ -81,10 +81,10 @@ Target
 Analysis
 --------------------
   We first compute a topological enumeration (_topo_location) across nodes, then scan for hazards over shared memory resources:
-    - Core: implementation is defined in `handle_hazard` function. This function scans a linearized sequence of FX nodes, and discovers producer–consumer hazards on the same shared memory resource. For each resource, it groups accesses into episodes (a run of one or more producers followed by one or more consumers) and emits a SyncRequirement describing where synchronization is needed (RAW/WAR), including whether the hazard is cross iteration.
+    - Core: implementation is defined in `handle_hazard` function. This function scans a linearized sequence of FX nodes, and discovers producer–consumer hazards on the same shared memory resource. For each resource, it groups accesses into ResourceAccessWindow (a run of one or more producers followed by one or more consumers) and emits a SyncRequirement describing where synchronization is needed (RAW/WAR), including whether the hazard is cross iteration.
     - Procedure:
         1. Identify shared-memory accesses (Read, Write, Atomic, GatherToLDS) and classify them as READ, WRITE, or READ_WRITE.
-        2. Track producer/consumer "episodes" per memory resource.
+        2. Track producer/consumer "ResourceAccessWindow" per memory resource.
         3. Create SyncRequirement records capturing:
             - the producer region and the consumer region
             - their topological positions
@@ -93,7 +93,12 @@ Analysis
         4. RAW hazards are tagged with BarrierType.FILL, WAR with BarrierType.READY (for easier debugging and potential future guard usage)
 
     Cross-iteration hazards: For nested regions, hazards can connect iteration N to iteration N+1 (e.g., read(i+1) after write(i)). To catch these, handle_hazard:
-        - Duplicates the sequence (nodes = nodes * 2) so that “next iteration” uses of the same logical resource appear later in the stream.
+        - Loops `n * iters` times, where n is the length of given set of nodes.
+        .. code-block:: python
+            for i in range(n*iters):
+                idx = i % n # node index within iterations
+                depth = i // n # which iteration (0 or 1)
+
         - Computes a depth flag (0 or 1) for each occurrence so get_shared_memory_from_op can “shift” loop carried operands from iteration i to i+1.
         - With this setup, a producer at position p and a consumer at position c will look like p < c for intra iteration hazards, and like p > c (i.e., is_loop=True) for cross iteration hazards. These are tagged in the requirement for placement to handle specially.
 
