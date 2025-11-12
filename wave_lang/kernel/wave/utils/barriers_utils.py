@@ -514,37 +514,62 @@ def find_intersecting_interval_strategy(
     if not sync_reqs:
         return []
 
-    graph_groups = defaultdict(list)
-    results: List[SyncRequirement] = []
-    seen = set()
-
     # --- Helpers ----
     get_location = lambda req: (req.prod_location, req.cons_location)
 
-    def window_is_covered(start: int, end: int, index: int = 0):
-        return any(get_location(req)[index] in range(start, end + 1) for req in results)
+    def make_request(proto: SyncRequirement, prod: fx.Node, cons: fx.Node):
+        """Make a new request based on provided producer and consumer. dont care values are default to None."""
+        cls = type(proto)
+        return cls(
+            is_loop=False,
+            prod_region=prod,
+            cons_region=cons,
+            prod_location=prod._topo_location,
+            cons_location=cons._topo_location,
+            graph_start=proto.graph_start,
+            graph_end=proto.graph_end,
+        )
 
-    def place_barrier_at(prod: fx.Node, cons: fx.Node) -> None:
+    def shift_consumer(req: SyncRequirement, body_len):
+        new_req = make_request(req, req.prod_region, req.cons_region)
+        new_req.cons_location += body_len
+        return new_req
+
+    def snap_consumer_to_epilog(req: SyncRequirement, graph: fx.Graph):
+        new_req = make_request(req, req.prod_region, req.cons_region)
+        epilog_cons = graph.parent_op.next
+        new_req.cons_region = epilog_cons
+        new_req.cons_location = epilog_cons._topo_location
+        return new_req
+
+    def window_is_covered(start: int, end: int, index: int = 0):
+        return any(
+            (start <= get_location(req)[index] and get_location(req)[index] <= end)
+            for req in results
+        )
+
+    results: List[SyncRequirement] = []
+    seen = set()
+
+    def place_barrier_at(proto: SyncRequirement, prod: fx.Node, cons: fx.Node) -> None:
         """Add a synchronization requirement to the result list"""
         key = (id(prod), id(cons))
         if key in seen:
             return
         seen.add(key)
-        base = _clone_like(proto)
-        base.prod_region = prod
-        base.cons_region = cons
-        base.prod_location = prod._topo_location
-        base.cons_location = cons._topo_location
-        base.is_loop = False
-        results.append(base)
+        results.append(make_request(proto, prod, cons))
 
+    # Core sweep (forward intervals only)
     def sweep(reqs: List[SyncRequirement]) -> bool:
         """Coalesce forward intervals. Returns True if all placements are intra-graph."""
         inter_graph = True
-        window = None  # (current seen largest p,
+        proto = reqs[0]
+
+        # (current seen largest p,
         #  current seen smallest c,
         #  producer at p,
         #  consumer at c)
+        window = None
 
         for req in sorted(reqs, key=lambda req: (req.cons_location, req.prod_location)):
             p, c = get_location(req)
@@ -557,7 +582,7 @@ def find_intersecting_interval_strategy(
             max_p, min_c, max_p_prod, min_c_cons = window
 
             if p > min_c:
-                place_barrier_at(max_p_prod, min_c_cons)
+                place_barrier_at(proto, max_p_prod, min_c_cons)
                 inter_graph &= max_p_prod.graph == min_c_cons.graph
                 window = (p, c, prod, cons)
             else:
@@ -570,12 +595,14 @@ def find_intersecting_interval_strategy(
         # Final cleanup
         if window is not None:
             _, _, prod, cons = window
-            place_barrier_at(prod, cons)
+            place_barrier_at(proto, prod, cons)
             inter_graph &= prod.graph == cons.graph
 
         return inter_graph
 
     # --- Procedure ----
+    graph_groups = defaultdict(list)
+
     # 1) group by graphs
     for req in sync_reqs:
         graph = getattr(req.prod_region, "graph", None) or getattr(
@@ -598,7 +625,6 @@ def find_intersecting_interval_strategy(
 
         # forward pass
         if forward:
-            proto = forward[0]
             sweep(forward)
 
         # loop-carried pass, preprocess all reqs before sweeping
@@ -625,7 +651,7 @@ def find_intersecting_interval_strategy(
 
                 # If only cons is covered, snap consumer to loop-exit and treat as forward
                 if cons_is_covered and not prod_is_covered:
-                    r = _snap_consumer_to_epilog(req, graph)
+                    r = snap_consumer_to_epilog(req, graph)
                     norm.append(r)
                     continue
 
@@ -634,8 +660,7 @@ def find_intersecting_interval_strategy(
                     continue
 
                 # Normalize cross-iter: shift consumer by body length, clear is_loop
-                r = _shift_consumer(req, body_len)
-                norm.append(r)
+                norm.append(shift_consumer(req, body_len))
 
             if norm:
                 added_before = len(results)
@@ -647,39 +672,6 @@ def find_intersecting_interval_strategy(
                     and hasattr(graph, "parent_op")
                 ):
                     it = graph.parent_op
-                    place_barrier_at(it.prev, it.next)
+                    place_barrier_at(proto, it.prev, it.next)
 
     return results
-
-
-def _shift_consumer(r: SyncRequirement, body_len: int) -> SyncRequirement:
-    r = _clone_like(r)
-    r.is_loop = False
-    r.cons_location = r.cons_location + body_len
-    return r
-
-
-def _snap_consumer_to_epilog(r: SyncRequirement, graph: fx.Graph) -> SyncRequirement:
-    r = _clone_like(r)
-    r.is_loop = False
-    r.cons_region = graph.parent_op.next
-    r.cons_location = r.cons_region._topo_location
-    return r
-
-
-def _clone_like(r: SyncRequirement) -> SyncRequirement:
-    # Lightweight structural clone for fields we rely on.
-    cls = type(r)
-    return cls(
-        resource=r.resource,
-        producers=r.producers,
-        consumers=r.consumers,
-        is_loop=r.is_loop,
-        prod_region=r.prod_region,
-        cons_region=r.cons_region,
-        prod_location=r.prod_location,
-        cons_location=r.cons_location,
-        graph_start=r.graph_start,
-        graph_end=r.graph_end,
-        barrier_type=r.barrier_type,
-    )
