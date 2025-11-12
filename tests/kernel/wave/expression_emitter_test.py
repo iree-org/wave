@@ -55,6 +55,7 @@ class FakeEmitter:
         self.vgpr_allocator = FakeVGPRAllocator()
         self.instructions = []  # List of emitted instructions
         self._lane_id = 1  # lane_id is always in v1
+        self.asm_lines = []  # Capture raw assembly strings
 
     def ensure_lane_id(self, subgroup_size):
         """Return the lane_id register number."""
@@ -63,6 +64,10 @@ class FakeEmitter:
     def emit_instruction(self, instruction):
         """Capture emitted instruction."""
         self.instructions.append(instruction)
+
+    def emit(self, asm_line):
+        """Capture raw assembly line."""
+        self.asm_lines.append(asm_line)
 
     def get_instruction_types(self):
         """Get list of instruction types for easy testing."""
@@ -75,6 +80,7 @@ class FakeEmitter:
     def reset(self):
         """Reset for a fresh test."""
         self.instructions = []
+        self.asm_lines = []
         self.register_file.v_used = set()
         self.vgpr_allocator._next_temp_reg = 10
         self.vgpr_allocator._freed_regs = []
@@ -83,8 +89,9 @@ class FakeEmitter:
 class FakeKernelInfo:
     """Simple kernel info for testing."""
 
-    def __init__(self, subgroup_size=64):
+    def __init__(self, subgroup_size=64, wg_size=(64, 1, 1)):
         self.subgroup_size = subgroup_size
+        self.wg_size = wg_size
 
 
 # ============================================================================
@@ -363,8 +370,8 @@ class TestExprEmitter:
         tid_y = sp.Symbol("tid_y", nonnegative=True)
         expr = tid_x * tid_y
 
-        # Will raise due to unknown symbol tid_y (detected first in postorder traversal)
-        with pytest.raises(ValueError, match="Unknown symbol"):
+        # Will raise because products of multiple dynamic terms are not supported
+        with pytest.raises(ValueError, match="product of multiple dynamic terms"):
             expr_emitter.emit(expr, "v2")
 
     def test_emit_unknown_symbol_raises(self, expr_emitter):

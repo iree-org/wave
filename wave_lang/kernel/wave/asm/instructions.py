@@ -481,20 +481,27 @@ class DSReadB64(MemoryInstruction):
 
 # MFMA + AGPR spill
 class VMfmaF32_16x16x16F16(ArithmeticInstruction):
-    """Matrix FMA f32_16x16x16_f16."""
+    """Matrix FMA f32_16x16x16_f16 - supports both VGPR and AGPR destinations."""
 
     def __init__(
         self,
-        agpr_base: int,
+        dest_base: int,
         a_src_pair: Tuple[int, int],
         b_src_pair: Tuple[int, int],
         c_sel: int = 0,
         comment: str = None,
+        use_vgpr: bool = True,
     ):
+        # Determine destination register type (VGPR or AGPR)
+        if use_vgpr:
+            dest_str = f"v[{dest_base}:{dest_base+3}]"
+        else:
+            dest_str = f"a[{dest_base}:{dest_base+3}]"
+
         super().__init__(
             "v_mfma_f32_16x16x16_f16",
             [
-                f"a[{agpr_base}:{agpr_base+3}]",
+                dest_str,
                 f"v[{a_src_pair[0]}:{a_src_pair[1]}]",
                 f"v[{b_src_pair[0]}:{b_src_pair[1]}]",
                 str(c_sel),
@@ -547,12 +554,22 @@ class InstructionBuilder:
 
     @staticmethod
     def load_kernarg(
-        destination_low: int, destination_high: int, offset: int
+        destination_low: int,
+        destination_high: int,
+        offset: int,
+        kernarg_ptr_sgprs: tuple = (0, 1),
     ) -> SLoadDwordx2:
-        """Load kernel argument from memory."""
+        """Load kernel argument from memory.
+
+        Args:
+            destination_low: Low SGPR for destination
+            destination_high: High SGPR for destination
+            offset: Offset in bytes
+            kernarg_ptr_sgprs: Tuple of (low, high) SGPRs containing kernarg pointer
+        """
         return SLoadDwordx2(
             (destination_low, destination_high),
-            (0, 1),  # s[0:1] contains kernarg pointer
+            kernarg_ptr_sgprs,
             offset,
             f"Load kernarg at offset {offset}",
         )
@@ -631,12 +648,21 @@ class InstructionBuilder:
 
 
 # Convenience functions for common instruction patterns
-def emit_kernargs(num_args: int) -> List[Instruction]:
-    """Emit instructions to load kernel arguments."""
+def emit_kernargs(
+    num_args: int, kernarg_ptr_sgprs: tuple = (0, 1)
+) -> List[Instruction]:
+    """Emit instructions to load kernel arguments.
+
+    Args:
+        num_args: Number of kernel arguments to load
+        kernarg_ptr_sgprs: Tuple of (low, high) SGPRs containing kernarg pointer
+    """
     instructions = []
     for i in range(num_args):
         instructions.append(
-            InstructionBuilder.load_kernarg(2 + i * 2, 3 + i * 2, i * 8)
+            InstructionBuilder.load_kernarg(
+                2 + i * 2, 3 + i * 2, i * 8, kernarg_ptr_sgprs
+            )
         )
     instructions.append(SWaitcnt("lgkmcnt(0)", "wait for all kernarg loads"))
     return instructions
