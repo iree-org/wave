@@ -6,8 +6,6 @@ for optimizing matrix multiplication performance.
 """
 
 import torch
-import pdb
-import traceback
 
 import wave_lang.kernel.wave as tkw
 import wave_lang.kernel.lang as tkl
@@ -132,7 +130,7 @@ def test_default_gemm_prefetch(is_debug=False):
     print("GEMM test passed!")
 
 
-def gemm_schedule_test(is_debug=False):
+def test_gemm_schedule(is_debug=False):
     """
     Returns a GEMM kernel with prefetch schedule that demonstrates pipelining.
     """
@@ -269,7 +267,7 @@ def gemm_schedule_test(is_debug=False):
     print("GEMM prefetch test passed!")
 
 
-def gemm_prefetch_reorder(is_debug=False):
+def test_gemm_prefetch_reorder(is_debug=False):
     """Reference GEMM with improved prefetch scheduling using cluster-based reordering."""
     shape: tuple[int, int, int] = (128, 256, 1024)
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16
@@ -492,21 +490,12 @@ if __name__ == "__main__":
 
     if args.list_tests:
         list_tests(globals())
-    else:
-        # run the test with error handling for debugging
-        for i in range(args.repeat):
-            try:
-                success = run_test(args.test, globals(), args.debug, 1)
-                if success:
-                    print(f"Test {i} passed")
-                else:
-                    exit(1)
-            except SystemExit as e:
-                print(f"SystemExit: code={e.code!r}")
-                traceback.print_exc()
-                pdb.post_mortem(e.__traceback__)
-            except Exception as e:
-                print(f"Error: {e}")
-                print(f"Test {i} failed")
-                traceback.print_exc()
-                exit(1)
+        exit(0)
+
+    if not args.test:
+        print("Error: --test argument is required")
+        print("Use --list_tests to see available tests")
+        exit(1)
+
+    success = run_test(args.test, globals(), args.debug, args.repeat)
+    exit(0 if success else 1)
