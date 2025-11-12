@@ -113,7 +113,7 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
         - Procedure:
             1. Sort all SyncRequirements by their endpoints. (earliest barrier requirements)
             2. Forward Hazard Sweep
-                - For normal intervals (start < end), we maintain a singale "last chosen position", initialize as -1 (an impossible topology position)
+                - For normal intervals (start < end), we maintain a single "last chosen position", initialize as -1 (an impossible topology position)
                 - For each interval, if no existing barrier lies in (start, end], this mean the hazard window is not covered, a barrier is needed in that position, add one to list, and update `last_pos`.
             3. Cross-iteration (loop) hazards
                 - For loop-carrierd intervals (start > end), each forms a circular interval on [graph_start, graph_end].
@@ -123,18 +123,16 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
     - Find intersecting intervals (find_intersecting_interval_strategy):
         - Intent: Given a set of synchronization requirements (“hazard windows”) between a producer and a consumer operating on the same LDS (shared) memory region, we want to place one signal (after the producer) and one wait (before the consumer) so that: 1) Every consumer that could race with a producer waits for a matching signal, 2) No wait can appear before its corresponding signal, and 3) We use as few split barrier pairs as possible without over serializing the schedule.
         - Core: If two windows overlap, a single split barrier pair can satisfy both: signal after the latest producer seen so far (the largest L); wait before the earliest consumer (the smallest R).
-        - Procedure:
-            1. Sort all SyncRequirements by their startpoints and then their end points.
-            2. Main algorithm: scan and intersect
-                - Maintain a running intersection `sig_pos` and `wait_pos`.
-                - For each window, update the intersection variables.
-                - If the intersection becomes empty (`sig_pos` >= `wait_pos`), we emit the previous pair and start a new intersection.
-                - After the scan, emit the last pending pair.
-            3. For cross-iteration hazards
-                - If wait is already covered from `graph start` to window end position and signal is already covered from `graph end` to window start position, skip.
-                - If wait is covered, but signal is not: add signal as normal, add wait at graph end.
-                - Otherwise, offset the consumer topological position and run the algorithm on cross-iter hazards.
-                In case when we did add a cross-iter barrier (wait has position before signal), we add a signal-wait pair surrounding the subgraph.
+            - Each window (hazard) corresponds to an interval (p, c) where p = producer topology position and c is the consumer topology position.
+            - If p < c, we identify as normal hazard.
+            - If p > c, we identify a loop-carrier hazard, normalize it by shifting c:= c + |body|, prepare it for the forward sweep.
+        - Sweeping Procedure:
+            - Sort by (c, p) and sweep once while maintaining a window.
+                - max_p: the maximum producer position found so far.
+                - min_c: the minimum consumer position found so far.
+                - If the next hazard's p > min_c, we identify the smallest possible intersection, add a barrier to lisst and start a new window.
+                - Otherwise, tighten the window.
+            - If we add a cross-iteration barrier to graph, and all dependencies are inter-graph, then we emit a barrier surrounding the subgraph: (iterate.prev, iterate.next)
 
 Emission
 --------------------
@@ -158,3 +156,4 @@ End-to-End flow
 Known Limitations / TODO
 --------------------
 We are now propagating memory access of an op in the nested-region with `depth` set to 1
+To be simplify...

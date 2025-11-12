@@ -278,8 +278,8 @@ def handle_hazard(
 
         # Depth for loop-carried analysis:
         # - If we don't know the split: iteration = i // n over the virtual 2x pass.
-        # - If we do know the split: second copy starts at iterate_region within the body.
-        depth = (i // n) if iterate_region == 0 else int(i < iterate_region)
+        # - If we do know the split: depth=1 for first region (i < iterate_region), depth=0 for second region (i >= iterate_region).
+        depth = (i // n) if iterate_region == 0 else (1 if i < iterate_region else 0)
         resource = get_shared_memory_from_op(op, depth)
         assert resource is not None, "op has no smem access"
 
@@ -431,7 +431,7 @@ def minimize_placement_strategy(
         """Return True if there exist a value p in range with lo <= p <= hi."""
         if not ranges or lo > hi:
             return False
-        return any([p in range(lo, hi + 1) for p in ranges])
+        return any(lo <= p <= hi for p in ranges)
 
     # 1) sort by (consumer, producer)
     reqs = sorted(
@@ -522,8 +522,8 @@ def find_intersecting_interval_strategy(
     # --- Helpers ----
     get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
 
-    def window_is_covered(start: int, end: int, is_cons: int = 0):
-        return any(get_location(req)[is_cons] in range(start, end+1) for req in results)
+    def window_is_covered(start: int, end: int, index: int = 0):
+        return any(get_location(req)[index] in range(start, end + 1) for req in results)
 
     def add_placement_at(prod: fx.Node, cons: fx.Node) -> None:
         """Add a synchronization requirement to the result list"""
@@ -531,17 +531,25 @@ def find_intersecting_interval_strategy(
         if key in seen:
             return
         seen.add(key)
-        results.append(type(proto)(prod_region=prod, cons_region=cons))
+        base = _clone_like(proto)
+        base.prod_region = prod
+        base.cons_region = cons
+        base.prod_topo_location = prod._topo_location
+        base.cons_topo_location = cons._topo_location
+        base.is_loop = False
+        results.append(base)
 
     def sweep(reqs: List[SyncRequirement]) -> bool:
-        '''Coalesce forward intervals. Returns True if all placements are intra-graph.'''
+        """Coalesce forward intervals. Returns True if all placements are intra-graph."""
         inter_graph = True
-        window = None # (current seen largest p,
-                      #  current seen smallest c,
-                      #  producer at p,
-                      #  consumer at c)
+        window = None  # (current seen largest p,
+        #  current seen smallest c,
+        #  producer at p,
+        #  consumer at c)
 
-        for req in sorted(reqs, key=lambda req: (req.cons_topo_location, req.prod_topo_location)):
+        for req in sorted(
+            reqs, key=lambda req: (req.cons_topo_location, req.prod_topo_location)
+        ):
             p, c = get_location(req)
             prod, cons = req.prod_region, req.cons_region
 
@@ -553,37 +561,43 @@ def find_intersecting_interval_strategy(
 
             if p > min_c:
                 add_placement_at(max_p_prod, min_c_cons)
-                inter_graph &= (max_p_prod.graph == min_c_cons.graph)
+                inter_graph &= max_p_prod.graph == min_c_cons.graph
                 window = (p, c, prod, cons)
             else:
-                if p > max_p: max_p, max_p_prod = p, prod
-                if c < min_c: min_c, min_c_cons = c, cons
+                if p > max_p:
+                    max_p, max_p_prod = p, prod
+                if c < min_c:
+                    min_c, min_c_cons = c, cons
                 window = (max_p, min_c, max_p_prod, min_c_cons)
 
         # Final cleanup
         if window is not None:
             _, _, prod, cons = window
             add_placement_at(prod, cons)
-            inter_graph &= (prod.graph == cons.graph)
+            inter_graph &= prod.graph == cons.graph
 
         return inter_graph
-
 
     # --- Procedure ----
     # 1) group by graphs
     for req in sync_reqs:
-        graph = getattr(req.prod_region, "graph", None) or getattr(req.cons_region, "graph", None)
+        graph = getattr(req.prod_region, "graph", None) or getattr(
+            req.cons_region, "graph", None
+        )
         graph_groups[graph].append(req)
 
     # 2) process per graph
     for graph, reqs in graph_groups.items():
-        if not reqs: continue
+        if not reqs:
+            continue
 
         # prepare requests for 2 passes: forward and loop-carried (needs preprocess)
         forward, loops = [], []
         for req in reqs:
-            if req.is_loop: loops.append(req)
-            else: forward.append(req)
+            if req.is_loop:
+                loops.append(req)
+            else:
+                forward.append(req)
 
         # forward pass
         if forward:
@@ -593,12 +607,14 @@ def find_intersecting_interval_strategy(
         # loop-carried pass, preprocess all reqs before sweeping
         if loops:
             proto = loops[0]
-            norm: List[SyncRequirement]= []
+            norm: List[SyncRequirement] = []
             body_len = len(graph.nodes)
 
             for req in loops:
                 p, c = get_location(req)
-                assert p > c, "Cross-iter hazard should have producer location larger than consumer location."
+                assert (
+                    p > c
+                ), "Cross-iter hazard should have producer location larger than consumer location."
                 graph_start, graph_end = (
                     req.graph_start._topo_location,
                     req.graph_end._topo_location,
@@ -607,7 +623,8 @@ def find_intersecting_interval_strategy(
                 cons_is_covered = window_is_covered(graph_start, c, 1)
                 prod_is_covered = window_is_covered(p, graph_end, 0)
 
-                if prod_is_covered and cons_is_covered: continue
+                if prod_is_covered and cons_is_covered:
+                    continue
 
                 # If only cons is covered, snap consumer to loop-exit and treat as forward
                 if cons_is_covered and not prod_is_covered:
@@ -627,12 +644,16 @@ def find_intersecting_interval_strategy(
                 added_before = len(results)
                 inter_graph = sweep(norm)
                 # Optional loop wrap if we added only intra-graph deps
-                if len(results) > added_before and inter_graph and hasattr(graph, "parent_op"):
+                if (
+                    len(results) > added_before
+                    and inter_graph
+                    and hasattr(graph, "parent_op")
+                ):
                     it = graph.parent_op
                     add_placement_at(it.prev, it.next)
 
-
     return results
+
 
 def _shift_consumer(r: SyncRequirement, body_len: int) -> SyncRequirement:
     r = _clone_like(r)
@@ -640,12 +661,14 @@ def _shift_consumer(r: SyncRequirement, body_len: int) -> SyncRequirement:
     r.cons_topo_location = r.cons_topo_location + body_len
     return r
 
-def _snap_consumer_to_loop_exit(r: SyncRequirement, graph: fx.Graph) -> SyncRequirement:
+
+def _snap_consumer_to_epilog(r: SyncRequirement, graph: fx.Graph) -> SyncRequirement:
     r = _clone_like(r)
     r.is_loop = False
     r.cons_region = graph.parent_op.next
     r.cons_topo_location = r.cons_region._topo_location
     return r
+
 
 def _clone_like(r: SyncRequirement) -> SyncRequirement:
     # Lightweight structural clone for fields we rely on.
@@ -662,5 +685,4 @@ def _clone_like(r: SyncRequirement) -> SyncRequirement:
         graph_start=r.graph_start,
         graph_end=r.graph_end,
         barrier_type=r.barrier_type,
-
     )
