@@ -804,7 +804,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     shared_buffer = _linearize_shared_mem(shared_value)
 
     shared_strides = strides_from_symbolic_shape(
-        IndexingContext.current(), distributed_shape, allow_mixed_shapes=True
+        IndexingContext.current(), dst_memory.distributed_shape, allow_mixed_shapes=True
     )
     linearized_index = {
         "linearized_idx": linearize_index(shared_tile_index, shared_strides)
