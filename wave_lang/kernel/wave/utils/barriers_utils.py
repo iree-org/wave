@@ -222,7 +222,7 @@ def handle_hazard(
     and appends any required SyncRequirement objects to the `results` list.
     This function analyzes the sequence of nodes to detect situations where synchronization barriers
     are needed to ensure correct memory access ordering (e.g., between writes and reads to shared resources).
-    It handles cross-iteration dependencies by duplicating the node list to
+    It handles cross-iteration dependencies by iterating the node list twice to
     simulate multiple loop iterations, allowing detection of hazards that span loop boundaries.
 
     Parameters:
@@ -232,8 +232,7 @@ def handle_hazard(
         - consumer_kinds (Set[Any]): The set of node kinds considered as consumers (e.g., read operations).
         - barrier_type (BarrierType): The type of barrier to use if a hazard is detected.
         - is_nested (bool, optional): Whether the scan is occurring within a nested region. Defaults to False.
-        - iterate_region (int, optional): A split index that marks where the "second" copy of an iterate body begins when we duplicate the body to detect cross-iter hazards.
-            Used for detecting cross-iteration dependencies. Defaults to 0 (no duplication).
+        - iterate_region (int, optional): A split index that marks the end of an iterate body. This is used for detecting cross-iteration dependencies. Defaults to 0.
 
     Algorithm:
         - Check for the 2nd iterations if `is_nested` flag is set.
