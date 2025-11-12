@@ -17,6 +17,13 @@ from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
+from wave_lang.support.ir_imports import (
+    Context,
+    Location,
+    Module,
+    UnitAttr,
+)
+from iree.compiler.dialects.transform.extras import insert_transform_script, OpHandle
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -220,13 +227,34 @@ def mlir_converter_matmul():
 
     constraints = matmul.constraints
 
-    # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, _ = emit_wave_dialect(trace, constraints, options, False)
+    # Check that providing a custom transform script to water does not
+    # throw errors
+    with Context(), Location.unknown():
+        transform_module = Module.create()
+        transform_module_op = transform_module.operation
+        transform_module_op.attributes["transform.with_named_sequence"] = UnitAttr.get()
 
+        def pipeline(root: OpHandle):
+            pass
+
+        insert_transform_script(transform_module.body, pipeline)
+        pipeline_asm = str(transform_module)
+
+    # Use the mlir_converter to emit wave MLIR dialect and apply the empty
+    # pipeline.
+    mlir_output, diag = emit_wave_dialect(
+        trace, constraints, options, False, pipeline_asm
+    )
+
+    assert len(diag) == 0
     # Print to stdout for FileCheck
-    print(mlir_output)
-
     # CHECK-LABEL: mlir_converter_matmul
+    print(pipeline_asm)
+    # CHECK: module
+    # CHECK-NEXT: transform.named_sequence @__transform_main
+    # CHECK-NEXT:   transform.yield
+
+    print(mlir_output)
     # CHECK: module
     # CHECK-NEXT: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @K] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @K] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f32, <global>>
     # CHECK-SAME: wave.constraints =
