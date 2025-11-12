@@ -3,10 +3,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from bisect import bisect_left
 from enum import Enum, IntFlag, auto
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Union, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Union, Set
 
 import torch.fx as fx
 
@@ -419,65 +420,86 @@ def get_barriers_analysis(
 def minimize_placement_strategy(
     sync_reqs: Sequence[SyncRequirement],
 ) -> Sequence[SyncRequirement]:
-    if len(sync_reqs) == 0:
-        return sync_reqs
+    """
+    Efficient greedy barrier placement.
+        - Forward hazards: O(n log n) sort + O(n) sweep with a single "last_pos".
+        - Cross-iter hazards: two O(log m) range checks via binary search over an always-sorted list of chosen placement positions.
+    """
+    if not sync_reqs:
+        return []
 
-    placements: List[Tuple[int, BarrierType]] = []
-    results = []
-    cross_iters = []
+    placements_pos: List[int] = []
+    results: List[SyncRequirement] = []
 
-    # helper
+    # helpers
     get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
 
-    # 1) sort barrier placement location from pos low to high
-    ascending_reqs = sorted(
+    def add_placement_at(end_pos: int, req: SyncRequirement) -> None:
+        """Add a synchronization requirement to the result list"""
+        placements_pos.append(end_pos)
+        results.append(req)
+
+    def in_range(ranges: List[int], lo: int, hi: int) -> bool:
+        """Return True if there exist a value p in range with lo <= p <= hi."""
+        if not ranges or lo > hi:
+            return False
+        it = bisect_left(ranges, lo)
+        return it < len(ranges) and ranges[it] <= hi
+
+    # 1) sort by (consumer, producer)
+    reqs = sorted(
         sync_reqs,
         key=lambda req: (req.cons_topo_location, req.prod_topo_location),
     )
 
-    # 2) add to result if no barriers are placed in between topo_region
-    for req in ascending_reqs:
+    # ---- Forward hazard (start < end) ----
+    # 2) Greedy interval stabbing: pick end if interval not already stabbed by last_position.
+    last_pos = -1  # topo location can never be < 0, choose -1 as anchor
+    for req in reqs:
         if req.is_loop:
-            cross_iters.append(req)
             continue
-
         start, end = get_location(req)
-        btype = req.barrier_type
 
-        if any([pos in range(start + 1, end + 1) for pos, _ in placements]):
+        # A hazard window is covered if placement is at (start, end]
+        # We append to result if this window is not covered.
+        if not (last_pos > start and last_pos <= end):
+            add_placement_at(end, req)
+            last_pos = end
+
+    # ---- Cross-iteration hazards (start > end) ----
+    # 3) Handle circular interval.
+    # Need to check if any chosen point lies in:
+    #   A) [graph_start, end]
+    #   B) [start, graph_end]
+    # If neither contains a point, place a new one at `end`.
+    for req in reqs:
+        if not req.is_loop:
             continue
 
-        results.append(req)
-        placements.append((end, btype))
-
-    # 3) handle cross iteration sync req separately (they have producer loc > consumer loc)
-    for req in cross_iters:
         start, end = get_location(req)
         graph_start, graph_end = (
             req.graph_start._topo_location,
             req.graph_end._topo_location,
         )
-        btype = req.barrier_type
 
+        # sanity checks
         assert (
             start > end
         ), "Got producer location < consumer location but identified as cross-iter loop."
-
         assert (
             graph_start < graph_end
         ), f"Expected graph_start ({graph_start}) position to be less than graph_end ({graph_end}) position."
 
-        # 3.1) If graph start ~ consumer location already has barrier placements: skip
-        if any([p in range(graph_start, end + 1) for p, _ in placements]):
+        is_covered = in_range(placements_pos, start, graph_end) or in_range(
+            placements_pos, graph_start, end
+        )
+
+        # Already covered by an existing placement on at least one wrapped segment.
+        if is_covered:
             continue
 
-        # 3.2) If producer location ~ graph end already has barrier placements: skip
-        if any([p in range(start, graph_end + 1) for p, _ in placements]):
-            continue
-
-        # 3.3) else valid placements
-        results.append(req)
-        placements.append((end, btype))
+        # Otherwise, place at `end` (greedy choice consistent with forward logic)
+        add_placement_at(end, req)
 
     return results
 

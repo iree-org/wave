@@ -107,10 +107,13 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
         - Intent: Use the fewest possible barriers, placed before consumers.
         - Procedure:
             1. Sort all SyncRequirements by their endpoints. (earliest barrier requirements)
-            2. Walk all windows in 1. order and check
-                - If a window is already covered by a previously-placed barrier, skip it
-                - Otherwise, this is an uncovered region, so we place one barrier.
-            3. Finally for "cross-iteration" hazards, we check for barrier coverage from 1) the graph start position to the window endpoint, 2) the window start point to the graph end position.
+            2. Forward Hazard Sweep
+                - For normal intervals (start < end), we maintain a singale "last chosen position", initialize as -1 (an impossible topology position)
+                - For each interval, if no existing barrier lies in (start, end], this mean the hazard window is not covered, a barrier is needed in that position, add one to list, and update `last_pos`.
+            3. Cross-iteration (loop) hazards
+                - For loop-carrierd intervals (start > end), each forms a circular interval on [graph_start, graph_end].
+                - Check if an existing barrier lies in segments: (start, end] or (graph_start, end]
+                - If neither segment contains a barrier, this position requires a barrier, add one to list
 
     - Find intersecting intervals (find_intersecting_interval_strategy):
         - Intent: Given a set of synchronization requirements (“hazard windows”) between a producer and a consumer operating on the same LDS (shared) memory region, we want to place one signal (after the producer) and one wait (before the consumer) so that: 1) Every consumer that could race with a producer waits for a matching signal, 2) No wait can appear before its corresponding signal, and 3) We use as few split barrier pairs as possible without over serializing the schedule.
