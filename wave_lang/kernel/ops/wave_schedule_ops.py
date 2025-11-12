@@ -110,7 +110,7 @@ def partition_by_address_space(node: Any, address_space: Any): ...
 
 
 @define_schedule_op
-def partition_by_dim(nodes: Any, dim: Any, factor: int): ...
+def partition_by_dim(nodes: Any, dim: Any, num_partitions: int): ...
 
 
 @define_schedule_op
@@ -476,7 +476,7 @@ class ReorderGraph(CustomScheduleOp):
 class PartitionByDim(CustomScheduleOp):
     nodes: Any
     dim: Any
-    factor: int
+    num_partitions: int
     schedule_op_name = "partition_by_dim"
 
     @classmethod
@@ -487,7 +487,7 @@ class PartitionByDim(CustomScheduleOp):
         constraints: list[Constraint],
         nodes: Any,
         dim: Any,
-        factor: int,
+        num_partitions: int,
     ):
         """
         Partition a list of nodes by dimension into equal-sized partitions.
@@ -496,7 +496,7 @@ class PartitionByDim(CustomScheduleOp):
         into equal-sized groups. Each partition contains nodes with contiguous
         dimension IDs.
 
-        For example, with M,N,K = 2,8,4 and factor=2, partitioning by K dimension
+        For example, with M,N,K = 2,8,4 and num_partitions=2, partitioning by K dimension
         creates two partitions: first with K IDs 0-1, second with K IDs 2-3.
 
         """
@@ -515,11 +515,13 @@ class PartitionByDim(CustomScheduleOp):
             if custom.expanded_dims and dim in custom.expanded_dims:
                 dim_ids.add(custom.expanded_dims[dim])
 
-        # Validate that the dimension can be partitioned by the factor
+        # Validate that the dimension can be partitioned by the num_partitions
         dim_expand_size = len(dim_ids)
-        assert dim_expand_size >= factor and dim_expand_size % factor == 0, (
+        assert (
+            dim_expand_size >= num_partitions and dim_expand_size % num_partitions == 0
+        ), (
             f"Dimension {dim} has {dim_expand_size} unique IDs which cannot be evenly "
-            f"partitioned by factor {factor}"
+            f"partitioned by num_partitions {num_partitions}"
         )
 
         # Sort nodes by dimension and compute partition boundaries
@@ -527,11 +529,11 @@ class PartitionByDim(CustomScheduleOp):
             nodes_list, key=lambda x: get_custom(x).expanded_dims[dim]
         )
         nodes_per_dim = len(sorted_nodes_list) // dim_expand_size
-        partition_size = dim_expand_size // factor
+        partition_size = dim_expand_size // num_partitions
 
         # Partition nodes by dimension ID ranges
         partitioned_nodes = []
-        for partition_id in range(factor):
+        for partition_id in range(num_partitions):
             lower_bound_dim_id = partition_id * partition_size
             upper_bound_dim_id = (partition_id + 1) * partition_size
 

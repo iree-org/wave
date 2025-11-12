@@ -376,12 +376,12 @@ def get_gemm_prefetch_reorder_kernel_and_schedule(
         mma = tkw.get_node_by_tag("mma", subgraph=k_loop)
 
         # Partition node lists by K dimension for fine-grained scheduling
-        mma_0, mma_1 = tkw.partition_by_dim(mma, dim=K, factor=2)
+        mma_0, mma_1 = tkw.partition_by_dim(mma, dim=K, num_partitions=2)
         shared_load_a_0, shared_load_a_1 = tkw.partition_by_dim(
-            shared_load_a, dim=K, factor=2
+            shared_load_a, dim=K, num_partitions=2
         )
         shared_load_b_0, shared_load_b_1 = tkw.partition_by_dim(
-            shared_load_b, dim=K, factor=2
+            shared_load_b, dim=K, num_partitions=2
         )
 
         # Create cluster ordering
