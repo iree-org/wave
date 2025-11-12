@@ -5,9 +5,6 @@ from ..ops.wave_ops import (
     get_custom,
     Read,
     Write,
-    SharedMemoryBarrier,
-    WorkgroupBarrier,
-    SchedulingBarrier,
 )
 from ..wave.constraints import Constraint
 from .base import define_schedule_op
@@ -360,13 +357,6 @@ class Cluster(CustomScheduleOp):
 
         subgraph = first_proxy_node.graph
         context_location = getattr(get_custom(first_proxy_node), "location", None)
-
-        # Parse barrier string: "scheduling, workgroup" -> [SchedulingBarrier(), WorkgroupBarrier()]
-        barrier_map = {
-            "scheduling": lambda: SchedulingBarrier([]),
-            "workgroup": lambda: WorkgroupBarrier(),
-            "shared": lambda: SharedMemoryBarrier(),
-        }
 
         result_nodes = []
 
