@@ -3083,10 +3083,10 @@ class Reshape(CustomOp, ABC):
 @define_op("tensor_load_to_lds")
 @dataclass
 class TensorLoadToLDS(CustomOp):
-    src: Memory
-    dst: Memory
+    src: list[Memory]
+    dst: list[Memory]
     element_type: DataType
-    distributed_shape: list[IndexExpr]
+    distributed_shape: dict[IndexSymbol, IndexExpr]
     shared_tile_index: dict[IndexSymbol, IndexSequence]
     global_tile_index: dict[IndexSymbol, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
