@@ -45,3 +45,8 @@ out
 
 # clangd
 water/.cache
+
+# Water artifacts
+water/llvm-install
+water/llvm-project
+water/build_tools/wheel/water_mlir/water_mlir

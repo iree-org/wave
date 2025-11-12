@@ -31,6 +31,7 @@ from ...ops.wave_ops import (
     TensorLoadToLDS,
     MMA,
     MMABase,
+    MemoryCounterWait,
     NestedRegionOp,
     Output,
     Placeholder,
@@ -222,6 +223,7 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
         if isinstance(
             custom,
             (
+                MemoryCounterWait,
                 SharedMemoryBarrier,
                 SharedMemoryBarrierSignal,
                 SharedMemoryBarrierWait,

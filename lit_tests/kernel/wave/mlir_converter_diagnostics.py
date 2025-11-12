@@ -82,8 +82,10 @@ def mlir_converter_diagnostics_emission():
     # Get the compiled graph from the compiled kernel
     trace = compiled_kernel.get_compiled_graph()
 
+    constraints = matrix_add.constraints
+
     # Use the mlir_converter to emit wave MLIR dialect
-    _, diagnostics = emit_wave_dialect(trace, options, True)
+    _, diagnostics = emit_wave_dialect(trace, constraints, options, True)
 
     # Print to stdout for FileCheck
     print(diagnostics[0])

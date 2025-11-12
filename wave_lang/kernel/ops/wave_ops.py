@@ -139,6 +139,9 @@ def shared_memory_barrier_signal(barId: int = 0, wait_async_ops: bool = False): 
 def shared_memory_barrier_wait(barId: int = 0): ...
 
 
+def memory_counter_wait(load=None, store=None, ds=None, exp=None): ...
+
+
 def workgroup_barrier(): ...
 
 
@@ -1601,6 +1604,24 @@ class SchedulingGroupBarrier(CustomOp):
 
     instructions: dict[Operation, int]
     sync_id: int
+
+
+@define_op("memory_counter_wait")
+@dataclass
+class MemoryCounterWait(CustomOp):
+    """
+    Wait for the specified counters to be less-than or equal-to
+    the provided values before continuing.
+    """
+
+    load: Optional[int] = None
+    store: Optional[int] = None
+    ds: Optional[int] = None
+    exp: Optional[int] = None
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("workgroup_barrier")

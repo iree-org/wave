@@ -80,6 +80,7 @@ from ...ops.wave_ops import (
     log2,
     lt,
     maximum,
+    memory_counter_wait,
     minimum,
     mma,
     ne,
@@ -1700,6 +1701,26 @@ def handle_scheduling_group_barrier(emitter: WaveEmitter, node: fx.Node):
         llvm_d.call_intrinsic(
             None, "llvm.amdgcn.sched.group.barrier", [mask, counts, sync_id], [], []
         )
+
+
+@handle_op(memory_counter_wait)
+def handle_memory_counter_wait(emitter: WaveEmitter, node: fx.Node):
+    try:
+        load, store, ds, exp = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    i32 = IntegerType.get_signless(32)
+
+    def to_attr(v):
+        return None if v is None else get_constant_attr(v, i32)
+
+    amdgpu_d.memory_counter_wait(
+        load=to_attr(load),
+        store=to_attr(store),
+        ds=to_attr(ds),
+        exp=to_attr(exp),
+    )
 
 
 @handle_op(workgroup_barrier)

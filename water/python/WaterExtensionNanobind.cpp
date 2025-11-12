@@ -31,6 +31,9 @@ NB_MODULE(_waterDialects, m) {
       },
       nb::arg("context").none() = nb::none(), nb::arg("load") = true);
 
+  // Export dialect constants
+  d.attr("WAVE_CONSTRAINTS_ATTR_NAME") = mlirWaveDialectConstraintsAttrName;
+
   //===---------------------------------------------------------------------===//
   // WaveSymbolAttr
   //===---------------------------------------------------------------------===//
@@ -366,7 +369,7 @@ NB_MODULE(_waterDialects, m) {
             }
 
             return cls(mlirHardwareConstraintAttrGet(
-                context, threadsPerWave, wavesPerBlockPtr, wavesPerBlockSize,
+                context, threadsPerWave, wavesPerBlockSize, wavesPerBlockPtr,
                 mmaType.value_or(MlirAttribute()),
                 vectorShapes.value_or(MlirAttribute()), maxBitsPerLoad));
           },
