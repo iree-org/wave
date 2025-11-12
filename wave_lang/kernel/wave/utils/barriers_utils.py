@@ -74,7 +74,7 @@ class SyncRequirement:
     barrier_type: BarrierType = BarrierType.NONE
 
 
-class EpisodeState:
+class ResourceAccessWindow:
     def __init__(
         self, producers: List[fx.Node] = None, consumers: List[fx.Node] = None
     ):
@@ -171,7 +171,7 @@ def need_barrier(
 def add_sync_requirements(
     results: List[SyncRequirement],
     resource: fx.Node,
-    state: EpisodeState,
+    state: ResourceAccessWindow,
     graph_info: List[fx.Node],
     barrier_type: BarrierType = BarrierType.NONE,
 ) -> None:
@@ -249,7 +249,7 @@ def handle_hazard(
     if not nodes:
         return
 
-    states: Dict[fx.Node, EpisodeState] = defaultdict(EpisodeState)
+    states: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
     n = len(nodes)
     graph_info = [None, None]
 
