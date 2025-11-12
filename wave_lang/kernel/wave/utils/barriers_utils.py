@@ -3,7 +3,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from bisect import bisect_left
 from enum import Enum, IntFlag, auto
 from dataclasses import dataclass
 from collections import defaultdict
@@ -443,8 +442,7 @@ def minimize_placement_strategy(
         """Return True if there exist a value p in range with lo <= p <= hi."""
         if not ranges or lo > hi:
             return False
-        it = bisect_left(ranges, lo)
-        return it < len(ranges) and ranges[it] <= hi
+        return any([p in range(lo, hi + 1) for p in ranges])
 
     # 1) sort by (consumer, producer)
     reqs = sorted(
