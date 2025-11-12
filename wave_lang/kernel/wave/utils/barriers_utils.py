@@ -421,7 +421,7 @@ def minimize_placement_strategy(
     # helpers
     get_location = lambda req: (req.prod_location, req.cons_location)
 
-    def add_placement_at(end_pos: int, req: SyncRequirement) -> None:
+    def place_barrier_at(end_pos: int, req: SyncRequirement) -> None:
         """Add a synchronization requirement to the result list"""
         placements_pos.append(end_pos)
         results.append(req)
@@ -449,7 +449,7 @@ def minimize_placement_strategy(
         # A hazard window is covered if placement is at (start, end]
         # We append to result if this window is not covered.
         if not (last_pos > start and last_pos <= end):
-            add_placement_at(end, req)
+            place_barrier_at(end, req)
             last_pos = end
 
     # ---- Cross-iteration hazards (start > end) ----
@@ -485,7 +485,7 @@ def minimize_placement_strategy(
             continue
 
         # Otherwise, place at `end` (greedy choice consistent with forward logic)
-        add_placement_at(end, req)
+        place_barrier_at(end, req)
 
     return results
 
@@ -524,7 +524,7 @@ def find_intersecting_interval_strategy(
     def window_is_covered(start: int, end: int, index: int = 0):
         return any(get_location(req)[index] in range(start, end + 1) for req in results)
 
-    def add_placement_at(prod: fx.Node, cons: fx.Node) -> None:
+    def place_barrier_at(prod: fx.Node, cons: fx.Node) -> None:
         """Add a synchronization requirement to the result list"""
         key = (id(prod), id(cons))
         if key in seen:
@@ -557,7 +557,7 @@ def find_intersecting_interval_strategy(
             max_p, min_c, max_p_prod, min_c_cons = window
 
             if p > min_c:
-                add_placement_at(max_p_prod, min_c_cons)
+                place_barrier_at(max_p_prod, min_c_cons)
                 inter_graph &= max_p_prod.graph == min_c_cons.graph
                 window = (p, c, prod, cons)
             else:
@@ -570,7 +570,7 @@ def find_intersecting_interval_strategy(
         # Final cleanup
         if window is not None:
             _, _, prod, cons = window
-            add_placement_at(prod, cons)
+            place_barrier_at(prod, cons)
             inter_graph &= prod.graph == cons.graph
 
         return inter_graph
@@ -647,7 +647,7 @@ def find_intersecting_interval_strategy(
                     and hasattr(graph, "parent_op")
                 ):
                     it = graph.parent_op
-                    add_placement_at(it.prev, it.next)
+                    place_barrier_at(it.prev, it.next)
 
     return results
 
