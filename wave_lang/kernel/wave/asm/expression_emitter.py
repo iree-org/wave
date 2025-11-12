@@ -143,7 +143,23 @@ class ExprEmitter:
         self.emitter = emitter
         self.kernel_info = kernel_info
         self.tid_x_symbol = sympy.Symbol("tid_x", nonnegative=True)
+        self.tid_y_symbol = sympy.Symbol("tid_y", nonnegative=True)
+        self.tid_z_symbol = sympy.Symbol("tid_z", nonnegative=True)
         self._cache: Dict[tuple, str] = {}
+
+        # Symbol bindings for workgroup IDs (maps symbol -> SGPR index or register name)
+        self.symbol_bindings: Dict[sympy.Symbol, str] = {}
+
+    def bind_symbol(self, symbol_name: str, register: str) -> None:
+        """
+        Bind a symbol name to a register.
+
+        Args:
+            symbol_name: Symbol name (e.g., "wgid_x", "wgid_y")
+            register: Register name (e.g., "s2", "s3", "v5")
+        """
+        symbol = sympy.Symbol(symbol_name, nonnegative=True)
+        self.symbol_bindings[symbol] = register
 
     def get_or_emit(self, expr: sympy.Expr, dst_hint: Optional[str] = None) -> str:
         """
@@ -240,12 +256,180 @@ class ExprEmitter:
     # Stack-based handler methods for iterative postorder traversal
     # ===============================================================
 
+    def _is_multi_wave_mode(self) -> bool:
+        """Check if kernel is in multi-wave mode (wg_size_y > 1 or wg_size_z > 1)."""
+        from .utils import normalize_wg_size
+
+        wg_size_x, wg_size_y, wg_size_z = normalize_wg_size(self.kernel_info.wg_size)
+        return wg_size_y > 1 or wg_size_z > 1
+
+    def _get_flat_thread_id_vgpr(self) -> int:
+        """
+        Get the VGPR index containing the flat thread ID.
+
+        Returns:
+            VGPR index (typically 0 for v0)
+        """
+        if self.tid_x_symbol in self.symbol_bindings:
+            flat_tid_reg = self.symbol_bindings[self.tid_x_symbol]
+            return int(flat_tid_reg[1:])
+        else:
+            return 0  # Default to v0
+
+    def _extract_tid_x_from_flat_id(self, flat_tid_v: int, stack: list) -> None:
+        """
+        Extract tid_x (bits 0-9) from flat thread ID register.
+
+        Args:
+            flat_tid_v: VGPR index containing flat thread ID
+            stack: Expression stack to push result onto
+        """
+        temp_v = self.emitter.vgpr_allocator.alloc_v()
+        self.emitter.emit(
+            f"  v_and_b32 v{temp_v}, 0x3ff, v{flat_tid_v}  // Extract tid_x: mask 0x3ff = bits 0-9"
+        )
+        stack.append(f"v{temp_v}")
+
+    def _extract_tid_y_from_flat_id(self, flat_tid_v: int, stack: list) -> None:
+        """
+        Extract tid_y (bits 10-19) from flat thread ID register.
+
+        Args:
+            flat_tid_v: VGPR index containing flat thread ID
+            stack: Expression stack to push result onto
+        """
+        temp_v = self.emitter.vgpr_allocator.alloc_v()
+        self.emitter.emit(
+            f"  v_bfe_u32 v{temp_v}, v{flat_tid_v}, 10, 10  // Extract tid_y from bits 10-19"
+        )
+        stack.append(f"v{temp_v}")
+
+    def _handle_bound_symbol(
+        self, term: sympy.Symbol, bound_reg: str, stack: list
+    ) -> None:
+        """
+        Handle a symbol that has been bound to a register.
+
+        Args:
+            term: The symbol being handled
+            bound_reg: Register name (e.g., "s2", "v0")
+            stack: Expression stack to push result onto
+        """
+        if bound_reg.startswith("s"):
+            # SGPR - need to move to VGPR for arithmetic
+            temp_v = self._sgpr_to_vgpr(bound_reg)
+            stack.append(f"v{temp_v}")
+        else:
+            # VGPR binding - but for tid_x, check if we need to extract from flat thread ID
+            if term == self.tid_x_symbol:
+                if self._is_multi_wave_mode():
+                    # Multi-wave: bound register contains flat thread ID, extract bits 0-9 for tid_x
+                    # Note: bound_reg is typically v0 (system VGPR for flat workitem ID)
+                    # AMD GPU flat thread ID encoding (fixed by hardware):
+                    #   Bits 0-9:   tid_x (max 1024, mask 0x3ff)
+                    #   Bits 10-19: tid_y (max 1024, mask 0x3ff << 10)
+                    #   Bits 20-29: tid_z (max 1024, mask 0x3ff << 20)
+                    bound_v = int(bound_reg[1:])
+                    self._extract_tid_x_from_flat_id(bound_v, stack)
+                else:
+                    # Single-wave: bound register contains tid_x directly
+                    stack.append(bound_reg)
+            else:
+                # Other VGPR binding - use directly
+                stack.append(bound_reg)
+
+    def _handle_unbound_tid_x(self, lane_id_v: int, stack: list) -> None:
+        """
+        Handle tid_x when it's not bound (legacy fallback).
+
+        Args:
+            lane_id_v: VGPR index containing lane ID
+            stack: Expression stack to push result onto
+        """
+        # Legacy fallback: use lane_id for single-wave scenarios where tid_x wasn't bound
+        stack.append(f"v{lane_id_v}")
+
+    def _handle_unbound_tid_y(self, stack: list) -> None:
+        """
+        Handle tid_y when it's not bound.
+
+        Args:
+            stack: Expression stack to push result onto
+        """
+        if self._is_multi_wave_mode():
+            # Multi-wave: extract tid_y from flat thread ID
+            # AMD GPU runtime uses a fixed encoding for thread IDs:
+            # - Bits 0-9: thread_id_x (max 1024, mask 0x3ff)
+            # - Bits 10-19: thread_id_y (max 1024, mask 0x3ff << 10)
+            # - Bits 20-29: thread_id_z (max 1024, mask 0x3ff << 20)
+            # This is independent of the actual workgroup dimensions.
+            flat_tid_v = self._get_flat_thread_id_vgpr()
+            self._extract_tid_y_from_flat_id(flat_tid_v, stack)
+        else:
+            # Single-wave: tid_y is always 0 (wg_size_y=1 means only one row of threads)
+            stack.append(("_const", 0))
+
+    def _handle_direct_sgpr_reference(self, term: sympy.Symbol, stack: list) -> None:
+        """
+        Handle direct SGPR references like "s0", "s1".
+
+        Args:
+            term: Symbol representing SGPR (e.g., Symbol("s0"))
+            stack: Expression stack to push result onto
+        """
+        sgpr_num = int(str(term)[1:])
+        temp_v = self._sgpr_to_vgpr(f"s{sgpr_num}")
+        stack.append(f"v{temp_v}")
+
     def _handle_symbol(self, term: sympy.Symbol, lane_id_v: int, stack: list) -> None:
-        """Handle Symbol node - push tid_x register to stack."""
-        if term == self.tid_x_symbol:
-            stack.append(f"v{lane_id_v}")
+        """
+        Handle Symbol node - push appropriate register to stack.
+
+        Dispatches to specialized helper methods based on symbol type:
+        - Bound symbols: Calls _handle_bound_symbol
+        - Unbound tid_x: Calls _handle_unbound_tid_x (legacy fallback)
+        - Unbound tid_y: Calls _handle_unbound_tid_y
+        - Direct SGPR references: Calls _handle_direct_sgpr_reference
+        - tid_z: Raises ValueError (not yet supported)
+        - Unknown symbols: Raises ValueError
+        """
+        if term in self.symbol_bindings:
+            # Symbol is bound to a register (SGPR or VGPR)
+            bound_reg = self.symbol_bindings[term]
+            self._handle_bound_symbol(term, bound_reg, stack)
+        elif term == self.tid_x_symbol:
+            # Legacy fallback for unbound tid_x
+            self._handle_unbound_tid_x(lane_id_v, stack)
+        elif term == self.tid_y_symbol:
+            # Handle unbound tid_y (extract from flat thread ID or return 0)
+            self._handle_unbound_tid_y(stack)
+        elif term == self.tid_z_symbol:
+            # tid_z not yet supported
+            raise ValueError(
+                f"Thread ID symbol {term} (tid_z) not supported - only tid_x and tid_y"
+            )
+        elif str(term).startswith("s") and str(term)[1:].isdigit():
+            # Direct SGPR reference like "s0", "s1"
+            self._handle_direct_sgpr_reference(term, stack)
         else:
             raise ValueError(f"Unknown symbol: {term}")
+
+    def _sgpr_to_vgpr(self, sgpr: str) -> int:
+        """
+        Move an SGPR value to a VGPR.
+
+        Args:
+            sgpr: SGPR name (e.g., "s2")
+
+        Returns:
+            VGPR index containing the SGPR value
+        """
+        from .instructions import VMovB32
+
+        temp_v = self.emitter.vgpr_allocator.alloc_v()
+        self.emitter.emit_instruction(VMovB32(temp_v, sgpr))
+        self.emitter.register_file.v_used.add(temp_v)
+        return temp_v
 
     def _handle_integer(self, term: sympy.Integer, stack: list) -> None:
         """Handle Integer node - push const marker to stack."""

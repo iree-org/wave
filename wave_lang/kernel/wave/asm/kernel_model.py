@@ -18,7 +18,7 @@ class MemRefInfo:
     elem_bytes: int
 
 
-IndexVal = Union[int, str]  # int for constants, "tid.x" marker for per-lane
+IndexVal = Union[int, str]  # int for constants, "tid_x" marker for per-lane
 
 
 @dataclass
@@ -49,7 +49,7 @@ class KernelInfo:
     # SSA env for simple indices
     index_env: Dict[str, IndexVal] = field(
         default_factory=dict
-    )  # e.g., {"%thread_id_x": "tid.x", "%c0": 0, "%1": "tid.x"}
+    )  # e.g., {"%thread_id_x": "tid_x", "%c0": 0, "%1": "tid_x"}
     subspans: Dict[str, BindingUse] = field(
         default_factory=dict
     )  # memref_ssa -> BindingUse
@@ -57,6 +57,7 @@ class KernelInfo:
     wg_size: Tuple[int, int, int] = (64, 1, 1)
     subgroup_size: int = 64
     tid_ub_x: int = 64
+    tid_ub_y: int = 1  # Upper bound for thread ID in Y dimension
     # optional: remember last affine map for comments
     affine_map_attr: Optional[object] = None
     lds_size_bytes: int = 0

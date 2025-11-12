@@ -16,7 +16,7 @@ from wave_lang.support.ir_imports import (
 )
 
 from .kernel_model import KernelInfo, MemRefInfo
-from .utils import emit_expression_asm
+from .utils import emit_expression_asm, normalize_wg_size
 from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator, AGPRAllocator
 from .mlir_walker import IRWalker
 from .instructions import (
@@ -61,6 +61,66 @@ def get_register_granularity(target: str) -> Tuple[int, int]:
 
 
 class AsmEmitter:
+    """
+    AMDGCN Assembly Emitter for Wave-based kernels.
+
+    Generates optimized assembly code for AMD CDNA architectures (gfx90a, gfx940, gfx942)
+    with support for:
+    - Single-wave and multi-wave workgroups
+    - Single-workgroup and multi-workgroup dispatches
+    - MFMA (Matrix Fused Multiply-Add) instructions
+    - LDS (Local Data Share) operations
+    - Latency-aware instruction scheduling with waitcnt optimization
+
+    ## Multi-Wave and Multi-Workgroup Support
+
+    The emitter supports flexible workgroup configurations:
+
+    **Thread ID Handling**:
+    - Single-wave (wg_size = [64, 1, 1]): No system VGPRs requested (tid_x uses lane_id)
+    - Multi-wave (wg_size = [N, M, 1]): Requests `.amdhsa_system_vgpr_workitem_id 1`
+      - v0 contains flat thread ID with encoding: bits[0:9]=tid_x, bits[10:19]=tid_y
+      - tid_x extracted via `v_and_b32 v_temp, 0x3ff, v0`
+      - tid_y extracted via `v_bfe_u32 v_temp, v0, 10, 10`
+
+    **Workgroup ID Handling**:
+    - Dynamically detects `gpu.block_id` operations in MLIR
+    - Requests only needed system SGPRs: `.amdhsa_system_sgpr_workgroup_id_{x,y,z}`
+    - SGPRs allocated at s2, s3, s4 (after kernarg pointer at s0:s1)
+    - Workgroup IDs used in affine address expressions for global memory indexing
+
+    **MFMA Instructions**:
+    - Uses VGPR-variant MFMA (writes directly to VGPRs, not accumulators)
+    - Example: `v_mfma_f32_16x16x16_f16 v[0:3], v[4:5], v[6:7], v[0:3]`
+
+    ## Thread-to-Dimension Mapping
+
+    Row-major layout (AMD standard):
+    - tid_x = fastest-varying local thread ID (within wave, lane 0-63)
+    - tid_y = slower-varying (across waves in Y dimension)
+    - tid_z = slowest-varying (rarely used, reserved for future 3D workgroups)
+
+    ## Address Offset Limits
+
+    Buffer instructions (`buffer_load_dword`, `buffer_store_dword`) have a 16-bit
+    unsigned immediate offset limit (0-65535 bytes).
+
+    **Current Limitations**:
+    - Large memory footprints can exceed this offset range
+    - Affects very large workgroup counts or memory-intensive kernels
+    - Example: 32x32 workgroup grid with large tile sizes may exceed 65535 bytes
+
+    **Future Work**: Implement offset splitting by adjusting SRD base pointer
+    dynamically using `s_add_u32`/`s_addc_u32` for offsets >= 65536.
+
+    ## Latency-Aware Scheduling
+
+    The emitter uses a ticketing system for optimal `s_waitcnt` placement:
+    - VMEM (vector memory) instructions tracked for `vmcnt` waits
+    - LGKM (LDS/GDS/constant/message) instructions tracked for `lgkmcnt` waits
+    - Minimizes stalls by placing waits as late as possible before data dependencies
+    """
+
     SRD127_96 = "0x20000"  # data_format=4 for gfx9xx
 
     def __init__(
@@ -79,9 +139,21 @@ class AsmEmitter:
         self.srds: Dict[str, Tuple[int, int, int, int]] = {}  # memref_ssa -> srd quad
         self.lane_id_emitted = False
         self.lane_id_v = None  # Store which VGPR holds lane ID
-        self.current_agpr_quad = None  # Track current AGPR quad allocated for MFMA
+        self.current_vgpr_quad = None  # Track current VGPR quad for MFMA results
         # Track pinned VGPRs for future lifetime management (API surface)
         self._pinned_vgprs = set()
+
+        # Workgroup ID tracking (for multi-workgroup support)
+        # These are assigned sequentially after kernarg ptr based on what we request
+        self.sgpr_workgroup_id_x = None
+        self.sgpr_workgroup_id_y = None
+        self.sgpr_workgroup_id_z = None
+
+        # Thread/workitem ID tracking (for multi-wave support)
+        # System VGPRs are allocated by hardware at v0, v1, v2 for tid_x, tid_y, tid_z
+        self.vgpr_tid_x = None  # Will be v0 when system_vgpr_workitem_id >= 1
+        self.vgpr_tid_y = None  # Will be v1 when system_vgpr_workitem_id >= 2
+        self.vgpr_tid_z = None  # Will be v2 when system_vgpr_workitem_id == 3
 
         # Ticket-based VMEM/LGKM tracking for optimal wait placement
         self.ticketing = Ticketing()
@@ -92,6 +164,49 @@ class AsmEmitter:
         # Latency-aware scheduling
         self.latency_provider = LatencyProvider(arch=targetid)
         self.scoreboard = Scoreboard(latency_provider=self.latency_provider)
+
+        # Track which workgroup IDs are needed (detected from MLIR)
+        self.needs_wgid_x = False
+        self.needs_wgid_y = False
+        self.needs_wgid_z = False
+
+    @staticmethod
+    def _detect_needed_workgroup_ids(fn) -> tuple[bool, bool, bool]:
+        """
+        Scan MLIR function to detect which workgroup IDs are needed.
+
+        Returns:
+            (needs_wgid_x, needs_wgid_y, needs_wgid_z) tuple
+        """
+        from wave_lang.support.ir_imports import gpu_d
+
+        needs_x, needs_y, needs_z = False, False, False
+
+        # Recursively walk all operations
+        def walk_ops(op):
+            nonlocal needs_x, needs_y, needs_z
+
+            # Check if this is a gpu.block_id operation
+            if isinstance(op, gpu_d.BlockIdOp):
+                # Extract dimension from the operation
+                # dimension is an Attribute, convert to string for comparison
+                dim_str = str(op.dimension)
+                if "dim x" in dim_str:
+                    needs_x = True
+                elif "dim y" in dim_str:
+                    needs_y = True
+                elif "dim z" in dim_str:
+                    needs_z = True
+
+            # Recurse into regions
+            if hasattr(op, "regions"):
+                for region in op.regions:
+                    for block in region.blocks:
+                        for inner in block.operations:
+                            walk_ops(inner)
+
+        walk_ops(fn)
+        return needs_x, needs_y, needs_z
 
     @classmethod
     def from_mlir_string(
@@ -125,17 +240,48 @@ class AsmEmitter:
                     kernel_name = fn.sym_name.value
                     num_args = len(fn.entry_block.arguments)
 
-                    # Emit kernel preamble and kernargs
-                    emitter.emit_prologue(kernel_name)
+                    # Extract workgroup size from function attributes
+                    from .utils import parse_wg_and_subgroup
+                    from wave_lang.support.ir_imports import OpAttributeMap
+
+                    wg_size = None
+                    function_attributes = (
+                        dict(fn.attributes)
+                        if isinstance(fn.attributes, OpAttributeMap)
+                        else {}
+                    )
+                    translation_info = function_attributes.get("translation_info")
+                    if translation_info is not None:
+                        workgroup_size_tuple, _ = parse_wg_and_subgroup(
+                            translation_info
+                        )
+                        if workgroup_size_tuple:
+                            wg_size = workgroup_size_tuple
+
+                    # Workgroup size is required for code generation
+                    assert (
+                        wg_size is not None
+                    ), "translation_info with workgroup_size must be present in MLIR function attributes"
+
+                    # Detect which workgroup IDs are needed
+                    needs_wgid_x, needs_wgid_y, needs_wgid_z = (
+                        cls._detect_needed_workgroup_ids(fn)
+                    )
+                    emitter.needs_wgid_x = needs_wgid_x
+                    emitter.needs_wgid_y = needs_wgid_y
+                    emitter.needs_wgid_z = needs_wgid_z
+
+                    # Emit kernel preamble with workgroup size
+                    emitter.emit_prologue(kernel_name, wg_size)
                     emitter.emit_kernargs(num_args)
 
-                    # Do full traversal with emitter to emit instructions
+                    # Walk MLIR and emit instructions
                     walker = IRWalker(emitter)
                     kernel_info = walker.interpret_func(fn)
 
                     emitter.emit_epilogue(
                         kernel_info.name,
-                        kernel_info.wg_size[0],
+                        kernel_info.wg_size,
                         kernel_info.subgroup_size,
                         len(kernel_info.arg_ssa_order),
                         kernel_info.lds_size_bytes,
@@ -177,8 +323,127 @@ class AsmEmitter:
 
         self.lines.append(str(instr))
 
+    def _setup_workgroup_id_sgprs(self):
+        """
+        Set up workgroup ID SGPRs using SYSTEM SGPR mechanism.
+
+        AMD ABI SGPR Layout:
+        - User SGPRs (allocated first):
+          * s[0:1] = kernarg_segment_ptr (when .amdhsa_user_sgpr_kernarg_segment_ptr 1)
+        - System SGPRs (come immediately after user SGPRs):
+          * s2 = workgroup_id_x (when .amdhsa_system_sgpr_workgroup_id_x 1)
+          * s3 = workgroup_id_y (when .amdhsa_system_sgpr_workgroup_id_y 1)
+        - Free SGPRs for user allocation: s4+
+
+        Returns:
+            Number of workgroup ID system SGPRs requested (0-3)
+
+        NOTE: Dynamically requests only the workgroup IDs that are actually used
+        in the MLIR (detected by scanning for gpu.block_id operations).
+        """
+        # SGPR layout: kernarg ptr (s0:s1), then workgroup IDs as system SGPRs
+        kernarg_ptr_sgprs = 2  # s[0:1]
+        next_system_sgpr = kernarg_ptr_sgprs
+
+        # Allocate system SGPRs based on what's actually needed
+        if self.needs_wgid_x:
+            self.sgpr_workgroup_id_x = next_system_sgpr
+            next_system_sgpr += 1
+        else:
+            self.sgpr_workgroup_id_x = None
+
+        if self.needs_wgid_y:
+            self.sgpr_workgroup_id_y = next_system_sgpr
+            next_system_sgpr += 1
+        else:
+            self.sgpr_workgroup_id_y = None
+
+        if self.needs_wgid_z:
+            self.sgpr_workgroup_id_z = next_system_sgpr
+            next_system_sgpr += 1
+        else:
+            self.sgpr_workgroup_id_z = None
+
+        # Reserve all allocated workgroup ID SGPRs
+        if next_system_sgpr > kernarg_ptr_sgprs:
+            self.register_file.s_max = max(
+                self.register_file.s_max, next_system_sgpr - 1
+            )
+
+        # Update SGPR allocator to start after system workgroup ID SGPRs
+        # Round up to s4 for even alignment (required for dwordx2 loads)
+        self.sgpr_allocator.next_sgpr = max(4, next_system_sgpr)
+
+        # Return count of requested workgroup IDs
+        return sum([self.needs_wgid_x, self.needs_wgid_y, self.needs_wgid_z])
+
+    def _setup_workitem_id_vgprs(self, wg_size: tuple) -> int:
+        """
+        Set up workitem ID VGPRs using SYSTEM VGPR mechanism.
+
+        AMD ABI VGPR Layout for system_vgpr_workitem_id:
+        - When system_vgpr_workitem_id == 0: No system VGPRs allocated
+        - When system_vgpr_workitem_id == 1: v0 = flat workitem_id
+
+        For multi-wave kernels (wg_size_y > 1 or wg_size_z > 1):
+        - v0 contains flat thread ID with fixed encoding:
+          * Bits 0-9: thread_id_x
+          * Bits 10-19: thread_id_y
+          * Bits 20-29: thread_id_z
+        - We'll extract tid_x/tid_y/tid_z from v0 on-demand in expression_emitter.py
+
+        For single-wave kernels (wg_size_y == 1 and wg_size_z == 1):
+        - Don't request system VGPRs (matches LLVM behavior)
+        - MLIR doesn't have gpu.thread_id ops, uses lane-based indexing
+
+        Returns:
+            system_vgpr_workitem_id value (0 for single-wave, 1 for multi-wave)
+        """
+        # Store workgroup size for multi-wave tid extraction
+        self.wg_size = wg_size
+
+        # Check if multi-wave (need thread IDs from multiple dimensions)
+        wg_size_x, wg_size_y, wg_size_z = normalize_wg_size(wg_size)
+        is_multi_wave = wg_size_y > 1 or wg_size_z > 1
+
+        if is_multi_wave:
+            # Multi-wave: request system VGPR for flat thread ID
+            requested_dims = 1
+            self.vgpr_tid_x = 0  # v0 contains flat thread ID
+            self.vgpr_tid_y = None  # Will be extracted on-demand
+            self.vgpr_tid_z = None  # Will be extracted on-demand
+            self._reserve_system_vgprs(requested_dims)
+        else:
+            # Single-wave: no system VGPRs (matches LLVM)
+            requested_dims = 0
+            self.vgpr_tid_x = None  # No system VGPR, use lane_id fallback
+            self.vgpr_tid_y = None
+            self.vgpr_tid_z = None
+            # Don't reserve v0 - it's a regular VGPR
+
+        return requested_dims
+
+    def _reserve_system_vgprs(self, n: int):
+        """
+        Reserve v0..v(n-1) as system VGPRs and set allocator base.
+
+        Args:
+            n: Number of system VGPRs to reserve (0-3)
+        """
+        for i in range(n):
+            self.vgpr_allocator.reserve(i)
+        # User-allocated VGPRs start after system VGPRs
+        self.vgpr_allocator.base = n
+
     # ---- high-level sections ----
-    def emit_prologue(self, kernel_name: str):
+    def emit_prologue(self, kernel_name: str, wg_size: tuple):
+        """
+        Emit kernel prologue with metadata directives.
+
+        Args:
+            kernel_name: Name of the kernel function
+            wg_size: Workgroup size tuple (x, y, z) from MLIR attributes
+        """
         self.emit(f'.amdgcn_target "amdgcn-amd-amdhsa--{self.targetid}"')
         self.emit(".text")
         self.emit(f".protected {kernel_name}")
@@ -189,15 +454,34 @@ class AsmEmitter:
         self.emit(".p2align 6")
         self.emit(f".amdhsa_kernel {kernel_name}")
         self.emit("  .amdhsa_user_sgpr_kernarg_segment_ptr 1")
+
+        # Set up workgroup ID SGPRs - use system SGPRs (the assembler recognizes these)
+        self._setup_workgroup_id_sgprs()
+
+        # Emit user SGPR count - this tells the hardware where to place system SGPRs
+        # With count=2 (just kernarg ptr), system SGPRs will be at s2, s3, s4...
+        self.emit("  .amdhsa_user_sgpr_count 2")
+
         self.emit("  .amdhsa_accum_offset 0")  # patched later
         self.emit("  .amdhsa_next_free_vgpr 0")  # patched later
         self.emit("  .amdhsa_next_free_sgpr 0")  # patched later
         self.emit("  .amdhsa_group_segment_fixed_size 0")
         self.emit("  .amdhsa_private_segment_fixed_size 0")
-        self.emit("  .amdhsa_system_sgpr_workgroup_id_x 0")
-        self.emit("  .amdhsa_system_sgpr_workgroup_id_y 0")
-        self.emit("  .amdhsa_system_sgpr_workgroup_id_z 0")
-        self.emit("  .amdhsa_system_vgpr_workitem_id 0")
+        # Request workgroup IDs as system SGPRs (based on MLIR analysis)
+        self.emit(
+            f"  .amdhsa_system_sgpr_workgroup_id_x {1 if self.needs_wgid_x else 0}"
+        )
+        self.emit(
+            f"  .amdhsa_system_sgpr_workgroup_id_y {1 if self.needs_wgid_y else 0}"
+        )
+        self.emit(
+            f"  .amdhsa_system_sgpr_workgroup_id_z {1 if self.needs_wgid_z else 0}"
+        )
+
+        # Set up workitem ID VGPRs and emit directive based on workgroup size
+        system_vgpr_workitem_id = self._setup_workitem_id_vgprs(wg_size)
+        self.emit(f"  .amdhsa_system_vgpr_workitem_id {system_vgpr_workitem_id}")
+
         self.emit("  .amdhsa_float_denorm_mode_32 3")
         self.emit("  .amdhsa_float_denorm_mode_16_64 3")
         self.emit(".end_amdhsa_kernel")
@@ -209,13 +493,16 @@ class AsmEmitter:
     def emit_epilogue(
         self,
         kernel_name: str,
-        wg_size_x: int,
+        wg_size: tuple,
         subgroup_size: int,
         num_args: int,
         lds_size_bytes: int = 0,
     ):
         self.emit_instruction(SEndpgm())
         self.emit("")
+
+        # Extract workgroup dimensions
+        wg_size_x, wg_size_y, wg_size_z = normalize_wg_size(wg_size)
 
         # Compute actual register usage
         vgprs_used = (
@@ -305,7 +592,7 @@ amdhsa.kernels:
     .group_segment_fixed_size:   {lds_size_bytes}
     .kernarg_segment_align:      8
     .kernarg_segment_size:       {num_args*8}
-    .max_flat_workgroup_size:    {wg_size_x}
+    .max_flat_workgroup_size:    {wg_size_x * wg_size_y * wg_size_z}
     .private_segment_fixed_size: 0
     .sgpr_count:                 {sgprs_used}
     .sgpr_spill_count:           0
@@ -504,58 +791,32 @@ amdhsa.kernels:
 
     def emit_mfma_16x16x16_f16(self, a_pair: Tuple[int, int], b_pair: Tuple[int, int]):
         """
-        Emit MFMA instruction with dynamically allocated AGPR result.
+        Emit MFMA instruction with VGPR result (not AGPR).
 
-        Allocates an AGPR quad for the MFMA result and records it for later spilling.
-        The latency-aware scheduler will insert necessary NOPs if needed.
+        Uses VGPR-variant of MFMA instruction to write results directly to VGPRs,
+        avoiding accumulator complexity. This is required for multi-wave support
+        and matches LLVM backend behavior.
         """
         from .instructions import VMfmaF32_16x16x16F16, SWaitcnt
 
         # Wait for LDS reads to complete before MFMA
         self.emit_instruction(SWaitcnt("lgkmcnt(0)"))
 
-        # Allocate AGPR quad for MFMA result
-        self.current_agpr_quad = self.agpr_allocator.alloc_a_quad()
-        agpr_base = self.current_agpr_quad[0]
+        # Allocate VGPR quad for MFMA result (not AGPR)
+        result_quad = self.vgpr_allocator.alloc_v_quad()
+        vgpr_base = result_quad[0]
 
-        # Emit MFMA into allocated AGPR quad
-        self.emit_instruction(VMfmaF32_16x16x16F16(agpr_base, a_pair, b_pair, 0))
+        # Emit MFMA into VGPR quad (VGPR-variant instruction)
+        # The 0 at the end means no accumulator input (zero initialization)
+        # use_vgpr=True makes it write to VGPRs instead of AGPRs
+        self.emit_instruction(
+            VMfmaF32_16x16x16F16(vgpr_base, a_pair, b_pair, 0, use_vgpr=True)
+        )
         # Track MFMA for latency-aware scheduling
         self.track_mfma("v_mfma_f32_16x16x16_f16")
-        # Latency-aware scheduler will handle MFMA→AGPR read hazards automatically
 
-    def spill_agprs_to_vgprs(
-        self, dst_v_quad: Tuple[int, int, int, int] = None
-    ) -> Tuple[int, int, int, int]:
-        """
-        Spill MFMA AGPRs to VGPRs for use in stores.
-
-        Args:
-            dst_v_quad: Optional VGPR quad to spill into. If None, allocates a new quad.
-
-        Returns:
-            VGPR quad (v0, v1, v2, v3) containing the spilled MFMA results
-        """
-        from .instructions import VAccvgprReadB32
-
-        if dst_v_quad is None:
-            dst_v_quad = self.vgpr_allocator.alloc_v_quad()
-
-        # Read from currently allocated AGPR quad into VGPRs
-        if self.current_agpr_quad is None:
-            raise RuntimeError(
-                "No AGPR quad allocated; call emit_mfma_16x16x16_f16 first"
-            )
-
-        # Wait for MFMA to complete before reading AGPRs
-        self.wait_for_mfma_ready()
-
-        for i in range(4):
-            self.emit_instruction(
-                VAccvgprReadB32(dst_v_quad[i], self.current_agpr_quad[i])
-            )
-
-        return dst_v_quad
+        # Store the result quad for later use
+        self.current_vgpr_quad = result_quad
 
     def compute_lane_scaled_offset(self, scale_bytes: int) -> int:
         """
@@ -592,7 +853,13 @@ amdhsa.kernels:
         self.register_file.s_max = max(self.register_file.s_max, sreg)
 
     def emit_kernargs(self, num_args: int):
-        kernarg_instructions = emit_kernargs(num_args)
+        # Kernarg pointer is ALWAYS at s[0:1] (user SGPR, comes before system SGPRs)
+        kernarg_ptr_low = 0
+        kernarg_ptr_high = 1
+
+        kernarg_instructions = emit_kernargs(
+            num_args, (kernarg_ptr_low, kernarg_ptr_high)
+        )
         for i, instruction in enumerate(kernarg_instructions):
             if isinstance(instruction, SLoadDwordx2):
                 # Extract register numbers from the instruction and store them
@@ -600,7 +867,9 @@ amdhsa.kernels:
                 self.ptr_pairs[i] = (low_register, high_register)
                 # Create a new instruction with the allocated registers
                 new_instruction = SLoadDwordx2(
-                    (low_register, high_register), (0, 1), i * 8
+                    (low_register, high_register),
+                    (kernarg_ptr_low, kernarg_ptr_high),
+                    i * 8,
                 )
                 self.emit_instruction(new_instruction)
             else:

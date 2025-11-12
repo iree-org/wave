@@ -54,7 +54,6 @@ Key Components
 
   - Scalar General Purpose Register (SGPR) allocation
   - Vector General Purpose Register (VGPR) allocation
-  - Accumulator General Purpose Register (AGPR) allocation for MFMA operations
   - Register conflict detection and resolution
   - Alignment requirements for vector operations
   - Architecture-specific granularities (CDNA2/3: VGPR=4, SGPR=8; RDNA2/3: VGPR=4, SGPR=16)
@@ -137,10 +136,10 @@ Hardware Accelerated Operations
 
 The ASM backend provides native support for AMD GPU specialized instructions:
 
-- **MFMA (Matrix Multiply-Accumulate)**: Hardware-accelerated matrix operations on CDNA architectures
+- **MFMA (Matrix Multiply-Accumulate)**: Hardware-accelerated matrix operations on CDNA architectures using VGPR-variant instructions
 - **LDS Operations**: Fast shared memory operations (ds_read_b64, ds_write_b64)
-- **AGPR Management**: Automatic allocation and management of accumulator registers for MFMA
-- **AGPR Spilling**: Efficient transfer of MFMA results from AGPRs to VGPRs
+- **Multi-Wave Support**: Automatic detection and handling of multi-wave workgroups with proper thread ID extraction
+- **Multi-Workgroup Support**: Dynamic detection of workgroup ID usage and conditional SGPR allocation
 
 Architecture Support
 ~~~~~~~~~~~~~~~~~~~~
@@ -156,9 +155,9 @@ The backend features fully dynamic register allocation:
 
 - **Automatic VGPR Allocation**: Computes required VGPRs based on actual usage
 - **Automatic SGPR Allocation**: Computes required SGPRs based on actual usage
-- **Dynamic AGPR Allocation**: Allocates AGPRs as needed for MFMA operations
+- **Conditional System Register Allocation**: Dynamically detects workgroup ID and thread ID usage from MLIR
 - **Granularity Alignment**: Automatically rounds allocations to architecture-specific granularities
-- **Accumulator Offset Calculation**: Dynamically computes accum_offset for AGPR/VGPR mapping
+- **VGPR-Variant MFMA**: Uses MFMA instructions that write directly to VGPRs, eliminating accumulator complexity
 
 Usage
 -----
@@ -456,14 +455,52 @@ MFMA Key Features
 The MFMA support includes:
 
 1. **LDS Staging**: Automatically stages data through Local Data Share for optimal MFMA performance
-2. **AGPR Management**: Allocates and manages Accumulator General Purpose Registers for MFMA results
+2. **VGPR-Variant MFMA**: Uses MFMA instructions that write directly to VGPRs (not accumulators)
 3. **Synchronization**: Inserts ``s_waitcnt lgkmcnt(0)`` before MFMA to ensure LDS reads complete
-4. **AGPR Spilling**: Efficiently transfers MFMA results from AGPRs to VGPRs using ``v_accvgpr_read_b32``
-5. **Timing Control**: Inserts ``s_nop 6`` after MFMA for proper instruction timing
-6. **Dynamic Metadata**: Computes ``accum_offset``, ``vgpr_count``, ``sgpr_count``, and ``lds_size`` dynamically
+4. **Multi-Wave Support**: Correctly handles multiple waves per workgroup with thread ID extraction
+5. **Multi-Workgroup Support**: Automatically detects and allocates workgroup ID system SGPRs as needed
+6. **Dynamic Metadata**: Computes ``vgpr_count``, ``sgpr_count``, and ``lds_size`` dynamically
 
 Advanced Features
 -----------------
+
+Multi-Wave and Multi-Workgroup Support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ASM backend automatically handles complex thread and workgroup configurations:
+
+**Multi-Wave Kernels**
+
+When a workgroup contains multiple waves (e.g., ``workgroup_size = [256, 4, 1]``), the backend:
+
+1. **Detects Multi-Wave Configuration**: Analyzes workgroup size from MLIR ``translation_info``
+2. **Requests System VGPRs**: Sets ``.amdhsa_system_vgpr_workitem_id 1`` to get flat thread ID in ``v0``
+3. **Extracts Thread IDs**: Generates code to extract ``tid_x`` and ``tid_y`` from flat ID:
+
+   - ``tid_x = v0 & 0x3ff`` (bits 0-9)
+   - ``tid_y = (v0 >> 10) & 0x3ff`` (bits 10-19)
+
+4. **Uses in Addressing**: Thread IDs are used in affine expressions for memory access
+
+**Multi-Workgroup Kernels**
+
+When a kernel is dispatched across multiple workgroups (e.g., ``grid = [16, 16, 1]``), the backend:
+
+1. **Detects Workgroup ID Usage**: Scans MLIR for ``gpu.block_id`` operations
+2. **Conditionally Requests System SGPRs**: Only requests needed workgroup IDs:
+
+   - ``.amdhsa_system_sgpr_workgroup_id_x 1`` if ``gpu.block_id x`` is used
+   - ``.amdhsa_system_sgpr_workgroup_id_y 1`` if ``gpu.block_id y`` is used
+   - ``.amdhsa_system_sgpr_workgroup_id_z 1`` if ``gpu.block_id z`` is used
+
+3. **Allocates SGPRs**: Places workgroup IDs at ``s2``, ``s3``, ``s4`` (after kernarg pointer)
+4. **Uses in Addressing**: Workgroup IDs scale memory access for workgroup-local tiles
+
+**Example**: 256x256 MMA with 4 workgroups (2x2 grid), single wave per workgroup:
+
+- Each workgroup processes a 64x64 tile
+- ``wgid_x`` and ``wgid_y`` are detected and allocated
+- Global memory addresses: ``base + (wgid_x * 64 * 4) + (wgid_y * 64 * 256 * 4) + tid_x``
 
 Affine Expression Simplification
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -627,28 +664,30 @@ scheduler to minimize stalls across VMEM, LGKM (LDS/scalar), VALU and MFMA pipel
 - **Always-On Integration** (``asm_emitter.py``): The emitter unconditionally initializes
   the Latency Provider and Scoreboard. Latency-aware scheduling is always enabled.
 
-MFMA Readiness Example
-^^^^^^^^^^^^^^^^^^^^^^
+MFMA Scheduling Example
+^^^^^^^^^^^^^^^^^^^^^^^
 
-For MFMA→AGPR-read sequences, the database distinguishes the full MFMA execution latency
-(e.g., 8 cycles for ``v_mfma_f32_16x16x16_f16`` on gfx942) from the minimal hazard distance
-before ``v_accvgpr_read_b32`` can safely issue (``mfma_to_agpr_read = 6`` cycles from LLVM
-codegen patterns). The scheduler inserts the minimal NOPs needed, at the first use:
+The backend uses VGPR-variant MFMA instructions that write results directly to VGPRs,
+simplifying the instruction sequence and eliminating the need for accumulator transfers.
+The latency-aware scheduler tracks MFMA execution to ensure proper timing before using results:
 
 .. code-block:: asm
 
-   v_mfma_f32_16x16x16_f16 a[0:3], v[26:27], v[24:25], 0
-   # MFMA issued, latency ~8 cycles
-   s_nop 6                    # from DB: mfma_to_agpr_read = 6 cycles
-   v_accvgpr_read_b32 v28, a0
-   v_accvgpr_read_b32 v29, a1
+   # Wait for LDS data before MFMA
+   s_waitcnt lgkmcnt(0)
+   # VGPR-variant MFMA writes directly to VGPRs
+   v_mfma_f32_16x16x16_f16 v[0:3], v[26:27], v[24:25], 0
+   # Results in v[0:3] are ready after MFMA latency (~8 cycles)
+   # Scheduler ensures proper timing before using v[0:3]
+   buffer_store_dwordx4 v[0:3], v2, s[12:15], 0 offen
 
 Benefits
 ^^^^^^^^
 
 - Minimal waits and NOPs derived from a single source of truth (the database)
 - Architecture-specific values without code changes
-- Matches LLVM’s proven patterns where applicable (e.g., MFMA→AGPR read)
+- VGPR-variant MFMA simplifies instruction sequences and matches LLVM backend behavior
+- Dynamic workgroup/thread ID detection minimizes system register usage
 - Ready to adopt measured data in the future
 
 Best Practices
@@ -706,7 +745,7 @@ This typically indicates missing synchronization:
 
 - The backend automatically inserts ``s_waitcnt lgkmcnt(0)`` before MFMA
 - Ensure LDS staging is configured correctly with SHARED_MEMORY address space
-- Verify that AGPR spilling is functioning correctly
+- Verify that workgroup size and constraints are properly configured
 
 **Issue: Register Allocation Errors**
 
@@ -714,7 +753,7 @@ The backend now dynamically computes register requirements:
 
 - Check ``amdhsa_next_free_vgpr`` and ``amdhsa_next_free_sgpr`` in generated assembly
 - Ensure allocations are aligned to granularity (VGPR: 4, SGPR: 8 or 16)
-- Verify ``accum_offset`` is in valid range [4..256] and aligned to 4
+- Verify that workgroup size is properly specified in MLIR ``translation_info`` attribute
 
 Debugging
 ~~~~~~~~~

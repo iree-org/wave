@@ -24,6 +24,34 @@ if TYPE_CHECKING:
     from .kernel_model import KernelInfo, MemRefInfo
 
 
+def normalize_wg_size(wg_size: tuple) -> Tuple[int, int, int]:
+    """
+    Normalize workgroup size tuple to always have 3 dimensions.
+
+    Args:
+        wg_size: Workgroup size tuple with 1, 2, or 3 elements (e.g., (64,), (64, 4), or (64, 4, 1))
+
+    Returns:
+        Tuple of (wg_size_x, wg_size_y, wg_size_z) with missing dimensions defaulting to 1
+
+    Examples:
+        >>> normalize_wg_size((64,))
+        (64, 1, 1)
+        >>> normalize_wg_size((64, 4))
+        (64, 4, 1)
+        >>> normalize_wg_size((64, 4, 2))
+        (64, 4, 2)
+    """
+    if len(wg_size) == 3:
+        return wg_size
+    elif len(wg_size) == 2:
+        return (wg_size[0], wg_size[1], 1)
+    elif len(wg_size) == 1:
+        return (wg_size[0], 1, 1)
+    else:
+        raise ValueError(f"Invalid workgroup size: {wg_size}")
+
+
 def parse_vector_type(s: str) -> Tuple[int, int, str]:
     """Parse vector type using MLIR Python bindings instead of string matching."""
     ctx = Context()
@@ -202,36 +230,26 @@ def _apply_simplification_patterns(
     return expression
 
 
-def _create_dimension_substitutions(
-    dimension_values: List,
-) -> Dict[sympy.Symbol, sympy.Expr]:
-    """Create substitutions for dimension values (d0, d1, ...)."""
+def _create_substitutions(values: List, prefix: str) -> Dict[sympy.Symbol, sympy.Expr]:
+    """
+    Create substitutions for affine map parameters.
+
+    Args:
+        values: List of values (integers or ID strings like "tid_x", "wgid_x")
+        prefix: Prefix for the symbols ("d" for dimensions, "s" for symbols)
+
+    Returns:
+        Dictionary mapping parameter symbols (d0, d1, ... or s0, s1, ...) to expressions
+    """
     substitutions = {}
 
-    for i, value in enumerate(dimension_values):
-        dimension_symbol = sympy.Symbol(f"d{i}")
+    for i, value in enumerate(values):
+        param_symbol = sympy.Symbol(f"{prefix}{i}")
         if isinstance(value, int):
-            substitutions[dimension_symbol] = sympy.Integer(value)
-        elif value in ["tid.x", "tid.y", "tid.z"]:
-            substitutions[dimension_symbol] = sympy.Symbol(
-                value.replace(".", "_"), nonnegative=True
-            )
-
-    return substitutions
-
-
-def _create_symbol_substitutions(symbol_values: List) -> Dict[sympy.Symbol, sympy.Expr]:
-    """Create substitutions for symbol values (s0, s1, ...)."""
-    substitutions = {}
-
-    for i, value in enumerate(symbol_values):
-        symbol_symbol = sympy.Symbol(f"s{i}")
-        if isinstance(value, int):
-            substitutions[symbol_symbol] = sympy.Integer(value)
-        elif value in ["tid.x", "tid.y", "tid.z"]:
-            substitutions[symbol_symbol] = sympy.Symbol(
-                value.replace(".", "_"), nonnegative=True
-            )
+            substitutions[param_symbol] = sympy.Integer(value)
+        elif value in ["tid_x", "tid_y", "tid_z", "wgid_x", "wgid_y", "wgid_z"]:
+            # Thread IDs and workgroup IDs are symbolic runtime values
+            substitutions[param_symbol] = sympy.Symbol(value, nonnegative=True)
 
     return substitutions
 
@@ -267,14 +285,14 @@ def simplify_expression(
         if dim_values is not None or symbol_values is not None:
             substitutions = {}
 
-            # Create dimension substitutions
+            # Create dimension substitutions (d0, d1, ...)
             if dim_values is not None:
-                dimension_substitutions = _create_dimension_substitutions(dim_values)
+                dimension_substitutions = _create_substitutions(dim_values, "d")
                 substitutions.update(dimension_substitutions)
 
-            # Create symbol substitutions
+            # Create symbol substitutions (s0, s1, ...)
             if symbol_values is not None:
-                symbol_substitutions = _create_symbol_substitutions(symbol_values)
+                symbol_substitutions = _create_substitutions(symbol_values, "s")
                 substitutions.update(symbol_substitutions)
 
             # Apply substitutions
@@ -418,11 +436,14 @@ def build_memref_byte_offset_expr(
     Raises:
         ValueError: If an index SSA is not found or has an unsupported type
     """
-    # Mapping for thread ID strings to SymPy symbols
-    TID_SYMBOLS = {
-        "tid.x": sympy.Symbol("tid_x", nonnegative=True),
-        "tid.y": sympy.Symbol("tid_y", nonnegative=True),
-        "tid.z": sympy.Symbol("tid_z", nonnegative=True),
+    # Mapping for thread ID and workgroup ID strings to SymPy symbols
+    ID_SYMBOLS = {
+        "tid_x": sympy.Symbol("tid_x", nonnegative=True),
+        "tid_y": sympy.Symbol("tid_y", nonnegative=True),
+        "tid_z": sympy.Symbol("tid_z", nonnegative=True),
+        "wgid_x": sympy.Symbol("wgid_x", nonnegative=True),
+        "wgid_y": sympy.Symbol("wgid_y", nonnegative=True),
+        "wgid_z": sympy.Symbol("wgid_z", nonnegative=True),
     }
 
     def to_sympy(value) -> sympy.Expr:
@@ -432,9 +453,9 @@ def build_memref_byte_offset_expr(
         if isinstance(value, int):
             return sympy.Integer(value)
         if isinstance(value, str):
-            if value in TID_SYMBOLS:
-                return TID_SYMBOLS[value]
-            raise ValueError(f"Unknown thread ID string: {value}")
+            if value in ID_SYMBOLS:
+                return ID_SYMBOLS[value]
+            raise ValueError(f"Unknown ID string: {value}")
         raise ValueError(f"Unsupported index type: {type(value)}")
 
     # Build element index expression: sum(index[i] * stride[i])
@@ -453,24 +474,32 @@ def build_memref_byte_offset_expr(
     return elem_index_expr * memref_info.elem_bytes
 
 
-def split_const_dynamic(expr: sympy.Expr) -> Tuple[int, sympy.Expr]:
+def split_const_dynamic(
+    expr: sympy.Expr, max_immediate: int = 4096
+) -> Tuple[int, sympy.Expr]:
     """
-    Split a SymPy expression into constant and dynamic parts.
+    Split a SymPy expression into constant and dynamic parts for buffer addressing.
 
-    This is useful for GPU addressing modes that support base + voffset + instoffset,
-    where instoffset is an immediate constant.
+    For large matrices, buffer instruction immediate offsets can overflow the 16-bit limit (65535).
+    We clamp the immediate offset to a safe value and fold any overflow into the VGPR address.
 
     Args:
         expr: SymPy expression to split (e.g., tid_x * 4 + 128)
+        max_immediate: Maximum value for immediate offset (default 4096 for safety)
+                       Buffer instructions support 16-bit unsigned (0-65535), but we use
+                       a conservative limit to ensure large constants are handled in VGPRs.
+                       Set to 0 to force all constants into VGPR (matching LLVM's approach).
 
     Returns:
         Tuple of (constant_term, dynamic_expr)
-        - constant_term: Integer constant part (e.g., 128)
-        - dynamic_expr: Remaining dynamic SymPy expression (e.g., tid_x * 4)
+        - constant_term: Integer constant for instruction immediate (clamped to max_immediate)
+        - dynamic_expr: Dynamic expression with overflow folded in if needed
 
     Example:
-        >>> split_const_dynamic(tid_x * 4 + 128)
+        >>> split_const_dynamic(tid_x * 4 + 128)  # 128 < 4096, stays in immediate
         (128, tid_x * 4)
+        >>> split_const_dynamic(tid_x * 4 + 100000)  # 100000 > 4096, folded into vaddr
+        (0, tid_x * 4 + 100000)
     """
     # Use SymPy's built-in as_coeff_Add which returns (const, rest)
     const, rest = expr.as_coeff_Add()
@@ -480,6 +509,13 @@ def split_const_dynamic(expr: sympy.Expr) -> Tuple[int, sympy.Expr]:
 
     # If rest is just the constant part, dynamic is zero
     dynamic_expr = rest if rest != const else sympy.Integer(0)
+
+    # Clamp immediate to max_immediate and fold remainder into dynamic expression
+    if const_term > max_immediate:
+        # Fold the constant into the dynamic expression
+        if const_term > 0:
+            dynamic_expr = dynamic_expr + sympy.Integer(const_term)
+        const_term = 0
 
     return const_term, dynamic_expr
 

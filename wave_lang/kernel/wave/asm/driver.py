@@ -56,12 +56,41 @@ def main():
                 kernel_name = function_operation.sym_name.value
                 num_args = len(function_operation.entry_block.arguments)
 
-                # Emit kernel preamble and kernargs
+                # Extract workgroup size from function attributes
+                from .utils import parse_wg_and_subgroup
+                from wave_lang.support.ir_imports import OpAttributeMap
+
+                wg_size = None
+                function_attributes = (
+                    dict(function_operation.attributes)
+                    if isinstance(function_operation.attributes, OpAttributeMap)
+                    else {}
+                )
+                translation_info = function_attributes.get("translation_info")
+                if translation_info is not None:
+                    workgroup_size_tuple, _ = parse_wg_and_subgroup(translation_info)
+                    if workgroup_size_tuple:
+                        wg_size = workgroup_size_tuple
+
+                # Workgroup size is required for code generation
+                assert (
+                    wg_size is not None
+                ), "translation_info with workgroup_size must be present in MLIR function attributes"
+
+                # Create emitter and detect which workgroup IDs are needed
                 emitter = AsmEmitter(targetid=args.targetid, codeobj=args.codeobj)
-                emitter.emit_prologue(kernel_name)
+                needs_wgid_x, needs_wgid_y, needs_wgid_z = (
+                    AsmEmitter._detect_needed_workgroup_ids(function_operation)
+                )
+                emitter.needs_wgid_x = needs_wgid_x
+                emitter.needs_wgid_y = needs_wgid_y
+                emitter.needs_wgid_z = needs_wgid_z
+
+                # Emit kernel preamble and kernargs
+                emitter.emit_prologue(kernel_name, wg_size)
                 emitter.emit_kernargs(num_args)
 
-                # Do full traversal with emitter to emit instructions
+                # Walk MLIR and emit instructions
                 walker = IRWalker(emitter)
                 kernel_info = walker.interpret_func(function_operation)
 

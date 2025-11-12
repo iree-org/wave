@@ -67,6 +67,8 @@ class IRWalker:
                     self.handlers.handle_arith_constant_op(operation, kernel_info)
                 elif isinstance(operation, gpu_d.ThreadIdOp):
                     self.handlers.handle_gpu_thread_id_op(operation, kernel_info)
+                elif isinstance(operation, gpu_d.BlockIdOp):
+                    self.handlers.handle_gpu_block_id_op(operation, kernel_info)
                 elif isinstance(operation, affine_d.AffineApplyOp):
                     self.handlers.handle_affine_apply_op(operation, kernel_info)
                 elif isinstance(operation, vector_d.LoadOp):
