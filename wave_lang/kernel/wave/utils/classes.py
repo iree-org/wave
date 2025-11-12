@@ -40,9 +40,11 @@ class AttentionOperationType(Enum):
     LOCAL_LOAD_0 = "local_load_0"
     GLOBAL_LOAD_0 = "global_load_0"
     LOCAL_STORE_0 = "local_store_0"
+    GATHER_TO_LDS_0 = "gather_to_lds_0"
     LOCAL_LOAD_1 = "local_load_1"
     GLOBAL_LOAD_1 = "global_load_1"
     LOCAL_STORE_1 = "local_store_1"
+    GATHER_TO_LDS_1 = "gather_to_lds_1"
 
     @classmethod
     def get_all_types(cls) -> List["AttentionOperationType"]:

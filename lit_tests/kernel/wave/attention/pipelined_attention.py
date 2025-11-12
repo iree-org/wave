@@ -405,6 +405,65 @@ def test_bshd_attention_pipelined_prefetch():
 
 
 @run_test
+def test_bshd_attention_pipelined_prefetch_gather_to_shared():
+    shape = AttentionShape(
+        num_query_heads=64,
+        num_kv_heads=64,
+        query_seq_len=16384,
+        head_size_kv=128,
+        head_size=128,
+        kv_seq_len=16384,
+    )
+    mfma_variant = (tkw.MMAType.F32_32x32x8_F16,) * 2
+    base_attention, hyperparams, _ = get_bshd_attention_kernel(
+        shape,
+        mfma_variant,
+        dynamic_dims=False,
+    )
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=False,
+        schedule=SchedulingType.PREFETCH_ATTENTION,
+        use_scheduling_barriers=False,
+        compile_to_mlir=True,
+        use_global_to_shared=True,
+        target="gfx950",
+    )
+    base_attention = wave_compile(options, base_attention)
+    print(base_attention.asm)
+
+    # CHECK: func.func @base_attention
+    # CHECK-COUNT-12: amdgpu.gather_to_lds
+    # CHECK: {{.*}} = scf.for
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT-64: memref.load
+    # CHECK: arith.subf
+    # CHECK: math.exp2
+    # CHECK: math.exp2
+    # CHECK: arith.mulf
+    # CHECK: arith.addf
+    # CHECK-COUNT-16: vector.extract
+    # CHECK: vector.broadcast
+    # CHECK: gpu.shuffle
+    # CHECK-COUNT-2: arith.addf
+    # CHECK-COUNT-2: arith.truncf
+    # CHECK: vector.extract
+    # CHECK: vector.broadcast
+    # CHECK: arith.mulf
+    # CHECK: arith.mulf
+    # CHECK-COUNT-8: vector.extract_strided_slice
+    # CHECK-COUNT-32: amdgpu.mfma
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT-32: vector.load
+    # CHECK: amdgpu.lds_barrier
+    # CHECK-COUNT-4: amdgpu.gather_to_lds
+    # CHECK-COUNT-8: amdgpu.mfma
+
+
+@run_test
 def test_bshd_attention_pipelined_prefetch_pingpong():
     shape = AttentionShape(
         num_query_heads=64,
