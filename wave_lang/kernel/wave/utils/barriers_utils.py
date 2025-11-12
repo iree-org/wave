@@ -66,8 +66,8 @@ class SyncRequirement:
     is_loop: bool = False
     prod_region: fx.Node = None
     cons_region: fx.Node = None
-    prod_topo_location: int = -1
-    cons_topo_location: int = -1
+    prod_location: int = -1
+    cons_location: int = -1
     graph_start: fx.Node = None
     graph_end: fx.Node = None
     barrier_type: BarrierType = BarrierType.NONE
@@ -195,8 +195,8 @@ def add_sync_requirements(
         is_loop=cross_iter,  # when producer appears after consumer, we identify a loop
         prod_region=last_prod,
         cons_region=first_con,
-        prod_topo_location=last_prod_loc,
-        cons_topo_location=first_con_loc,
+        prod_location=last_prod_loc,
+        cons_location=first_con_loc,
         graph_start=graph_info[0],
         graph_end=graph_info[1],
         barrier_type=barrier_type,
@@ -420,7 +420,7 @@ def minimize_placement_strategy(
     results: List[SyncRequirement] = []
 
     # helpers
-    get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
+    get_location = lambda req: (req.prod_location, req.cons_location)
 
     def add_placement_at(end_pos: int, req: SyncRequirement) -> None:
         """Add a synchronization requirement to the result list"""
@@ -436,7 +436,7 @@ def minimize_placement_strategy(
     # 1) sort by (consumer, producer)
     reqs = sorted(
         sync_reqs,
-        key=lambda req: (req.cons_topo_location, req.prod_topo_location),
+        key=lambda req: (req.cons_location, req.prod_location),
     )
 
     # ---- Forward hazard (start < end) ----
@@ -520,7 +520,7 @@ def find_intersecting_interval_strategy(
     seen = set()
 
     # --- Helpers ----
-    get_location = lambda req: (req.prod_topo_location, req.cons_topo_location)
+    get_location = lambda req: (req.prod_location, req.cons_location)
 
     def window_is_covered(start: int, end: int, index: int = 0):
         return any(get_location(req)[index] in range(start, end + 1) for req in results)
@@ -534,8 +534,8 @@ def find_intersecting_interval_strategy(
         base = _clone_like(proto)
         base.prod_region = prod
         base.cons_region = cons
-        base.prod_topo_location = prod._topo_location
-        base.cons_topo_location = cons._topo_location
+        base.prod_location = prod._topo_location
+        base.cons_location = cons._topo_location
         base.is_loop = False
         results.append(base)
 
@@ -547,9 +547,7 @@ def find_intersecting_interval_strategy(
         #  producer at p,
         #  consumer at c)
 
-        for req in sorted(
-            reqs, key=lambda req: (req.cons_topo_location, req.prod_topo_location)
-        ):
+        for req in sorted(reqs, key=lambda req: (req.cons_location, req.prod_location)):
             p, c = get_location(req)
             prod, cons = req.prod_region, req.cons_region
 
@@ -658,7 +656,7 @@ def find_intersecting_interval_strategy(
 def _shift_consumer(r: SyncRequirement, body_len: int) -> SyncRequirement:
     r = _clone_like(r)
     r.is_loop = False
-    r.cons_topo_location = r.cons_topo_location + body_len
+    r.cons_location = r.cons_location + body_len
     return r
 
 
@@ -666,7 +664,7 @@ def _snap_consumer_to_epilog(r: SyncRequirement, graph: fx.Graph) -> SyncRequire
     r = _clone_like(r)
     r.is_loop = False
     r.cons_region = graph.parent_op.next
-    r.cons_topo_location = r.cons_region._topo_location
+    r.cons_location = r.cons_region._topo_location
     return r
 
 
@@ -680,8 +678,8 @@ def _clone_like(r: SyncRequirement) -> SyncRequirement:
         is_loop=r.is_loop,
         prod_region=r.prod_region,
         cons_region=r.cons_region,
-        prod_topo_location=r.prod_topo_location,
-        cons_topo_location=r.cons_topo_location,
+        prod_location=r.prod_location,
+        cons_location=r.cons_location,
         graph_start=r.graph_start,
         graph_end=r.graph_end,
         barrier_type=r.barrier_type,
