@@ -722,9 +722,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    dst_memory = get_custom(dst)
+    dst_memory = get_custom(dst[0])
 
-    symbolic_shape = _get_symbolic_shape(src)
+    symbolic_shape = _get_symbolic_shape(src[0])
     local_bounds = [bounds[s] - global_tile_index[s].start for s in symbolic_shape]
     subs = add_emitter_subs(emitter)
     local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
@@ -736,7 +736,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
     strides = [gen_sympy_index(subs, s) for s in strides]
 
-    distributed_shape_values = [gen_sympy_index(subs, s) for s in distributed_shape]
+    distributed_shape_values = [
+        gen_sympy_index(subs, distributed_shape[s]) for s in symbolic_shape
+    ]
 
     # construct default descriptors
     i32 = IntegerType.get_signless(32)
@@ -767,8 +769,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     descriptor_type = lambda x: int(math.log2(x.bitwidth() >> 3))
     data_size = cast_py_value(emitter, descriptor_type(element_type), i32).ir_value
 
-    global_mem = cast_py_value(emitter, src)
-    shared_mem = cast_py_value(emitter, dst)
+    global_mem = cast_py_value(emitter, src[0])
+    shared_mem = cast_py_value(emitter, dst[0])
 
     global_value = global_mem.ir_value
     shared_value = shared_mem.ir_value
