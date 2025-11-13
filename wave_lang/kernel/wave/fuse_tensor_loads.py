@@ -31,9 +31,10 @@ from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
 )
-from ..wave.constraints import Constraint, HardwareConstraint
+from ..wave.constraints import Constraint
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
+from ..wave.utils.symbol_utils import is_literal, subs_idxc
 
 logger = logging.getLogger(__name__)
 
@@ -100,24 +101,6 @@ def merge_dicts_with_piecewise(dict1, dict2, selector_symbol):
             result[key] = merge_with_piecewise(dict1[key], dict2[key], selector_symbol)
 
     return result
-
-
-def get_wave_count(constraints: list[Constraint]) -> int:
-    """
-    Extract the total number of waves from the hardware constraints.
-
-    Args:
-        constraints: List of constraints for the kernel
-
-    Returns:
-        Total number of waves (product of waves_per_block dimensions)
-    """
-    for constraint in constraints:
-        if isinstance(constraint, HardwareConstraint):
-            if constraint.waves_per_block is not None:
-                # Calculate total wave count as product of all dimensions
-                return math.prod(constraint.waves_per_block)
-    return 0
 
 
 def find_adjacent_loads(
@@ -238,13 +221,14 @@ def fuse_tensor_loads(
     """
     logger.info("Running fuse_tensor_loads pass")
 
-    # Check if we have an even number of waves (required for fusion)
-    wave_count = get_wave_count(constraints)
-    if wave_count == 0:
-        logger.info("No wave count found in constraints, skipping fusion")
-        return
+    # Get hardware constraints for wave calculation
+    hardware_constraint = get_hardware_constraint(constraints)
+    threads_per_wave = hardware_constraint.threads_per_wave
+    waves_per_block = hardware_constraint.waves_per_block
+    wave_count = subs_idxc(math.prod(waves_per_block))
 
-    if wave_count % 2 != 0:
+    # Check if we have an even number of waves (required for fusion)
+    if not is_literal(wave_count) or int(wave_count) % 2 != 0:
         logger.info(
             f"Skipping tensor load fusion: odd number of waves ({wave_count}). "
             "Fusion requires an even number of waves."
@@ -259,11 +243,6 @@ def fuse_tensor_loads(
     if not fusable_pairs:
         logger.info("No fusable tensor load pairs found")
         return
-
-    # Get hardware constraints for wave calculation
-    hardware_constraint = get_hardware_constraint(constraints)
-    threads_per_wave = hardware_constraint.threads_per_wave
-    waves_per_block = hardware_constraint.waves_per_block
 
     # Calculate wave_id in each dimension
     wave_id_0 = THREAD_0 // threads_per_wave
