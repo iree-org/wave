@@ -3092,6 +3092,10 @@ class TensorLoadToLDS(CustomOp):
     bounds: dict[IndexSymbol, IndexExpr]
     input_selector: IndexSymbol = 0
 
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
 
 @define_op("gather_to_lds")
 @dataclass
@@ -3113,6 +3117,10 @@ class GatherToLDS(CustomOp):
     src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
     src_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     dst_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("scatter_add")
