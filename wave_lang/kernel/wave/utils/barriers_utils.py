@@ -3,7 +3,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from enum import Enum, IntFlag, auto
+from enum import Enum, auto
 from dataclasses import dataclass
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Sequence, Union, Set
@@ -43,17 +43,6 @@ class TargetConfig:
             self.max_named_barriers = 16
 
 
-class BarrierType(IntFlag):
-    """
-    For RAW Write -> Read: guard fill
-    For WAR Read -> Write: guard ready
-    """
-
-    NONE = 0
-    READY = auto()
-    FILL = auto()
-
-
 @dataclass
 class SyncRequirement:
     """
@@ -70,19 +59,25 @@ class SyncRequirement:
     cons_location: int = -1
     graph_start: fx.Node = None
     graph_end: fx.Node = None
-    barrier_type: BarrierType = BarrierType.NONE
 
 
 class ResourceAccessWindow:
     def __init__(
-        self, producers: List[fx.Node] = None, consumers: List[fx.Node] = None
+        self,
+        producers: List[fx.Node] = None,
+        consumers: List[fx.Node] = None,
+        graph_info: List[fx.Node] = None,
     ):
         self.producers: List[fx.Node] = producers if producers is not None else []
         self.consumers: List[fx.Node] = consumers if consumers is not None else []
+        self.graph_info: List[fx.Node] = (
+            graph_info if graph_info is not None else [None, None]
+        )
 
     def reset(self):
         self.producers = []
         self.consumers = []
+        self.graph_info = [None, None]
 
 
 class MemoryAccessType(Enum):
@@ -170,16 +165,14 @@ def need_barrier(
 def add_sync_requirements(
     results: List[SyncRequirement],
     resource: fx.Node,
-    state: ResourceAccessWindow,
-    graph_info: List[fx.Node],
-    barrier_type: BarrierType = BarrierType.NONE,
+    window: ResourceAccessWindow,
 ) -> None:
     """
     Add a SyncRequirement to the results list.
     """
     cross_iter = False
-    last_prod = state.producers[-1]
-    first_con = state.consumers[0]
+    last_prod = window.producers[-1]
+    first_con = window.consumers[0]
 
     if resource is not None and not need_barrier(last_prod, first_con):
         return
@@ -190,16 +183,15 @@ def add_sync_requirements(
 
     req = SyncRequirement(
         resource=resource,
-        producers=list(state.producers),
-        consumers=list(state.consumers),
+        producers=list(window.producers),
+        consumers=list(window.consumers),
         is_loop=cross_iter,  # when producer appears after consumer, we identify a loop
         prod_region=last_prod,
         cons_region=first_con,
         prod_location=last_prod_loc,
         cons_location=first_con_loc,
-        graph_start=graph_info[0],
-        graph_end=graph_info[1],
-        barrier_type=barrier_type,
+        graph_start=window.graph_info[0],
+        graph_end=window.graph_info[1],
     )
 
     if req in results:
@@ -215,6 +207,9 @@ def handle_hazard(
     consumer_kinds: Set[MemoryAccessType],
     next_iter_regions: List[List] = [],
 ) -> None:
+    """
+    Scan the graph once, keeps track of used resource, if a hazard window is valid, add a SyncRequirement to the result list.
+    """
     if not nodes:
         return
 
@@ -223,13 +218,13 @@ def handle_hazard(
     def add_hazard_if_window_valid(
         resource: fx.Node, window: ResourceAccessWindow
     ) -> None:
+        """Add a SyncRequirement if producers and consumers are present in current hazard window."""
         if not (window.producers and window.consumers):
             return
         add_sync_requirements(
             results,
             resource,
             window,
-            graph_info=graph_info,
         )
         window.reset()
 
@@ -238,7 +233,7 @@ def handle_hazard(
         graph_info = [None, None]
 
         for gs, ge, gs_node, ge_node in next_iter_regions:
-            if gs <= i and i <= ge:
+            if gs <= i and i < ge:
                 graph_info = [gs_node, ge_node]
                 depth = 1
                 break
@@ -254,6 +249,8 @@ def handle_hazard(
         assert resource is not None, "op has no smem access"
 
         hazard_window = windows[resource]
+        if graph_info[0] is not None:
+            hazard_window.graph_info = graph_info
 
         is_prod = access_kind in producer_kinds
         is_cons = access_kind in consumer_kinds
@@ -326,31 +323,48 @@ def get_barriers_analysis(
     )
 
     # flatten the entire graph
-    flatten: List[fx.Node] = []
+    nodes = List[fx.Node]
     iterate_regions: List[List] = []
 
-    def collect_nodes(nodes):
+    def flatten_graph(nodes):
+        """
+        Walk through the nodes, append a node to flatten if it is a shared memory node, recursely flatten if the node is a NestedRegionOp.
+        Flatten the iterated nodes twice to capture [iter(i) and iter(i+1)] and [iter(i+1) and outer-loop nodes] dependencies
+        """
+        flatten: List[fx.Node] = []
         for node in nodes:
             if is_shared_memory_node(node):
                 flatten.append(node)
             if is_iterate_node(node):
                 subgraph_nodes = get_subgraph_nodes(node)
-                collect_nodes(subgraph_nodes)
+
+                # get shared memory ops from subgraph nodes
+                smem_nodes = flatten_graph(subgraph_nodes)
+
+                # for iter(i)
+                flatten.extend(smem_nodes)
+
+                # capture which region in the resulting node list needs to be propagated (iter i+1)
                 iterate_regions.append(
                     [
                         len(flatten),
-                        len(flatten) + len(subgraph_nodes),
+                        len(flatten) + len(smem_nodes),
                         subgraph_nodes[0],
                         subgraph_nodes[-1],
                     ]
                 )
-                collect_nodes(subgraph_nodes)
+
+                # for iter(i+1)
+                flatten.extend(smem_nodes)
+
             if is_condition_node(node):
                 subgraph_nodes = get_subgraph_nodes(node)
-                collect_nodes(subgraph_nodes)
+                flatten.extend(flatten_graph(subgraph_nodes))
 
-    collect_nodes(trace.get_root_graph().nodes)
-    return get_all_hazards(flatten, iterate_regions)
+        return flatten
+
+    nodes = flatten_graph(trace.get_root_graph().nodes)
+    return get_all_hazards(nodes, iterate_regions)
 
 
 def minimize_placement_strategy(
