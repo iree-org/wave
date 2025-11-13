@@ -13,7 +13,6 @@ if(HAS_WNO_MACRO_REDEFINED)
   add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wno-macro-redefined>")
 endif()
 
-
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   find_package(MLIR REQUIRED CONFIG)
 
