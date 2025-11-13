@@ -421,6 +421,11 @@ def add_get_results(trace: CapturedTrace):
             )
             iterate.replace_all_uses_with_except(get_result, [get_result])
 
+            for subgraph in trace.region_graph.subgraphs.values():
+                for node in subgraph.nodes:
+                    if node.meta.get("lifted", None) == iterate.fx_node:
+                        node.meta["lifted"] = get_result.fx_node
+
 
 def populate_inputs(
     node: CustomOp,
