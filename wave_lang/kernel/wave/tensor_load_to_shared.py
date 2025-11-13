@@ -32,16 +32,15 @@ For a tensor with shape M x K, and K is the contiguous dimension:
     ** Global offset (Index Sequence unit : elements)
         global offset is calculated by only perserving global index sequence with wave index sequence.
         this is valid because tensor load instruction expects global base address of a tile.
-    ** Shared offset (Allocation size unit: bytes)
-        shared offset is calculated by materializing the distributed shape from a "write_shared" node.
+    ** Shared offset (Index Sequence unit: elements)
+        shared offset is calculated by preserving the index sequence from a "write_shared" node,
+        removing thread offsets within a tile, similar to global offset.
 
 Example:
 For loading tensors with shape M x K to alloc0 (smem), and N x K to alloc1 (smem),
 with tile size = BLOCK_M * BLOCK_K, BLOCK_N x BLOCK_K, and K is the contiguous dimension:
-    - global offset perserves BLOCK index and WAVE_ID: $WG0 * BLOCK_M + BLOCK_M * ($T0 // 32)
-    - shared offset:
-        - for alloc0 = 0
-        - for alloc1 = BLOCKM * BLOCK_K
+    - global offset preserves BLOCK index and WAVE_ID: $WG0 * BLOCK_M + BLOCK_M * ($T0 // 32)
+    - shared offset preserves tile-level index: similar structure to global offset
 """
 
 import logging
@@ -77,11 +76,9 @@ from .utils.general_utils import (
     get_hardware_constraint,
     infer_dim,
     is_pow2,
+    remove_global_indexing,
 )
 from .utils.symbol_utils import subs_idxc
-
-from .memory_analysis.minimize_shared_allocs import get_alloc_info
-from .memory_analysis.solver import determine_allocations_offsets
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +112,7 @@ class TensorLoadConfig:
     """
     element_type
     tensor_tile_shapes : [tile dim 0 shape, tile dim 1 shape]
-    shared_tile_index (bytes)
+    shared_tile_index (IndexSequence)
     global_tile_index (IndexSequence)
     bounds
 
@@ -124,7 +121,7 @@ class TensorLoadConfig:
 
     element_type: "DataType"
     distributed_shape: list[IndexExpr]
-    shared_tile_index: int
+    shared_tile_index: dict[IndexSymbol, IndexSequence]
     global_tile_index: dict[IndexSymbol, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
 
@@ -149,13 +146,18 @@ def get_global_element_offset(
     return {key: IndexSequence(index[key].start, 1, 1) for key in index.keys()}
 
 
-def get_shared_tile_byte_offset(node: fx.Node, alloc_offset_map) -> int:
+def get_shared_element_offset(
+    node: CustomOp, constraints: list[Constraint], wave_subs
+) -> dict[IndexSymbol, IndexSequence]:
     """
-    LDS address = Shared mem buffer + tile offset in bytes
-    This function returns the tile offset.
+    Shared memory address = shared mem buffer + tile offset
+    This function returns the tile index by removing threads offset within a tile.
     """
-    offset_sym = alloc_offset_map[node.memory]
-    return int(offset_sym)
+    assert isinstance(node, Write), "Expect Write custom node as caller argument"
+    index = remove_global_indexing(node.index, constraints)
+
+    index = {k: v.subs(wave_subs) for k, v in index.items()}
+    return {key: IndexSequence(index[key].start, 1, 1) for key in index.keys()}
 
 
 def get_tensor_load_descriptor_config(
@@ -166,7 +168,6 @@ def get_tensor_load_descriptor_config(
     element_type: "DataType",
     wave_subs,
     hardware_constraint: "HardwareConstraint",
-    alloc_offset_map,
 ) -> TensorLoadConfig:
     """
     Get the tensor to shared config for the given read and write.
@@ -190,10 +191,10 @@ def get_tensor_load_descriptor_config(
 
     distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape)
 
-    # get LDS byte offset
-    shared_tile_index = get_shared_tile_byte_offset(write, alloc_offset_map)
+    # get shared tile index
+    shared_tile_index = get_shared_element_offset(write, constraints, wave_subs)
 
-    # get global tile addr
+    # get global tile index
     global_tile_index = get_global_element_offset(read, wave_subs)
 
     return TensorLoadConfig(
@@ -269,13 +270,6 @@ def clear_padding(write: Write):
     custom_memory.update_arg("distributed_shape", tuple(new_distributed_shape))
 
 
-def get_allocation_offsets(trace) -> dict[fx.Node, int]:
-    allocs, _, alloc_info = get_alloc_info(trace)
-    offsets, _ = determine_allocations_offsets(alloc_info)
-    allocs_to_offsets = {allocs[i]: offsets[i] for i in range(len(allocs))}
-    return allocs_to_offsets
-
-
 def tensor_load_to_shared(
     trace: CapturedTrace,
     constraints: list[Constraint],
@@ -286,10 +280,9 @@ def tensor_load_to_shared(
         1) option.use_global_to_shared is set
         2) target is gfx1250
     1. Build 1-many mapping of GLOBAL_READ: SHARED_WRITE_X ... #a
-    2. Get shared memory allocation information.
-    3. Build descriptors for tensor.load.to.lds.
-    4. Replace #a with tensor_load_to_shared op.
-    5. Update write dependencies.
+    2. Build descriptors for tensor.load.to.lds with proper IndexSequence offsets.
+    3. Replace #a with tensor_load_to_shared op.
+    4. Update write dependencies.
     """
     if not options.use_global_to_shared:
         return
@@ -337,8 +330,6 @@ def tensor_load_to_shared(
         _, write = _writes[0]
         clear_padding(write)
 
-    allocate_offsets = get_allocation_offsets(trace)
-
     for reads_writes in id_to_read_write.values():
         read, write = reads_writes[0]
 
@@ -356,7 +347,6 @@ def tensor_load_to_shared(
             element_type,
             wave_subs,
             hardware_constraint,
-            allocate_offsets,
         )
 
         if config is None:
