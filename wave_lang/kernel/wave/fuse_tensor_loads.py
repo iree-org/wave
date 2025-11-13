@@ -103,6 +103,109 @@ def merge_dicts_with_piecewise(dict1, dict2, selector_symbol):
     return result
 
 
+def compute_fused_parameters(
+    load1: TensorLoadToLDS,
+    load2: TensorLoadToLDS,
+    threads_per_wave: int,
+) -> tuple[dict, int, dict, dict]:
+    """
+    Compute fused parameters for two tensor loads.
+
+    Args:
+        load1: First TensorLoadToLDS operation
+        load2: Second TensorLoadToLDS operation
+        threads_per_wave: Number of threads per wave
+
+    Returns:
+        Tuple of (merged_distributed_shape, merged_shared_tile_index,
+                  merged_global_tile_index, merged_bounds)
+    """
+    # Identify wave-dependent dimensions for load1
+    wave_dependent_dims_load1 = set()
+    for dim, idx_seq in load1.global_tile_index.items():
+        start_expr = idx_seq.start
+        free_symbols = (
+            start_expr.free_symbols if hasattr(start_expr, "free_symbols") else set()
+        )
+        if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
+            wave_dependent_dims_load1.add(dim)
+
+    # Identify wave-dependent dimensions for load2
+    wave_dependent_dims_load2 = set()
+    for dim, idx_seq in load2.global_tile_index.items():
+        start_expr = idx_seq.start
+        free_symbols = (
+            start_expr.free_symbols if hasattr(start_expr, "free_symbols") else set()
+        )
+        if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
+            wave_dependent_dims_load2.add(dim)
+
+    logger.debug(f"Wave-dependent dimensions for load1: {wave_dependent_dims_load1}")
+    logger.debug(f"Wave-dependent dimensions for load2: {wave_dependent_dims_load2}")
+
+    # Scale distributed_shape by 2 for wave-dependent dimensions only
+    # After fusion: even waves execute load1, odd waves execute load2
+    # Each wave needs to do 2x the work in wave-dependent dims
+    scaled_load1_shape = {
+        dim: load1.distributed_shape[dim]
+        * (2 if dim in wave_dependent_dims_load1 else 1)
+        for dim in load1.distributed_shape.keys()
+    }
+    scaled_load2_shape = {
+        dim: load2.distributed_shape[dim]
+        * (2 if dim in wave_dependent_dims_load2 else 1)
+        for dim in load2.distributed_shape.keys()
+    }
+
+    # Merge distributed_shape using Piecewise
+    merged_distributed_shape = merge_dicts_with_piecewise(
+        scaled_load1_shape, scaled_load2_shape, INPUT_SELECTOR
+    )
+
+    # Adjust indices for load2 so odd waves act as even waves
+    # After fusion: even waves (0,2,4,...) use load1, odd waves (1,3,5,...) use load2
+    # We need odd waves to use even wave indices, so wave 1 acts like wave 0, wave 3 like wave 2, etc.
+    # This is achieved by subtracting threads_per_wave from THREAD_0
+    adjusted_load2_global_tile_index = {}
+    for dim, idx_seq in load2.global_tile_index.items():
+        adjusted_start = idx_seq.start.subs(
+            THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
+        )
+        adjusted_load2_global_tile_index[dim] = IndexSequence(
+            adjusted_start, idx_seq.size, idx_seq.stride
+        )
+
+    # Adjust shared_tile_index for load2 if it depends on thread IDs
+    # Typically shared_tile_index is a constant, but we handle the general case
+    adjusted_load2_shared_tile_index = load2.shared_tile_index
+    if hasattr(load2.shared_tile_index, "subs"):
+        adjusted_load2_shared_tile_index = load2.shared_tile_index.subs(
+            THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
+        )
+
+    # Merge shared_tile_index using Piecewise
+    merged_shared_tile_index = merge_with_piecewise(
+        load1.shared_tile_index, adjusted_load2_shared_tile_index, INPUT_SELECTOR
+    )
+
+    # Merge global_tile_index using Piecewise
+    merged_global_tile_index = merge_dicts_with_piecewise(
+        load1.global_tile_index, adjusted_load2_global_tile_index, INPUT_SELECTOR
+    )
+
+    # Merge bounds using Piecewise
+    merged_bounds = merge_dicts_with_piecewise(
+        load1.bounds, load2.bounds, INPUT_SELECTOR
+    )
+
+    return (
+        merged_distributed_shape,
+        merged_shared_tile_index,
+        merged_global_tile_index,
+        merged_bounds,
+    )
+
+
 def find_adjacent_loads(
     trace: CapturedTrace,
 ) -> list[tuple[fx.Node, fx.Node]]:
@@ -275,91 +378,13 @@ def fuse_tensor_loads(
         # Element type must be the same (already checked in find_adjacent_loads)
         merged_element_type = load1.element_type
 
-        # Identify wave-dependent dimensions for load1
-        wave_dependent_dims_load1 = set()
-        for dim, idx_seq in load1.global_tile_index.items():
-            start_expr = idx_seq.start
-            free_symbols = (
-                start_expr.free_symbols
-                if hasattr(start_expr, "free_symbols")
-                else set()
-            )
-            if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
-                wave_dependent_dims_load1.add(dim)
-
-        # Identify wave-dependent dimensions for load2
-        wave_dependent_dims_load2 = set()
-        for dim, idx_seq in load2.global_tile_index.items():
-            start_expr = idx_seq.start
-            free_symbols = (
-                start_expr.free_symbols
-                if hasattr(start_expr, "free_symbols")
-                else set()
-            )
-            if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
-                wave_dependent_dims_load2.add(dim)
-
-        logger.debug(
-            f"Wave-dependent dimensions for {load1_node.name}: {wave_dependent_dims_load1}"
-        )
-        logger.debug(
-            f"Wave-dependent dimensions for {load2_node.name}: {wave_dependent_dims_load2}"
-        )
-
-        # Scale distributed_shape by 2 for wave-dependent dimensions only
-        # After fusion: even waves execute load1, odd waves execute load2
-        # Each wave needs to do 2x the work in wave-dependent dims
-        scaled_load1_shape = {
-            dim: load1.distributed_shape[dim]
-            * (2 if dim in wave_dependent_dims_load1 else 1)
-            for dim in load1.distributed_shape.keys()
-        }
-        scaled_load2_shape = {
-            dim: load2.distributed_shape[dim]
-            * (2 if dim in wave_dependent_dims_load2 else 1)
-            for dim in load2.distributed_shape.keys()
-        }
-
-        # Merge distributed_shape using Piecewise
-        merged_distributed_shape = merge_dicts_with_piecewise(
-            scaled_load1_shape, scaled_load2_shape, INPUT_SELECTOR
-        )
-
-        # Adjust indices for load2 so odd waves act as even waves
-        # After fusion: even waves (0,2,4,...) use load1, odd waves (1,3,5,...) use load2
-        # We need odd waves to use even wave indices, so wave 1 acts like wave 0, wave 3 like wave 2, etc.
-        # This is achieved by subtracting threads_per_wave from THREAD_0
-        adjusted_load2_global_tile_index = {}
-        for dim, idx_seq in load2.global_tile_index.items():
-            adjusted_start = idx_seq.start.subs(
-                THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
-            )
-            adjusted_load2_global_tile_index[dim] = IndexSequence(
-                adjusted_start, idx_seq.size, idx_seq.stride
-            )
-
-        # Adjust shared_tile_index for load2 if it depends on thread IDs
-        # Typically shared_tile_index is a constant, but we handle the general case
-        adjusted_load2_shared_tile_index = load2.shared_tile_index
-        if hasattr(load2.shared_tile_index, "subs"):
-            adjusted_load2_shared_tile_index = load2.shared_tile_index.subs(
-                THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
-            )
-
-        # Merge shared_tile_index using Piecewise
-        merged_shared_tile_index = merge_with_piecewise(
-            load1.shared_tile_index, adjusted_load2_shared_tile_index, INPUT_SELECTOR
-        )
-
-        # Merge global_tile_index using Piecewise
-        merged_global_tile_index = merge_dicts_with_piecewise(
-            load1.global_tile_index, adjusted_load2_global_tile_index, INPUT_SELECTOR
-        )
-
-        # Merge bounds using Piecewise
-        merged_bounds = merge_dicts_with_piecewise(
-            load1.bounds, load2.bounds, INPUT_SELECTOR
-        )
+        # Compute fused parameters
+        (
+            merged_distributed_shape,
+            merged_shared_tile_index,
+            merged_global_tile_index,
+            merged_bounds,
+        ) = compute_fused_parameters(load1, load2, threads_per_wave)
 
         # Create the fused TensorLoadToLDS node
         # Insert it before the first load
