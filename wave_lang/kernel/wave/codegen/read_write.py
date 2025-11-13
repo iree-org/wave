@@ -746,7 +746,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     for i, (src, dst) in enumerate(zip(sources, destinations)):
         subs = copy.copy(subs_init)
-        subs[INPUT_SELECTOR] = sympy.sympify(i)
+        subs[INPUT_SELECTOR] = arith_d.constant(IndexType.get(), i)
 
         dst_memory = get_custom(dst)
 
@@ -761,7 +761,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
         strides = [gen_sympy_index(subs, s) for s in strides]
 
-        distributed_shape = [
+        distributed_shape_vals = [
             gen_sympy_index(subs, distributed_shape[s]) for s in symbolic_shape
         ]
 
@@ -775,8 +775,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         valid = 1
         dim_stride_1 = arith_d.index_cast(i48, strides[0])
         dim_stride_0 = arith_d.index_cast(i48, strides[1])
-        tile_size_1 = arith_d.index_cast(i32, distributed_shape[0])
-        tile_size_0 = arith_d.index_cast(i32, distributed_shape[1])
+        tile_size_1 = arith_d.index_cast(i32, distributed_shape_vals[0])
+        tile_size_0 = arith_d.index_cast(i32, distributed_shape_vals[1])
         dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
         dim_size_0 = arith_d.index_cast(i32, local_bounds[1])
 
@@ -820,7 +820,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         # 2. move shared memory pointer by offset_byte to get shared memory address of a tile.
         shared_buffer = _linearize_shared_mem(shared_value)
 
-        shared_byte_offset = arith_d.constant(i32, shared_tile_index)
+        tile_index = gen_sympy_index(subs, shared_tile_index)
+        shared_byte_offset = arith_d.index_cast(i32, tile_index)
 
         shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
         shared_ptr = arith_d.index_cast(i32, shared_ptr)
