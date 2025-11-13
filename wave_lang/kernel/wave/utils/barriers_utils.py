@@ -19,6 +19,7 @@ from ...ops.wave_ops import (
     AtomicOp,
     CustomOp,
     GatherToLDS,
+    TensorLoadToLDS,
     Read,
     Write,
     get_custom,
@@ -112,6 +113,8 @@ def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
         return MemoryAccessType.READ_WRITE
     elif isinstance(op, GatherToLDS):
         return MemoryAccessType.READ_WRITE
+    elif isinstance(op, TensorLoadToLDS):
+        return MemoryAccessType.READ_WRITE
     else:
         return MemoryAccessType.NONE
 
@@ -131,6 +134,8 @@ def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> Optional[fx.Node]
     ):
         return propagate_loop_carried_vars(op.rhs, depth)
     if isinstance(op, GatherToLDS):
+        return propagate_loop_carried_vars(op.dst, depth)
+    if isinstance(op, TensorLoadToLDS):
         return propagate_loop_carried_vars(op.dst, depth)
 
     return None

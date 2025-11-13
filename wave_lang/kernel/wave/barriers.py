@@ -10,6 +10,7 @@ from collections import defaultdict
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     GatherToLDS,
+    TensorLoadToLDS,
     SharedMemoryBarrier,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
@@ -138,14 +139,17 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
         """
         Place split barriers (signal/wait) for synchronization.
         """
+        is_tensor_op = lambda node: isinstance(get_custom(node), TensorLoadToLDS)
+
         barId = -1
         producer = req.prod_region
         consumer = req.cons_region
         barrier = is_barrier_between(producer, consumer, barId)
 
+        is_tdm = is_tensor_op(producer) or is_tensor_op(consumer)
         if barrier is None:
             with producer.graph.inserting_after(producer):
-                SharedMemoryBarrierSignal(barId).add_to_graph(
+                SharedMemoryBarrierSignal(barId, tensor_wait=is_tdm).add_to_graph(
                     producer.graph, loc=get_custom(producer).location
                 )
             with consumer.graph.inserting_before(consumer):
