@@ -34,7 +34,6 @@ from ..ops.wave_ops import (
 from ..wave.constraints import Constraint, HardwareConstraint
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
-from ..wave.utils.print_utils import print_trace
 
 logger = logging.getLogger(__name__)
 
@@ -238,7 +237,6 @@ def fuse_tensor_loads(
         constraints: List of constraints for the kernel
     """
     logger.info("Running fuse_tensor_loads pass")
-    print_trace(trace)
 
     # Check if we have an even number of waves (required for fusion)
     wave_count = get_wave_count(constraints)
@@ -348,14 +346,35 @@ def fuse_tensor_loads(
             scaled_load1_shape, scaled_load2_shape, INPUT_SELECTOR
         )
 
+        # Adjust indices for load2 so odd waves act as even waves
+        # After fusion: even waves (0,2,4,...) use load1, odd waves (1,3,5,...) use load2
+        # We need odd waves to use even wave indices, so wave 1 acts like wave 0, wave 3 like wave 2, etc.
+        # This is achieved by subtracting threads_per_wave from THREAD_0
+        adjusted_load2_global_tile_index = {}
+        for dim, idx_seq in load2.global_tile_index.items():
+            adjusted_start = idx_seq.start.subs(
+                THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
+            )
+            adjusted_load2_global_tile_index[dim] = IndexSequence(
+                adjusted_start, idx_seq.size, idx_seq.stride
+            )
+
+        # Adjust shared_tile_index for load2 if it depends on thread IDs
+        # Typically shared_tile_index is a constant, but we handle the general case
+        adjusted_load2_shared_tile_index = load2.shared_tile_index
+        if hasattr(load2.shared_tile_index, "subs"):
+            adjusted_load2_shared_tile_index = load2.shared_tile_index.subs(
+                THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
+            )
+
         # Merge shared_tile_index using Piecewise
         merged_shared_tile_index = merge_with_piecewise(
-            load1.shared_tile_index, load2.shared_tile_index, INPUT_SELECTOR
+            load1.shared_tile_index, adjusted_load2_shared_tile_index, INPUT_SELECTOR
         )
 
         # Merge global_tile_index using Piecewise
         merged_global_tile_index = merge_dicts_with_piecewise(
-            load1.global_tile_index, load2.global_tile_index, INPUT_SELECTOR
+            load1.global_tile_index, adjusted_load2_global_tile_index, INPUT_SELECTOR
         )
 
         # Merge bounds using Piecewise
