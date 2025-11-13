@@ -298,9 +298,54 @@ def fuse_tensor_loads(
         # Element type must be the same (already checked in find_adjacent_loads)
         merged_element_type = load1.element_type
 
+        # Identify wave-dependent dimensions for load1
+        wave_dependent_dims_load1 = set()
+        for dim, idx_seq in load1.global_tile_index.items():
+            start_expr = idx_seq.start
+            free_symbols = (
+                start_expr.free_symbols
+                if hasattr(start_expr, "free_symbols")
+                else set()
+            )
+            if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
+                wave_dependent_dims_load1.add(dim)
+
+        # Identify wave-dependent dimensions for load2
+        wave_dependent_dims_load2 = set()
+        for dim, idx_seq in load2.global_tile_index.items():
+            start_expr = idx_seq.start
+            free_symbols = (
+                start_expr.free_symbols
+                if hasattr(start_expr, "free_symbols")
+                else set()
+            )
+            if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
+                wave_dependent_dims_load2.add(dim)
+
+        logger.debug(
+            f"Wave-dependent dimensions for {load1_node.name}: {wave_dependent_dims_load1}"
+        )
+        logger.debug(
+            f"Wave-dependent dimensions for {load2_node.name}: {wave_dependent_dims_load2}"
+        )
+
+        # Scale distributed_shape by 2 for wave-dependent dimensions only
+        # After fusion: even waves execute load1, odd waves execute load2
+        # Each wave needs to do 2x the work in wave-dependent dims
+        scaled_load1_shape = {
+            dim: load1.distributed_shape[dim]
+            * (2 if dim in wave_dependent_dims_load1 else 1)
+            for dim in load1.distributed_shape.keys()
+        }
+        scaled_load2_shape = {
+            dim: load2.distributed_shape[dim]
+            * (2 if dim in wave_dependent_dims_load2 else 1)
+            for dim in load2.distributed_shape.keys()
+        }
+
         # Merge distributed_shape using Piecewise
         merged_distributed_shape = merge_dicts_with_piecewise(
-            load1.distributed_shape, load2.distributed_shape, INPUT_SELECTOR
+            scaled_load1_shape, scaled_load2_shape, INPUT_SELECTOR
         )
 
         # Merge shared_tile_index using Piecewise
