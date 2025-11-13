@@ -4,20 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""
-Pass to fuse adjacent TensorLoadToLDS operations.
-
-This pass identifies consecutive TensorLoadToLDS operations that can be combined
-into a single optimized load operation to reduce memory access overhead and
-improve performance.
-
-Fusion candidates are identified based on:
-- Spatial locality: loads accessing adjacent memory regions
-- Temporal locality: loads occurring close together in the execution order
-- Memory alignment: loads with compatible alignment constraints
-- Shared memory layout: loads targeting adjacent LDS regions
-"""
-
 import logging
 import math
 
@@ -86,17 +72,13 @@ def merge_dicts_with_piecewise(dict1, dict2, selector_symbol):
         Keys present in only one dict are included as-is without Piecewise.
     """
     result = {}
-    # Sort keys for stable iteration order
-    all_keys = sorted(set(dict1.keys()) | set(dict2.keys()), key=str)
+    all_keys = dict1 | dict2
 
-    for key in all_keys:
-        # Key only in dict1 - use value as-is
+    for key in all_keys.keys():
         if key not in dict2:
             result[key] = dict1[key]
-        # Key only in dict2 - use value as-is
         elif key not in dict1:
             result[key] = dict2[key]
-        # Key in both - merge with Piecewise
         else:
             result[key] = merge_with_piecewise(dict1[key], dict2[key], selector_symbol)
 
@@ -143,7 +125,7 @@ def compute_fused_parameters(
     logger.debug(f"Wave-dependent dimensions for load1: {wave_dependent_dims_load1}")
     logger.debug(f"Wave-dependent dimensions for load2: {wave_dependent_dims_load2}")
 
-    # Scale distributed_shape by 2 for wave-dependent dimensions only
+    # Scale distributed_shape by 2 for wave-dependent dimensions
     # After fusion: even waves execute load1, odd waves execute load2
     # Each wave needs to do 2x the work in wave-dependent dims
     scaled_load1_shape = {
@@ -157,7 +139,6 @@ def compute_fused_parameters(
         for dim in load2.distributed_shape.keys()
     }
 
-    # Merge distributed_shape using Piecewise
     merged_distributed_shape = merge_dicts_with_piecewise(
         scaled_load1_shape, scaled_load2_shape, INPUT_SELECTOR
     )
@@ -176,24 +157,21 @@ def compute_fused_parameters(
         )
 
     # Adjust shared_tile_index for load2 if it depends on thread IDs
-    # Typically shared_tile_index is a constant, but we handle the general case
+    # TODO: need to switch to proper index
     adjusted_load2_shared_tile_index = load2.shared_tile_index
     if hasattr(load2.shared_tile_index, "subs"):
         adjusted_load2_shared_tile_index = load2.shared_tile_index.subs(
             THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
         )
 
-    # Merge shared_tile_index using Piecewise
     merged_shared_tile_index = merge_with_piecewise(
         load1.shared_tile_index, adjusted_load2_shared_tile_index, INPUT_SELECTOR
     )
 
-    # Merge global_tile_index using Piecewise
     merged_global_tile_index = merge_dicts_with_piecewise(
         load1.global_tile_index, adjusted_load2_global_tile_index, INPUT_SELECTOR
     )
 
-    # Merge bounds using Piecewise
     merged_bounds = merge_dicts_with_piecewise(
         load1.bounds, load2.bounds, INPUT_SELECTOR
     )
@@ -309,11 +287,7 @@ def fuse_tensor_loads(
     constraints: list[Constraint],
 ):
     """
-    Fuse adjacent TensorLoadToLDS operations to optimize memory access.
-
-    This pass identifies and combines consecutive tensor loads that access
-    adjacent memory regions, reducing the number of memory operations and
-    improving overall performance.
+    Fuse adjacent TensorLoadToLDS operations to reduce the number of tensor loads.
 
     Fusion is only performed when we have an even number of waves, as this
     is a requirement for correct fusion behavior.
@@ -378,7 +352,6 @@ def fuse_tensor_loads(
         # Element type must be the same (already checked in find_adjacent_loads)
         merged_element_type = load1.element_type
 
-        # Compute fused parameters
         (
             merged_distributed_shape,
             merged_shared_tile_index,
@@ -387,7 +360,7 @@ def fuse_tensor_loads(
         ) = compute_fused_parameters(load1, load2, threads_per_wave)
 
         # Create the fused TensorLoadToLDS node
-        # Insert it before the first load
+        # Insert it before the second load
         with load2_node.graph.inserting_before(load2_node):
             fused_load = TensorLoadToLDS(
                 src=merged_src,
@@ -403,15 +376,11 @@ def fuse_tensor_loads(
                 loc=load2.location,
             )
 
-        # Copy pre_expansion_id from the first load
         if hasattr(load1_node, "pre_expansion_id"):
             fused_load.pre_expansion_id = load1_node.pre_expansion_id
 
         logger.debug(f"Created fused load: {fused_load.name}")
 
-        # Replace all uses of load1 and load2 with the fused load
-        # Note: TensorLoadToLDS operations typically don't have return values,
-        # so this mainly updates the graph structure
         load1_node.replace_all_uses_with(fused_load)
         load2_node.replace_all_uses_with(fused_load)
 
