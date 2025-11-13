@@ -21,17 +21,86 @@ Fusion candidates are identified based on:
 import logging
 import math
 
+import sympy
 import torch.fx as fx
 
+from .._support.indexing import IndexSequence
 from .._support.tracing import CapturedTrace
+from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0
 from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
 )
 from ..wave.constraints import Constraint, HardwareConstraint
+from ..wave.utils.general_utils import get_hardware_constraint
+from ..wave.utils.graph_utils import DCE
 from ..wave.utils.print_utils import print_trace
 
 logger = logging.getLogger(__name__)
+
+
+def merge_with_piecewise(value1, value2, selector_symbol):
+    """
+    Merge two values using sympy.Piecewise to select based on selector_symbol.
+
+    Args:
+        value1: Value to use when selector is 0 (even waves)
+        value2: Value to use when selector is 1 (odd waves)
+        selector_symbol: Symbol to use for selection (INPUT_SELECTOR)
+
+    Returns:
+        Piecewise expression or original value if they're identical
+    """
+    # If values are identical, no need for Piecewise
+    if value1 == value2:
+        return value1
+
+    # For IndexSequence, merge start, size, and stride separately
+    if isinstance(value1, IndexSequence) and isinstance(value2, IndexSequence):
+        start = sympy.Piecewise(
+            (value1.start, sympy.Eq(selector_symbol, 0)), (value2.start, True)
+        )
+        size = sympy.Piecewise(
+            (value1.size, sympy.Eq(selector_symbol, 0)), (value2.size, True)
+        )
+        stride = sympy.Piecewise(
+            (value1.stride, sympy.Eq(selector_symbol, 0)), (value2.stride, True)
+        )
+        return IndexSequence(start, size, stride)
+
+    # For scalar values, create Piecewise expression
+    return sympy.Piecewise((value1, sympy.Eq(selector_symbol, 0)), (value2, True))
+
+
+def merge_dicts_with_piecewise(dict1, dict2, selector_symbol):
+    """
+    Merge two dictionaries using Piecewise for differing values.
+
+    Args:
+        dict1: First dictionary
+        dict2: Second dictionary
+        selector_symbol: Symbol to use for selection (INPUT_SELECTOR)
+
+    Returns:
+        Merged dictionary with Piecewise expressions for differing values.
+        Keys present in only one dict are included as-is without Piecewise.
+    """
+    result = {}
+    # Sort keys for stable iteration order
+    all_keys = sorted(set(dict1.keys()) | set(dict2.keys()), key=str)
+
+    for key in all_keys:
+        # Key only in dict1 - use value as-is
+        if key not in dict2:
+            result[key] = dict1[key]
+        # Key only in dict2 - use value as-is
+        elif key not in dict1:
+            result[key] = dict2[key]
+        # Key in both - merge with Piecewise
+        else:
+            result[key] = merge_with_piecewise(dict1[key], dict2[key], selector_symbol)
+
+    return result
 
 
 def get_wave_count(constraints: list[Constraint]) -> int:
@@ -193,13 +262,91 @@ def fuse_tensor_loads(
         logger.info("No fusable tensor load pairs found")
         return
 
-    # TODO: Implement actual fusion logic
-    # For each pair in fusable_pairs:
-    # - Merge the two TensorLoadToLDS operations
-    # - Update distributed shapes and bounds
-    # - Replace uses and remove old nodes
-    # - Run DCE to clean up
+    # Get hardware constraints for wave calculation
+    hardware_constraint = get_hardware_constraint(constraints)
+    threads_per_wave = hardware_constraint.threads_per_wave
 
-    logger.info(
-        f"Found {len(fusable_pairs)} pairs ready for fusion (fusion not yet implemented)"
-    )
+    # Calculate wave_id expression: wave_id = THREAD_0 // threads_per_wave
+    wave_id = THREAD_0 // threads_per_wave
+
+    # input_selector will be wave_id % 2 (0 for even waves, 1 for odd waves)
+    input_selector = wave_id % 2
+
+    logger.info(f"Fusing {len(fusable_pairs)} tensor load pairs")
+
+    # Fuse each pair
+    for load1_node, load2_node in fusable_pairs:
+        load1 = get_custom(load1_node)
+        load2 = get_custom(load2_node)
+
+        logger.info(f"Fusing {load1_node.name} and {load2_node.name}")
+
+        # Merge sources and destinations into lists
+        merged_src = load1.src + load2.src
+        merged_dst = load1.dst + load2.dst
+
+        # Element type must be the same (already checked in find_adjacent_loads)
+        merged_element_type = load1.element_type
+
+        # Merge distributed_shape using Piecewise
+        merged_distributed_shape = merge_dicts_with_piecewise(
+            load1.distributed_shape, load2.distributed_shape, INPUT_SELECTOR
+        )
+
+        # Merge shared_tile_index using Piecewise
+        merged_shared_tile_index = merge_with_piecewise(
+            load1.shared_tile_index, load2.shared_tile_index, INPUT_SELECTOR
+        )
+
+        # Merge global_tile_index using Piecewise
+        merged_global_tile_index = merge_dicts_with_piecewise(
+            load1.global_tile_index, load2.global_tile_index, INPUT_SELECTOR
+        )
+
+        # Merge bounds using Piecewise
+        merged_bounds = merge_dicts_with_piecewise(
+            load1.bounds, load2.bounds, INPUT_SELECTOR
+        )
+
+        # Create the fused TensorLoadToLDS node
+        # Insert it before the first load
+        with load1_node.graph.inserting_before(load1_node):
+            fused_load = TensorLoadToLDS(
+                src=merged_src,
+                dst=merged_dst,
+                element_type=merged_element_type,
+                distributed_shape=merged_distributed_shape,
+                shared_tile_index=merged_shared_tile_index,
+                global_tile_index=merged_global_tile_index,
+                bounds=merged_bounds,
+                input_selector=input_selector,
+            ).add_to_graph(
+                load1_node.graph,
+                loc=load1.location,
+            )
+
+        # Copy pre_expansion_id from the first load
+        if hasattr(load1_node, "pre_expansion_id"):
+            fused_load.pre_expansion_id = load1_node.pre_expansion_id
+
+        logger.debug(f"Created fused load: {fused_load.name}")
+
+        # Replace all uses of load1 and load2 with the fused load
+        # Note: TensorLoadToLDS operations typically don't have return values,
+        # so this mainly updates the graph structure
+        load1_node.replace_all_uses_with(fused_load)
+        load2_node.replace_all_uses_with(fused_load)
+
+        # Erase the old nodes
+        logger.debug(f"Erasing {load1_node.name}")
+        get_custom(load1_node).erase()
+
+        logger.debug(f"Erasing {load2_node.name}")
+        get_custom(load2_node).erase()
+
+    # Run dead code elimination to clean up
+    logger.info("Running DCE after fusion")
+    DCE(trace)
+
+    logger.info(f"Successfully fused {len(fusable_pairs)} tensor load pairs")
+    print_trace(trace)
