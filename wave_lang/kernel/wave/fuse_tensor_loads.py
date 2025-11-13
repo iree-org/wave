@@ -26,7 +26,7 @@ import torch.fx as fx
 
 from .._support.indexing import IndexSequence
 from .._support.tracing import CapturedTrace
-from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0
+from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0, THREAD_1, THREAD_2
 from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
@@ -265,9 +265,19 @@ def fuse_tensor_loads(
     # Get hardware constraints for wave calculation
     hardware_constraint = get_hardware_constraint(constraints)
     threads_per_wave = hardware_constraint.threads_per_wave
+    waves_per_block = hardware_constraint.waves_per_block
 
-    # Calculate wave_id expression: wave_id = THREAD_0 // threads_per_wave
-    wave_id = THREAD_0 // threads_per_wave
+    # Calculate wave_id in each dimension
+    wave_id_0 = THREAD_0 // threads_per_wave
+    wave_id_1 = THREAD_1 if waves_per_block[1] > 1 else 0
+    wave_id_2 = THREAD_2 if waves_per_block[2] > 1 else 0
+
+    # Linearize wave_id: linear_id = id_0 + id_1 * dim_0 + id_2 * dim_0 * dim_1
+    wave_id = (
+        wave_id_0
+        + wave_id_1 * waves_per_block[0]
+        + wave_id_2 * waves_per_block[0] * waves_per_block[1]
+    )
 
     # input_selector will be wave_id % 2 (0 for even waves, 1 for odd waves)
     input_selector = wave_id % 2
@@ -310,7 +320,7 @@ def fuse_tensor_loads(
 
         # Create the fused TensorLoadToLDS node
         # Insert it before the first load
-        with load1_node.graph.inserting_before(load1_node):
+        with load2_node.graph.inserting_before(load2_node):
             fused_load = TensorLoadToLDS(
                 src=merged_src,
                 dst=merged_dst,
@@ -321,8 +331,8 @@ def fuse_tensor_loads(
                 bounds=merged_bounds,
                 input_selector=input_selector,
             ).add_to_graph(
-                load1_node.graph,
-                loc=load1.location,
+                load2_node.graph,
+                loc=load2.location,
             )
 
         # Copy pre_expansion_id from the first load
