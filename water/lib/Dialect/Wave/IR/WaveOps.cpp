@@ -112,7 +112,7 @@ bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
 }
 
 mlir::OperandRange
-wave::IterateOp::getEntrySuccessorOperands(mlir::RegionBranchPoint point) {
+wave::IterateOp::getEntrySuccessorOperands(mlir::RegionSuccessor) {
   return getIterArgs();
 }
 
@@ -120,7 +120,7 @@ void wave::IterateOp::getSuccessorRegions(
     mlir::RegionBranchPoint point,
     ::llvm::SmallVectorImpl<::mlir::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
-  regions.emplace_back(mlir::RegionSuccessor(getResults()));
+  regions.emplace_back(mlir::RegionSuccessor(getOperation(), getResults()));
   regions.emplace_back(
       mlir::RegionSuccessor(&getBody(), getBody().front().getArguments()));
 }
@@ -544,6 +544,6 @@ LogicalResult WriteOp::verify() {
 //-----------------------------------------------------------------------------
 
 mlir::MutableOperandRange
-wave::YieldOp::getMutableSuccessorOperands(mlir::RegionBranchPoint) {
+wave::YieldOp::getMutableSuccessorOperands(mlir::RegionSuccessor) {
   return getValuesMutable();
 }
