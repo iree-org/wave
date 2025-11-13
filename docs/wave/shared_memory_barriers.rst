@@ -80,27 +80,27 @@ Target
 
 Analysis
 --------------------
-  We first compute a topological enumeration (_topo_location) across nodes, then scan for hazards over shared memory resources:
-    - Core: implementation is defined in `handle_hazard` function. This function scans a linearized sequence of FX nodes, and discovers producer–consumer hazards on the same shared memory resource. For each resource, it groups accesses into ResourceAccessWindow (a run of one or more producers followed by one or more consumers) and emits a SyncRequirement describing where synchronization is needed (RAW/WAR), including whether the hazard is cross iteration.
-    - Procedure:
-        1. Identify shared-memory accesses (Read, Write, Atomic, GatherToLDS) and classify them as READ, WRITE, or READ_WRITE.
-        2. Track producer/consumer "ResourceAccessWindow" per memory resource.
-        3. Create SyncRequirement records capturing:
-            - the producer region and the consumer region
-            - their topological positions
-            - whether the hazard crosses an iteration boundary (is_loop)
-            - boundary nodes of the surrounding graph
-        4. RAW hazards are tagged with BarrierType.FILL, WAR with BarrierType.READY (for easier debugging and potential future guard usage)
-
-    Cross-iteration hazards: For nested regions, hazards can connect iteration N to iteration N+1 (e.g., read(i+1) after write(i)). To catch these, handle_hazard:
-        - Loops `n * iters` times, where n is the length of given set of nodes.
-        .. code-block:: python
-            for i in range(n*iters):
-                idx = i % n # node index within iterations
-                depth = i // n # which iteration (0 or 1)
-
-        - Computes a depth flag (0 or 1) for each occurrence so get_shared_memory_from_op can “shift” loop carried operands from iteration i to i+1.
-        - With this setup, a producer at position p and a consumer at position c will look like p < c for intra iteration hazards, and like p > c (i.e., is_loop=True) for cross iteration hazards. These are tagged in the requirement for placement to handle specially.
+Flatten (make a linear view with loop wrap)
+- Start with a pre order walk and assign a topo index to every node.
+- Keep two arrays: flatten (only shared mem nodes) and next_iter_regions (ranges for the second, “next iter” copy of loop bodies).
+- Define collect(nodes) that visits nodes in order.
+- For each node: if it touches shared memory, append it to flatten.
+- If it’s an Iterate, get its body nodes (body).
+- Remember start1 = len(flatten); collect(body) once (same iter copy).
+- Let gs, ge = first and last node of body to mark loop bounds.
+- Make a second copy: start2 = len(flatten); collect(body) again.
+- Record end2 = len(flatten)−1 and append (start2, end2, gs, ge) to next_iter_regions.
+- If it’s a Conditional, just collect its subgraph.
+Handle hazard (per resource, streaming windows)
+- Maintain windows: resource → {producers, consumers}.
+- Walk flatten with index i; set depth=1 if i falls in any (start2, end2) range, else depth=0.
+- Get op, its access kind; skip nodes with no memory access.
+- Resolve resource via get_shared_memory_from_op(op, depth).
+- If kind is a producer (WRITE/RW for RAW; READ for WAR): flush current window if it already has producers+consumers, then append this node to producers.
+- If kind is a consumer (READ for RAW; WRITE/RW for WAR) and the window has producers, append this node to consumers.
+- Flushing uses add_sync_requirements: check need_barrier, compute is_loop by comparing producer/consumer topo positions, carry (graph_start, graph_end) from the matched loop range.
+- After the scan, flush all remaining windows.
+- Run the scan twice with the two producer/consumer role sets to collect RAW and WAR hazards.
 
 
 Placement strategies
@@ -130,7 +130,7 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
             - Sort by (c, p) and sweep once while maintaining a window.
                 - max_p: the maximum producer position found so far.
                 - min_c: the minimum consumer position found so far.
-                - If the next hazard's p > min_c, we identify the smallest possible intersection, add a barrier to lisst and start a new window.
+                - If the next hazard's p > min_c, we identify the smallest possible intersection, add a barrier to list and start a new window.
                 - Otherwise, tighten the window.
             - If we add a cross-iteration barrier to graph, and all dependencies are inter-graph, then we emit a barrier surrounding the subgraph: (iterate.prev, iterate.next)
 
@@ -155,5 +155,5 @@ End-to-End flow
 
 Known Limitations / TODO
 --------------------
-We are now propagating memory access of an op in the nested-region with `depth` set to 1
-To be simplify...
+- We are now propagating memory access of an op in the nested-region with `depth` set to 1
+- Handle the hazard with space complexity O(1)

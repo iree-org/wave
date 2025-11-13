@@ -480,7 +480,7 @@ def find_intersecting_interval_strategy(
     # --- Helpers ----
     get_location = lambda req: (req.prod_location, req.cons_location)
 
-    def make_request(proto: SyncRequirement, prod: fx.Node, cons: fx.Node):
+    def make_request(proto: SyncRequirement, prod: fx.Node, cons: fx.Node) -> SyncRequirement:
         """Make a new request based on provided producer and consumer. dont care values are default to None."""
         cls = type(proto)
         return cls(
@@ -506,6 +506,10 @@ def find_intersecting_interval_strategy(
         return new_req
 
     def window_is_covered(start: int, end: int, index: int = 0):
+        """
+        `Covered` means that at least one sync requirement's position is inside the window.
+        Index determine whether we are checking for producer presence (0) or consumer presence (1).
+        """
         return any(
             (start <= get_location(req)[index] and get_location(req)[index] <= end)
             for req in results
