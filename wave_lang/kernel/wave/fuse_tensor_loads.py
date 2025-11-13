@@ -385,14 +385,9 @@ def fuse_tensor_loads(
         load2_node.replace_all_uses_with(fused_load)
 
         # Erase the old nodes
-        logger.debug(f"Erasing {load1_node.name}")
         get_custom(load1_node).erase()
-
-        logger.debug(f"Erasing {load2_node.name}")
         get_custom(load2_node).erase()
 
-    # Run dead code elimination to clean up
-    logger.info("Running DCE after fusion")
     DCE(trace)
 
     logger.info(f"Successfully fused {len(fusable_pairs)} tensor load pairs")
