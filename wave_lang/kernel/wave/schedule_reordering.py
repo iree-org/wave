@@ -583,6 +583,7 @@ def transform_two_PP_clusters(
     sliced_mma_nodes, sliced_local_load_lhs, sliced_local_load_rhs = slice_mma(
         mma_nodes, local_load_lhs, local_load_rhs, num_slice=num_slices
     )
+
     # Check that we have valid slice size for local_loads and mmas.
     assert len(sliced_mma_nodes) == len(sliced_local_load_rhs)
     assert len(sliced_mma_nodes) == len(sliced_local_load_lhs)
@@ -1042,11 +1043,17 @@ def schedule_reordering(
         # Skip to next Iterate if fail to reorder graph.
         if reordered_graph is None:
             continue
+
         reordered_graph.parent_op = graph.parent_op
-        reordered_subgraph_name = f"reoredered_{custom_iterate.subgraph_name}"
+        original_subgraph_name = custom_iterate.subgraph_name
+        reordered_subgraph_name = f"reoredered_{original_subgraph_name}"
         trace.add_subgraph(reordered_subgraph_name, reordered_graph)
         trace.get_root_graph().subgraphs[reordered_subgraph_name] = reordered_graph
         custom_iterate.update_arg("subgraph_name", reordered_subgraph_name)
+
+        del trace.region_graph.subgraphs[original_subgraph_name]
+        del trace.get_root_graph().subgraphs[original_subgraph_name]
+
         if is_pingpong_strategy(reorder_strategy):
             add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
 

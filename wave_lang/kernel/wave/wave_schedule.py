@@ -20,9 +20,16 @@ class WaveSchedule:
         self.schedule_function = schedule_function
         self.f = f
 
-    def _trace(self, kernel_trace=None, constraints: list[Constraint] = None):
+    def _trace(
+        self,
+        kernel_trace=None,
+        constraints: list[Constraint] = None,
+        use_scheduling_barriers: bool = False,
+    ):
         region_graph = ScheduleRegionGraph()
-        with ScheduleContext(region_graph, kernel_trace, constraints) as context:
+        with ScheduleContext(
+            region_graph, kernel_trace, constraints, use_scheduling_barriers
+        ) as context:
             # Get all explicitly defined custom schedule ops (dataclasses)
             schedule_ops: dict[str, wave_schedule_ops.CustomScheduleOp] = {
                 cls.schedule_op_name: cls
@@ -48,7 +55,12 @@ class WaveSchedule:
 
         return trace
 
-    def trace(self, kernel_trace: CapturedTrace, constraints: list[Constraint]):
+    def trace(
+        self,
+        kernel_trace: CapturedTrace,
+        constraints: list[Constraint],
+        use_scheduling_barriers: bool = False,
+    ):
         """Run the schedule"""
-        trace = self._trace(kernel_trace, constraints)
+        trace = self._trace(kernel_trace, constraints, use_scheduling_barriers)
         return trace

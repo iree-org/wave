@@ -56,7 +56,6 @@ from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     CustomOp,
     TensorLoadToLDS,
-    SharedMemoryBarrier,
     IndexSequence,
     Read,
     Write,
@@ -220,9 +219,6 @@ def emit_tensor_load_to_shared(
     with write.graph.inserting_before(write.fx_node):
         tensor_write = TensorLoadToLDS(read.memory, write.memory, *config).add_to_graph(
             write.graph, loc=write.location
-        )
-        SharedMemoryBarrier(tensor_wait=True).add_to_graph(
-            write.graph, loc=tensor_write.location
         )
 
     tensor_write.pre_expansion_id = id(tensor_write)

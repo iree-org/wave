@@ -667,15 +667,26 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[D0:.*]] = vector.from_elements
     # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
-    # CHECK:        amdgpu.lds_barrier
+    # CHECK-NOT:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK-NOT:        amdgpu.lds_barrier
 
     ### pack descriptors and invoke tensor load
     # CHECK:        %[[D1:.*]] = vector.from_elements
     # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
+
+    ### resource provider
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D1]], %[[TENSOR_DESC_1]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
-    # CHECK:        amdgpu.lds_barrier
+    # CHECK:        rocdl.s.wait.dscnt 0
+    # CHECK:        rocdl.s.barrier.signal -1
+
+    ### resource consumer
+    # CHECK-NEXT:   rocdl.s.barrier.wait -1
+    # CHECK-NEXT:   affine.apply
+    # CHECK-NEXT:   affine.apply
+    # CHECK-NEXT:   vector.load %[[VIEW0]]
+    # CHECK-NEXT:   affine.apply
+    # CHECK-NEXT:   vector.load %[[VIEW1]]
 
     ### wmma
     # CHECK:        rocdl.wmma.f32.16x16x32.f16 {{.*}} : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>

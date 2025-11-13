@@ -1103,7 +1103,7 @@ def test_scheduling_ops():
 @run_test
 def test_tensor_waitcnt():
     constraints: list[tkw.Constraint] = [
-        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+        tkw.HardwareConstraint(threads_per_wave=32, vector_shapes={M: 16, N: 16})
     ]
     constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -1112,7 +1112,8 @@ def test_tensor_waitcnt():
 
     @tkw.wave(constraints)
     def schedule_ops(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16]):
-        tkw.shared_memory_barrier(tensor_wait=True)
+        tkw.shared_memory_barrier_signal(-1, tensor_wait=True)
+        tkw.shared_memory_barrier_wait(-1)
         tkw.read(a)
 
     schedule_ops = wave_compile(get_wave_compile_options(), schedule_ops)
@@ -1120,7 +1121,9 @@ def test_tensor_waitcnt():
 
     # CHECK-LABEL:    func.func @schedule_ops
     # CHECK:            llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
-    # CHECK:            amdgpu.lds_barrier
+    # CHECK:            rocdl.s.wait.dscnt 0
+    # CHECK:            rocdl.s.barrier.signal -1
+    # CHECK:            rocdl.s.barrier.wait -1
 
 
 @run_test

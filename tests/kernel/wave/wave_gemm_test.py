@@ -43,6 +43,9 @@ from wave_lang.kernel.wave.templates.gemm import (
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
 )
+from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
+    get_gemm_two_pp_cluster_schedule,
+)
 from wave_lang.kernel.lang import DataType
 import os
 import json
@@ -2418,6 +2421,52 @@ def test_gemm_prefetch_manual_schedule(shape: tuple[int], mfma_variant: MMAType)
 
     # Run the kernel
     asm = gemm_prefetch(a, b, c)
+
+    # Verify results with IREE reference
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(128, 256, 1024)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_prefetch_reorder_manual_schedule(
+    shape: tuple[int], mfma_variant: MMAType
+):
+    """
+    Test the advanced GEMM prefetch+reorder+stagger kernel template from test_kernels.py.
+
+    This test demonstrates the full manual scheduling pipeline with:
+    - 2-stage pipelining
+    - Cluster-based reordering for latency hiding
+    - 2-way wave staggering
+    """
+    # Use the wrapper function to get kernel, schedule, and options
+    (
+        gemm_prefetch_reorder,
+        prefetch_reorder_schedule,
+        options,
+    ) = get_gemm_two_pp_cluster_schedule(
+        shape=shape, mfma_variant=mfma_variant, compile_to_mlir=False
+    )
+
+    # Set runtime configuration for execution
+    options = set_default_run_config(options)
+
+    # Compile the kernel with the schedule
+    gemm_prefetch_reorder = wave_compile(
+        options, gemm_prefetch_reorder, prefetch_reorder_schedule
+    )
+
+    # Create test data
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    # Run the kernel
+    asm = gemm_prefetch_reorder(a, b, c)
 
     # Verify results with IREE reference
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)

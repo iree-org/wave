@@ -1637,11 +1637,6 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     if wait_async_ops:
         waitcnt(0)
 
-    if tensor_wait:
-        # TODO(megan.kuo): Use rocdl intrinsic when iree has support
-        c0 = arith_d.constant(IntegerType.get_signless(16), 0)
-        llvm_d.call_intrinsic(None, "llvm.amdgcn.s.wait.tensorcnt", [c0], [], [])
-
     amdgpu_d.lds_barrier()
 
 
@@ -1649,14 +1644,16 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
 def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
     try:
         barId = node.args[0]
-        wait_async_ops = node.args[1]
+        tensor_wait = node.args[1]
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    rocdl_d.s_wait_dscnt(0)
+    if tensor_wait:
+        # TODO(megan.kuo): Use rocdl intrinsic when iree has support
+        c0 = arith_d.constant(IntegerType.get_signless(16), 0)
+        llvm_d.call_intrinsic(None, "llvm.amdgcn.s.wait.tensorcnt", [c0], [], [])
 
-    if wait_async_ops:
-        rocdl_d.s_wait_loadcnt(0)
+    rocdl_d.s_wait_dscnt(0)
 
     rocdl_d.s_barrier_signal(barId)
 

@@ -530,6 +530,10 @@ def construct_kernel(
             implicit_captures=reduction.implicit_captures,
         ).add_to_graph(reduction.graph, type=reduction.type, loc=reduction.location)
         pipelined_reduction.index = reduction.index
+        # Preserve the tag from the original iterate so it can be found after pipelining.
+        if hasattr(reduction, "tag") and reduction.tag:
+            pipelined_reduction.tag = reduction.tag
+            logger.debug(f"Preserved tag '{reduction.tag}' on pipelined iterate")
         pipelined_reduction_graph = fx.Graph()
         reduction.graph.subgraphs["pipelined_iterate"] = pipelined_reduction_graph
 

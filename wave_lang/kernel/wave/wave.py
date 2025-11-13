@@ -887,12 +887,18 @@ class LaunchableWave(Launchable):
 
         # Schedule the iterate ops.
         scheduling_type = options.schedule
+        use_scheduling_barriers = options.use_scheduling_barriers
         if options.schedule == SchedulingType.MANUAL:
             graph_passes.append(
-                partial(self.run_manual_schedule, trace, self.constraints, schedule)
+                partial(
+                    self.run_manual_schedule,
+                    trace,
+                    self.constraints,
+                    schedule,
+                    use_scheduling_barriers,
+                ),
             )
         else:
-            use_scheduling_barriers = options.use_scheduling_barriers
             graph_passes.append(
                 partial(
                     schedule_graph,
@@ -1017,8 +1023,13 @@ class LaunchableWave(Launchable):
         trace: CapturedTrace,
         constraints: list[Constraint],
         schedule: WaveSchedule,
+        use_scheduling_barriers: bool = False,
     ):
         """
         Runs the manual schedule provided by the user.
         """
-        schedule.trace(kernel_trace=trace, constraints=constraints)
+        schedule.trace(
+            kernel_trace=trace,
+            constraints=constraints,
+            use_scheduling_barriers=use_scheduling_barriers,
+        )
