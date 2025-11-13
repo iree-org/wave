@@ -320,7 +320,7 @@ def get_barriers_analysis(
     is_condition_node = lambda node: isinstance(get_custom(node), Conditional)
 
     get_subgraph_nodes = lambda node: (
-        track.walk_graph(op.subgraph_name)
+        trace.walk_graph(op.subgraph_name)
         if isinstance(op := get_custom(node), NestedRegionOp)
         else []
     )
@@ -334,7 +334,7 @@ def get_barriers_analysis(
             if is_shared_memory_node(node):
                 flatten.append(node)
             if is_iterate_node(node):
-                subgraph_nodes = get_subgraph_nodes(trace, node)
+                subgraph_nodes = get_subgraph_nodes(node)
                 collect_nodes(subgraph_nodes)
                 iterate_regions.append(
                     [
@@ -346,7 +346,7 @@ def get_barriers_analysis(
                 )
                 collect_nodes(subgraph_nodes)
             if is_condition_node(node):
-                subgraph_nodes = get_subgraph_nodes(trace, node)
+                subgraph_nodes = get_subgraph_nodes(node)
                 collect_nodes(subgraph_nodes)
 
     collect_nodes(trace.get_root_graph().nodes)
