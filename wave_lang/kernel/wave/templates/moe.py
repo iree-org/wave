@@ -416,20 +416,11 @@ def get_moe_align_block_size_kernel(
         num_experts = tkw.scalar(NUM_EXPERTS - 1, tkl.i32)
         zero_counts = tkl.Register[NUM_EXPERTS, dtype](0)
         one_reg = tkw.Register[NUM_EXPERTS, dtype](1)
-        shifted_cumsum = tkw.Register[NUM_EXPERTS, dtype](0)
 
         shmem = tkw.allocate(
             shape=(NUM_EXPERTS,),
             distributed_shape=(NUM_EXPERTS,),
             dtype=dtype,
-        )
-        # cumsum_exclusive = tkw.allocate(
-        #     shape=(NUM_EXPERTS,),
-        #     distributed_shape=(NUM_EXPERTS,),
-        #     dtype=dtype,
-        # )
-        s_total_tokens_post_pad = tkw.allocate(
-            (1,), distributed_shape=(1,), dtype=dtype
         )
         tkw.write(zero_counts, shmem)
 
@@ -462,7 +453,7 @@ def get_moe_align_block_size_kernel(
         block_size_reg = tkl.Register[NUM_EXPERTS, dtype](BLOCK_SIZE)
 
         # (count + block_size - 1) // block_size * block_size
-        temp1 = counts + block_size_reg - one_reg
+        temp1 = counts + tkw.scalar(BLOCK_SIZE, dtype) - tkw.scalar(1, dtype)
         temp2 = temp1 / block_size_reg
         padded_counts_reg = temp2 * block_size_reg
 
