@@ -1,0 +1,104 @@
+name: happy - CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        desription: "Run tests in happy container."
+        required: true
+        default: "yes"
+        type: choice
+        options:
+          - "yes"
+          - "no"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  happy-set-env:
+    runs-on: ['self-hosted', 'Linux', 'X64', 'rdna4']
+    if: github.event.inputs.run_tests == "yes"
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Show workspace on host
+        run: |
+          echo "GITHUB_WORKSPACE on host:"
+          echo "${{ github.workspace }}"
+
+      - name: Ensure container happy is running
+        run: |
+          if ! docker ps --format '{{.Names}}' | grep -q '^happy$'; then
+            echo "Happy is not present. Starting it..."
+            docker start happy
+          else
+            echo "Happy is present."
+          fi
+
+      - name: Setup wave project
+        id: setup_python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: ${{matrix.version}}
+
+      - name: Create Python venv
+        run: |
+           python3 -m venv ${VENV_DIR}
+           source ${VENV_DIR}/bin/activate
+           echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
+           echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust via rustup.sh
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "CARGO_HOME=$HOME/.cargo" >> $GITHUB_ENV
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install pip deps
+        if: ${{ !cancelled() }}
+        run: |
+          # Install User libraries
+          sudo apt-get update
+          sudo apt install -y libnuma1 numactl gfortran build-essential binutils
+
+          # Install torch+rocm6.4
+          python -m pip install --no-compile --upgrade pip
+          pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
+
+          # Install wave deps
+          pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
+          pip install -r requirements.txt -e .
+
+      - name: Run unit tests
+        if: ${{ !cancelled() }}
+        run: |
+          pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+
+      - name: Test TKW runtime related stack on amdgpu
+        if: ${{ !cancelled() }}
+        run: |
+          export WAVE_CACHE_DIR=$PWD/.wave
+          rm -rf ./.wave
+          nproc
+          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+
+      - name: Run e2e tests
+        if: ${{ !cancelled() }}
+        run: |
+          WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+
+      - name: Run expensive e2e tests
+        if: ${{ !cancelled() }}
+        run: |
+          WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
+
+      - name: Run LIT tests
+        if: ${{ !cancelled() }}
+        run: |
+          lit lit_tests/ -v
