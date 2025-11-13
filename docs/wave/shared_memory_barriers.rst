@@ -80,27 +80,30 @@ Target
 
 Analysis
 --------------------
-Flatten (make a linear view with loop wrap)
-- Start with a pre order walk and assign a topo index to every node.
-- Keep two arrays: flatten (only shared mem nodes) and next_iter_regions (ranges for the second, “next iter” copy of loop bodies).
-- Define collect(nodes) that visits nodes in order.
-- For each node: if it touches shared memory, append it to flatten.
-- If it’s an Iterate, get its body nodes (body).
-- Remember start1 = len(flatten); collect(body) once (same iter copy).
-- Let gs, ge = first and last node of body to mark loop bounds.
-- Make a second copy: start2 = len(flatten); collect(body) again.
-- Record end2 = len(flatten)−1 and append (start2, end2, gs, ge) to next_iter_regions.
-- If it’s a Conditional, just collect its subgraph.
-Handle hazard (per resource, streaming windows)
-- Maintain windows: resource → {producers, consumers}.
-- Walk flatten with index i; set depth=1 if i falls in any (start2, end2) range, else depth=0.
-- Get op, its access kind; skip nodes with no memory access.
-- Resolve resource via get_shared_memory_from_op(op, depth).
-- If kind is a producer (WRITE/RW for RAW; READ for WAR): flush current window if it already has producers+consumers, then append this node to producers.
-- If kind is a consumer (READ for RAW; WRITE/RW for WAR) and the window has producers, append this node to consumers.
-- Flushing uses add_sync_requirements: check need_barrier, compute is_loop by comparing producer/consumer topo positions, carry (graph_start, graph_end) from the matched loop range.
-- After the scan, flush all remaining windows.
-- Run the scan twice with the two producer/consumer role sets to collect RAW and WAR hazards.
+Core idea
+- Track, per shared resource, a rolling “window” of producers (writers) followed by consumers (readers).
+- When a new producer starts, the previous window (if it had both sides) is finalized into a barrier requirement.
+add_sync_requirements
+- Takes the last producer and the first consumer in the current window.
+- Skips if their access types don’t actually require a barrier.
+- Marks as loop carried if producer’s topo index is greater than consumer’s.
+- Emits a SyncRequirement with resource, endpoints, positions, loop bounds; dedups before appending.
+add_hazard_if_window_valid
+- Finalizes the current window only if it contains at least one producer and one consumer.
+- Calls add_sync_requirements, then resets the window.
+handle_hazard
+- For a single node: determine access kind and the shared resource (with depth for next iter).
+- Attach optional graph_info (loop body [start, end]) to the window for later annotation.
+- If node is a producer kind: flush current window, then record this producer.
+- If node is a consumer kind and producers exist: record this consumer.
+get_hazard_handle
+- Returns a partially applied handle_hazard with chosen producer/consumer kinds (e.g., RAW or WAR).
+get_barriers_analysis
+- Assigns topo indices via pre order walk.
+- Recursively walks the root graph and nested regions:
+    - For Iterate: walk body twice (depth 0 for same iter, depth 1 for next iter) carrying [start, end].
+    - For Conditional: walk its subgraph once.
+- Runs two passes: WAR, then RAW; each pass maintains its own per resource windows and flushes after traversal.
 
 
 Placement strategies
