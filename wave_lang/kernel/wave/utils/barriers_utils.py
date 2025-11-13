@@ -220,6 +220,48 @@ def handle_hazard(
     graph_info: List[fx.Node] = None,
     depth: int = 0,
 ) -> None:
+    """
+    Process a single shared-memory node and update hazard tracking state for barrier analysis.
+
+    This function classifies the node's memory access (producer vs. consumer) using
+    MemoryAccessType, updates the per-resource hazard window,
+    and emits any pending SyncRequirement when a new producer begins a window.
+
+    Behavior:
+    - If the node has no memory access or is None, it is ignored.
+    - The shared-memory resource is derived from the operation (op) and the iteration depth.
+      When a producer is found:
+        * Flush any existing window via `add_hazard_if_window_valid(...)` (emits a barrier if needed).
+        * Start/extend the producer list for the current resource.
+      Consumers are only recorded if there is at least one producer in the current window
+      (i.e., they form a potential hazard with prior producers).
+
+    Args:
+        results (List[SyncRequirement]):
+            Accumulator list where detected synchronization requirements (barriers)
+            are appended.
+        windows (Dict[fx.Node, ResourceAccessWindow]):
+            Mapping from shared-memory resource to its current hazard tracking window.
+            Each window typically contains:
+              - producers: List[fx.Node]
+              - consumers: List[fx.Node]
+              - graph_info: Optional[List[fx.Node]] context (e.g., [entry, exit] of subgraph)
+        node (fx.Node):
+            The current graph node to analyze. If None, the function returns immediately.
+        producer_kinds (MemoryAccessType):
+            Bitmask of access types that count as producers (e.g., WRITE | READ_WRITE).
+        consumer_kinds (MemoryAccessType):
+            Bitmask of access types that count as consumers (e.g., READ).
+        graph_info (List[fx.Node], optional):
+            Optional graph context markers (e.g., subgraph entry/exit nodes). If provided,
+            it is stored in the resource window for downstream handling/reporting.
+        depth (int, optional):
+            Depth or phase used when deriving the shared-memory resource (e.g., for
+            nested regions/iteration phases). Defaults to 0.
+
+    Returns:
+        None
+    """
     if not node:
         return
 
@@ -229,7 +271,9 @@ def handle_hazard(
         return
 
     resource = get_shared_memory_from_op(op, depth)
-    assert resource is not None, "op has no smem access"
+    assert (
+        resource is not None
+    ), "Expected op to access shared memory, but no shared memory resource found."
 
     hazard_window = windows[resource]
     if graph_info is not None:
@@ -283,7 +327,35 @@ def get_barriers_analysis(
 
     results: List[SyncRequirement] = []
 
-    def walk_nodes(nodes, graph_info: List[fx.Node] = None, depth: int = 0):
+    def walk_nodes(nodes, graph_info: Optional[List[fx.Node]] = None, depth: int = 0):
+        """
+        Traverse a sequence of graph nodes, updating hazard windows and collecting
+        synchronization requirements for shared-memory accesses. This function
+        handles nested subgraphs for Iterate and Conditional regions.
+
+        Behavior:
+        - For each node:
+          - If it represents a shared-memory access, invoke `handle(...)` to update
+            per-resource access windows and append any detected hazards to `results`.
+          - If it is an Iterate region, walk its subgraph twice:
+            * First with depth=0 and graph_info marking the subgraph's entry/exit nodes.
+            * Then with depth=1 using the same markers (e.g., separate phases/iterations).
+          - If it is a Conditional region, walk its subgraph once.
+        - After traversing the provided `nodes`, perform a final cleanup pass:
+          - For each resource window in `windows`, call `add_hazard_if_window_valid(...)`
+            to flush any pending hazards.
+
+        Args:
+            nodes (Iterable[fx.Node]): Nodes to traverse in the current graph or subgraph.
+            graph_info (List[fx.Node], optional): A pair [entry_node, exit_node] giving
+                context for subgraph traversal. Defaults to None.
+            depth (int): Phase indicator for Iterate subgraphs (iter i, iter i+1). Defaults to 0.
+
+        Side effects:
+            - Mutates `windows` (a mapping of resource -> ResourceAccessWindow).
+            - Appends `SyncRequirement` entries to `results` via `handle(...)` and
+              `add_hazard_if_window_valid(...)`.
+        """
         for node in nodes:
             if is_shared_memory_node(node):
                 handle(
@@ -315,14 +387,14 @@ def get_barriers_analysis(
             add_hazard_if_window_valid(results, resource, window)
 
     nodes = trace.get_root_graph().nodes
-    # handle RAW
+    # handle WAR
     windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
     handle = get_hazard_handle(
         MemoryAccessType.READ, MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE
     )
     walk_nodes(nodes)
 
-    # handle WAR
+    # handle RAW
     windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
     handle = get_hazard_handle(
         MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE, MemoryAccessType.READ
