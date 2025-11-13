@@ -213,43 +213,11 @@ def handle_hazard(
     nodes: List[fx.Node],
     producer_kinds: Set[MemoryAccessType],
     consumer_kinds: Set[MemoryAccessType],
-    barrier_type: BarrierType,
-    is_nested: bool = False,
-    iterate_region: int = 0,
+    next_iter_regions: List[List] = [],
 ) -> None:
-    """
-    Scans the provided list of graph nodes for memory access hazards between producers and consumers,
-    and appends any required SyncRequirement objects to the `results` list.
-    This function analyzes the sequence of nodes to detect situations where synchronization barriers
-    are needed to ensure correct memory access ordering (e.g., between writes and reads to shared resources).
-    It handles cross-iteration dependencies by iterating the node list twice to
-    simulate multiple loop iterations, allowing detection of hazards that span loop boundaries.
-
-    Parameters:
-        - results (List[SyncRequirement]): The list to which any detected SyncRequirement objects will be appended.
-        - nodes (List[fx.Node]): The ordered list of graph nodes to scan for hazards.
-        - producer_kinds (Set[Any]): The set of node kinds considered as producers (e.g., write operations).
-        - consumer_kinds (Set[Any]): The set of node kinds considered as consumers (e.g., read operations).
-        - barrier_type (BarrierType): The type of barrier to use if a hazard is detected.
-        - is_nested (bool, optional): Whether the scan is occurring within a nested region. Defaults to False.
-        - iterate_region (int, optional): A split index that marks the end of an iterate body. This is used for detecting cross-iteration dependencies. Defaults to 0.
-
-    Algorithm:
-        - Check for the 2nd iterations if `is_nested` flag is set.
-        - Iterates through the nodes, tracking producers and consumers for each resource.
-        - When a hazard is detected, a SyncRequirement is created and appended to `results`.
-        - Uses a window dictionary to track the current set of resource accesses.
-        - Handles both intra- and inter-iteration hazards.
-
-    Side Effects:
-        Modifies the `results` list in place by appending new SyncRequirement objects as needed.
-    """
     if not nodes:
         return
 
-    n = len(nodes)
-    iters = 2 if is_nested else 1
-    graph_info = [nodes[0], nodes[-1]] if is_nested else [None, None]
     windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
 
     def add_hazard_if_window_valid(
@@ -262,23 +230,26 @@ def handle_hazard(
             resource,
             window,
             graph_info=graph_info,
-            barrier_type=barrier_type,
         )
         window.reset()
 
-    for i in range(n * iters):
-        idx = i % n
-        node = nodes[idx]
+    for i in range(len(nodes)):
+        depth = 0
+        graph_info = [None, None]
+
+        for gs, ge, gs_node, ge_node in next_iter_regions:
+            if gs <= i and i <= ge:
+                graph_info = [gs_node, ge_node]
+                depth = 1
+                break
+
+        node = nodes[i]
 
         op = get_custom(node)
         access_kind = get_memory_access_type(op)
         if access_kind == MemoryAccessType.NONE:
             continue
 
-        # Depth for loop-carried analysis:
-        # - If we don't know the split: iteration = i // n over the virtual 2x pass.
-        # - If we do know the split: depth=1 for first region (i < iterate_region), depth=0 for second region (i >= iterate_region).
-        depth = (i // n) if iterate_region == 0 else (1 if i < iterate_region else 0)
         resource = get_shared_memory_from_op(op, depth)
         assert resource is not None, "op has no smem access"
 
@@ -300,26 +271,8 @@ def handle_hazard(
         add_hazard_if_window_valid(resource, hazard_window)
 
 
-def get_subgraph_nodes(trace: CapturedTrace, node: fx.Node) -> List[fx.Node]:
-    """
-    Args:
-        - trace: The trace object containing the graph and walk_graph method.
-        - node (fx.Node): The node whose subgraph nodes are to be retrieved.
-    Returns:
-        List[fx.Node]: A list of nodes in the subgraph if the node is a NestedRegionOp, otherwise an empty list.
-    """
-    op = get_custom(node)
-    if not isinstance(op, NestedRegionOp):
-        return []
-
-    subgraph_name = op.subgraph_name
-    return trace.walk_graph(name=subgraph_name)
-
-
 def get_all_hazards(
-    nodes: List[fx.Node],
-    is_nested: bool = False,
-    iterate_region: int = 0,
+    nodes: List[fx.Node], next_iter_regions: List
 ) -> List[SyncRequirement]:
     """
     Get all possible hazards (RAW, WAR) from provided set of nodes.
@@ -332,9 +285,7 @@ def get_all_hazards(
         nodes,
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
         {MemoryAccessType.READ},
-        barrier_type=BarrierType.FILL,
-        is_nested=is_nested,
-        iterate_region=iterate_region,
+        next_iter_regions,
     )
 
     # WAR
@@ -343,9 +294,7 @@ def get_all_hazards(
         nodes,
         {MemoryAccessType.READ},
         {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-        barrier_type=BarrierType.READY,
-        is_nested=is_nested,
-        iterate_region=iterate_region,
+        next_iter_regions,
     )
 
     return results
@@ -361,8 +310,8 @@ def get_barriers_analysis(
         - target_arch: The target architecture identifier (e.g., string) used to determine architecture-specific barrier handling.
     Returns: List[SyncRequirement]: A list of synchronization requirements (barriers) needed to ensure correct ordering of shared memory accesses in the graph.
     """
-    nodes = trace.preorder_walk()
-    assign_preorder_index(nodes)
+    all_nodes = trace.preorder_walk()
+    assign_preorder_index(all_nodes)
 
     is_shared_memory_node = (
         lambda node: get_shared_memory_from_op(get_custom(node)) is not None
@@ -370,38 +319,38 @@ def get_barriers_analysis(
     is_iterate_node = lambda node: isinstance(get_custom(node), Iterate)
     is_condition_node = lambda node: isinstance(get_custom(node), Conditional)
 
-    def dfs(
-        nodes: List[fx.Node],
-        collections: List[fx.Node],
-        is_nested: bool = False,
-        iterate_region: int = 0,
-    ) -> List[SyncRequirement]:
-        results: List[SyncRequirement] = []
+    get_subgraph_nodes = lambda node: (
+        track.walk_graph(op.subgraph_name)
+        if isinstance(op := get_custom(node), NestedRegionOp)
+        else []
+    )
 
+    # flatten the entire graph
+    flatten: List[fx.Node] = []
+    iterate_regions: List[List] = []
+
+    def collect_nodes(nodes):
         for node in nodes:
             if is_shared_memory_node(node):
-                collections.append(node)
-
+                flatten.append(node)
             if is_iterate_node(node):
                 subgraph_nodes = get_subgraph_nodes(trace, node)
-                results.extend(dfs(subgraph_nodes, collections))
-                collections.clear()
-                results.extend(dfs(subgraph_nodes, collections, is_nested=True))
-                iterate_region = sum(
-                    [is_shared_memory_node(node) for node in subgraph_nodes]
+                collect_nodes(subgraph_nodes)
+                iterate_regions.append(
+                    [
+                        len(flatten),
+                        len(flatten) + len(subgraph_nodes),
+                        subgraph_nodes[0],
+                        subgraph_nodes[-1],
+                    ]
                 )
-
+                collect_nodes(subgraph_nodes)
             if is_condition_node(node):
                 subgraph_nodes = get_subgraph_nodes(trace, node)
-                results.extend(dfs(subgraph_nodes, collections))
+                collect_nodes(subgraph_nodes)
 
-        results.extend(get_all_hazards(collections, is_nested, iterate_region))
-        return results
-
-    collections: List[fx.Node] = []
-    nodes = trace.walk_graph(trace.root_graph)
-
-    return dfs(nodes, collections)
+    collect_nodes(trace.get_root_graph().nodes)
+    return get_all_hazards(flatten, iterate_regions)
 
 
 def minimize_placement_strategy(
