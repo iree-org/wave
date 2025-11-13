@@ -201,6 +201,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                         simplified_index[dim].start.subs({GPR_NUM: 0}) + offset[j], 1, 1
                     )
                     for j, dim in enumerate(symbolic_shape)
+                    if dim in simplified_index
                 }
                 extract.index = write.index
                 write.vector_shapes = vector_shapes
