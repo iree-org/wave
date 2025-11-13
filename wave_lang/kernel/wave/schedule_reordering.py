@@ -104,7 +104,7 @@ class CompatibleBlockSize:
 twoPPConfig = CompatibleBlockSize(128, 128, 64, 16, False, MMA)
 asyncTwoPPConfig = CompatibleBlockSize(128, 128, 64, 16, True, MMA)
 MXFP4PPConfig = CompatibleBlockSize(256, 128, 256, 4, False, ScaledMMA)
-fourWaveConfig = CompatibleBlockSize(64, 64, 32, 16, False, MMA)
+fourWaveConfig = CompatibleBlockSize(64, 64, 32, 16, True, MMA)
 
 
 class InsertionMode(Enum):
