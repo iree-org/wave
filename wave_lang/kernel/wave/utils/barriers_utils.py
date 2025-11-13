@@ -480,7 +480,9 @@ def find_intersecting_interval_strategy(
     # --- Helpers ----
     get_location = lambda req: (req.prod_location, req.cons_location)
 
-    def make_request(proto: SyncRequirement, prod: fx.Node, cons: fx.Node) -> SyncRequirement:
+    def make_request(
+        proto: SyncRequirement, prod: fx.Node, cons: fx.Node
+    ) -> SyncRequirement:
         """Make a new request based on provided producer and consumer. dont care values are default to None."""
         cls = type(proto)
         return cls(

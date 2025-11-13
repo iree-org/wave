@@ -182,6 +182,7 @@ def test_split_barriers():
 
     # CHECK-LABEL: test_split_barriers
 
+
 @run_test
 def test_find_intersecting_interval_strategy():
     shape = AttentionShape(
@@ -217,6 +218,7 @@ def test_find_intersecting_interval_strategy():
     # CHECK-LABEL: test_find_intersecting_interval_strategy
     # CHECK-COUNT-3: rocdl.s.barrier.signal -1
     # CHECK-COUNT-3: rocdl.s.barrier.wait -1
+
 
 @run_test
 def test_minimum_placement_strategy():
