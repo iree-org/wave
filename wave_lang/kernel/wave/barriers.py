@@ -48,7 +48,7 @@ class BarrierEmitter:
 
     def emit(self, sync_reqs: Sequence[SyncRequirement]) -> None:
         """
-        Optimize barrier placement using strategies defined in the derived class and place the resulting barriers accordingly.
+        Optimizes barrier placement using the derived class's strategy and places the resulting barriers.
         """
         sync_reqs = self.optimize(sync_reqs)
         for req in sync_reqs:
@@ -85,9 +85,7 @@ class LegacyBarrierEmitter(BarrierEmitter):
         producer = req.prod_region
         consumer = req.cons_region
 
-        wait_async = False
-        if is_async_op(producer) or is_async_op(consumer):
-            wait_async = True
+        wait_async = is_async_op(producer) or is_async_op(consumer)
         with consumer.graph.inserting_before(consumer):
             SharedMemoryBarrier(wait_async_ops=wait_async).add_to_graph(
                 consumer.graph, loc=get_custom(consumer).location
