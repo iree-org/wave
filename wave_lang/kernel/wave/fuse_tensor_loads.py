@@ -6,6 +6,7 @@
 
 import logging
 import math
+from typing import Any
 
 import sympy
 import torch.fx as fx
@@ -25,7 +26,9 @@ from ..wave.utils.symbol_utils import is_literal, subs_idxc
 logger = logging.getLogger(__name__)
 
 
-def merge_with_piecewise(value1, value2, selector_symbol):
+def merge_with_piecewise(
+    value1: Any, value2: Any, selector_symbol: sympy.Symbol
+) -> Any:
     """
     Merge two values using sympy.Piecewise to select based on selector_symbol.
 
@@ -58,7 +61,9 @@ def merge_with_piecewise(value1, value2, selector_symbol):
     return sympy.Piecewise((value1, sympy.Eq(selector_symbol, 0)), (value2, True))
 
 
-def merge_dicts_with_piecewise(dict1, dict2, selector_symbol):
+def merge_dicts_with_piecewise(
+    dict1: dict[Any, Any], dict2: dict[Any, Any], selector_symbol: sympy.Symbol
+) -> dict[Any, Any]:
     """
     Merge two dictionaries using Piecewise for differing values.
 
@@ -89,7 +94,7 @@ def compute_fused_parameters(
     load1: TensorLoadToLDS,
     load2: TensorLoadToLDS,
     threads_per_wave: int,
-) -> tuple[dict, int, dict, dict]:
+) -> tuple[dict[Any, Any], Any, dict[Any, Any], dict[Any, Any]]:
     """
     Compute fused parameters for two tensor loads.
 
@@ -285,7 +290,7 @@ def find_adjacent_loads(
 def fuse_tensor_loads(
     trace: CapturedTrace,
     constraints: list[Constraint],
-):
+) -> None:
     """
     Fuse adjacent TensorLoadToLDS operations to reduce the number of tensor loads.
 
