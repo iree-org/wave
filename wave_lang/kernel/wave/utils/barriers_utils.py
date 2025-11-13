@@ -3,10 +3,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from enum import Enum, auto
+from enum import auto, IntFlag
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Union, Set
+from typing import Any, Dict, List, Optional, Sequence, Union
+from functools import partial
 
 import torch.fx as fx
 
@@ -80,12 +81,12 @@ class ResourceAccessWindow:
         self.graph_info = [None, None]
 
 
-class MemoryAccessType(Enum):
+class MemoryAccessType(IntFlag):
     """
     Enum to classify memory access operations.
     """
 
-    NONE = auto()
+    NONE = 0
     READ = auto()
     WRITE = auto()
     READ_WRITE = auto()
@@ -200,101 +201,59 @@ def add_sync_requirements(
     results.append(req)
 
 
+def add_hazard_if_window_valid(
+    results: List[SyncRequirement], resource: fx.Node, window: ResourceAccessWindow
+) -> None:
+    """Add a SyncRequirement if producers and consumers are present in current hazard window."""
+    if not (window.producers and window.consumers):
+        return
+    add_sync_requirements(results, resource, window)
+    window.reset()
+
+
 def handle_hazard(
     results: List[SyncRequirement],
-    nodes: List[fx.Node],
-    producer_kinds: Set[MemoryAccessType],
-    consumer_kinds: Set[MemoryAccessType],
-    next_iter_regions: List[List] = [],
+    windows: Dict[fx.Node, ResourceAccessWindow],
+    node: fx.Node,
+    producer_kinds: MemoryAccessType,
+    consumer_kinds: MemoryAccessType,
+    graph_info: List[fx.Node] = None,
+    depth: int = 0,
 ) -> None:
-    """
-    Scan the graph once, keeps track of used resource, if a hazard window is valid, add a SyncRequirement to the result list.
-    """
-    if not nodes:
+    if not node:
         return
 
-    windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
+    op = get_custom(node)
+    access_kind = get_memory_access_type(op)
+    if access_kind == MemoryAccessType.NONE:
+        return
 
-    def add_hazard_if_window_valid(
-        resource: fx.Node, window: ResourceAccessWindow
-    ) -> None:
-        """Add a SyncRequirement if producers and consumers are present in current hazard window."""
-        if not (window.producers and window.consumers):
-            return
-        add_sync_requirements(
-            results,
-            resource,
-            window,
-        )
-        window.reset()
+    resource = get_shared_memory_from_op(op, depth)
+    assert resource is not None, "op has no smem access"
 
-    for i in range(len(nodes)):
-        depth = 0
-        graph_info = [None, None]
+    hazard_window = windows[resource]
+    if graph_info is not None:
+        hazard_window.graph_info = graph_info
 
-        for gs, ge, gs_node, ge_node in next_iter_regions:
-            if gs <= i and i < ge:
-                graph_info = [gs_node, ge_node]
-                depth = 1
-                break
+    is_prod = access_kind & producer_kinds
+    is_cons = access_kind & consumer_kinds
 
-        node = nodes[i]
+    if is_prod:
+        add_hazard_if_window_valid(results, resource, hazard_window)
+        hazard_window.producers.append(node)
 
-        op = get_custom(node)
-        access_kind = get_memory_access_type(op)
-        if access_kind == MemoryAccessType.NONE:
-            continue
-
-        resource = get_shared_memory_from_op(op, depth)
-        assert resource is not None, "op has no smem access"
-
-        hazard_window = windows[resource]
-        if graph_info[0] is not None:
-            hazard_window.graph_info = graph_info
-
-        is_prod = access_kind in producer_kinds
-        is_cons = access_kind in consumer_kinds
-
-        if is_prod:
-            add_hazard_if_window_valid(resource, hazard_window)
-            hazard_window.producers.append(node)
-
-        # Consumers only count after at least one producer for this resource.
-        if is_cons and hazard_window.producers:
-            hazard_window.consumers.append(node)
-
-    # Final cleanup
-    for resource, hazard_window in windows.items():
-        add_hazard_if_window_valid(resource, hazard_window)
+    # Consumers only count after at least one producer for this resource.
+    if is_cons and hazard_window.producers:
+        hazard_window.consumers.append(node)
 
 
-def get_all_hazards(
-    nodes: List[fx.Node], next_iter_regions: List
-) -> List[SyncRequirement]:
-    """
-    Get all possible hazards (RAW, WAR) from provided set of nodes.
-    """
-    results: List[SyncRequirement] = []
-
-    # RAW
-    handle_hazard(
-        results,
-        nodes,
-        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-        {MemoryAccessType.READ},
-        next_iter_regions,
+def get_hazard_handle(
+    producer_kinds: MemoryAccessType,
+    consumer_kinds: MemoryAccessType,
+):
+    return partial(
+        handle_hazard, producer_kinds=producer_kinds, consumer_kinds=consumer_kinds
     )
-
-    # WAR
-    handle_hazard(
-        results,
-        nodes,
-        {MemoryAccessType.READ},
-        {MemoryAccessType.WRITE, MemoryAccessType.READ_WRITE},
-        next_iter_regions,
-    )
-
-    return results
 
 
 def get_barriers_analysis(
@@ -322,49 +281,55 @@ def get_barriers_analysis(
         else []
     )
 
-    # flatten the entire graph
-    nodes = List[fx.Node]
-    iterate_regions: List[List] = []
+    results: List[SyncRequirement] = []
 
-    def flatten_graph(nodes):
-        """
-        Walk through the nodes, append a node to flatten if it is a shared memory node, recursely flatten if the node is a NestedRegionOp.
-        Flatten the iterated nodes twice to capture [iter(i) and iter(i+1)] and [iter(i+1) and outer-loop nodes] dependencies
-        """
-        flatten: List[fx.Node] = []
+    def walk_nodes(nodes, graph_info: List[fx.Node] = None, depth: int = 0):
         for node in nodes:
             if is_shared_memory_node(node):
-                flatten.append(node)
-            if is_iterate_node(node):
-                subgraph_nodes = get_subgraph_nodes(node)
-
-                # get shared memory ops from subgraph nodes
-                smem_nodes = flatten_graph(subgraph_nodes)
-
-                # for iter(i)
-                flatten.extend(smem_nodes)
-
-                # capture which region in the resulting node list needs to be propagated (iter i+1)
-                iterate_regions.append(
-                    [
-                        len(flatten),
-                        len(flatten) + len(smem_nodes),
-                        subgraph_nodes[0],
-                        subgraph_nodes[-1],
-                    ]
+                handle(
+                    results=results,
+                    windows=windows,
+                    node=node,
+                    graph_info=graph_info,
+                    depth=depth,
                 )
 
-                # for iter(i+1)
-                flatten.extend(smem_nodes)
+            if is_iterate_node(node):
+                subgraph_nodes = get_subgraph_nodes(node)
+                walk_nodes(
+                    subgraph_nodes,
+                    graph_info=[subgraph_nodes[0], subgraph_nodes[-1]],
+                    depth=0,
+                )
+                walk_nodes(
+                    subgraph_nodes,
+                    graph_info=[subgraph_nodes[0], subgraph_nodes[-1]],
+                    depth=1,
+                )
 
             if is_condition_node(node):
                 subgraph_nodes = get_subgraph_nodes(node)
-                flatten.extend(flatten_graph(subgraph_nodes))
+                walk_nodes(subgraph_nodes)
 
-        return flatten
+        for resource, window in windows.items():
+            add_hazard_if_window_valid(results, resource, window)
 
-    nodes = flatten_graph(trace.get_root_graph().nodes)
-    return get_all_hazards(nodes, iterate_regions)
+    nodes = trace.get_root_graph().nodes
+    # handle RAW
+    windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
+    handle = get_hazard_handle(
+        MemoryAccessType.READ, MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE
+    )
+    walk_nodes(nodes)
+
+    # handle WAR
+    windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
+    handle = get_hazard_handle(
+        MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE, MemoryAccessType.READ
+    )
+    walk_nodes(nodes)
+
+    return results
 
 
 def minimize_placement_strategy(
