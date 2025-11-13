@@ -563,4 +563,5 @@ def decompose_scan_ops(
                     custom.fx_node, final_scan[user.expanded_dims[scan_dim]]
                 )
 
-    DCE(trace)
+        custom.graph.erase_node(custom.fx_node)
+    # DCE(trace)
