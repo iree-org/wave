@@ -5,6 +5,7 @@
 
 import logging
 import torch
+import operator
 import torch.fx as fx
 import wave_lang.kernel.lang as tkl
 
@@ -82,6 +83,8 @@ class GraphAnalyzer:
         # Add your custom logic here
         optimizable_ops = [
             torch.ops.aten.mm.default,
+            torch.matmul,
+            operator.matmul,
         ]
 
         if node.op == "call_function" and node.target in optimizable_ops:
@@ -196,7 +199,6 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        schedule=False,
         dynamic_symbols=dynamic_symbols,
     )
     options.postprocess = """
