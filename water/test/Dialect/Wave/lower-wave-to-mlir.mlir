@@ -43,8 +43,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     %acc = wave.register %cst_f32 : vector<4xf32>
 
     // CHECK-NOT: wave.mma
-    // CHECK: amdgpu.mfma %[[LHS]] * %[[RHS]] + %[[ACC]]
-    // CHECK-SAME: blocks = 1 : i32, k = 16 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK: amdgpu.mfma 16x16x16 %[[LHS]] * %[[RHS]] + %[[ACC]]
     // CHECK-SAME: blgp =  none
     // CHECK-SAME: vector<4xf16>, vector<4xf16>, vector<4xf32>
     %res = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
@@ -93,88 +92,88 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     // f16 kinds
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x16
     %0 = wave.mma %lhs_f16, %rhs_f16, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (vector<4xf16>, vector<4xf16>, vector<4xf32>) -> vector<4xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 8 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x8
     %1 = wave.mma %lhs_f16, %rhs_f16, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x8_f16>}
       : (vector<4xf16>, vector<4xf16>, vector<16xf32>) -> vector<16xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x32
     %2 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_k8_f16>}
       : (vector<8xf16>, vector<8xf16>, vector<4xf32>) -> vector<4xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x16
     %3 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_k8_f16>}
       : (vector<8xf16>, vector<8xf16>, vector<16xf32>) -> vector<16xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x16
     %4 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_f16>}
       : (vector<8xf16>, vector<8xf16>, vector<16xf32>) -> vector<16xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x32
     %5 = wave.mma %lhs_f16_w8, %rhs_f16_w8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_f16>}
       : (vector<8xf16>, vector<8xf16>, vector<4xf32>) -> vector<4xf32>
 
     // bf16 kinds
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x16
     %6 = wave.mma %lhs_bf16, %rhs_bf16, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_bf16>}
       : (vector<8xbf16>, vector<8xbf16>, vector<16xf32>) -> vector<16xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x32
     %7 = wave.mma %lhs_bf16, %rhs_bf16, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_bf16>}
       : (vector<8xbf16>, vector<8xbf16>, vector<4xf32>) -> vector<4xf32>
 
     // f8 kinds
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x32
     %8 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_f8>}
       : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>) -> vector<4xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x16
     %9 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_f8>}
       : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>) -> vector<16xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x32
     %10 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_4 {kind = #wave.mma_kind<f32_16x16x32_k4_f8>}
       : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>) -> vector<4xf32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x16
     %11 = wave.mma %lhs_f8, %rhs_f8, %acc_f32_16 {kind = #wave.mma_kind<f32_32x32x16_k4_f8>}
       : (vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>) -> vector<16xf32>
 
     // i8 kinds
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x16
     %12 = wave.mma %lhs_i8, %rhs_i8, %acc_i32_4 {kind = #wave.mma_kind<i32_16x16x16_i8>}
       : (vector<4xi8>, vector<4xi8>, vector<4xi32>) -> vector<4xi32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 8 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x8
     %13 = wave.mma %lhs_i8, %rhs_i8, %acc_i32_16 {kind = #wave.mma_kind<i32_32x32x8_i8>}
       : (vector<4xi8>, vector<4xi8>, vector<16xi32>) -> vector<16xi32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 32 : i32, m = 16 : i32, n = 16 : i32
+    // CHECK-SAME: 16x16x32
     %14 = wave.mma %lhs_i8_w8, %rhs_i8_w8, %acc_i32_4 {kind = #wave.mma_kind<i32_16x16x32_i8>}
       : (vector<8xi8>, vector<8xi8>, vector<4xi32>) -> vector<4xi32>
     // CHECK-NOT: wave.mma
     // CHECK: amdgpu.mfma
-    // CHECK-SAME: k = 16 : i32, m = 32 : i32, n = 32 : i32
+    // CHECK-SAME: 32x32x16
     %15 = wave.mma %lhs_i8_w8, %rhs_i8_w8, %acc_i32_16 {kind = #wave.mma_kind<i32_32x32x16_i8>}
       : (vector<8xi8>, vector<8xi8>, vector<16xi32>) -> vector<16xi32>
 
