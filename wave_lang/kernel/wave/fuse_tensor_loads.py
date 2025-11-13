@@ -404,4 +404,3 @@ def fuse_tensor_loads(
     DCE(trace)
 
     logger.info(f"Successfully fused {len(fusable_pairs)} tensor load pairs")
-    print_trace(trace)
