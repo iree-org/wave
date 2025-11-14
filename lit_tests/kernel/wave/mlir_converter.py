@@ -17,6 +17,10 @@ from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
+from wave_lang.support.location_config import (
+    LocationCaptureConfig,
+    LocationCaptureLevel,
+)
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -76,6 +80,8 @@ def mlir_converter_matrix_add():
     options = WaveCompileOptions(
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
     )
     options = set_default_run_config(options)
 
@@ -210,6 +216,8 @@ def mlir_converter_matmul():
     options = WaveCompileOptions(
         subs=subs,
         compile_to_mlir=True,  # Avoid IREE compilation
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
     )
     options = set_default_run_config(options)
 
@@ -228,7 +236,10 @@ def mlir_converter_matmul():
 
     # CHECK-LABEL: mlir_converter_matmul
     # CHECK: module
-    # CHECK-NEXT: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @K] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@N, @K] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f32, <global>>
+    # CHECK-NEXT: func.func @kernel(
+    # CHECK-SAME: %[[ARG0:.*]]: !wave.tensor<[@M, @K] of f16, <global>>
+    # CHECK-SAME: %[[ARG1:.*]]: !wave.tensor<[@N, @K] of f16, <global>>
+    # CHECK-SAME: %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f32, <global>>
     # CHECK-SAME: wave.constraints =
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[BLOCK_M] -> (BLOCK_M)>, workgroup_dim = <x>>
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[BLOCK_N] -> (BLOCK_N)>, workgroup_dim = <y>>
