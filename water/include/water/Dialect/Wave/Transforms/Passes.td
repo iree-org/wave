@@ -23,6 +23,9 @@ def LowerWaveToMLIRPass : Pass<"lower-wave-to-mlir"> {
   ];
 }
 
+def WaterWaveInferIndexExprsPass : Pass<"water-wave-infer-index-exprs"> {
+}
+
 def WaterWaveInferTypesPass : Pass<"water-wave-infer-types"> {
   let summary = "Infer fully-specified Wave dialect types";
   let description = [{
