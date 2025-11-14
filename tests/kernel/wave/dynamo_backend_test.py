@@ -5,6 +5,10 @@ from torch.testing import assert_close
 import wave_lang.dynamo.register_backend
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="Dynamo Wave backend can compile only when torch can detect GPUs",
+)
 def test_wave_dynamo_backend():
     assert "wave" in torch.compiler.list_backends()
 
