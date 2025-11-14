@@ -8,10 +8,10 @@ name: happy - CI
 
 on:
   pull_request:
-  workflow_dispatch:
+    workflow_dispatch:
 
-permissions:
-  contents: read
+      permissions:
+        contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,29 +36,30 @@ jobs:
           docker restart happy
           fi
 
-      - name: Setup wave project
+      - name: setup python
         id: setup_python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           # choose whatever version you actually want here
           python-version: "3.11"
 
-      - name: Create Python venv
+      - name: Launch happy and run tests
         run: |
+          docker exec -e VENV_DIR="${VENV_DIR}" -e GITHUB_PATH="${GITHUB_PATH}" -e GITHUB_ENV="${GITHUB_ENV}" happy bash -lc '
+          # ensure venv dependencies are installed
+          apt install python3.12-venv
+
           python3 -m venv "${VENV_DIR}"
           source "${VENV_DIR}/bin/activate"
           echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
           echo "${VENV_DIR}/bin" >> "$GITHUB_PATH"
 
-      - name: Install Rust via rustup.sh
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "Install Rust via rustup.sh"
+          curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Install pip deps
-        if: ${{ !cancelled() }}
-        run: |
+          echo "Install pip deps"
           # Install torch+rocm6.4
           python -m pip install --no-compile --upgrade pip
           pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
@@ -68,46 +69,37 @@ jobs:
           pip install -r requirements.txt -e .
           #
           # Install hip-python
-          pip unintall -y hip-python
+          pip uninstall -y hip-python
           python3 -m pip install -i https://test.pypi.org/simple "hip-python<=6.4"
 
-      - name: Check Arch after python installation
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
+          echo "Check Arch after python installation"
           x=$(python -c "import torch;print(torch.cuda.get_device_properties())")
           echo $x | grep "gfx1250"
           y=$(echo $?)
           if [ "$y" -ne 0 ]; then
-            echo "Expecting gfx1250, got"
-            echo $x
-            exit 1
+          echo "Expecting gfx1250, got"
+          echo $x
+          exit 1
           fi
 
-      - name: Run unit tests
-        if: ${{ !cancelled() }}
-        run: |
+          echo "Run unit tests"
           pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
 
-      - name: Test TKW runtime related stack on amdgpu
-        if: ${{ !cancelled() }}
-        run: |
+          echo "Test TKW runtime related stack on amdgpu"
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
           nproc
           WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
 
-      - name: Run e2e tests
-        if: ${{ !cancelled() }}
-        run: |
+          echo "Run less expensive e2e"
           WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
 
-      - name: Run expensive e2e tests
-        if: ${{ !cancelled() }}
-        run: |
+          echo "Run expensive e2e tests"
           WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
 
-      - name: Run LIT tests
-        if: ${{ !cancelled() }}
-        run: |
           lit lit_tests/ -v
+          '
+
+      - name: Clean up
+        run: |
+          docker stop happy
