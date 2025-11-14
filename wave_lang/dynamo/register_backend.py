@@ -189,15 +189,17 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     dynamic_dims = False
     datatype = torch.float16
     mfma_variant = MMAType.F32_16x16x16_F16
+    threads_per_wave = 64
 
     if "gfx120" in get_default_arch():
         mfma_variant = MMAType.RDNA4_WAVE32_F32_16x16x16_F16
+        threads_per_wave = 32
 
-    if "gfx1250" in get_default_arch():
+    if "gfx125" in get_default_arch():
         mfma_variant = MMAType.GFX1250_F32_16x16x32_F16
 
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=64
+        shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=threads_per_wave
     )
 
     multibuffer = False
