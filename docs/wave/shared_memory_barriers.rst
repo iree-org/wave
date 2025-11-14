@@ -135,7 +135,7 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
                 - min_c: the minimum consumer position found so far.
                 - If the next hazard's p > min_c, we identify the smallest possible intersection, add a barrier to list and start a new window.
                 - Otherwise, tighten the window.
-            - If we add a cross-iteration barrier to graph, and all dependencies are inter-graph, then we emit a barrier surrounding the subgraph: (iterate.prev, iterate.next)
+            - If we add a cross-iteration barrier to graph, and all dependencies are intra-graph, then we emit a barrier surrounding the subgraph: (iterate.prev, iterate.next)
 
 Emission
 --------------------
