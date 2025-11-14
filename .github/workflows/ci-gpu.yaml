@@ -94,10 +94,11 @@ jobs:
             -DLLVM_ENABLE_ZSTD=OFF                                             \
             -DMLIR_INCLUDE_TESTS=OFF                                           \
             -DLLVM_USE_LINKER=lld                                              \
-            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen;mlir-python-sources" \
+            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;llvm-dwarfdump;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen;mlir-python-sources" \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON                                   \
             -DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
           ninja install-distribution-stripped
+          echo "${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install/bin" >> "$GITHUB_PATH"
           popd
 
 
