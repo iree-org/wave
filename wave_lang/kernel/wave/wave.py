@@ -993,6 +993,11 @@ class LaunchableWave(Launchable):
         options.kernel_launch_info.blocks = [
             int(x) for x in hw_constraint.threads_per_block
         ]
+        options.kernel_launch_info.cluster_dims = (
+            [int(x) for x in hw_constraint.workgroups_per_cluster]
+            if hw_constraint.workgroups_per_cluster
+            else [0, 0, 0]
+        )
         options.kernel_launch_info.func_name = self._name
 
         idxc = IndexingContext.current()
