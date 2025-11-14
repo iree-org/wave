@@ -3,16 +3,11 @@ import torch
 from torch.testing import assert_close
 
 import wave_lang.dynamo.register_backend
-from wave_lang.kernel.wave.utils.run_utils import get_default_arch
 
 
 @pytest.mark.skipif(
     not torch.cuda.is_available(),
     reason="Dynamo Wave backend can compile only when torch can detect GPUs",
-)
-@pytest.mark.skipif(
-    "gfx120" in get_default_arch(),
-    reason="amdgpu.mfma' op MFMA only supported on gfx908+",
 )
 def test_wave_dynamo_backend():
     assert "wave" in torch.compiler.list_backends()
