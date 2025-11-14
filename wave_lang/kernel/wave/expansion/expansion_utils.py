@@ -272,7 +272,7 @@ def remove_original_nodes(leaf_nodes: list[CustomOp]):
         node = queue.pop(0)
         if node._erased:
             continue
-        inputs, _ = get_inputs(node, None)
+        inputs, _, _ = get_inputs(node, None)
         for input in inputs:
             queue.append(input)
         if not node.users:
