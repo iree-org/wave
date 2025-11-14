@@ -11,9 +11,17 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Support/LLVM.h"
+
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "water/Dialect/Wave/IR/WaveAttrs.h"
+
 namespace wave {
+
+// Callback generating a diagnostic.
+using EmitErrorFn = llvm::function_ref<mlir::InFlightDiagnostic()>;
 
 class WaveTensorType;
 
@@ -380,6 +388,171 @@ public:
 template <typename OpTy>
 class NoOpElementsPerThreadOpTrait
     : public mlir::OpTrait::TraitBase<OpTy, NoOpElementsPerThreadOpTrait> {};
+
+//-----------------------------------------------------------------------------
+// WaveInferIndexExprsOpInterface
+//-----------------------------------------------------------------------------
+
+// Container for information used in index expression analysis initialization.
+// This is a simple data class with a static constructor.
+class IndexExprsAnalysisInit {
+private:
+  IndexExprsAnalysisInit() = default;
+
+public:
+  // Create an initialization object from the constraints attribute, report
+  // errors as diagnostics at the given location.
+  static llvm::FailureOr<IndexExprsAnalysisInit>
+  create(mlir::Location loc, mlir::Attribute constraintsAttr);
+
+  // Hardware constraint.
+  wave::HardwareConstraintAttr hardwareConstraint;
+
+  // Constraints relevant to each symbol.
+  llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<mlir::Attribute>>
+      symbolConstraints;
+
+  // Cached waves-per-block extracted from the hardware constraint and
+  // potentially wave constraints.
+  llvm::ArrayRef<unsigned> wavesPerBlock;
+};
+
+// Lattice for propagating index expressions across wave dialect operations.
+// In addition to the bottom and top states, it can represent a concrete state
+// manifest as a dictionary attribute mapping symbol names to index mappings.
+// The JOIN function is defined similarly to other lattices with special
+// handling for combining thread-dependent and thread-independent index
+// expressions.
+class IndexExprsLatticeStorage {
+public:
+  IndexExprsLatticeStorage();
+  IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
+  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue);
+
+  IndexExprsLatticeStorage &
+  operator=(const IndexExprsLatticeStorage &other) = default;
+
+  bool operator==(const IndexExprsLatticeStorage &other) const;
+  bool operator!=(const IndexExprsLatticeStorage &other) const;
+
+  // Return true if this lattice instance is the bottom state.
+  bool isBottom() const;
+
+  // Return true if this lattice instance is the top state.
+  bool isTop() const;
+
+  // Returns the concrete value stored in the lattice instance, be it fully
+  // specified or not, or null if the lattice instance is a top or a bottom.
+  mlir::DictionaryAttr getConcreteValue() const;
+
+  // Return the top lattice instance.
+  static IndexExprsLatticeStorage top();
+
+  // Return the bottom lattice instance.
+  static IndexExprsLatticeStorage bottom();
+
+  // Join two lattice instances and return the result.
+  static IndexExprsLatticeStorage
+  join(const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
+       llvm::ArrayRef<mlir::Attribute> ignoredRhsSymbols = {});
+
+  // XXX: backward analysis calls `meet` instead of `join`, but it isn't related
+  // to the direction of the analysis. Just defer to join.
+  static IndexExprsLatticeStorage meet(const IndexExprsLatticeStorage &lhs,
+                                       const IndexExprsLatticeStorage &rhs);
+
+  // Forcibly assign the current value of the lattice. This MUST NOT be used in
+  // the transfer functions as it may be moving the instance back on the lattice
+  // and therefore breaking the analysis convergence guarantees due to
+  // non-monotonicity. This is useful during forceful initialization to override
+  // the quirk of the dataflow framework using the same function
+  // (`setToEntry/ExitState`) to both initialize the analysis and to indicate
+  // failure to analyze. Those functions can keep setting the lattice to the top
+  // state.
+  void unsafeSet(const IndexExprsLatticeStorage &value);
+
+  // Return a new lattice instance with only the provided symbols present.
+  IndexExprsLatticeStorage
+  keepOnlySymbols(llvm::ArrayRef<class WaveSymbolAttr> symbols) const;
+
+  void print(llvm::raw_ostream &os) const;
+
+  LLVM_DUMP_METHOD void dump() const;
+
+private:
+  // The internal storage is either a dictionary attribute with one entry per
+  // symbol indexing the value or one of the top/bottom flags.
+  llvm::PointerIntPair<mlir::Attribute, 2> value;
+
+  // State flags.
+  const static unsigned kUninitializedState = 0;
+  const static unsigned kSpecificTypeState = 1;
+  const static unsigned kUndecidableState = 2;
+};
+
+void operator<<(mlir::Diagnostic &diag, const IndexExprsLatticeStorage &value);
+
+namespace detail {
+
+// Default propagation of index expressions from all operands to all results
+// (forward) or from all results to all operands (backward). This is used for
+// operations that don't need special handling of index expressions.
+llvm::FailureOr<mlir::ChangeResult>
+identityIndexExprsPropagate(llvm::ArrayRef<IndexExprsLatticeStorage> from,
+                            llvm::MutableArrayRef<IndexExprsLatticeStorage> to,
+                            mlir::TypeRange toTypes, llvm::StringRef fromName,
+                            llvm::StringRef toName,
+                            wave::EmitErrorFn emitError);
+
+// Set the index attribute as an array of index expressions, one for each of the
+// results.
+llvm::LogicalResult identitySetIndexFromLattices(
+    mlir::Operation *op, llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs);
+
+// Check the index expressions is a concrete value rather lattice top/bottom and
+// append it to the indexExprs list. If it is lattice top/bottom, report an
+// error and return failure.
+llvm::LogicalResult
+checkAndAppendIndexExpr(mlir::Location loc,
+                        const IndexExprsLatticeStorage &expr,
+                        llvm::Twine description,
+                        llvm::SmallVectorImpl<mlir::Attribute> &indexExprs);
+} // namespace detail
+
+// Trait implementing the methods of the WaveInferIndexExprsOpInterface with
+// information flowing between operands and results.
+template <typename OpTy>
+class IdentityIndexExprsOpTrait
+    : public mlir::OpTrait::TraitBase<OpTy, IdentityIndexExprsOpTrait> {
+public:
+  // Propagate from operands to results.
+  llvm::FailureOr<mlir::ChangeResult> propagateIndexExprsForward(
+      llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+      llvm::MutableArrayRef<IndexExprsLatticeStorage> resultExprs,
+      wave::EmitErrorFn emitError) {
+    return wave::detail::identityIndexExprsPropagate(
+        operandExprs, resultExprs, this->getOperation()->getResultTypes(),
+        "operand", "result", emitError);
+  }
+
+  // Propagate from results to operands.
+  llvm::FailureOr<mlir::ChangeResult> propagateIndexExprsBackward(
+      llvm::MutableArrayRef<IndexExprsLatticeStorage> operandExprs,
+      llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs,
+      wave::EmitErrorFn emitError) {
+    return wave::detail::identityIndexExprsPropagate(
+        resultExprs, operandExprs, this->getOperation()->getOperandTypes(),
+        "result", "operand", emitError);
+  }
+
+  llvm::LogicalResult
+  setIndexFromLattices(llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+                       llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
+    return detail::identitySetIndexFromLattices(this->getOperation(),
+                                                operandExprs, resultExprs);
+  }
+};
 
 } // namespace wave
 
