@@ -104,7 +104,7 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
         For difference scheduling such as Prefetch / Modulo, LR and LW may appear at prolog or epilog of a subgraph.
         This function checks if there are waits before any signals.
         """
-        signals = defaultdict(bool)  # barId : signal exist
+        signals = defaultdict(bool)  # barId : signal exists
         lonely_waits = set()
         nodes = trace.preorder_walk()
 
