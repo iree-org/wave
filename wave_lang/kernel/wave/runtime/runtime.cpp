@@ -290,7 +290,8 @@ NB_MODULE(wave_runtime, m) {
   nb::bind_vector<Int64Vector>(m, "Int64Vector");
   nb::bind_vector<Int32Vector>(m, "Int32Vector");
   nb::class_<KernelLaunchInfo>(m, "KernelLaunchInfo")
-      .def(nb::init<uintptr_t, uintptr_t, int, int, int, int, int, int, int>())
+      .def(nb::init<uintptr_t, uintptr_t, int, int, int, int, int, int, int,
+                    int, int, int>())
       .def_rw("gpu_stream", &KernelLaunchInfo::stream)
       .def_rw("gpu_func", &KernelLaunchInfo::function)
       .def_rw("sharedMemoryBytes", &KernelLaunchInfo::sharedMemoryBytes)
