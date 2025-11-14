@@ -75,18 +75,14 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          set -euo pipefail
-          python - <<'PY'
-          import sys, torch
-        if not torch.cuda.is_available():
-          sys.stderr.write("GPU not available\n")
-          sys.exit(1)
-          props = torch.cuda.get_device_properties(0)
-          name = getattr(props, 'name', '')
-        if "gfx1250" not in name:
-          sys.stderr.write(f"Expected gfx1250, got: {name}\n")
-            sys.exit(1)
-          PY
+          x=$(python -c "import torch;print(torch.cuda.get_device_properties())")
+          echo $x | grep "gfx1250"
+          y=$(echo $?)
+          if [ "$y" -ne 0 ]; then
+            echo "Expecting gfx1250, got"
+            echo $x
+            exit 1
+          fi
 
       - name: Run unit tests
         if: ${{ !cancelled() }}
