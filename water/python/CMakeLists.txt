@@ -9,6 +9,7 @@ if (WATER_ENABLE_PYTHON)
 
   # Avoid clashing with IREE Python bindings
   set(MLIR_BINDINGS_PYTHON_NB_DOMAIN "water_mlir")
+  set(MLIR_BINDINGS_PYTHON_INSTALL_PREFIX "python_packages/water/water_mlir" CACHE STRING "" FORCE)
   add_compile_definitions("MLIR_PYTHON_PACKAGE_PREFIX=water_mlir.")
 
   declare_mlir_python_sources(WaterPythonSources)
