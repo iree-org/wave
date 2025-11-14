@@ -2322,3 +2322,117 @@ def test_explicit_shared_gemm():
     # CHECK:              amdgpu.mfma
     # Verify write to global memory (outside loop)
     # CHECK:            vector.store %{{.*}}, %[[GLOBAL_C]]
+
+
+@run_test
+def test_persistent_gemm():
+    TOTAL_TILES = tkl.sym.TOTAL_TILES
+    NUM_CTAS = tkl.sym.NUM_CTAS
+    TILE_IDX = tkl.sym.TILE_IDX
+
+    def m_offset_fn(wg_id):
+        from sympy import ceiling, floor
+
+        n_tiles = ceiling(N / BLOCK_N)
+        return floor(wg_id / n_tiles) * BLOCK_M
+
+    def n_offset_fn(wg_id):
+        from sympy import ceiling
+
+        n_tiles = ceiling(N / BLOCK_N)
+        return (wg_id % n_tiles) * BLOCK_N
+
+    constraints: list[tkw.Constraint] = [
+        tkw.GridConstraint(NUM_CTAS),
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0, apply_fn=m_offset_fn),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 0, primary=False, apply_fn=n_offset_fn),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.TilingConstraint(TILE_IDX),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={TILE_IDX: 0},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def persistent_gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        total_tiles_scalar = tkw.scalar(TOTAL_TILES, tkl.i32)
+        tkw.set_symbol(TOTAL_TILES, total_tiles_scalar)
+
+        condition = TILE_IDX < TOTAL_TILES
+
+        init_tile_id = tkw.scalar(WORKGROUP_0, tkl.i32)
+
+        @tkw.iterate(TILE_IDX, start=init_tile_id, condition=condition, init_args=[])
+        def persistent_loop():
+            tile_idx = tkw.self_index(TILE_IDX, tkl.i32)
+            tkw.set_symbol(WORKGROUP_0, tile_idx)
+
+            c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+            @tkw.iterate(axis=K, init_args=[c_reg])
+            def k_loop(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+                a_reg = tkw.read(a)
+                b_reg = tkw.read(b)
+                acc = tkw.mma(a_reg, b_reg, acc)
+                return acc
+
+            tkw.write(k_loop, c)
+
+            num_cus_scalar = tkw.scalar(NUM_CTAS, tkl.i32)
+            next_idx = tile_idx + num_cus_scalar
+            tkw.set_symbol(TILE_IDX, next_idx)
+
+    m_val, n_val, block_m_val, block_n_val = 2048, 2048, 128, 256
+    m_tiles = (m_val + block_m_val - 1) // block_m_val
+    n_tiles = (n_val + block_n_val - 1) // block_n_val
+    total_tiles = m_tiles * n_tiles
+    num_ctas = total_tiles
+
+    options = WaveCompileOptions(
+        subs={
+            M: m_val,
+            N: n_val,
+            K: 2048,
+            BLOCK_M: block_m_val,
+            BLOCK_N: block_n_val,
+            BLOCK_K: 64,
+            TOTAL_TILES: total_tiles,
+            NUM_CTAS: num_ctas,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    persistent_gemm = wave_compile(options, persistent_gemm)
+    print(persistent_gemm.asm)
+
+    # CHECK-LABEL:    test_persistent_gemm
+    # CHECK:          func.func @persistent_gemm
+    # CHECK-SAME:       (%[[ARG0:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG1:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION:.+]]} {
+
+    # CHECK-DAG:       %[[C128_I32:.+]] = arith.constant 128 : i32
+    # CHECK-DAG:       %[[C128:.+]] = arith.constant 128 : index
+    # CHECK:           %[[BLOCK_ID_X:.+]] = gpu.block_id  x upper_bound 128
+
+    # Persistent loop
+    # CHECK:           %{{.*}} = scf.while (%[[ARG3:.+]] = %[[BLOCK_ID_X]]) : (index) -> index {
+    # CHECK:             %{{.*}} = arith.cmpi slt, %[[ARG3]], %[[C128]] : index
+    # CHECK:             scf.condition(%{{.*}}) %[[ARG3]] : index
+    # CHECK:           } do {
+    # CHECK:             %{{.*}} = arith.index_cast %[[ARG3]] : index to i32
+
+    # Advance to next tile
+    # CHECK:             %{{.*}} = arith.addi %{{.*}}, %[[C128_I32]] : i32
+    # CHECK:             %{{.*}} = arith.index_cast %{{.*}} : i32 to index
+    # CHECK:             scf.yield %{{.*}} : index
+    # CHECK:           }
+    # CHECK:           return
