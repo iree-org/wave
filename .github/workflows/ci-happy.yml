@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       run_tests:
-        desription: "Run tests in happy container."
+        description: "Run tests in happy container."
         required: true
         default: "yes"
         type: choice
@@ -23,6 +23,9 @@ jobs:
   happy-set-env:
     runs-on: ['self-hosted', 'Linux', 'X64', 'rdna4']
     if: github.event.inputs.run_tests == "yes"
+    strategy:
+      matrix:
+        version: ['3.10', '3.11']
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
