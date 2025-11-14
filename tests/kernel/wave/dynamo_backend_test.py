@@ -8,8 +8,8 @@ import wave_lang.dynamo.register_backend
 def test_wave_dynamo_backend():
     assert "wave" in torch.compiler.list_backends()
 
-    a = torch.randn(64, 64, dtype=torch.float16, device="cuda")
-    b = torch.randn(64, 64, dtype=torch.float16, device="cuda")
+    a = torch.randn(64, 64, dtype=torch.float16)
+    b = torch.randn(64, 64, dtype=torch.float16)
 
     def model(x, y):
         a = torch.matmul(x, y)
