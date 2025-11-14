@@ -191,7 +191,7 @@ def add_sync_requirements(
         resource=resource,
         producers=list(window.producers),
         consumers=list(window.consumers),
-        is_loop=cross_iter,  # when producer appears after consumer, we identify a loop
+        is_loop=cross_iter,  # when producer location is greater than consumer location, we identify a loop
         prod_region=last_prod,
         cons_region=first_con,
         prod_location=last_prod_loc,
