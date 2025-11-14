@@ -552,7 +552,7 @@ def find_intersecting_interval_strategy(
     def window_is_covered(start: int, end: int, index: int = 0):
         """
         `Covered` means that at least one sync requirement's position is inside the window.
-        Index determine whether we are checking for producer presence (0) or consumer presence (1).
+        Index determines whether we are checking for producer presence (0) or consumer presence (1).
         """
         return any(
             (start <= get_location(req)[index] and get_location(req)[index] <= end)
