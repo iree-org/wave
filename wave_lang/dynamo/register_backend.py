@@ -214,7 +214,7 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     gemm = wave_compile(options, gemm)
 
     a_tensor_wave = device_tensor(a.detach().clone(), dtype=datatype)
-    b_tensor_wave = device_tensor(b.detach().clone(), dtype=datatype)
+    b_tensor_wave = device_tensor(b.detach().clone().t(), dtype=datatype)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a_tensor_wave, b_tensor_wave, c)
 
