@@ -26,18 +26,14 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - name: Show workspace on host
-        run: |
-          echo "GITHUB_WORKSPACE on host:"
-          echo "${{ github.workspace }}"
-
       - name: Ensure container happy is running
         run: |
           if ! docker ps --format '{{.Names}}' | grep -q '^happy$'; then
           echo "Happy is not present. Starting it..."
           docker start happy
           else
-          echo "Happy is present."
+          echo "Happy is present. Restarting it..."
+          docker restart happy
           fi
 
       - name: Setup wave project
@@ -63,10 +59,6 @@ jobs:
       - name: Install pip deps
         if: ${{ !cancelled() }}
         run: |
-          # Install User libraries
-          sudo apt-get update
-          sudo apt install -y libnuma1 numactl gfortran build-essential binutils
-
           # Install torch+rocm6.4
           python -m pip install --no-compile --upgrade pip
           pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
@@ -74,6 +66,27 @@ jobs:
           # Install wave deps
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -r requirements.txt -e .
+          #
+          # Install hip-python
+          pip unintall -y hip-python
+          python3 -m pip install -i https://test.pypi.org/simple "hip-python<=6.4"
+
+      - name: Check Arch after python installation
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys, torch
+        if not torch.cuda.is_available():
+          sys.stderr.write("GPU not available\n")
+          sys.exit(1)
+          props = torch.cuda.get_device_properties(0)
+          name = getattr(props, 'name', '')
+        if "gfx1250" not in name:
+          sys.stderr.write(f"Expected gfx1250, got: {name}\n")
+            sys.exit(1)
+          PY
 
       - name: Run unit tests
         if: ${{ !cancelled() }}
