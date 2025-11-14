@@ -119,7 +119,7 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
                 - For normal intervals (start < end), we maintain a single "last chosen position", initialize as -1 (an impossible topology position)
                 - For each interval, if no existing barrier lies in (start, end], this mean the hazard window is not covered, a barrier is needed in that position, add one to list, and update `last_pos`.
             3. Cross-iteration (loop) hazards
-                - For loop-carrierd intervals (start > end), each forms a circular interval on [graph_start, graph_end].
+                - For loop-carried intervals (start > end), each forms a circular interval on [graph_start, graph_end].
                 - Check if an existing barrier lies in segments: (start, end] or (graph_start, end]
                 - If neither segment contains a barrier, this position requires a barrier, add one to list
 
