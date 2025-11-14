@@ -573,7 +573,7 @@ def find_intersecting_interval_strategy(
     # Core sweep (forward intervals only)
     def sweep(reqs: List[SyncRequirement]) -> bool:
         """Coalesce forward intervals. Returns True if all placements are intra-graph."""
-        inter_graph = True
+        intra_graph = True
         proto = reqs[0]
 
         # (current seen largest p,
@@ -594,7 +594,7 @@ def find_intersecting_interval_strategy(
 
             if p > min_c:
                 place_barrier_at(proto, max_p_prod, min_c_cons)
-                inter_graph &= max_p_prod.graph == min_c_cons.graph
+                intra_graph &= max_p_prod.graph == min_c_cons.graph
                 window = (p, c, prod, cons)
             else:
                 if p > max_p:
@@ -607,9 +607,9 @@ def find_intersecting_interval_strategy(
         if window is not None:
             _, _, prod, cons = window
             place_barrier_at(proto, prod, cons)
-            inter_graph &= prod.graph == cons.graph
+            intra_graph &= prod.graph == cons.graph
 
-        return inter_graph
+        return intra_graph
 
     # --- Procedure ----
     graph_groups = defaultdict(list)
@@ -675,11 +675,11 @@ def find_intersecting_interval_strategy(
 
             if norm:
                 added_before = len(results)
-                inter_graph = sweep(norm)
+                intra_graph = sweep(norm)
                 # Optional loop wrap if we added only intra-graph deps
                 if (
                     len(results) > added_before
-                    and inter_graph
+                    and intra_graph
                     and hasattr(graph, "parent_op")
                 ):
                     it = graph.parent_op
