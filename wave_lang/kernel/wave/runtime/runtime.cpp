@@ -29,11 +29,75 @@ using hipStream_t = void *;
 using hipFunction_t = void *;
 using hipModule_t = void *;
 
+typedef enum hipLaunchAttributeID {
+  hipLaunchAttributeAccessPolicyWindow =
+      1, ///< Valid for Streams, graph nodes, launches
+  hipLaunchAttributeCooperative = 2, ///< Valid for graph nodes, launches
+  hipLaunchAttributeSynchronizationPolicy = 3, ///< Valid for streams
+  hipLaunchAttributePriority = 8, ///< Valid for graph node, streams, launches
+  hipLaunchAttributeMemSyncDomainMap =
+      9, ///< Valid for streams, graph nodes, launches
+  hipLaunchAttributeMemSyncDomain =
+      10, ///< Valid for streams, graph nodes, launches
+  hipLaunchAttributeMax
+} hipLaunchAttributeID;
+
+typedef union hipLaunchAttributeValue {
+  char pad[64]; ///< 64 byte padding
+  // hipAccessPolicyWindow
+  //     accessPolicyWindow;  ///< Value of launch attribute
+  //     ::hipLaunchAttributeAccessPolicyWindow.
+  // int cooperative;         ///< Value of launch attribute
+  // ::hipLaunchAttributeCooperative. Indicates
+  //                          ///< whether the kernel is cooperative.
+  // int priority;  ///< Value of launch attribute ::
+  // hipLaunchAttributePriority. Execution priority of
+  //                ///< kernel
+  // hipSynchronizationPolicy
+  //     syncPolicy;  ///< Value of launch attribute ::
+  //     hipLaunchAttributeSynchronizationPolicy. Used
+  //                  ///< to work queued up in stream
+  // hipLaunchMemSyncDomainMap
+  //     memSyncDomainMap;  ///< Value of launch attribute
+  //     hipLaunchAttributeMemSyncDomainMap
+  // hipLaunchMemSyncDomain
+  //     memSyncDomain;  ///< Value of launch attribute
+  //     hipLaunchAttributeMemSyncDomain
+} hipLaunchAttributeValue;
+
+typedef struct hipLaunchAttribute_st {
+  hipLaunchAttributeID id; ///< Identifier of the launch attribute
+  char pad[8 - sizeof(hipLaunchAttributeID)]; ///< Padding to align the
+                                              ///< structure to 8 bytes
+  union {
+    hipLaunchAttributeValue val; ///< Value associated with the launch attribute
+    hipLaunchAttributeValue
+        value; ///< Value associated with the launch attribute
+  };
+} hipLaunchAttribute;
+
+typedef struct HIP_LAUNCH_CONFIG_st {
+  unsigned int gridDimX;  ///< Grid width in blocks
+  unsigned int gridDimY;  ///< Grid height in blocks
+  unsigned int gridDimZ;  ///< Grid depth in blocks
+  unsigned int blockDimX; ///< Thread block dimension in X
+  unsigned int blockDimY; ///< Thread block dimension in Y
+  unsigned int blockDimZ; ///< Thread block dimension in Z
+  unsigned int
+      sharedMemBytes;        ///< Dynamic shared-memory size in bytes per block
+  hipStream_t hStream;       ///< HIP stream identifier
+  hipLaunchAttribute *attrs; ///< Attribute list
+  unsigned int numAttrs;     ///< Number of attributes
+} HIP_LAUNCH_CONFIG;
+
 using hipModuleLaunchKernel_t = hipError_t (*)(hipFunction_t, unsigned int,
                                                unsigned int, unsigned int,
                                                unsigned int, unsigned int,
                                                unsigned int, unsigned int,
                                                hipStream_t, void **, void **);
+
+using hipDrvLaunchKernelEx_t = hipError_t (*)(const HIP_LAUNCH_CONFIG *,
+                                              hipFunction_t, void **, void **);
 
 using hipGetErrorName_t = const char *(*)(hipError_t);
 using hipGetErrorString_t = const char *(*)(hipError_t);
@@ -43,6 +107,7 @@ using hipModuleGetFunction_t = hipError_t (*)(hipFunction_t *, hipModule_t,
                                               const char *);
 
 static hipModuleLaunchKernel_t hipModuleLaunchKernel = nullptr;
+static hipDrvLaunchKernelEx_t hipDrvLaunchKernelEx = nullptr;
 static hipGetErrorName_t hipGetErrorName = nullptr;
 static hipGetErrorString_t hipGetErrorString = nullptr;
 static hipModuleUnload_t hipModuleUnload = nullptr;
@@ -97,6 +162,10 @@ static void load_hip_functions() {
   GET_FUNC(module, hipModuleLoad);
   GET_FUNC(module, hipModuleGetFunction);
 
+  // hipDrvLaunchKernelEx may not be available.
+  hipDrvLaunchKernelEx = reinterpret_cast<hipDrvLaunchKernelEx_t>(
+      get_symbol_address(module, "hipDrvLaunchKernelEx"));
+
 #undef GET_FUNC
 }
 
@@ -123,6 +192,7 @@ struct KernelLaunchInfo {
   int sharedMemoryBytes;
   int gridX, gridY, gridZ;
   int blockX, blockY, blockZ;
+  int clusterDimX, clusterDimY, clusterDimZ;
 };
 
 using Int64Vector = std::vector<uint64_t>;
@@ -169,9 +239,33 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
                              HIP_LAUNCH_PARAM_BUFFER_SIZE, &kernArgSize,
                              HIP_LAUNCH_PARAM_END};
 
-  HIP_CHECK_EXC(hipModuleLaunchKernel(
-      function, info.gridX, info.gridY, info.gridZ, info.blockX, info.blockY,
-      info.blockZ, 0, stream, nullptr, (void **)&hipLaunchParams));
+  if (info.clusterDimX * info.clusterDimY * info.clusterDimZ > 1) {
+    if (!hipDrvLaunchKernelEx)
+      throw std::runtime_error("hipDrvLaunchKernelEx is not available");
+
+    hipLaunchAttribute attributes[1];
+    // Attribute0: Cluster dimensions
+    attributes[0].id = (hipLaunchAttributeID)4;
+    int *cluster_dims = (int *)attributes[0].val.pad;
+    cluster_dims[0] = info.clusterDimX;
+    cluster_dims[1] = info.clusterDimY;
+    cluster_dims[2] = info.clusterDimZ;
+
+    HIP_LAUNCH_CONFIG config = {
+        info.gridX,  info.gridY,
+        info.gridZ,  info.blockX,
+        info.blockY, info.blockZ,
+        0,           stream,
+        attributes,  1 // Number of attributes
+    };
+
+    HIP_CHECK_EXC(hipDrvLaunchKernelEx(&config, function, nullptr,
+                                       (void **)&hipLaunchParams));
+  } else {
+    HIP_CHECK_EXC(hipModuleLaunchKernel(
+        function, info.gridX, info.gridY, info.gridZ, info.blockX, info.blockY,
+        info.blockZ, 0, stream, nullptr, (void **)&hipLaunchParams));
+  }
 }
 
 static void unload_binary(void *ptr) noexcept {
@@ -205,7 +299,10 @@ NB_MODULE(wave_runtime, m) {
       .def_rw("gridZ", &KernelLaunchInfo::gridZ)
       .def_rw("blockX", &KernelLaunchInfo::blockX)
       .def_rw("blockY", &KernelLaunchInfo::blockY)
-      .def_rw("blockZ", &KernelLaunchInfo::blockZ);
+      .def_rw("blockZ", &KernelLaunchInfo::blockZ)
+      .def_rw("clusterDimX", &KernelLaunchInfo::clusterDimX)
+      .def_rw("clusterDimY", &KernelLaunchInfo::clusterDimY)
+      .def_rw("clusterDimZ", &KernelLaunchInfo::clusterDimZ);
   m.def("load_hip_functions", &load_hip_functions);
   m.def("launch", &launch);
   m.def("load_binary", &load_binary);
