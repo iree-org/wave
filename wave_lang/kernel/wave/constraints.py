@@ -230,6 +230,7 @@ class HardwareConstraint(Constraint):
 
     threads_per_wave: int
     waves_per_block: Optional[tuple[int, int, int]] = None
+    workgroups_per_cluster: Optional[tuple[int, int, int]] = None
     mma_type: Optional[MMAType | ScaledMMAType] = MMAType.F32_16x16x16_F16
     vector_shapes: Optional[dict[IndexSymbol, int]] = None
     max_bits_per_load: int = 128
