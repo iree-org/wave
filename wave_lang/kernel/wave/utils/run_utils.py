@@ -82,6 +82,9 @@ def invoke_with_wave_runtime(
         options.kernel_launch_info.blocks[0],
         options.kernel_launch_info.blocks[1],
         options.kernel_launch_info.blocks[2],
+        options.kernel_launch_info.cluster_dims[0],
+        options.kernel_launch_info.cluster_dims[1],
+        options.kernel_launch_info.cluster_dims[2],
     )
 
     # Ensure that the tensors are contiguous.
