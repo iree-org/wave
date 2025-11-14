@@ -504,12 +504,12 @@ def find_intersecting_interval_strategy(
     - node
     - node <- largest
 
-    The algorithm keep tracks of the smallest wait position, and
-    update the signal position if a request has
-    1) a wait with larger position than track-recorded wait position, and
-    2) a signal with larger position than track-recorded signal position
+    The algorithm keeps track of the smallest wait position, and
+    updates the signal position if a request has
+    1) a wait with larger position than tracked wait position, and
+    2) a signal with larger position than tracked signal position
 
-    We add synchronization requirement to the result when current signal position is larger than track-recorded wait position
+    We add synchronization requirement to the result when current signal position is larger than tracked wait position
     - Groups by graph.
     - Normalizes loop-carried hazards by shifting consumer by |body|.
     - Single sweep coalescing intervals.
