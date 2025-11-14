@@ -680,7 +680,7 @@ def _emit_from_captured_trace(
             diagnostics.append(str(e))
 
         enable_debug_info = (
-            options.location_capture_config is not LocationCaptureLevel.NONE
+            options.location_capture_config.level is not LocationCaptureLevel.NONE
         )
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
 
