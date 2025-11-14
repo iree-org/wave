@@ -7,13 +7,8 @@
 name: happy - CI
 
 on:
+  pull_request:
   workflow_dispatch:
-    inputs:
-      run_tests:
-        description: "Run tests in happy container"
-        required: true
-        type: choice
-        options: [yes, no]
 
 permissions:
   contents: read
@@ -25,9 +20,6 @@ concurrency:
 jobs:
   happy-set-env:
     runs-on: ['self-hosted', 'Linux', 'X64', 'rdna4']
-      # important: wrap the expression in ${{ }}
-    if: ${{ github.event.inputs.run_tests == 'yes' }}
-
     env:
       VENV_DIR: .venv
 
