@@ -27,6 +27,50 @@ except ImportError:
 _cached_engine: Optional[weakref.ref] = None
 
 
+def _get_wave_get_buffer_address():
+    """
+    Get the address of the wave_get_buffer function.
+
+    This function is defined in buffer_utils.cpp and needs to be accessible
+    to JIT-compiled code.
+
+    Returns:
+        Integer address of wave_get_buffer, or None if not available
+    """
+    import ctypes
+    import sys
+
+    # Try to find wave_get_buffer in the current process
+    # It should be loaded as part of the wave_execution_engine extension
+    try:
+        # Get handle to current process
+        if sys.platform == "linux":
+            RTLD_DEFAULT = ctypes.cast(0, ctypes.c_void_p)
+            libc = ctypes.CDLL(None)
+            dlsym = libc.dlsym
+            dlsym.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            dlsym.restype = ctypes.c_void_p
+
+            addr = dlsym(RTLD_DEFAULT, b"wave_get_buffer")
+            if addr:
+                return addr
+        elif sys.platform == "darwin":
+            # macOS
+            RTLD_DEFAULT = ctypes.cast(-2, ctypes.c_void_p)
+            libc = ctypes.CDLL(None)
+            dlsym = libc.dlsym
+            dlsym.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            dlsym.restype = ctypes.c_void_p
+
+            addr = dlsym(RTLD_DEFAULT, b"wave_get_buffer")
+            if addr:
+                return addr
+    except Exception:
+        pass
+
+    return None
+
+
 def _create_options_from_env() -> "ExecutionEngineOptions":
     """
     Create ExecutionEngineOptions from environment variables.
