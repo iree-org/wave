@@ -310,9 +310,8 @@ class WaveKernel2:
         """
         Invokes the wave kernel with the given arguments using the ExecutionEngine.
         """
-        # Prepare arguments for the host wrapper
-        # Stream pointer (currently unused, pass NULL)
-        stream_ptr = None
+        # Get the current CUDA stream
+        stream_ptr = torch.cuda.current_stream().cuda_stream
 
         # Convert arguments to PyObject* pointers using id()
         # id() returns the memory address of the Python object
