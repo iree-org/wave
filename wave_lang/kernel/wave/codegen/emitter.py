@@ -296,7 +296,7 @@ class WaveEmitter:
         # Rest are kernel arguments as PyObject*
         host_args_types = [ptr] + [ptr] * len(arg_types)
         host_ftype = FunctionType.get(host_args_types, [])
-        func_name = kernel_func.name.value + "_host_wrapper"
+        func_name = self.options.func_name
         func_op = func_d.FuncOp(func_name, host_ftype)
 
         entry_block = func_op.add_entry_block(
