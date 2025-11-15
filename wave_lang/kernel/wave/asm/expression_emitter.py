@@ -143,7 +143,23 @@ class ExprEmitter:
         self.emitter = emitter
         self.kernel_info = kernel_info
         self.tid_x_symbol = sympy.Symbol("tid_x", nonnegative=True)
+        self.tid_y_symbol = sympy.Symbol("tid_y", nonnegative=True)
+        self.tid_z_symbol = sympy.Symbol("tid_z", nonnegative=True)
         self._cache: Dict[tuple, str] = {}
+
+        # Symbol bindings for workgroup IDs (maps symbol -> SGPR index or register name)
+        self.symbol_bindings: Dict[sympy.Symbol, str] = {}
+
+    def bind_symbol(self, symbol_name: str, register: str) -> None:
+        """
+        Bind a symbol name to a register.
+
+        Args:
+            symbol_name: Symbol name (e.g., "wgid_x", "wgid_y")
+            register: Register name (e.g., "s2", "s3", "v5")
+        """
+        symbol = sympy.Symbol(symbol_name, nonnegative=True)
+        self.symbol_bindings[symbol] = register
 
     def get_or_emit(self, expr: sympy.Expr, dst_hint: Optional[str] = None) -> str:
         """
@@ -241,11 +257,96 @@ class ExprEmitter:
     # ===============================================================
 
     def _handle_symbol(self, term: sympy.Symbol, lane_id_v: int, stack: list) -> None:
-        """Handle Symbol node - push tid_x register to stack."""
-        if term == self.tid_x_symbol:
+        """
+        Handle Symbol node - push appropriate register to stack.
+
+        Supports:
+        - Bound symbols (e.g., tid_x, tid_y, wgid_x, wgid_y): Thread/workgroup IDs in VGPRs/SGPRs
+        - SGPR symbols (s0, s1, etc.): Direct SGPR references
+        - Legacy tid_x: Falls back to lane_id_v if not bound
+
+        For SGPR symbols, we move them to a VGPR since most arithmetic is VALU.
+        """
+        if term in self.symbol_bindings:
+            # Symbol bound to a register (e.g., wgid_x -> "s2", tid_x -> "v0")
+            bound_reg = self.symbol_bindings[term]
+            if bound_reg.startswith("s"):
+                # SGPR - need to move to VGPR for arithmetic
+                temp_v = self._sgpr_to_vgpr(bound_reg)
+                stack.append(f"v{temp_v}")
+            else:
+                # VGPR binding - but for tid_x, check if we need to extract from flat thread ID
+                if term == self.tid_x_symbol and bound_reg == "v0":
+                    # Check if we're in multi-wave mode
+                    wg_size_y = (
+                        self.kernel_info.wg_size[1]
+                        if len(self.kernel_info.wg_size) > 1
+                        else 1
+                    )
+                    wg_size_z = (
+                        self.kernel_info.wg_size[2]
+                        if len(self.kernel_info.wg_size) > 2
+                        else 1
+                    )
+
+                    if wg_size_y > 1 or wg_size_z > 1:
+                        # Multi-wave: v0 contains flat thread ID, extract bits 0-9 for tid_x
+                        temp_v = self.emitter.vgpr_allocator.alloc_v()
+                        self.emitter.emit(
+                            f"  v_and_b32 v{temp_v}, 0x3ff, v0  // Extract tid_x from bits 0-9"
+                        )
+                        stack.append(f"v{temp_v}")
+                    else:
+                        # Single-wave: v0 == tid_x directly
+                        stack.append(bound_reg)
+                else:
+                    # Other VGPR binding - use directly
+                    stack.append(bound_reg)
+        elif term == self.tid_x_symbol:
+            # Legacy fallback: use lane_id for single-wave scenarios where tid_x wasn't bound
             stack.append(f"v{lane_id_v}")
+        elif term == self.tid_y_symbol:
+            # tid_y needs to be extracted from flat tid_x (v0)
+            # AMD GPU runtime uses a fixed encoding for thread IDs:
+            # - Bits 0-9: thread_id_x (up to 1024)
+            # - Bits 10-19: thread_id_y (up to 1024)
+            # - Bits 20-29: thread_id_z (up to 1024)
+            # This is independent of the actual workgroup dimensions.
+            temp_v = self.emitter.vgpr_allocator.alloc_v()
+            self.emitter.emit(
+                f"  v_bfe_u32 v{temp_v}, v0, 10, 10  // Extract tid_y from bits 10-19"
+            )
+            stack.append(f"v{temp_v}")
+        elif term == self.tid_z_symbol:
+            # tid_z would be extracted from even higher bits if needed
+            # For now, multi-wave only uses Y dimension
+            raise ValueError(
+                f"Thread ID symbol {term} (tid_z) not supported - only tid_x and tid_y"
+            )
+        elif str(term).startswith("s") and str(term)[1:].isdigit():
+            # Direct SGPR reference like "s0", "s1"
+            sgpr_num = int(str(term)[1:])
+            temp_v = self._sgpr_to_vgpr(f"s{sgpr_num}")
+            stack.append(f"v{temp_v}")
         else:
             raise ValueError(f"Unknown symbol: {term}")
+
+    def _sgpr_to_vgpr(self, sgpr: str) -> int:
+        """
+        Move an SGPR value to a VGPR.
+
+        Args:
+            sgpr: SGPR name (e.g., "s2")
+
+        Returns:
+            VGPR index containing the SGPR value
+        """
+        from .instructions import VMovB32
+
+        temp_v = self.emitter.vgpr_allocator.alloc_v()
+        self.emitter.emit_instruction(VMovB32(temp_v, sgpr))
+        self.emitter.register_file.v_used.add(temp_v)
+        return temp_v
 
     def _handle_integer(self, term: sympy.Integer, stack: list) -> None:
         """Handle Integer node - push const marker to stack."""
