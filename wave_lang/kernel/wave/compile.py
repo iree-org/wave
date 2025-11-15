@@ -267,6 +267,7 @@ class WaveKernel2:
 
         self._engine = None
         self._module_handle = None
+        self._host_func_ptr = None
 
         # Serialize MLIR module to text if needed
         # TODO: investigate why bytecode deserialization is not working
@@ -283,6 +284,17 @@ class WaveKernel2:
         self._engine = get_execution_engine()
         self._module_handle = self._engine.load_module_from_text(mlir_asm)
 
+        # Look up the host wrapper function
+        # The host wrapper is named "{kernel_name}_host_wrapper" by emit_host_func
+        func_name = f"{self.options.func_name}_host_wrapper"
+        try:
+            self._host_func_ptr = self._engine.lookup(self._module_handle, func_name)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Failed to lookup function '{func_name}' in loaded module. "
+                f"Make sure the module was compiled with emit_host_func. Error: {e}"
+            )
+
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
 
@@ -290,15 +302,44 @@ class WaveKernel2:
         """
         Invokes the wave kernel with the given arguments using the ExecutionEngine.
         """
-        # TODO: Implement argument marshalling and function invocation
-        # This will need to:
-        # 1. Convert Python/PyTorch arguments to C-compatible pointers
-        # 2. Look up the kernel function in the loaded module
-        # 3. Call the function with ctypes
-        # 4. Handle return values
-        raise NotImplementedError(
-            "WaveKernel2.invoke: argument marshalling not yet implemented"
-        )
+        import ctypes
+
+        # The host wrapper signature is:
+        # void func(void* stream, void* arg0, void* arg1, ...)
+        # where stream is currently unused and args are PyObject* pointers to tensors
+
+        # Create ctypes function type
+        # Return type is void, arguments are all void pointers
+        num_args = len(args)
+        arg_types = [ctypes.c_void_p] * (num_args + 1)  # +1 for stream pointer
+        func_type = ctypes.CFUNCTYPE(None, *arg_types)
+
+        # Cast the function pointer
+        cfunc = func_type(self._host_func_ptr)
+
+        # Prepare arguments
+        # Stream pointer (currently unused, pass NULL)
+        stream_ptr = None
+
+        # Convert PyTorch tensors to PyObject* using id()
+        # id() returns the memory address of the Python object
+        py_args = []
+        for arg in args:
+            if isinstance(arg, torch.Tensor):
+                # Get pointer to PyObject* for this tensor
+                obj_ptr = id(arg)
+                py_args.append(obj_ptr)
+            else:
+                # For scalars, also pass as PyObject*
+                obj_ptr = id(arg)
+                py_args.append(obj_ptr)
+
+        # Call the function
+        # Note: stream_ptr is None which ctypes will convert to NULL
+        cfunc(stream_ptr, *py_args)
+
+        # Return None (kernel modifies output tensors in place)
+        return None
 
     def __del__(self):
         """Clean up the loaded module when the kernel is destroyed."""
