@@ -285,8 +285,7 @@ class WaveKernel2:
         self._module_handle = self._engine.load_module_from_text(mlir_asm)
 
         # Look up the host wrapper function
-        # The host wrapper is named "{kernel_name}_host_wrapper" by emit_host_func
-        func_name = f"{self.options.func_name}_host_wrapper"
+        func_name = self.options.func_name
         try:
             self._host_func_ptr = self._engine.lookup(self._module_handle, func_name)
         except RuntimeError as e:
