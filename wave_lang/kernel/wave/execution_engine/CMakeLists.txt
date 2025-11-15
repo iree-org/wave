@@ -53,6 +53,7 @@ add_definitions(${LLVM_DEFINITIONS_LIST})
 add_library(wave_execution_engine MODULE
   execution_engine.cpp
   bindings.cpp
+  buffer_utils.cpp
 )
 
 # Disable RTTI for execution_engine.cpp to avoid typeinfo symbol dependencies
