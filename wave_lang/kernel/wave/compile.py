@@ -294,6 +294,15 @@ class WaveKernel2:
                 f"Make sure the module was compiled with emit_host_func. Error: {e}"
             )
 
+        # Create ctypes function type once
+        # The host wrapper signature is: void func(void* stream, void* arg0, void* arg1, ...)
+        import ctypes
+
+        num_kernel_args = len(self.options.kernel_usages)
+        arg_types = [ctypes.c_void_p] * (num_kernel_args + 1)  # +1 for stream pointer
+        func_type = ctypes.CFUNCTYPE(None, *arg_types)
+        self._cfunc = func_type(self._host_func_ptr)
+
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
 
@@ -301,41 +310,17 @@ class WaveKernel2:
         """
         Invokes the wave kernel with the given arguments using the ExecutionEngine.
         """
-        import ctypes
-
-        # The host wrapper signature is:
-        # void func(void* stream, void* arg0, void* arg1, ...)
-        # where stream is currently unused and args are PyObject* pointers to tensors
-
-        # Create ctypes function type
-        # Return type is void, arguments are all void pointers
-        num_args = len(args)
-        arg_types = [ctypes.c_void_p] * (num_args + 1)  # +1 for stream pointer
-        func_type = ctypes.CFUNCTYPE(None, *arg_types)
-
-        # Cast the function pointer
-        cfunc = func_type(self._host_func_ptr)
-
-        # Prepare arguments
+        # Prepare arguments for the host wrapper
         # Stream pointer (currently unused, pass NULL)
         stream_ptr = None
 
-        # Convert PyTorch tensors to PyObject* using id()
+        # Convert arguments to PyObject* pointers using id()
         # id() returns the memory address of the Python object
-        py_args = []
-        for arg in args:
-            if isinstance(arg, torch.Tensor):
-                # Get pointer to PyObject* for this tensor
-                obj_ptr = id(arg)
-                py_args.append(obj_ptr)
-            else:
-                # For scalars, also pass as PyObject*
-                obj_ptr = id(arg)
-                py_args.append(obj_ptr)
+        py_args = [id(arg) for arg in args]
 
-        # Call the function
-        # Note: stream_ptr is None which ctypes will convert to NULL
-        cfunc(stream_ptr, *py_args)
+        # Call the JIT-compiled host wrapper function
+        # Signature: void func(void* stream, void* arg0, void* arg1, ...)
+        self._cfunc(stream_ptr, *py_args)
 
         # Return None (kernel modifies output tensors in place)
         return None
@@ -523,6 +508,12 @@ def wave_compile(
         # Handle ASM and LLVM backends in a clear, single-pass flow
         compiled_wave_vmfb = None
 
+        kernel_usages = [
+            binding.kernel_buffer_type.usage
+            for binding in kernel_sig.kernel_buffer_bindings
+        ]
+        options.kernel_usages = kernel_usages
+
         if options.compile_to_asm or options.backend == "asm":
             # ASM flow: generate AMDGCN assembly; optionally build a binary
             asm = _generate_asm_code(mb, options)
@@ -554,12 +545,6 @@ def wave_compile(
             )
         if options.create_vmfb_file:
             write_file(options.create_vmfb_file, "wb", compiled_wave_vmfb)
-
-        kernel_usages = [
-            binding.kernel_buffer_type.usage
-            for binding in kernel_sig.kernel_buffer_bindings
-        ]
-        options.kernel_usages = kernel_usages
 
         if is_cache_enabled() and not debug_arg_info:
             cache_manager.store_kernel(
