@@ -4,31 +4,75 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "buffer_utils.h"
-#include <nanobind/nanobind.h>
-#include <stdexcept>
+#include <Python.h>
 
-namespace nb = nanobind;
+#include <memory>
+
+namespace {
+struct GILState {
+  GILState() : gstate(PyGILState_Ensure()) {}
+  ~GILState() { PyGILState_Release(gstate); }
+  PyGILState_STATE gstate;
+};
+
+struct PyDeleter {
+  void operator()(PyObject *obj) const { Py_DECREF(obj); }
+};
+
+using PyObjectPtr = std::unique_ptr<PyObject, PyDeleter>;
+} // namespace
 
 extern "C" void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret,
                                              PyObject *obj_ptr) {
-  // Wrap PyObject* in nanobind::object for safe access
-  nb::object obj = nb::borrow(obj_ptr);
+  GILState gil_state;
 
-  // Call tensor.data_ptr() to get the data pointer
-  nb::object data_ptr_result = obj.attr("data_ptr")();
-  void *data_ptr =
-      reinterpret_cast<void *>(nb::cast<uintptr_t>(data_ptr_result));
+  // Get tensor.data_ptr() method and call it
+  PyObjectPtr data_ptr_method(PyObject_GetAttrString(obj_ptr, "data_ptr"));
+  if (!data_ptr_method) {
+    PyErr_Clear();
+    return;
+  }
 
-  // Get tensor.numel() for the number of elements
-  int64_t numel = nb::cast<int64_t>(obj.attr("numel")());
+  PyObjectPtr data_ptr_result(PyObject_CallNoArgs(data_ptr_method.get()));
 
-  // Create and return memref descriptor
-  MemRef1Di8 descriptor;
-  descriptor.basePtr = static_cast<uint8_t *>(data_ptr);
-  descriptor.data = static_cast<uint8_t *>(data_ptr);
-  descriptor.offset = 0;
-  descriptor.sizes[0] = numel;
-  descriptor.strides[0] = 1;
+  if (!data_ptr_result) {
+    PyErr_Clear();
+    return;
+  }
 
-  *ret = descriptor;
+  // Convert Python int to pointer
+  void *data_ptr = PyLong_AsVoidPtr(data_ptr_result.get());
+
+  if (!data_ptr && PyErr_Occurred()) {
+    PyErr_Clear();
+    return;
+  }
+
+  // Get tensor.numel() method and call it
+  PyObjectPtr numel_method(PyObject_GetAttrString(obj_ptr, "numel"));
+  if (!numel_method) {
+    PyErr_Clear();
+    return;
+  }
+
+  PyObjectPtr numel_result(PyObject_CallNoArgs(numel_method.get()));
+
+  if (!numel_result) {
+    PyErr_Clear();
+    return;
+  }
+
+  int64_t numel = PyLong_AsLongLong(numel_result.get());
+
+  if (PyErr_Occurred()) {
+    PyErr_Clear();
+    return;
+  }
+
+  // Fill in the memref descriptor
+  ret->basePtr = static_cast<uint8_t *>(data_ptr);
+  ret->data = static_cast<uint8_t *>(data_ptr);
+  ret->offset = 0;
+  ret->sizes[0] = numel;
+  ret->strides[0] = 1;
 }
