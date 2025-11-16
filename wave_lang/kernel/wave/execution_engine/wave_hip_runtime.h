@@ -6,44 +6,14 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 
 extern "C" {
 
-/// Opaque kernel handle type
-typedef void *WaveKernelHandle;
+void *wave_load_kernel(void *stream, void **cached_kernel_handle,
+                       const void *binary_pointer, size_t binary_size,
+                       const char *kernel_name);
 
-/// Load a GPU kernel from a binary file
-///
-/// Args:
-///   binary_path: Path to the kernel binary (.hsaco file)
-///   kernel_name: Name of the kernel function to load
-///
-/// Returns:
-///   Opaque kernel handle, or nullptr on failure
-WaveKernelHandle wave_load_kernel(const char *binary_path,
-                                  const char *kernel_name);
-
-/// Launch a GPU kernel
-///
-/// Args:
-///   handle: Kernel handle from wave_load_kernel
-///   stream: HIP stream pointer
-///   grid_x, grid_y, grid_z: Grid dimensions
-///   block_x, block_y, block_z: Block dimensions
-///   args: Pointer to array of kernel argument pointers
-///   num_args: Number of kernel arguments
-///
-/// Returns:
-///   0 on success, non-zero on failure
-int wave_launch_kernel(WaveKernelHandle handle, void *stream, uint32_t grid_x,
-                       uint32_t grid_y, uint32_t grid_z, uint32_t block_x,
-                       uint32_t block_y, uint32_t block_z, void **args,
-                       size_t num_args);
-
-/// Unload a GPU kernel
-///
-/// Args:
-///   handle: Kernel handle from wave_load_kernel
-void wave_unload_kernel(WaveKernelHandle handle);
+void wave_launch_kernel(void *stream, void *function, int shared_memory_bytes,
+                        int grid_x, int grid_y, int grid_z, int block_x,
+                        int block_y, int block_z, void **args, int num_args);
 }
