@@ -108,6 +108,7 @@ from ...ops.wave_ops import (
     sin,
     sinh,
     softsign,
+    sigmoid,
     sqrt,
     tanh,
     tanh_approx,
@@ -1300,6 +1301,48 @@ def handle_softsign(emitter: WaveEmitter, node: fx.Node) -> None:
     result = arith_d.mulf(source, reciprocal_denom, fastmath=get_fast_math_flags(opts))
 
     emitter.bind_node_proxy(node, IRProxyValue(result))
+
+
+@handle_unary_op(sigmoid)
+def handle_sigmoid(source: Value, options: WaveCompileOptions) -> OpResult:
+    # check element type
+    element_type = get_type_or_element_type(source.type)
+
+    if _is_float_type(element_type):
+        # constant one
+        one = arith_d.ConstantOp(
+            source.type,
+            DenseElementsAttr.get_splat(
+                source.type, get_constant_attr(1.0, element_type)
+            ),
+        )
+        # negative one
+        neg_one = arith_d.ConstantOp(
+            source.type,
+            DenseElementsAttr.get_splat(
+                source.type, get_constant_attr(-1.0, element_type)
+            ),
+        )
+        # negative x
+        neg_x = arith_d.mulf(source, neg_one, fastmath=get_fast_math_flags(options))
+        # denominator = 1 + exp(-x)
+        denom = arith_d.addf(
+            one, math_d.exp(neg_x), fastmath=get_fast_math_flags(options)
+        )
+        # reciprocal_denom = 1 / denom
+        reciprocal_denom = arith_d.divf(
+            one, denom, fastmath=get_fast_math_flags(options)
+        )
+        # result = 1 * (1 / denom)
+        result = arith_d.mulf(
+            one, reciprocal_denom, fastmath=get_fast_math_flags(options)
+        )
+    else:
+        raise ValidationError(
+            f"Found unhandled operand type for sigmoid: {element_type}"
+        )    
+    
+    return result
 
 
 @handle_unary_op(tanh)
