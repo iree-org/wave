@@ -8,6 +8,7 @@
 #include <cstddef>
 
 extern "C" {
+void load_functions();
 
 void *wave_load_kernel(void *stream, void **cached_kernel_handle,
                        const void *binary_pointer, size_t binary_size,
