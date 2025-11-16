@@ -89,6 +89,37 @@ def _load_runtime_helpers():
     return symbol_map
 
 
+def _load_hip_runtime():
+    """
+    Load the wave_hip_runtime shared library and return symbol addresses.
+
+    This library contains HIP runtime functions for kernel loading and launching.
+
+    Returns:
+        Dictionary mapping symbol names to their addresses
+
+    Raises:
+        RuntimeError: If the library cannot be found or loaded
+    """
+    import ctypes
+
+    lib = _load_library("wave_hip_runtime")
+
+    symbol_map = {}
+
+    # Register HIP runtime functions
+    wave_load_kernel_addr = ctypes.cast(lib.wave_load_kernel, ctypes.c_void_p).value
+    symbol_map["wave_load_kernel"] = wave_load_kernel_addr
+
+    wave_launch_kernel_addr = ctypes.cast(lib.wave_launch_kernel, ctypes.c_void_p).value
+    symbol_map["wave_launch_kernel"] = wave_launch_kernel_addr
+
+    wave_unload_kernel_addr = ctypes.cast(lib.wave_unload_kernel, ctypes.c_void_p).value
+    symbol_map["wave_unload_kernel"] = wave_unload_kernel_addr
+
+    return symbol_map
+
+
 def _create_options_from_env() -> "ExecutionEngineOptions":
     """
     Create ExecutionEngineOptions from environment variables.
@@ -149,7 +180,11 @@ def get_execution_engine() -> "ExecutionEngine":
 
     symbol_map = {}
 
+    # Load runtime helpers (wave_get_buffer, etc.)
     symbol_map.update(_load_runtime_helpers())
+
+    # Load HIP runtime (wave_load_kernel, wave_launch_kernel, etc.)
+    symbol_map.update(_load_hip_runtime())
 
     options = _create_options_from_env()
 

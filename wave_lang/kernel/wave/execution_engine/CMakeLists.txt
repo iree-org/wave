@@ -65,6 +65,17 @@ target_link_libraries(wave_runtime_helpers PRIVATE
   Python::Python
 )
 
+# Compile HIP runtime as a separate shared library
+add_library(wave_hip_runtime SHARED
+  wave_hip_runtime.cpp
+)
+
+# Set visibility for wave_hip_runtime
+set_target_properties(wave_hip_runtime PROPERTIES
+  CXX_VISIBILITY_PRESET default
+  VISIBILITY_INLINES_HIDDEN OFF
+)
+
 # Compile an extension library
 add_library(wave_execution_engine MODULE
   execution_engine.cpp
@@ -142,4 +153,4 @@ nanobind_extension(wave_execution_engine)
 # Set important linker flags
 nanobind_link_options(wave_execution_engine)
 
-install(TARGETS wave_execution_engine wave_runtime_helpers DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+install(TARGETS wave_execution_engine wave_runtime_helpers wave_hip_runtime DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
