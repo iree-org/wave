@@ -27,13 +27,15 @@ except ImportError:
 _cached_engine: Optional[weakref.ref] = None
 
 
-def _load_runtime_helpers():
+def _load_library(lib_basename: str):
     """
-    Load the wave_runtime_helpers shared library.
+    Load a shared library from the execution_engine directory.
 
-    This library contains runtime helper functions like wave_get_buffer that are
-    needed by JIT-compiled code. We load it once globally so that the symbols
-    are available when the ExecutionEngine uses DynamicLibrarySearchGenerator.
+    Args:
+        lib_basename: Base name of library (e.g., "wave_runtime_helpers")
+
+    Returns:
+        ctypes.CDLL library handle
 
     Raises:
         RuntimeError: If the library cannot be found or loaded
@@ -44,84 +46,47 @@ def _load_runtime_helpers():
 
     # Find the library file
     lib_name = {
-        "Linux": "libwave_runtime_helpers.so",
-        "Darwin": "libwave_runtime_helpers.dylib",
-        "Windows": "wave_runtime_helpers.dll",
+        "Linux": f"lib{lib_basename}.so",
+        "Darwin": f"lib{lib_basename}.dylib",
+        "Windows": f"{lib_basename}.dll",
     }.get(platform.system())
 
     if not lib_name:
-        raise RuntimeError(
-            f"Unsupported platform: {platform.system()}. "
-            "wave_runtime_helpers is only available on Linux, macOS, and Windows."
-        )
+        raise RuntimeError(f"Unsupported platform: {platform.system()}.")
 
     # Look for the library in the same directory as this module
     module_dir = Path(__file__).parent
     lib_path = module_dir / lib_name
 
     if not lib_path.exists():
-        raise RuntimeError(
-            f"wave_runtime_helpers library not found at {lib_path}. "
-            "Please build the C++ extension: "
-            "cd wave_lang/kernel/wave/execution_engine && cmake -B build && cmake --build build"
-        )
+        raise RuntimeError(f"{lib_basename} library not found at {lib_path}. ")
 
-    # Load the library globally with RTLD_GLOBAL so symbols are visible
-    try:
-        if platform.system() == "Windows":
-            ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
-        else:
-            # On Unix, use RTLD_GLOBAL to make symbols visible to dlsym
-            ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
-    except OSError as e:
-        raise RuntimeError(
-            f"Failed to load wave_runtime_helpers from {lib_path}: {e}. "
-            "The library may be missing dependencies or corrupted."
-        ) from e
+    return ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
 
 
-def _get_wave_get_buffer_address():
+def _load_runtime_helpers():
     """
-    Get the address of the wave_get_buffer function.
+    Load the wave_runtime_helpers shared library and return symbol addresses.
 
-    This function is defined in buffer_utils.cpp and needs to be accessible
-    to JIT-compiled code.
+    This library contains runtime helper functions like wave_get_buffer that are
+    needed by JIT-compiled code.
 
     Returns:
-        Integer address of wave_get_buffer, or None if not available
+        Dictionary mapping symbol names to their addresses
+
+    Raises:
+        RuntimeError: If the library cannot be found or loaded
     """
     import ctypes
-    import sys
 
-    # Try to find wave_get_buffer in the current process
-    # It should be loaded as part of the wave_execution_engine extension
-    try:
-        # Get handle to current process
-        if sys.platform == "linux":
-            RTLD_DEFAULT = ctypes.cast(0, ctypes.c_void_p)
-            libc = ctypes.CDLL(None)
-            dlsym = libc.dlsym
-            dlsym.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-            dlsym.restype = ctypes.c_void_p
+    lib = _load_library("wave_runtime_helpers")
 
-            addr = dlsym(RTLD_DEFAULT, b"wave_get_buffer")
-            if addr:
-                return addr
-        elif sys.platform == "darwin":
-            # macOS
-            RTLD_DEFAULT = ctypes.cast(-2, ctypes.c_void_p)
-            libc = ctypes.CDLL(None)
-            dlsym = libc.dlsym
-            dlsym.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-            dlsym.restype = ctypes.c_void_p
+    symbol_map = {}
 
-            addr = dlsym(RTLD_DEFAULT, b"wave_get_buffer")
-            if addr:
-                return addr
-    except Exception:
-        pass
+    wave_get_buffer_addr = ctypes.cast(lib.wave_get_buffer, ctypes.c_void_p).value
+    symbol_map["wave_get_buffer"] = wave_get_buffer_addr
 
-    return None
+    return symbol_map
 
 
 def _create_options_from_env() -> "ExecutionEngineOptions":
@@ -182,14 +147,17 @@ def get_execution_engine() -> "ExecutionEngine":
         if engine is not None:
             return engine
 
-    # Load wave_runtime_helpers library to make wave_get_buffer available
-    _load_runtime_helpers()
+    symbol_map = {}
 
-    # Create new instance with options from environment
+    symbol_map.update(_load_runtime_helpers())
+
     options = _create_options_from_env()
+
+    if symbol_map:
+        options.set_symbol_map(symbol_map)
+
     engine = ExecutionEngine(options)
 
-    # Cache using weak reference
     _cached_engine = weakref.ref(engine)
 
     return engine
