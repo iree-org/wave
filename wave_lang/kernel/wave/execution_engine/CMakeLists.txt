@@ -32,9 +32,6 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY)
 find_package(nanobind CONFIG REQUIRED)
 
-# Build the core parts of nanobind once
-nanobind_build_library(nanobind STATIC)
-
 # Find LLVM and MLIR
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
@@ -54,10 +51,9 @@ add_library(wave_runtime_helpers SHARED
   buffer_utils.cpp
 )
 
-# Link Python and nanobind for wave_runtime_helpers
+# Link Python for wave_runtime_helpers
 target_link_libraries(wave_runtime_helpers PRIVATE
   Python::Python
-  nanobind
 )
 
 # Compile HIP runtime as a separate shared library
