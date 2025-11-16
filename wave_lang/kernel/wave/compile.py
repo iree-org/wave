@@ -299,7 +299,9 @@ class WaveKernel2:
         import ctypes
 
         num_kernel_args = len(self.options.kernel_usages)
-        arg_types = [ctypes.c_void_p] * (num_kernel_args + 1)  # +1 for stream pointer
+        arg_types = [ctypes.c_void_p] + [
+            ctypes.py_object
+        ] * num_kernel_args  # +1 for stream pointer
         func_type = ctypes.CFUNCTYPE(None, *arg_types)
         self._cfunc = func_type(self._host_func_ptr)
 
@@ -313,13 +315,9 @@ class WaveKernel2:
         # Get the current CUDA stream
         stream_ptr = torch.cuda.current_stream().cuda_stream
 
-        # Convert arguments to PyObject* pointers using id()
-        # id() returns the memory address of the Python object
-        py_args = [id(arg) for arg in args]
-
         # Call the JIT-compiled host wrapper function
         # Signature: void func(void* stream, void* arg0, void* arg1, ...)
-        self._cfunc(stream_ptr, *py_args)
+        self._cfunc(stream_ptr, *args)
 
         # Return None (kernel modifies output tensors in place)
         return None
