@@ -16,7 +16,7 @@ import weakref
 from typing import Optional
 
 try:
-    from wave_execution_engine import ExecutionEngine, ExecutionEngineOptions
+    from .wave_execution_engine import ExecutionEngine, ExecutionEngineOptions
 except ImportError:
     # Allow import to succeed even if C++ module not built yet
     ExecutionEngine = None
