@@ -30,10 +30,10 @@ extern "C" {
 /// - basePtr: pointer to the raw data
 /// - data: same as basePtr (no alignment offset)
 /// - offset: 0
-/// - sizes[0]: total size in bytes
+/// - sizes[0]: number of elements
 /// - strides[0]: 1
 ///
 /// This function assumes the PyObject is a PyTorch tensor and uses
 /// the PyTorch C API to extract the data pointer and size.
-MemRef1Di8 wave_get_buffer(PyObject *obj);
+void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret, PyObject *obj);
 }

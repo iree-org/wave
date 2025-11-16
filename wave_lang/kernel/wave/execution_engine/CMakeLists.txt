@@ -54,15 +54,10 @@ add_library(wave_runtime_helpers SHARED
   buffer_utils.cpp
 )
 
-# Set visibility for wave_runtime_helpers
-set_target_properties(wave_runtime_helpers PROPERTIES
-  CXX_VISIBILITY_PRESET default
-  VISIBILITY_INLINES_HIDDEN OFF
-)
-
-# Link Python for wave_runtime_helpers
+# Link Python and nanobind for wave_runtime_helpers
 target_link_libraries(wave_runtime_helpers PRIVATE
   Python::Python
+  nanobind
 )
 
 # Compile HIP runtime as a separate shared library
@@ -70,29 +65,19 @@ add_library(wave_hip_runtime SHARED
   wave_hip_runtime.cpp
 )
 
-# Set visibility for wave_hip_runtime
-set_target_properties(wave_hip_runtime PROPERTIES
-  CXX_VISIBILITY_PRESET default
-  VISIBILITY_INLINES_HIDDEN OFF
-)
-
 # Compile an extension library
-add_library(wave_execution_engine MODULE
+nanobind_add_module(wave_execution_engine NB_STATIC
   execution_engine.cpp
   bindings.cpp
 )
 
 # Disable RTTI for execution_engine.cpp to avoid typeinfo symbol dependencies
-# Only for GCC/Clang on Unix-like systems
 if(UNIX AND (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"))
   set_source_files_properties(execution_engine.cpp PROPERTIES COMPILE_FLAGS "-fno-rtti")
 endif()
 
 # Include current directory for header files
 target_include_directories(wave_execution_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-# Link against nanobind
-target_link_libraries(wave_execution_engine PRIVATE nanobind)
 
 get_property(mlir_dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(mlir_conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
@@ -131,26 +116,5 @@ if(UNIX AND NOT APPLE)
     -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/wave_execution_engine.lds
   )
 endif()
-
-# Enable size optimizations
-nanobind_opt_size(wave_execution_engine)
-
-# Enable link time optimization
-nanobind_lto(wave_execution_engine)
-
-# Set the default symbol visibility to 'hidden'
-nanobind_set_visibility(wave_execution_engine)
-
-# Strip unneeded symbols and debug info from the binary (only active in release builds)
-nanobind_strip(wave_execution_engine)
-
-# Disable the stack protector
-nanobind_disable_stack_protector(wave_execution_engine)
-
-# Set the Python extension suffix
-nanobind_extension(wave_execution_engine)
-
-# Set important linker flags
-nanobind_link_options(wave_execution_engine)
 
 install(TARGETS wave_execution_engine wave_runtime_helpers wave_hip_runtime DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})

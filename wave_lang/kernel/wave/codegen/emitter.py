@@ -290,6 +290,7 @@ class WaveEmitter:
         get_buffer_func = func_d.FuncOp(
             "wave_get_buffer", get_buffer_ftype, visibility="private"
         )
+        get_buffer_func.attributes["llvm.emit_c_interface"] = UnitAttr.get()
         get_buffer_func_symbol = FlatSymbolRefAttr.get(get_buffer_func.sym_name.value)
 
         # First argument is stream pointer
