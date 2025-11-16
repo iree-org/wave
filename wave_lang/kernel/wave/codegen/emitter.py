@@ -236,6 +236,8 @@ class WaveEmitter:
         return func
 
     def emit_host_func(self, kernel_func: Operation) -> Operation:
+        # TODO: kernel bindiong order may not be the same as the kernel function
+        # arguments order, so map kernel order to host function arguments orderS
         binding_map = {}
         for i, b in enumerate(self.root_sig.sig.bindings):
             binding_map[id(b)] = i
