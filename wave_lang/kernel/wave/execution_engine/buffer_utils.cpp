@@ -4,73 +4,23 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "buffer_utils.h"
-#include <Python.h>
-#include <cstring>
-#include <dlfcn.h>
+#include <nanobind/nanobind.h>
 #include <stdexcept>
-#include <string>
 
-// PyTorch Tensor C API function pointers
-typedef void *(*THPVariable_Unpack_t)(PyObject *);
-typedef void *(*at_tensor_data_ptr_t)(void *);
-typedef int64_t (*at_tensor_numel_t)(void *);
-typedef int64_t (*at_tensor_element_size_t)(void *);
+namespace nb = nanobind;
 
-// Global function pointers (initialized on first use)
-static THPVariable_Unpack_t THPVariable_Unpack_ptr = nullptr;
-static at_tensor_data_ptr_t at_tensor_data_ptr_ptr = nullptr;
-static at_tensor_numel_t at_tensor_numel_ptr = nullptr;
+extern "C" void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret,
+                                             PyObject *obj_ptr) {
+  // Wrap PyObject* in nanobind::object for safe access
+  nb::object obj = nb::borrow(obj_ptr);
 
-// Helper to get symbol address
-static void *get_symbol_address(void *handle, const char *symbol_name) {
-  return dlsym(handle, symbol_name);
-}
+  // Call tensor.data_ptr() to get the data pointer
+  nb::object data_ptr_result = obj.attr("data_ptr")();
+  void *data_ptr =
+      reinterpret_cast<void *>(nb::cast<uintptr_t>(data_ptr_result));
 
-// Macro to load a function pointer and check for errors
-#define GET_FUNC(handle, name)                                                 \
-  do {                                                                         \
-    name =                                                                     \
-        reinterpret_cast<decltype(name)>(get_symbol_address(handle, #name));   \
-    if (!name) {                                                               \
-      throw std::runtime_error("Failed to load PyTorch symbol: " +             \
-                               std::string(#name));                            \
-    }                                                                          \
-  } while (0)
-
-/// Initialize PyTorch C API function pointers using dlsym
-static void initPyTorchSymbols() {
-  if (THPVariable_Unpack_ptr != nullptr) {
-    return; // Already initialized
-  }
-
-  // Use RTLD_DEFAULT to search all loaded libraries
-  void *handle = RTLD_DEFAULT;
-
-  GET_FUNC(handle, THPVariable_Unpack_ptr);
-  GET_FUNC(handle, at_tensor_data_ptr_ptr);
-  GET_FUNC(handle, at_tensor_numel_ptr);
-}
-
-extern "C" MemRef1Di8 wave_get_buffer(PyObject *obj) {
-  // Initialize PyTorch symbols on first use
-  initPyTorchSymbols();
-
-  // Extract the ATen tensor from the PyTorch Python object
-  void *tensor = THPVariable_Unpack_ptr(obj);
-  if (!tensor) {
-    throw std::runtime_error(
-        "wave_get_buffer: Failed to unpack PyTorch tensor. "
-        "Object is not a valid torch.Tensor.");
-  }
-
-  // Get the data pointer
-  void *data_ptr = at_tensor_data_ptr_ptr(tensor);
-  if (!data_ptr) {
-    throw std::runtime_error("wave_get_buffer: Tensor has NULL data pointer");
-  }
-
-  // Calculate total size in bytes
-  int64_t numel = at_tensor_numel_ptr(tensor);
+  // Get tensor.numel() for the number of elements
+  int64_t numel = nb::cast<int64_t>(obj.attr("numel")());
 
   // Create and return memref descriptor
   MemRef1Di8 descriptor;
@@ -80,5 +30,5 @@ extern "C" MemRef1Di8 wave_get_buffer(PyObject *obj) {
   descriptor.sizes[0] = numel;
   descriptor.strides[0] = 1;
 
-  return descriptor;
+  *ret = descriptor;
 }
