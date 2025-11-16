@@ -88,6 +88,12 @@ def _load_runtime_helpers():
     ).value
     symbol_map["_mlir_ciface_wave_get_buffer"] = wave_get_buffer_addr
 
+    wave_get_int64_addr = ctypes.cast(lib.wave_get_int64, ctypes.c_void_p).value
+    symbol_map["wave_get_int64"] = wave_get_int64_addr
+
+    wave_get_float64_addr = ctypes.cast(lib.wave_get_float64, ctypes.c_void_p).value
+    symbol_map["wave_get_float64"] = wave_get_float64_addr
+
     return symbol_map
 
 

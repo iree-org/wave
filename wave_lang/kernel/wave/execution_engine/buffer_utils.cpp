@@ -76,3 +76,27 @@ extern "C" void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret,
   ret->sizes[0] = numel;
   ret->strides[0] = 1;
 }
+
+extern "C" int64_t wave_get_int64(PyObject *obj_ptr) {
+  GILState gil_state;
+
+  int64_t value = PyLong_AsLongLong(obj_ptr);
+  if (PyErr_Occurred()) {
+    PyErr_Clear();
+    throw std::runtime_error("wave_get_int64: Failed to convert to int64");
+  }
+
+  return value;
+}
+
+extern "C" double wave_get_float64(PyObject *obj_ptr) {
+  GILState gil_state;
+
+  double value = PyFloat_AsDouble(obj_ptr);
+  if (PyErr_Occurred()) {
+    PyErr_Clear();
+    throw std::runtime_error("wave_get_float64: Failed to convert to double");
+  }
+
+  return value;
+}
