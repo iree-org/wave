@@ -20,6 +20,7 @@ from .ir_utils import (
 from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.lang import Memory
 from wave_lang.kernel.lang.kernel_buffer import KernelBuffer
+from wave_lang.kernel.compiler.kernel_codegen import BindingType
 from wave_lang.kernel.compiler.utils import strides_from_symbolic_shape
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.support.logging import get_logger
@@ -28,6 +29,9 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
+    F16Type,
+    F32Type,
+    F64Type,
     FlatSymbolRefAttr,
     FloatAttr,
     FunctionType,
@@ -293,6 +297,21 @@ class WaveEmitter:
         get_buffer_func.attributes["llvm.emit_c_interface"] = UnitAttr.get()
         get_buffer_func_symbol = FlatSymbolRefAttr.get(get_buffer_func.sym_name.value)
 
+        # Declare scalar extraction functions
+        i64 = IntegerType.get_signless(64)
+        f64 = F64Type.get()
+        get_int64_ftype = FunctionType.get([ptr], [i64])
+        get_int64_func = func_d.FuncOp(
+            "wave_get_int64", get_int64_ftype, visibility="private"
+        )
+        get_int64_func_symbol = FlatSymbolRefAttr.get(get_int64_func.sym_name.value)
+
+        get_float64_ftype = FunctionType.get([ptr], [f64])
+        get_float64_func = func_d.FuncOp(
+            "wave_get_float64", get_float64_ftype, visibility="private"
+        )
+        get_float64_func_symbol = FlatSymbolRefAttr.get(get_float64_func.sym_name.value)
+
         # First argument is stream pointer
         # Rest are kernel arguments as PyObject*
         host_args_types = [ptr] + [ptr] * len(arg_types)
@@ -312,14 +331,39 @@ class WaveEmitter:
 
             launch_args = []
             func_args = entry_block.arguments[1:]
-            for arg, dst_type in zip(func_args, arg_types):
-                call = func_d.CallOp(
-                    get_buffer_ftype.results, get_buffer_func_symbol, [arg]
-                )
-                buffer = call.results[0]
-                offset = arith_d.constant(IndexType.get(), 0)
-                buffer = memref_d.view(dst_type, buffer, offset, [])
-                launch_args.append(buffer)
+            for binding, arg, dst_type in zip(bindings, func_args, arg_types):
+                if binding.binding_type == BindingType.KERNEL_BUFFER:
+                    # Extract buffer from PyObject
+                    call = func_d.CallOp(
+                        get_buffer_ftype.results, get_buffer_func_symbol, [arg]
+                    )
+                    buffer = call.results[0]
+                    offset = arith_d.constant(IndexType.get(), 0)
+                    buffer = memref_d.view(dst_type, buffer, offset, [])
+                    launch_args.append(buffer)
+                else:
+                    # Extract scalar from PyObject
+                    # Determine if it's float or int based on MLIR type
+                    if isinstance(dst_type, (F16Type, F32Type, F64Type)):
+                        # Float type - call wave_get_float64 and cast
+                        call = func_d.CallOp(
+                            get_float64_ftype.results, get_float64_func_symbol, [arg]
+                        )
+                        scalar = call.results[0]
+                        if not isinstance(dst_type, F64Type):
+                            scalar = arith_d.truncf(dst_type, scalar)
+                    else:
+                        # Integer/Index type - call wave_get_int64 and cast
+                        call = func_d.CallOp(
+                            get_int64_ftype.results, get_int64_func_symbol, [arg]
+                        )
+                        scalar = call.results[0]
+                        # Cast to target type if needed
+                        if isinstance(dst_type, IndexType):
+                            scalar = arith_d.index_cast(dst_type, scalar)
+                        elif isinstance(dst_type, IntegerType) and dst_type.width != 64:
+                            scalar = arith_d.trunci(dst_type, scalar)
+                    launch_args.append(scalar)
 
             gpu_d.launch_func(
                 async_dependencies=[],

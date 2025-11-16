@@ -36,4 +36,12 @@ extern "C" {
 /// This function assumes the PyObject is a PyTorch tensor and uses
 /// the PyTorch C API to extract the data pointer and size.
 void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret, PyObject *obj);
+
+/// Extract an int64_t value from a PyObject.
+/// Throws std::runtime_error if conversion fails.
+int64_t wave_get_int64(PyObject *obj);
+
+/// Extract a double value from a PyObject.
+/// Throws std::runtime_error if conversion fails.
+double wave_get_float64(PyObject *obj);
 }
