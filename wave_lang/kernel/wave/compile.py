@@ -3,6 +3,8 @@ from itertools import chain
 from typing import Any, Optional, Callable, Sequence
 
 import torch
+import ctypes
+from ctypes import py_object
 
 from wave_lang.kernel.lang import IndexSymbol
 from wave_lang.support.ir_imports import Module, stream_d
@@ -296,11 +298,10 @@ class WaveKernel2:
 
         # Create ctypes function type once
         # The host wrapper signature is: void func(void* stream, void* arg0, void* arg1, ...)
-        import ctypes
 
         num_kernel_args = len(self.options.kernel_usages)
         arg_types = [ctypes.c_void_p] + [
-            ctypes.py_object
+            py_object
         ] * num_kernel_args  # +1 for stream pointer
         func_type = ctypes.CFUNCTYPE(None, *arg_types)
         self._cfunc = func_type(self._host_func_ptr)
@@ -312,12 +313,14 @@ class WaveKernel2:
         """
         Invokes the wave kernel with the given arguments using the ExecutionEngine.
         """
+
+        assert not kwargs, "kwargs are not supported"
         # Get the current CUDA stream
         stream_ptr = torch.cuda.current_stream().cuda_stream
 
         # Call the JIT-compiled host wrapper function
         # Signature: void func(void* stream, void* arg0, void* arg1, ...)
-        self._cfunc(stream_ptr, *args)
+        self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
 
         # Return None (kernel modifies output tensors in place)
         return None
