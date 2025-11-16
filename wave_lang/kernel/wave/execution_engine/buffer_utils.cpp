@@ -6,40 +6,57 @@
 #include "buffer_utils.h"
 #include <Python.h>
 #include <cstring>
+#include <dlfcn.h>
 #include <stdexcept>
+#include <string>
 
-// PyTorch C API definitions
-// We use weak symbols so the code compiles even if PyTorch is not available
-// The symbols will be resolved at runtime when PyTorch is loaded
+// PyTorch Tensor C API function pointers
+typedef void *(*THPVariable_Unpack_t)(PyObject *);
+typedef void *(*at_tensor_data_ptr_t)(void *);
+typedef int64_t (*at_tensor_numel_t)(void *);
+typedef int64_t (*at_tensor_element_size_t)(void *);
 
-extern "C" {
-// PyTorch Tensor C API functions (from torch/csrc/Module.h)
-void *__attribute__((weak)) THPVariable_Unpack(PyObject *obj);
-void *__attribute__((weak)) at_tensor_data_ptr(void *tensor);
-int64_t __attribute__((weak)) at_tensor_numel(void *tensor);
-int64_t __attribute__((weak)) at_tensor_element_size(void *tensor);
+// Global function pointers (initialized on first use)
+static THPVariable_Unpack_t THPVariable_Unpack_ptr = nullptr;
+static at_tensor_data_ptr_t at_tensor_data_ptr_ptr = nullptr;
+static at_tensor_numel_t at_tensor_numel_ptr = nullptr;
+
+// Helper to get symbol address
+static void *get_symbol_address(void *handle, const char *symbol_name) {
+  return dlsym(handle, symbol_name);
 }
 
-/// Helper to check if PyTorch symbols are available
-static bool isPyTorchAvailable() {
-  return THPVariable_Unpack != nullptr && at_tensor_data_ptr != nullptr &&
-         at_tensor_numel != nullptr && at_tensor_element_size != nullptr;
+// Macro to load a function pointer and check for errors
+#define GET_FUNC(handle, name)                                                 \
+  do {                                                                         \
+    name =                                                                     \
+        reinterpret_cast<decltype(name)>(get_symbol_address(handle, #name));   \
+    if (!name) {                                                               \
+      throw std::runtime_error("Failed to load PyTorch symbol: " +             \
+                               std::string(#name));                            \
+    }                                                                          \
+  } while (0)
+
+/// Initialize PyTorch C API function pointers using dlsym
+static void initPyTorchSymbols() {
+  if (THPVariable_Unpack_ptr != nullptr) {
+    return; // Already initialized
+  }
+
+  // Use RTLD_DEFAULT to search all loaded libraries
+  void *handle = RTLD_DEFAULT;
+
+  GET_FUNC(handle, THPVariable_Unpack_ptr);
+  GET_FUNC(handle, at_tensor_data_ptr_ptr);
+  GET_FUNC(handle, at_tensor_numel_ptr);
 }
 
 extern "C" MemRef1Di8 wave_get_buffer(PyObject *obj) {
-  if (!obj) {
-    throw std::runtime_error("wave_get_buffer: NULL PyObject");
-  }
-
-  // Check if PyTorch is available
-  if (!isPyTorchAvailable()) {
-    throw std::runtime_error(
-        "wave_get_buffer: PyTorch C API symbols not found. "
-        "Make sure PyTorch is loaded before calling this function.");
-  }
+  // Initialize PyTorch symbols on first use
+  initPyTorchSymbols();
 
   // Extract the ATen tensor from the PyTorch Python object
-  void *tensor = THPVariable_Unpack(obj);
+  void *tensor = THPVariable_Unpack_ptr(obj);
   if (!tensor) {
     throw std::runtime_error(
         "wave_get_buffer: Failed to unpack PyTorch tensor. "
@@ -47,22 +64,20 @@ extern "C" MemRef1Di8 wave_get_buffer(PyObject *obj) {
   }
 
   // Get the data pointer
-  void *data_ptr = at_tensor_data_ptr(tensor);
+  void *data_ptr = at_tensor_data_ptr_ptr(tensor);
   if (!data_ptr) {
     throw std::runtime_error("wave_get_buffer: Tensor has NULL data pointer");
   }
 
   // Calculate total size in bytes
-  int64_t numel = at_tensor_numel(tensor);
-  int64_t element_size = at_tensor_element_size(tensor);
-  int64_t total_bytes = numel * element_size;
+  int64_t numel = at_tensor_numel_ptr(tensor);
 
   // Create and return memref descriptor
   MemRef1Di8 descriptor;
   descriptor.basePtr = static_cast<uint8_t *>(data_ptr);
   descriptor.data = static_cast<uint8_t *>(data_ptr);
   descriptor.offset = 0;
-  descriptor.sizes[0] = total_bytes;
+  descriptor.sizes[0] = numel;
   descriptor.strides[0] = 1;
 
   return descriptor;
