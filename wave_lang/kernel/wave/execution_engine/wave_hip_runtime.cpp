@@ -70,7 +70,7 @@ static void *get_symbol_address(module_handle_t module,
     }                                                                          \
   } while (0)
 
-static void load_hip_functions() {
+extern "C" void load_functions() {
   // Return early if already loaded
   if (hipModuleLaunchKernel && hipGetErrorName && hipGetErrorString &&
       hipModuleUnload && hipModuleLoadData && hipModuleGetFunction)
@@ -122,8 +122,6 @@ extern "C" void *wave_load_kernel(void *stream, void **cached_kernel_handle,
                                   const void *binary_pointer,
                                   size_t /*binary_size*/,
                                   const char *kernel_name) {
-  load_hip_functions();
-
   hipFunction_t function = *cached_kernel_handle;
   if (function)
     return function;

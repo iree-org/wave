@@ -107,6 +107,9 @@ def _load_hip_runtime():
 
     lib = _load_library("wave_hip_runtime")
 
+    # Load HIP functions eagerly
+    lib.load_functions()
+
     symbol_map = {}
 
     # Register HIP runtime functions
