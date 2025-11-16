@@ -5,9 +5,12 @@
 
 #include "execution_engine.h"
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
+#include <llvm/ExecutionEngine/Orc/Core.h>
+#include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/MemoryBuffer.h>
 
@@ -47,7 +50,31 @@ NB_MODULE(wave_execution_engine, m) {
               "Enable GDB notification listener")
       .def_rw("enable_perf_notification_listener",
               &wave::ExecutionEngineOptions::enablePerfNotificationListener,
-              "Enable Perf notification listener");
+              "Enable Perf notification listener")
+      .def(
+          "set_symbol_map",
+          [](wave::ExecutionEngineOptions &self,
+             const std::map<std::string, uintptr_t> &symbols) {
+            // Convert Python dict to C++ symbolMap function
+            self.symbolMap = [symbols](llvm::orc::MangleAndInterner mangle) {
+              llvm::orc::SymbolMap symbolMap;
+              for (const auto &[name, address] : symbols) {
+                auto mangledName = mangle(name);
+                auto flags = llvm::JITSymbolFlags::Exported |
+                             llvm::JITSymbolFlags::Callable;
+                symbolMap[mangledName] = llvm::orc::ExecutorSymbolDef(
+                    llvm::orc::ExecutorAddr(address), flags);
+              }
+              return symbolMap;
+            };
+          },
+          nb::arg("symbols"),
+          "Set symbol map from a dictionary of symbol names to addresses.\n\n"
+          "Args:\n"
+          "    symbols: Dictionary mapping symbol names (str) to addresses "
+          "(int)\n\n"
+          "Example:\n"
+          "    options.set_symbol_map({'my_function': 0x12345678})");
 
   // Bind ExecutionEngine class
   nb::class_<wave::ExecutionEngine>(m, "ExecutionEngine",
