@@ -116,9 +116,6 @@ def _load_hip_runtime():
     wave_launch_kernel_addr = ctypes.cast(lib.wave_launch_kernel, ctypes.c_void_p).value
     symbol_map["wave_launch_kernel"] = wave_launch_kernel_addr
 
-    wave_unload_kernel_addr = ctypes.cast(lib.wave_unload_kernel, ctypes.c_void_p).value
-    symbol_map["wave_unload_kernel"] = wave_unload_kernel_addr
-
     return symbol_map
 
 
