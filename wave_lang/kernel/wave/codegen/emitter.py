@@ -236,6 +236,10 @@ class WaveEmitter:
         return func
 
     def emit_host_func(self, kernel_func: Operation) -> Operation:
+        binding_map = {}
+        for i, b in enumerate(self.root_sig.sig.bindings):
+            binding_map[id(b)] = i
+
         bindings = self.root_sig.sig.linear_bindings
 
         ptr = llvm_d.PointerType.get()
@@ -331,7 +335,8 @@ class WaveEmitter:
 
             launch_args = []
             func_args = entry_block.arguments[1:]
-            for binding, arg, dst_type in zip(bindings, func_args, arg_types):
+            for binding, dst_type in zip(bindings, arg_types):
+                arg = func_args[binding_map[id(binding)]]
                 if binding.binding_type == BindingType.KERNEL_BUFFER:
                     # Extract buffer from PyObject
                     call = func_d.CallOp(
