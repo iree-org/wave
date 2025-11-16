@@ -27,6 +27,59 @@ except ImportError:
 _cached_engine: Optional[weakref.ref] = None
 
 
+def _load_runtime_helpers():
+    """
+    Load the wave_runtime_helpers shared library.
+
+    This library contains runtime helper functions like wave_get_buffer that are
+    needed by JIT-compiled code. We load it once globally so that the symbols
+    are available when the ExecutionEngine uses DynamicLibrarySearchGenerator.
+
+    Raises:
+        RuntimeError: If the library cannot be found or loaded
+    """
+    import ctypes
+    import platform
+    from pathlib import Path
+
+    # Find the library file
+    lib_name = {
+        "Linux": "libwave_runtime_helpers.so",
+        "Darwin": "libwave_runtime_helpers.dylib",
+        "Windows": "wave_runtime_helpers.dll",
+    }.get(platform.system())
+
+    if not lib_name:
+        raise RuntimeError(
+            f"Unsupported platform: {platform.system()}. "
+            "wave_runtime_helpers is only available on Linux, macOS, and Windows."
+        )
+
+    # Look for the library in the same directory as this module
+    module_dir = Path(__file__).parent
+    lib_path = module_dir / lib_name
+
+    if not lib_path.exists():
+        raise RuntimeError(
+            f"wave_runtime_helpers library not found at {lib_path}. "
+            "Please build the C++ extension: "
+            "cd wave_lang/kernel/wave/execution_engine && cmake -B build && cmake --build build"
+        )
+
+    # Load the library globally with RTLD_GLOBAL so symbols are visible
+    try:
+        if platform.system() == "Windows":
+            ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+        else:
+            # On Unix, use RTLD_GLOBAL to make symbols visible to dlsym
+            ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+    except OSError as e:
+        raise RuntimeError(
+            f"Failed to load wave_runtime_helpers from {lib_path}: {e}. "
+            "The library may be missing dependencies or corrupted."
+        ) from e
+
+
 def _get_wave_get_buffer_address():
     """
     Get the address of the wave_get_buffer function.
@@ -128,6 +181,9 @@ def get_execution_engine() -> "ExecutionEngine":
         engine = _cached_engine()
         if engine is not None:
             return engine
+
+    # Load wave_runtime_helpers library to make wave_get_buffer available
+    _load_runtime_helpers()
 
     # Create new instance with options from environment
     options = _create_options_from_env()

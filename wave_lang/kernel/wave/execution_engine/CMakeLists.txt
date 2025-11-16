@@ -49,11 +49,26 @@ include_directories(${MLIR_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
+# Compile buffer utils as a separate shared library
+add_library(wave_runtime_helpers SHARED
+  buffer_utils.cpp
+)
+
+# Set visibility for wave_runtime_helpers
+set_target_properties(wave_runtime_helpers PROPERTIES
+  CXX_VISIBILITY_PRESET default
+  VISIBILITY_INLINES_HIDDEN OFF
+)
+
+# Link Python for wave_runtime_helpers
+target_link_libraries(wave_runtime_helpers PRIVATE
+  Python::Python
+)
+
 # Compile an extension library
 add_library(wave_execution_engine MODULE
   execution_engine.cpp
   bindings.cpp
-  buffer_utils.cpp
 )
 
 # Disable RTTI for execution_engine.cpp to avoid typeinfo symbol dependencies
@@ -127,4 +142,4 @@ nanobind_extension(wave_execution_engine)
 # Set important linker flags
 nanobind_link_options(wave_execution_engine)
 
-install(TARGETS wave_execution_engine DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+install(TARGETS wave_execution_engine wave_runtime_helpers DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
