@@ -21,9 +21,10 @@ WAVE_IS_STABLE_REL = int(os.getenv("WAVE_IS_STABLE_REL", "0"))
 
 
 class CMakeExtension(Extension):
-    def __init__(self, name: str, sourcedir: str = "") -> None:
+    def __init__(self, name: str, sourcedir: str, install_dir: str = None) -> None:
         super().__init__(name, sources=[])
         self.sourcedir = os.fspath(Path(sourcedir).resolve())
+        self.install_dir = install_dir
 
 
 class CMakeBuild(build_ext):
@@ -37,8 +38,16 @@ class CMakeBuild(build_ext):
         os.makedirs(build_dir, exist_ok=True)
 
         # Get extension directory
-        ext_fullpath = Path.cwd() / self.get_ext_fullpath(ext.name)
-        extdir = ext_fullpath.parent.resolve()
+        if ext.install_dir:
+            # Use custom install directory relative to package root
+            extdir = Path.cwd() / ext.install_dir
+        else:
+            # Default behavior: install alongside the extension
+            ext_fullpath = Path.cwd() / self.get_ext_fullpath(ext.name)
+            extdir = ext_fullpath.parent.resolve()
+
+        # Ensure install directory exists
+        os.makedirs(extdir, exist_ok=True)
 
         # Configure CMake
         cmake_args = [
@@ -181,7 +190,9 @@ setup(
     ext_modules=[
         CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime"),
         CMakeExtension(
-            "wave_execution_engine", "wave_lang/kernel/wave/execution_engine"
+            "wave_execution_engine",
+            "wave_lang/kernel/wave/execution_engine",
+            install_dir="wave_lang/kernel/wave/execution_engine",
         ),
     ],
     rust_extensions=[
