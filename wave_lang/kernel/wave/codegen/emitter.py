@@ -236,7 +236,7 @@ class WaveEmitter:
         return func
 
     def emit_host_func(self, kernel_func: Operation) -> Operation:
-        # TODO: kernel bindiong order may not be the same as the kernel function
+        # TODO: kernel bindings order may not be the same as the kernel function
         # arguments order, so map kernel order to host function arguments orderS
         binding_map = {}
         symbol_map = {}
@@ -281,6 +281,8 @@ class WaveEmitter:
             *arg_types,
             arg_locs=locs,
         )
+
+        # Inline the kernel function into the gpu module function body and erase the original function
         with (
             InsertionPoint(kernel_entry_block),
             Location.name("wave-generated kernel function"),
@@ -297,10 +299,10 @@ class WaveEmitter:
             ):
                 old_arg.replace_all_uses_with(new_value)
 
+            gpu_d.return_([])
             kernel_func.erase()
 
-            gpu_d.return_([])
-
+        # Declare runtime functions
         buffer_type = MemRefType.get(
             [MemRefType.get_dynamic_size()], element_type=IntegerType.get_signless(8)
         )
@@ -334,6 +336,7 @@ class WaveEmitter:
         )
         get_float64_func_symbol = FlatSymbolRefAttr.get(get_float64_func.sym_name.value)
 
+        # Declare host function
         # First argument is stream pointer
         # Rest are kernel arguments as PyObject*
         host_args_types = [ptr] + [ptr] * len(arg_types)
@@ -351,6 +354,7 @@ class WaveEmitter:
         threads_per_block = self.hardware_constraint.threads_per_block
         with InsertionPoint(entry_block), Location.name("wave-generated host function"):
             func_args = entry_block.arguments[1:]
+            # Populate dynamic symbols from kernel function arguments
             for binding in bindings:
                 if binding.binding_type != BindingType.SYMBOL_VALUE:
                     continue
@@ -369,6 +373,7 @@ class WaveEmitter:
             grid = [gen_sympy_index(subs, s) for s in self.grid]
             threads = [gen_sympy_index(subs, s) for s in threads_per_block]
 
+            # Populate launch arguments
             launch_args = []
             for binding, dst_type in zip(bindings, arg_types):
                 if binding.binding_type == BindingType.KERNEL_BUFFER:
