@@ -66,7 +66,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
           failed(checkNoDims(strideMap, "stride")))
         return failure();
 
-      unsigned declared = mapping.getSymbolNames().size();
+      unsigned declared = mapping.getSymbols().size();
       if (startMap.getNumSymbols() != declared ||
           stepMap.getNumSymbols() != declared ||
           strideMap.getNumSymbols() != declared)

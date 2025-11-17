@@ -13,6 +13,7 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "wave-tensor-type-converter"
@@ -66,8 +67,10 @@ wave::WaveTypeConverter::WaveTypeConverter(
 mlir::Type wave::WaveTypeConverter::convertTensorFromComponents(
     llvm::ArrayRef<wave::WaveSymbolAttr> symbols, mlir::AffineMap shape,
     mlir::Type elementType, wave::WaveAddressSpace addressSpace) const {
+  llvm::ArrayRef<mlir::Attribute> symbolAttrs(symbols.data(), symbols.size());
   std::optional<SmallVector<int64_t>> staticShape =
-      shape ? wave::evaluateMapWithHyperparams(shape, symbols, hyperparameters)
+      shape ? wave::evaluateMapWithHyperparams(shape, symbolAttrs,
+                                               hyperparameters)
             : wave::resolveSymbolNames(symbols, hyperparameters);
   if (!staticShape)
     return nullptr;
