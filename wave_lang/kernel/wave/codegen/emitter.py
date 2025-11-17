@@ -324,8 +324,6 @@ class WaveEmitter:
             ):
                 old_arg.replace_all_uses_with(new_value)
 
-            kernel_func.erase()
-
             gpu_d.return_([])
             kernel_func.erase()
 
