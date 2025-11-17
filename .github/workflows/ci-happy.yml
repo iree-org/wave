@@ -8,10 +8,7 @@ name: happy - CI
 
 on:
   pull_request:
-    workflow_dispatch:
-
-      permissions:
-        contents: read
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,85 +18,173 @@ jobs:
   happy-set-env:
     runs-on: ['self-hosted', 'Linux', 'X64', 'rdna4']
     env:
-      VENV_DIR: .venv
+      VENV_DIR: /home/user/.venvs/happy-test/
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Ensure container happy is running
-        run: |
-          if ! docker ps --format '{{.Names}}' | grep -q '^happy$'; then
-          echo "Happy is not present. Starting it..."
-          docker start happy
-          else
-          echo "Happy is present. Restarting it..."
-          docker restart happy
-          fi
 
       - name: setup python
         id: setup_python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
-          # choose whatever version you actually want here
           python-version: "3.11"
 
-      - name: Launch happy and run tests
+      # 0. load happy image from local tar
+      - name: Load image
         run: |
-          docker exec -e VENV_DIR="${VENV_DIR}" -e GITHUB_PATH="${GITHUB_PATH}" -e GITHUB_ENV="${GITHUB_ENV}" happy bash -lc '
-          # ensure venv dependencies are installed
-          apt install python3.12-venv
+          RUNNER_BASE="$(dirname $RUNNER_WORKSPACE)"
+          docker load -i "$RUNNER_BASE/../docker-images/ci-gfx1250.tar"
 
-          python3 -m venv "${VENV_DIR}"
-          source "${VENV_DIR}/bin/activate"
-          echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
-          echo "${VENV_DIR}/bin" >> "$GITHUB_PATH"
+      # 1. long-live happiness
+      - name: Start happy container from image
+        run: |
+          HOST_UID=$(id -u)
+          HOST_GID=$(id -g)
+          docker run -d \
+            --name happy \
+            -v "${PWD}:/workspace" \
+            --network=host \
+            --ipc=host \
+            --device=/dev/kfd \
+            --device=/dev/dri \
+            --group-add video \
+            --cap-add=SYS_PTRACE \
+            -p8000:8000 -p18000:18000 \
+            --security-opt seccomp=unconfined \
+            -w /workspace \
+            -e HOST_UID=$HOST_UID \
+            -e HOST_GID=$HOST_GID \
+            ci-gfx1250:latest \
+            sleep infinity
 
-          echo "Install Rust via rustup.sh"
-          curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Debug
+        run: |
+          docker exec \
+            -e VENV_DIR="${VENV_DIR}" \
+            happy bash -lc '
+              set -eux
+              ls -l "${VENV_DIR}/bin"
+              echo "python  -> $(command -v python || echo not found)"
+              echo "python3 -> $(command -v python3 || echo not found)"
+            '
 
-          echo "Install pip deps"
-          # Install torch+rocm6.4
-          python -m pip install --no-compile --upgrade pip
-          pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
+      # 2. wave-env
+      - name: Setup venv, Rust and Python deps
+        run: |
+          docker exec \
+            -e VENV_DIR="${VENV_DIR}" \
+            happy bash -lc '
+              set -euxo pipefail
+              source /entrypoint.sh >/dev/null 2>&1
+              source "${VENV_DIR}/bin/activate"
 
-          # Install wave deps
-          pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
-          pip install -r requirements.txt -e .
-          #
-          # Install hip-python
-          pip uninstall -y hip-python
-          python3 -m pip install -i https://test.pypi.org/simple "hip-python<=6.4"
+              echo "Install Rust via rustup.sh"
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              export CARGO_HOME="$HOME/.cargo"
+              export PATH="$CARGO_HOME/bin:$PATH"
 
-          echo "Check Arch after python installation"
-          x=$(python -c "import torch;print(torch.cuda.get_device_properties())")
-          echo $x | grep "gfx1250"
-          y=$(echo $?)
-          if [ "$y" -ne 0 ]; then
-          echo "Expecting gfx1250, got"
-          echo $x
-          exit 1
-          fi
+              echo "Install pip deps"
+              python3 -m pip install --no-compile --upgrade pip
 
-          echo "Run unit tests"
-          pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+              # Install wave deps
+              pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
+              pip install -r requirements.txt .
 
-          echo "Test TKW runtime related stack on amdgpu"
-          export WAVE_CACHE_DIR=$PWD/.wave
-          rm -rf ./.wave
-          nproc
-          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+            '
 
-          echo "Run less expensive e2e"
-          WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+      # 3. check GPU arch
+      - name: Check Arch (gfx1250)
+        run: |
+          docker exec \
+            -e VENV_DIR="${VENV_DIR}" \
+            happy bash -lc '
+              set -euxo pipefail
+              .github/workflows/setup-happy.sh
 
-          echo "Run expensive e2e tests"
-          WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
+              echo "Check Arch after python3 installation"
+              x=$("${VENV_DIR}"/bin/python -c "import torch;print(torch.cuda.get_device_properties())")
+              echo "$x" | grep "gfx1250"
+              y=$?
+              if [ "$y" -ne 0 ]; then
+                echo "Expecting gfx1250, got"
+                echo "$x"
+                exit 1
+              fi
+            '
 
-          lit lit_tests/ -v
+      # 4. unit test
+      - name: Run unit tests
+        run: |
+          docker exec \
+            -e VENV_DIR="${VENV_DIR}" \
+            happy bash -lc '
+              set -euxo pipefail
+              .github/workflows/setup-happy.sh
+              pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+            '
+
+      # 5. TKW runtime related e2e
+      - name: Run TKW runtime e2e tests
+        run: |
+          docker exec \
+            -e VENV_DIR="${VENV_DIR}" \
+            happy bash -lc '
+              set -euxo pipefail
+              .github/workflows/setup-happy.sh
+              echo "Test TKW runtime related stack on amdgpu"
+              export WAVE_CACHE_DIR=$PWD/.wave
+              rm -rf ./.wave
+              nproc
+              WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+              '
+
+              # 6. cheap e2e
+      - name: Run less expensive e2e tests
+        run: |
+          docker exec \
+          -e VENV_DIR="${VENV_DIR}" \
+          happy bash -lc '
+            set -euxo pipefail
+            .github/workflows/setup-happy.sh
+            echo "Run less expensive e2e"
+            WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+            '
+
+      # 7. expansive e2e
+      - name: Run expensive e2e tests
+        run: |
+          docker exec \
+          -e VENV_DIR="${VENV_DIR}" \
+            happy bash -lc '
+              set -euxo pipefail
+              .github/workflows/setup-happy.sh
+              echo "Run expensive e2e tests"
+              WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
+            '
+
+      # 8. lit tests
+      - name: Run lit tests
+        run: |
+          docker exec \
+          -e VENV_DIR="${VENV_DIR}" \
+            happy bash -lc '
+              set -euxo pipefail
+              .github/workflows/setup-happy.sh
+              lit lit_tests/ -v
+            '
+
+      # 9. fix permission
+      - name: Clean up happy container - 0
+        if: always()
+        run: |
+          docker exec happy bash -lc '
+            set -eux
+            chown -R "$HOST_UID:$HOST_GID" /workspace
           '
 
-      - name: Clean up
+      # 10. final cleanup container
+      - name: Clean up happy container - 1
+        if: always()
         run: |
-          docker stop happy
+          docker stop happy && docker rm -f happy || true
+
