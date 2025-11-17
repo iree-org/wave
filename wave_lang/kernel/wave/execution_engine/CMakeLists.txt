@@ -6,12 +6,6 @@
 cmake_minimum_required(VERSION 3.19...3.27)
 project(wave_execution_engine)
 
-# Skip building on macOS
-if(APPLE)
-  message(STATUS "Skipping wave_execution_engine build on ${CMAKE_SYSTEM_NAME}")
-  return()
-endif()
-
 # Set the C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,7 +26,6 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY)
 find_package(nanobind CONFIG REQUIRED)
 
-# Find LLVM and MLIR
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
 
@@ -46,22 +39,18 @@ include_directories(${MLIR_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
-# Compile buffer utils as a separate shared library
 add_library(wave_runtime_helpers SHARED
   buffer_utils.cpp
 )
 
-# Link Python for wave_runtime_helpers
 target_link_libraries(wave_runtime_helpers PRIVATE
   Python::Python
 )
 
-# Compile HIP runtime as a separate shared library
 add_library(wave_hip_runtime SHARED
   wave_hip_runtime.cpp
 )
 
-# Compile an extension library
 nanobind_add_module(wave_execution_engine NB_STATIC
   execution_engine.cpp
   bindings.cpp
@@ -79,7 +68,6 @@ get_property(mlir_dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(mlir_conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(mlir_extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 
-# Link against LLVM and MLIR libraries
 target_link_libraries(wave_execution_engine PRIVATE
   Python::Python
   Python::Module
