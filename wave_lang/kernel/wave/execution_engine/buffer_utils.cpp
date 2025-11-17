@@ -100,3 +100,39 @@ extern "C" double wave_get_float64(PyObject *obj_ptr) {
 
   return value;
 }
+
+extern "C" int64_t wave_get_dim(PyObject *obj_ptr, int32_t dim_idx) {
+  GILState gil_state;
+
+  // Get tensor.size() method
+  PyObjectPtr size_method(PyObject_GetAttrString(obj_ptr, "size"));
+  if (!size_method) {
+    PyErr_Clear();
+    throw std::runtime_error(
+        "wave_get_dim: Object does not have 'size' attribute");
+  }
+
+  // Call tensor.size(dim_idx)
+  PyObjectPtr dim_arg(PyLong_FromLong(dim_idx));
+  if (!dim_arg) {
+    PyErr_Clear();
+    throw std::runtime_error(
+        "wave_get_dim: Failed to create dimension argument");
+  }
+
+  PyObjectPtr size_result(
+      PyObject_CallOneArg(size_method.get(), dim_arg.get()));
+  if (!size_result) {
+    PyErr_Clear();
+    throw std::runtime_error("wave_get_dim: Failed to call size()");
+  }
+
+  // Convert result to int64_t
+  int64_t dim_size = PyLong_AsLongLong(size_result.get());
+  if (PyErr_Occurred()) {
+    PyErr_Clear();
+    throw std::runtime_error("wave_get_dim: size() returned invalid value");
+  }
+
+  return dim_size;
+}

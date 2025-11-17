@@ -44,4 +44,18 @@ int64_t wave_get_int64(PyObject *obj);
 /// Extract a double value from a PyObject.
 /// Throws std::runtime_error if conversion fails.
 double wave_get_float64(PyObject *obj);
+
+/// Extract the size of a specific dimension from a PyObject (PyTorch tensor).
+///
+/// Args:
+///   obj: PyObject* pointing to a PyTorch tensor
+///   dim_idx: Dimension index to query (0-based)
+///
+/// Returns:
+///   Size of the specified dimension as int64_t
+///
+/// Throws:
+///   std::runtime_error if the object doesn't have a size() method or
+///   if the dimension index is invalid
+int64_t wave_get_dim(PyObject *obj, int32_t dim_idx);
 }
