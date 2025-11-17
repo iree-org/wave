@@ -239,8 +239,14 @@ class WaveEmitter:
         # TODO: kernel bindiong order may not be the same as the kernel function
         # arguments order, so map kernel order to host function arguments orderS
         binding_map = {}
+        symbol_map = {}
         for i, b in enumerate(self.root_sig.sig.bindings):
             binding_map[id(b)] = i
+            if b.binding_type == BindingType.KERNEL_BUFFER:
+                for j, symbol in enumerate(b.kernel_buffer_type.symbolic_shape):
+                    if symbol in symbol_map:
+                        continue
+                    symbol_map[symbol] = (i, j)
 
         bindings = self.root_sig.sig.linear_bindings
 
@@ -303,9 +309,17 @@ class WaveEmitter:
         get_buffer_func.attributes["llvm.emit_c_interface"] = UnitAttr.get()
         get_buffer_func_symbol = FlatSymbolRefAttr.get(get_buffer_func.sym_name.value)
 
-        # Declare scalar extraction functions
+        i32 = IntegerType.get_signless(32)
         i64 = IntegerType.get_signless(64)
         f64 = F64Type.get()
+
+        get_dim_ftype = FunctionType.get([ptr, i32], [i64])
+        get_dim_func = func_d.FuncOp(
+            "wave_get_dim", get_dim_ftype, visibility="private"
+        )
+        get_dim_func_symbol = FlatSymbolRefAttr.get(get_dim_func.sym_name.value)
+
+        # Declare scalar extraction functions
         get_int64_ftype = FunctionType.get([ptr], [i64])
         get_int64_func = func_d.FuncOp(
             "wave_get_int64", get_int64_ftype, visibility="private"
@@ -329,17 +343,34 @@ class WaveEmitter:
             [Location.unknown()] * len(host_args_types)
         )
 
+        symbol_vals = {}
+
         subs = add_emitter_subs(self)
         threads_per_block = self.hardware_constraint.threads_per_block
         with InsertionPoint(entry_block), Location.name("wave-generated host function"):
+            func_args = entry_block.arguments[1:]
+            for binding in bindings:
+                if binding.binding_type != BindingType.SYMBOL_VALUE:
+                    continue
+
+                sym = binding.symbol_type
+                arg_idx, dim_idx = symbol_map[sym]
+                arg = func_args[arg_idx]
+                dim = arith_d.constant(i32, dim_idx)
+                value = func_d.CallOp(
+                    get_dim_ftype.results, get_dim_func_symbol, [arg, dim]
+                ).results[0]
+                value = arith_d.index_cast(IndexType.get(), value)
+                symbol_vals[sym] = value
+                subs[sym] = value
+
             grid = [gen_sympy_index(subs, s) for s in self.grid]
             threads = [gen_sympy_index(subs, s) for s in threads_per_block]
 
             launch_args = []
-            func_args = entry_block.arguments[1:]
             for binding, dst_type in zip(bindings, arg_types):
-                arg = func_args[binding_map[id(binding)]]
                 if binding.binding_type == BindingType.KERNEL_BUFFER:
+                    arg = func_args[binding_map[id(binding)]]
                     # Extract buffer from PyObject
                     call = func_d.CallOp(
                         get_buffer_ftype.results, get_buffer_func_symbol, [arg]
@@ -348,7 +379,8 @@ class WaveEmitter:
                     offset = arith_d.constant(IndexType.get(), 0)
                     buffer = memref_d.view(dst_type, buffer, offset, [])
                     launch_args.append(buffer)
-                else:
+                elif binding.binding_type == BindingType.SCALAR_VALUE:
+                    arg = func_args[binding_map[id(binding)]]
                     # Extract scalar from PyObject
                     # Determine if it's float or int based on MLIR type
                     if isinstance(dst_type, (F16Type, F32Type, F64Type)):
@@ -371,6 +403,13 @@ class WaveEmitter:
                         elif isinstance(dst_type, IntegerType) and dst_type.width != 64:
                             scalar = arith_d.trunci(dst_type, scalar)
                     launch_args.append(scalar)
+
+                elif binding.binding_type == BindingType.SYMBOL_VALUE:
+                    sym = binding.symbol_type
+                    value = symbol_vals[sym]
+                    launch_args.append(value)
+                else:
+                    raise CodegenError(f"Unsupported binding type: {binding}")
 
             gpu_d.launch_func(
                 async_dependencies=[],
