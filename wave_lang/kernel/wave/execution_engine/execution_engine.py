@@ -94,6 +94,9 @@ def _load_runtime_helpers():
     wave_get_float64_addr = ctypes.cast(lib.wave_get_float64, ctypes.c_void_p).value
     symbol_map["wave_get_float64"] = wave_get_float64_addr
 
+    wave_get_dim_addr = ctypes.cast(lib.wave_get_dim, ctypes.c_void_p).value
+    symbol_map["wave_get_dim"] = wave_get_dim_addr
+
     return symbol_map
 
 
