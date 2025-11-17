@@ -238,6 +238,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
+        dynamic_symbols=[M, N],
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
