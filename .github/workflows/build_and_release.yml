@@ -125,7 +125,7 @@ jobs:
           echo "WAVE_IS_STABLE_REL=${{ steps.decide.outputs.is_stable }}"
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@9c00cb4f6b517705a3794b22395aedc36257242c # v3.2.1
+        uses: pypa/cibuildwheel@63fd63b352a9a8bdcc24791c9dbee952ee9a8abc # v3.3.0
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-${{ matrix.platform }}
           CIBW_BEFORE_ALL_LINUX: curl -sSf https://sh.rustup.rs | sh -s -- -y
