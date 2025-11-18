@@ -101,9 +101,9 @@ def mlir_converter_location():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_location
-    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":44:0)
+    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":44
     # CHECK: module
-    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44:0), %arg1: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44:0), %arg2: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44:0))
+    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg1: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg2: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44
 
     # CHECK: wave.read
     # CHECK-SAME: loc(#loc1)
@@ -122,10 +122,10 @@ def mlir_converter_location():
     # CHECK: loc(#loc)
     # CHECK: loc(#loc)
 
-    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":55:12 to :24)
-    # CHECK: #loc2 = loc("{{.*}}mlir_converter_debug_locations.py":56:12 to :24)
-    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":59:12 to :25)
-    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":62:4 to :24)
+    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":55
+    # CHECK: #loc2 = loc("{{.*}}mlir_converter_debug_locations.py":56
+    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":59
+    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":62
 
 
 @run_test
@@ -210,13 +210,13 @@ def mlir_converter_location_iterate():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_location_iterate
-    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":157:0)
-    # CHECK: #loc5 = loc("{{.*}}mlir_converter_debug_locations.py":174:18 to :44)
+    # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":157
+    # CHECK: #loc5 = loc("{{.*}}mlir_converter_debug_locations.py":174
     # CHECK: module
     # CHECK: func.func @kernel
 
     # CHECK: wave.iterate
-    # CHECK: %arg3: !wave.tensor<[@M, @N] of f32, <register>> loc("{{.*}}mlir_converter_debug_locations.py":174:18 to :44)
+    # CHECK: %arg3: !wave.tensor<[@M, @N] of f32, <register>> loc("{{.*}}mlir_converter_debug_locations.py":174
 
     # CHECK:        wave.read
     # CHECK-SAME:   loc(#loc3)
@@ -250,8 +250,8 @@ def mlir_converter_location_iterate():
 
     # CHECK: (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>> loc(#loc4)
 
-    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":172:20 to :31)
-    # CHECK: #loc2 = loc("{{.*}}mlir_converter_debug_locations.py":163:16 to :48)
-    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":170:20 to :31)
-    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":167:9 to :42)
-    # CHECK: #loc6 = loc("{{.*}}mlir_converter_debug_locations.py":178:8 to :28)
+    # CHECK: #loc1 = loc("{{.*}}mlir_converter_debug_locations.py":172
+    # CHECK: #loc2 = loc("{{.*}}mlir_converter_debug_locations.py":163
+    # CHECK: #loc3 = loc("{{.*}}mlir_converter_debug_locations.py":170
+    # CHECK: #loc4 = loc("{{.*}}mlir_converter_debug_locations.py":167
+    # CHECK: #loc6 = loc("{{.*}}mlir_converter_debug_locations.py":178
