@@ -575,11 +575,19 @@ def _emit_from_captured_trace(
     # keep track of which emitted value stems from what node to wire
     # arguments correctly
     value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
+    diagnostics = []
 
     if pipeline:
         raise NotImplementedError(
             "Transform dialect pipelines are not implemented yet."
         )
+
+    enable_debug_info = (
+        options.location_capture_config.level is not LocationCaptureLevel.NONE
+    )
+
+    if enable_debug_info and not trace.location:
+        diagnostics.append("Missing debug location for wave trace")
 
     with ir.Context() as ctx, (
         trace.location.to_water() if trace.location else ir.Location.unknown()
@@ -587,8 +595,6 @@ def _emit_from_captured_trace(
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
         module = ir.Module.create()
-
-        diagnostics = []
 
         def diagnostics_handler(d):
             diagnostics.append(f"{d.location}: {d.message}")
@@ -679,9 +685,6 @@ def _emit_from_captured_trace(
         except ir.MLIRError as e:
             diagnostics.append(str(e))
 
-        enable_debug_info = (
-            options.location_capture_config.level is not LocationCaptureLevel.NONE
-        )
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
 
         output = dill.dumps({"diagnostics": diagnostics, "module": module_str})
