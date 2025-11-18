@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import sys
 from dataclasses import dataclass
-from typing import List, Optional, Union, Callable
+from typing import List, Optional, TypeVar, Union, Callable
 
 from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
 
@@ -23,7 +23,10 @@ class FileLineColInfo:
     line: Union[int, tuple[int, int]]
     col: Union[int, tuple[int, int]]
 
-    def _to_mlir_impl[ContextImpl, LocationImpl](
+    ContextImpl = TypeVar("ContextImpl")
+    LocationImpl = TypeVar("LocationImpl")
+
+    def _to_mlir_impl(
         self, Context: ContextImpl, Location: LocationImpl
     ) -> LocationImpl:
         assert Context.current is not None, "Must be called under MLIR context manager."
@@ -83,7 +86,10 @@ class StackTraceInfo:
 
     frames: List[FileLineColInfo]
 
-    def _to_mlir_impl[ContextImpl, LocationImpl](
+    ContextImpl = TypeVar("ContextImpl")
+    LocationImpl = TypeVar("LocationImpl")
+
+    def _to_mlir_impl(
         self, Context: ContextImpl, Location: LocationImpl
     ) -> LocationImpl:
         assert Context.current is not None, "Must be called under MLIR context manager."
