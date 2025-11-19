@@ -464,6 +464,16 @@ class HardwareConstraint(Constraint):
         ]
         return sum([x * y for x, y in zip(thread_ids, threads_per_block)])
 
+    @property
+    def wave_id(self) -> tuple[int]:
+        # threads_per_block is set in initialize_wave_constraints method
+        return self.linearized_thread_id // self.threads_per_wave
+    
+    @property
+    def lane_id(self) -> tuple[int]:
+        # threads_per_block is set in initialize_wave_constraints method
+        return self.linearized_thread_id % self.threads_per_wave
+
     # Inline substitution for vector_size given index map. In the future we can add support for other members.
     def subs_vector_shapes(self, index_map: dict[IndexSymbol, int]):
         if self.vector_shapes is None:
