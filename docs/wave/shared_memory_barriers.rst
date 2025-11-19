@@ -18,7 +18,7 @@ Glossary
 
 - Split barriers: two-part synchronization using signal (after producer) and wait (before consumer), supported on gfx12 targets.
 
-- RAW / WAR hazards: classic shared memory hazards (Write→Read and Read→Write), this is represented as a closed interval in the pass (SyncRequirement).
+- RAW / WAR hazards: classic shared memory hazards (Write→Read and Read→Write), this is represented as a closed interval in the pass (SyncRegion).
 
 **Note.** We will use producer to refer to an access type operator that takes ownership of a shared memory region for a period of time; consumer to refer to an access type operator that operates on the same shared memory region and therefore needs to synchronize before the producer releases it.
 
@@ -58,9 +58,9 @@ The above gif is a visual illustration for inserting split barriers between prod
 Key Ideas:
 --------------------
 - A hazard is a producer–consumer relationship on shared memory that needs ordering.
-- We model hazards as intervals (windows).
+- We model hazards as intervals/window/regions.
 - minimize_placement_strategy is aimed at monolithic barriers (e.g., amdgpu.lds_barrier) and greedily places the fewest barriers before consumers by sorting on right endpoints.
-- find_intersecting_interval_strategy is designed for split barriers: it coalesces hazard windows into the smallest feasible intersection and emits signal/wait pairs only when necessary.
+- find_disjoint_interval_strategy is designed for split barriers: it reuses the minimize_placement_strategy and coalesces hazard windows into the smallest feasible intersection, emits signal/wait pairs at the intersection bounary.
 
 Public API:
 --------------------
@@ -87,7 +87,7 @@ add_sync_requirements
 - Takes the last producer and the first consumer in the current window.
 - Skips if their access types don’t actually require a barrier.
 - Marks as loop carried if producer’s topo index is greater than consumer’s.
-- Emits a SyncRequirement with resource, endpoints, positions, loop bounds; dedups before appending.
+- Emits a SyncRegion with resource, endpoints, positions, loop bounds; dedups before appending.
 add_hazard_if_window_valid
 - Finalizes the current window only if it contains at least one producer and one consumer.
 - Calls add_sync_requirements, then resets the window.
@@ -108,13 +108,13 @@ get_barriers_analysis
 
 Placement strategies
 --------------------
-We'll use `window` to refer to a SyncRequirement hazard interval, the interval is defined by the topological positions between a producer and a consumer.
+We'll use `window` to refer to a SyncRegion hazard interval, the interval is defined by the topological positions between a producer and a consumer.
 
-2 strategies are currently available; both take a list of SyncRequirement and return a reduced set of barrier placement positions.
+2 strategies are currently available; both take a list of SyncRegion and return a reduced set of barrier placement positions.
     - Minimize placement (minimize_placement_strategy):
         - Intent: Use the fewest possible barriers, placed before consumers.
         - Procedure:
-            1. Sort all SyncRequirements by their endpoints. (earliest barrier requirements)
+            1. Sort all SyncRegions by their endpoints. (earliest barrier requirements)
             2. Forward Hazard Sweep
                 - For normal intervals (start < end), we maintain a single "last chosen position", initialize as -1 (an impossible topology position)
                 - For each interval, if no existing barrier lies in (start, end], this mean the hazard window is not covered, a barrier is needed in that position, add one to list, and update `last_pos`.
@@ -123,23 +123,29 @@ We'll use `window` to refer to a SyncRequirement hazard interval, the interval i
                 - Check if an existing barrier lies in segments: (start, end] or (graph_start, end]
                 - If neither segment contains a barrier, this position requires a barrier, add one to list
 
-    - Find intersecting intervals (find_intersecting_interval_strategy):
-        - Intent: Given a set of synchronization requirements (“hazard windows”) between a producer and a consumer operating on the same LDS (shared) memory region, we want to place one signal (after the producer) and one wait (before the consumer) so that: 1) Every consumer that could race with a producer waits for a matching signal, 2) No wait can appear before its corresponding signal, and 3) We use as few split barrier pairs as possible without over serializing the schedule.
-        - Core: If two windows overlap, a single split barrier pair can satisfy both: signal after the latest producer seen so far (the largest L); wait before the earliest consumer (the smallest R).
-            - Each window (hazard) corresponds to an interval (p, c) where p = producer topology position and c is the consumer topology position.
-            - If p < c, we identify as normal hazard.
-            - If p > c, we identify a loop-carrier hazard, normalize it by shifting c:= c + |body|, prepare it for the forward sweep.
-        - Sweeping Procedure:
-            - Sort by (c, p) and sweep once while maintaining a window.
-                - max_p: the maximum producer position found so far.
-                - min_c: the minimum consumer position found so far.
-                - If the next hazard's p > min_c, we identify the smallest possible intersection, add a barrier to list and start a new window.
-                - Otherwise, tighten the window.
-            - If we add a cross-iteration barrier to graph, and all dependencies are intra-graph, then we emit a barrier surrounding the subgraph: (iterate.prev, iterate.next)
-
+    - Disjoint interval (find_disjoint_interval_strategy)
+        - Intent:
+            - When using split barriers (signal/wait), you want pairs that:
+            - Cover hazards (respect RAW/WAR windows),
+            - Minimize waits (so fewer consumers are serialized),
+            - Place signals as early as safely possible (to maximize overlap/concurrency), and
+            - Avoid tangled pairs (disjoint intervals are easier for downstream passes and analyzers).
+        note that minimize_placement_strategy already gives us the best possible wait positions (fewest consumers to wait at). So the remaining question is: where do we put the matching signals? That’s exactly what find_disjoint_interval_strategy answers—by choosing, for each selected wait, the nearest earlier producer that still forms a valid window.
+        - TL;DR
+            1.	First, compute a minimal set of wait sites using minimize_placement_strategy (i.e., pick the fewest consumer positions that “stab” all hazard windows).
+            2.	Then, for each chosen wait, pick the closest feasible signal (a producer that occurs before that wait) so that each (signal, wait) pair covers at least one hazard window and does not overlap other pairs more than necessary.
+            3.	Finally, fall back to “signal immediately before wait” in two edge cases:
+                - when there’s no earlier producer (purely cross-iteration graphs), or
+                - when the candidate signal lives in a different subgraph than the consumer.
+        This creates disjoint signal–wait intervals wherever possible, making split barriers easier to schedule and verify while preserving the minimality of waits.
+        - Inputs and outputs
+            - Input: a list of SyncRegion items (each with producer, consumer, prod_location, cons_location, and cross_iter flags). Think of each item as a hazard window (prod_location, cons_location].
+            - Output: a new list of (signal, wait) pairs (as SyncRegions) where:
+            - Waits are a minimal set returned by minimize_placement_strategy.
+            - Signals are chosen to be as early as feasible while remaining valid.
 Emission
 --------------------
-A small dispatcher selects an emitter based on TargetConfig:
+Constructing BarrierEmitter(...) returns an instance of the subclass based on TargetConfig:
 - LegacyBarrierEmitter (amdgpu.lds_barrier): emits monolithic SharedMemoryBarrier before the consumer.
 - BasicSplitBarrierEmitter (rocdl.s.barrier.signal/rocdl.s.barrier.wait {barId: -1}) emits a signal after a producer and a wait before a consumer.
     - Verification: Scanning the pre-order traversal of the full nested graph.
@@ -151,7 +157,7 @@ End-to-End flow
 --------------------
 - Build TargetConfig from target string.
 - Walk the graph in the pre-order manner and assign _topo_location.
-- Run get_barriers_analysis function to get a list of SyncRequirements.
+- Run get_barriers_analysis function to get a list of SyncRegions.
 - BarrierEmitter dispatch to choose Legacy or BasicSplit emitter.
 - Optimize placements, then emit barriers.
 - Run verify on the resulting graph to avoid GPU hangs.
@@ -159,4 +165,3 @@ End-to-End flow
 Known Limitations / TODO
 --------------------
 - We are now propagating memory access of an op in the nested-region with `depth` set to 1
-- Handle the hazard with space complexity O(1)
