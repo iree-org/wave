@@ -486,7 +486,7 @@ def minimize_placement_strategy(
             graph_start < graph_end
         ), f"Expected graph_start ({graph_start}) position to be less than graph_end ({graph_end}) position."
 
-        # A syncrhonization region is guarded if in between
+        # A synchronization region is guarded if in between
         #   1. producer and graph end, or
         #   2. graph start and consumer
         # has already a barrier expected to be placed.
