@@ -37,6 +37,23 @@ mlirWaveSymbolAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveSymbolAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveIndexSymbolAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveIndexSymbolAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveIndexSymbolAttr(MlirAttribute attr);
+
+/// Creates a new WaveIndexSymbolAttr with the given value.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexSymbolAttrGet(MlirContext mlirCtx,
+                                                            uint32_t value);
+
+/// Get the value from a WaveIndexSymbolAttr.
+MLIR_CAPI_EXPORTED uint32_t mlirWaveIndexSymbolAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveIndexSymbolAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIndexSymbolAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
 // WaveIndexMappingAttr
 //===---------------------------------------------------------------------===//
 

@@ -56,6 +56,42 @@ NB_MODULE(_waterDialects, m) {
           "Gets a wave.WaveSymbolAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
+  // WaveIndexSymbolAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveIndexSymbolAttr", mlirAttributeIsAWaveIndexSymbolAttr,
+      mlirWaveIndexSymbolAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, wave::WaveIndexSymbol value,
+             MlirContext context) {
+            return cls(mlirWaveIndexSymbolAttrGet(
+                context, static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveIndexSymbolAttr from an index symbol enum value.")
+      .def(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<wave::WaveIndexSymbol>(
+                mlirWaveIndexSymbolAttrGetValue(self));
+          },
+          "Returns the index symbol enum value.");
+
+  nb::enum_<wave::WaveIndexSymbol>(d, "WaveIndexSymbol")
+      .value("DEVICE_DIM_0", wave::WaveIndexSymbol::DEVICE_DIM_0)
+      .value("DEVICE_DIM_1", wave::WaveIndexSymbol::DEVICE_DIM_1)
+      .value("DEVICE_DIM_2", wave::WaveIndexSymbol::DEVICE_DIM_2)
+      .value("WORKGROUP_0", wave::WaveIndexSymbol::WORKGROUP_0)
+      .value("WORKGROUP_1", wave::WaveIndexSymbol::WORKGROUP_1)
+      .value("WORKGROUP_2", wave::WaveIndexSymbol::WORKGROUP_2)
+      .value("THREAD_0", wave::WaveIndexSymbol::THREAD_0)
+      .value("THREAD_1", wave::WaveIndexSymbol::THREAD_1)
+      .value("THREAD_2", wave::WaveIndexSymbol::THREAD_2)
+      .value("GPR_NUMBER", wave::WaveIndexSymbol::GPR_NUMBER);
+
+  //===---------------------------------------------------------------------===//
   // WaveIndexMappingAttr
   //===---------------------------------------------------------------------===//
 

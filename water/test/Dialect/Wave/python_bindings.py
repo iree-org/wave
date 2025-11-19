@@ -21,6 +21,25 @@ try:
         # CHECK: #wave.symbol<"test">
         print(wave.WaveSymbolAttr.get("test"))
 
+        # CHECK: #wave.index_symbol<WG0>
+        index_symbol_attr = wave.WaveIndexSymbolAttr.get(
+            wave.WaveIndexSymbol.WORKGROUP_0
+        )
+        print(index_symbol_attr)
+
+        # CHECK: WaveIndexSymbol.WORKGROUP_0
+        print(index_symbol_attr.value())
+
+        # CHECK: #wave.index_symbol<T0>
+        print(wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.THREAD_0))
+
+        try:
+            wave.WaveIndexSymbolAttr.get(100)
+        except TypeError as e:
+            assert "incompatible function arguments" in str(e)
+        else:
+            assert False, "Expected to fail with TypeError."
+
         # CHECK: #wave<index_mapping[$WG0, BLOCK_M, $T0] -> ($WG0 * 3, $WG0 + BLOCK_M, $T0 mod $WG0)>
         symbol_names = ["$WG0", "BLOCK_M", "$T0"]
         s0 = ir.AffineSymbolExpr.get(0)

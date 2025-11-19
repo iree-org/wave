@@ -44,6 +44,28 @@ MlirTypeID mlirWaveSymbolAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveIndexSymbolAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveIndexSymbolAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveIndexSymbolAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveIndexSymbolAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveIndexSymbolAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveIndexSymbol>(value)));
+}
+
+uint32_t mlirWaveIndexSymbolAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveIndexSymbolAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveIndexSymbolAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveIndexSymbolAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveIndexMappingAttr
 //===---------------------------------------------------------------------===//
 
