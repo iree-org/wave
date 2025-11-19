@@ -95,7 +95,11 @@ def mlir_converter_location():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, _ = emit_wave_dialect(trace, constraints, options, False)
+    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False)
+
+    if diagnostics:
+        print(diagnostics)
+    assert len(diagnostics) == 0, "diagnostics should be empty"
 
     # Print to stdout for FileCheck
     print(mlir_output)
@@ -204,7 +208,11 @@ def mlir_converter_location_iterate():
     constraints = matmul.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, _ = emit_wave_dialect(trace, constraints, options, False)
+    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False)
+
+    if diagnostics:
+        print(diagnostics)
+    assert len(diagnostics) == 0, "diagnostics should be empty"
 
     # Print to stdout for FileCheck
     print(mlir_output)
