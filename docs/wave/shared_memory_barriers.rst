@@ -1,4 +1,4 @@
-How are shared memory barriers inserted in wave
+Shared Memory Barrier Placements
 =============================================================
 
 We want to automatically insert shared-memory barriers so that read/write/atomics on the same LDS (shared memory) region are ordered correctly.
@@ -60,7 +60,7 @@ Key Ideas:
 - A hazard is a producer–consumer relationship on shared memory that needs ordering.
 - We model hazards as intervals/window/regions.
 - minimize_placement_strategy is aimed at monolithic barriers (e.g., amdgpu.lds_barrier) and greedily places the fewest barriers before consumers by sorting on right endpoints.
-- find_disjoint_interval_strategy is designed for split barriers: it reuses the minimize_placement_strategy and coalesces hazard windows into the smallest feasible intersection, emits signal/wait pairs at the intersection boundary.
+- find_disjoint_interval_strategy is designed for split barriers: it reuses the minimize_placement_strategy and coalesces hazard windows into the smallest feasible intersection, emits signal/wait pairs at the intersection bounary.
 
 Public API:
 --------------------
@@ -83,26 +83,32 @@ Analysis
 Core idea
 - Track, per shared resource, a rolling “window” of producers (writers) followed by consumers (readers).
 - When a new producer starts, the previous window (if it had both sides) is finalized into a barrier requirement.
-add_sync_requirements
-- Takes the last producer and the first consumer in the current window.
-- Skips if their access types don’t actually require a barrier.
-- Marks as loop carried if producer’s topo index is greater than consumer’s.
-- Emits a SyncRegion with resource, endpoints, positions, loop bounds; dedups before appending.
-add_hazard_if_window_valid
-- Finalizes the current window only if it contains at least one producer and one consumer.
-- Calls add_sync_requirements, then resets the window.
-handle_hazard
-- For a single node: determine access kind and the shared resource (with depth for next iter).
-- Attach optional graph_info (loop body [start, end]) to the window for later annotation.
-- If node is a producer kind: flush current window, then record this producer.
-- If node is a consumer kind and producers exist: record this consumer.
-get_hazard_handle
-- Returns a partially applied handle_hazard with chosen producer/consumer kinds (e.g., RAW or WAR).
-get_barriers_analysis
-- Assigns topo indices via pre order walk.
-- Recursively walks the root graph and nested regions:
-    - For Iterate: walk body twice (depth 0 for same iter, depth 1 for next iter) carrying [start, end].
-    - For Conditional: walk its subgraph once.
+
+    - add_sync_requirements
+        - Takes the last producer and the first consumer in the current window.
+        - Skips if their access types don’t actually require a barrier.
+        - Marks as loop carried if producer’s topo index is greater than consumer’s.
+        - Emits a SyncRegion with resource, enclosing nodes, enclosing intervals, loop bounds;
+
+    - add_hazard_if_window_valid
+        - Finalizes the current window only if it contains at least one producer and one consumer.
+        - Calls add_sync_requirements, then resets the window.
+
+    - handle_hazard
+        - For a single node: determine access kind and the shared resource (with depth for next iter).
+        - Attach optional graph_info (loop body [start, end]) to the window for later annotation.
+        - If node is a producer kind: flush current window, then record this producer.
+        - If node is a consumer kind and producers exist: record this consumer.
+
+    - get_hazard_handle
+        - Returns a partially applied handle_hazard with chosen producer/consumer kinds (e.g., RAW or WAR).
+
+    - get_barriers_analysis
+        - Assigns topo indices via pre order walk.
+        - Recursively walks the root graph and nested regions:
+            - For Iterate: walk body twice (depth 0 for same iter, depth 1 for next iter) carrying [start, end].
+            - For Conditional: walk its subgraph once.
+
 - Runs two passes: WAR, then RAW; each pass maintains its own per resource windows and flushes after traversal.
 
 
@@ -124,13 +130,13 @@ We'll use `window` to refer to a SyncRegion hazard interval, the interval is def
                 - If neither segment contains a barrier, this position requires a barrier, add one to list
 
     - Disjoint interval (find_disjoint_interval_strategy)
-        - Intent:
-            - When using split barriers (signal/wait), you want pairs that:
+        - Intent: When using split barriers (signal/wait), you want pairs that:
             - Cover hazards (respect RAW/WAR windows),
             - Minimize waits (so fewer consumers are serialized),
             - Place signals as early as safely possible (to maximize overlap/concurrency), and
             - Avoid tangled pairs (disjoint intervals are easier for downstream passes and analyzers).
         note that minimize_placement_strategy already gives us the best possible wait positions (fewest consumers to wait at). So the remaining question is: where do we put the matching signals? That’s exactly what find_disjoint_interval_strategy answers—by choosing, for each selected wait, the nearest earlier producer that still forms a valid window.
+
         - TL;DR
             1.	First, compute a minimal set of wait sites using minimize_placement_strategy (i.e., pick the fewest consumer positions that “stab” all hazard windows).
             2.	Then, for each chosen wait, pick the closest feasible signal (a producer that occurs before that wait) so that each (signal, wait) pair covers at least one hazard window and does not overlap other pairs more than necessary.
