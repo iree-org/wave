@@ -83,7 +83,6 @@ class GraphAnalyzer:
         """Check if a node can be optimized with custom kernels"""
         # Add your custom logic here
         optimizable_ops = [
-            torch.ops.aten.mm.default,
             torch.matmul,
             operator.matmul,
         ]
@@ -197,6 +196,7 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
     if "gfx125" in get_default_arch():
         mfma_variant = MMAType.GFX1250_F32_16x16x32_F16
+        threads_per_wave = 32
 
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=threads_per_wave
