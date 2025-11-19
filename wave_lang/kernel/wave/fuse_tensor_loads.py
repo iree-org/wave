@@ -169,7 +169,7 @@ def compute_fused_parameters(
             THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
         )
 
-    merged_shared_tile_index = merge_with_piecewise(
+    merged_shared_tile_index = merge_dicts_with_piecewise(
         load1.shared_tile_index, adjusted_load2_shared_tile_index, INPUT_SELECTOR
     )
 
