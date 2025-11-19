@@ -161,10 +161,6 @@ def _build_start_indices(
     return indices, indices_wg, indices_th
 
 
-def _compute_offset(indices: list[IndexExpr], strides: list[IndexExpr]) -> IndexExpr:
-    return sum(i * s for i, s in zip(indices, strides))
-
-
 def _get_symbolic_shape(node: fx.Node) -> tuple[IndexExpr]:
     return get_custom(node).type.symbolic_shape
 
@@ -752,7 +748,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         dst_memory = get_custom(dst)
 
         symbolic_shape = _get_symbolic_shape(src)
-        local_bounds = [bounds[s] - global_tile_index[s].start for s in symbolic_shape]
+        global_tile_index_current = {k: global_tile_index[k] for k in symbolic_shape}
+
+        local_bounds = [
+            bounds[s] - global_tile_index_current[s].start for s in symbolic_shape
+        ]
         local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
 
         strides = strides_from_symbolic_shape(
@@ -802,7 +802,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         # 4. offset_byte = offset * element byte : byte
         # 5. get global memory pointer
         # 6. move global memory pointer by offset_byte to get global address of a tile : byte
-        index, _, _ = _build_start_indices(emitter, global_tile_index)
+        index, _, _ = _build_start_indices(emitter, global_tile_index_current)
 
         wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
         wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
@@ -827,8 +827,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             dst_memory.distributed_shape,
             allow_mixed_shapes=True,
         )
+
+        shared_tile_index_current = {k: shared_tile_index[k] for k in symbolic_shape}
+
         linearized_index = {
-            "linearized_idx": linearize_index(shared_tile_index, shared_strides)
+            "linearized_idx": linearize_index(shared_tile_index_current, shared_strides)
         }
 
         # Calculate shared memory offset from tile indices
