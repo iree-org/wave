@@ -378,14 +378,8 @@ def emit_wmma(
 ) -> Value:
     source_a, source_b = values
     if intr == MMAType.GFX1250_F32_16x16x32_F16:
-        # TODO: Use amdgpu intrinsic when it is supported
-        f = arith_d.constant(IntegerType.get_signless(1), 0)
-        t = arith_d.constant(IntegerType.get_signless(1), 1)
-        i16 = arith_d.constant(IntegerType.get_signless(16), 0)
-        v16f32 = VectorType.get((8,), F32Type.get())
-        res = rocdl_d.wmma_f32_16x16x32_f16(
-            v16f32, [f, source_a, f, source_b, i16, acc, f, t]
-        )
+        v8f32 = VectorType.get((8,), F32Type.get())
+        res = rocdl_d.wmma_f32_16x16x32_f16(v8f32, source_a, source_b, acc)
         return res.result
 
     return amdgpu_d.wmma(m, n, k, source_a, source_b, acc)
