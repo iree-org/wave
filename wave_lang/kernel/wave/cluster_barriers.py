@@ -5,10 +5,12 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import logging
+from typing import Optional
 
 import torch.fx as fx
 
 from .._support.tracing import CapturedTrace
+from .compile_options import WaveCompileOptions
 from ..ops.wave_ops import (
     get_custom,
     Iterate,
@@ -23,32 +25,68 @@ logger = logging.getLogger(__name__)
 CLUSTER_BARRIER_ID = -3
 
 
-def add_cluster_barriers_to_iterate(node: fx.Node):
+def add_cluster_barriers_to_iterate(
+    trace: CapturedTrace, node: fx.Node, multiplier: Optional[int]
+):
     """
-    Add cluster barrier signal and wait before an iterate node.
+    Add cluster barriers to an iterate node.
+
+    When multiplier is None: Add barrier signal and wait before the loop.
+    When multiplier is set: Add pipelined barriers:
+      - barrier_signal before the loop
+      - barrier_wait at start of body if current_iteration % multiplier == 0
+      - barrier_signal at end of body if (current_iteration + 1) % multiplier == 0
+      - barrier_wait after the loop
 
     Args:
-        node: The iterate node before which to insert barriers
+        trace: The captured trace
+        node: The iterate node
+        multiplier: Barrier multiplier for pipelined synchronization
     """
     graph = node.graph
     custom = get_custom(node)
     location = custom.location
 
-    with graph.inserting_before(node):
-        # Add cluster barrier signal
-        signal_node = SharedMemoryBarrierSignal(
-            barId=CLUSTER_BARRIER_ID, tensor_wait=False
-        ).add_to_graph(graph, loc=location)
-        logger.debug(f"  Added cluster barrier signal before {node.name}")
+    if multiplier is None:
+        # Simple case: Add barriers before the loop
+        with graph.inserting_before(node):
+            SharedMemoryBarrierSignal(
+                barId=CLUSTER_BARRIER_ID, tensor_wait=False
+            ).add_to_graph(graph, loc=location)
+            logger.debug(f"  Added cluster barrier signal before {node.name}")
 
-        # Add cluster barrier wait
-        wait_node = SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
-            graph, loc=location
+            SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
+                graph, loc=location
+            )
+            logger.debug(f"  Added cluster barrier wait before {node.name}")
+    else:
+        # Pipelined case: Add conditional barriers inside the loop
+        logger.debug(
+            f"  Adding pipelined cluster barriers with multiplier={multiplier}"
         )
-        logger.debug(f"  Added cluster barrier wait before {node.name}")
+
+        # Add barrier_signal before the loop
+        with graph.inserting_before(node):
+            SharedMemoryBarrierSignal(
+                barId=CLUSTER_BARRIER_ID, tensor_wait=False
+            ).add_to_graph(graph, loc=location)
+            logger.debug(f"  Added cluster barrier signal before {node.name}")
+
+        # Get the subgraph to add barriers inside
+        subgraph = trace.get_subgraph(custom.subgraph_name)
+
+        # TODO: Add conditional barrier_wait at start of body
+        # TODO: Add conditional barrier_signal at end of body
+
+        # Add barrier_wait after the loop
+        with graph.inserting_after(node):
+            SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
+                graph, loc=location
+            )
+            logger.debug(f"  Added cluster barrier wait after {node.name}")
 
 
-def add_cluster_memory_barriers(trace: CapturedTrace):
+def add_cluster_memory_barriers(trace: CapturedTrace, options: WaveCompileOptions):
     """
     Adds cluster memory barriers to the graph for cross-workgroup synchronization.
     This pass handles barrier insertion for cluster-level synchronization using
@@ -59,9 +97,11 @@ def add_cluster_memory_barriers(trace: CapturedTrace):
 
     Args:
         trace: The captured trace containing the computation graph
+        options: Wave compilation options
     """
 
     logger.debug("Running add_cluster_memory_barriers pass")
+    logger.debug(f"  cluster_barrier_multiplier={options.cluster_barrier_multiplier}")
 
     # Step 1: Look for iterate ops and check if they contain tensor load ops
     iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
@@ -82,6 +122,8 @@ def add_cluster_memory_barriers(trace: CapturedTrace):
             logger.debug(
                 f"  Iterate op {node.name} contains {len(tensor_load_nodes)} tensor load op(s)"
             )
-            add_cluster_barriers_to_iterate(node)
+            add_cluster_barriers_to_iterate(
+                trace, node, options.cluster_barrier_multiplier
+            )
         else:
             logger.debug(f"  Iterate op {node.name} does not contain tensor load ops")
