@@ -60,7 +60,7 @@ Key Ideas:
 - A hazard is a producer–consumer relationship on shared memory that needs ordering.
 - We model hazards as intervals/window/regions.
 - minimize_placement_strategy is aimed at monolithic barriers (e.g., amdgpu.lds_barrier) and greedily places the fewest barriers before consumers by sorting on right endpoints.
-- find_disjoint_interval_strategy is designed for split barriers: it reuses the minimize_placement_strategy and coalesces hazard windows into the smallest feasible intersection, emits signal/wait pairs at the intersection bounary.
+- find_disjoint_interval_strategy is designed for split barriers: it reuses the minimize_placement_strategy and coalesces hazard windows into the smallest feasible intersection, emits signal/wait pairs at the intersection boundary.
 
 Public API:
 --------------------
