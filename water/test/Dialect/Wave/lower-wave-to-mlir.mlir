@@ -509,3 +509,117 @@ func.func @lower_write_non_innermost(%mem: !wave.tensor<[@M, @N] of f16, <global
   return
   }
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_cast_float_extension
+  func.func @lower_cast_float_extension() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.cast
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<0.000000e+00> : vector<4xf16>
+    // CHECK:     arith.extf %[[INPUT]] : vector<4xf16> to vector<4xf32>
+    %cst = arith.constant 0.0 : f16
+    %input = wave.register %cst : vector<4xf16>
+    %result = wave.cast %input : vector<4xf16> to vector<4xf32>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_cast_float_truncation
+  func.func @lower_cast_float_truncation() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.cast
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<1.000000e+00> : vector<8xf32>
+    // CHECK:     arith.truncf %[[INPUT]] : vector<8xf32> to vector<8xf16>
+    %cst = arith.constant 1.0 : f32
+    %input = wave.register %cst : vector<8xf32>
+    %result = wave.cast %input : vector<8xf32> to vector<8xf16>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_cast_integer_extension
+  func.func @lower_cast_integer_extension() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.cast
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<42> : vector<4xi8>
+    // CHECK:     arith.extsi %[[INPUT]] : vector<4xi8> to vector<4xi32>
+    %cst = arith.constant 42 : i8
+    %input = wave.register %cst : vector<4xi8>
+    %result = wave.cast %input : vector<4xi8> to vector<4xi32>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_cast_integer_truncation
+  func.func @lower_cast_integer_truncation() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.cast
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<1000> : vector<4xi32>
+    // CHECK:     arith.trunci %[[INPUT]] : vector<4xi32> to vector<4xi16>
+    %cst = arith.constant 1000 : i32
+    %input = wave.register %cst : vector<4xi32>
+    %result = wave.cast %input : vector<4xi32> to vector<4xi16>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_cast_float_to_integer
+  func.func @lower_cast_float_to_integer() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.cast
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<3.140000e+00> : vector<4xf32>
+    // CHECK:     arith.fptosi %[[INPUT]] : vector<4xf32> to vector<4xi32>
+    %cst = arith.constant 3.14 : f32
+    %input = wave.register %cst : vector<4xf32>
+    %result = wave.cast %input : vector<4xf32> to vector<4xi32>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_cast_integer_to_float
+  func.func @lower_cast_integer_to_float() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK-NOT: wave.cast
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<-5> : vector<8xi32>
+    // CHECK:     arith.sitofp %[[INPUT]] : vector<8xi32> to vector<8xf32>
+    %cst = arith.constant -5 : i32
+    %input = wave.register %cst : vector<8xi32>
+    %result = wave.cast %input : vector<8xi32> to vector<8xf32>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_cast_mixed_types
+  func.func @lower_cast_mixed_types() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // Test f16 -> f32 extension
+    // CHECK:     %[[F16:.*]] = arith.constant dense<1.000000e+00> : vector<4xf16>
+    %cst_f16 = arith.constant 1.0 : f16
+    %f16_reg = wave.register %cst_f16 : vector<4xf16>
+    // CHECK:     %[[F16_TO_F32:.*]] = arith.extf %[[F16]] : vector<4xf16> to vector<4xf32>
+    %f16_to_f32 = wave.cast %f16_reg : vector<4xf16> to vector<4xf32>
+
+    // Test f32 -> i32 conversion
+    // CHECK:     arith.fptosi %[[F16_TO_F32]] : vector<4xf32> to vector<4xi32>
+    %f32_to_i32 = wave.cast %f16_to_f32 : vector<4xf32> to vector<4xi32>
+
+    // Test i32 -> i64 extension
+    // CHECK:     arith.extsi {{.*}} : vector<4xi32> to vector<4xi64>
+    %i32_to_i64 = wave.cast %f32_to_i32 : vector<4xi32> to vector<4xi64>
+
+    return
+  }
+}

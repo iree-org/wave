@@ -547,3 +547,34 @@ mlir::MutableOperandRange
 wave::YieldOp::getMutableSuccessorOperands(mlir::RegionSuccessor) {
   return getValuesMutable();
 }
+
+//-----------------------------------------------------------------------------
+// CastOp
+//-----------------------------------------------------------------------------
+
+mlir::LogicalResult wave::CastOp::verify() {
+  mlir::Type valueType = getValueToCast().getType();
+  mlir::Type resultType = getResult().getType();
+
+  wave::WaveTensorType valueTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(valueType);
+  wave::WaveTensorType resultTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(resultType);
+  mlir::VectorType valueVec = llvm::dyn_cast<mlir::VectorType>(valueType);
+  mlir::VectorType resultVec = llvm::dyn_cast<mlir::VectorType>(resultType);
+  if (valueTensor && resultTensor && valueTensor.getFullySpecified() &&
+      resultTensor.getFullySpecified() &&
+      valueTensor.getShape() != resultTensor.getShape()) {
+    return emitOpError("shape of input (")
+           << valueTensor.getShape() << ") must match shape of result ("
+           << resultTensor.getShape() << ")";
+  }
+
+  if (valueVec && resultVec && valueVec.getShape() != resultVec.getShape()) {
+    return emitOpError("shape of input (")
+           << valueVec.getShape() << ") must match shape of result ("
+           << resultVec.getShape() << ")";
+  }
+
+  return mlir::success();
+}

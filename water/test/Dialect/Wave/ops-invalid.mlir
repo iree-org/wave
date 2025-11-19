@@ -372,3 +372,43 @@ func.func @extract_slice_all_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>
   wave.extract_slice %memory {offset = #wave.expr_list<[BLOCK_M] -> (BLOCK_M + 2)>, size = #wave.expr_list<[BLOCK_K] -> (BLOCK_K * 2)>, stride = #wave.expr_list<[BLOCK_N] -> (BLOCK_N)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
   return
 }
+
+// -----
+
+func.func @cast_wave_tensor_shape_mismatch(%arg0: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{shape of input (#wave.symbol<"A">, #wave.symbol<"B">) must match shape of result (#wave.symbol<"C">, #wave.symbol<"D">)}}
+  wave.cast %arg0 : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@C, @D] of bf16>
+  return
+}
+
+// -----
+
+func.func @cast_vector_shape_mismatch(%arg0: vector<4xf32>) {
+  // expected-error @below {{shape of input (4) must match shape of result (8)}}
+  wave.cast %arg0 : vector<4xf32> to vector<8xbf16>
+  return
+}
+
+// -----
+
+func.func @cast_invalid_result_type(%arg0: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{result #0 must be Wave tensor in register or a 1D vector, but got 'f32'}}
+  wave.cast %arg0 : !wave.tensor<[@A, @B] of f32> to f32
+  return
+}
+
+// -----
+
+func.func @cast_wave_tensor_rank_mismatch(%arg0: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{shape of input (#wave.symbol<"A">, #wave.symbol<"B">) must match shape of result (#wave.symbol<"C">, #wave.symbol<"D">, #wave.symbol<"E">)}}
+  wave.cast %arg0 : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@C, @D, @E] of bf16>
+  return
+}
+
+// -----
+
+func.func @cast_underspecified_to_different_shape(%arg0: !wave.tensor<[@A, @B] of f32>) {
+  // expected-error @below {{shape of input (#wave.symbol<"A">, #wave.symbol<"B">) must match shape of result (#wave.symbol<"X">, #wave.symbol<"Y">)}}
+  wave.cast %arg0 : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@X, @Y] of i32>
+  return
+}

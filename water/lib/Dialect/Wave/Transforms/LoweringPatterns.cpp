@@ -237,11 +237,72 @@ public:
   }
 };
 
+class CastOpLoweringPattern : public OpConversionPattern<wave::CastOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::CastOp op, wave::CastOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value input = adaptor.getValueToCast();
+    Type srcType = input.getType();
+    Type dstType = getTypeConverter()->convertType(op.getResult().getType());
+
+    if (!dstType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Only support 1-D vectors here.
+    VectorType srcVecType = dyn_cast<VectorType>(srcType);
+    VectorType dstVecType = dyn_cast<VectorType>(dstType);
+    if (!srcVecType || !dstVecType)
+      return rewriter.notifyMatchFailure(
+          op, "expected vector types for cast lowering");
+
+    Type srcElemType = srcVecType.getElementType();
+    Type dstElemType = dstVecType.getElementType();
+
+    Value castResult = nullptr;
+
+    if (isa<FloatType>(srcElemType) && isa<FloatType>(dstElemType)) {
+      // Floating point to floating point.
+      unsigned srcWidth = srcElemType.getIntOrFloatBitWidth();
+      unsigned dstWidth = dstElemType.getIntOrFloatBitWidth();
+      if (dstWidth < srcWidth)
+        castResult = arith::TruncFOp::create(rewriter, loc, dstVecType, input);
+      else if (dstWidth > srcWidth)
+        castResult = arith::ExtFOp::create(rewriter, loc, dstVecType, input);
+    } else if (isa<IntegerType>(srcElemType) && isa<IntegerType>(dstElemType)) {
+      // Integer to integer.
+      unsigned srcWidth = srcElemType.getIntOrFloatBitWidth();
+      unsigned dstWidth = dstElemType.getIntOrFloatBitWidth();
+      if (dstWidth < srcWidth)
+        castResult = arith::TruncIOp::create(rewriter, loc, dstVecType, input);
+      else if (dstWidth > srcWidth)
+        castResult = arith::ExtSIOp::create(rewriter, loc, dstVecType, input);
+    } else if (isa<FloatType>(srcElemType) && isa<IntegerType>(dstElemType)) {
+      // Float to integer.
+      castResult = arith::FPToSIOp::create(rewriter, loc, dstVecType, input);
+    } else if (isa<IntegerType>(srcElemType) && isa<FloatType>(dstElemType)) {
+      // Integer to float.
+      castResult = arith::SIToFPOp::create(rewriter, loc, dstVecType, input);
+    } else {
+      return rewriter.notifyMatchFailure(
+          op, "unsupported cast element type combination");
+    }
+
+    if (castResult)
+      rewriter.replaceOp(op, castResult);
+    return success();
+  }
+};
+
 } // namespace
 
-void wave::populateWaveRegisterLoweringPatterns(
+void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<RegisterOpLoweringPattern>(typeConverter, patterns.getContext());
+  patterns.add<RegisterOpLoweringPattern, CastOpLoweringPattern>(
+      typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//

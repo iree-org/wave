@@ -158,3 +158,91 @@ func.func @write_with_bounds(%memo: !wave.tensor<[@M] of f32>, %val: !wave.tenso
   wave.write %val, %memo { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32>
   return
 }
+
+// CHECK-LABEL: @cast_wave_tensor
+func.func @cast_wave_tensor(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of bf16> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of bf16>
+  return %0 : !wave.tensor<[@M, @N] of bf16>
+}
+
+// CHECK-LABEL: @cast_wave_tensor_int_to_float
+func.func @cast_wave_tensor_int_to_float(%arg0: !wave.tensor<[@A, @B] of i32>) -> !wave.tensor<[@A, @B] of f32> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<[@A, @B] of i32> to !wave.tensor<[@A, @B] of f32>
+  return %0 : !wave.tensor<[@A, @B] of f32>
+}
+
+// CHECK-LABEL: @cast_vector
+func.func @cast_vector(%arg0: vector<4xf32>) -> vector<4xbf16> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : vector<4xf32> to vector<4xbf16>
+  return %0 : vector<4xbf16>
+}
+
+// CHECK-LABEL: @cast_wave_tensor_underspecified
+func.func @cast_wave_tensor_underspecified(%arg0: !wave.tensor<any of f32>) -> !wave.tensor<any of bf16> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<any of f32> to !wave.tensor<any of bf16>
+  return %0 : !wave.tensor<any of bf16>
+}
+
+// CHECK-LABEL: @cast_wave_tensor_with_index
+func.func @cast_wave_tensor_with_index(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f16> {
+  // CHECK: wave.cast
+  // CHECK-SAME: index
+  %0 = wave.cast %arg0 index [{
+    M : [_T0, BLOCK_M] -> (_T0 * BLOCK_M, 1, 1),
+    N : [_T1, BLOCK_N] -> (_T1 * BLOCK_N, 1, 1)
+  }] : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
+  return %0 : !wave.tensor<[@M, @N] of f16>
+}
+
+// CHECK-LABEL: @cast_int_types
+func.func @cast_int_types(%arg0: !wave.tensor<[@X, @Y] of i8>) -> !wave.tensor<[@X, @Y] of i32> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<[@X, @Y] of i8> to !wave.tensor<[@X, @Y] of i32>
+  return %0 : !wave.tensor<[@X, @Y] of i32>
+}
+
+// CHECK-LABEL: @cast_float_types
+func.func @cast_float_types(%arg0: !wave.tensor<[@A] of f64>) -> !wave.tensor<[@A] of f16> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<[@A] of f64> to !wave.tensor<[@A] of f16>
+  return %0 : !wave.tensor<[@A] of f16>
+}
+
+// CHECK-LABEL: @cast_vector_int
+func.func @cast_vector_int(%arg0: vector<8xi32>) -> vector<8xi8> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : vector<8xi32> to vector<8xi8>
+  return %0 : vector<8xi8>
+}
+
+// CHECK-LABEL: @cast_single_element_vector
+func.func @cast_single_element_vector(%arg0: vector<1xf32>) -> vector<1xbf16> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : vector<1xf32> to vector<1xbf16>
+  return %0 : vector<1xbf16>
+}
+
+// CHECK-LABEL: @cast_wave_tensor_1d
+func.func @cast_wave_tensor_1d(%arg0: !wave.tensor<[@K] of f32>) -> !wave.tensor<[@K] of i32> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<[@K] of f32> to !wave.tensor<[@K] of i32>
+  return %0 : !wave.tensor<[@K] of i32>
+}
+
+// CHECK-LABEL: @cast_wave_tensor_3d
+func.func @cast_wave_tensor_3d(%arg0: !wave.tensor<[@X, @Y, @Z] of bf16>) -> !wave.tensor<[@X, @Y, @Z] of f32> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<[@X, @Y, @Z] of bf16> to !wave.tensor<[@X, @Y, @Z] of f32>
+  return %0 : !wave.tensor<[@X, @Y, @Z] of f32>
+}
+
+// CHECK-LABEL: @cast_mixed_specified
+func.func @cast_mixed_specified(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<any of bf16> {
+  // CHECK: wave.cast
+  %0 = wave.cast %arg0 : !wave.tensor<[@M, @N] of f32> to !wave.tensor<any of bf16>
+  return %0 : !wave.tensor<any of bf16>
+}

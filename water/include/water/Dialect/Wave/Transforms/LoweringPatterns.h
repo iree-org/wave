@@ -42,9 +42,9 @@ private:
   wave::WaveHyperparameterAttr hyperparameters;
 };
 
-// Adds pattern that lowers `wave.register` to upstream MLIR ops.
-void populateWaveRegisterLoweringPatterns(WaveTypeConverter &typeConverter,
-                                          mlir::RewritePatternSet &patterns);
+// Adds pattern that lowers miscellaneous wave ops to upstream MLIR ops.
+void populateWaveMiscellaneousOpsLoweringPatterns(
+    WaveTypeConverter &typeConverter, mlir::RewritePatternSet &patterns);
 
 // Adds pattern that lowers wave binary ops to upstream MLIR ops.
 void populateWaveBinaryOpLoweringPatterns(WaveTypeConverter &typeConverter,
