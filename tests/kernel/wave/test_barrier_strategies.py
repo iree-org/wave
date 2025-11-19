@@ -166,7 +166,7 @@ def test_find_disjoint_interval_coalesces_overlapping_simple_1():
 
 def test_find_disjoint_interval_coalesces_overlapping_with_loop():
     """
-    These are the patterns observed in bshd attnetion kernels with modulo pipeline
+    These are the patterns observed in bshd attention kernels with modulo pipeline
     [[159, 530], [211, 587], [630, 530], [682, 587], [65, 88], [121, 132], [533, 557], [590, 601]]]
                              ^           ^
                              cross-iter  cross-iter
