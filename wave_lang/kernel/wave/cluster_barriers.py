@@ -6,14 +6,46 @@
 
 import logging
 
+import torch.fx as fx
+
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     get_custom,
     Iterate,
     TensorLoadToLDS,
+    SharedMemoryBarrierSignal,
+    SharedMemoryBarrierWait,
 )
 
 logger = logging.getLogger(__name__)
+
+# Cluster barrier ID (-3 = cluster barrier)
+CLUSTER_BARRIER_ID = -3
+
+
+def add_cluster_barriers_to_iterate(node: fx.Node):
+    """
+    Add cluster barrier signal and wait before an iterate node.
+
+    Args:
+        node: The iterate node before which to insert barriers
+    """
+    graph = node.graph
+    custom = get_custom(node)
+    location = custom.location
+
+    with graph.inserting_before(node):
+        # Add cluster barrier signal
+        signal_node = SharedMemoryBarrierSignal(
+            barId=CLUSTER_BARRIER_ID, tensor_wait=False
+        ).add_to_graph(graph, loc=location)
+        logger.debug(f"  Added cluster barrier signal before {node.name}")
+
+        # Add cluster barrier wait
+        wait_node = SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
+            graph, loc=location
+        )
+        logger.debug(f"  Added cluster barrier wait before {node.name}")
 
 
 def add_cluster_memory_barriers(trace: CapturedTrace):
@@ -50,5 +82,6 @@ def add_cluster_memory_barriers(trace: CapturedTrace):
             logger.debug(
                 f"  Iterate op {node.name} contains {len(tensor_load_nodes)} tensor load op(s)"
             )
+            add_cluster_barriers_to_iterate(node)
         else:
             logger.debug(f"  Iterate op {node.name} does not contain tensor load ops")
