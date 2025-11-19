@@ -54,30 +54,21 @@ def add_cluster_barriers_to_iterate(
     custom = get_custom(node)
     location = custom.location
 
-    if multiplier is None:
-        # Simple case: Add barriers before the loop
-        with graph.inserting_before(node):
-            SharedMemoryBarrierSignal(
-                barId=CLUSTER_BARRIER_ID, tensor_wait=False
-            ).add_to_graph(graph, loc=location)
-            logger.debug(f"  Added cluster barrier signal before {node.name}")
+    # Add barrier_signal before the loop (common to both cases)
+    with graph.inserting_before(node):
+        SharedMemoryBarrierSignal(
+            barId=CLUSTER_BARRIER_ID, tensor_wait=False
+        ).add_to_graph(graph, loc=location)
 
+    if multiplier is None:
+        # Simple case: Add barrier wait before the loop
+        with graph.inserting_before(node):
             SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
                 graph, loc=location
             )
-            logger.debug(f"  Added cluster barrier wait before {node.name}")
     else:
         # Pipelined case: Add conditional barriers inside the loop
-        logger.debug(
-            f"  Adding pipelined cluster barriers with multiplier={multiplier}"
-        )
-
-        # Add barrier_signal before the loop
-        with graph.inserting_before(node):
-            SharedMemoryBarrierSignal(
-                barId=CLUSTER_BARRIER_ID, tensor_wait=False
-            ).add_to_graph(graph, loc=location)
-            logger.debug(f"  Added cluster barrier signal before {node.name}")
+        logger.debug(f"  Pipelined barriers (multiplier={multiplier}) for {node.name}")
 
         # Get the subgraph to add barriers inside
         subgraph = trace.get_subgraph(custom.subgraph_name)
@@ -115,7 +106,6 @@ def add_cluster_barriers_to_iterate(
             Conditional(condition, wait_subgraph_name, []).add_to_graph(
                 subgraph, loc=location
             )
-            logger.debug(f"  Added conditional barrier wait at start of loop body")
 
         # Add conditional barrier_signal at end of body
         # Condition: (current_iteration + 1) % multiplier == 0
@@ -141,21 +131,19 @@ def add_cluster_barriers_to_iterate(
             Conditional(condition, signal_subgraph_name, []).add_to_graph(
                 subgraph, loc=location
             )
-            logger.debug(f"  Added conditional barrier signal at end of loop body")
 
         # Add barrier_wait after the loop
         with graph.inserting_after(node):
             SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
                 graph, loc=location
             )
-            logger.debug(f"  Added cluster barrier wait after {node.name}")
 
 
-def add_cluster_memory_barriers(
+def add_cluster_barriers(
     trace: CapturedTrace, constraints: list[Constraint], options: WaveCompileOptions
 ):
     """
-    Adds cluster memory barriers to the graph for cross-workgroup synchronization.
+    Adds cluster barriers to the graph for cross-workgroup synchronization.
     This pass handles barrier insertion for cluster-level synchronization using
     barId=-3 (cluster barrier).
 
@@ -168,23 +156,17 @@ def add_cluster_memory_barriers(
         options: Wave compilation options
     """
 
-    logger.debug("Running add_cluster_memory_barriers pass")
-    logger.debug(f"  cluster_barrier_multiplier={options.cluster_barrier_multiplier}")
-
     # Build map from axis to induction variable from TilingConstraints
     axis_to_induction_var = {}
     for constraint in constraints:
         if isinstance(constraint, TilingConstraint):
             axis_to_induction_var[constraint.dim] = constraint.induction_var
 
-    logger.debug(f"  Found {len(axis_to_induction_var)} TilingConstraints")
-
-    # Step 1: Look for iterate ops and check if they contain tensor load ops
+    # Look for iterate ops and check if they contain tensor load ops
     iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
 
     for node in iterate_nodes:
         custom = get_custom(node)
-        logger.debug(f"Found iterate op: {node.name}")
 
         # Get the subgraph for this iterate op
         subgraph = trace.get_subgraph(custom.subgraph_name)
@@ -195,11 +177,6 @@ def add_cluster_memory_barriers(
         ]
 
         if tensor_load_nodes:
-            logger.debug(
-                f"  Iterate op {node.name} contains {len(tensor_load_nodes)} tensor load op(s)"
-            )
             add_cluster_barriers_to_iterate(
                 trace, node, options.cluster_barrier_multiplier, axis_to_induction_var
             )
-        else:
-            logger.debug(f"  Iterate op {node.name} does not contain tensor load ops")
