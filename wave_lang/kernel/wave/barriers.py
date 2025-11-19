@@ -22,10 +22,10 @@ from .utils.graph_utils import (
 
 from .utils.barriers_utils import (
     TargetConfig,
-    SyncRequirement,
+    SyncRegion,
     get_barriers_analysis,
     minimize_placement_strategy,
-    find_intersecting_interval_strategy,
+    find_disjoint_interval_strategy,
 )
 
 
@@ -38,29 +38,28 @@ class BarrierEmitter:
     def __init__(self, cfg: TargetConfig):
         self.cfg = cfg
 
-    def dispatch(self) -> "BarrierEmitter":
+    def __new__(cls, cfg: TargetConfig):
         """
-        Dispatch different types of emitters based on provided TargetConfig.
+        Return subclass instance
         """
-        if not self.cfg.has_split_barriers:
-            return LegacyBarrierEmitter(self.cfg)
-        else:
-            return BasicSplitBarrierEmitter(self.cfg)
+        if cls is BarrierEmitter:
+            if not cfg.has_split_barriers:
+                return super().__new__(LegacyBarrierEmitter)
+            return super().__new__(BasicSplitBarrierEmitter)
+        return super().__new__(cls)
 
-    def emit(self, sync_reqs: Sequence[SyncRequirement]) -> None:
+    def emit(self, sync_regions: Sequence[SyncRegion]) -> None:
         """
         Optimizes barrier placement using the derived class's strategy and places the resulting barriers.
         """
-        sync_reqs = self.optimize(sync_reqs)
-        for req in sync_reqs:
-            self.place_barrier(req)
+        sync_regions = self.optimize(sync_regions)
+        for region in sync_regions:
+            self.place_barrier(region)
 
-    def place_barrier(self, req: SyncRequirement) -> None:
+    def place_barrier(self, region: SyncRegion) -> None:
         raise NotImplementedError
 
-    def optimize(
-        self, sync_reqs: Sequence[SyncRequirement]
-    ) -> Sequence[SyncRequirement]:
+    def optimize(self, sync_regions: Sequence[SyncRegion]) -> Sequence[SyncRegion]:
         raise NotImplementedError
 
     def verify(self, trace: CapturedTrace) -> None:
@@ -72,19 +71,17 @@ class LegacyBarrierEmitter(BarrierEmitter):
     This class emits amdgpu.lds_barrier using minimize_placement_strategy.
     """
 
-    def optimize(
-        self, sync_reqs: Sequence[SyncRequirement]
-    ) -> Sequence[SyncRequirement]:
-        return minimize_placement_strategy(sync_reqs)
+    def optimize(self, sync_regions: Sequence[SyncRegion]) -> Sequence[SyncRegion]:
+        return minimize_placement_strategy(sync_regions)
 
-    def place_barrier(self, req: SyncRequirement) -> None:
+    def place_barrier(self, region: SyncRegion) -> None:
         """
         Places a single shared memory barrier between producer and consumer.
         """
         is_async_op = lambda node: isinstance(get_custom(node), GatherToLDS)
 
-        producer = req.prod_region
-        consumer = req.cons_region
+        producer = region.producer
+        consumer = region.consumer
 
         wait_async = is_async_op(producer) or is_async_op(consumer)
         with consumer.graph.inserting_before(consumer):
@@ -95,7 +92,7 @@ class LegacyBarrierEmitter(BarrierEmitter):
 
 class BasicSplitBarrierEmitter(BarrierEmitter):
     """
-    This class emits rocdl.s.barrier.signal and rocdl.s.barrier.wait using find_intersecting_interval_strategy,
+    This class emits rocdl.s.barrier.signal and rocdl.s.barrier.wait using find_disjoint_interval_strategy,
     and provides a verify method to ensure proper placement before invoking the runtime.
     """
 
@@ -129,21 +126,19 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
             -1
         ), "All signals and waits should be paired, there are some leftover signals, this is a serious bug."
 
-    def optimize(
-        self, sync_reqs: Sequence[SyncRequirement]
-    ) -> Sequence[SyncRequirement]:
+    def optimize(self, sync_regions: Sequence[SyncRegion]) -> Sequence[SyncRegion]:
         # note. we can also change the approach to minimize_placement_strategy.
-        return find_intersecting_interval_strategy(sync_reqs)
+        return find_disjoint_interval_strategy(sync_regions)
 
-    def place_barrier(self, req: SyncRequirement) -> None:
+    def place_barrier(self, region: SyncRegion) -> None:
         """
         Place split barriers (signal/wait) for synchronization.
         """
         is_tensor_op = lambda node: isinstance(get_custom(node), TensorLoadToLDS)
 
         barId = -1
-        producer = req.prod_region
-        consumer = req.cons_region
+        producer = region.producer
+        consumer = region.consumer
         barrier = is_barrier_between(producer, consumer, barId)
 
         is_tdm = is_tensor_op(producer) or is_tensor_op(consumer)
@@ -164,9 +159,8 @@ def add_shared_memory_barriers(
 ):
     target_arch = TargetConfig(target)
 
-    sync_requests = get_barriers_analysis(trace, target_arch)
+    sync_regions = get_barriers_analysis(trace, target_arch)
 
-    handle = BarrierEmitter(target_arch)
-    emitter = handle.dispatch()
-    emitter.emit(sync_requests)
+    emitter = BarrierEmitter(target_arch)
+    emitter.emit(sync_regions)
     emitter.verify(trace)

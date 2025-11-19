@@ -3,6 +3,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import bisect
 from enum import auto, IntFlag
 from dataclasses import dataclass
 from collections import defaultdict
@@ -46,17 +47,17 @@ class TargetConfig:
 
 
 @dataclass
-class SyncRequirement:
+class SyncRegion:
     """
-    Synchronization requirements in between producers and consumers.
+    Synchronization region in between producers and consumers.
     """
 
     resource: Any = None
     producers: Sequence[Any] = None
     consumers: Sequence[Any] = None
-    is_loop: bool = False
-    prod_region: fx.Node = None
-    cons_region: fx.Node = None
+    cross_iter: bool = False
+    producer: fx.Node = None
+    consumer: fx.Node = None
     prod_location: int = -1
     cons_location: int = -1
     graph_start: fx.Node = None
@@ -168,13 +169,13 @@ def need_barrier(
     return False
 
 
-def add_sync_requirements(
-    results: List[SyncRequirement],
+def add_sync_regions(
+    results: List[SyncRegion],
     resource: fx.Node,
     window: ResourceAccessWindow,
 ) -> None:
     """
-    Add a SyncRequirement to the results list.
+    Add a SyncRegion to the results list.
     """
     cross_iter = False
     last_prod = window.producers[-1]
@@ -187,37 +188,37 @@ def add_sync_requirements(
     first_con_loc = first_con._topo_location
     cross_iter = last_prod_loc > first_con_loc
 
-    req = SyncRequirement(
+    region = SyncRegion(
         resource=resource,
         producers=list(window.producers),
         consumers=list(window.consumers),
-        is_loop=cross_iter,  # when producer location is greater than consumer location, we identify a loop
-        prod_region=last_prod,
-        cons_region=first_con,
+        cross_iter=cross_iter,  # when producer location is greater than consumer location, we identify a loop
+        producer=last_prod,
+        consumer=first_con,
         prod_location=last_prod_loc,
         cons_location=first_con_loc,
         graph_start=window.graph_info[0],
         graph_end=window.graph_info[1],
     )
 
-    if req in results:
+    if region in results:
         return
 
-    results.append(req)
+    results.append(region)
 
 
 def add_hazard_if_window_valid(
-    results: List[SyncRequirement], resource: fx.Node, window: ResourceAccessWindow
+    results: List[SyncRegion], resource: fx.Node, window: ResourceAccessWindow
 ) -> None:
-    """Add a SyncRequirement if producers and consumers are present in current hazard window."""
+    """Add a SyncRegion if producers and consumers are present in current hazard window."""
     if not (window.producers and window.consumers):
         return
-    add_sync_requirements(results, resource, window)
+    add_sync_regions(results, resource, window)
     window.reset()
 
 
 def handle_hazard(
-    results: List[SyncRequirement],
+    results: List[SyncRegion],
     windows: Dict[fx.Node, ResourceAccessWindow],
     node: fx.Node,
     producer_kinds: MemoryAccessType,
@@ -230,7 +231,7 @@ def handle_hazard(
 
     This function classifies the node's memory access (producer vs. consumer) using
     MemoryAccessType, updates the per-resource hazard window,
-    and emits any pending SyncRequirement when a new producer begins a window.
+    and emits any pending SyncRegion when a new producer begins a window.
 
     Behavior:
     - If the node has no memory access or is None, it is ignored.
@@ -242,8 +243,8 @@ def handle_hazard(
       (i.e., they form a potential hazard with prior producers).
 
     Args:
-        results (List[SyncRequirement]):
-            Accumulator list where detected synchronization requirements (barriers)
+        results (List[SyncRegion]):
+            Accumulator list where detected synchronization regions (barriers)
             are appended.
         windows (Dict[fx.Node, ResourceAccessWindow]):
             Mapping from shared-memory resource to its current hazard tracking window.
@@ -307,13 +308,13 @@ def get_hazard_handle(
 
 def get_barriers_analysis(
     trace: CapturedTrace, target_arch: TargetConfig
-) -> List[SyncRequirement]:
+) -> List[SyncRegion]:
     """
-    Analyzes the given computational graph to determine synchronization (barrier) requirements for shared memory accesses, based on the target architecture.
+    Analyzes the given computational graph to determine synchronization (barrier) regions for shared memory accesses, based on the target architecture.
     Args:
         - trace: The traced representation of the computation, expected to provide graph traversal methods such as `preorder_walk` and `walk_graph`.
         - target_arch: The target architecture identifier (e.g., string) used to determine architecture-specific barrier handling.
-    Returns: List[SyncRequirement]: A list of synchronization requirements (barriers) needed to ensure correct ordering of shared memory accesses in the graph.
+    Returns: List[SyncRegion]: A list of synchronization regions (barriers) needed to ensure correct ordering of shared memory accesses in the graph.
     """
     all_nodes = trace.preorder_walk()
     assign_preorder_index(all_nodes)
@@ -330,12 +331,14 @@ def get_barriers_analysis(
         else []
     )
 
-    results: List[SyncRequirement] = []
+    results: List[SyncRegion] = []
 
-    def walk_nodes(nodes, graph_info: Optional[List[fx.Node]] = None, depth: int = 0):
+    def walk_nodes(
+        nodes, handle, graph_info: Optional[List[fx.Node]] = None, depth: int = 0
+    ):
         """
         Traverse a sequence of graph nodes, updating hazard windows and collecting
-        synchronization requirements for shared-memory accesses. This function
+        synchronization regions for shared-memory accesses. This function
         handles nested subgraphs for Iterate and Conditional regions.
 
         Behavior:
@@ -344,7 +347,7 @@ def get_barriers_analysis(
             per-resource access windows and append any detected hazards to `results`.
           - If it is an Iterate region, walk its subgraph twice:
             * First with depth=0 and graph_info marking the subgraph's entry/exit nodes.
-            * Then with depth=1 using the same markers (e.g., separate phases/iterations).
+            * Then with depth=1 using the same markers.
           - If it is a Conditional region, walk its subgraph once.
         - After traversing the provided `nodes`, perform a final cleanup pass:
           - For each resource window in `windows`, call `add_hazard_if_window_valid(...)`
@@ -358,7 +361,7 @@ def get_barriers_analysis(
 
         Side effects:
             - Mutates `windows` (a mapping of resource -> ResourceAccessWindow).
-            - Appends `SyncRequirement` entries to `results` via `handle(...)` and
+            - Appends `SyncRegion` entries to `results` via `handle(...)` and
               `add_hazard_if_window_valid(...)`.
         """
         for node in nodes:
@@ -375,18 +378,20 @@ def get_barriers_analysis(
                 subgraph_nodes = get_subgraph_nodes(node)
                 walk_nodes(
                     subgraph_nodes,
+                    handle,
                     graph_info=[subgraph_nodes[0], subgraph_nodes[-1]],
                     depth=0,
                 )
                 walk_nodes(
                     subgraph_nodes,
+                    handle,
                     graph_info=[subgraph_nodes[0], subgraph_nodes[-1]],
                     depth=1,
                 )
 
             if is_condition_node(node):
                 subgraph_nodes = get_subgraph_nodes(node)
-                walk_nodes(subgraph_nodes)
+                walk_nodes(subgraph_nodes, handle)
 
         for resource, window in windows.items():
             add_hazard_if_window_valid(results, resource, window)
@@ -397,39 +402,39 @@ def get_barriers_analysis(
     handle = get_hazard_handle(
         MemoryAccessType.READ, MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE
     )
-    walk_nodes(nodes)
+    walk_nodes(nodes, handle)
 
     # handle RAW
     windows: Dict[fx.Node, ResourceAccessWindow] = defaultdict(ResourceAccessWindow)
     handle = get_hazard_handle(
         MemoryAccessType.WRITE | MemoryAccessType.READ_WRITE, MemoryAccessType.READ
     )
-    walk_nodes(nodes)
+    walk_nodes(nodes, handle)
 
     return results
 
 
 def minimize_placement_strategy(
-    sync_reqs: Sequence[SyncRequirement],
-) -> Sequence[SyncRequirement]:
+    sync_regions: Sequence[SyncRegion],
+) -> Sequence[SyncRegion]:
     """
     Efficient greedy barrier placement.
         - Forward hazards: O(n log n) sort + O(n) sweep with a single "last_pos".
         - Cross-iter hazards: two O(log m) range checks via binary search over an always-sorted list of chosen placement positions.
     """
-    if not sync_reqs:
+    if not sync_regions:
         return []
 
     placements_pos: List[int] = []
-    results: List[SyncRequirement] = []
+    results: List[SyncRegion] = []
 
     # helpers
-    get_location = lambda req: (req.prod_location, req.cons_location)
+    get_location = lambda region: (region.prod_location, region.cons_location)
 
-    def place_barrier_at(end_pos: int, req: SyncRequirement) -> None:
+    def place_barrier_at(end_pos: int, region: SyncRegion) -> None:
         """Add a synchronization requirement to the result list"""
         placements_pos.append(end_pos)
-        results.append(req)
+        results.append(region)
 
     def in_range(ranges: List[int], lo: int, hi: int) -> bool:
         """Return True if there exist a value p in range with lo <= p <= hi."""
@@ -438,23 +443,23 @@ def minimize_placement_strategy(
         return any(lo <= p <= hi for p in ranges)
 
     # 1) sort by (consumer, producer)
-    reqs = sorted(
-        sync_reqs,
-        key=lambda req: (req.cons_location, req.prod_location),
+    regions = sorted(
+        sync_regions,
+        key=lambda region: (region.cons_location, region.prod_location),
     )
 
     # ---- Forward hazard (start < end) ----
     # 2) Greedy interval stabbing: pick end if interval not already stabbed by last_position.
     last_pos = -1  # topo location can never be < 0, choose -1 as anchor
-    for req in reqs:
-        if req.is_loop:
+    for region in regions:
+        if region.cross_iter:
             continue
-        start, end = get_location(req)
+        start, end = get_location(region)
 
         # A hazard window is covered if placement is at (start, end]
         # We append to result if this window is not covered.
         if not (last_pos > start and last_pos <= end):
-            place_barrier_at(end, req)
+            place_barrier_at(end, region)
             last_pos = end
 
     # ---- Cross-iteration hazards (start > end) ----
@@ -463,14 +468,14 @@ def minimize_placement_strategy(
     #   A) [graph_start, end]
     #   B) [start, graph_end]
     # If neither contains a point, place a new one at `end`.
-    for req in reqs:
-        if not req.is_loop:
+    for region in regions:
+        if not region.cross_iter:
             continue
 
-        start, end = get_location(req)
+        start, end = get_location(region)
         graph_start, graph_end = (
-            req.graph_start._topo_location,
-            req.graph_end._topo_location,
+            region.graph_start._topo_location,
+            region.graph_end._topo_location,
         )
 
         # sanity checks
@@ -481,208 +486,85 @@ def minimize_placement_strategy(
             graph_start < graph_end
         ), f"Expected graph_start ({graph_start}) position to be less than graph_end ({graph_end}) position."
 
-        is_covered = in_range(placements_pos, start, graph_end) or in_range(
+        # A syncrhonization region is guarded if in between
+        #   1. producer and graph end, or
+        #   2. graph start and consumer
+        # has already a barrier expected to be placed.
+        is_guarded = in_range(placements_pos, start, graph_end) or in_range(
             placements_pos, graph_start, end
         )
 
-        # Already covered by an existing placement on at least one wrapped segment.
-        if is_covered:
+        if is_guarded:
             continue
 
-        # Otherwise, place at `end` (greedy choice consistent with forward logic)
-        place_barrier_at(end, req)
+        # Otherwise, we found a disjoind set,
+        # place the barrier at `end` (greedy choice consistent with forward logic)
+        place_barrier_at(end, region)
 
     return results
 
 
-def find_intersecting_interval_strategy(
-    sync_reqs: Sequence[SyncRequirement],
-) -> Sequence[SyncRequirement]:
+def find_disjoint_interval_strategy(
+    sync_regions: Sequence[SyncRegion],
+) -> Sequence[SyncRegion]:
     """
     def position:
     - node <- smallest
     - node
     - node <- largest
 
-    The algorithm keeps track of the smallest wait position, and
-    updates the signal position if a request has
-    1) a wait with larger position than tracked wait position, and
-    2) a signal with larger position than tracked signal position
-
-    We add synchronization requirement to the result when current signal position is larger than tracked wait position
-    - Groups by graph.
-    - Normalizes loop-carried hazards by shifting consumer by |body|.
-    - Single sweep coalescing intervals.
-    - Dedups on emit.
+    This approach reuses minimize_placement_strategy.
+    The minimize_placement_strategy returns the minimal places that we need to insert a wait barrier,
+    to find the corresponding valid place to signal, we find the lower bound of the wait position among all SyncRegion.
+    -----
+    Special case that we fall back to inserting signal immediately before the wait:
+    1) graphs with only cross-iteration dependencies
+        >> e.g., pure GEMM with a None scheduling strategy
+        >> We detect this when the lower-bound index is 0
+    2) resource that has cross-iteration dependencies also have a producer from another graph.
+        >> e.g., BSHD attention with modulo scheduling strategy
+        >> We detect this when signal_placement graph is different then the consumer graph.
     """
 
-    if not sync_reqs:
+    if not sync_regions:
         return []
 
     # --- Helpers ----
-    get_location = lambda req: (req.prod_location, req.cons_location)
+    get_location = lambda region: (region.prod_location, region.cons_location)
 
-    def make_request(
-        proto: SyncRequirement, prod: fx.Node, cons: fx.Node
-    ) -> SyncRequirement:
+    def make_request(prod: fx.Node, cons: fx.Node) -> SyncRegion:
         """Make a new request based on provided producer and consumer. dont care values are default to None."""
-        cls = type(proto)
-        return cls(
-            is_loop=False,
-            prod_region=prod,
-            cons_region=cons,
+        return SyncRegion(
+            cross_iter=False,
+            producer=prod,
+            consumer=cons,
             prod_location=prod._topo_location,
             cons_location=cons._topo_location,
-            graph_start=proto.graph_start,
-            graph_end=proto.graph_end,
         )
 
-    def shift_consumer(req: SyncRequirement, body_len):
-        new_req = make_request(req, req.prod_region, req.cons_region)
-        new_req.cons_location += body_len
-        return new_req
+    def find_closest(sorted_regions, pos):
+        # find the largest producer location < wait position (consumer location)
+        idx = bisect.bisect_left(sorted_regions, pos, key=lambda x: x.prod_location)
+        if idx == 0:
+            return None
+        return sorted_regions[idx - 1].producer
 
-    def snap_consumer_to_epilog(req: SyncRequirement, graph: fx.Graph):
-        new_req = make_request(req, req.prod_region, req.cons_region)
-        epilog_cons = graph.parent_op.next
-        new_req.cons_region = epilog_cons
-        new_req.cons_location = epilog_cons._topo_location
-        return new_req
+    minimal_placements = minimize_placement_strategy(sync_regions)
+    ascending_producers = sorted(
+        sync_regions, key=lambda region: (region.prod_location, region.cons_location)
+    )
 
-    def window_is_covered(start: int, end: int, index: int = 0):
-        """
-        `Covered` means that at least one sync requirement's position is inside the window.
-        Index determines whether we are checking for producer presence (0) or consumer presence (1).
-        """
-        return any(
-            (start <= get_location(req)[index] and get_location(req)[index] <= end)
-            for req in results
+    results = []
+    for placement in minimal_placements:
+        closest_signal = find_closest(ascending_producers, placement.cons_location)
+        # special case 1)
+        signal_placement = (
+            closest_signal if closest_signal is not None else placement.consumer.prev
         )
+        # special case 2)
+        if signal_placement.graph != placement.consumer.graph:
+            signal_placement = placement.consumer.prev
 
-    results: List[SyncRequirement] = []
-    seen = set()
-
-    def place_barrier_at(proto: SyncRequirement, prod: fx.Node, cons: fx.Node) -> None:
-        """Add a synchronization requirement to the result list"""
-        key = (id(prod), id(cons))
-        if key in seen:
-            return
-        seen.add(key)
-        results.append(make_request(proto, prod, cons))
-
-    # Core sweep (forward intervals only)
-    def sweep(reqs: List[SyncRequirement]) -> bool:
-        """Coalesce forward intervals. Returns True if all placements are intra-graph."""
-        intra_graph = True
-        proto = reqs[0]
-
-        # (current seen largest p,
-        #  current seen smallest c,
-        #  producer at p,
-        #  consumer at c)
-        window = None
-
-        for req in sorted(reqs, key=lambda req: (req.cons_location, req.prod_location)):
-            p, c = get_location(req)
-            prod, cons = req.prod_region, req.cons_region
-
-            if window is None:
-                window = (p, c, prod, cons)
-                continue
-
-            max_p, min_c, max_p_prod, min_c_cons = window
-
-            if p > min_c:
-                place_barrier_at(proto, max_p_prod, min_c_cons)
-                intra_graph &= max_p_prod.graph == min_c_cons.graph
-                window = (p, c, prod, cons)
-            else:
-                if p > max_p:
-                    max_p, max_p_prod = p, prod
-                if c < min_c:
-                    min_c, min_c_cons = c, cons
-                window = (max_p, min_c, max_p_prod, min_c_cons)
-
-        # Final cleanup
-        if window is not None:
-            _, _, prod, cons = window
-            place_barrier_at(proto, prod, cons)
-            intra_graph &= prod.graph == cons.graph
-
-        return intra_graph
-
-    # --- Procedure ----
-    graph_groups = defaultdict(list)
-
-    # 1) group by graphs
-    for req in sync_reqs:
-        graph = getattr(req.prod_region, "graph", None) or getattr(
-            req.cons_region, "graph", None
-        )
-        graph_groups[graph].append(req)
-
-    # 2) process per graph
-    for graph, reqs in graph_groups.items():
-        if not reqs:
-            continue
-
-        # prepare requests for 2 passes: forward and loop-carried (needs preprocess)
-        forward, loops = [], []
-        for req in reqs:
-            if req.is_loop:
-                loops.append(req)
-            else:
-                forward.append(req)
-
-        # forward pass
-        if forward:
-            sweep(forward)
-
-        # loop-carried pass, preprocess all reqs before sweeping
-        if loops:
-            proto = loops[0]
-            norm: List[SyncRequirement] = []
-            body_len = len(graph.nodes)
-
-            for req in loops:
-                p, c = get_location(req)
-                assert (
-                    p > c
-                ), "Cross-iter hazard should have producer location larger than consumer location."
-                graph_start, graph_end = (
-                    req.graph_start._topo_location,
-                    req.graph_end._topo_location,
-                )
-
-                cons_is_covered = window_is_covered(graph_start, c, 1)
-                prod_is_covered = window_is_covered(p, graph_end, 0)
-
-                if prod_is_covered and cons_is_covered:
-                    continue
-
-                # If only cons is covered, snap consumer to loop-exit and treat as forward
-                if cons_is_covered and not prod_is_covered:
-                    r = snap_consumer_to_epilog(req, graph)
-                    norm.append(r)
-                    continue
-
-                # If only producer is covered, skip it
-                if prod_is_covered:
-                    continue
-
-                # Normalize cross-iter: shift consumer by body length, clear is_loop
-                norm.append(shift_consumer(req, body_len))
-
-            if norm:
-                added_before = len(results)
-                intra_graph = sweep(norm)
-                # Optional loop wrap if we added only intra-graph deps
-                if (
-                    len(results) > added_before
-                    and intra_graph
-                    and hasattr(graph, "parent_op")
-                ):
-                    it = graph.parent_op
-                    place_barrier_at(proto, it.prev, it.next)
+        results.append(make_request(signal_placement, placement.consumer))
 
     return results
