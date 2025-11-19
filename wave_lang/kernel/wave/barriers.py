@@ -120,7 +120,7 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
 
         assert (
             len(lonely_waits) == 0
-        ), "Wait barrier appears more than once before any signals, this is a serious bug."
+        ), "Wait barrier appears before any signals, this is a serious bug."
         assert len(signals) <= 1, "Only -1 barrier ID is supported on gfx120x."
         assert not signals.get(
             -1
