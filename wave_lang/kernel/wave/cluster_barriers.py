@@ -7,6 +7,11 @@
 import logging
 
 from .._support.tracing import CapturedTrace
+from ..ops.wave_ops import (
+    get_custom,
+    Iterate,
+    TensorLoadToLDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,5 +31,24 @@ def add_cluster_memory_barriers(trace: CapturedTrace):
 
     logger.debug("Running add_cluster_memory_barriers pass")
 
-    # TODO: Implement cluster barrier logic
-    pass
+    # Step 1: Look for iterate ops and check if they contain tensor load ops
+    iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
+
+    for node in iterate_nodes:
+        custom = get_custom(node)
+        logger.debug(f"Found iterate op: {node.name}")
+
+        # Get the subgraph for this iterate op
+        subgraph = trace.get_subgraph(custom.subgraph_name)
+
+        # Check if subgraph contains TensorLoadToLDS ops
+        tensor_load_nodes = [
+            n for n in subgraph.nodes if isinstance(get_custom(n), TensorLoadToLDS)
+        ]
+
+        if tensor_load_nodes:
+            logger.debug(
+                f"  Iterate op {node.name} contains {len(tensor_load_nodes)} tensor load op(s)"
+            )
+        else:
+            logger.debug(f"  Iterate op {node.name} does not contain tensor load ops")
