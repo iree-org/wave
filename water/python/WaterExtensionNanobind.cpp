@@ -100,27 +100,37 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveIndexMappingAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, const std::vector<std::string> &symbolNames,
+          [](const nb::object &cls, const nb::list &symbols,
              MlirAffineMap start, MlirAffineMap step, MlirAffineMap stride,
              // MlirContext should always come last to allow for being
              // automatically deduced from context.
              MlirContext context) {
             std::vector<MlirAttribute> symbolAttrs;
-            symbolAttrs.reserve(symbolNames.size());
+            symbolAttrs.reserve(symbols.size());
 
-            for (const std::string &symbolName : symbolNames) {
-              MlirStringRef symbolNameStrRef =
-                  mlirStringRefCreate(symbolName.data(), symbolName.size());
-              MlirAttribute symbolAttr =
-                  mlirWaveSymbolAttrGet(context, symbolNameStrRef);
-              symbolAttrs.push_back(symbolAttr);
+            for (const auto &item : symbols) {
+              MlirAttribute attr;
+              try {
+                attr = nb::cast<MlirAttribute>(item);
+              } catch (const nb::cast_error &e) {
+                throw nb::type_error(
+                    "symbols must be a list of MlirAttribute (WaveSymbolAttr "
+                    "or WaveIndexSymbolAttr)");
+              }
+              if (!mlirAttributeIsAWaveSymbolAttr(attr) &&
+                  !mlirAttributeIsAWaveIndexSymbolAttr(attr)) {
+                throw nb::type_error(
+                    "symbols must contain only WaveSymbolAttr or "
+                    "WaveIndexSymbolAttr attributes");
+              }
+              symbolAttrs.push_back(attr);
             }
 
             intptr_t numSymbols = symbolAttrs.size();
             intptr_t numResults = mlirAffineMapGetNumResults(start);
             for (MlirAffineMap map : {start, step, stride}) {
               if (numSymbols != mlirAffineMapGetNumSymbols(map)) {
-                throw nb::value_error("Expected symbol_names, start, step and "
+                throw nb::value_error("Expected symbols, start, step and "
                                       "stride to be co-indexed.");
               }
               if (mlirAffineMapGetNumDims(map) != 0) {
@@ -134,9 +144,9 @@ NB_MODULE(_waterDialects, m) {
             return cls(mlirWaveIndexMappingAttrGet(context, symbolAttrs.data(),
                                                    start, step, stride));
           },
-          nb::arg("cls"), nb::arg("symbol_names"), nb::arg("start"),
-          nb::arg("step"), nb::arg("stride"), nb::arg("context") = nb::none(),
-          "Gets a wave.WaveIndexMappingAttr from parameters.");
+          nb::arg("cls"), nb::arg("symbols"), nb::arg("start"), nb::arg("step"),
+          nb::arg("stride"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveIndexMappingAttr from a list of symbol attributes.");
 
   //===---------------------------------------------------------------------===//
   // WaveHyperparameterAttr

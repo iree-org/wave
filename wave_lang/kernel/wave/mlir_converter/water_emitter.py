@@ -245,9 +245,34 @@ def _preprocess_symbols(
     (2) replacing `$` prefix of special symbols (e.g. `$WG0`) by `_` since MLIR affine expressions
     do not accept `$`.
     """
-    return {
-        sym: sympy.Symbol(sym.name.replace("$", "_"), positive=True) for sym in symbols
+    return {sym: sympy.Symbol(sym.name, positive=True) for sym in symbols}
+
+
+def _symbol_name_to_attribute(name: str) -> ir.Attribute:
+    """
+    Convert a symbol name to either a WaveSymbolAttr or WaveIndexSymbolAttr.
+
+    Special symbols starting with $ are converted to WaveIndexSymbolAttr,
+    while regular symbols are converted to WaveSymbolAttr.
+    """
+    # Mapping of special symbol names to WaveIndexSymbol enum values
+    INDEX_SYMBOL_MAP = {
+        "$WG0": wave.WaveIndexSymbol.WORKGROUP_0,
+        "$WG1": wave.WaveIndexSymbol.WORKGROUP_1,
+        "$WG2": wave.WaveIndexSymbol.WORKGROUP_2,
+        "$T0": wave.WaveIndexSymbol.THREAD_0,
+        "$T1": wave.WaveIndexSymbol.THREAD_1,
+        "$T2": wave.WaveIndexSymbol.THREAD_2,
+        "$DD0": wave.WaveIndexSymbol.DEVICE_DIM_0,
+        "$DD1": wave.WaveIndexSymbol.DEVICE_DIM_1,
+        "$DD2": wave.WaveIndexSymbol.DEVICE_DIM_2,
+        "$GPR_NUM": wave.WaveIndexSymbol.GPR_NUMBER,
     }
+
+    if name in INDEX_SYMBOL_MAP:
+        return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
+    else:
+        return wave.WaveSymbolAttr.get(name)
 
 
 def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
@@ -272,8 +297,11 @@ def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
         start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
         size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
         stride = _convert_sympy_expr_to_affine_map(exprs.stride, symbol_mapping)
+        symbol_attrs = [
+            _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+        ]
         index_mappings[dim.name] = wave.WaveIndexMappingAttr.get(
-            [sym.name for sym in symbol_mapping.values()], start, size, stride
+            symbol_attrs, start, size, stride
         )
     return ir.DictAttr.get(index_mappings)
 

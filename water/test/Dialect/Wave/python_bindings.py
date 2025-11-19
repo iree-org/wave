@@ -41,16 +41,18 @@ try:
             assert False, "Expected to fail with TypeError."
 
         # CHECK: #wave<index_mapping[$WG0, BLOCK_M, $T0] -> ($WG0 * 3, $WG0 + BLOCK_M, $T0 mod $WG0)>
-        symbol_names = ["$WG0", "BLOCK_M", "$T0"]
+        symbols = [
+            wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0),
+            wave.WaveSymbolAttr.get("BLOCK_M"),
+            wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.THREAD_0),
+        ]
         s0 = ir.AffineSymbolExpr.get(0)
         s1 = ir.AffineSymbolExpr.get(1)
         s2 = ir.AffineSymbolExpr.get(2)
         start_map = ir.AffineMap.get(0, 3, [s0 * 3])
         step_map = ir.AffineMap.get(0, 3, [s0 + s1])
         stride_map = ir.AffineMap.get(0, 3, [s2 % s0])
-        print(
-            wave.WaveIndexMappingAttr.get(symbol_names, start_map, step_map, stride_map)
-        )
+        print(wave.WaveIndexMappingAttr.get(symbols, start_map, step_map, stride_map))
 
         try:
             wave.WaveIndexMappingAttr.get([], start_map, step_map, stride_map)
@@ -71,13 +73,20 @@ try:
 
         try:
             no_result_map = ir.AffineMap.get(0, 3, [])
-            wave.WaveIndexMappingAttr.get(
-                symbol_names, start_map, no_result_map, stride_map
-            )
+            wave.WaveIndexMappingAttr.get(symbols, start_map, no_result_map, stride_map)
         except ValueError as e:
             assert "same number of results" in str(e)
         else:
             assert False, "Expected to fail with ValueError."
+
+        try:
+            wave.WaveIndexMappingAttr.get(
+                ["string", "instead", "of", "attrs"], start_map, step_map, stride_map
+            )
+        except TypeError as e:
+            assert "MlirAttribute" in str(e)
+        else:
+            assert False, "Expected to fail with TypeError."
 
         # CHECK: #wave.hyperparameters<{A = 1 : i64, B = 2 : i64, C = 3 : i64}>
         print(wave.WaveHyperparameterAttr.get({"A": 1, "B": 2, "C": 3}))
@@ -118,11 +127,12 @@ try:
             assert False, "Expected to fail with TypeError."
 
         # CHECK: #wave.expr_list<[$WG0, BLOCK_M, $T0] -> ($WG0 * 3)>
-        expr_attr = wave.WaveExprListAttr.get(symbol_names, start_map)
+        symbol_names_for_expr = ["$WG0", "BLOCK_M", "$T0"]
+        expr_attr = wave.WaveExprListAttr.get(symbol_names_for_expr, start_map)
         print(expr_attr)
 
         try:
-            wave.WaveExprListAttr.get(symbol_names[:-1], start_map)
+            wave.WaveExprListAttr.get(symbol_names_for_expr[:-1], start_map)
         except ValueError as e:
             assert "as many entries as map have symbols" in str(e)
         else:
