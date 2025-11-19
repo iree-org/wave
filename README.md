@@ -13,7 +13,7 @@ The language is designed to achieve high performance with minimal tuning effort.
 Wave is particularly focused on the machine learning domain, with deep integration into the PyTorch ecosystem. This integration enables:
 
 1. Seamless transition from PyTorch models to optimized GPU kernels
-2. Easy experimentation with new ML algorithms and optimizations
+2. Easy experimentation with newML algorithms and optimizations
 3. Rapid deployment of custom kernels in production ML pipelines
 4. Direct reuse of PyTorch’s tensor abstractions and operator semantics
 
