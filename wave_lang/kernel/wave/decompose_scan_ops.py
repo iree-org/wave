@@ -25,7 +25,6 @@ from ..ops.wave_ops import (
 )
 from .constraints import HardwareConstraint
 from .utils.classes import ShuffleMode
-from .utils.graph_utils import DCE
 
 
 def get_graph_node(
@@ -342,4 +341,5 @@ def decompose_scan_ops(
                     custom.fx_node, global_scan[user.expanded_dims[scan_dim]]
                 )
 
-    DCE(trace)
+        custom.graph.erase_node(custom.fx_node)
+    # DCE(trace)
