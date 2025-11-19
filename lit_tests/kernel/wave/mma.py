@@ -667,11 +667,16 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[D0:.*]] = vector.from_elements
     # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
-    # CHECK-NOT:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
-    # CHECK-NOT:        amdgpu.lds_barrier
+    # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK-NOT:    amdgpu.lds_barrier
+
+    ### get shared buffer pointer
+    # CHECK:        %[[CAST_4:.*]] = memref.reinterpret_cast %[[VIEW0]]
+    # CHECK:        %[[INT_PTR_2:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_4]]
+    # CHECK:        %[[INT_PTR_2_CAST:.+]] = arith.index_cast %[[INT_PTR_2]] : index to i32
 
     ### pack descriptors and invoke tensor load
-    # CHECK:        %[[D1:.*]] = vector.from_elements
+    # CHECK:        %[[D1:.*]] = vector.from_elements %{{.*}}, %[[INT_PTR_2_CAST]], %{{.*}}, %{{.*}} : vector<4xi32>
     # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
 
     ### resource provider
