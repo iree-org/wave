@@ -119,7 +119,7 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
       }
     }
   }
-
+  // TODO: somehow get rid of hardcoded magic names (_ARG).
   mlir::WalkResult walkResult =
       namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
         usedSymbols.insert(symbolAttr.getName());
@@ -189,7 +189,8 @@ verifyConstraints(mlir::ArrayAttr constraints,
   // verify DeviceConstraint
   // * The number of devices should be greater than or equal to one.
   for (auto &&[symbol, constraint] : deviceConstraints) {
-    auto constraintSymbols = constraint.getTileSize().getSymbols();
+    llvm::ArrayRef<wave::WaveSymbolAttr> constraintSymbols =
+        constraint.getTileSize().getSymbols();
     llvm::ArrayRef<mlir::Attribute> symbolAttrs(constraintSymbols.data(),
                                                 constraintSymbols.size());
     std::optional<llvm::SmallVector<int64_t>> evaluated =

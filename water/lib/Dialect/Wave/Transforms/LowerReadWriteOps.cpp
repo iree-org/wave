@@ -81,10 +81,12 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
     if (auto symbol = dyn_cast<wave::WaveSymbolAttr>(attr)) {
       StringRef name = symbol.getName();
       std::optional<int64_t> value = hyper.getSymbolValue(name);
+#ifndef NDEBUG
       if (!value) {
-        LLVM_DEBUG(llvm::errs() << "symbol: " << name << "\n");
+        llvm::errs() << "symbol: " << name << "\n";
         assert(false && "unknown symbol, should have been caught by verifiers");
       }
+#endif
       baseSymVals.emplace_back(
           arith::ConstantIndexOp::create(rewriter, loc, *value));
       continue;

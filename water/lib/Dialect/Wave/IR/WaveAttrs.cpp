@@ -124,7 +124,7 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   MLIRContext *context = parser.getContext();
   SmallVector<StringRef> symbolNames;
   symbolNames.reserve(symbolNameAttrs.size());
-  for (auto attr : symbolNameAttrs) {
+  for (Attribute attr : symbolNameAttrs) {
     if (auto sym = dyn_cast<WaveSymbolAttr>(attr)) {
       symbolNames.push_back(sym.getName());
     } else if (auto sym = dyn_cast<WaveIndexSymbolAttr>(attr)) {
@@ -253,10 +253,11 @@ WaveSymbolAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                        StringRef name) {
   static const llvm::StringSet<> indexSymbols(llvm::from_range,
                                               WaveIndexSymbolAttr::AllCases);
-  if (indexSymbols.contains(name))
-    return emitError() << "illegal wave symbol name '" << name
-                       << "'. Did you mean to use WaveIndexSymbolAttr instead?";
-
+  if (indexSymbols.contains(name)) {
+    auto diag = emitError() << "illegal wave symbol name '" << name << "'";
+    diag.attachNote() << "Did you mean to use WaveIndexSymbolAttr instead?";
+    return diag;
+  }
   return llvm::success();
 }
 
