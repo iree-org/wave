@@ -63,7 +63,7 @@ from ..ops.wave_ops import (
 from ..wave.constraints import (
     Constraint,
     TilingConstraint,
-    WorkgroupConstraint,
+    WaveConstraint,
 )
 from ..wave.utils.graph_utils import DCE
 from .compile_options import WaveCompileOptions
@@ -323,7 +323,7 @@ def tensor_load_to_shared(
     constraint_tile_size = {
         c.dim: c.tile_size
         for c in constraints
-        if isinstance(c, TilingConstraint) or isinstance(c, WorkgroupConstraint)
+        if isinstance(c, TilingConstraint) or isinstance(c, WaveConstraint)
     }
 
     for _writes in id_to_read_write.values():
