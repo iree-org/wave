@@ -11,14 +11,14 @@ from typing import Any
 import sympy
 import torch.fx as fx
 
-from .._support.indexing import IndexSequence
+from .._support.indexing import IndexSequence, IndexSymbol
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0, THREAD_1, THREAD_2
 from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
 )
-from ..wave.constraints import Constraint
+from ..wave.constraints import Constraint, WaveConstraint
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
 from ..wave.utils.symbol_utils import is_literal, subs_idxc
@@ -91,6 +91,7 @@ def merge_dicts_with_piecewise(
 
 
 def compute_fused_parameters(
+    distributed_dims: dict[IndexSymbol, int],
     load1: TensorLoadToLDS,
     load2: TensorLoadToLDS,
     threads_per_wave: int,
@@ -107,40 +108,15 @@ def compute_fused_parameters(
         Tuple of (merged_distributed_shape, merged_shared_tile_index,
                   merged_global_tile_index, merged_bounds)
     """
-    # Identify wave-dependent dimensions for load1
-    wave_dependent_dims_load1 = set()
-    for dim, idx_seq in load1.global_tile_index.items():
-        start_expr = idx_seq.start
-        free_symbols = (
-            start_expr.free_symbols if hasattr(start_expr, "free_symbols") else set()
-        )
-        if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
-            wave_dependent_dims_load1.add(dim)
-
-    # Identify wave-dependent dimensions for load2
-    wave_dependent_dims_load2 = set()
-    for dim, idx_seq in load2.global_tile_index.items():
-        start_expr = idx_seq.start
-        free_symbols = (
-            start_expr.free_symbols if hasattr(start_expr, "free_symbols") else set()
-        )
-        if any(t in free_symbols for t in [THREAD_0, THREAD_1, THREAD_2]):
-            wave_dependent_dims_load2.add(dim)
-
-    logger.debug(f"Wave-dependent dimensions for load1: {wave_dependent_dims_load1}")
-    logger.debug(f"Wave-dependent dimensions for load2: {wave_dependent_dims_load2}")
-
     # Scale distributed_shape by 2 for wave-dependent dimensions
     # After fusion: even waves execute load1, odd waves execute load2
     # Each wave needs to do 2x the work in wave-dependent dims
     scaled_load1_shape = {
-        dim: load1.distributed_shape[dim]
-        * (2 if dim in wave_dependent_dims_load1 else 1)
+        dim: load1.distributed_shape[dim] * (2 if dim in distributed_dims else 1)
         for dim in load1.distributed_shape.keys()
     }
     scaled_load2_shape = {
-        dim: load2.distributed_shape[dim]
-        * (2 if dim in wave_dependent_dims_load2 else 1)
+        dim: load2.distributed_shape[dim] * (2 if dim in distributed_dims else 1)
         for dim in load2.distributed_shape.keys()
     }
 
@@ -151,12 +127,19 @@ def compute_fused_parameters(
     # Adjust indices for load2 so odd waves act as even waves
     # After fusion: even waves (0,2,4,...) use load1, odd waves (1,3,5,...) use load2
     # We need odd waves to use even wave indices, so wave 1 acts like wave 0, wave 3 like wave 2, etc.
-    # This is achieved by subtracting threads_per_wave from THREAD_0
+    wave_offset_subs = [
+        (THREAD_0, THREAD_0 - threads_per_wave),
+        (THREAD_1, THREAD_1 - 1),
+        (THREAD_2, THREAD_2 - 1),
+    ]
     adjusted_load2_global_tile_index = {}
     for dim, idx_seq in load2.global_tile_index.items():
-        adjusted_start = idx_seq.start.subs(
-            THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
-        )
+        adjusted_start = idx_seq.start
+        if dim in distributed_dims:
+            adjusted_start = adjusted_start.subs(
+                *wave_offset_subs[distributed_dims[dim]], simultaneous=True
+            )
+
         adjusted_load2_global_tile_index[dim] = IndexSequence(
             adjusted_start, idx_seq.size, idx_seq.stride
         )
@@ -164,9 +147,12 @@ def compute_fused_parameters(
     # Adjust shared_tile_index for load2 if it depends on thread IDs
     adjusted_load2_shared_tile_index = {}
     for dim, idx_seq in load2.shared_tile_index.items():
-        adjusted_start = idx_seq.start.subs(
-            THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
-        )
+        adjusted_start = idx_seq.start
+        if dim in distributed_dims:
+            adjusted_start = adjusted_start.subs(
+                *wave_offset_subs[distributed_dims[dim]], simultaneous=True
+            )
+
         adjusted_load2_shared_tile_index[dim] = IndexSequence(
             adjusted_start, idx_seq.size, idx_seq.stride
         )
@@ -328,20 +314,17 @@ def fuse_tensor_loads(
         logger.info("No fusable tensor load pairs found")
         return
 
-    # Calculate wave_id in each dimension
-    wave_id_0 = THREAD_0 // threads_per_wave
-    wave_id_1 = THREAD_1 if waves_per_block[1] > 1 else 0
-    wave_id_2 = THREAD_2 if waves_per_block[2] > 1 else 0
-
-    # Linearize wave_id: linear_id = id_0 + id_1 * dim_0 + id_2 * dim_0 * dim_1
     wave_id = (
-        wave_id_0
-        + wave_id_1 * waves_per_block[0]
-        + wave_id_2 * waves_per_block[0] * waves_per_block[1]
+        hardware_constraint.linearized_thread_id // hardware_constraint.threads_per_wave
     )
-
     # input_selector will be wave_id % 2 (0 for even waves, 1 for odd waves)
     input_selector = wave_id % 2
+
+    distributed_dims = {
+        c.dim: c.wg_constraint.workgroup_dim
+        for c in constraints
+        if isinstance(c, WaveConstraint)
+    }
 
     logger.info(f"Fusing {len(fusable_pairs)} tensor load pairs")
 
@@ -364,7 +347,7 @@ def fuse_tensor_loads(
             merged_shared_tile_index,
             merged_global_tile_index,
             merged_bounds,
-        ) = compute_fused_parameters(load1, load2, threads_per_wave)
+        ) = compute_fused_parameters(distributed_dims, load1, load2, threads_per_wave)
 
         # Create the fused TensorLoadToLDS node
         # Insert it before the second load
