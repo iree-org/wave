@@ -327,7 +327,10 @@ def WaveIndexSymbolAttr : EnumAttr<WaveDialect, WaveIndexSymbolEnum, "WaveIndexS
   let mnemonic = "index_symbol";
   let assemblyFormat = "`<` $value `>`";
   let description = [{
-    Specialized symbol used in index expressions in the Wave dialect.
+    Hardware-specific index symbols used in Wave indexing expressions and bounds.
+
+    These symbols represent runtime hardware indices such as workgroup IDs (WG0, WG1, WG2),
+    thread IDs (T0, T1, T2), device dimensions (DD0, DD1, DD2), and GPR numbers (GPR_NUM).
   }];
 
   let extraClassDeclaration = [{

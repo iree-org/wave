@@ -237,12 +237,10 @@ verifyConstraints(mlir::ArrayAttr constraints,
       needsPrimaryDim.insert(wgDim);
     }
 
-    auto constraintSymbols = constraint.getTileSize().getSymbols();
-    llvm::ArrayRef<mlir::Attribute> symbolAttrs(constraintSymbols.data(),
-                                                constraintSymbols.size());
     std::optional<llvm::SmallVector<int64_t>> evaluated =
         wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
-                                         symbolAttrs, hyperparams);
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for workgroup constraint");
     assert(evaluated->size() == 1 &&
@@ -284,12 +282,10 @@ verifyConstraints(mlir::ArrayAttr constraints,
              << symbol;
     }
 
-    auto constraintSymbols = constraint.getTileSize().getSymbols();
-    llvm::ArrayRef<mlir::Attribute> symbolAttrs(constraintSymbols.data(),
-                                                constraintSymbols.size());
     std::optional<llvm::SmallVector<int64_t>> evaluated =
         wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
-                                         symbolAttrs, hyperparams);
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for wave constraint");
     assert(evaluated->size() == 1 &&
@@ -306,12 +302,10 @@ verifyConstraints(mlir::ArrayAttr constraints,
   // verify TilingConstraint
   // * The number of tiles should be greater than or equal to one.
   for (auto &&[symbol, constraint] : tilingConstraints) {
-    auto constraintSymbols = constraint.getTileSize().getSymbols();
-    llvm::ArrayRef<mlir::Attribute> symbolAttrs(constraintSymbols.data(),
-                                                constraintSymbols.size());
     std::optional<llvm::SmallVector<int64_t>> evaluated =
         wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
-                                         symbolAttrs, hyperparams);
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for tiling constraint");
     assert(evaluated->size() == 1 &&
