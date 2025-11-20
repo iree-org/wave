@@ -162,11 +162,13 @@ def compute_fused_parameters(
         )
 
     # Adjust shared_tile_index for load2 if it depends on thread IDs
-    # TODO: need to switch to proper index
-    adjusted_load2_shared_tile_index = load2.shared_tile_index
-    if hasattr(load2.shared_tile_index, "subs"):
-        adjusted_load2_shared_tile_index = load2.shared_tile_index.subs(
+    adjusted_load2_shared_tile_index = {}
+    for dim, idx_seq in load2.shared_tile_index.items():
+        adjusted_start = idx_seq.start.subs(
             THREAD_0, THREAD_0 - threads_per_wave, simultaneous=True
+        )
+        adjusted_load2_shared_tile_index[dim] = IndexSequence(
+            adjusted_start, idx_seq.size, idx_seq.stride
         )
 
     merged_shared_tile_index = merge_dicts_with_piecewise(
