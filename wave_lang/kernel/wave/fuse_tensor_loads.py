@@ -91,10 +91,11 @@ def merge_dicts_with_piecewise(
 
 
 def compute_fused_parameters(
-    distributed_dims: dict[IndexSymbol, int],
     load1: TensorLoadToLDS,
     load2: TensorLoadToLDS,
+    distributed_dims: dict[IndexSymbol, int],
     threads_per_wave: int,
+    waves_per_block: tuple[int, int, int],
 ) -> tuple[dict[Any, Any], Any, dict[Any, Any], dict[Any, Any]]:
     """
     Compute fused parameters for two tensor loads.
@@ -127,18 +128,18 @@ def compute_fused_parameters(
     # Adjust indices for load2 so odd waves act as even waves
     # After fusion: even waves (0,2,4,...) use load1, odd waves (1,3,5,...) use load2
     # We need odd waves to use even wave indices, so wave 1 acts like wave 0, wave 3 like wave 2, etc.
-    wave_offset_subs = [
-        (THREAD_0, THREAD_0 - threads_per_wave),
-        (THREAD_1, THREAD_1 - 1),
-        (THREAD_2, THREAD_2 - 1),
-    ]
+    if waves_per_block[0] > 1:
+        wave_offset_subs = (THREAD_0, THREAD_0 - threads_per_wave)
+    elif waves_per_block[1] > 1:
+        wave_offset_subs = (THREAD_1, THREAD_1 - 1)
+    elif waves_per_block[2] > 1:
+        wave_offset_subs = (THREAD_2, THREAD_2 - 1)
+    else:
+        raise ValueError(f"Invalid waves_per_block: {waves_per_block}")
+
     adjusted_load2_global_tile_index = {}
     for dim, idx_seq in load2.global_tile_index.items():
-        adjusted_start = idx_seq.start
-        if dim in distributed_dims:
-            adjusted_start = adjusted_start.subs(
-                *wave_offset_subs[distributed_dims[dim]], simultaneous=True
-            )
+        adjusted_start = idx_seq.start.subs(*wave_offset_subs, simultaneous=True)
 
         adjusted_load2_global_tile_index[dim] = IndexSequence(
             adjusted_start, idx_seq.size, idx_seq.stride
@@ -147,11 +148,7 @@ def compute_fused_parameters(
     # Adjust shared_tile_index for load2 if it depends on thread IDs
     adjusted_load2_shared_tile_index = {}
     for dim, idx_seq in load2.shared_tile_index.items():
-        adjusted_start = idx_seq.start
-        if dim in distributed_dims:
-            adjusted_start = adjusted_start.subs(
-                *wave_offset_subs[distributed_dims[dim]], simultaneous=True
-            )
+        adjusted_start = idx_seq.start.subs(*wave_offset_subs, simultaneous=True)
 
         adjusted_load2_shared_tile_index[dim] = IndexSequence(
             adjusted_start, idx_seq.size, idx_seq.stride
@@ -347,7 +344,9 @@ def fuse_tensor_loads(
             merged_shared_tile_index,
             merged_global_tile_index,
             merged_bounds,
-        ) = compute_fused_parameters(distributed_dims, load1, load2, threads_per_wave)
+        ) = compute_fused_parameters(
+            load1, load2, distributed_dims, threads_per_wave, waves_per_block
+        )
 
         # Create the fused TensorLoadToLDS node
         # Insert it before the second load
