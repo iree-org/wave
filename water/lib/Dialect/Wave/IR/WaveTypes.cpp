@@ -88,5 +88,6 @@ wave::WaveTensorType::getResolvedShape(
   if (!getFullySpecified()) {
     return {};
   }
-  return wave::resolveSymbolNames(getShape(), hyper);
+  llvm::ArrayRef<mlir::Attribute> symbols(getShape().begin(), getShape().end());
+  return wave::resolveSymbolNames(symbols, hyper);
 }

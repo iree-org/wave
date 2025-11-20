@@ -29,7 +29,9 @@ wave::WaveTypeConverter::WaveTypeConverter(
   addConversion([](Type t) { return t; });
 
   addConversion([this](wave::WaveTensorType tensorType) -> Type {
-    return convertTensorFromComponents(tensorType.getShape(),
+    ArrayRef<Attribute> symbols(tensorType.getShape().begin(),
+                                tensorType.getShape().end());
+    return convertTensorFromComponents(symbols,
                                        /*shape=*/{},
                                        tensorType.getElementType(),
                                        tensorType.getAddressSpaceValue());
