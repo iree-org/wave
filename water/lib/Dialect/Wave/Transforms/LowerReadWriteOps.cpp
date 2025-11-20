@@ -65,10 +65,10 @@ materializeAffine(Location loc, ArrayRef<wave::WaveSymbolAttr> symbols,
   assert(map.getNumDims() == 0 && "expected 0 dims");
 
   auto threadId = [&](gpu::Dimension d) -> Value {
-    return rewriter.create<gpu::ThreadIdOp>(loc, rewriter.getIndexType(), d);
+    return gpu::ThreadIdOp::create(rewriter, loc, rewriter.getIndexType(), d);
   };
   auto blockId = [&](gpu::Dimension d) -> Value {
-    return rewriter.create<gpu::BlockIdOp>(loc, rewriter.getIndexType(), d);
+    return gpu::BlockIdOp::create(rewriter, loc, rewriter.getIndexType(), d);
   };
 
   SmallVector<Value> baseSymVals;
@@ -95,7 +95,7 @@ materializeAffine(Location loc, ArrayRef<wave::WaveSymbolAttr> symbols,
           loc, "materialization of affine expressions containing device "
                "dimension symbols is not implemented.");
     else if (std::optional<int64_t> value = hyper.getSymbolValue(name)) {
-      v = rewriter.create<arith::ConstantIndexOp>(loc, *value);
+      v = arith::ConstantIndexOp::create(rewriter, loc, *value);
     } else {
       LLVM_DEBUG(llvm::errs() << "symbol: " << name << "\n");
       assert(false && "unknown symbol, should have been caught by verifiers");
@@ -111,7 +111,7 @@ materializeAffine(Location loc, ArrayRef<wave::WaveSymbolAttr> symbols,
     SmallVector<Value> symVals = baseSymVals;
     affine::canonicalizeMapAndOperands(&submap, &symVals);
 
-    Value apply = rewriter.create<affine::AffineApplyOp>(loc, submap, symVals);
+    Value apply = affine::AffineApplyOp::create(rewriter, loc, submap, symVals);
     results.push_back(apply);
   }
 
@@ -186,30 +186,30 @@ buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
     Value clause;
     if (d == rank - 1) {
       // iota [0..L-1] : vector<index>
-      Value iota = rewriter.create<vector::StepOp>(loc, vecIdxType);
+      Value iota = vector::StepOp::create(rewriter, loc, vecIdxType);
 
       // Lane indices for fastest dim: start + iota.
       Value startFastVec =
-          rewriter.create<vector::BroadcastOp>(loc, vecIdxType, startIdx[d]);
+          vector::BroadcastOp::create(rewriter, loc, vecIdxType, startIdx[d]);
       Value laneIdxFast =
-          rewriter.create<arith::AddIOp>(loc, startFastVec, iota);
+          arith::AddIOp::create(rewriter, loc, startFastVec, iota);
 
       // lane-wise compare: (start + iota) < bound.
       Value boundVec =
-          rewriter.create<vector::BroadcastOp>(loc, vecIdxType, bound);
-      clause = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                              laneIdxFast, boundVec);
+          vector::BroadcastOp::create(rewriter, loc, vecIdxType, bound);
+      clause = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                     laneIdxFast, boundVec);
     } else {
       // scalar compare then broadcast: startIdx[d] < bound.
-      Value scalarCmp = rewriter.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::slt, startIdx[d], bound);
-      clause = rewriter.create<vector::BroadcastOp>(loc, maskType, scalarCmp);
+      Value scalarCmp = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::slt, startIdx[d], bound);
+      clause = vector::BroadcastOp::create(rewriter, loc, maskType, scalarCmp);
     }
 
-    finalMask =
-        finalMask
-            ? rewriter.create<arith::AndIOp>(loc, finalMask, clause).getResult()
-            : clause;
+    finalMask = finalMask
+                    ? arith::AndIOp::create(rewriter, loc, finalMask, clause)
+                          .getResult()
+                    : clause;
   }
 
   return finalMask;
@@ -272,14 +272,14 @@ static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
   // vector.load or vector.masked_load
   if (usePlainVectorRead) {
     if (!mask)
-      return rewriter.create<vector::LoadOp>(loc, vecType, mem, indices);
+      return vector::LoadOp::create(rewriter, loc, vecType, mem, indices);
 
     // Create a passthrough vector with elements set to zero corresponding to
     // the element type in memory.
-    Value passthrough = rewriter.create<arith::ConstantOp>(
-        loc, vecType, SplatElementsAttr::get(vecType, zeroElement));
-    return rewriter.create<vector::MaskedLoadOp>(loc, vecType, mem, indices,
-                                                 mask, passthrough);
+    Value passthrough = arith::ConstantOp::create(
+        rewriter, loc, vecType, SplatElementsAttr::get(vecType, zeroElement));
+    return vector::MaskedLoadOp::create(rewriter, loc, vecType, mem, indices,
+                                        mask, passthrough);
   }
 
   // vector.transfer_read (masked or unmasked)
@@ -287,18 +287,19 @@ static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
       make1DTransferCommonAttrs(memrefType, vectorizedDim, vecType, rewriter);
   // Padding value used by vector.transfer_read to fill lanes that are
   // out-of-bounds or masked-off.
-  Value padding = rewriter.create<arith::ConstantOp>(loc, eltType, zeroElement);
+  Value padding =
+      arith::ConstantOp::create(rewriter, loc, eltType, zeroElement);
 
   if (!mask) {
-    return rewriter.create<vector::TransferReadOp>(
-        loc, vecType, mem, indices, /*padding=*/padding,
-        /*permutation_map=*/common.perm,
-        /*in_bounds=*/common.inFalse);
+    return vector::TransferReadOp::create(rewriter, loc, vecType, mem, indices,
+                                          /*padding=*/padding,
+                                          /*permutation_map=*/common.perm,
+                                          /*in_bounds=*/common.inFalse);
   }
-  return rewriter.create<vector::TransferReadOp>(
-      loc, vecType, mem, indices, /*permutation_map=*/common.perm, padding,
-      mask,
-      /*in_bounds=*/common.inTrue);
+  return vector::TransferReadOp::create(rewriter, loc, vecType, mem, indices,
+                                        /*permutation_map=*/common.perm,
+                                        padding, mask,
+                                        /*in_bounds=*/common.inTrue);
 }
 
 /// Build a write or a masked write operation based on presence of a mask.
@@ -323,9 +324,10 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
   // vector.store or vector.masked_store
   if (usePlainVectorStore) {
     if (mask) {
-      rewriter.create<vector::MaskedStoreOp>(loc, mem, indices, mask, vecValue);
+      vector::MaskedStoreOp::create(rewriter, loc, mem, indices, mask,
+                                    vecValue);
     } else {
-      rewriter.create<vector::StoreOp>(loc, vecValue, mem, indices);
+      vector::StoreOp::create(rewriter, loc, vecValue, mem, indices);
     }
   }
 
@@ -335,15 +337,15 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
       make1DTransferCommonAttrs(memrefType, vectorizedDim, vecType, rewriter);
 
   if (mask) {
-    rewriter.create<vector::TransferWriteOp>(loc, vecValue, mem, indices,
-                                             /*permutation_map=*/common.perm,
-                                             /*mask=*/mask,
-                                             /*in_bounds=*/common.inTrue);
+    vector::TransferWriteOp::create(rewriter, loc, vecValue, mem, indices,
+                                    /*permutation_map=*/common.perm,
+                                    /*mask=*/mask,
+                                    /*in_bounds=*/common.inTrue);
 
   } else {
-    rewriter.create<vector::TransferWriteOp>(loc, vecValue, mem, indices,
-                                             /*permutation_map=*/common.perm,
-                                             /*in_bounds=*/common.inFalse);
+    vector::TransferWriteOp::create(rewriter, loc, vecValue, mem, indices,
+                                    /*permutation_map=*/common.perm,
+                                    /*in_bounds=*/common.inFalse);
   }
 }
 

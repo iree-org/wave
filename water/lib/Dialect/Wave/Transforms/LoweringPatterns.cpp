@@ -65,7 +65,7 @@ public:
 
       byteOffset = static_cast<int64_t>(*op.getOffset());
       mlir::Value off =
-          rewriter.create<mlir::arith::ConstantIndexOp>(loc, byteOffset);
+          mlir::arith::ConstantIndexOp::create(rewriter, loc, byteOffset);
       rewriter.replaceOpWithNewOp<mlir::memref::ViewOp>(
           op, memrefType, cast.getOperand(0), off, mlir::ValueRange());
 
@@ -339,13 +339,13 @@ public:
         wave::WaveMmaKindAttr::getShape(rewriter.getContext(), kind);
 
     // TODO: Extend lowering for ops beyond MFMA, e.g. WMMA
-    auto mfma = rewriter.create<mlir::amdgpu::MFMAOp>(
-        loc, acc.getType(),
-        /*m=*/M,
-        /*n=*/N,
-        /*k=*/K,
-        /*blocks=*/1,
-        /*sourceA=*/lhs, /*sourceB=*/rhs, /*destC=*/acc);
+    auto mfma = mlir::amdgpu::MFMAOp::create(rewriter, loc, acc.getType(),
+                                             /*m=*/M,
+                                             /*n=*/N,
+                                             /*k=*/K,
+                                             /*blocks=*/1,
+                                             /*sourceA=*/lhs, /*sourceB=*/rhs,
+                                             /*destC=*/acc);
     rewriter.replaceOp(op, mfma.getResult());
     return success();
   }

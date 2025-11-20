@@ -211,7 +211,7 @@ insertInBoundsAssertionDispatch(OpBuilder &builder, Operation *op,
 static Operation *createCall(OpBuilder &builder, Location loc,
                              FunctionOpInterface func, ValueRange operands) {
   if (auto funcFunc = dyn_cast<func::FuncOp>(*func)) {
-    return builder.create<func::CallOp>(loc, funcFunc, operands);
+    return func::CallOp::create(builder, loc, funcFunc, operands);
   }
   func.emitError() << "cannot create a call to this function";
   return nullptr;
@@ -223,7 +223,7 @@ static Operation *createCall(OpBuilder &builder, Location loc,
 static Operation *createReturn(OpBuilder &builder, Location loc,
                                FunctionOpInterface func, ValueRange operands) {
   if (auto funcFunc = dyn_cast<func::FuncOp>(*func)) {
-    return builder.create<func::ReturnOp>(loc, operands);
+    return func::ReturnOp::create(builder, loc, operands);
   }
   func.emitError() << "cannot create a return from this function";
   return nullptr;
@@ -235,21 +235,22 @@ static Operation *createReturn(OpBuilder &builder, Location loc,
 /// don't affect the logic.
 static Value createDummyValue(OpBuilder &builder, Location loc, Type type) {
   if (type.isInteger()) {
-    return builder.create<arith::ConstantOp>(loc, type,
-                                             builder.getIntegerAttr(type, 0));
+    return arith::ConstantOp::create(builder, loc, type,
+                                     builder.getIntegerAttr(type, 0));
   }
   if (type.isIndex()) {
-    return builder.create<arith::ConstantIndexOp>(loc, 0);
+    return arith::ConstantIndexOp::create(builder, loc, 0);
   }
   if (auto floatType = dyn_cast<FloatType>(type)) {
-    return builder.create<arith::ConstantFloatOp>(
-        loc, floatType, llvm::APFloat::getZero(floatType.getFloatSemantics()));
+    return arith::ConstantFloatOp::create(
+        builder, loc, floatType,
+        llvm::APFloat::getZero(floatType.getFloatSemantics()));
   }
   if (auto vecType = dyn_cast<VectorType>(type)) {
     Value element = createDummyValue(builder, loc, vecType.getElementType());
     if (!element)
       return nullptr;
-    return builder.create<vector::BroadcastOp>(loc, vecType, element);
+    return vector::BroadcastOp::create(builder, loc, vecType, element);
   }
   return nullptr;
 }
