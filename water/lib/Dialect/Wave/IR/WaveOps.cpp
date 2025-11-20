@@ -184,6 +184,200 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateBackward(
                                            "result", "accumulator", errs);
 }
 
+// Set the value of `lattice` to `newLattice` and return whether a change
+// happened. Note that this does NOT verify whether the lattice change goes into
+// the direction of top or bottom.
+static mlir::ChangeResult
+updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
+                const wave::IndexExprsLatticeStorage &newLattice) {
+  if (newLattice == lattice)
+    return mlir::ChangeResult::NoChange;
+  lattice = newLattice;
+  return mlir::ChangeResult::Change;
+}
+
+namespace llvm {
+// Combine two potentially failing ChangeResults: if any of them failed, the
+// result of the combination is also failure.
+FailureOr<mlir::ChangeResult> operator|(FailureOr<mlir::ChangeResult> lhs,
+                                        FailureOr<mlir::ChangeResult> rhs) {
+  if (failed(lhs) || failed(rhs))
+    return failure();
+  return *lhs | *rhs;
+}
+} // namespace llvm
+
+// Update index expressions of the result of the MMA operation.
+llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
+  if (!resultType)
+    return updateIfChanged(resultExprs[0],
+                           wave::IndexExprsLatticeStorage::top());
+
+  // Join LHS (ignoring M symbol), RHS, and accumulator lattices into result.
+  unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
+  unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
+  unsigned accumulatorOperandNumber =
+      getAccumulatorMutable().getOperandNumber();
+
+  wave::IndexExprsLatticeStorage resultLattice =
+      wave::IndexExprsLatticeStorage::bottom();
+
+  // LHS: ignore M symbol since it has different indexing in LHS vs result.
+  if (auto lhsType = dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
+    StringRef mSymbol = lhsType.getShape()[0].getName();
+    resultLattice = wave::IndexExprsLatticeStorage::join(
+        resultLattice, operandExprs[lhsOperandNumber], {mSymbol});
+  }
+
+  // RHS: propagate all symbols.
+  if (llvm::isa<wave::WaveTensorType>(getRhs().getType())) {
+    resultLattice = wave::IndexExprsLatticeStorage::join(
+        resultLattice, operandExprs[rhsOperandNumber]);
+  }
+
+  // Accumulator: propagate all symbols.
+  if (llvm::isa<wave::WaveTensorType>(getAccumulator().getType())) {
+    resultLattice = wave::IndexExprsLatticeStorage::join(
+        resultLattice, operandExprs[accumulatorOperandNumber]);
+  }
+
+  resultLattice = resultLattice.keepOnlySymbols(resultType.getShape());
+  wave::IndexExprsLatticeStorage newResultLattice =
+      wave::IndexExprsLatticeStorage::join(resultExprs[0], resultLattice);
+
+  if (newResultLattice.isTop() && !resultExprs[0].isTop()) {
+    mlir::InFlightDiagnostic diag =
+        emitError()
+        << "conflict when propagating forward the result lattice in MmaOp";
+    diag.attachNote() << "Result lattice: " << resultExprs[0];
+    diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
+    diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
+    diag.attachNote() << "Accumulator lattice: "
+                      << operandExprs[accumulatorOperandNumber];
+    return diag;
+  }
+
+  return updateIfChanged(resultExprs[0], newResultLattice);
+}
+
+// Update index expressions of the operands of the MMA operation.
+llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  const unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
+  const unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
+  const unsigned accumulatorOperandNumber =
+      getAccumulatorMutable().getOperandNumber();
+
+  // Create separate lattices for operands (ignoring M symbol from results)
+  // and accumulator (with all symbols).
+  wave::IndexExprsLatticeStorage operandLattice =
+      wave::IndexExprsLatticeStorage::bottom();
+  wave::IndexExprsLatticeStorage accumulatorLattice =
+      wave::IndexExprsLatticeStorage::bottom();
+
+  for (const wave::IndexExprsLatticeStorage &resultExpr : resultExprs) {
+    auto resultType = dyn_cast<wave::WaveTensorType>(getResult().getType());
+    if (!resultType)
+      continue;
+
+    // For LHS/RHS operands, ignore M symbol.
+    llvm::StringRef mSymbol = resultType.getShape()[0].getName();
+    operandLattice = wave::IndexExprsLatticeStorage::join(
+        operandLattice, resultExpr, {mSymbol});
+
+    // For accumulator, use all symbols.
+    accumulatorLattice =
+        wave::IndexExprsLatticeStorage::join(accumulatorLattice, resultExpr);
+  }
+
+  mlir::ChangeResult changeResult = mlir::ChangeResult::NoChange;
+
+  // Propagate to LHS (operand 0).
+  if (auto lhsType = llvm::dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
+    wave::IndexExprsLatticeStorage filtered =
+        operandLattice.keepOnlySymbols(lhsType.getShape());
+    wave::IndexExprsLatticeStorage newLattice =
+        wave::IndexExprsLatticeStorage::join(operandExprs[lhsOperandNumber],
+                                             filtered);
+
+    if (newLattice.isTop() && !operandExprs[lhsOperandNumber].isTop()) {
+      mlir::InFlightDiagnostic diag =
+          emitError()
+          << "conflict when propagating to LHS from RHS/accumulator in MmaOp";
+      diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
+      diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
+      diag.attachNote() << "Accumulator lattice: "
+                        << operandExprs[accumulatorOperandNumber];
+      return diag;
+    }
+
+    if (newLattice != operandExprs[lhsOperandNumber]) {
+      operandExprs[lhsOperandNumber] = newLattice;
+      changeResult = mlir::ChangeResult::Change;
+    }
+  }
+
+  // Propagate to RHS (operand 1).
+  if (auto rhsType = llvm::dyn_cast<wave::WaveTensorType>(getRhs().getType())) {
+    wave::IndexExprsLatticeStorage filtered =
+        operandLattice.keepOnlySymbols(rhsType.getShape());
+    wave::IndexExprsLatticeStorage newLattice =
+        wave::IndexExprsLatticeStorage::join(operandExprs[rhsOperandNumber],
+                                             filtered);
+
+    if (newLattice.isTop() && !operandExprs[rhsOperandNumber].isTop()) {
+      mlir::InFlightDiagnostic diag =
+          emitError()
+          << "conflict when propagating to RHS from LHS/accumulator in MmaOp";
+      diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
+      diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
+      diag.attachNote() << "Accumulator lattice: "
+                        << operandExprs[accumulatorOperandNumber];
+      return diag;
+    }
+
+    if (newLattice != operandExprs[rhsOperandNumber]) {
+      operandExprs[rhsOperandNumber] = newLattice;
+      changeResult = mlir::ChangeResult::Change;
+    }
+  }
+
+  // Propagate to accumulator (operand 2).
+  if (auto accType =
+          llvm::dyn_cast<wave::WaveTensorType>(getAccumulator().getType())) {
+    wave::IndexExprsLatticeStorage filtered =
+        accumulatorLattice.keepOnlySymbols(accType.getShape());
+    wave::IndexExprsLatticeStorage newLattice =
+        wave::IndexExprsLatticeStorage::join(
+            operandExprs[accumulatorOperandNumber], filtered);
+
+    if (newLattice.isTop() && !operandExprs[accumulatorOperandNumber].isTop()) {
+      mlir::InFlightDiagnostic diag =
+          emitError()
+          << "conflict when propagating to accumulator from LHS/RHS in MmaOp";
+      diag.attachNote() << "Accumulator lattice: "
+                        << operandExprs[accumulatorOperandNumber];
+      diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
+      diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
+      diag.attachNote() << "Result lattice: " << resultExprs[0];
+      return diag;
+    }
+
+    if (newLattice != operandExprs[accumulatorOperandNumber]) {
+      operandExprs[accumulatorOperandNumber] = newLattice;
+      changeResult = mlir::ChangeResult::Change;
+    }
+  }
+
+  return changeResult;
+}
+
 // Check if the given type is one of the allowed types provided as template
 // arguments and report an error at the given location otherwise.
 template <typename... AllowedTypes>
@@ -276,9 +470,601 @@ static mlir::LogicalResult checkMmaTypeCompatibility(mlir::Location loc,
   return mlir::success(success);
 }
 
-//===----------------------------------------------------------------------===//
-// MmaOp
-//===----------------------------------------------------------------------===//
+// Extract the context from the first symbol that is not null.
+static mlir::MLIRContext *getAnySymbolContext(wave::WaveSymbolAttr mSymbol,
+                                              wave::WaveSymbolAttr nSymbol,
+                                              wave::WaveSymbolAttr kSymbol) {
+  mlir::MLIRContext *context = nullptr;
+  for (wave::WaveSymbolAttr symbol : {mSymbol, nSymbol, kSymbol})
+    if (!context && symbol)
+      context = symbol.getContext();
+  assert(context && "expected at least one symbol name to be provided");
+  return context;
+}
+
+namespace {
+
+struct MmaIndexingExprBuilder;
+
+// Fluent-style API builder for index expressions of an MMA operation. See
+// MmaIndexingExprBuilder for details.
+struct MmaSingleIndexExprBuilder {
+  MmaSingleIndexExprBuilder(MmaIndexingExprBuilder &parent, bool enabled)
+      : parent(parent), enabled(enabled) {}
+
+  // Set the parameter of the index expression for the currently selected
+  // dimension.
+  MmaSingleIndexExprBuilder &offset(mlir::AffineExpr expr);
+  MmaSingleIndexExprBuilder &size(int64_t value);
+  MmaSingleIndexExprBuilder &stride(int64_t value);
+
+  // Select the dimension.
+  MmaSingleIndexExprBuilder &m();
+  MmaSingleIndexExprBuilder &n();
+  MmaSingleIndexExprBuilder &k();
+
+  // Populate the attributes with all index expressions.
+  void populate(llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const;
+
+  MmaIndexingExprBuilder &parent;
+  mlir::AffineExpr offsetExpr, sizeExpr, strideExpr;
+  bool enabled;
+};
+
+// Fluent-style API builder for index expressions of an MMA operation. Usage:
+//   1. Create an instance of this class.
+//   2. Use `m`, `n` or `k` to select the MMA dimension to build an index
+//   expression for.
+//   3. After selecting the dimension, use `offset`, `size` or `stride` to set
+//   the corresponding quantities of the index expression.
+//   4. Proceed with the next dimension until all dimensions are set.
+//   5. Call `populate` to populate the attributes of the MMA operation.
+//
+// Example:
+//
+// ```
+//   MmaIndexingExprBuilder builder(symbols, mSymbol, nSymbol, kSymbol);
+//   builder.m().offset(offset_m).size(size_m).stride(stride_m)
+//          .n().offset(offset_n).size(size_n).stride(stride_n)
+//          .k().offset(offset_k).size(size_k).stride(stride_k)
+//          .populate(attributes);
+// ```
+struct MmaIndexingExprBuilder {
+  MmaIndexingExprBuilder(llvm::ArrayRef<wave::WaveSymbolAttr> symbols,
+                         wave::WaveSymbolAttr mSymbol,
+                         wave::WaveSymbolAttr nSymbol,
+                         wave::WaveSymbolAttr kSymbol)
+      : symbols(symbols), mBuilder(*this, mSymbol != nullptr),
+        nBuilder(*this, nSymbol != nullptr),
+        kBuilder(*this, kSymbol != nullptr), mSymbol(mSymbol), nSymbol(nSymbol),
+        kSymbol(kSymbol) {}
+
+  // Select the dimension.
+  MmaSingleIndexExprBuilder &m() { return mBuilder; }
+  MmaSingleIndexExprBuilder &n() { return nBuilder; }
+  MmaSingleIndexExprBuilder &k() { return kBuilder; }
+
+  // Populate the attributes with all index expressions.
+  void populate(llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const {
+    mlir::MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
+
+    auto buildMap = [&](mlir::AffineExpr expr) {
+      assert(expr &&
+             "expected offset/size/stride to be set up for all symbols");
+      return mlir::AffineMap::get(/*dimCount=*/0,
+                                  /*symbolCount=*/symbols.size(), expr, ctx);
+    };
+    auto buildOne = [&](const MmaSingleIndexExprBuilder &builder) {
+      return wave::WaveIndexMappingAttr::get(
+          ctx, symbols, buildMap(builder.offsetExpr),
+          buildMap(builder.sizeExpr), buildMap(builder.strideExpr));
+    };
+
+    if (mSymbol)
+      attributes.emplace_back(mSymbol.getName(), buildOne(mBuilder));
+    if (nSymbol)
+      attributes.emplace_back(nSymbol.getName(), buildOne(nBuilder));
+    if (kSymbol)
+      attributes.emplace_back(kSymbol.getName(), buildOne(kBuilder));
+  }
+
+  llvm::ArrayRef<wave::WaveSymbolAttr> symbols;
+  MmaSingleIndexExprBuilder mBuilder, nBuilder, kBuilder;
+  wave::WaveSymbolAttr mSymbol, nSymbol, kSymbol;
+};
+
+MmaSingleIndexExprBuilder &
+MmaSingleIndexExprBuilder::offset(mlir::AffineExpr expr) {
+  if (!enabled)
+    return *this;
+  assert(!offsetExpr && "expected offset to be set only once");
+  offsetExpr = expr;
+  return *this;
+}
+
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::size(int64_t value) {
+  if (!enabled)
+    return *this;
+  assert(!sizeExpr && "expected size to be set only once");
+  sizeExpr = mlir::getAffineConstantExpr(value, offsetExpr.getContext());
+  return *this;
+}
+
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(int64_t value) {
+  if (!enabled)
+    return *this;
+  assert(!strideExpr && "expected stride to be set only once");
+  strideExpr = mlir::getAffineConstantExpr(value, offsetExpr.getContext());
+  return *this;
+}
+
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() { return parent.m(); }
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() { return parent.n(); }
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() { return parent.k(); }
+void MmaSingleIndexExprBuilder::populate(
+    llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const {
+  parent.populate(attributes);
+}
+} // namespace
+
+// Populate `attributes` with index expressions for the symbols associated with
+// M, N, K dimensions of the given MMA operation kind provided the configuration
+// of wavefronts in the workgroup. Any symbol may be omitted as long as at least
+// one is provided, e.g., for the LHS of the operation, only M and N symbols may
+// be provided. If `isAccumulator` is set, the index expressions are created for
+// the accumulator/result of an MMA, which may affect the expression for the M
+// dimension.
+static llvm::LogicalResult populateMmaIndexingExpr(
+    wave::WaveMmaKind kind, bool isAccumulator,
+    llvm::ArrayRef<unsigned> wavesPerWorkgroup, int64_t threadsPerWave,
+    wave::WaveSymbolAttr mSymbol, wave::WaveSymbolAttr nSymbol,
+    wave::WaveSymbolAttr kSymbol,
+    llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) {
+  mlir::MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
+
+  // TODO: fix the string-based abomination in favor of first-class symbols.
+  llvm::SmallVector<wave::WaveSymbolAttr> symbolNames = {
+      wave::WaveSymbolAttr::get(ctx, "_T0"),
+      wave::WaveSymbolAttr::get(ctx, "_T1"),
+      wave::WaveSymbolAttr::get(ctx, "_T2"),
+      wave::WaveSymbolAttr::get(ctx, "_GPR_NUM"),
+  };
+  mlir::AffineExpr threadX, threadY, threadZ, gprNum;
+  mlir::bindSymbols(ctx, threadX, threadY, threadZ, gprNum);
+
+  mlir::AffineExpr linearizedThreadId =
+      threadX + threadY * wavesPerWorkgroup[0] +
+      threadZ * wavesPerWorkgroup[1] * wavesPerWorkgroup[0];
+  mlir::AffineExpr laneId = linearizedThreadId % threadsPerWave;
+  MmaIndexingExprBuilder builder(symbolNames, mSymbol, nSymbol, kSymbol);
+
+  switch (kind) {
+  case wave::WaveMmaKind::F32_16x16x16_F16:
+  case wave::WaveMmaKind::I32_16x16x16_I8:
+    builder.m()
+        .offset(isAccumulator ? 4 * laneId.floorDiv(16) : laneId % 16)
+        .size(isAccumulator ? 4 : 1)
+        .stride(isAccumulator ? 16 : 1)
+        .n()
+        .offset(laneId % 16)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset(4 * laneId.floorDiv(16))
+        .size(4)
+        .stride(1)
+        .populate(attributes);
+    return llvm::LogicalResult::success();
+
+  case wave::WaveMmaKind::F32_32x32x8_F16:
+  case wave::WaveMmaKind::I32_32x32x8_I8:
+    builder.m()
+        .offset(isAccumulator ? (8 * gprNum.floorDiv(4) % 32) +
+                                    4 * laneId.floorDiv(32) + (gprNum % 4)
+                              : laneId % 32)
+        .size(isAccumulator ? 16 : 1)
+        .stride(isAccumulator ? 32 : 1)
+        .n()
+        .offset(laneId % 32)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset(4 * laneId.floorDiv(32))
+        .size(4)
+        .stride(1)
+        .populate(attributes);
+    return llvm::LogicalResult::success();
+
+  case wave::WaveMmaKind::F32_16x16x32_F8:
+  case wave::WaveMmaKind::F32_16x16x32_BF16:
+  case wave::WaveMmaKind::F32_16x16x32_F16:
+  case wave::WaveMmaKind::F32_16x16x32_K8_F16:
+  case wave::WaveMmaKind::I32_16x16x32_I8:
+    builder.m()
+        .offset(isAccumulator ? 4 * laneId.floorDiv(16) : laneId % 16)
+        .size(isAccumulator ? 4 : 1)
+        .stride(isAccumulator ? 16 : 1)
+        .n()
+        .offset(laneId % 16)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset(8 * laneId.floorDiv(16))
+        .size(8)
+        .stride(1)
+        .populate(attributes);
+    return llvm::LogicalResult::success();
+  case wave::WaveMmaKind::F32_16x16x32_K4_F8:
+    builder.m()
+        .offset(isAccumulator ? 4 * laneId.floorDiv(16) : laneId % 16)
+        .size(isAccumulator ? 4 : 1)
+        .stride(isAccumulator ? 16 : 1)
+        .n()
+        .offset(laneId % 16)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset(16 * gprNum.floorDiv(4) + 4 * laneId.floorDiv(16) +
+                (gprNum % 4))
+        .size(8)
+        .stride(1)
+        .populate(attributes);
+    return llvm::LogicalResult::success();
+  case wave::WaveMmaKind::F32_32x32x16_F8:
+  case wave::WaveMmaKind::F32_32x32x16_BF16:
+  case wave::WaveMmaKind::F32_32x32x16_F16:
+  case wave::WaveMmaKind::F32_32x32x16_K8_F16:
+  case wave::WaveMmaKind::I32_32x32x16_I8:
+    builder.m()
+        .offset(isAccumulator ? (8 * gprNum.floorDiv(4) % 32) +
+                                    4 * laneId.floorDiv(32) + (gprNum % 4)
+                              : laneId % 32)
+        .size(isAccumulator ? 16 : 1)
+        .stride(isAccumulator ? 32 : 1)
+        .n()
+        .offset(laneId % 32)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset(8 * laneId.floorDiv(32))
+        .size(8)
+        .stride(1)
+        .populate(attributes);
+    return llvm::LogicalResult::success();
+  case wave::WaveMmaKind::F32_32x32x16_K4_F8:
+    builder.m()
+        .offset(isAccumulator ? (8 * gprNum.floorDiv(4) % 32) +
+                                    4 * laneId.floorDiv(32) + (gprNum % 4)
+                              : laneId % 32)
+        .size(isAccumulator ? 16 : 1)
+        .stride(isAccumulator ? 32 : 1)
+        .n()
+        .offset(laneId % 32)
+        .size(1)
+        .stride(1)
+        .k()
+        .offset(8 * gprNum.floorDiv(4) + 4 * laneId.floorDiv(32) + (gprNum % 4))
+        .size(8)
+        .stride(1)
+        .populate(attributes);
+    return llvm::LogicalResult::success();
+  default:
+    return llvm::LogicalResult::failure();
+  }
+}
+
+// Given a range of ranges of symbol names (StringRef), create a flat list of
+// unique names in `symbolNames` and populate `symbolNamesToIdx` with a mapping
+// from symbol name to its position in that flat list.
+template <typename RangeT>
+static void
+aggregateAllSymbolNames(RangeT &&symbolNameLists,
+                        llvm::SmallVectorImpl<llvm::StringRef> &symbolNames,
+                        llvm::StringMap<unsigned> &symbolNamesToIdx) {
+  llvm::SetVector<llvm::StringRef> allSymbolNames;
+  for (auto &&symbolNameList : symbolNameLists)
+    allSymbolNames.insert_range(symbolNameList);
+  for (auto &&[i, symbolName] : llvm::enumerate(allSymbolNames))
+    symbolNamesToIdx[symbolName] = i;
+  symbolNames = allSymbolNames.takeVector();
+}
+
+// Return a new map that is has the same expression mathematically, but uses
+// symbols aligned with `allSymbolNames`. `symbolNames` should list the names of
+// the currently used symbols and must be co-indexed with the symbols used in
+// the map.
+static mlir::AffineMap
+permuteMapSymbols(mlir::AffineMap map,
+                  llvm::ArrayRef<llvm::StringRef> symbolNames,
+                  llvm::ArrayRef<llvm::StringRef> allSymbolNames,
+                  const llvm::StringMap<unsigned> &symbolNamesToIdx) {
+  assert(map.getNumDims() == 0 && "maps should not involve dimensions");
+  assert(symbolNames.size() == map.getNumSymbols() &&
+         "symbol names must be co-indexed with the symbols used in the map");
+  mlir::MLIRContext *ctx = map.getContext();
+  unsigned newNumSyms = allSymbolNames.size();
+
+  auto newSymbols = llvm::map_to_vector(symbolNames, [&](llvm::StringRef name) {
+    return mlir::getAffineSymbolExpr(symbolNamesToIdx.at(name), ctx);
+  });
+
+  llvm::SmallVector<mlir::AffineExpr> remapped;
+  remapped.reserve(map.getNumResults());
+  for (mlir::AffineExpr expr : map.getResults())
+    remapped.push_back(expr.replaceSymbols(newSymbols));
+
+  return mlir::AffineMap::get(/*dimCount=*/0, newNumSyms, remapped, ctx);
+}
+
+// Get the (indexed) affine symbol expression corresponding to the given symbol
+// name, insert it into the list if it isn't already present.
+static mlir::AffineExpr getOrInsertSymbolExpr(
+    wave::WaveSymbolAttr symbol,
+    llvm::SmallVectorImpl<wave::WaveSymbolAttr> &symbolNames) {
+  auto it = llvm::find(symbolNames, symbol);
+  unsigned position = [&] {
+    if (it != symbolNames.end())
+      return static_cast<unsigned>(std::distance(symbolNames.begin(), it));
+    symbolNames.push_back(symbol);
+    return static_cast<unsigned>(symbolNames.size() - 1);
+  }();
+  return mlir::getAffineSymbolExpr(position, symbol.getContext());
+}
+
+// Create an index mapping induced by the given constraint. Combine it with the
+// base index mapping if provided. Call `applyConstraintGeneric` if the
+// constraint is only available as an Attribute.
+template <typename ConstraintAttrT>
+static wave::WaveIndexMappingAttr
+applyConstraint(ConstraintAttrT constraint,
+                wave::WaveIndexMappingAttr baseMapping = nullptr) {
+  static_assert(llvm::is_one_of<ConstraintAttrT, wave::WorkgroupConstraintAttr,
+                                wave::TilingConstraintAttr>(),
+                "unsupported constraint type for applyConstraint");
+
+  llvm::SmallVector<wave::WaveSymbolAttr> symbolNames =
+      llvm::to_vector(constraint.getTileSize().getSymbols());
+
+  mlir::AffineExpr symbolExpr;
+  mlir::MLIRContext *context = constraint.getContext();
+
+  if constexpr (std::is_same_v<ConstraintAttrT,
+                               wave::WorkgroupConstraintAttr>) {
+    // TODO: remove this string-based abomination in favor of first-class
+    // attributes.
+    std::string symbolString =
+        "_WG" + std::to_string(static_cast<uint32_t>(
+                    constraint.getWorkgroupDim().getValue()));
+    wave::WaveSymbolAttr symbolNameAttr =
+        wave::WaveSymbolAttr::get(context, symbolString);
+    symbolExpr = getOrInsertSymbolExpr(symbolNameAttr, symbolNames);
+  } else if constexpr (std::is_same_v<ConstraintAttrT,
+                                      wave::TilingConstraintAttr>) {
+    symbolExpr = getOrInsertSymbolExpr(constraint.getDim(), symbolNames);
+  }
+
+  assert(constraint.getTileSize().getMap().getNumResults() == 1 &&
+         "expected a single result expression in affine map");
+  mlir::AffineMap map = mlir::AffineMap::get(
+      /*dimCount=*/0, symbolNames.size(),
+      symbolExpr * constraint.getTileSize().getMap().getResult(0));
+  if (baseMapping == nullptr)
+    return wave::WaveIndexMappingAttr::get(
+        context, symbolNames, map, mlir::AffineMap::getConstantMap(1, context),
+        mlir::AffineMap::getConstantMap(1, context));
+
+  // TODO: there's too much of stringRef flying around here, use proper symbols
+  // instead.
+  llvm::SmallVector<llvm::StringRef> symbolNameStrings =
+      llvm::map_to_vector(symbolNames, [](wave::WaveSymbolAttr symbol) {
+        return symbol.getName();
+      });
+  llvm::SmallVector<llvm::StringRef> baseSymbolNames =
+      baseMapping.getAllSymbolNames();
+  llvm::SmallVector<llvm::StringRef> allSymbolNames;
+  llvm::StringMap<unsigned int> symbolNamesToIdx;
+  aggregateAllSymbolNames(llvm::ArrayRef{baseSymbolNames, symbolNameStrings},
+                          allSymbolNames, symbolNamesToIdx);
+  mlir::AffineMap baseStart =
+      permuteMapSymbols(baseMapping.getStart(), baseSymbolNames, allSymbolNames,
+                        symbolNamesToIdx);
+  map = permuteMapSymbols(map, symbolNameStrings, allSymbolNames,
+                          symbolNamesToIdx);
+  map = mlir::AffineMap::get(/*dimCount=*/0, allSymbolNames.size(),
+                             baseStart.getResult(0) + map.getResult(0));
+  return wave::WaveIndexMappingAttr::get(context, symbolNames, map,
+                                         baseMapping.getStep(),
+                                         baseMapping.getStride());
+}
+
+// Create an index mapping induced by the given constraint. Combine it with the
+// base index mapping if provided. Call `applyConstraint` if the specific kind
+// of constraint is already known.
+static wave::WaveIndexMappingAttr
+applyConstraintGeneric(mlir::Attribute constraint,
+                       wave::WaveIndexMappingAttr baseMapping = nullptr) {
+  return llvm::TypeSwitch<mlir::Attribute, wave::WaveIndexMappingAttr>(
+             constraint)
+      .Case<wave::WorkgroupConstraintAttr, wave::TilingConstraintAttr>(
+          [&](auto constraint) {
+            // This double dispatching is necessary in absence of interfaces to
+            // dispatch to a class method based on a specific type.
+            return applyConstraint(constraint, baseMapping);
+          })
+      .Default([&](mlir::Attribute constraint) { return nullptr; });
+}
+
+/// Create per-symbol thread-independent index expressions for `indexingSymbols`
+/// given constraints on them and put them into `symbolMappings` as named pairs
+/// (symbol, index mapping attribute). Thread-independent means affected by
+/// workgroup, tiling and device constraints, and NOT affected by wave
+/// constraints or MMA shapes.
+static void mixInThreadIndependentConstraints(
+    llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
+    const llvm::DenseMap<wave::WaveSymbolAttr,
+                         llvm::SmallVector<mlir::Attribute>> &symbolConstraints,
+    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings) {
+  for (wave::WaveSymbolAttr symbol : indexingSymbols) {
+    auto it = symbolConstraints.find(symbol);
+    if (it == symbolConstraints.end())
+      continue;
+
+    auto mappingIt =
+        llvm::find_if(symbolMappings, [&](mlir::NamedAttribute attr) {
+          return attr.getName() == symbol.getName();
+        });
+#ifndef NDEBUG
+    llvm::errs() << "symbol: " << symbol.getName() << "\n";
+    assert(mappingIt != symbolMappings.end() &&
+           "expected a mapping for the symbol");
+#endif // NDEBUG
+    wave::WaveIndexMappingAttr mapping =
+        llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue());
+    for (mlir::Attribute constraint : it->second) {
+      mapping = applyConstraintGeneric(constraint, mapping);
+    }
+    mappingIt->setValue(mapping);
+  }
+}
+
+// Initialize the index expression lattices for the result of the MMA operation.
+// This sets index expressions to values derived from the MMA operation kind and
+// wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
+// constraints (thread-independent).
+LogicalResult MmaOp::initializeForward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError) {
+  ArrayRef<wave::WaveSymbolAttr> indexingSymbols =
+      cast<wave::WaveTensorType>(getResult().getType()).getShape();
+  SmallVector<NamedAttribute> symbolMappings;
+  symbolMappings.reserve(indexingSymbols.size());
+
+  // TODO: consider whether we want to allow for some batched MMA
+  // operations at this level and in general. If not, disallow this
+  // at the operation verifier level instead.
+  if (indexingSymbols.size() != 2)
+    return emitError() << "only 2 indexing symbols are currently "
+                          "supported for MMA result";
+  wave::WaveSymbolAttr mSymbol = indexingSymbols[0];
+  wave::WaveSymbolAttr nSymbol = indexingSymbols[1];
+
+  // TODO: propagate MMA kinds from hardware constraints as a
+  // separate step...
+  wave::WaveMmaKind mmaKind =
+      getKindAttr() ? getKind()
+                    : initObject.hardwareConstraint.getMmaType().getValue();
+  if (llvm::failed(populateMmaIndexingExpr(
+          mmaKind,
+          /*isAccumulator=*/true, initObject.wavesPerBlock,
+          initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
+          /*kSymbol=*/nullptr, symbolMappings))) {
+    return emitError() << "MMA kind not supported by index deduction";
+  }
+
+  mixInThreadIndependentConstraints(
+      indexingSymbols, initObject.symbolConstraints, symbolMappings);
+  resultExprs[0].unsafeSet(
+      mlir::DictionaryAttr::get(getContext(), symbolMappings));
+
+  return llvm::success();
+}
+
+// Initialize the index expression lattices for the operands of the MMA operation.
+// This sets index expressions to values derived from the MMA operation kind and
+// wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
+// constraints (thread-independent).
+LogicalResult MmaOp::initializeBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    const wave::IndexExprsAnalysisInit &initObject,
+    wave::EmitErrorFn emitError) {
+  auto resultType = llvm::cast<wave::WaveTensorType>(getResult().getType());
+  auto lhsType = llvm::cast<wave::WaveTensorType>(getLhs().getType());
+  // TODO: check whether this is actually the case in op verifier
+  assert(resultType.getRank() == lhsType.getRank() && lhsType.getRank() == 2 &&
+         "only 2D MMA operations are supported");
+  wave::WaveSymbolAttr mSymbol = resultType.getShape()[0];
+  wave::WaveSymbolAttr nSymbol = resultType.getShape()[1];
+  wave::WaveSymbolAttr kSymbol = lhsType.getShape()[1];
+
+  // TODO: propagate MMA kinds from hardware constraints as a
+  // separate step...
+  wave::WaveMmaKind mmaKind =
+      getKindAttr() ? getKind()
+                    : initObject.hardwareConstraint.getMmaType().getValue();
+
+  llvm::SmallVector<mlir::NamedAttribute> operandSymbolMappings;
+  if (llvm::failed(populateMmaIndexingExpr(
+          mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
+          initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
+          kSymbol, operandSymbolMappings))) {
+    return emitError() << "MMA kind not supported by index deduction";
+  }
+
+  llvm::SmallVector<mlir::NamedAttribute> accumulatorSymbolMappings;
+  if (llvm::failed(populateMmaIndexingExpr(
+          mmaKind,
+          /*isAccumulator=*/true, initObject.wavesPerBlock,
+          initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
+          nullptr, accumulatorSymbolMappings))) {
+    return emitError() << "MMA kind not supported by index deduction";
+  }
+
+  mixInThreadIndependentConstraints({mSymbol, nSymbol, kSymbol},
+                                    initObject.symbolConstraints,
+                                    operandSymbolMappings);
+  mixInThreadIndependentConstraints({mSymbol, nSymbol},
+                                    initObject.symbolConstraints,
+                                    accumulatorSymbolMappings);
+
+  // Create the LHS and RHS mappings that are not using symbols
+  // irrelevant for them.
+  llvm::SmallVector<mlir::NamedAttribute> lhsSymbolMappings =
+      llvm::filter_to_vector(operandSymbolMappings,
+                             [&](mlir::NamedAttribute attr) {
+                               return attr.getName() != nSymbol.getName();
+                             });
+  llvm::SmallVector<mlir::NamedAttribute> rhsSymbolMappings =
+      llvm::filter_to_vector(operandSymbolMappings,
+                             [&](mlir::NamedAttribute attr) {
+                               return attr.getName() != mSymbol.getName();
+                             });
+
+  operandExprs[getLhsMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          mlir::DictionaryAttr::get(getContext(), lhsSymbolMappings));
+  operandExprs[getRhsMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          mlir::DictionaryAttr::get(getContext(), rhsSymbolMappings));
+  operandExprs[getAccumulatorMutable().getOperandNumber()] =
+      wave::IndexExprsLatticeStorage(
+          mlir::DictionaryAttr::get(getContext(), accumulatorSymbolMappings));
+  return llvm::success();
+}
+
+// Special case for MMA where we also want to have index expressions
+// for the operands.
+// TODO: this shouldn't be strictly necessary in a purely MLIR flow,
+// but is kept for Python compatibility.
+LogicalResult MmaOp::setIndexFromLattices(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
+  llvm::SmallVector<mlir::Attribute> indexExprs;
+  indexExprs.reserve(operandExprs.size() + resultExprs.size());
+  for (mlir::OpOperand &operand : getOperation()->getOpOperands()) {
+    if (llvm::failed(detail::checkAndAppendIndexExpr(
+            getLoc(), operandExprs[operand.getOperandNumber()],
+            "operand #" + llvm::Twine(operand.getOperandNumber()), indexExprs)))
+      return mlir::failure();
+  }
+  for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
+    if (llvm::failed(detail::checkAndAppendIndexExpr(
+            getLoc(), resultExprs[i], "result #" + llvm::Twine(i), indexExprs)))
+      return mlir::failure();
+  }
+  getOperation()->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                          mlir::ArrayAttr::get(getContext(), indexExprs));
+  return llvm::success();
+}
 
 LogicalResult MmaOp::verify() {
   Type lhsTypeGeneric = getLhs().getType();
@@ -555,6 +1341,118 @@ LogicalResult WriteOp::verify() {
 
   return verifyReadWriteBounds(getLoc(), getMemory().getType(),
                                bounds.getMapping());
+}
+
+// Propagate index expressions forward from the operands to the result of the
+// WriteOp. Since WriteOp has no results, this is a no-op.
+llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  // WriteOp has no results, so just return NoChange.
+  return mlir::ChangeResult::NoChange;
+}
+
+// Propagate index expressions from the given lattice (may be result or another
+// operand in the case of "sideways" propagation) to the lattice of the given
+// operand by joining them. If lattices are conflicting as indicated by reaching
+// the top state, report an error and return failure. Otherwise return whether
+// the operand lattice changed as the result of propagation.
+static llvm::FailureOr<mlir::ChangeResult> propagateToOperand(
+    mlir::OpOperand &opOperand, llvm::StringRef operandName,
+    const wave::IndexExprsLatticeStorage &lattice,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    wave::EmitErrorFn emitError) {
+  unsigned operandNumber = opOperand.getOperandNumber();
+  wave::WaveTensorType tensorType =
+      llvm::dyn_cast<wave::WaveTensorType>(opOperand.get().getType());
+  if (!tensorType)
+    return mlir::ChangeResult::NoChange;
+
+  wave::IndexExprsLatticeStorage filtered =
+      lattice.keepOnlySymbols(tensorType.getShape());
+  wave::IndexExprsLatticeStorage newLattice =
+      wave::IndexExprsLatticeStorage::join(operandExprs[operandNumber],
+                                           filtered);
+
+  if (newLattice.isTop() && !operandExprs[operandNumber].isTop()) {
+    mlir::InFlightDiagnostic diag =
+        emitError() << "conflict when propagating to " << operandName;
+    diag.attachNote() << operandName
+                      << " lattice: " << operandExprs[operandNumber];
+    for (auto &&[i, operand] : llvm::enumerate(operandExprs))
+      diag.attachNote() << "operand #" << i << " lattice: " << operand;
+    return diag;
+  }
+  return updateIfChanged(operandExprs[operandNumber], newLattice);
+}
+
+// Propagate index expressions "backward" in the write operation. Since this
+// operation has no results, the propagation actually happens "sideways" between
+// operands, but is implemented as backwards because backwards propagation
+// allows one to mutate operand lattices.
+// TODO: double-check whether this is triggered when the lattice of one of the
+// operands changes; if not, we will have to manually add a dependency during
+// initialization.
+llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
+    wave::EmitErrorFn emitError) {
+  // Special "sideways" propagation: join all operands and propagate to both.
+  wave::IndexExprsLatticeStorage sidewaysPropagationLattice =
+      wave::IndexExprsLatticeStorage::bottom();
+  bool fromTop = false;
+  for (const wave::IndexExprsLatticeStorage &operand : operandExprs) {
+    // If one of the operands reached the top, no need to keep joining, the
+    // result is known to be top.
+    if (operand.isTop()) {
+      fromTop = true;
+      sidewaysPropagationLattice = wave::IndexExprsLatticeStorage::top();
+      break;
+    }
+    sidewaysPropagationLattice = wave::IndexExprsLatticeStorage::join(
+        sidewaysPropagationLattice, operand);
+  }
+
+  if (sidewaysPropagationLattice.isTop() && !fromTop) {
+    mlir::InFlightDiagnostic diag =
+        emitError() << "conflict between operand index expressions in WriteOp";
+    for (auto &&[i, operand] : llvm::enumerate(operandExprs)) {
+      diag.attachNote() << "operand #" << i << " lattice: " << operand;
+    }
+    return diag;
+  }
+
+  return propagateToOperand(getValueToStoreMutable(), "value-to-store",
+                            sidewaysPropagationLattice, operandExprs,
+                            emitError) |
+         propagateToOperand(getMemoryMutable(), "memory",
+                            sidewaysPropagationLattice, operandExprs,
+                            emitError);
+}
+
+// Special case for WriteOp where we want an index expression even
+// though it doesn't have results.
+// TODO: this shouldn't be necessary in a purely MLIR form since
+// mappings are a property of the SSA value (conversely, changing the
+// mapping should create a new value), but keeping for compatibility.
+llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
+  llvm::SmallVector<mlir::Attribute> indexExprs;
+  indexExprs.reserve(resultExprs.size() + 1);
+  if (llvm::failed(detail::checkAndAppendIndexExpr(
+          getLoc(), operandExprs[getValueToStoreMutable().getOperandNumber()],
+          "value to store", indexExprs)))
+    return llvm::failure();
+  for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
+    if (llvm::failed(detail::checkAndAppendIndexExpr(
+            getLoc(), resultExprs[i], "result #" + llvm::Twine(i), indexExprs)))
+      return llvm::failure();
+  }
+  getOperation()->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+                          mlir::ArrayAttr::get(getContext(), indexExprs));
+  return llvm::success();
 }
 
 //-----------------------------------------------------------------------------

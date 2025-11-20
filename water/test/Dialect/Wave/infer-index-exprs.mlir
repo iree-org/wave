@@ -175,7 +175,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK: wave.cast
     // CHECK-DAG: M : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 + _T2 * 2) mod 16, 1, 1)
     // CHECK-DAG: N : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 + _T2 * 2) mod 64) floordiv 16) * 4, 4, 1)
-    %mma1_casted = wave.cast %mma1 { target_element_type = f16 }
+    %mma1_casted = wave.cast %mma1
       : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@M, @N] of f16, <register>>
 
     // Second read and register
@@ -209,6 +209,151 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     // CHECK-DAG: M : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 + _T2 * 2) mod 64) floordiv 16) * 4, 4, 16)
     // CHECK-DAG: P : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 + _T2 * 2) mod 16, 1, 1)
     wave.write %mma2, %c : !wave.tensor<[@M, @P] of f32, <register>>, !wave.tensor<[@M, @P] of f32>
+    return
+  }
+}
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK: @mma_32x32x8_f16
+  func.func @mma_32x32x8_f16(%a: !wave.tensor<[@M, @K] of f16>,
+                             %b: !wave.tensor<[@N, @K] of f16>,
+                             %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4, 4, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4, 4, 1)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> (((_GPR_NUM floordiv 4) * 8) mod 32 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 16, 32)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> (((_GPR_NUM floordiv 4) * 8) mod 32 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 16, 32)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x8_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK: @mma_16x16x32_f16
+  func.func @mma_16x16x32_f16(%a: !wave.tensor<[@M, @K] of f16>,
+                              %b: !wave.tensor<[@N, @K] of f16>,
+                              %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 8, 8, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 8, 8, 1)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 4, 4, 16)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 4, 4, 16)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x32_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK: @mma_16x16x32_k4_f8
+  func.func @mma_16x16x32_k4_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
+                                %b: !wave.tensor<[@N, @K] of f8E5M2>,
+                                %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((_GPR_NUM floordiv 4) * 16 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 4 + _GPR_NUM mod 4, 8, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((_GPR_NUM floordiv 4) * 16 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 4 + _GPR_NUM mod 4, 8, 1)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 4, 4, 16)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 16) * 4, 4, 16)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 16, 1, 1)
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x32_k4_f8>}
+      : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK: @mma_32x32x16_f16
+  func.func @mma_32x32x16_f16(%a: !wave.tensor<[@M, @K] of f16>,
+                              %b: !wave.tensor<[@N, @K] of f16>,
+                              %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 8, 8, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 8, 8, 1)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> (((_GPR_NUM floordiv 4) * 8) mod 32 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 16, 32)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> (((_GPR_NUM floordiv 4) * 8) mod 32 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 16, 32)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x16_f16>}
+      : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
+    return
+  }
+}
+
+// -----
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK: @mma_32x32x16_k4_f8
+  func.func @mma_32x32x16_k4_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
+                                %b: !wave.tensor<[@N, @K] of f8E5M2>,
+                                %c: !wave.tensor<[@M, @N] of f32>)
+  attributes { wave.constraints = [
+    #wave.hardware_constraint<threads_per_wave = 64,
+                              waves_per_block = [2, 3, 4]>
+  ]} {
+    // CHECK: wave.mma
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((_GPR_NUM floordiv 4) * 8 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 8, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  K : [_T0, _T1, _T2, _GPR_NUM] -> ((_GPR_NUM floordiv 4) * 8 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 8, 1)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> (((_GPR_NUM floordiv 4) * 8) mod 32 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 16, 32)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    // CHECK: }, {
+    // CHECK-DAG:  M : [_T0, _T1, _T2, _GPR_NUM] -> (((_GPR_NUM floordiv 4) * 8) mod 32 + (((_T0 + _T1 * 2 + _T2 * 6) mod 64) floordiv 32) * 4 + _GPR_NUM mod 4, 16, 32)
+    // CHECK-DAG:  N : [_T0, _T1, _T2, _GPR_NUM] -> ((_T0 + _T1 * 2 + _T2 * 6) mod 32, 1, 1)
+    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x16_k4_f8>}
+      : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
   }
 }
