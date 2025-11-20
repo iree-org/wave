@@ -272,6 +272,8 @@ public:
         castResult = arith::TruncFOp::create(rewriter, loc, dstVecType, input);
       else if (dstWidth > srcWidth)
         castResult = arith::ExtFOp::create(rewriter, loc, dstVecType, input);
+      else
+        castResult = input;
     } else if (isa<IntegerType>(srcElemType) && isa<IntegerType>(dstElemType)) {
       // Integer to integer.
       unsigned srcWidth = srcElemType.getIntOrFloatBitWidth();
@@ -280,6 +282,8 @@ public:
         castResult = arith::TruncIOp::create(rewriter, loc, dstVecType, input);
       else if (dstWidth > srcWidth)
         castResult = arith::ExtSIOp::create(rewriter, loc, dstVecType, input);
+      else
+        castResult = input;
     } else if (isa<FloatType>(srcElemType) && isa<IntegerType>(dstElemType)) {
       // Float to integer.
       castResult = arith::FPToSIOp::create(rewriter, loc, dstVecType, input);
@@ -291,8 +295,7 @@ public:
           op, "unsupported cast element type combination");
     }
 
-    if (castResult)
-      rewriter.replaceOp(op, castResult);
+    rewriter.replaceOp(op, castResult);
     return success();
   }
 };
