@@ -162,7 +162,7 @@ func.func @mismatch_shape_write(%lhs: !wave.tensor<[@A, @B] of f32, <register>>,
 
 func.func @empty_distributed_shape() {
   // expected-error @below {{wave expression attribute must have at least one dimension}}
-  %buf = wave.allocate { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> ()>}
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> ()>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
 }
 
@@ -271,7 +271,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 
 func.func @bounds_missing_dim(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.tensor<[@M, @N] of f32, <register>>) {
   // expected-error @below {{bounds not provided for memory tensor symbol 'N'}}
-  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
+  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
   return
 }
 
@@ -279,7 +279,7 @@ func.func @bounds_missing_dim(%mem: !wave.tensor<[@M, @N] of f32>, %val: !wave.t
 
 func.func @bounds_extraneous_dim(%mem: !wave.tensor<[@N] of f32>, %val: !wave.tensor<[@N] of f32, <register>>) {
   // expected-error @below {{'bounds' specified for a symbol "M" not used in the indexed memory tensor}}
-  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[BLOCK_M] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
+  wave.write %val, %mem { bounds = #wave.read_write_bounds<{ M = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M * 64)>}> } : !wave.tensor<[@N] of f32, <register>>, !wave.tensor<[@N] of f32>
   return
 }
 
@@ -370,7 +370,7 @@ func.func @extract_slice_mismatch_size_stride(%memory: !wave.tensor<[@A, @B] of 
 
 func.func @extract_slice_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>) {
   // expected-error @below {{offset, size, and stride must be constant expressions with no symbols, but got offset with 1 symbols, size with 0 symbols, and stride with 0 symbols}}
-  wave.extract_slice %memory {offset = #wave.expr_list<[BLOCK_M] -> (BLOCK_M)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  wave.extract_slice %memory {offset = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, size = #wave.expr_list<[] -> (32)>, stride = #wave.expr_list<[] -> (2)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
   return
 }
 
@@ -378,7 +378,7 @@ func.func @extract_slice_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>) {
 
 func.func @extract_slice_all_with_symbols(%memory: !wave.tensor<[@A, @B] of f16>) {
   // expected-error @below {{offset, size, and stride must be constant expressions with no symbols, but got offset with 1 symbols, size with 1 symbols, and stride with 1 symbols}}
-  wave.extract_slice %memory {offset = #wave.expr_list<[BLOCK_M] -> (BLOCK_M + 2)>, size = #wave.expr_list<[BLOCK_K] -> (BLOCK_K * 2)>, stride = #wave.expr_list<[BLOCK_N] -> (BLOCK_N)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
+  wave.extract_slice %memory {offset = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M + 2)>, size = #wave.expr_list<[#wave.symbol<"BLOCK_K">] -> (BLOCK_K * 2)>, stride = #wave.expr_list<[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>} : (!wave.tensor<[@A, @B] of f16>) -> !wave.tensor<[@A, @B] of f16>
   return
 }
 

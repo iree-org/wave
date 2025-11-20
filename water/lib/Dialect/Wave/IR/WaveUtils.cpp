@@ -58,14 +58,19 @@ wave::getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 }
 
 std::optional<llvm::SmallVector<int64_t>>
-wave::resolveSymbolNames(llvm::ArrayRef<wave::WaveSymbolAttr> symbols,
+wave::resolveSymbolNames(llvm::ArrayRef<mlir::Attribute> symbols,
                          wave::WaveHyperparameterAttr hyper) {
+  if (llvm::any_of(symbols, llvm::IsaPred<WaveIndexSymbolAttr>))
+    return std::nullopt;
+
   if (!hyper)
     return std::nullopt;
+
   // Collect concrete values for each symbol in stored order.
   llvm::SmallVector<int64_t> symVals;
   symVals.reserve(symbols.size());
-  for (auto symbol : symbols) {
+  for (Attribute attr : symbols) {
+    wave::WaveSymbolAttr symbol = cast<wave::WaveSymbolAttr>(attr);
     auto value = hyper.getSymbolValue(symbol.getName());
     if (!value)
       return std::nullopt;

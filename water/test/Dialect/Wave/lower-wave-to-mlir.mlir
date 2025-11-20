@@ -212,7 +212,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     // CHECK:     %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ALLOC]] : memref<1x6xf32, #gpu.address_space<workgroup>> to !wave.tensor<[@Y, @Z] of f32, <shared>>
     // CHECK:     "test.foo"(%[[CAST]])
     %0 = wave.allocate
-    { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>}
+    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
     : !wave.tensor<[@Y, @Z] of f32, <shared>>
     "test.foo"(%0) : (!wave.tensor<[@Y, @Z] of f32, <shared>>) -> ()
     return
@@ -337,7 +337,7 @@ func.func @lower_alloc_view() attributes {wave.hyperparameters = #wave.hyperpara
   // CHECK: %[[VIEW:.*]] = memref.view %[[BUFF]][%[[OFF]]][]
   // CHECK-SAME: : memref<256xi8, #gpu.address_space<workgroup>> to memref<4x32xbf16, #gpu.address_space<workgroup>>
   %buf = wave.allocate in %parent : !wave.tensor<[@M,@N,@K] of i8, <shared>>
-    { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>, offset = 128}
+    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>, offset = 128}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
   return
   }
@@ -350,7 +350,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 func.func @lower_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28, M = 128, K= 128}>}  {
   // CHECK: memref.alloc() : memref<4x32xbf16, #gpu.address_space<workgroup>>
   %buf = wave.allocate
-    { distributed_shape = #wave.expr_list<[BLOCK_M, BLOCK_K] -> (BLOCK_M, BLOCK_K + 4)>}
+    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
   return
   }
@@ -417,8 +417,8 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
         // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 32)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
         N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)
       }] { bounds = #wave.read_write_bounds<{
-        M = #wave.expr_list<[M] -> (M)>,
-        N = #wave.expr_list<[N] -> (N)>}>}
+        M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
+        N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>}>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<4xf16>
       // Bounds for dim 0.
       // CHECK: %[[DIM0_SIZE:.+]] = affine.apply affine_map<() -> (100)>()
@@ -452,8 +452,8 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
         M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0, 8, 64),
         N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 1, 1)
       }] { bounds = #wave.read_write_bounds<{
-        M = #wave.expr_list<[M] -> (M)>,
-        N = #wave.expr_list<[N] -> (N)>}>}
+        M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
+        N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>}>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
       // CHECK: %[[MASK:.+]] = arith.andi {{.*}}, {{.*}}
       // CHECK: %[[PAD:.*]] = arith.constant {{.*}} : f16

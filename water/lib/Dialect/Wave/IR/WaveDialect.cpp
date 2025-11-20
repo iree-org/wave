@@ -189,13 +189,10 @@ verifyConstraints(mlir::ArrayAttr constraints,
   // verify DeviceConstraint
   // * The number of devices should be greater than or equal to one.
   for (auto &&[symbol, constraint] : deviceConstraints) {
-    llvm::ArrayRef<wave::WaveSymbolAttr> constraintSymbols =
-        constraint.getTileSize().getSymbols();
-    llvm::ArrayRef<mlir::Attribute> symbolAttrs(constraintSymbols.data(),
-                                                constraintSymbols.size());
     std::optional<llvm::SmallVector<int64_t>> evaluated =
         wave::evaluateMapWithHyperparams(constraint.getTileSize().getMap(),
-                                         symbolAttrs, hyperparams);
+                                         constraint.getTileSize().getSymbols(),
+                                         hyperparams);
     assert(evaluated &&
            "failed to evaluate wave expression for device constraint");
     assert(evaluated->size() == 1 &&
