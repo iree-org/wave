@@ -75,7 +75,6 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
-              bash
               source "${VENV_DIR}/bin/activate"
 
               echo "Install Rust via rustup.sh"
@@ -99,7 +98,6 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euo pipefail
-              source ~/.bashrc
               source "${VENV_DIR}/bin/activate"
 
               echo "Check Arch after python installation"
@@ -122,7 +120,6 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
-              source ~/.bashrc
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
@@ -138,7 +135,6 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
-              source ~/.bashrc
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
@@ -157,7 +153,6 @@ jobs:
           -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
-              source ~/.bashrc
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
@@ -174,7 +169,6 @@ jobs:
           -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
-              source ~/.bashrc
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
