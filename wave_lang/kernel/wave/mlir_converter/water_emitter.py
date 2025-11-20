@@ -350,18 +350,8 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
 
-def _convert_sympy_expr_to_expr_list_attr(expr: sympy.Expr | int) -> WaveExprListAttr:
-    """
-    Converts a single wave IndexExpr to a `WaveExprListAttr`.
-    This is a convenience wrapper around _convert_to_wave_expr_list_tuple for single expressions.
-    """
-    # Get the context from the current IR context (must be active)
-    ctx = ir.Context.current
-    return _convert_to_wave_expr_list_tuple([expr], ctx)
-
-
 def _convert_to_wave_expr_list_tuple(
-    exprs: Sequence[sympy.Expr | int], ctx: ir.Context
+    exprs: Sequence[sympy.Expr | int],
 ) -> WaveExprListAttr:
     """
     Returns a WaveExprListAttr from a sequence of wave IndexExpr.
@@ -384,9 +374,7 @@ def _convert_to_wave_expr_list_tuple(
         affine_exprs.append(affine_map.results[0])
 
     # Create a multi-result affine map
-    multi_result_map = ir.AffineMap.get(
-        0, len(symbol_mapping), affine_exprs, context=ctx
-    )
+    multi_result_map = ir.AffineMap.get(0, len(symbol_mapping), affine_exprs)
 
     # Convert symbol names to attributes
     symbol_attrs = [
@@ -526,13 +514,13 @@ def _emit_ops_from_graph(
                     mlir_op = op_builder(
                         result_type,
                         distributed_shape=_convert_to_wave_expr_list_tuple(
-                            node.distributed_shape, ctx
+                            node.distributed_shape
                         ),
                     )
                 elif isinstance(node, ExtractSlice):
-                    size = _convert_to_wave_expr_list_tuple(node.size, ctx)
-                    stride = _convert_to_wave_expr_list_tuple(node.stride, ctx)
-                    offset = _convert_to_wave_expr_list_tuple(node.offset, ctx)
+                    size = _convert_to_wave_expr_list_tuple(node.size)
+                    stride = _convert_to_wave_expr_list_tuple(node.stride)
+                    offset = _convert_to_wave_expr_list_tuple(node.offset)
                     mlir_op = op_builder(
                         result_type, *mlir_operands, size, stride, offset
                     )
@@ -588,7 +576,7 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
         return attr
 
     if isinstance(constraint, WorkgroupConstraint):
-        size = _convert_sympy_expr_to_expr_list_attr(constraint.tile_size)
+        size = _convert_to_wave_expr_list_tuple([constraint.tile_size])
         wg_dim = WaveWorkgroupDimAttr.get(constraint.workgroup_dim)
         attr = WorkgroupConstraintAttr.get(
             dim=constraint.dim.name, tile_size=size, workgroup_dim=wg_dim
@@ -596,16 +584,16 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
         return attr
 
     if isinstance(constraint, WaveConstraint):
-        size = _convert_sympy_expr_to_expr_list_attr(constraint.tile_size)
+        size = _convert_to_wave_expr_list_tuple([constraint.tile_size])
         attr = WaveConstraintAttr.get(dim=constraint.dim.name, tile_size=size)
         return attr
 
     if isinstance(constraint, TilingConstraint):
-        size = _convert_sympy_expr_to_expr_list_attr(constraint.tile_size)
+        size = _convert_to_wave_expr_list_tuple([constraint.tile_size])
         return TilingConstraintAttr.get(dim=constraint.dim.name, tile_size=size)
 
     if isinstance(constraint, DeviceConstraint):
-        size = _convert_sympy_expr_to_expr_list_attr(constraint.tile_size)
+        size = _convert_to_wave_expr_list_tuple([constraint.tile_size])
         return DeviceConstraintAttr.get(
             dim=constraint.dim.name, tile_size=size, device_dim=constraint.device_dim
         )

@@ -195,7 +195,9 @@ StringRef WaveIndexMappingAttr::getSymbolName(unsigned index) const {
   if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
     return wave::stringifyWaveIndexSymbol(symbol.getValue());
 
-  return StringRef();
+  llvm_unreachable("Unrecognized symbol attribute type in "
+                   "WaveIndexMappingAttr::getSymbolName; should have been "
+                   "verified earlier.");
 }
 
 SmallVector<StringRef> WaveIndexMappingAttr::getAllSymbolNames() const {
@@ -403,6 +405,9 @@ SmallVector<StringRef> WaveExprListAttr::getAllSymbolNames() const {
       result.push_back(symbol.getName());
     else if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
       result.emplace_back(wave::stringifyWaveIndexSymbol(symbol.getValue()));
+    else
+      llvm_unreachable(
+          "Unexpected symbol attribute type in getAllSymbolNames()");
   }
   return result;
 }

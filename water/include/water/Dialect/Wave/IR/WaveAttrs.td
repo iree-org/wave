@@ -428,7 +428,7 @@ def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
     • Distributed (physical) shapes for allocations
 
     Stores:
-      - symbols: [WaveSymbolAttr] giving names (e.g., M, BLOCK_M, BLOCK_K)
+      - symbols: [WaveSymbolAttr or WaveIndexSymbolAttr] giving names (e.g., M, BLOCK_M, BLOCK_K, T0)
       The i-th name maps to the s<i> in the affine expressions
       - shape: affine_map<()[s0..sN] -> (expr_0, ..., expr_{rank-1})>
       Each result expr_k defines the k-th physical dimension.
