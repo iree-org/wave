@@ -81,12 +81,10 @@ def add_cluster_barriers_to_iterate(
             )
 
         # Add conditional barrier_wait at start of body
-        # Condition: current_iteration % multiplier == 0
         first_node = next(
             n for n in subgraph.nodes if n.op not in ["placeholder", "output"]
         )
         with subgraph.inserting_before(first_node):
-            # Create condition: induction_var % multiplier == 0
             condition = sympy.Eq(induction_var % multiplier, 0)
 
             # Create a conditional subgraph for the barrier wait
@@ -108,11 +106,9 @@ def add_cluster_barriers_to_iterate(
             )
 
         # Add conditional barrier_signal at end of body
-        # Condition: (current_iteration + 1) % multiplier == 0
         output_node = next(n for n in subgraph.nodes if n.op == "output")
         with subgraph.inserting_before(output_node):
-            # Create condition: (induction_var + 1) % multiplier == 0
-            condition = sympy.Eq((induction_var + 1) % multiplier, 0)
+            condition = sympy.Eq(induction_var % multiplier, multiplier - 1)
 
             # Create a conditional subgraph for the barrier signal
             signal_subgraph_name = f"{custom.subgraph_name}_barrier_signal"
