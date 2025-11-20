@@ -169,48 +169,28 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
   // Each expression is an affine map with the same numSymbols; we substitute
   // s0, s1, ... using the shared names when rendering each expression.
   printer << "[";
-  llvm::interleaveComma(getSymbols(), printer, [&](mlir::Attribute attr) {
+  ArrayRef<Attribute> symbols = getSymbols();
+  llvm::interleaveComma(symbols, printer, [&](mlir::Attribute attr) {
     printer.printAttribute(attr);
   });
   printer << "] -> ";
 
-  SmallVector<StringRef> allNames = getAllSymbolNames();
-  // All three maps share the same symbol set and order.
-  std::string startStr = stringifyWithNames(getStart(), allNames);
-  std::string stepStr = stringifyWithNames(getStep(), allNames);
-  std::string strideStr = stringifyWithNames(getStride(), allNames);
-
-  printer << "(" << startStr << ", " << stepStr << ", " << strideStr << ")";
-}
-
-StringRef WaveIndexMappingAttr::getSymbolName(unsigned index) const {
-  ArrayRef<Attribute> symbols = getSymbols();
-  if (index >= symbols.size())
-    return StringRef();
-
-  Attribute symbolAttr = symbols[index];
-  if (auto symbol = llvm::dyn_cast<WaveSymbolAttr>(symbolAttr))
-    return symbol.getName();
-
-  if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
-    return wave::stringifyWaveIndexSymbol(symbol.getValue());
-
-  llvm_unreachable("Unrecognized symbol attribute type in "
-                   "WaveIndexMappingAttr::getSymbolName; should have been "
-                   "verified earlier.");
-}
-
-SmallVector<StringRef> WaveIndexMappingAttr::getAllSymbolNames() const {
-  SmallVector<StringRef> result;
-  ArrayRef<Attribute> symbols = getSymbols();
-  result.reserve(symbols.size());
+  SmallVector<StringRef> names;
+  names.reserve(symbols.size());
   for (auto symbolAttr : symbols) {
     if (auto symbol = llvm::dyn_cast<WaveSymbolAttr>(symbolAttr))
-      result.push_back(symbol.getName());
+      names.push_back(symbol.getName());
     else if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
-      result.emplace_back(wave::stringifyWaveIndexSymbol(symbol.getValue()));
+      names.emplace_back(wave::stringifyWaveIndexSymbol(symbol.getValue()));
+    else
+      llvm_unreachable("Unexpected symbol attribute type");
   }
-  return result;
+  // All three maps share the same symbol set and order.
+  std::string startStr = stringifyWithNames(getStart(), names);
+  std::string stepStr = stringifyWithNames(getStep(), names);
+  std::string strideStr = stringifyWithNames(getStride(), names);
+
+  printer << "(" << startStr << ", " << stepStr << ", " << strideStr << ")";
 }
 
 LogicalResult
@@ -364,11 +344,22 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
 void WaveExprListAttr::print(mlir::AsmPrinter &printer) const {
   // Print symbol names like: [#wave.symbol<"M">, #wave.symbol<"K">] -> ( ... )
   printer << "<[";
-  llvm::SmallVector<StringRef> names = getAllSymbolNames();
-  llvm::interleaveComma(getSymbols(), printer, [&](mlir::Attribute attr) {
+  ArrayRef<Attribute> symbols = getSymbols();
+  SmallVector<StringRef> names;
+  llvm::interleaveComma(symbols, printer, [&](mlir::Attribute attr) {
     printer.printAttribute(attr);
   });
   printer << "] -> (";
+
+  names.reserve(symbols.size());
+  for (Attribute symbolAttr : symbols) {
+    if (auto symbol = llvm::dyn_cast<WaveSymbolAttr>(symbolAttr))
+      names.push_back(symbol.getName());
+    else if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
+      names.emplace_back(wave::stringifyWaveIndexSymbol(symbol.getValue()));
+    else
+      llvm_unreachable("Unexpected symbol attribute type");
+  }
 
   // We have one map with N results. For each result expr, make a 1-result map
   // so we can reuse the identical stringifyWithNames(map,names) helper.
@@ -394,22 +385,6 @@ WaveExprListAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                           "WaveIndexSymbolAttr";
 
   return success();
-}
-
-SmallVector<StringRef> WaveExprListAttr::getAllSymbolNames() const {
-  SmallVector<StringRef> result;
-  ArrayRef<Attribute> symbols = getSymbols();
-  result.reserve(symbols.size());
-  for (Attribute symbolAttr : symbols) {
-    if (auto symbol = llvm::dyn_cast<WaveSymbolAttr>(symbolAttr))
-      result.push_back(symbol.getName());
-    else if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
-      result.emplace_back(wave::stringifyWaveIndexSymbol(symbol.getValue()));
-    else
-      llvm_unreachable(
-          "Unexpected symbol attribute type in getAllSymbolNames()");
-  }
-  return result;
 }
 
 //-----------------------------------------------------------------------------

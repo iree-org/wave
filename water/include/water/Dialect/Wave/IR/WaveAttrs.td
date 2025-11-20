@@ -384,14 +384,6 @@ def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
 
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
-
-  let extraClassDeclaration = [{
-    /// Get the symbol name at the given index.
-    ::llvm::StringRef getSymbolName(unsigned index) const;
-
-    /// Get all symbol names as a vector of string references.
-    ::llvm::SmallVector<::llvm::StringRef> getAllSymbolNames() const;
-  }];
 }
 
 def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
@@ -454,8 +446,6 @@ def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
 
     std::optional<llvm::SmallVector<int64_t>>
     getResolvedShape(::wave::WaveHyperparameterAttr hyper) const;
-
-    llvm::SmallVector<llvm::StringRef> getAllSymbolNames() const;
   }];
 }
 

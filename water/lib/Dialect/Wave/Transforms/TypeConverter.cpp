@@ -70,13 +70,12 @@ wave::WaveTypeConverter::WaveTypeConverter(
 mlir::Type wave::WaveTypeConverter::convertTensorFromComponents(
     llvm::ArrayRef<mlir::Attribute> symbols, mlir::AffineMap shape,
     mlir::Type elementType, wave::WaveAddressSpace addressSpace) const {
-  llvm::ArrayRef<mlir::Attribute> symbolAttrs(symbols.data(), symbols.size());
-  std::optional<SmallVector<int64_t>> staticShape =
-      shape ? wave::evaluateMapWithHyperparams(shape, symbolAttrs,
-                                               hyperparameters)
-            : wave::resolveSymbolNames(symbols, hyperparameters);
-  if (any_of(symbolAttrs, llvm::IsaPred<wave::WaveIndexSymbolAttr>))
+  if (any_of(symbols, llvm::IsaPred<wave::WaveIndexSymbolAttr>))
     return nullptr;
+
+  std::optional<SmallVector<int64_t>> staticShape =
+      shape ? wave::evaluateMapWithHyperparams(shape, symbols, hyperparameters)
+            : wave::resolveSymbolNames(symbols, hyperparameters);
 
   if (!staticShape)
     return nullptr;
