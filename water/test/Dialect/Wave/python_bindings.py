@@ -40,7 +40,7 @@ try:
         else:
             assert False, "Expected to fail with TypeError."
 
-        # CHECK: #wave<index_mapping[$WG0, BLOCK_M, $T0] -> ($WG0 * 3, $WG0 + BLOCK_M, $T0 mod $WG0)>
+        # CHECK: #wave<index_mapping[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3, WG0 + BLOCK_M, T0 mod WG0)>
         symbols = [
             wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0),
             wave.WaveSymbolAttr.get("BLOCK_M"),
@@ -126,19 +126,23 @@ try:
         else:
             assert False, "Expected to fail with TypeError."
 
-        # CHECK: #wave.expr_list<[$WG0, BLOCK_M, $T0] -> ($WG0 * 3)>
-        symbol_names_for_expr = ["$WG0", "BLOCK_M", "$T0"]
-        expr_attr = wave.WaveExprListAttr.get(symbol_names_for_expr, start_map)
+        # CHECK: #wave.expr_list<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3)>
+        symbol_attrs_for_expr = [
+            wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0),
+            wave.WaveSymbolAttr.get("BLOCK_M"),
+            wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.THREAD_0),
+        ]
+        expr_attr = wave.WaveExprListAttr.get(symbol_attrs_for_expr, start_map)
         print(expr_attr)
 
         try:
-            wave.WaveExprListAttr.get(symbol_names_for_expr[:-1], start_map)
+            wave.WaveExprListAttr.get(symbol_attrs_for_expr[:-1], start_map)
         except ValueError as e:
             assert "as many entries as map have symbols" in str(e)
         else:
             assert False, "Expected to fail with ValueError."
 
-        # CHECK: #wave.read_write_bounds<{M = #wave.expr_list<[$WG0, BLOCK_M, $T0] -> ($WG0 * 3)>}>
+        # CHECK: #wave.read_write_bounds<{M = #wave.expr_list<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3)>}>
         print(wave.WaveReadWriteBoundsAttr.get({"M": expr_attr}))
 
         try:
@@ -174,12 +178,15 @@ try:
         M = wave.WaveSymbolAttr.get("M")
         print(M)
 
-        # CHECK: #wave.expr_list<[M, BLOCK_M] -> (M floordiv BLOCK_M)>
-        symbol_names = ["M", "BLOCK_M"]
+        # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
+        symbol_attrs = [
+            wave.WaveSymbolAttr.get("M"),
+            wave.WaveSymbolAttr.get("BLOCK_M"),
+        ]
         s0 = ir.AffineSymbolExpr.get(0)
         s1 = ir.AffineSymbolExpr.get(1)
         expr_map = ir.AffineMap.get(0, 2, [ir.AffineExpr.get_floor_div(s0, s1)])
-        expr_attr = wave.WaveExprListAttr.get(symbol_names, expr_map)
+        expr_attr = wave.WaveExprListAttr.get(symbol_attrs, expr_map)
         print(expr_attr)
 
         # CHECK: #wave.expr_list<[] -> (512)>
@@ -208,37 +215,37 @@ try:
             )
         )
 
-        # CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2], vector_shapes = {M = 512 : i64, N = 512 : i64}>
+        # CHECK: #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [2, 2, 1], vector_shapes = {M = 512 : i64, N = 512 : i64}>
         print(
             wave.HardwareConstraintAttr.get(
                 threads_per_wave=64,
-                waves_per_block=[2, 2],
+                waves_per_block=[2, 2, 1],
                 vector_shapes=shape_dict,
                 max_bits_per_load=128,
             )
         )
 
-        # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, device_dim = 0>
+        # CHECK: #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, device_dim = 0>
         print(wave.DeviceConstraintAttr.get(dim="M", tile_size=expr_attr, device_dim=0))
 
-        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>
+        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>>
         print(
             wave.WorkgroupConstraintAttr.get(
                 dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x
             )
         )
 
-        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
+        # CHECK: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>, workgroup_dim = <x>, primary = false>
         print(
             wave.WorkgroupConstraintAttr.get(
                 dim="M", tile_size=expr_attr, workgroup_dim=wg_dim_x, primary=False
             )
         )
 
-        # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>>
+        # CHECK: #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>>
         print(wave.WaveConstraintAttr.get(dim="M", tile_size=expr_attr))
 
-        # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[M, BLOCK_M] -> (M floordiv BLOCK_M)>>
+        # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>>
         print(wave.TilingConstraintAttr.get(dim="M", tile_size=expr_attr))
 
     # CHECK: wave_ok
