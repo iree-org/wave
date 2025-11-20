@@ -242,10 +242,17 @@ def _preprocess_symbols(
     """
     Preprocess symbols by:
     (1) adding assumptions about all symbols being positive to later enable more simplifications.
-    (2) replacing `$` prefix of special symbols (e.g. `$WG0`) by `_` since MLIR affine expressions
-    do not accept `$`.
+    (2) replacing `$ARG` prefix of argument symbols (e.g. `ARG0`) by `_ARG` for consistency.
     """
-    return {sym: sympy.Symbol(sym.name, positive=True) for sym in symbols}
+    result = {}
+    for sym in symbols:
+        # Special case: rename ARG* symbols to _ARG*
+        if sym.name.startswith("$ARG"):
+            new_name = sym.name.replace("$", "_")
+            result[sym] = sympy.Symbol(new_name, positive=True)
+        else:
+            result[sym] = sympy.Symbol(sym.name, positive=True)
+    return result
 
 
 def _symbol_name_to_attribute(name: str) -> ir.Attribute:
@@ -336,23 +343,21 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
                 list(expr.free_symbols) if isinstance(expr, sympy.Expr) else []
             )
             result = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
-            bounds[dim.name] = wave.WaveExprListAttr.get(
-                [sym.name for sym in symbol_mapping.values()], result
-            )
+            symbol_attrs = [
+                _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+            ]
+            bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
 
 def _convert_sympy_expr_to_expr_list_attr(expr: sympy.Expr | int) -> WaveExprListAttr:
     """
-    Converts a wave IndexExpr to a `WaveExprListAttr`.
+    Converts a single wave IndexExpr to a `WaveExprListAttr`.
+    This is a convenience wrapper around _convert_to_wave_expr_list_tuple for single expressions.
     """
-    if isinstance(expr, int):
-        symbol_mapping = {}
-    else:
-        symbol_mapping = _preprocess_symbols(expr.free_symbols)
-    affine_map = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
-    symbol_attrs = [sym.name for sym in symbol_mapping.values()]
-    return WaveExprListAttr.get(symbol_attrs, affine_map)
+    # Get the context from the current IR context (must be active)
+    ctx = ir.Context.current
+    return _convert_to_wave_expr_list_tuple([expr], ctx)
 
 
 def _convert_to_wave_expr_list_tuple(
@@ -360,18 +365,35 @@ def _convert_to_wave_expr_list_tuple(
 ) -> WaveExprListAttr:
     """
     Returns a WaveExprListAttr from a sequence of wave IndexExpr.
+    Creates a multi-result affine map from the sequence of expressions.
     """
-    symbols = list(
-        set().union(
-            *[
-                expr.free_symbols if isinstance(expr, sympy.Expr) else []
-                for expr in exprs
-            ]
-        )
+    # Collect all symbols from all expressions
+    all_symbols = set()
+    for expr in exprs:
+        if isinstance(expr, sympy.Expr):
+            all_symbols.update(expr.free_symbols)
+
+    # Preprocess symbols and create mapping
+    symbol_mapping = _preprocess_symbols(list(all_symbols))
+
+    # Convert each expression to an affine expression
+    affine_exprs = []
+    for expr in exprs:
+        affine_map = _convert_sympy_expr_to_affine_map(expr, symbol_mapping)
+        # Extract the single result from the map (each expr creates a 1-result map)
+        affine_exprs.append(affine_map.results[0])
+
+    # Create a multi-result affine map
+    multi_result_map = ir.AffineMap.get(
+        0, len(symbol_mapping), affine_exprs, context=ctx
     )
-    return ir.Attribute.parse(
-        f"#wave.expr_list<{symbols} -> ({', '.join(map(str, exprs))})>", context=ctx
-    )
+
+    # Convert symbol names to attributes
+    symbol_attrs = [
+        _symbol_name_to_attribute(sym.name) for sym in symbol_mapping.values()
+    ]
+
+    return WaveExprListAttr.get(symbol_attrs, multi_result_map)
 
 
 def _emit_ops_from_graph(

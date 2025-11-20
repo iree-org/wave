@@ -210,11 +210,15 @@ MlirAttribute mlirWaveExprListAttrGet(MlirAttribute *symbolNames,
   mlir::MLIRContext *ctx = unwrap(map).getContext();
 
   unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
-  llvm::SmallVector<wave::WaveSymbolAttr> symbolAttrs = llvm::map_to_vector(
+  llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
       llvm::make_range(symbolNames, symbolNames + numSymbols),
-      [](MlirAttribute attr) {
-        return llvm::cast<wave::WaveSymbolAttr>(unwrap(attr));
-      });
+      [](MlirAttribute attr) { return unwrap(attr); });
+
+  assert(llvm::all_of(
+             symbolAttrs,
+             llvm::IsaPred<wave::WaveSymbolAttr, wave::WaveIndexSymbolAttr>) &&
+         "expected mapping to contain only WaveSymbolAttr or "
+         "WaveIndexSymbolAttr attributes");
 
   return wrap(wave::WaveExprListAttr::get(ctx, symbolAttrs, unwrap(map)));
 }

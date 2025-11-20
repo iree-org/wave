@@ -315,22 +315,32 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveExprListAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, const std::vector<std::string> &symbolNames,
+          [](const nb::object &cls, const nb::list &symbols,
              MlirAffineMap map) {
             std::vector<MlirAttribute> symbolAttrs;
-            intptr_t numSymbols = symbolNames.size();
-            symbolAttrs.reserve(numSymbols);
+            symbolAttrs.reserve(symbols.size());
 
-            for (const std::string &symbolName : symbolNames) {
-              MlirStringRef symbolNameStrRef =
-                  mlirStringRefCreate(symbolName.data(), symbolName.size());
-              MlirAttribute symbolAttr = mlirWaveSymbolAttrGet(
-                  mlirAffineMapGetContext(map), symbolNameStrRef);
-              symbolAttrs.push_back(symbolAttr);
+            for (const auto &item : symbols) {
+              MlirAttribute attr;
+              try {
+                attr = nb::cast<MlirAttribute>(item);
+              } catch (const nb::cast_error &e) {
+                throw nb::type_error(
+                    "symbols must be a list of MlirAttribute (WaveSymbolAttr "
+                    "or WaveIndexSymbolAttr)");
+              }
+              if (!mlirAttributeIsAWaveSymbolAttr(attr) &&
+                  !mlirAttributeIsAWaveIndexSymbolAttr(attr)) {
+                throw nb::type_error(
+                    "symbols must contain only WaveSymbolAttr or "
+                    "WaveIndexSymbolAttr attributes");
+              }
+              symbolAttrs.push_back(attr);
             }
 
+            intptr_t numSymbols = symbolAttrs.size();
             if (numSymbols != mlirAffineMapGetNumSymbols(map)) {
-              throw nb::value_error("Expected symbol_names to have as many "
+              throw nb::value_error("Expected symbols to have as many "
                                     "entries as map have symbols.");
             }
             if (mlirAffineMapGetNumDims(map) != 0) {
@@ -338,8 +348,8 @@ NB_MODULE(_waterDialects, m) {
             }
             return cls(mlirWaveExprListAttrGet(symbolAttrs.data(), map));
           },
-          nb::arg("cls"), nb::arg("symbol_names"), nb::arg("map"),
-          "Gets a wave.WaveExprListAttr from parameters.");
+          nb::arg("cls"), nb::arg("symbols"), nb::arg("map"),
+          "Gets a wave.WaveExprListAttr from a list of symbol attributes.");
 
   //===---------------------------------------------------------------------===//
   // WaveReadWriteBoundsAttr

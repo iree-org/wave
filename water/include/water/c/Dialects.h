@@ -155,7 +155,8 @@ MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveExprListAttr(MlirAttribute attr);
 /// interpreted as accepting the symbols provided in the
 /// `symbolNames` list. The list must have as many entries as maps have symbols,
 /// and all maps must have the same number of symbols and zero dimensions. The
-/// list is expected to only contain WaveSymbolAttr instances.
+/// list is expected to only contain WaveSymbolAttr or WaveIndexSymbolAttr
+/// instances.
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveExprListAttrGet(MlirAttribute *symbolNames, MlirAffineMap map);
 
