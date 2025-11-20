@@ -97,6 +97,12 @@ llvm::LogicalResult wave::AllocateOp::verify() {
            << "expects parent and offset to be present simultaneously";
   }
 
+  if (!llvm::all_of(getDistributedShape().getSymbols(),
+                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError()
+           << "distributed_shape must only contain WaveSymbolAttr";
+  }
+
   return llvm::success();
 }
 
@@ -515,6 +521,18 @@ LogicalResult ExtractSliceOp::verify() {
                          << offset.getNumSymbols() << " symbols, size with "
                          << size.getNumSymbols() << " symbols, and stride with "
                          << stride.getNumSymbols() << " symbols";
+  }
+
+  if (!llvm::all_of(offset.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError() << "offset must only contain WaveSymbolAttr";
+  }
+
+  if (!llvm::all_of(size.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError() << "size must only contain WaveSymbolAttr";
+  }
+
+  if (!llvm::all_of(stride.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError() << "stride must only contain WaveSymbolAttr";
   }
 
   return success();

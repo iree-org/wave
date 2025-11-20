@@ -447,6 +447,10 @@ WorkgroupConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size, expected 1";
   }
+  if (!llvm::all_of(tile_size.getSymbols(),
+                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitError() << "tile_size must only contain WaveSymbolAttr";
+  }
   return success();
 }
 
@@ -455,6 +459,10 @@ WaveConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                            WaveSymbolAttr dim, WaveExprListAttr tile_size) {
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size, expected 1";
+  }
+  if (!llvm::all_of(tile_size.getSymbols(),
+                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitError() << "tile_size must only contain WaveSymbolAttr";
   }
 
   return success();
@@ -466,6 +474,10 @@ TilingConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size, expected 1";
   }
+  if (!llvm::all_of(tile_size.getSymbols(),
+                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitError() << "tile_size must only contain WaveSymbolAttr";
+  }
   return success();
 }
 
@@ -475,6 +487,10 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                              unsigned int device_dim) {
   if (tile_size.getSize() != 1) {
     return emitError() << "invalid ExpressionList size, expected 1";
+  }
+  if (!llvm::all_of(tile_size.getSymbols(),
+                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitError() << "tile_size must only contain WaveSymbolAttr";
   }
   return success();
 }
