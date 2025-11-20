@@ -2503,7 +2503,6 @@ def testTensorLoadToShared(
     BLOCK_K = tkl.sym.BLOCK_K
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
 
-    # Current tdm works for a single wave
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
