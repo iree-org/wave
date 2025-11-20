@@ -42,6 +42,7 @@ jobs:
           HOST_GID=$(id -g)
           docker run -d \
             --name happy \
+            --restart unless-stopped \
             -v "${PWD}:/workspace" \
             --network=host \
             --ipc=host \
@@ -54,8 +55,9 @@ jobs:
             -w /workspace \
             -e HOST_UID=$HOST_UID \
             -e HOST_GID=$HOST_GID \
-            ci-gfx1250:latest \
-            sleep infinity
+            --entrypoint sleep \
+            ci-rocplay-gfx1250:latest \
+            infinity
 
       - name: Debug
         run: |
@@ -75,6 +77,8 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
+              echo $HSA_MODEL_NUM_THREADS
+              source /usr/local/bin/env.sh >/dev/null 2>&1
               source "${VENV_DIR}/bin/activate"
 
               echo "Install Rust via rustup.sh"
@@ -98,6 +102,7 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euo pipefail
+              source /usr/local/bin/env.sh >/dev/null 2>&1
               source "${VENV_DIR}/bin/activate"
 
               echo "Check Arch after python installation"
@@ -120,6 +125,7 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
+              source /usr/local/bin/env.sh >/dev/null 2>&1
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
@@ -135,6 +141,7 @@ jobs:
             -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
+              source /usr/local/bin/env.sh >/dev/null 2>&1
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
@@ -153,9 +160,11 @@ jobs:
           -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
+              source /usr/local/bin/env.sh >/dev/null 2>&1
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
+              echo $HSA_MODEL_NUM_THREADS
               printenv HSA_MODEL_NUM_THREADS || echo "not set"
 
               git apply ./patches/diff.patch
@@ -169,6 +178,7 @@ jobs:
           -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
+              source /usr/local/bin/env.sh >/dev/null 2>&1
               source "${VENV_DIR}/bin/activate"
               export CARGO_HOME="$HOME/.cargo"
               export PATH="$CARGO_HOME/bin:$PATH"
