@@ -111,7 +111,7 @@ def is_valid_write(write: CustomOp) -> bool:
 class TensorLoadConfig:
     """
     element_type
-    tensor_tile_shapes : [tile dim 0 shape, tile dim 1 shape]
+    distributed_shape : {dim0: tile dim 0 shape, dim1: tile dim 1 shape}
     shared_tile_index (IndexSequence)
     global_tile_index (IndexSequence)
     bounds
@@ -120,7 +120,7 @@ class TensorLoadConfig:
     """
 
     element_type: "DataType"
-    distributed_shape: list[IndexExpr]
+    distributed_shape: dict[IndexSymbol, IndexExpr]
     shared_tile_index: dict[IndexSymbol, IndexSequence]
     global_tile_index: dict[IndexSymbol, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
@@ -190,6 +190,7 @@ def get_tensor_load_descriptor_config(
         bounds = {infer_dim(v): bounds.get(infer_dim(v), v) for v in symbolic_shape}
 
     distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape)
+    distributed_shape = {v: distributed_shape[i] for i, v in enumerate(symbolic_shape)}
 
     # get shared tile index
     shared_tile_index = get_shared_element_offset(write, constraints, wave_subs)
@@ -218,9 +219,9 @@ def emit_tensor_load_to_shared(
     tensor_writes = defaultdict(list)
 
     with write.graph.inserting_before(write.fx_node):
-        tensor_write = TensorLoadToLDS(read.memory, write.memory, *config).add_to_graph(
-            write.graph, loc=write.location
-        )
+        tensor_write = TensorLoadToLDS(
+            [read.memory], [write.memory], *config
+        ).add_to_graph(write.graph, loc=write.location)
 
     tensor_write.pre_expansion_id = id(tensor_write)
 
