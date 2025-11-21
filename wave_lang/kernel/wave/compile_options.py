@@ -95,6 +95,7 @@ class WaveCompileOptions:
     override_schedule: Optional[str] = None
     dump_schedule: Optional[str] = None
     use_bound_check: bool = False
+    specialize: bool = False
 
     # === Print options ===
     mlir_print_ir_after_all: bool = False
