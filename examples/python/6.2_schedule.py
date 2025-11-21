@@ -112,15 +112,16 @@ def test_gemm_advanced_scheduling(is_debug=False):
         shared_write_b = tkw.get_node_by_tag_and_type("read_b", tkw.Write)
         mma = tkw.get_node_by_tag("mma")
 
+        pipeline_loop = tkw.pipeline(k_loop)
         # First, create the basic 2-stage pipeline
-        with tkw.pipeline(k_loop) as pipelined_loop:
-            pipelined_loop.set_stage(
+        with pipeline_loop as pl:
+            pl.set_stage(
                 [
                     (global_load_a, global_load_b),
                     (shared_write_a, shared_write_b),
                 ],
             )
-            pipelined_loop.set_stage(
+            pl.set_stage(
                 [
                     (shared_load_a, shared_load_b),
                     (mma,),
@@ -128,25 +129,13 @@ def test_gemm_advanced_scheduling(is_debug=False):
             )
 
         # Now apply advanced scheduling to the KERNEL stage
-        # Get all nodes again, but only from the pipelined kernel subgraph
-        k_loop = tkw.get_node_by_tag("k_loop")
-
-        # Use subgraph parameter to get nodes only from the KERNEL stage
-        load_a = tkw.get_node_by_tag_and_type("read_a", tkw.Read, subgraph=k_loop)
-        global_load_a, shared_load_a = tkw.partition_by_address_space(
-            load_a, GLOBAL_ADDRESS_SPACE
-        )
-        shared_write_a = tkw.get_node_by_tag_and_type(
-            "read_a", tkw.Write, subgraph=k_loop
-        )
-        load_b = tkw.get_node_by_tag_and_type("read_b", tkw.Read, subgraph=k_loop)
-        global_load_b, shared_load_b = tkw.partition_by_address_space(
-            load_b, GLOBAL_ADDRESS_SPACE
-        )
-        shared_write_b = tkw.get_node_by_tag_and_type(
-            "read_b", tkw.Write, subgraph=k_loop
-        )
-        mma = tkw.get_node_by_tag("mma", subgraph=k_loop)
+        global_load_a = tkw.filter_nodes(global_load_a, subgraph=pipeline_loop.KERNEL)
+        shared_load_a = tkw.filter_nodes(shared_load_a, subgraph=pipeline_loop.KERNEL)
+        shared_write_a = tkw.filter_nodes(shared_write_a, subgraph=pipeline_loop.KERNEL)
+        global_load_b = tkw.filter_nodes(global_load_b, subgraph=pipeline_loop.KERNEL)
+        shared_load_b = tkw.filter_nodes(shared_load_b, subgraph=pipeline_loop.KERNEL)
+        shared_write_b = tkw.filter_nodes(shared_write_b, subgraph=pipeline_loop.KERNEL)
+        mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
 
         # Partition MMA operations by K dimension into 2 groups
         # This allows us to interleave the first half of MMA with prefetch for next iteration
@@ -209,16 +198,15 @@ def test_gemm_advanced_scheduling(is_debug=False):
             ),
         ]
 
-        # Insert barriers before and after the loop for ping-pong buffering
-        tkw.insert_before(k_loop, tkw.SharedMemoryBarrier())
-        output_node = tkw.get_output_node(k_loop)
-        tkw.insert_before(output_node, tkw.SharedMemoryBarrier())
+        # Insert barriers before the for loop and at the end of the for loop
+        tkw.insert_before(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+        tkw.insert_at_end(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
 
         # Apply the cluster-based reordering to the KERNEL stage
-        tkw.reorder_graph(k_loop, clusters)
+        tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
 
         # Apply staggering waves scheduling to allow two waves to execute clusters in parallel with a stagger offset
-        tkw.stagger(k_loop)
+        tkw.stagger(pipeline_loop.KERNEL)
 
     # Define compile options
     M_val, N_val, K_val = shape

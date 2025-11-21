@@ -81,12 +81,15 @@ def add_nodes_by_schedule(
     rotating_registers: dict[fx.Node, list[fx.Node]],
     pipelining_stage: PipelineStage = PipelineStage.KERNEL,
     use_scheduling_barriers: bool = False,
+    node_mapping: dict[fx.Node, list[fx.Node]] = None,
 ):
     """
     Interleave the instructions in the partitioned graph by stage
     for a single initiation interval, updating the argument maps
     per stage starting at the provided start times and indices.
     """
+    if node_mapping is None:
+        node_mapping = {}
     fill_or_drain = pipelining_stage in [PipelineStage.PROLOGUE, PipelineStage.EPILOGUE]
 
     for cycle in range(initiation_interval):
@@ -133,9 +136,13 @@ def add_nodes_by_schedule(
                 # We cannot properly handle write dependencies for mapped nodes
                 # yet, so just drop it for now.
                 new_node.update_arg("_write_dependency", [])
+            # Tag the node with its pipeline stage for later identification
+            new_node.fx_node.meta["pipeline_stage"] = pipelining_stage
             instructions[get_custom_operation_type(new_node)] += 1
             # Update the argument context.
             arg_context[(iteration, stage, node)] = new_node.fx_node
+            # Track the mapping from original node to new node
+            node_mapping.setdefault(node, []).append(new_node.fx_node)
             logger.debug(
                 f"Copying Node: {node}, Stage: {stage}, Iteration: {iteration} -> {new_node.fx_node}"
             )
@@ -336,6 +343,7 @@ def construct_prologue(
     new_induction_variables: list[int],
     stages: list[int],
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
+    node_mapping: dict[fx.Node, list[fx.Node]] = None,
 ):
     """
     Construct the prologue of the pipelined loop.
@@ -378,6 +386,7 @@ def construct_prologue(
                 new_induction_variables,
                 rotating_registers,
                 PipelineStage.PROLOGUE,
+                node_mapping=node_mapping,
             )
 
     # During the prologue, we may have computed results that need to be passed as init args
@@ -502,6 +511,7 @@ def construct_kernel(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
+    node_mapping: dict[fx.Node, list[fx.Node]] = None,
 ) -> tuple[Iterate, fx.Graph]:
     """
     Construct the kernel of the pipelined loop.
@@ -583,6 +593,7 @@ def construct_kernel(
             new_rotating_registers,
             PipelineStage.KERNEL,
             use_scheduling_barriers,
+            node_mapping,
         )
 
         # Create output node (last node in the graph).
@@ -628,6 +639,7 @@ def construct_epilogue(
     num_rotating_registers: dict[fx.Node, int],
     visualize: bool = False,
     outer_vars: dict[fx.Node, list[fx.Node]] = {},
+    node_mapping: dict[fx.Node, list[fx.Node]] = None,
 ):
     """
     Construct the epilogue of the pipelined loop.
@@ -720,6 +732,7 @@ def construct_epilogue(
                 new_induction_variables,
                 rotating_registers,
                 PipelineStage.EPILOGUE,
+                node_mapping=node_mapping,
             )
 
         # Replace the existing uses with the new results.
@@ -785,7 +798,7 @@ def construct_pipelined_loop(
     visualize: bool = False,
     use_scheduling_barriers: bool = False,
     multi_buffer_count: Optional[int] = None,
-) -> fx.Node:
+) -> tuple[fx.Node, dict[fx.Node, list[fx.Node]]]:
     """
     Given a graph annotated with scheduling parameters, construct a pipelined loop
     with a prologue, kernel and epilogue.
@@ -797,6 +810,10 @@ def construct_pipelined_loop(
     )
 
     outer_vars = defaultdict(list)
+    # Dictionary to track mappings from original nodes to their pipelined copies
+    # this is used to update the proxy mappings after pipelining when using
+    # manual schedule.
+    node_mapping: dict[fx.Node, list[fx.Node]] = {}
 
     if multi_buffer_count:
         create_multibuffered_allocs(graph, multi_buffer_count, outer_vars)
@@ -818,6 +835,7 @@ def construct_pipelined_loop(
         list(range(num_stages)),
         create_fill_stage_schedule(num_stages),
         outer_vars=outer_vars,
+        node_mapping=node_mapping,
     )
 
     # Construct kernel.
@@ -833,6 +851,7 @@ def construct_pipelined_loop(
         visualize,
         use_scheduling_barriers,
         outer_vars=outer_vars,
+        node_mapping=node_mapping,
     )
 
     pipelined_reduction_graph.parent_op = pipelined_reduction
@@ -854,6 +873,7 @@ def construct_pipelined_loop(
         num_rotating_registers,
         visualize,
         outer_vars=outer_vars,
+        node_mapping=node_mapping,
     )
 
     # Remove the unpipelined reduction and the corresponding subgraph
@@ -866,4 +886,4 @@ def construct_pipelined_loop(
     if visualize:
         visualize_graph(pipelined_reduction.graph, "pipelined.png")
 
-    return pipelined_reduction
+    return pipelined_reduction, node_mapping
