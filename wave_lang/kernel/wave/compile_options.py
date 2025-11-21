@@ -96,6 +96,7 @@ class WaveCompileOptions:
     override_schedule: Optional[str] = None
     dump_schedule: Optional[str] = None
     use_bound_check: bool = False
+    specialize: bool = False
 
     # Cluster barrier signal/wait delay in number of loop iterations
     # None - no barriers inside the loop
