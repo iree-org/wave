@@ -98,7 +98,9 @@ def mlir_converter_matrix_add():
 
     if diagnostics:
         print(diagnostics)
-    assert len(diagnostics) == 0, "diagnostics should be empty"
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
     # Print to stdout for FileCheck
     print(mlir_output)
@@ -237,7 +239,9 @@ def mlir_converter_matmul():
 
     if diagnostics:
         print(diagnostics)
-    assert len(diagnostics) == 0, "diagnostics should be empty"
+    assert (
+        len(diagnostics) == 0
+    ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
     # Print to stdout for FileCheck
     print(mlir_output)

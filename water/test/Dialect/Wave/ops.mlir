@@ -192,8 +192,8 @@ func.func @cast_wave_tensor_with_index(%arg0: !wave.tensor<[@M, @N] of f32>) -> 
   // CHECK: wave.cast
   // CHECK-SAME: index
   %0 = wave.cast %arg0 index [{
-    M : [_T0, BLOCK_M] -> (_T0 * BLOCK_M, 1, 1),
-    N : [_T1, BLOCK_N] -> (_T1 * BLOCK_N, 1, 1)
+    M : [#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 * BLOCK_M, 1, 1),
+    N : [#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * BLOCK_N, 1, 1)
   }] : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
   return %0 : !wave.tensor<[@M, @N] of f16>
 }

@@ -13,7 +13,6 @@
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/c/Dialects.h"
-#include "llvm/Support/Casting.h"
 
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Wave, wave, ::wave::WaveDialect)
 

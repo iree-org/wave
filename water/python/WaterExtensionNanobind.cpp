@@ -100,33 +100,12 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveIndexMappingAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, const nb::list &symbols,
+          [](const nb::object &cls, std::vector<MlirAttribute> &symbols,
              MlirAffineMap start, MlirAffineMap step, MlirAffineMap stride,
              // MlirContext should always come last to allow for being
              // automatically deduced from context.
              MlirContext context) {
-            std::vector<MlirAttribute> symbolAttrs;
-            symbolAttrs.reserve(symbols.size());
-
-            for (const auto &item : symbols) {
-              MlirAttribute attr;
-              try {
-                attr = nb::cast<MlirAttribute>(item);
-              } catch (const nb::cast_error &e) {
-                throw nb::type_error(
-                    "symbols must be a list of MlirAttribute (WaveSymbolAttr "
-                    "or WaveIndexSymbolAttr)");
-              }
-              if (!mlirAttributeIsAWaveSymbolAttr(attr) &&
-                  !mlirAttributeIsAWaveIndexSymbolAttr(attr)) {
-                throw nb::type_error(
-                    "symbols must contain only WaveSymbolAttr or "
-                    "WaveIndexSymbolAttr attributes");
-              }
-              symbolAttrs.push_back(attr);
-            }
-
-            intptr_t numSymbols = symbolAttrs.size();
+            intptr_t numSymbols = symbols.size();
             intptr_t numResults = mlirAffineMapGetNumResults(start);
             for (MlirAffineMap map : {start, step, stride}) {
               if (numSymbols != mlirAffineMapGetNumSymbols(map)) {
@@ -141,7 +120,7 @@ NB_MODULE(_waterDialects, m) {
                     "Maps should have the same number of results.");
               }
             }
-            return cls(mlirWaveIndexMappingAttrGet(context, symbolAttrs.data(),
+            return cls(mlirWaveIndexMappingAttrGet(context, symbols.data(),
                                                    start, step, stride));
           },
           nb::arg("cls"), nb::arg("symbols"), nb::arg("start"), nb::arg("step"),

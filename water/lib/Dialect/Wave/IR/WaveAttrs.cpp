@@ -177,7 +177,7 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
 
   SmallVector<StringRef> names;
   names.reserve(symbols.size());
-  for (auto symbolAttr : symbols) {
+  for (Attribute symbolAttr : symbols) {
     if (auto symbol = llvm::dyn_cast<WaveSymbolAttr>(symbolAttr))
       names.push_back(symbol.getName());
     else if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
