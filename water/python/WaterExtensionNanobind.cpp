@@ -291,30 +291,18 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveExprListAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, const nb::list &symbols,
+          [](const nb::object &cls, std::vector<MlirAttribute> &symbols,
              MlirAffineMap map) {
-            std::vector<MlirAttribute> symbolAttrs;
-            symbolAttrs.reserve(symbols.size());
-
-            for (const auto &item : symbols) {
-              MlirAttribute attr;
-              try {
-                attr = nb::cast<MlirAttribute>(item);
-              } catch (const nb::cast_error &e) {
-                throw nb::type_error(
-                    "symbols must be a list of MlirAttribute (WaveSymbolAttr "
-                    "or WaveIndexSymbolAttr)");
-              }
+            for (MlirAttribute attr : symbols) {
               if (!mlirAttributeIsAWaveSymbolAttr(attr) &&
                   !mlirAttributeIsAWaveIndexSymbolAttr(attr)) {
                 throw nb::type_error(
                     "symbols must contain only WaveSymbolAttr or "
                     "WaveIndexSymbolAttr attributes");
               }
-              symbolAttrs.push_back(attr);
             }
 
-            intptr_t numSymbols = symbolAttrs.size();
+            intptr_t numSymbols = symbols.size();
             if (numSymbols != mlirAffineMapGetNumSymbols(map)) {
               throw nb::value_error("Expected symbols to have as many "
                                     "entries as map have symbols.");
@@ -322,7 +310,7 @@ NB_MODULE(_waterDialects, m) {
             if (mlirAffineMapGetNumDims(map) != 0) {
               throw nb::value_error("Maps should not involve dimensions.");
             }
-            return cls(mlirWaveExprListAttrGet(symbolAttrs.data(), map));
+            return cls(mlirWaveExprListAttrGet(symbols.data(), map));
           },
           nb::arg("cls"), nb::arg("symbols"), nb::arg("map"),
           "Gets a wave.WaveExprListAttr from a list of symbol attributes.");
