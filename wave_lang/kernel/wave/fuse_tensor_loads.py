@@ -318,9 +318,9 @@ def fuse_tensor_loads(
     input_selector = wave_id % 2
 
     distributed_dims = {
-        c.dim: c.wg_constraint.workgroup_dim
+        c.dim: None
         for c in constraints
-        if isinstance(c, WaveConstraint)
+        if isinstance(c, WaveConstraint) and c.wg_constraint.tile_size != c.tile_size
     }
 
     logger.info(f"Fusing {len(fusable_pairs)} tensor load pairs")
