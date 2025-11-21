@@ -7,6 +7,8 @@
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -15,16 +17,21 @@
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/Dialect/Wave/Transforms/Utils.h"
+#include "llvm/ADT/PointerIntPair.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
+#include <type_traits>
 
 #define DEBUG_TYPE "wave-infer-types"
 
 using wave::ElementsPerThreadLatticeValue;
+using wave::IndexExprsLatticeStorage;
 
 namespace wave {
 #define GEN_PASS_DEF_WATERWAVEINFERTYPESPASS
 #define GEN_PASS_DEF_WATERWAVEPROPAGATEELEMENTSPERTHREADPASS
+#define GEN_PASS_DEF_WATERWAVEINFERINDEXEXPRSPASS
 #include "water/Dialect/Wave/Transforms/Passes.h.inc"
 } // namespace wave
 
@@ -63,6 +70,10 @@ public:
 
   bool operator==(const InferTypeLatticeStorage &other) const {
     return value == other.value;
+  }
+
+  bool operator!=(const InferTypeLatticeStorage &other) const {
+    return !(*this == other);
   }
 
   // Return true if this lattice instance is the bottom state.
@@ -828,3 +839,399 @@ public:
   }
 };
 } // namespace
+
+void operator<<(mlir::Diagnostic &diag, const IndexExprsLatticeStorage &value) {
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  value.print(os);
+  diag << os.str();
+}
+
+class IndexExprsLattice
+    : public mlir::dataflow::Lattice<IndexExprsLatticeStorage> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(IndexExprsLattice);
+  using Lattice::Lattice;
+};
+
+namespace {
+// Wrapper to print operations without regions. Use as `llvm::outs() <<
+// PrintNoRegions(op)`.
+class PrintNoRegions {
+public:
+  PrintNoRegions(mlir::Operation *op) : operation(op) {}
+
+  void print(llvm::raw_ostream &os) const {
+    operation->print(os, mlir::OpPrintingFlags().skipRegions());
+    os << "\n";
+  }
+
+private:
+  mlir::Operation *operation;
+};
+
+} // namespace
+
+// Support operator<< for OperationPrinterWithoutRegions.
+inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                                     const PrintNoRegions &printer) {
+  printer.print(os);
+  return os;
+}
+
+// Helper function to walk the IR and collect wave constraints attributes.
+static llvm::LogicalResult collectWaveConstraints(
+    mlir::Operation *top,
+    llvm::DenseMap<mlir::Operation *, mlir::Attribute> &constraints) {
+  auto *waveDialect = top->getContext()->getLoadedDialect<wave::WaveDialect>();
+  auto walkResult =
+      top->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *op) {
+        if (auto attr = op->getAttrOfType<mlir::ArrayAttr>(
+                wave::WaveDialect::kWaveConstraintsAttrName)) {
+          constraints[op] = attr;
+          return mlir::WalkResult::skip();
+        }
+        if (op->getDialect() == waveDialect) {
+          op->emitError()
+              << "wave dialect operation without constraints on an ancestor";
+          return mlir::WalkResult::interrupt();
+        }
+        return mlir::WalkResult::advance();
+      });
+  if (walkResult.wasInterrupted())
+    return llvm::failure();
+  return llvm::success();
+}
+
+class IndexExprsForwardAnalysis
+    : public mlir::dataflow::SparseForwardDataFlowAnalysis<IndexExprsLattice> {
+public:
+  using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
+
+  mlir::LogicalResult initialize(mlir::Operation *top) override {
+    if (getSolverConfig().isInterprocedural())
+      return top->emitError() << "interprocedural analysis not supported";
+
+    // Call the base class initialization in order to set up update listeners.
+    // Note that this will initialize values at function/region entries to
+    // lattice top.
+    if (mlir::failed(SparseForwardDataFlowAnalysis::initialize(top)))
+      return mlir::failure();
+
+    llvm::DenseMap<mlir::Operation *, mlir::Attribute> constraints;
+    if (llvm::failed(collectWaveConstraints(top, constraints)))
+      return llvm::failure();
+
+    for (auto &&[parent, attr] : constraints) {
+      auto initObject = wave::IndexExprsAnalysisInit::create(parent, attr);
+      if (llvm::failed(initObject))
+        return llvm::failure();
+      mlir::WalkResult walkResult =
+          parent->walk([&](mlir::Operation *op) -> mlir::WalkResult {
+            if (auto iface =
+                    llvm::dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
+              llvm::SmallVector<wave::IndexExprsLatticeStorage> resultExprs =
+                  llvm::map_to_vector(op->getResults(), [&](mlir::Value v) {
+                    return getLatticeElement(v)->getValue();
+                  });
+              auto emitError = [op]() { return op->emitError(); };
+              if (llvm::failed(iface.initializeForward(resultExprs, *initObject,
+                                                       emitError)))
+                return mlir::WalkResult::interrupt();
+
+              for (auto &&[result, lattice] :
+                   llvm::zip_equal(op->getResults(), resultExprs)) {
+                IndexExprsLattice *latticeObject = getLatticeElement(result);
+                if (latticeObject->getValue() != lattice)
+                  latticeObject->getValue().unsafeSet(lattice);
+              }
+            }
+
+            // Set block arguments to bottom initially so they can be join'ed
+            // with actual lattices coming from other operations.
+            for (mlir::Region &region : op->getRegions()) {
+              for (mlir::Block &block : region) {
+                for (mlir::Value value : block.getArguments()) {
+                  if (!llvm::isa<wave::WaveTensorType>(value.getType()))
+                    continue;
+
+                  getLatticeElement(value)->getValue().unsafeSet(
+                      IndexExprsLatticeStorage::bottom());
+                }
+              }
+            }
+            return llvm::success();
+          });
+      if (walkResult.wasInterrupted())
+        return llvm::failure();
+    }
+
+    initialized = true;
+    return llvm::success();
+  }
+
+  void setToEntryState(IndexExprsLattice *lattice) override {
+    propagateIfChanged(lattice,
+                       lattice->join(initialized
+                                         ? IndexExprsLatticeStorage::top()
+                                         : IndexExprsLatticeStorage::bottom()));
+  }
+
+  llvm::LogicalResult
+  visitOperation(mlir::Operation *op,
+                 llvm::ArrayRef<const IndexExprsLattice *> operands,
+                 llvm::ArrayRef<IndexExprsLattice *> results) override {
+
+    LLVM_DEBUG({
+      LDBG() << "visiting operation " << PrintNoRegions(op) << "\n";
+      LDBG() << "  Operands lattices:\n";
+      for (auto [i, operand] : llvm::enumerate(operands)) {
+        LDBG() << "    operand #" << i << ": ";
+        operand->getValue().print(LDBG_STREAM);
+        LDBG() << "";
+      }
+      // Print all result lattices.
+      LDBG() << "  Results lattices:\n";
+      for (auto [i, result] : llvm::enumerate(results)) {
+        LDBG() << "    result #" << i << ": ";
+        result->getValue().print(LDBG_STREAM);
+        LDBG() << "";
+      }
+    });
+
+    // Check if the operation implements the interface.
+    if (!llvm::isa<wave::WaveInferIndexExprsOpInterface>(op)) {
+      // Operations without the interface should not manipulate WaveTensorType.
+      if (!llvm::any_of(op->getOperandTypes(),
+                        llvm::IsaPred<wave::WaveTensorType>) &&
+          !llvm::any_of(op->getResultTypes(),
+                        llvm::IsaPred<wave::WaveTensorType>)) {
+        return llvm::success();
+      }
+      return op->emitError()
+             << "cannot propagate index expressions across an operation not "
+                "implementing the wave infer index expressions interface";
+    }
+
+    auto extractLattice = [](const IndexExprsLattice *lattice) {
+      return lattice->getValue();
+    };
+    llvm::SmallVector<IndexExprsLatticeStorage> operandLattices =
+        llvm::map_to_vector(operands, extractLattice);
+    llvm::SmallVector<IndexExprsLatticeStorage> resultLattices =
+        llvm::map_to_vector(results, extractLattice);
+
+    auto reportError = [op]() { return op->emitError(); };
+    llvm::FailureOr<mlir::ChangeResult> result =
+        llvm::cast<wave::WaveInferIndexExprsOpInterface>(op)
+            .propagateIndexExprsForward(operandLattices, resultLattices,
+                                        reportError);
+    if (llvm::failed(result))
+      return llvm::failure();
+    if (*result == mlir::ChangeResult::NoChange)
+      return llvm::success();
+
+    for (auto &&[resultLattice, lattice] :
+         llvm::zip_equal(resultLattices, results)) {
+      propagateIfChanged(lattice, lattice->join(resultLattice));
+    }
+    return llvm::success();
+  }
+
+private:
+  bool initialized = false;
+};
+
+class IndexExprsBackwardAnalysis
+    : public mlir::dataflow::SparseBackwardDataFlowAnalysis<IndexExprsLattice> {
+public:
+  using SparseBackwardDataFlowAnalysis::SparseBackwardDataFlowAnalysis;
+
+  llvm::LogicalResult initialize(mlir::Operation *top) override {
+    if (getSolverConfig().isInterprocedural())
+      return top->emitError() << "interprocedural analysis not supported";
+
+    // Call the base class initialization in order to set up update listeners.
+    // Note that this will initialize values at function/region entries to
+    // lattice top.
+    if (llvm::failed(SparseBackwardDataFlowAnalysis::initialize(top)))
+      return llvm::failure();
+
+    llvm::DenseMap<mlir::Operation *, mlir::Attribute> constraints;
+    if (llvm::failed(collectWaveConstraints(top, constraints)))
+      return llvm::failure();
+    for (auto &&[parent, attr] : constraints) {
+      auto initObject = wave::IndexExprsAnalysisInit::create(parent, attr);
+      if (llvm::failed(initObject))
+        return llvm::failure();
+
+      parent->walk([&](mlir::Operation *op) -> mlir::WalkResult {
+        if (auto iface =
+                llvm::dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
+          llvm::SmallVector<wave::IndexExprsLatticeStorage> operandExprs =
+              llvm::map_to_vector(op->getOperands(), [&](mlir::Value v) {
+                return getLatticeElement(v)->getValue();
+              });
+          auto emitError = [op]() { return op->emitError(); };
+
+          if (llvm::failed(iface.initializeBackward(operandExprs, *initObject,
+                                                    emitError)))
+            return mlir::WalkResult::interrupt();
+          for (auto &&[operand, lattice] :
+               llvm::zip_equal(op->getOperands(), operandExprs)) {
+            IndexExprsLattice *latticeObject = getLatticeElement(operand);
+            if (latticeObject->getValue() != lattice)
+              latticeObject->getValue().unsafeSet(lattice);
+          }
+          return mlir::WalkResult::advance();
+        } else if (op->hasTrait<mlir::OpTrait::IsTerminator>()) {
+          // Set terminator operands to bottom initially so they can be join'ed
+          // with actual lattices coming from other operations.
+          for (mlir::Value operand : op->getOperands()) {
+            if (!llvm::isa<wave::WaveTensorType>(operand.getType()))
+              continue;
+            getLatticeElement(operand)->getValue().unsafeSet(
+                IndexExprsLatticeStorage::bottom());
+          }
+        }
+
+        return mlir::WalkResult::advance();
+      });
+    }
+
+    initialized = true;
+    return llvm::success();
+  }
+
+  void visitBranchOperand(mlir::OpOperand &opOperand) override {
+    if (!llvm::isa<wave::WaveTensorType>(opOperand.get().getType()))
+      return;
+    setToExitState(getLatticeElement(opOperand.get()));
+  }
+
+  void visitCallOperand(mlir::OpOperand &opOperand) override {
+    if (!llvm::isa<wave::WaveTensorType>(opOperand.get().getType()))
+      return;
+    setToExitState(getLatticeElement(opOperand.get()));
+  }
+
+  void setToExitState(IndexExprsLattice *lattice) override {
+    propagateIfChanged(lattice,
+                       lattice->join(initialized
+                                         ? IndexExprsLatticeStorage::top()
+                                         : IndexExprsLatticeStorage::bottom()));
+  }
+
+  llvm::LogicalResult
+  visitOperation(mlir::Operation *op,
+                 llvm::ArrayRef<IndexExprsLattice *> operands,
+                 llvm::ArrayRef<const IndexExprsLattice *> results) override {
+    LLVM_DEBUG({
+      LDBG() << "visiting operation backward " << PrintNoRegions(op) << "\n";
+      LDBG() << "  Operands lattices:\n";
+      for (auto [i, operand] : llvm::enumerate(operands)) {
+        LDBG() << "    operand #" << i << ": ";
+        operand->getValue().print(llvm::dbgs());
+        LDBG() << "\n";
+      }
+      LDBG() << "  Results lattices:\n";
+      for (auto [i, result] : llvm::enumerate(results)) {
+        LDBG() << "    result #" << i << ": ";
+        result->getValue().print(llvm::dbgs());
+        LDBG() << "\n";
+      }
+    });
+
+    // Check if the operation implements the interface.
+    if (!llvm::isa<wave::WaveInferIndexExprsOpInterface>(op)) {
+      // Operations without the interface should not manipulate WaveTensorType.
+      if (!llvm::any_of(op->getOperandTypes(),
+                        llvm::IsaPred<wave::WaveTensorType>) &&
+          !llvm::any_of(op->getResultTypes(),
+                        llvm::IsaPred<wave::WaveTensorType>)) {
+        return llvm::success();
+      }
+      return op->emitError()
+             << "cannot propagate index expressions across an operation not "
+                "implementing the wave infer index expressions interface";
+    }
+
+    auto extractLattice = [](const IndexExprsLattice *lattice) {
+      return lattice->getValue();
+    };
+    llvm::SmallVector<IndexExprsLatticeStorage> operandLattices =
+        llvm::map_to_vector(operands, extractLattice);
+    llvm::SmallVector<IndexExprsLatticeStorage> resultLattices =
+        llvm::map_to_vector(results, extractLattice);
+
+    auto reportError = [op]() { return op->emitError(); };
+    llvm::FailureOr<mlir::ChangeResult> result =
+        llvm::cast<wave::WaveInferIndexExprsOpInterface>(op)
+            .propagateIndexExprsBackward(operandLattices, resultLattices,
+                                         reportError);
+    if (llvm::failed(result))
+      return llvm::failure();
+    if (*result == mlir::ChangeResult::NoChange)
+      return llvm::success();
+
+    for (auto &&[operandLattice, lattice] :
+         llvm::zip_equal(operandLattices, operands)) {
+      propagateIfChanged(lattice, lattice->join(operandLattice));
+    }
+    return llvm::success();
+  }
+
+private:
+  bool initialized = false;
+};
+
+class InferIndexExprsPass
+    : public wave::impl::WaterWaveInferIndexExprsPassBase<InferIndexExprsPass> {
+public:
+  using Base::Base;
+
+  void runOnOperation() override {
+    if (llvm::failed(verifyNormalFormPassPrecondition(
+            wave::WaveNormalForm::AllTypesSpecified, getOperation(),
+            getArgument())))
+      return signalPassFailure();
+
+    mlir::SymbolTableCollection symbolTable;
+    mlir::DataFlowConfig config;
+    config.setInterprocedural(false);
+    mlir::DataFlowSolver solver(config);
+
+    solver.load<mlir::dataflow::DeadCodeAnalysis>();
+    solver.load<mlir::dataflow::SparseConstantPropagation>();
+    solver.load<IndexExprsForwardAnalysis>();
+    solver.load<IndexExprsBackwardAnalysis>(symbolTable);
+
+    if (llvm::failed(runSolverAndCaptureErrors(solver, getOperation(), false)))
+      return signalPassFailure();
+
+    mlir::WalkResult walkResult =
+        getOperation()->walk([&](wave::WaveInferIndexExprsOpInterface iface) {
+          auto getLatticeValue = [&](mlir::Value value) {
+            auto *latticeObject = solver.lookupState<IndexExprsLattice>(value);
+            return latticeObject ? latticeObject->getValue()
+                                 : IndexExprsLatticeStorage::bottom();
+          };
+          llvm::SmallVector<wave::IndexExprsLatticeStorage> operandExprs =
+              llvm::map_to_vector(iface->getOperands(), getLatticeValue);
+          llvm::SmallVector<wave::IndexExprsLatticeStorage> resultExprs =
+              llvm::map_to_vector(iface->getResults(), getLatticeValue);
+
+          if (llvm::failed(
+                  iface.setIndexFromLattices(operandExprs, resultExprs)))
+            return mlir::WalkResult::interrupt();
+
+          return mlir::WalkResult::advance();
+        });
+    if (walkResult.wasInterrupted())
+      return signalPassFailure();
+
+    if (llvm::failed(wave::setNormalFormPassPostcondition(
+            wave::WaveNormalForm::IndexExprsSpecified, getOperation())))
+      return signalPassFailure();
+  }
+};

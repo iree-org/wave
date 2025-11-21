@@ -48,7 +48,8 @@ class UnaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
           WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-          CompatibleOperandsAndResultsOpTrait]>,
+          CompatibleOperandsAndResultsOpTrait,
+          WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Argument">:$argument
@@ -66,7 +67,8 @@ class BinaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
           WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-          CompatibleOperandsAndResultsOpTrait]>,
+          CompatibleOperandsAndResultsOpTrait,
+          WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Left-hand side">:$lhs,
@@ -107,7 +109,9 @@ def Exp2Op : UnaryWaveOp<"exp2"> {
 }
 
 def MmaOp : WaveOp<"mma",
-    [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>]>,
+    [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
+      ["initializeForward", "initializeBackward"]>]>,
             WaveArithmeticOpDoc {
   let summary = "Matrix multiply and accumulate";
 
@@ -241,7 +245,8 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
     WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
+    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Reads from memory";
   let description = [{
     Moves data from a memory-resident tensor to a register-resident tensor
@@ -267,7 +272,8 @@ def ReadOp : WaveOp<"read", [
 
 def RegisterOp : WaveOp<"register", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
-    NoOpElementsPerThreadOpTrait]> {
+    NoOpElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Defines a tensor value known to be placed in a register";
   let description = [{
     Defines a new register-resident tensor initialized with the given scalar
@@ -293,7 +299,8 @@ def RegisterOp : WaveOp<"register", [
 def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
     WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
+    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor
@@ -322,7 +329,8 @@ def WriteOp : WaveOp<"write", [
 
 def CastOp : WaveOp<"cast", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
-    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait]> {
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Cast a register-resident tensor from one type to another";
   let description = [{
     Change the type of elements in the register-resident tensor without

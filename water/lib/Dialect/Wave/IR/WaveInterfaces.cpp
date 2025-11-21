@@ -13,6 +13,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 
 using namespace mlir;
 
@@ -474,6 +476,477 @@ llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
 
   return verifyTypeRange(op->getLoc(), op->getResultTypes(), referenceType,
                          includeAddressSpace, kResultNamePrefix, os.str());
+}
+
+//-----------------------------------------------------------------------------
+// Lattice implementation
+//-----------------------------------------------------------------------------
+
+wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage()
+    : value(nullptr, kUninitializedState) {}
+
+wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
+    mlir::DictionaryAttr concreteValue)
+    : value(concreteValue, kSpecificTypeState) {}
+
+bool wave::IndexExprsLatticeStorage::operator==(
+    const IndexExprsLatticeStorage &other) const {
+  return value == other.value;
+}
+
+bool wave::IndexExprsLatticeStorage::operator!=(
+    const IndexExprsLatticeStorage &other) const {
+  return !(*this == other);
+}
+
+bool wave::IndexExprsLatticeStorage::isBottom() const {
+  return value.getInt() == kUninitializedState;
+}
+
+bool wave::IndexExprsLatticeStorage::isTop() const {
+  return value.getInt() == kUndecidableState;
+}
+
+mlir::DictionaryAttr wave::IndexExprsLatticeStorage::getConcreteValue() const {
+  if (value.getInt() != kSpecificTypeState)
+    return nullptr;
+  return llvm::cast<mlir::DictionaryAttr>(value.getPointer());
+}
+
+wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::top() {
+  IndexExprsLatticeStorage result;
+  result.value.setPointer(nullptr);
+  result.value.setInt(kUndecidableState);
+  return result;
+}
+
+wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::bottom() {
+  IndexExprsLatticeStorage result;
+  result.value.setPointer(nullptr);
+  result.value.setInt(kUninitializedState);
+  return result;
+}
+
+namespace {
+template <typename RangeT>
+static void
+aggregateAllSymbolNames(RangeT &&symbolNameLists,
+                        llvm::SmallVectorImpl<llvm::StringRef> &symbolNames,
+                        llvm::StringMap<unsigned> &symbolNamesToIdx) {
+  llvm::SetVector<llvm::StringRef> allSymbolNames;
+  for (auto &&symbolNameList : symbolNameLists)
+    allSymbolNames.insert_range(symbolNameList);
+  for (auto &&[i, symbolName] : llvm::enumerate(allSymbolNames))
+    symbolNamesToIdx[symbolName] = i;
+  symbolNames = allSymbolNames.takeVector();
+}
+
+static mlir::AffineMap
+permuteMapSymbols(mlir::AffineMap map,
+                  llvm::ArrayRef<llvm::StringRef> symbolNames,
+                  llvm::ArrayRef<llvm::StringRef> allSymbolNames,
+                  const llvm::StringMap<unsigned> &symbolNamesToIdx) {
+  assert(map.getNumDims() == 0 && "maps should not involve dimensions");
+  mlir::MLIRContext *ctx = map.getContext();
+  unsigned newNumSyms = allSymbolNames.size();
+
+  auto newSymbols = llvm::map_to_vector(symbolNames, [&](llvm::StringRef name) {
+    return mlir::getAffineSymbolExpr(symbolNamesToIdx.at(name), ctx);
+  });
+
+  llvm::SmallVector<mlir::AffineExpr> remapped;
+  remapped.reserve(map.getNumResults());
+  for (mlir::AffineExpr expr : map.getResults())
+    remapped.push_back(expr.replaceSymbols(newSymbols));
+
+  return mlir::AffineMap::get(/*dimCount=*/0, newNumSyms, remapped, ctx);
+};
+} // namespace
+
+/// Parse and validate wave constraints from an attribute array.
+/// Returns the hardware constraint or nullptr on failure.
+static wave::HardwareConstraintAttr parseWaveConstraints(
+    mlir::Operation *parent, mlir::Attribute constraints,
+    llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<mlir::Attribute>>
+        &symbolConstraints) {
+  wave::HardwareConstraintAttr hardwareConstraint;
+  for (mlir::Attribute constraint : llvm::cast<mlir::ArrayAttr>(constraints)) {
+    if (auto workgroup =
+            llvm::dyn_cast<wave::WorkgroupConstraintAttr>(constraint)) {
+      symbolConstraints[workgroup.getDim()].push_back(workgroup);
+    } else if (auto tiling =
+                   llvm::dyn_cast<wave::TilingConstraintAttr>(constraint)) {
+      symbolConstraints[tiling.getDim()].push_back(tiling);
+    } else if (auto hardware =
+                   llvm::dyn_cast<wave::HardwareConstraintAttr>(constraint)) {
+      if (!hardwareConstraint) {
+        hardwareConstraint = hardware;
+      } else {
+        // TODO: this should be checked by the verifier.
+        parent->emitError()
+            << "multiple hardware constraints are not supported";
+        return nullptr;
+      }
+    } else {
+      parent->emitError() << "unsupported constraint type: " << constraint;
+      return nullptr;
+    }
+  }
+
+  if (!hardwareConstraint) {
+    parent->emitError() << "expected a hardware constraint";
+    return nullptr;
+  }
+  // TODO: compute waves_per_block from wave constraints; this should be
+  // done in the attribute itself. Maybe move this to the attribute
+  // verifier.
+  llvm::ArrayRef<unsigned> wavesPerBlock =
+      hardwareConstraint.getWavesPerBlock();
+  if (wavesPerBlock.size() != 3) {
+    parent->emitError() << "expected a waves_per_block entry with three "
+                           "elements in the hardware constraint";
+    return nullptr;
+  }
+
+  return hardwareConstraint;
+}
+
+llvm::FailureOr<wave::IndexExprsAnalysisInit>
+wave::IndexExprsAnalysisInit::create(mlir::Operation *root,
+                                     mlir::Attribute constraintsAttr) {
+  wave::IndexExprsAnalysisInit initObject;
+  initObject.hardwareConstraint =
+      parseWaveConstraints(root, constraintsAttr, initObject.symbolConstraints);
+  if (initObject.hardwareConstraint == nullptr)
+    return llvm::failure();
+  initObject.wavesPerBlock = initObject.hardwareConstraint.getWavesPerBlock();
+  return initObject;
+}
+
+wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
+    const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
+    llvm::ArrayRef<llvm::StringRef> ignoredRhsSymbols) {
+  if (lhs.value == rhs.value)
+    return lhs;
+
+  if (lhs.isTop() || rhs.isTop())
+    return top();
+
+  if (lhs.isBottom()) {
+    if (ignoredRhsSymbols.empty() || rhs.isBottom())
+      return rhs;
+
+    llvm::SmallVector<mlir::NamedAttribute> filtered = llvm::filter_to_vector(
+        rhs.getConcreteValue(), [&](mlir::NamedAttribute attr) {
+          return !llvm::is_contained(ignoredRhsSymbols,
+                                     attr.getName().getValue());
+        });
+    return IndexExprsLatticeStorage(mlir::DictionaryAttr::get(
+        rhs.getConcreteValue().getContext(), filtered));
+  }
+
+  if (rhs.isBottom())
+    return lhs;
+
+  mlir::MLIRContext *ctx = lhs.getConcreteValue().getContext();
+  mlir::DictionaryAttr lhsValue = lhs.getConcreteValue();
+  mlir::DictionaryAttr rhsValue = rhs.getConcreteValue();
+
+  llvm::DenseMap<mlir::StringAttr, mlir::Attribute> result;
+  for (mlir::NamedAttribute namedAttr : lhsValue) {
+    result[namedAttr.getName()] = namedAttr.getValue();
+  }
+  for (mlir::NamedAttribute namedAttr : rhsValue) {
+    if (llvm::find_if(ignoredRhsSymbols, [&](llvm::StringRef symbol) {
+          return symbol == namedAttr.getName().getValue();
+        }) != ignoredRhsSymbols.end()) {
+      continue;
+    }
+
+    auto it = result.find(namedAttr.getName());
+    if (it == result.end()) {
+      result[namedAttr.getName()] = namedAttr.getValue();
+      continue;
+    }
+
+    auto lhsValue = llvm::cast<wave::WaveIndexMappingAttr>(it->getSecond());
+    auto rhsValue =
+        llvm::cast<wave::WaveIndexMappingAttr>(namedAttr.getValue());
+    if (lhsValue == rhsValue)
+      continue;
+
+    // TODO: fix this string-based abomination.
+    llvm::SmallVector<llvm::StringRef> fixmeMagicThreadDependentNames = {
+        "_T0", "_T1", "_T2", "_GPR_NUM"};
+    auto hasThreadSymbols = [&](mlir::AffineMap map,
+                                llvm::ArrayRef<llvm::StringRef> names) {
+      for (auto &&[i, symbol] : llvm::enumerate(names)) {
+        if (!llvm::is_contained(fixmeMagicThreadDependentNames, symbol))
+          continue;
+        if (map.isFunctionOfSymbol(i))
+          return true;
+      }
+      return false;
+    };
+
+    auto isThreadDependent = [&](wave::WaveIndexMappingAttr val) -> bool {
+      return llvm::any_of(
+          llvm::ArrayRef{val.getStart(), val.getStep(), val.getStride()},
+          [&](mlir::AffineMap map) {
+            return hasThreadSymbols(map, val.getAllSymbolNames());
+          });
+    };
+
+    // If both are thread-dependent or thread-independent, the only acceptable
+    // join is when they are equal, which was handled above.
+    bool lhsIsThreadDependent = isThreadDependent(lhsValue);
+    bool rhsIsThreadDependent = isThreadDependent(rhsValue);
+    if (!(lhsIsThreadDependent ^ rhsIsThreadDependent))
+      return top();
+
+    wave::WaveIndexMappingAttr threadDependentMapping =
+        lhsIsThreadDependent ? lhsValue : rhsValue;
+    wave::WaveIndexMappingAttr threadIndependentMapping =
+        lhsIsThreadDependent ? rhsValue : lhsValue;
+
+    // Collect all unique symbol names from both index mappings in order.
+    llvm::SmallVector<llvm::StringRef> allSymbolNames;
+    llvm::StringMap<unsigned> symbolNamesToIdx;
+    auto threadDependentSymbolNames =
+        threadDependentMapping.getAllSymbolNames();
+    auto threadIndependentSymbolNames =
+        threadIndependentMapping.getAllSymbolNames();
+    aggregateAllSymbolNames(llvm::ArrayRef{threadIndependentSymbolNames,
+                                           threadDependentSymbolNames},
+                            allSymbolNames, symbolNamesToIdx);
+
+    mlir::AffineMap threadDependentStart = permuteMapSymbols(
+        threadDependentMapping.getStart(), threadDependentSymbolNames,
+        allSymbolNames, symbolNamesToIdx);
+    mlir::AffineMap threadIndependentStart = permuteMapSymbols(
+        threadIndependentMapping.getStart(), threadIndependentSymbolNames,
+        allSymbolNames, symbolNamesToIdx);
+
+    mlir::AffineMap threadDependentStep = permuteMapSymbols(
+        threadDependentMapping.getStep(), threadDependentSymbolNames,
+        allSymbolNames, symbolNamesToIdx);
+    mlir::AffineMap threadIndependentStep = permuteMapSymbols(
+        threadIndependentMapping.getStep(), threadIndependentSymbolNames,
+        allSymbolNames, symbolNamesToIdx);
+
+    mlir::AffineMap threadDependentStride = permuteMapSymbols(
+        threadDependentMapping.getStride(), threadDependentSymbolNames,
+        allSymbolNames, symbolNamesToIdx);
+    mlir::AffineMap threadIndependentStride = permuteMapSymbols(
+        threadIndependentMapping.getStride(), threadIndependentSymbolNames,
+        allSymbolNames, symbolNamesToIdx);
+
+    // Subtract the thread-independent from thread-dependent for each.
+    mlir::MLIRContext *ctx = threadDependentMapping.getContext();
+    auto subtractMaps = [&](mlir::AffineMap a,
+                            mlir::AffineMap b) -> mlir::AffineMap {
+      // Assert there is only one result expression in each map.
+      assert(a.getNumResults() == 1 &&
+             "expected a single result expression in affine map 'a'");
+      assert(b.getNumResults() == 1 &&
+             "expected a single result expression in affine map 'b'");
+      mlir::AffineExpr subtracted = a.getResult(0) - b.getResult(0);
+      return mlir::AffineMap::get(a.getNumDims(), a.getNumSymbols(), subtracted,
+                                  ctx);
+    };
+    mlir::AffineMap newStart =
+        subtractMaps(threadDependentStart, threadIndependentStart);
+    mlir::AffineMap newStep =
+        subtractMaps(threadDependentStep, threadIndependentStep);
+    mlir::AffineMap newStride =
+        subtractMaps(threadDependentStride, threadIndependentStride);
+
+    llvm::DenseSet<unsigned> allowedSymbols;
+    for (llvm::StringRef symbolName : fixmeMagicThreadDependentNames) {
+      auto it = symbolNamesToIdx.find(symbolName);
+      if (it != symbolNamesToIdx.end())
+        allowedSymbols.insert(it->second);
+    }
+    auto isOnlyThreadDependent = [&](mlir::AffineMap map) {
+      mlir::WalkResult walkResult =
+          map.getResult(0).walk([&](mlir::AffineExpr expr) {
+            auto symExpr = llvm::dyn_cast<mlir::AffineSymbolExpr>(expr);
+            if (!symExpr)
+              return mlir::WalkResult::advance();
+            if (!allowedSymbols.contains(symExpr.getPosition()))
+              return mlir::WalkResult::interrupt();
+            return mlir::WalkResult::advance();
+          });
+      return !walkResult.wasInterrupted();
+    };
+
+    if (!isOnlyThreadDependent(newStart) || !isOnlyThreadDependent(newStep) ||
+        !isOnlyThreadDependent(newStride))
+      return top();
+
+    result[namedAttr.getName()] = threadDependentMapping;
+  }
+  return IndexExprsLatticeStorage(mlir::DictionaryAttr::get(
+      ctx, llvm::map_to_vector(result, [](auto &&pair) {
+        return mlir::NamedAttribute(pair.first, pair.second);
+      })));
+}
+
+wave::IndexExprsLatticeStorage
+wave::IndexExprsLatticeStorage::meet(const IndexExprsLatticeStorage &lhs,
+                                     const IndexExprsLatticeStorage &rhs) {
+  return join(lhs, rhs);
+}
+
+void wave::IndexExprsLatticeStorage::unsafeSet(
+    const IndexExprsLatticeStorage &value) {
+  this->value = value.value;
+}
+
+wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
+    llvm::ArrayRef<wave::WaveSymbolAttr> symbols) const {
+  if (isBottom() || isTop())
+    return *this;
+
+  llvm::StringSet<> symbolNames;
+  for (wave::WaveSymbolAttr symbol : symbols)
+    symbolNames.insert(symbol.getName());
+
+  llvm::SmallVector<mlir::NamedAttribute> filtered = llvm::filter_to_vector(
+      getConcreteValue(), [&](mlir::NamedAttribute attr) {
+        return symbolNames.contains(attr.getName().getValue());
+      });
+
+  if (filtered.empty())
+    return bottom();
+
+  return IndexExprsLatticeStorage(
+      mlir::DictionaryAttr::get(getConcreteValue().getContext(), filtered));
+}
+
+void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
+  if (isBottom()) {
+    os << "<bottom>";
+  } else if (isTop()) {
+    os << "<top>";
+  } else {
+    os << getConcreteValue();
+  }
+}
+
+void wave::IndexExprsLatticeStorage::dump() const { print(llvm::errs()); }
+
+void wave::operator<<(mlir::Diagnostic &diag,
+                      const IndexExprsLatticeStorage &value) {
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  value.print(os);
+  diag << os.str();
+}
+
+llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
+    llvm::ArrayRef<IndexExprsLatticeStorage> from,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> to, mlir::TypeRange toTypes,
+    llvm::StringRef fromName, llvm::StringRef toName,
+    wave::EmitErrorFn emitError) {
+  // Join all "from" lattices.
+  IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::bottom();
+  bool fromTop = false;
+  for (const IndexExprsLatticeStorage &fromLattice : from) {
+    // If one of the from lattices reached the top, no need to keep joining, the
+    // result is known to be top.
+    if (fromLattice.isTop()) {
+      fromTop = true;
+      joined = IndexExprsLatticeStorage::top();
+      break;
+    }
+    joined = IndexExprsLatticeStorage::join(joined, fromLattice);
+  }
+
+  // Report if joining non-top "from" lattices reached the top as this is
+  // indicative of a "sideways" conflict.
+  if (joined.isTop() && !fromTop) {
+    mlir::InFlightDiagnostic diag =
+        emitError() << "incompatible " << fromName
+                    << " when propagating from those to " << toName;
+    for (auto &&[i, fromLattice] : llvm::enumerate(from)) {
+      diag.attachNote() << fromName << " #" << i << " lattice: " << fromLattice;
+    }
+    return diag;
+  }
+
+  // Propagate to all "to" lattices.
+  mlir::ChangeResult changeResult = mlir::ChangeResult::NoChange;
+  for (auto &&[i, toLattice] : llvm::enumerate(to)) {
+    auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(toTypes[i]);
+    if (!tensorType) {
+      toLattice = IndexExprsLatticeStorage::top();
+      continue;
+    }
+    IndexExprsLatticeStorage filtered =
+        joined.keepOnlySymbols(tensorType.getShape());
+    IndexExprsLatticeStorage newLattice =
+        IndexExprsLatticeStorage::join(toLattice, filtered);
+
+    // Report an error only when the lattice moved to the top state, which is
+    // indicative of a conflict, not when it was in the top state to start with.
+    // Also avoid reporting errors when joined lattice is in the top state: it
+    // is either reported above or it means the conflict was found elsewhere and
+    // we are just propagating it.
+    if (newLattice.isTop() && !toLattice.isTop() && !filtered.isTop()) {
+      mlir::InFlightDiagnostic diag =
+          emitError() << "conflict when propagating from " << fromName << " to "
+                      << toName << " #" << i;
+      diag.attachNote() << "original lattice: " << toLattice;
+      for (auto &&[j, fromLattice] : llvm::enumerate(from)) {
+        diag.attachNote() << fromName << " #" << j
+                          << " lattice: " << fromLattice;
+      }
+      return diag;
+    }
+
+    if (newLattice != toLattice) {
+      changeResult = mlir::ChangeResult::Change;
+      toLattice = newLattice;
+    }
+  }
+  return changeResult;
+}
+
+llvm::LogicalResult wave::detail::checkAndAppendIndexExpr(
+    mlir::Location loc, const IndexExprsLatticeStorage &expr,
+    llvm::Twine description,
+    llvm::SmallVectorImpl<mlir::Attribute> &indexExprs) {
+  if (expr.isBottom()) {
+    emitError(loc) << "failed to infer index expressions for " << description;
+    return llvm::failure();
+  }
+  if (expr.isTop()) {
+    emitError(loc) << "conflict detected in index expressions for "
+                   << description;
+    return llvm::failure();
+  }
+  indexExprs.push_back(expr.getConcreteValue());
+  return llvm::success();
+}
+
+llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
+    mlir::Operation *op, llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
+    llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
+  (void)operandExprs;
+  llvm::SmallVector<mlir::Attribute> indexExprs;
+  indexExprs.reserve(resultExprs.size());
+  for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
+    if (!llvm::isa<wave::WaveTensorType>(op->getResult(i).getType()))
+      continue;
+    if (failed(checkAndAppendIndexExpr(op->getLoc(), resultExprs[i],
+                                       "result #" + llvm::Twine(i),
+                                       indexExprs)))
+      return llvm::failure();
+  }
+  op->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
+              mlir::ArrayAttr::get(op->getContext(), indexExprs));
+  return llvm::success();
 }
 
 #include "water/Dialect/Wave/IR/WaveOpInterfaces.cpp.inc"

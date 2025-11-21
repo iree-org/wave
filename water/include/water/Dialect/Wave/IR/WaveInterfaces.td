@@ -143,4 +143,86 @@ def CompatibleOperandsAndResultsIgnoreSpaceOpTrait
   let cppNamespace = "::wave";
 }
 
+//-----------------------------------------------------------------------------
+// WaveInferIndexExprsOpInterface and implementation traits
+//-----------------------------------------------------------------------------
+
+def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface"> {
+  let description = [{
+    Interface capturing op-specific index expression inference rules inside the
+    Wave dialect. Index expression inference proceeds forward and backward on a
+    function in order to compute index expressions for all values. For legacy
+    reasons, MMA and reduction operations capture index expressions for their
+    operands in addition to results, and write operations capture a single index
+    expression that is common to operations. Each operation may indicate how to
+    propagate index expressions from its operands to its results and, conversely,
+    from its results to its operands.
+  }];
+  let cppNamespace = "::wave";
+
+  let methods = [
+    InterfaceMethod<[{
+      Propagate index expression information from operands to results. Result
+      index expressions may be updated in place. If propagation would lead to a
+      conflict, return failure and print additional information into the
+      provided error stream. Otherwise return an indication whether result
+      index expressions were updated.
+      }],
+      "::llvm::FailureOr<::mlir::ChangeResult>", "propagateIndexExprsForward",
+      (ins "::llvm::ArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
+           "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$resultExprs,
+           "::wave::EmitErrorFn":$emitError)
+    >,
+    InterfaceMethod<[{
+      Propagate index expression information from results to operands. Operand
+      index expressions may be updated in place. If propagation would lead to a
+      conflict, return failure and print additional information into the
+      provided error stream. Otherwise return an indication whether operand
+      index expressions were updated.
+      }],
+      "::llvm::FailureOr<::mlir::ChangeResult>",
+      "propagateIndexExprsBackward",
+      (ins "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
+           "::llvm::ArrayRef<::wave::IndexExprsLatticeStorage>":$resultExprs,
+           "::wave::EmitErrorFn":$emitError)
+    >,
+    InterfaceMethod<[{
+      }],
+      "::llvm::LogicalResult",
+      "initializeForward",
+      (ins "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$resultExprs,
+           "const ::wave::IndexExprsAnalysisInit &":$initObject,
+           "::wave::EmitErrorFn":$emitError),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return ::llvm::success();
+      }]
+    >,
+    InterfaceMethod<[{
+      }],
+      "::llvm::LogicalResult",
+      "initializeBackward",
+      (ins "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
+           "const ::wave::IndexExprsAnalysisInit &":$initObject,
+           "::wave::EmitErrorFn":$emitError),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return ::llvm::success();
+      }]
+    >,
+    InterfaceMethod<[{
+      }],
+      "::llvm::LogicalResult",
+      "setIndexFromLattices",
+      (ins "::llvm::ArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
+           "::llvm::ArrayRef<::wave::IndexExprsLatticeStorage>":$resultExprs)
+    >
+  ];
+}
+
+def IdentityIndexExprsOpTrait
+    : NativeOpTrait<"IdentityIndexExprsOpTrait"> {
+  let cppNamespace = "::wave";
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEINTERFACES
