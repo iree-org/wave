@@ -1,3 +1,9 @@
+// Copyright 2025 The IREE Authors
+//
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 #include <array>
 #include <cstring>
 #include <nanobind/nanobind.h>
@@ -6,6 +12,8 @@
 #include <sstream>
 #include <system_error>
 #include <vector>
+
+#include "hip_types.h"
 
 #if defined(__linux__)
 #include <dlfcn.h> // dlopen, dlsym, dlerror
@@ -18,31 +26,8 @@ using module_handle_t = HMODULE;
 #error "Unsupported platform"
 #endif
 
-// Just hardcode necessary constants and types here, we don't expect them to
-// change as it will break all hip programs in existence.
-#define HIP_LAUNCH_PARAM_BUFFER_POINTER ((void *)0x01)
-#define HIP_LAUNCH_PARAM_BUFFER_SIZE ((void *)0x02)
-#define HIP_LAUNCH_PARAM_END ((void *)0x03)
-
-using hipError_t = int;
-using hipStream_t = void *;
-using hipFunction_t = void *;
-using hipModule_t = void *;
-
-using hipModuleLaunchKernel_t = hipError_t (*)(hipFunction_t, unsigned int,
-                                               unsigned int, unsigned int,
-                                               unsigned int, unsigned int,
-                                               unsigned int, unsigned int,
-                                               hipStream_t, void **, void **);
-
-using hipGetErrorName_t = const char *(*)(hipError_t);
-using hipGetErrorString_t = const char *(*)(hipError_t);
-using hipModuleUnload_t = hipError_t (*)(hipModule_t);
-using hipModuleLoad_t = hipError_t (*)(hipModule_t *, const char *);
-using hipModuleGetFunction_t = hipError_t (*)(hipFunction_t *, hipModule_t,
-                                              const char *);
-
 static hipModuleLaunchKernel_t hipModuleLaunchKernel = nullptr;
+static hipDrvLaunchKernelEx_t hipDrvLaunchKernelEx = nullptr;
 static hipGetErrorName_t hipGetErrorName = nullptr;
 static hipGetErrorString_t hipGetErrorString = nullptr;
 static hipModuleUnload_t hipModuleUnload = nullptr;
@@ -97,6 +82,10 @@ static void load_hip_functions() {
   GET_FUNC(module, hipModuleLoad);
   GET_FUNC(module, hipModuleGetFunction);
 
+  // hipDrvLaunchKernelEx may not be available.
+  hipDrvLaunchKernelEx = reinterpret_cast<hipDrvLaunchKernelEx_t>(
+      get_symbol_address(module, "hipDrvLaunchKernelEx"));
+
 #undef GET_FUNC
 }
 
@@ -123,6 +112,7 @@ struct KernelLaunchInfo {
   int sharedMemoryBytes;
   int gridX, gridY, gridZ;
   int blockX, blockY, blockZ;
+  int clusterDimX, clusterDimY, clusterDimZ;
 };
 
 using Int64Vector = std::vector<uint64_t>;
@@ -169,9 +159,33 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
                              HIP_LAUNCH_PARAM_BUFFER_SIZE, &kernArgSize,
                              HIP_LAUNCH_PARAM_END};
 
-  HIP_CHECK_EXC(hipModuleLaunchKernel(
-      function, info.gridX, info.gridY, info.gridZ, info.blockX, info.blockY,
-      info.blockZ, 0, stream, nullptr, (void **)&hipLaunchParams));
+  if (info.clusterDimX * info.clusterDimY * info.clusterDimZ > 1) {
+    if (!hipDrvLaunchKernelEx)
+      throw std::runtime_error("hipDrvLaunchKernelEx is not available");
+
+    hipLaunchAttribute attributes[1];
+    // Attribute0: Cluster dimensions
+    attributes[0].id = (hipLaunchAttributeID)4;
+    int *cluster_dims = (int *)attributes[0].val.pad;
+    cluster_dims[0] = info.clusterDimX;
+    cluster_dims[1] = info.clusterDimY;
+    cluster_dims[2] = info.clusterDimZ;
+
+    HIP_LAUNCH_CONFIG config = {
+        info.gridX,  info.gridY,
+        info.gridZ,  info.blockX,
+        info.blockY, info.blockZ,
+        0,           stream,
+        attributes,  1 // Number of attributes
+    };
+
+    HIP_CHECK_EXC(hipDrvLaunchKernelEx(&config, function, nullptr,
+                                       (void **)&hipLaunchParams));
+  } else {
+    HIP_CHECK_EXC(hipModuleLaunchKernel(
+        function, info.gridX, info.gridY, info.gridZ, info.blockX, info.blockY,
+        info.blockZ, 0, stream, nullptr, (void **)&hipLaunchParams));
+  }
 }
 
 static void unload_binary(void *ptr) noexcept {
@@ -196,7 +210,8 @@ NB_MODULE(wave_runtime, m) {
   nb::bind_vector<Int64Vector>(m, "Int64Vector");
   nb::bind_vector<Int32Vector>(m, "Int32Vector");
   nb::class_<KernelLaunchInfo>(m, "KernelLaunchInfo")
-      .def(nb::init<uintptr_t, uintptr_t, int, int, int, int, int, int, int>())
+      .def(nb::init<uintptr_t, uintptr_t, int, int, int, int, int, int, int,
+                    int, int, int>())
       .def_rw("gpu_stream", &KernelLaunchInfo::stream)
       .def_rw("gpu_func", &KernelLaunchInfo::function)
       .def_rw("sharedMemoryBytes", &KernelLaunchInfo::sharedMemoryBytes)
@@ -205,7 +220,10 @@ NB_MODULE(wave_runtime, m) {
       .def_rw("gridZ", &KernelLaunchInfo::gridZ)
       .def_rw("blockX", &KernelLaunchInfo::blockX)
       .def_rw("blockY", &KernelLaunchInfo::blockY)
-      .def_rw("blockZ", &KernelLaunchInfo::blockZ);
+      .def_rw("blockZ", &KernelLaunchInfo::blockZ)
+      .def_rw("clusterDimX", &KernelLaunchInfo::clusterDimX)
+      .def_rw("clusterDimY", &KernelLaunchInfo::clusterDimY)
+      .def_rw("clusterDimZ", &KernelLaunchInfo::clusterDimZ);
   m.def("load_hip_functions", &load_hip_functions);
   m.def("launch", &launch);
   m.def("load_binary", &load_binary);

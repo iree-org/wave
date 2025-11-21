@@ -2509,8 +2509,15 @@ def testTensorLoadToShared(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
+    cluster_x = 4 if shape[0] % (16 * 4) == 0 else 1
+    cluster_y = 4 if shape[1] % (16 * 4) == 0 else 1
+
     constraints += [
-        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            workgroups_per_cluster=(cluster_x, cluster_y, 1),
+        )
     ]
 
     @tkw.wave(constraints)

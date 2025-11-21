@@ -651,8 +651,6 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
     # Why affine, for now simply create indexing expressions.
     # This can easily be adapted to affine expressions later.
     select_stack = []
-    if isinstance(expr, sympy.Piecewise):
-        assert len(expr.args) == 2 and expr.args[1][1], f"Unsupported piecewise {expr}"
     for term in sympy.postorder_traversal(expr):
         match term:
             case sympy.Symbol():
@@ -815,12 +813,37 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                 select_stack.append(expr)
                 continue
             case sympy.Piecewise():
-                expr = select_stack.pop()
-                cond = select_stack.pop()
-                last_expr = select_stack.pop()
-                last_cond = select_stack.pop()
-                res = arith_d.select(last_cond, *_broadcast(last_expr, expr))
-                stack.append(res)
+                # Last cond must be True
+                assert (
+                    term.args and term.args[-1][1] == True
+                ), f"Unsupported piecewise {term}"
+                # Number of (condition, expression) pairs
+                num_cases = len(term.args)
+
+                # Pop all (condition, expression) pairs from select_stack
+                # They are stored as: cond1, expr1, cond2, expr2, ..., condN, exprN
+                cases = []
+                for _ in range(num_cases):
+                    expr = select_stack.pop()
+                    cond = select_stack.pop()
+                    cases.append((cond, expr))
+
+                # Reverse to process in correct order (first case to last case)
+                cases.reverse()
+
+                # Build nested select operations
+                # Start with the last expression (typically the default/else case)
+                result = cases[-1][1]
+
+                # Work backwards through earlier cases to build nested selects
+                # Piecewise((expr1, cond1), (expr2, cond2), (expr3, True)) becomes:
+                # select(cond1, expr1, select(cond2, expr2, expr3))
+                for i in range(len(cases) - 2, -1, -1):
+                    cond, expr = cases[i]
+                    result = arith_d.select(cond, *_broadcast(expr, result))
+
+                stack.append(result)
+                assert not select_stack, f"select_stack is not empty: {select_stack}"
             case _:
                 raise CodegenError(f"Can not handle {type(term)} : {term}")
 

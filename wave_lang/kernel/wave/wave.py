@@ -87,6 +87,7 @@ from .decompose_topk_ops import decompose_topk_ops
 from .decompose_vmma_ops import decompose_vmma_ops
 from .expansion.expansion import add_get_results, expand_graph
 from .tensor_load_to_shared import tensor_load_to_shared
+from .multicast import multicast
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
@@ -859,6 +860,7 @@ class LaunchableWave(Launchable):
             graph_passes += [
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(tensor_load_to_shared, trace, self.constraints, options),
+                partial(multicast, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
@@ -991,6 +993,11 @@ class LaunchableWave(Launchable):
         options.kernel_launch_info.blocks = [
             int(x) for x in hw_constraint.threads_per_block
         ]
+        options.kernel_launch_info.cluster_dims = (
+            [int(x) for x in hw_constraint.workgroups_per_cluster]
+            if hw_constraint.workgroups_per_cluster
+            else [0, 0, 0]
+        )
         options.kernel_launch_info.func_name = self._name
 
         idxc = IndexingContext.current()

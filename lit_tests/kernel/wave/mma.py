@@ -603,7 +603,9 @@ def test_wmma_with_tensor_load():
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=32, mma_type=tkw.MMAType.GFX1250_F32_16x16x32_F16
+            threads_per_wave=32,
+            mma_type=tkw.MMAType.GFX1250_F32_16x16x32_F16,
+            workgroups_per_cluster=(4, 4, 1),
         )
     ]
 
@@ -641,6 +643,11 @@ def test_wmma_with_tensor_load():
     # CHECK-LABEL: test_wmma_with_tensor_load
     # CHECK:          func.func @mma
 
+    # CHECK-DAG:    %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG:    %[[C1:.*]] = arith.constant 1 : index
+    # CHECK-DAG:    %[[C2:.*]] = arith.constant 2 : index
+    # CHECK-DAG:    %[[C3:.*]] = arith.constant 3 : index
+
     ### global buffer is bound to %0, %1 and %2 : MK, NK, MN
     # CHECK:        %[[SUBSPAN0:.*]] = stream.binding.subspan
     # CHECK:        %[[SUBSPAN1:.*]] = stream.binding.subspan
@@ -663,8 +670,19 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[CAST_3:.*]] = memref.reinterpret_cast %[[VIEW1]]
     # CHECK:        %[[INT_PTR_1:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_3]]
 
-    ### pack descriptors and invoke tensor load
     # CHECK:        %[[D0:.*]] = vector.from_elements
+
+    # Cluster mask generation
+    # CHECK:        %[[COND0:.*]] = arith.cmpi eq, %{{.*}}, %[[C1]] : index
+    # CHECK:        %[[COND1:.*]] = arith.cmpi eq, %{{.*}}, %[[C0]] : index
+    # CHECK:        %[[COND2:.*]] = arith.cmpi eq, %{{.*}}, %[[C3]] : index
+    # CHECK:        %[[COND3:.*]] = arith.cmpi eq, %{{.*}}, %[[C2]] : index
+    # CHECK:        %[[MASK1:.*]] = arith.select %[[COND3]], %{{.*}}, %[[C0]] : index
+    # CHECK:        %[[MASK2:.*]] = arith.select %[[COND2]], %{{.*}}, %[[MASK1]] : index
+    # CHECK:        %[[MASK3:.*]] = arith.select %[[COND1]], %{{.*}}, %[[MASK2]] : index
+    # CHECK:        %[[MASK4:.*]] = arith.select %[[COND0]], %{{.*}}, %[[MASK3]] : index
+
+    ### pack descriptors and invoke tensor load
     # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
     # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"

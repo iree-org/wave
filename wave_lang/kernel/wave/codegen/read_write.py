@@ -717,6 +717,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             shared_tile_index,
             global_tile_index,
             bounds,
+            multicast_mask,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
@@ -872,6 +873,12 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         pad_amount = ((padding * bytewidth) // 4 - 1) << 25
         pad_packed = pad_enable | pad_interval | pad_amount
         data_size_val = arith_d.ori(data_size_val, arith_d.constant(i32, pad_packed))
+
+    if multicast_mask:
+        multicast_mask = sympy.simplify(subs_idxc(multicast_mask))
+        multicast_mask_val = gen_sympy_index(subs, multicast_mask)
+        multicast_mask_val = arith_d.index_cast(i32, multicast_mask_val)
+        data_size_val = arith_d.ori(data_size_val, multicast_mask_val)
 
     d1 = vector_d.insert(data_size_val, d1, static_position=[0], dynamic_position=[])
 
