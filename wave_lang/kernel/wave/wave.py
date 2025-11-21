@@ -106,6 +106,7 @@ from .scheduling.schedule import schedule_graph
 from .shared_memory_indexing import apply_shared_memory_indexing_corrections
 from .generate_bound_checks import generate_bound_checks
 from .symbolic_constraints import SymbolicAlias
+from .specialize import specialize_kernel
 from .type_inference import infer_types
 from .utils.compile_utils import canonicalize_module, apply_transform
 from .utils.general_utils import (
@@ -533,7 +534,11 @@ class LaunchableWave(Launchable):
                 count = subs_idxc(wave_constraint.waves_per_block)
                 waves_per_block[wave_constraint.workgroup_dim] = count
 
-            hardware_constraint.waves_per_block = tuple(waves_per_block)
+            # check for specialization service waves
+            if hardware_constraint.n_service_waves > 0:
+                waves_per_block[0] += hardware_constraint.n_service_waves
+
+            hardware_constraint.waves_per_block = waves_per_block
 
     def initialize_reductions(self, trace: CapturedTrace) -> None:
         """
@@ -871,6 +876,8 @@ class LaunchableWave(Launchable):
                 partial(tensor_load_to_shared, trace, self.constraints, options),
                 partial(multicast, trace, self.constraints, options),
                 partial(fuse_tensor_loads, trace, self.constraints),
+                # Wave specialization
+                partial(specialize_kernel, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
