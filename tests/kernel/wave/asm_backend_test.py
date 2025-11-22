@@ -378,3 +378,127 @@ def test_mma_multi_wave_asm_backend(shape, config, run_bench):
     expected = torch.matmul(a.float(), b.float().T)
 
     assert_close(c, expected)
+
+
+@require_e2e
+@require_cdna_3_or_4
+@pytest.mark.parametrize(
+    "shape,block_k,config",
+    [
+        # Single-wave configurations (BLOCK_M=16, BLOCK_N=16)
+        ((64, 64, 64), 16, (16, 16, 16, 16)),  # 1 wave per WG, BLOCK_K = 16
+        ((64, 64, 64), 32, (16, 16, 16, 16)),  # 1 wave per WG, BLOCK_K = 32
+        ((64, 64, 128), 64, (16, 16, 16, 16)),  # 1 wave per WG, BLOCK_K = 64
+        # Multi-wave configurations (multiple waves per workgroup)
+        ((64, 64, 64), 16, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, BLOCK_K = 16
+        ((64, 64, 64), 32, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, BLOCK_K = 32
+        ((64, 64, 128), 64, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, BLOCK_K = 64
+        (
+            (128, 128, 64),
+            16,
+            (64, 64, 16, 16),
+        ),  # 4x4 = 16 waves per WG (max), BLOCK_K = 16
+        ((64, 128, 64), 16, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, BLOCK_K = 16
+    ],
+)
+def test_gemm_asm_backend(shape, block_k, config, run_bench):
+    """End-to-end test for GEMM with K-loop using ASM backend.
+
+    Tests both single-wave and multi-wave configurations with varying BLOCK_K values.
+    Multi-wave configurations enable testing workgroups with multiple waves per workgroup,
+    where each wave operates on a 16x16 tile (required by F32_16x16x16_F16 MMA).
+    """
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    # Extract configuration: (BLOCK_M, BLOCK_N, WAVE_M, WAVE_N)
+    block_m, block_n, WAVE_M, WAVE_N = config
+    wave_size = 64
+
+    # Verify configuration: each wave must handle 16x16 tile for MMA
+    assert (
+        block_m % WAVE_M == 0
+    ), f"BLOCK_M ({block_m}) must be divisible by WAVE_M ({WAVE_M})"
+    assert (
+        block_n % WAVE_N == 0
+    ), f"BLOCK_N ({block_n}) must be divisible by WAVE_N ({WAVE_N})"
+    assert (
+        WAVE_M == 16 and WAVE_N == 16
+    ), f"Wave tile must be 16x16 for F32_16x16x16_F16 MMA"
+
+    # Calculate number of waves per workgroup
+    waves_per_wg_m = block_m // WAVE_M
+    waves_per_wg_n = block_n // WAVE_N
+    waves_per_wg = waves_per_wg_m * waves_per_wg_n
+
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, WAVE_M),
+        tkw.WaveConstraint(N, WAVE_N),
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_kernel(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        """GEMM kernel: C = A @ B^T with K-loop."""
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    # Create test tensors
+    m, n, k = shape
+    a = device_randn((m, k), dtype=torch.float16)
+    b = device_randn((n, k), dtype=torch.float16)
+    c = device_zeros((m, n), dtype=torch.float32)
+
+    options = WaveCompileOptions(
+        subs={
+            M: m,
+            N: n,
+            K: k,
+            BLOCK_M: block_m,
+            BLOCK_N: block_n,
+            BLOCK_K: block_k,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, gemm_kernel)
+
+    compiled_kernel(a, b, c)
+
+    # Compute expected result: C = A @ B^T
+    expected = torch.matmul(a.float(), b.float().T)
+
+    assert_close(c, expected)

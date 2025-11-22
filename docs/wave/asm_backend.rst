@@ -31,6 +31,8 @@ Key Components
   - Thread ID operations and bounds
   - Affine expressions and their simplifications
   - Binding subspan operations for memory mapping
+  - Unified SSA-to-VGPR tracking for all operations
+  - Loop iteration arguments and result mappings
 
 **ASM Emitter** (`asm_emitter.py`)
   Generates AMDGCN assembly instructions from kernel information:
@@ -46,6 +48,8 @@ Key Components
 
   - Base instruction classes for different operation types
   - Specific instruction implementations (loads, stores, arithmetic)
+  - Loop control flow instructions (s_cmp_lt_u32, s_cbranch_scc1, s_branch, s_add_u32)
+  - VGPR-variant MFMA with accumulator support
   - Instruction builders for common patterns
   - Proper assembly formatting and syntax
 
@@ -57,6 +61,9 @@ Key Components
   - Register conflict detection and resolution
   - Alignment requirements for vector operations
   - Architecture-specific granularities (CDNA2/3: VGPR=4, SGPR=8; RDNA2/3: VGPR=4, SGPR=16)
+  - Free list-based register reuse for optimal register pressure
+  - Peak VGPR usage tracking for performance analysis
+  - Typed operation logging with RegisterOp enum
 
 **Expression Emitter** (`expression_emitter.py`)
   Generic SymPy expression visitor that emits AMDGCN instructions with CSE:
@@ -68,7 +75,10 @@ Key Components
   - Optimized instruction selection (shifts for power-of-2, masks for modulo)
   - Const marker system for efficient register usage
   - Handles Add, Mul, Mod, floor division, and Pow operations
+  - Rational expression support for division in address calculations
   - Structural expression keys for cache lookup
+  - SGPR reference handling for loop induction variables
+  - Multi-wave thread ID extraction (tid_x, tid_y) from flat ID
   - Error handling for unsupported expression types
 
 **Utils** (`utils.py`)
@@ -88,8 +98,10 @@ Key Components
   - Memory views (memref.view) with offset tracking
   - Load operations (vector.load) from global and LDS memory
   - Store operations (vector.store) to global and LDS memory
-  - MFMA operations (amdgpu.mfma) with proper synchronization
+  - MFMA operations (amdgpu.mfma) with accumulator chaining
   - LDS read/write operations (ds_read_b64, ds_write_b64)
+  - Loop operations (scf.for) with induction variables and accumulators
+  - Vector extraction (vector.extract_strided_slice) for register slicing
 
 Features
 --------
@@ -136,10 +148,11 @@ Hardware Accelerated Operations
 
 The ASM backend provides native support for AMD GPU specialized instructions:
 
-- **MFMA (Matrix Multiply-Accumulate)**: Hardware-accelerated matrix operations on CDNA architectures using VGPR-variant instructions
+- **MFMA (Matrix Multiply-Accumulate)**: Hardware-accelerated matrix operations on CDNA architectures using VGPR-variant instructions with accumulator chaining for K-loops
 - **LDS Operations**: Fast shared memory operations (ds_read_b64, ds_write_b64)
 - **Multi-Wave Support**: Automatic detection and handling of multi-wave workgroups with proper thread ID extraction
 - **Multi-Workgroup Support**: Dynamic detection of workgroup ID usage and conditional SGPR allocation
+- **Loop Support (scf.for)**: Native support for structured control flow loops with SGPR induction variables and VGPR accumulators
 
 Architecture Support
 ~~~~~~~~~~~~~~~~~~~~
@@ -456,13 +469,97 @@ The MFMA support includes:
 
 1. **LDS Staging**: Automatically stages data through Local Data Share for optimal MFMA performance
 2. **VGPR-Variant MFMA**: Uses MFMA instructions that write directly to VGPRs (not accumulators)
-3. **Synchronization**: Inserts ``s_waitcnt lgkmcnt(0)`` before MFMA to ensure LDS reads complete
-4. **Multi-Wave Support**: Correctly handles multiple waves per workgroup with thread ID extraction
-5. **Multi-Workgroup Support**: Automatically detects and allocates workgroup ID system SGPRs as needed
-6. **Dynamic Metadata**: Computes ``vgpr_count``, ``sgpr_count``, and ``lds_size`` dynamically
+3. **Accumulator Chaining**: Supports chained MFMAs for K-loops with persistent accumulators
+4. **Loop Integration**: Automatically uses loop ``iter_args`` as MFMA accumulators
+5. **Synchronization**: Inserts ``s_waitcnt lgkmcnt(0)`` before MFMA to ensure LDS reads complete
+6. **Multi-Wave Support**: Correctly handles multiple waves per workgroup with thread ID extraction
+7. **Multi-Workgroup Support**: Automatically detects and allocates workgroup ID system SGPRs as needed
+8. **Dynamic Metadata**: Computes ``vgpr_count``, ``sgpr_count``, and ``lds_size`` dynamically
 
 Advanced Features
 -----------------
+
+Loop Support (scf.for)
+~~~~~~~~~~~~~~~~~~~~~~
+
+The ASM backend provides native support for MLIR structured control flow loops (``scf.for``), enabling K-loop tiling for GEMM and other iterative operations:
+
+**Loop Structure**
+
+The backend generates efficient loop control flow with:
+
+1. **Loop Initialization**: Allocates SGPR for loop counter, step, and upper bound
+2. **Loop Header**: Emits comparison (``s_cmp_lt_u32``) and conditional branch (``s_cbranch_scc1``)
+3. **Loop Body**: Contains the computation with access to loop induction variable
+4. **Loop Latch**: Increments counter (``s_add_u32``) and branches back to header
+5. **Loop Exit**: Continuation point after loop completes
+
+**MFMA Accumulator Chaining**
+
+For K-loops with MFMA operations, the backend automatically:
+
+- Pre-allocates VGPR quads for loop accumulators
+- Initializes accumulators to 0.0 before loop entry
+- Chains MFMA operations using the same accumulator across iterations
+- Maps loop ``iter_args`` to their corresponding VGPRs
+- Tracks loop results for use after loop exit
+
+**Example**: GEMM K-Loop
+
+.. code-block:: python
+
+   @tkw.wave(constraints)
+   def gemm_kernel(a, b, c):
+       c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+       @tkw.iterate(K, init_args=[c_reg])
+       def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+           a_reg = tkw.read(a)
+           b_reg = tkw.read(b)
+           acc = tkw.mma(a_reg, b_reg, acc)  # Chained MFMA
+           return acc
+
+       tkw.write(repeat, c)
+
+**Generated Assembly Pattern**
+
+.. code-block:: asm
+
+   # Initialize loop counter and accumulator
+   s_mov_b32 s24, 0                  # counter = 0
+   s_mov_b32 s25, 1                  # step = 1
+   s_mov_b32 s26, 2                  # upper_bound = K/BLOCK_K
+   v_mov_b32 v4, 0                   # accumulator[0] = 0.0
+   v_mov_b32 v5, 0                   # accumulator[1] = 0.0
+   v_mov_b32 v6, 0                   # accumulator[2] = 0.0
+   v_mov_b32 v7, 0                   # accumulator[3] = 0.0
+
+   loop_0_header:
+       s_cmp_lt_u32 s24, s26         # counter < upper_bound?
+       s_cbranch_scc1 loop_0_body
+       s_branch loop_0_exit
+
+   loop_0_body:
+       # Load A and B tiles
+       buffer_load_dwordx2 ...
+       # ...
+       # Chained MFMA using same accumulator
+       v_mfma_f32_16x16x16_f16 v[4:7], v[...], v[...], v[4:7]
+
+   loop_0_latch:
+       s_add_u32 s24, s24, s25       # counter += step
+       s_branch loop_0_header
+
+   loop_0_exit:
+       # Store accumulated results
+       buffer_store_dword v4, ...
+
+**Key Features**
+
+- **SGPR Induction Variables**: Loop counters stored in SGPRs for efficiency
+- **VGPR Accumulators**: Loop-carried values (e.g., MFMA results) stay in VGPRs
+- **Nested Loops**: Support for multiple active loop contexts via loop_stack
+- **Unique Labels**: Each loop gets unique labels (loop_N_header, loop_N_body, etc.)
 
 Multi-Wave and Multi-Workgroup Support
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -534,6 +631,63 @@ The backend analyzes thread ID usage patterns:
 
 The backend recognizes that the affine expression simplifies to the thread ID and generates optimal code.
 
+Unified SSA-to-VGPR Tracking
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ASM backend maintains a unified mapping from MLIR SSA values to their allocated VGPRs through the ``ssa_to_vgpr`` dictionary in ``IRWalker``:
+
+**Design**
+
+- **Single Source of Truth**: All SSA→VGPR mappings are stored in one dictionary
+- **Operation Integration**: All handlers (loads, MFMAs, extracts, loops) populate ``ssa_to_vgpr``
+- **Type Flexibility**: Values can be single registers, pairs, quads, or lists
+- **Lifecycle Management**: Entries persist across operations for proper data flow
+
+**Supported Operations**
+
+- **Global Loads**: ``buffer_load_*`` results mapped to allocated VGPR tuples
+- **LDS Reads**: ``ds_read_b64`` results mapped to VGPR pairs
+- **MFMA Results**: Matrix multiply outputs mapped to VGPR quads
+- **Loop Accumulators**: ``iter_args`` and results mapped to persistent VGPRs
+- **Vector Extracts**: ``vector.extract_strided_slice`` maps to register subsets
+
+**Example Flow**
+
+.. code-block:: python
+
+   # Load A matrix → tracked in ssa_to_vgpr
+   %a_vec = vector.load %A[...]
+   # ssa_to_vgpr["%a_vec"] = (v24, v25)  # VGPR pair
+
+   # Load B matrix → tracked in ssa_to_vgpr
+   %b_vec = vector.load %B[...]
+   # ssa_to_vgpr["%b_vec"] = (v26, v27)  # VGPR pair
+
+   # MFMA operation uses ssa_to_vgpr to find inputs
+   %result = amdgpu.mfma %a_vec, %b_vec, %acc
+   # Looks up: ssa_to_vgpr["%a_vec"] → (v24, v25)
+   #           ssa_to_vgpr["%b_vec"] → (v26, v27)
+   #           ssa_to_vgpr["%acc"] → (v4, v5, v6, v7)
+   # Emits: v_mfma_f32_16x16x16_f16 v[4:7], v[24:25], v[26:27], v[4:7]
+   # Tracks: ssa_to_vgpr["%result"] = (v4, v5, v6, v7)
+
+   # Vector extraction creates new mapping to subset
+   %slice = vector.extract_strided_slice %result [offset=0, size=2]
+   # ssa_to_vgpr["%slice"] = (v4, v5)  # First two regs of quad
+
+   # Store uses ssa_to_vgpr to find source registers
+   vector.store %result, %C[...]
+   # Looks up: ssa_to_vgpr["%result"] → (v4, v5, v6, v7)
+   # Emits: buffer_store_dword v4, ...
+   #        buffer_store_dword v5, ...
+
+**Benefits**
+
+- **Simplified Code**: Eliminates fragmented tracking variables
+- **Better Debugging**: Single place to inspect SSA→register mappings
+- **Correct Data Flow**: Ensures operations use the right registers
+- **Loop Support**: Natural fit for tracking loop-carried values
+
 Expression Visitor System
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -589,6 +743,98 @@ The ASM backend uses a sophisticated expression visitor (``ExprEmitter``) to con
    # buffer_store_dwordx4 v[4:7], v2, s[12:15], 0 offen offset:0
    # # No duplicate shift/mask instructions emitted!
 
+Example: GEMM with K-Loop
+---------------------------
+
+The ASM backend supports efficient GEMM kernels with K-dimension tiling using ``scf.for`` loops:
+
+.. code-block:: python
+
+   import wave_lang.kernel.lang as tkl
+   import wave_lang.kernel.wave as tkw
+   from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+
+   # Define symbolic dimensions
+   M = tkl.sym.M
+   N = tkl.sym.N
+   K = tkl.sym.K
+   BLOCK_M = tkl.sym.BLOCK_M
+   BLOCK_N = tkl.sym.BLOCK_N
+   BLOCK_K = tkl.sym.BLOCK_K
+   ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+   ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+   # Hardware constraints for multi-wave GEMM
+   constraints = [
+       tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+       tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+       tkw.TilingConstraint(K, BLOCK_K),  # K-dimension tiling
+       tkw.WaveConstraint(M, 16),  # Each wave handles 16x16
+       tkw.WaveConstraint(N, 16),
+       tkw.HardwareConstraint(
+           threads_per_wave=64,
+           mma_type=tkw.MMAType.F32_16x16x16_F16,
+       ),
+   ]
+
+   @tkw.wave(constraints)
+   def gemm_kernel(
+       a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+       b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+       c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+   ):
+       """GEMM kernel: C = A @ B^T with K-loop."""
+       c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+       @tkw.iterate(K, init_args=[c_reg])
+       def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+           a_reg = tkw.read(a)
+           b_reg = tkw.read(b)
+           acc = tkw.mma(a_reg, b_reg, acc)
+           return acc
+
+       tkw.write(repeat, c)
+
+   # Compile with multi-wave configuration
+   # 4 waves per workgroup (2x2), BLOCK_K=64
+   options = WaveCompileOptions(
+       subs={
+           M: 64, N: 64, K: 128,
+           BLOCK_M: 32, BLOCK_N: 32, BLOCK_K: 64,
+           ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+           ADDRESS_SPACE_0: tkl.AddressSpace.GLOBAL_MEMORY.value,
+       },
+       backend="asm",
+       wave_runtime=True,
+       compile_to_mlir=False
+   )
+
+   compiled_kernel = wave_compile(options, gemm_kernel)
+
+K-Loop Key Features
+~~~~~~~~~~~~~~~~~~~
+
+This example demonstrates several advanced features working together:
+
+1. **Multi-Wave Execution**: BLOCK_M=32, BLOCK_N=32 with WAVE_M=16, WAVE_N=16 creates 4 waves per workgroup
+2. **K-Dimension Tiling**: BLOCK_K=64 tiles the K dimension for cache efficiency
+3. **MFMA Accumulator Chaining**: Accumulator persists across loop iterations
+4. **LDS Staging**: Input tiles automatically staged through shared memory
+5. **Loop Control Flow**: Efficient SGPR-based loop counter and comparison
+6. **Unified Register Tracking**: All SSA values correctly tracked through loop iterations
+
+Performance Characteristics
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For the 64x64x128 GEMM with BLOCK_K=64 configuration:
+
+- **Iterations**: K/BLOCK_K = 128/64 = 2 iterations
+- **Waves per Workgroup**: (32/16) * (32/16) = 4 waves
+- **MFMAs per Iteration**: 4 MFMAs (one per K-tile chunk)
+- **Total MFMAs**: 2 iterations * 4 MFMAs = 8 chained MFMAs
+- **Register Pressure**: ~60 VGPRs (accumulator + temps), ~32 SGPRs
+- **LDS Usage**: Staging buffers for A and B tiles
+
 Performance Considerations
 ----------------------------
 
@@ -597,13 +843,16 @@ The ASM backend is designed for performance-critical applications:
 - **Direct Assembly**: Eliminates intermediate compilation steps
 - **Common Subexpression Elimination**: Eliminates redundant computations by caching and reusing expressions
 - **Optimized Instructions**: Uses the most efficient AMDGCN instructions (shifts over multiplies, masks over divides)
-- **Register Efficiency**: Minimizes register pressure through intelligent allocation, CSE, and const marker system
+- **Register Efficiency**: Minimizes register pressure through intelligent allocation, CSE, free lists, and const marker system
 - **Memory Bandwidth**: Optimizes memory access patterns with base+offset addressing for maximum throughput
 - **Lifetime Management**: Frees temporary registers promptly to reduce pressure while preserving cached values
-- **Hardware Acceleration**: Leverages MFMA for matrix operations on CDNA architectures
+- **Register Reuse**: Free list-based allocator reuses freed registers before allocating new ones
+- **Hardware Acceleration**: Leverages MFMA for matrix operations on CDNA architectures with accumulator chaining
 - **LDS Staging**: Automatically uses shared memory for improved memory access patterns
+- **Loop Efficiency**: SGPR-based loop counters and VGPR accumulators for minimal overhead
 - **Dynamic Allocation**: Computes exact register requirements for minimal resource usage
 - **Architecture-Specific**: Adapts to hardware granularities for optimal register allocation
+- **Unified Tracking**: Single SSA→VGPR mapping ensures correct data flow and simplifies debugging
 
 VMEM Wait Optimization (Ticket-based vmcnt)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -699,8 +948,11 @@ For optimal performance with the ASM backend:
 2. **Align Memory Access**: 16-byte aligned access patterns maximize bandwidth
 3. **Leverage LDS**: Use shared memory (ADDRESS_SPACE.SHARED_MEMORY) for frequently accessed data
 4. **Enable MFMA**: Use matrix operations on CDNA architectures for best performance
-5. **Minimize Register Pressure**: Keep working sets small to maximize occupancy
-6. **Profile and Iterate**: Use ROCm profiling tools to identify bottlenecks
+5. **Use K-Loops**: Tile the K dimension with ``TilingConstraint`` and ``@tkw.iterate`` for cache efficiency
+6. **Chain MFMA Accumulators**: Pass accumulators through loop ``iter_args`` for optimal accumulation
+7. **Minimize Register Pressure**: Keep working sets small to maximize occupancy; use free lists naturally via allocator
+8. **Multi-Wave Configurations**: Use multiple waves per workgroup to increase parallelism (up to 16 waves)
+9. **Profile and Iterate**: Use ROCm profiling tools to identify bottlenecks
 
 Limitations
 -----------
@@ -712,6 +964,7 @@ The ASM backend has some limitations:
 - **Expression Complexity**: Some very complex affine expressions may not be supported
 - **CDNA for MFMA**: MFMA operations require CDNA2 or CDNA3 architecture (gfx90a, gfx940, gfx941, gfx942)
 - **Dynamic Shapes**: Requires concrete shape values at compile time
+- **Loop Nesting**: While multiple loops are supported, deeply nested loops may increase register pressure
 
 Troubleshooting
 ---------------
@@ -754,6 +1007,16 @@ The backend now dynamically computes register requirements:
 - Check ``amdhsa_next_free_vgpr`` and ``amdhsa_next_free_sgpr`` in generated assembly
 - Ensure allocations are aligned to granularity (VGPR: 4, SGPR: 8 or 16)
 - Verify that workgroup size is properly specified in MLIR ``translation_info`` attribute
+- For K-loops, ensure BLOCK_K is sized appropriately to avoid excessive temporary registers
+
+**Issue: High Register Pressure with K-Loops**
+
+If K-loops cause high VGPR usage:
+
+- **Increase BLOCK_K**: Larger BLOCK_K means fewer iterations but more work per iteration
+- **Reduce Waves per Workgroup**: Fewer waves reduce parallelism but lower register pressure
+- **Check Free Lists**: The allocator reuses freed registers; ensure temps are freed properly
+- **Profile**: Use ``DEBUG_ASM_ALLOCATOR=1`` to see allocation patterns and peak usage
 
 Debugging
 ~~~~~~~~~
