@@ -12,8 +12,9 @@ import os
 import subprocess
 import sys
 import math
-from typing import Any, Sequence
+from typing import Any, Sequence, Optional
 import importlib
+from functools import lru_cache
 
 from wave_lang.support.ir_imports import (
     Attribute,
@@ -173,26 +174,36 @@ def _deiree(module: Module) -> str:
     return local_module.get_asm(binary=False, print_generic_op_form=True)
 
 
-def find_binary(name: str) -> str:
+def find_local_water_binary_path(name: str) -> Optional[str]:
     this_path = Path(__file__).parent
-    path = this_path / "water_mlir" / "bin" / name
-    assert path.is_file(), f"Could not find the {name} executable at {path}"
-    return str(path)
+    tool_path = this_path / "water_mlir" / "bin" / name
+    if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
+        return None
+    return str(tool_path)
 
 
+@lru_cache
 def is_water_available() -> bool:
-    """Returns True if the water_mlir package is available."""
-    try:
-        return (
-            importlib.util.find_spec("wave_lang.kernel.wave.water_mlir.water_mlir")
-            is not None
-        )
-    except Exception:
-        return False
+    """Returns True of the water_mlir package is available."""
+    if (Path(__file__).parent / "water_mlir").exists():
+        return True
+
+    return importlib.util.find_spec("water_mlir") is not None
 
 
+@lru_cache
 def get_water_binary_path() -> str:
-    return find_binary("water-opt")
+    path = find_local_water_binary_path("water-opt")
+    if path:
+        return path
+
+    try:
+        from water_mlir import binaries as water_bin
+    except ImportError as err:
+        raise RuntimeError(
+            "optional water_mlir module not installed but its use is requested"
+        ) from err
+    return water_bin.find_binary("water-opt")
 
 
 def make_linear_pass_pipeline(
