@@ -114,6 +114,7 @@ from ...ops.wave_ops import (
     workgroup_barrier,
 )
 from ..compile_options import WaveCompileOptions
+from ..cluster_barriers import CLUSTER_BARRIER_ID
 from ..constraints import GenericDot, HardwareConstraint, MMAType
 from ..scheduling.resources import get_scheduling_mask
 from ..utils.classes import ShuffleMode
@@ -1647,9 +1648,25 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
         c0 = arith_d.constant(IntegerType.get_signless(16), 0)
         llvm_d.call_intrinsic(None, "llvm.amdgcn.s.wait.tensorcnt", [c0], [], [])
 
-    rocdl_d.s_wait_dscnt(0)
+    if barId != CLUSTER_BARRIER_ID:
+        rocdl_d.s_wait_dscnt(0)
 
-    rocdl_d.s_barrier_signal(barId)
+    # For cluster barriers (barId == -3), only wave 0 should signal
+    if barId == CLUSTER_BARRIER_ID:
+        hw_constraint = emitter.hardware_constraint
+        threads_per_wave = hw_constraint.threads_per_wave
+
+        condition_expr = sympy.Eq(
+            hw_constraint.linearized_thread_id // threads_per_wave, 0
+        )
+        condition = gen_sympy_index(add_emitter_subs(emitter), condition_expr)
+
+        if_op = scf_d.IfOp(condition)
+        with InsertionPoint(if_op.then_block):
+            rocdl_d.s_barrier_signal(barId)
+            scf_d.YieldOp([])
+    else:
+        rocdl_d.s_barrier_signal(barId)
 
 
 @handle_op(shared_memory_barrier_wait)
