@@ -21,9 +21,10 @@ WAVE_IS_STABLE_REL = int(os.getenv("WAVE_IS_STABLE_REL", "0"))
 
 
 class CMakeExtension(Extension):
-    def __init__(self, name: str, sourcedir: str = "") -> None:
+    def __init__(self, name: str, sourcedir: str, install_dir: str = None) -> None:
         super().__init__(name, sources=[])
         self.sourcedir = os.fspath(Path(sourcedir).resolve())
+        self.install_dir = install_dir
 
 
 class CMakeBuild(build_ext):
@@ -37,8 +38,16 @@ class CMakeBuild(build_ext):
         os.makedirs(build_dir, exist_ok=True)
 
         # Get extension directory
-        ext_fullpath = Path.cwd() / self.get_ext_fullpath(ext.name)
-        extdir = ext_fullpath.parent.resolve()
+        if ext.install_dir:
+            # Use custom install directory relative to package root
+            extdir = Path.cwd() / ext.install_dir
+        else:
+            # Default behavior: install alongside the extension
+            ext_fullpath = Path.cwd() / self.get_ext_fullpath(ext.name)
+            extdir = ext_fullpath.parent.resolve()
+
+        # Ensure install directory exists
+        os.makedirs(extdir, exist_ok=True)
 
         # Configure CMake
         cmake_args = [
@@ -46,6 +55,19 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}{os.sep}",
             f"-DCMAKE_BUILD_TYPE={'Debug' if self.debug else 'Release'}",
         ]
+
+        # Configure LLVM if WAVE_LLVM_DIR is set
+        wave_llvm_dir = os.getenv("WAVE_LLVM_DIR")
+        if wave_llvm_dir:
+            llvm_dir = os.path.join(wave_llvm_dir, "lib", "cmake", "llvm")
+            mlir_dir = os.path.join(wave_llvm_dir, "lib", "cmake", "mlir")
+            cmake_args += [
+                f"-DLLVM_DIR={llvm_dir}",
+                f"-DMLIR_DIR={mlir_dir}",
+            ]
+            print(f"Using LLVM from WAVE_LLVM_DIR: {wave_llvm_dir}")
+            print(f"  LLVM_DIR: {llvm_dir}")
+            print(f"  MLIR_DIR: {mlir_dir}")
 
         # Clang is required on Windows, since Wave runtime uses variable-length
         # arrays (VLAs) which not supported by MSVC
@@ -165,7 +187,14 @@ setup(
         ],
     },
     cmdclass={"build": BuildCommand, "build_ext": CMakeBuild},
-    ext_modules=[CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime")],
+    ext_modules=[
+        CMakeExtension("wave_runtime", "wave_lang/kernel/wave/runtime"),
+        CMakeExtension(
+            "wave_execution_engine",
+            "wave_lang/kernel/wave/execution_engine",
+            install_dir="wave_lang/kernel/wave/execution_engine",
+        ),
+    ],
     rust_extensions=[
         RustExtension("aplp_lib", "wave_lang/kernel/wave/scheduling/aplp/Cargo.toml")
     ],

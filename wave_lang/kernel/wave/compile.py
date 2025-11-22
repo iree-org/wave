@@ -3,6 +3,8 @@ from itertools import chain
 from typing import Any, Optional, Callable, Sequence
 
 import torch
+import ctypes
+from ctypes import py_object
 
 from wave_lang.kernel.lang import IndexSymbol
 from wave_lang.support.ir_imports import Module, stream_d
@@ -264,6 +266,74 @@ class WaveKernelWithProfile(WaveKernel):
         return invoke_with_profile(self.options, self.invoke, *args, **kwargs)
 
 
+class WaveKernel2:
+    def __init__(self, options: WaveCompileOptions, module: Module | bytes | str):
+        self.options = options
+
+        self._engine = None
+        self._module_handle = None
+        self._host_func_ptr = None
+
+        # Serialize MLIR module to text if needed
+        # TODO: investigate why bytecode deserialization is not working
+        if isinstance(module, (bytes, str)):
+            # Assume it's already MLIR text
+            mlir_asm = module.decode() if isinstance(module, bytes) else module
+        else:
+            # Serialize the MLIR module to text
+            mlir_asm = str(module)
+
+        # Load module eagerly
+        from wave_lang.kernel.wave.execution_engine import get_execution_engine
+
+        self._engine = get_execution_engine()
+        self._module_handle = self._engine.load_module_from_text(mlir_asm)
+
+        # Look up the host wrapper function
+        func_name = self.options.func_name
+        try:
+            self._host_func_ptr = self._engine.lookup(self._module_handle, func_name)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Failed to lookup function '{func_name}' in loaded module. "
+                f"Make sure the module was compiled with emit_host_func. Error: {e}"
+            )
+
+        # Create ctypes function type once
+        # The host wrapper signature is: void func(void* stream, void* arg0, void* arg1, ...)
+
+        num_kernel_args = len(self.options.kernel_usages)
+        arg_types = [ctypes.c_void_p] + [
+            py_object
+        ] * num_kernel_args  # +1 for stream pointer
+        func_type = ctypes.CFUNCTYPE(None, *arg_types)
+        self._cfunc = func_type(self._host_func_ptr)
+
+    def __call__(self, *args, **kwargs):
+        return self.invoke(*args, **kwargs)
+
+    def invoke(self, *args, **kwargs):
+        """
+        Invokes the wave kernel with the given arguments using the ExecutionEngine.
+        """
+
+        assert not kwargs, "kwargs are not supported"
+        # Get the current CUDA stream
+        stream_ptr = torch.cuda.current_stream().cuda_stream
+
+        # Call the JIT-compiled host wrapper function
+        # Signature: void func(void* stream, void* arg0, void* arg1, ...)
+        self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
+
+        # Return None (kernel modifies output tensors in place)
+        return None
+
+    def __del__(self):
+        """Clean up the loaded module when the kernel is destroyed."""
+        if self._module_handle is not None and self._engine is not None:
+            self._engine.release_module(self._module_handle)
+
+
 def wave_compile(
     options: WaveCompileOptions,
     kernel: "LaunchableWave",
@@ -393,20 +463,21 @@ def wave_compile(
         # don't want to cache the kernel in that case.
         trace = kernel._trace()
 
-        # Disable async dispatch for benchmarking.
-        is_async = options.iree_launch_async and not options.run_bench
-        host_codegen.isolated_test_call(
-            mb,
-            exe,
-            kernel_sig,
-            entrypoint_name,
-            options.func_name,
-            options.dynamic_symbols,
-            location_capture_config=options.location_capture_config,
-            async_dispatch=is_async,
-            device_layout=device_layout,
-            device_constraints=kernel.device_constraints,
-        )
+        if not options.use_water_pipeline:
+            # Disable async dispatch for benchmarking.
+            is_async = options.iree_launch_async and not options.run_bench
+            host_codegen.isolated_test_call(
+                mb,
+                exe,
+                kernel_sig,
+                entrypoint_name,
+                options.func_name,
+                options.dynamic_symbols,
+                location_capture_config=options.location_capture_config,
+                async_dispatch=is_async,
+                device_layout=device_layout,
+                device_constraints=kernel.device_constraints,
+            )
         mb.module_op.verify()
         asm = mb.module_op.get_asm(
             enable_debug_info=options.location_capture_config.level
@@ -440,11 +511,23 @@ def wave_compile(
         # Handle ASM and LLVM backends in a clear, single-pass flow
         compiled_wave_vmfb = None
 
+        kernel_usages = [
+            binding.kernel_buffer_type.usage
+            for binding in kernel_sig.kernel_buffer_bindings
+        ]
+        options.kernel_usages = kernel_usages
+
         if options.compile_to_asm or options.backend == "asm":
             # ASM flow: generate AMDGCN assembly; optionally build a binary
             asm = _generate_asm_code(mb, options)
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
+        if options.use_water_pipeline:
+            from .water import water_lowering_pipeline
+
+            module = water_lowering_pipeline(mb.module_op, options.target)
+            return WaveKernel2(options, module)
+
         elif not options.compile_to_mlir:
             # LLVM flow: only compile to VMFB when not in MLIR-only mode
             compiled_wave_vmfb = compile_to_vmfb(asm, options)
@@ -465,12 +548,6 @@ def wave_compile(
             )
         if options.create_vmfb_file:
             write_file(options.create_vmfb_file, "wb", compiled_wave_vmfb)
-
-        kernel_usages = [
-            binding.kernel_buffer_type.usage
-            for binding in kernel_sig.kernel_buffer_bindings
-        ]
-        options.kernel_usages = kernel_usages
 
         if is_cache_enabled() and not debug_arg_info:
             cache_manager.store_kernel(
