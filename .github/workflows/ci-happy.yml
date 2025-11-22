@@ -157,7 +157,7 @@ jobs:
       - name: Run gemm e2e tests
         run: |
           docker exec \
-          -e VENV_DIR="${VENV_DIR}" \
+            -e VENV_DIR="${VENV_DIR}" \
             happy bash -lc '
               set -euxo pipefail
               source /usr/local/bin/env.sh >/dev/null 2>&1
