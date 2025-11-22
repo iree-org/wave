@@ -235,7 +235,7 @@ def _create_substitutions(values: List, prefix: str) -> Dict[sympy.Symbol, sympy
     Create substitutions for affine map parameters.
 
     Args:
-        values: List of values (integers or ID strings like "tid_x", "wgid_x")
+        values: List of values (integers or ID strings like "tid_x", "wgid_x", or "s4")
         prefix: Prefix for the symbols ("d" for dimensions, "s" for symbols)
 
     Returns:
@@ -250,6 +250,11 @@ def _create_substitutions(values: List, prefix: str) -> Dict[sympy.Symbol, sympy
         elif value in ["tid_x", "tid_y", "tid_z", "wgid_x", "wgid_y", "wgid_z"]:
             # Thread IDs and workgroup IDs are symbolic runtime values
             substitutions[param_symbol] = sympy.Symbol(value, nonnegative=True)
+        elif isinstance(value, str) and value.startswith("s") and value[1:].isdigit():
+            # SGPR references (e.g., "s4" for loop counter) - keep as symbol
+            # The expression emitter will handle these as direct SGPR references
+            sgpr_symbol = sympy.Symbol(value, nonnegative=True)
+            substitutions[param_symbol] = sgpr_symbol
 
     return substitutions
 
@@ -455,6 +460,9 @@ def build_memref_byte_offset_expr(
         if isinstance(value, str):
             if value in ID_SYMBOLS:
                 return ID_SYMBOLS[value]
+            # Handle SGPR references like "s24" (loop counters)
+            if value.startswith("s") and value[1:].isdigit():
+                return sympy.Symbol(value, nonnegative=True)
             raise ValueError(f"Unknown ID string: {value}")
         raise ValueError(f"Unsupported index type: {type(value)}")
 

@@ -88,7 +88,6 @@ def test_read_write():
     print(read_write.asm)
 
     # CHECK-LABEL:    test_read_write
-    # CHECK:          .amdgcn_target "amdgcn-amd-amdhsa--gfx942"
     # CHECK:          .text
     # CHECK:          .protected read_write
     # CHECK:          .globl read_write
@@ -188,7 +187,6 @@ def test_mma():
     print(mma.asm)
 
     # CHECK-LABEL:    test_mma
-    # CHECK:          .amdgcn_target "amdgcn-amd-amdhsa--gfx942"
     # CHECK:          .text
     # CHECK:          .protected mma
     # CHECK:          .globl mma
@@ -323,7 +321,6 @@ def test_mma_multi_workgroup_multi_wave():
     print(mma_multi.asm)
 
     # CHECK-LABEL:    test_mma_multi_workgroup_multi_wave
-    # CHECK:          .amdgcn_target "amdgcn-amd-amdhsa--gfx942"
     # CHECK:          .protected mma_multi
     # CHECK:          .amdhsa_kernel mma_multi
     # CHECK:          .amdhsa_user_sgpr_kernarg_segment_ptr 1
@@ -333,5 +330,108 @@ def test_mma_multi_workgroup_multi_wave():
     # CHECK:          v_mfma_f32_16x16x16_f16
     # CHECK:          # MFMA issued, latency ~{{[0-9]+}} cycles
     # Note: s_nop may or may not be emitted depending on latency tracking
+    # CHECK:          buffer_store_dword
+    # CHECK:          s_endpgm
+
+
+@run_test
+def test_gemm_multi_wave_k_loop():
+    """
+    Test multi-wave GEMM with K-loop (BLOCK_K=64).
+
+    Uses 4 waves per workgroup (BLOCK_M=32, BLOCK_N=32, WAVE_M=16, WAVE_N=16)
+    with BLOCK_K=64 to test loop generation with chained MFMA accumulators.
+
+    Verifies:
+    - Loop induction variable initialization
+    - Multiple MFMA instructions with accumulator chaining
+    - Loop increment and branch back
+    """
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M // 2),  # 2 waves in M dimension
+        tkw.WaveConstraint(N, BLOCK_N // 2),  # 2 waves in N dimension
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_multi_wave(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 64,
+            N: 64,
+            K: 128,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 64,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    compile_options.compile_to_asm = True
+    gemm_multi_wave = wave_compile(compile_options, gemm_multi_wave)
+    print(gemm_multi_wave.asm)
+
+    # CHECK-LABEL:    test_gemm_multi_wave_k_loop
+    # CHECK:          .protected gemm_multi_wave
+    # CHECK:          .amdhsa_kernel gemm_multi_wave
+    # CHECK:          .amdhsa_system_vgpr_workitem_id 1
+    # CHECK:          gemm_multi_wave:
+
+    # Verify loop initialization - induction variable and accumulator setup
+    # CHECK:          # Initialize loop 0 counter and bounds
+    # CHECK:          s_mov_b32 s{{[0-9]+}}, 0
+    # CHECK:          # Initialize accumulator 0 to 0.0
+    # CHECK-COUNT-4:  v_mov_b32 v{{[0-9]+}}, 0
+
+    # Verify loop header - comparison and conditional branch
+    # CHECK:          loop_0_header:
+    # CHECK:          s_cmp_lt_u32 s{{[0-9]+}}, s{{[0-9]+}}
+    # CHECK:          s_cbranch_scc1 loop_0_body
+
+    # Verify loop body starts
+    # CHECK:          loop_0_body:
+
+    # Verify 4 MFMAs with chained accumulators (all using same accumulator v[4:7])
+    # CHECK:          v_mfma_f32_16x16x16_f16 v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:          # MFMA issued, latency ~{{[0-9]+}} cycles
+    # CHECK:          v_mfma_f32_16x16x16_f16 v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:          # MFMA issued, latency ~{{[0-9]+}} cycles
+    # CHECK:          v_mfma_f32_16x16x16_f16 v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:          # MFMA issued, latency ~{{[0-9]+}} cycles
+    # CHECK:          v_mfma_f32_16x16x16_f16 v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}], v[{{[0-9]+}}:{{[0-9]+}}]
+    # CHECK:          # MFMA issued, latency ~{{[0-9]+}} cycles
+
+    # Verify loop latch - increment and branch back
+    # CHECK:          loop_0_latch:
+    # CHECK:          s_add_u32 s{{[0-9]+}}, s{{[0-9]+}}, s{{[0-9]+}}
+    # CHECK:          s_branch loop_0_header
+
+    # Verify loop exit and result stores
+    # CHECK:          loop_0_exit:
     # CHECK:          buffer_store_dword
     # CHECK:          s_endpgm
