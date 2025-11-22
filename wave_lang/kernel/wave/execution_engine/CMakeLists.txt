@@ -101,4 +101,4 @@ if(UNIX AND NOT APPLE)
   )
 endif()
 
-install(TARGETS wave_execution_engine wave_runtime_helpers wave_hip_runtime DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+install(TARGETS wave_execution_engine wave_runtime_helpers wave_hip_runtime LIBRARY DESTINATION .)
