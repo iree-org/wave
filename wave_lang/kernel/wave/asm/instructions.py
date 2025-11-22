@@ -495,8 +495,18 @@ class VMfmaF32_16x16x16F16(ArithmeticInstruction):
         # Determine destination register type (VGPR or AGPR)
         if use_vgpr:
             dest_str = f"v[{dest_base}:{dest_base+3}]"
+            # For VGPR variant with accumulation, c_sel is the accumulator register base
+            # If c_sel == dest_base, use dest_str (standard in-place accumulation)
+            # If c_sel == 0, use literal 0 (zero initialization)
+            if c_sel == dest_base:
+                acc_str = dest_str  # In-place accumulation
+            elif c_sel == 0:
+                acc_str = "0"  # Zero initialization
+            else:
+                acc_str = f"v[{c_sel}:{c_sel+3}]"  # Different accumulator
         else:
             dest_str = f"a[{dest_base}:{dest_base+3}]"
+            acc_str = str(c_sel)  # AGPR uses selector
 
         super().__init__(
             "v_mfma_f32_16x16x16_f16",
@@ -504,7 +514,7 @@ class VMfmaF32_16x16x16F16(ArithmeticInstruction):
                 dest_str,
                 f"v[{a_src_pair[0]}:{a_src_pair[1]}]",
                 f"v[{b_src_pair[0]}:{b_src_pair[1]}]",
-                str(c_sel),
+                acc_str,
             ],
             comment,
         )
@@ -546,6 +556,42 @@ class SEndpgm(ControlFlowInstruction):
 
     def __init__(self, comment: str = None):
         super().__init__("s_endpgm", [], comment)
+
+
+# Loop Control Flow Instructions
+class SCmpLtU32(ControlFlowInstruction):
+    """Compare less-than (unsigned 32-bit) - for scf.for [lower, upper) semantics."""
+
+    def __init__(self, src0, src1, comment: str = None):
+        super().__init__("s_cmp_lt_u32", [str(src0), str(src1)], comment)
+
+
+class SCmpLeU32(ControlFlowInstruction):
+    """Compare less-than-or-equal (unsigned 32-bit)."""
+
+    def __init__(self, src0, src1, comment: str = None):
+        super().__init__("s_cmp_le_u32", [str(src0), str(src1)], comment)
+
+
+class SCBranchSCC1(ControlFlowInstruction):
+    """Conditional branch if SCC==1."""
+
+    def __init__(self, label: str, comment: str = None):
+        super().__init__("s_cbranch_scc1", [label], comment)
+
+
+class SBranch(ControlFlowInstruction):
+    """Unconditional branch."""
+
+    def __init__(self, label: str, comment: str = None):
+        super().__init__("s_branch", [label], comment)
+
+
+class SAddU32(ArithmeticInstruction):
+    """Scalar 32-bit unsigned addition."""
+
+    def __init__(self, dst, src0, src1, comment: str = None):
+        super().__init__("s_add_u32", [str(dst), str(src0), str(src1)], comment)
 
 
 # Instruction Builder Classes
