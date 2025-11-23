@@ -522,7 +522,7 @@ def wave_compile(
         if options.use_water_pipeline:
             from .water import water_lowering_pipeline
 
-            module = water_lowering_pipeline(mb.module_op, options.target)
+            module = water_lowering_pipeline(mb.module_op, options)
             return WaveKernel2(options, module)
 
         elif not options.compile_to_mlir:
