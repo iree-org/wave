@@ -44,13 +44,13 @@ from .common.utils import (
     param_bool,
     perf_test,
     require_cdna3,
-    require_e2e,
-    require_cdna_2_or_3_or_4,
     require_cdna4,
+    require_cdna_2_or_3_or_4,
+    require_e2e,
     require_rdna4,
+    reguire_water_lowering,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
-from wave_lang.kernel.wave.water import is_water_available
 
 
 default_test_shapes = [
@@ -136,16 +136,13 @@ def test_dump_vmfb(shape, tmp_path):
     assert os.path.exists(vmfb_file)
 
 
-_need_water = pytest.mark.skipif(
-    not is_water_available(), reason="Water MLIR package not installed."
-)
-
-
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 @param_bool(
-    "use_water_pipeline", "water", values=[False, pytest.param(True, marks=_need_water)]
+    "use_water_pipeline",
+    "water",
+    values=[False, pytest.param(True, marks=reguire_water_lowering)],
 )
 @check_leaks
 def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
@@ -205,7 +202,9 @@ def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 @param_bool(
-    "use_water_pipeline", "water", values=[False, pytest.param(True, marks=_need_water)]
+    "use_water_pipeline",
+    "water",
+    values=[False, pytest.param(True, marks=reguire_water_lowering)],
 )
 def test_dynamic_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
