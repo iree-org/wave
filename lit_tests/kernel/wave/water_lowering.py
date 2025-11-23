@@ -1,3 +1,4 @@
+# REQUIRES: water
 # RUN: python %s | FileCheck %s
 
 import wave_lang.kernel.lang as tkl
