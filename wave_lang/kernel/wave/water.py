@@ -414,9 +414,13 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         "symbol-dce",
         opt_pass,
     ]
+    args = [binary, make_linear_pass_pipeline(pipeline)]
+    if options.mlir_print_ir_after_all:
+        args.append("--mlir-print-ir-after-all")
+
     try:
         result = subprocess.check_output(
-            [binary, make_linear_pass_pipeline(pipeline)],
+            args,
             input=mlir_asm,
             text=True,
         )
