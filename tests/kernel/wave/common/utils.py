@@ -75,6 +75,6 @@ def _is_water_lowering_available() -> bool:
     return is_water_available() and is_execution_engine_available()
 
 
-reguire_water_lowering = pytest.mark.skipif(
+require_water_lowering = pytest.mark.skipif(
     not _is_water_lowering_available(), reason="Water lowering is not available."
 )
