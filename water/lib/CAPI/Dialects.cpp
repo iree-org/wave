@@ -7,6 +7,7 @@
 #include "mlir-c/AffineMap.h"
 #include "mlir/CAPI/AffineMap.h"
 #include "mlir/CAPI/Registration.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/Support/TypeID.h"
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -42,6 +43,28 @@ MlirTypeID mlirWaveSymbolAttrGetTypeID() {
 }
 
 //===---------------------------------------------------------------------===//
+// WaveIndexSymbolAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveIndexSymbolAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveIndexSymbolAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveIndexSymbolAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveIndexSymbolAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveIndexSymbol>(value)));
+}
+
+uint32_t mlirWaveIndexSymbolAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveIndexSymbolAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveIndexSymbolAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveIndexSymbolAttr>());
+}
+
+//===---------------------------------------------------------------------===//
 // WaveIndexMappingAttr
 //===---------------------------------------------------------------------===//
 
@@ -62,11 +85,15 @@ MlirAttribute mlirWaveIndexMappingAttrGet(MlirContext mlirCtx,
          "expected start and step to have the same number of dimensions");
   assert(mlirAffineMapGetNumSymbols(stride) == numSymbols &&
          "expected start and stride to have the same number of dimensions");
-  llvm::SmallVector<wave::WaveSymbolAttr> symbolAttrs = llvm::map_to_vector(
+  llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
       llvm::make_range(symbolNames, symbolNames + numSymbols),
-      [](MlirAttribute attr) {
-        return llvm::cast<wave::WaveSymbolAttr>(unwrap(attr));
-      });
+      [](MlirAttribute attr) { return unwrap(attr); });
+
+  assert(llvm::all_of(
+             symbolAttrs,
+             llvm::IsaPred<wave::WaveSymbolAttr, wave::WaveIndexSymbolAttr>) &&
+         "expected mapping to contain only WaveSymbolAttr or "
+         "WaveIndexSymbolAttr attributes");
 
   return wrap(wave::WaveIndexMappingAttr::get(ctx, symbolAttrs, unwrap(start),
                                               unwrap(step), unwrap(stride)));
@@ -182,11 +209,15 @@ MlirAttribute mlirWaveExprListAttrGet(MlirAttribute *symbolNames,
   mlir::MLIRContext *ctx = unwrap(map).getContext();
 
   unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
-  llvm::SmallVector<wave::WaveSymbolAttr> symbolAttrs = llvm::map_to_vector(
+  llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
       llvm::make_range(symbolNames, symbolNames + numSymbols),
-      [](MlirAttribute attr) {
-        return llvm::cast<wave::WaveSymbolAttr>(unwrap(attr));
-      });
+      [](MlirAttribute attr) { return unwrap(attr); });
+
+  assert(llvm::all_of(
+             symbolAttrs,
+             llvm::IsaPred<wave::WaveSymbolAttr, wave::WaveIndexSymbolAttr>) &&
+         "expected mapping to contain only WaveSymbolAttr or "
+         "WaveIndexSymbolAttr attributes");
 
   return wrap(wave::WaveExprListAttr::get(ctx, symbolAttrs, unwrap(map)));
 }

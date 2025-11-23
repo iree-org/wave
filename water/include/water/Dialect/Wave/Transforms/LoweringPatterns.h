@@ -7,6 +7,7 @@
 #ifndef WATER_DIALECT_WAVE_TRANSFORMS_TRANSFORMS_H
 #define WATER_DIALECT_WAVE_TRANSFORMS_TRANSFORMS_H
 
+#include "mlir/IR/Attributes.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -30,7 +31,7 @@ public:
   // general cases than the Wave tensor type currently allows for. If `shape` is
   // null, an identity shape from symbols is assumed.
   mlir::Type
-  convertTensorFromComponents(llvm::ArrayRef<wave::WaveSymbolAttr> symbols,
+  convertTensorFromComponents(llvm::ArrayRef<mlir::Attribute> symbols,
                               mlir::AffineMap shape, mlir::Type elementType,
                               wave::WaveAddressSpace addressSpace) const;
 
@@ -42,9 +43,9 @@ private:
   wave::WaveHyperparameterAttr hyperparameters;
 };
 
-// Adds pattern that lowers `wave.register` to upstream MLIR ops.
-void populateWaveRegisterLoweringPatterns(WaveTypeConverter &typeConverter,
-                                          mlir::RewritePatternSet &patterns);
+// Adds pattern that lowers miscellaneous wave ops to upstream MLIR ops.
+void populateWaveMiscellaneousOpsLoweringPatterns(
+    WaveTypeConverter &typeConverter, mlir::RewritePatternSet &patterns);
 
 // Adds pattern that lowers wave binary ops to upstream MLIR ops.
 void populateWaveBinaryOpLoweringPatterns(WaveTypeConverter &typeConverter,

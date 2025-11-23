@@ -316,4 +316,31 @@ def WriteOp : WaveOp<"write", [
    let hasVerifier = 1;
 }
 
+//-----------------------------------------------------------------------------
+// Miscellaneous operations
+//-----------------------------------------------------------------------------
+
+def CastOp : WaveOp<"cast", [
+    WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait]> {
+  let summary = "Cast a register-resident tensor from one type to another";
+  let description = [{
+    Change the type of elements in the register-resident tensor without
+    changing its shape if specified. Supports integer, floating point casts
+    and combinations of both. Widening integer casts are sign-extending.
+  }];
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Value to cast">:$value_to_cast
+  ), commonArguments);
+  let results = (outs
+    Res<WaveTensorInRegister, "Casted value">:$result
+  );
+
+  let assemblyFormat =
+    "$value_to_cast " # commonArgumentsSyntax # " attr-dict `:`"
+    "qualified(type($value_to_cast)) `to` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEOPS

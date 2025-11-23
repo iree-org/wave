@@ -40,7 +40,7 @@ getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 /// Resolve named Wave symbols to concrete integer values using the
 /// hyperparameter table.
 std::optional<llvm::SmallVector<int64_t>>
-resolveSymbolNames(llvm::ArrayRef<wave::WaveSymbolAttr> names,
+resolveSymbolNames(llvm::ArrayRef<mlir::Attribute> symbols,
                    wave::WaveHyperparameterAttr hyper);
 
 /// Substitute named symbol values used in the affine map by the constant values
@@ -49,7 +49,7 @@ resolveSymbolNames(llvm::ArrayRef<wave::WaveSymbolAttr> names,
 /// constant results, in particular, if some symbols are not defined.
 std::optional<llvm::SmallVector<int64_t>>
 evaluateMapWithHyperparams(mlir::AffineMap map,
-                           llvm::ArrayRef<wave::WaveSymbolAttr> symbolNames,
+                           llvm::ArrayRef<mlir::Attribute> symbols,
                            wave::WaveHyperparameterAttr hyperparams);
 } // namespace wave
 

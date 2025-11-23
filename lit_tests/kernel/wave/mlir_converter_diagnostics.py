@@ -91,4 +91,4 @@ def mlir_converter_diagnostics_emission():
     print(diagnostics[0])
 
     # CHECK-LABEL: mlir_converter_diagnostics_emission
-    # CHECK: loc(unknown): test error
+    # CHECK: loc("{{.*}}mlir_converter_diagnostics.py":37{{.*}}): test error

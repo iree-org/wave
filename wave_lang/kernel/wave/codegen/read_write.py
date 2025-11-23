@@ -735,7 +735,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
     strides = [gen_sympy_index(subs, s) for s in strides]
 
-    distributed_shape = [gen_sympy_index(subs, s) for s in distributed_shape]
+    distributed_shape_values = [gen_sympy_index(subs, s) for s in distributed_shape]
 
     # construct default descriptors
     i32 = IntegerType.get_signless(32)
@@ -757,8 +757,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     valid = 1
     dim_stride_1 = arith_d.index_cast(i48, strides[0])
     dim_stride_0 = arith_d.index_cast(i48, strides[1])
-    tile_size_1 = arith_d.index_cast(i32, distributed_shape[0])
-    tile_size_0 = arith_d.index_cast(i32, distributed_shape[1])
+    tile_size_1 = arith_d.index_cast(i32, distributed_shape_values[0])
+    tile_size_0 = arith_d.index_cast(i32, distributed_shape_values[1])
     dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
     dim_size_0 = arith_d.index_cast(i32, local_bounds[1])
 
@@ -797,16 +797,33 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     global_byte_address = arith_d.addi(global_ptr, global_index_offset)
 
     # calculate shared address
-    # 0. get allocation space offset in descriptor
-    # 1. get shared memory pointer
-    # 2. move shared memory pointer by offset_byte to get shared memory address of a tile.
+    # 0. extract shared tile index from IndexSequence structure
+    # 1. calculate byte offset from tile indices and distributed shape
+    # 2. get shared memory pointer
+    # 3. move shared memory pointer by offset_byte to get shared memory address of a tile.
     shared_buffer = _linearize_shared_mem(shared_value)
 
-    shared_byte_offset = arith_d.constant(i32, shared_tile_index)
+    shared_strides = strides_from_symbolic_shape(
+        IndexingContext.current(), dst_memory.distributed_shape, allow_mixed_shapes=True
+    )
+    linearized_index = {
+        "linearized_idx": linearize_index(shared_tile_index, shared_strides)
+    }
+
+    # Calculate shared memory offset from tile indices
+    shared_index, _, _ = _build_start_indices(emitter, linearized_index)
+
+    shared_index_offset = arith_d.muli(shared_index[0], element_byte_index)
+    shared_byte_offset = arith_d.index_cast(i32, shared_index_offset)
 
     shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
     shared_ptr = arith_d.index_cast(i32, shared_ptr)
-    shared_byte_address = arith_d.addi(shared_ptr, shared_byte_offset)
+
+    shared_ptr_base_offset = memref_d.extract_strided_metadata(shared_buffer)[1]
+    shared_ptr_base_offset = arith_d.index_cast(i32, shared_ptr_base_offset)
+
+    shared_byte_address = arith_d.addi(shared_ptr_base_offset, shared_byte_offset)
+    shared_byte_address = arith_d.addi(shared_ptr, shared_byte_address)
 
     # assume no mapping
     def lshift(value, bits):

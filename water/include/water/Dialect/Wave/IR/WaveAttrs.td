@@ -202,7 +202,7 @@ def WorkgroupConstraintAttr : AttrDef<WaveDialect, "WorkgroupConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.workgroup_constraint<dim = <"M">,
-                               tile_size = <[BLOCK_M] -> (BLOCK_M)>,
+                               tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>,
                                workgroup_dim = <x>,
                                primary = true>
     ```
@@ -225,7 +225,7 @@ def WaveConstraintAttr : AttrDef<WaveDialect, "WaveConstraint"> {
   let description = [{
     A constraint of the form:
     ```mlir
-    #wave.wave_constraint<dim = <"K">, tile_size = <[WAVE_K] -> (WAVE_K)>>
+    #wave.wave_constraint<dim = <"K">, tile_size = <[#wave.symbol<"WAVE_K">] -> (WAVE_K)>>
     ```
 
     that we want distribute the K dimension among multiple waves with
@@ -248,7 +248,7 @@ def TilingConstraintAttr : AttrDef<WaveDialect, "TilingConstraint"> {
     A constraint of the form:
     ```mlir
     #wave.tiling_constraint<dim = <"K">,
-                            tile_size = <[TILE_K] -> (TILE_K)>>
+                            tile_size = <[#wave.symbol<"TILE_K">] -> (TILE_K)>>
     ```
 
     specifies that we want to distribute the K dimension among multiple threads. With
@@ -266,7 +266,7 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
   let description = [{
     A constraint of the form:
     ```mlir
-    #wave.device_constraint<dim = <"M">, tile_size = <[DEVICE_M] -> (DEVICE_M)>, device_dim = 0>
+    #wave.device_constraint<dim = <"M">, tile_size = <[#wave.symbol<"DEVICE_M">] -> (DEVICE_M)>, device_dim = 0>
     ```
 
     specifies that we want to distribute dimension `M` along the device with a tile size of `DEVICE_M`.
@@ -306,6 +306,40 @@ def DeviceConstraintAttr : AttrDef<WaveDialect, "DeviceConstraint"> {
 // Other attributes
 //-----------------------------------------------------------------------------
 
+def WaveIndexSymbolEnum
+    : I32EnumAttr<"WaveIndexSymbol", "Index symbol", [
+  I32EnumAttrCase<"DEVICE_DIM_0", 0, "DD0">,
+  I32EnumAttrCase<"DEVICE_DIM_1", 1, "DD1">,
+  I32EnumAttrCase<"DEVICE_DIM_2", 2, "DD2">,
+  I32EnumAttrCase<"WORKGROUP_0", 3, "WG0">,
+  I32EnumAttrCase<"WORKGROUP_1", 4, "WG1">,
+  I32EnumAttrCase<"WORKGROUP_2", 5, "WG2">,
+  I32EnumAttrCase<"THREAD_0", 6, "T0">,
+  I32EnumAttrCase<"THREAD_1", 7, "T1">,
+  I32EnumAttrCase<"THREAD_2", 8, "T2">,
+  I32EnumAttrCase<"GPR_NUMBER", 9, "GPR_NUM">,
+]> {
+  let cppNamespace = "::wave";
+  let genSpecializedAttr = 0;
+}
+
+def WaveIndexSymbolAttr : EnumAttr<WaveDialect, WaveIndexSymbolEnum, "WaveIndexSymbol"> {
+  let mnemonic = "index_symbol";
+  let assemblyFormat = "`<` $value `>`";
+  let description = [{
+    Hardware-specific index symbols used in Wave indexing expressions and bounds.
+
+    These symbols represent runtime hardware indices such as workgroup IDs (WG0, WG1, WG2),
+    thread IDs (T0, T1, T2), device dimensions (DD0, DD1, DD2), and GPR numbers (GPR_NUM).
+  }];
+
+  let extraClassDeclaration = [{
+    /// A list containing the string representation of all possible `WaveIndexSymbol` enum cases.
+    static constexpr ::llvm::StringLiteral AllCases[] = { }]# !interleave(!foreach(case, enum.enumerants, "\"" # case.str # "\""), ", ") #[{ };
+  }];
+}
+
+
 def WaveSymbolAttr : AttrDef<WaveDialect, "WaveSymbol"> {
   let mnemonic = "symbol";
   let description = [{
@@ -318,6 +352,7 @@ def WaveSymbolAttr : AttrDef<WaveDialect, "WaveSymbol"> {
 
   let parameters = (ins StringRefParameter<"name of the symbol">:$name);
   let assemblyFormat = "`<` $name `>`";
+  let genVerifyDecl = 1;
 
   let extraClassDeclaration = [{
     void printAsSymbolRef(::llvm::raw_ostream &os) const {
@@ -336,39 +371,19 @@ def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
     symbol_names array corresponds 1:1 to the symbols in the affine
     expressions, where s0 maps to symbol_names[0], s1 to symbol_names[1], etc.
 
-    Custom syntax: [symbol_names] -> (start_expr, step_expr, stride_expr)
-    Example: [WG0, BLOCK_M] -> (WG0 * BLOCK_M + 42, 1, BLOCK_M)
+    Custom syntax: [symbol_name attributes] -> (start_expr, step_expr, stride_expr)
+    Example: [wave.index_symbol<WG0>, wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + 42, 1, BLOCK_M)
   }];
 
   let parameters = (ins
-    ArrayRefParameter<"WaveSymbolAttr">:$symbol_names,
+    ArrayRefParameter<"::mlir::Attribute">:$symbols,
     "::mlir::AffineMap":$start,
     "::mlir::AffineMap":$step,
     "::mlir::AffineMap":$stride
   );
 
   let hasCustomAssemblyFormat = 1;
-
-  let extraClassDeclaration = [{
-    /// Get the symbol name at the given index.
-    ::llvm::StringRef getSymbolName(unsigned index) {
-      auto names = getSymbolNames();
-      if (index >= names.size()) return ::llvm::StringRef();
-      return names[index].getName();
-    }
-
-    /// Get all symbol names as a vector of string references.
-    ::llvm::SmallVector<::llvm::StringRef> getAllSymbolNames() const {
-      ::llvm::SmallVector<::llvm::StringRef> result;
-      auto names = getSymbolNames();
-      result.reserve(names.size());
-      for (auto symbolAttr : names) {
-        result.push_back(symbolAttr.getName());
-      }
-      return result;
-    }
-
-  }];
+  let genVerifyDecl = 1;
 }
 
 def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
@@ -402,26 +417,27 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
 def WaveExprListAttr : AttrDef<WaveDialect, "WaveExprList"> {
   let mnemonic = "expr_list";
   let description = [{
-  A tuple of affine expressions over named Wave symbols.
+  A tuple of affine expressions over named Wave symbols and index symbols.
   This attribute is used to encode:
     • Bounds expressions for read/write ops
     • Distributed (physical) shapes for allocations
 
     Stores:
-      - symbol_names: [WaveSymbolAttr] giving names (e.g., M, BLOCK_M, BLOCK_K)
+      - symbols: [WaveSymbolAttr or WaveIndexSymbolAttr] giving names (e.g., M, BLOCK_M, BLOCK_K, T0)
       The i-th name maps to the s<i> in the affine expressions
       - shape: affine_map<()[s0..sN] -> (expr_0, ..., expr_{rank-1})>
       Each result expr_k defines the k-th physical dimension.
 
       Parsing/printing:
-      #wave.expr_list<[M, K] -> (M, K+4)>
+      #wave.expr_list<[#wave.symbol<"M">, #wave.index_symbol<T0>] -> (M, T0 + 4)>
   }];
 
   let parameters = (ins
-    ArrayRefParameter<"WaveSymbolAttr">:$symbols,
+    ArrayRefParameter<"::mlir::Attribute">:$symbols,
     "::mlir::AffineMap":$map
   );
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
 
   let extraClassDeclaration = [{
     unsigned getRank() const { return getMap().getNumResults(); }

@@ -591,7 +591,7 @@ def test_wmma_f32_16x16x32_f16():
     # CHECK-LABEL: test_wmma_f32_16x16x32_f16
     # CHECK:          func.func @mma
 
-    # CHECK:            rocdl.wmma.f32.16x16x32.f16 {{.*}} : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    # CHECK:            rocdl.wmma.f32.16x16x32.f16 {{.*}} : (vector<16xf16>, vector<16xf16>, vector<8xf32>) -> vector<8xf32>
 
 
 @run_test
@@ -667,11 +667,16 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[D0:.*]] = vector.from_elements
     # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
-    # CHECK-NOT:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
-    # CHECK-NOT:        amdgpu.lds_barrier
+    # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK-NOT:    amdgpu.lds_barrier
+
+    ### get shared buffer pointer
+    # CHECK:        %[[CAST_4:.*]] = memref.reinterpret_cast %[[VIEW0]]
+    # CHECK:        %[[INT_PTR_2:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_4]]
+    # CHECK:        %[[INT_PTR_2_CAST:.+]] = arith.index_cast %[[INT_PTR_2]] : index to i32
 
     ### pack descriptors and invoke tensor load
-    # CHECK:        %[[D1:.*]] = vector.from_elements
+    # CHECK:        %[[D1:.*]] = vector.from_elements %{{.*}}, %[[INT_PTR_2_CAST]], %{{.*}}, %{{.*}} : vector<4xi32>
     # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
 
     ### resource provider
@@ -689,4 +694,4 @@ def test_wmma_with_tensor_load():
     # CHECK-NEXT:   vector.load %[[VIEW1]]
 
     ### wmma
-    # CHECK:        rocdl.wmma.f32.16x16x32.f16 {{.*}} : (i1, vector<16xf16>, i1, vector<16xf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    # CHECK:        rocdl.wmma.f32.16x16x32.f16 {{.*}} : (vector<16xf16>, vector<16xf16>, vector<8xf32>) -> vector<8xf32>

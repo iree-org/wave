@@ -5,13 +5,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveUtils.h"
+#include "mlir/IR/Attributes.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/Support/Casting.h"
+#include <optional>
 
 using namespace mlir;
 
@@ -25,7 +30,7 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
     auto mapAttr = cast<wave::WaveIndexMappingAttr>(entry);
     std::optional<SmallVector<int64_t>> folded =
         wave::evaluateMapWithHyperparams(mapAttr.getStep(),
-                                         mapAttr.getSymbolNames(), hyper);
+                                         mapAttr.getSymbols(), hyper);
     if (!folded)
       return ShapedType::kDynamic;
     assert(folded->size() == 1 && "expected single-result map");
@@ -53,14 +58,19 @@ wave::getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 }
 
 std::optional<llvm::SmallVector<int64_t>>
-wave::resolveSymbolNames(llvm::ArrayRef<wave::WaveSymbolAttr> names,
+wave::resolveSymbolNames(llvm::ArrayRef<mlir::Attribute> symbols,
                          wave::WaveHyperparameterAttr hyper) {
+  if (llvm::any_of(symbols, llvm::IsaPred<WaveIndexSymbolAttr>))
+    return std::nullopt;
+
   if (!hyper)
     return std::nullopt;
+
   // Collect concrete values for each symbol in stored order.
   llvm::SmallVector<int64_t> symVals;
-  symVals.reserve(names.size());
-  for (auto symbol : names) {
+  symVals.reserve(symbols.size());
+  for (Attribute attr : symbols) {
+    wave::WaveSymbolAttr symbol = cast<wave::WaveSymbolAttr>(attr);
     auto value = hyper.getSymbolValue(symbol.getName());
     if (!value)
       return std::nullopt;
@@ -71,7 +81,7 @@ wave::resolveSymbolNames(llvm::ArrayRef<wave::WaveSymbolAttr> names,
 
 std::optional<SmallVector<int64_t>>
 wave::evaluateMapWithHyperparams(AffineMap map,
-                                 ArrayRef<wave::WaveSymbolAttr> symbolNames,
+                                 ArrayRef<mlir::Attribute> symbols,
                                  wave::WaveHyperparameterAttr hyperparams) {
   SmallVector<AffineExpr> symReplacements;
   symReplacements.reserve(map.getNumSymbols());
@@ -83,8 +93,11 @@ wave::evaluateMapWithHyperparams(AffineMap map,
       continue;
     }
 
-    std::optional<int64_t> value =
-        hyperparams.getSymbolValue(symbolNames[i].getName());
+    auto symbol = dyn_cast<wave::WaveSymbolAttr>(symbols[i]);
+    if (!symbol)
+      return std::nullopt;
+
+    std::optional<int64_t> value = hyperparams.getSymbolValue(symbol.getName());
     if (!value)
       return std::nullopt;
     symReplacements.push_back(getAffineConstantExpr(*value, map.getContext()));

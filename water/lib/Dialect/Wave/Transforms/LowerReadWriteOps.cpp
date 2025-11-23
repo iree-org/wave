@@ -4,6 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "mlir/IR/Attributes.h"
+#include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
@@ -15,7 +17,9 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LogicalResult.h"
 
@@ -57,51 +61,72 @@ make1DTransferCommonAttrs(MemRefType memrefType, int64_t vectorizedDim,
 /// Materialize affine.apply for expressions inside a `map` with `symbols`.
 /// Each symbol is either a GPU id (thread/block) or a constant from `hyper`.
 static FailureOr<SmallVector<Value>>
-materializeAffine(Location loc, ArrayRef<wave::WaveSymbolAttr> symbols,
-                  AffineMap map, PatternRewriter &rewriter,
+materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
+                  PatternRewriter &rewriter,
                   wave::WaveHyperparameterAttr hyper) {
   // NOTE: This helper assumes 0 dims in `map`. If you add dims, prepend
   // the dim operands before the symbol operands below.
   assert(map.getNumDims() == 0 && "expected 0 dims");
 
   auto threadId = [&](gpu::Dimension d) -> Value {
-    return rewriter.create<gpu::ThreadIdOp>(loc, rewriter.getIndexType(), d);
+    return gpu::ThreadIdOp::create(rewriter, loc, rewriter.getIndexType(), d);
   };
   auto blockId = [&](gpu::Dimension d) -> Value {
-    return rewriter.create<gpu::BlockIdOp>(loc, rewriter.getIndexType(), d);
+    return gpu::BlockIdOp::create(rewriter, loc, rewriter.getIndexType(), d);
   };
 
   SmallVector<Value> baseSymVals;
   baseSymVals.reserve(map.getNumSymbols());
-  int64_t numSym = map.getNumSymbols();
-  for (int64_t i = 0; i < numSym; ++i) {
-    StringRef name = symbols[i].getName();
-
-    Value v;
-    if (name == "_T0")
-      v = threadId(gpu::Dimension::x);
-    else if (name == "_T1")
-      v = threadId(gpu::Dimension::y);
-    else if (name == "_T2")
-      v = threadId(gpu::Dimension::z);
-    else if (name == "_WG0")
-      v = blockId(gpu::Dimension::x);
-    else if (name == "_WG1")
-      v = blockId(gpu::Dimension::y);
-    else if (name == "_WG2")
-      v = blockId(gpu::Dimension::z);
-    else if (llvm::is_contained({"_DD0", "_DD1", "_DD2"}, name))
-      return rewriter.notifyMatchFailure(
-          loc, "materialization of affine expressions containing device "
-               "dimension symbols is not implemented.");
-    else if (std::optional<int64_t> value = hyper.getSymbolValue(name)) {
-      v = rewriter.create<arith::ConstantIndexOp>(loc, *value);
-    } else {
-      LLVM_DEBUG(llvm::errs() << "symbol: " << name << "\n");
-      assert(false && "unknown symbol, should have been caught by verifiers");
+  for (Attribute attr : symbols) {
+    if (auto symbol = dyn_cast<wave::WaveSymbolAttr>(attr)) {
+      StringRef name = symbol.getName();
+      std::optional<int64_t> value = hyper.getSymbolValue(name);
+#ifndef NDEBUG
+      if (!value) {
+        llvm::errs() << "symbol: " << name << "\n";
+        assert(false && "unknown symbol, should have been caught by verifiers");
+      }
+#endif
+      baseSymVals.emplace_back(
+          arith::ConstantIndexOp::create(rewriter, loc, *value));
+      continue;
     }
-    baseSymVals.push_back(v);
+
+    if (auto indexSymbol = dyn_cast<wave::WaveIndexSymbolAttr>(attr)) {
+      switch (indexSymbol.getValue()) {
+      case wave::WaveIndexSymbol::THREAD_0:
+        baseSymVals.emplace_back(threadId(gpu::Dimension::x));
+        break;
+      case wave::WaveIndexSymbol::THREAD_1:
+        baseSymVals.emplace_back(threadId(gpu::Dimension::y));
+        break;
+      case wave::WaveIndexSymbol::THREAD_2:
+        baseSymVals.emplace_back(threadId(gpu::Dimension::z));
+        break;
+      case wave::WaveIndexSymbol::WORKGROUP_0:
+        baseSymVals.emplace_back(blockId(gpu::Dimension::x));
+        break;
+      case wave::WaveIndexSymbol::WORKGROUP_1:
+        baseSymVals.emplace_back(blockId(gpu::Dimension::y));
+        break;
+      case wave::WaveIndexSymbol::WORKGROUP_2:
+        baseSymVals.emplace_back(blockId(gpu::Dimension::z));
+        break;
+      case wave::WaveIndexSymbol::DEVICE_DIM_0:
+      case wave::WaveIndexSymbol::DEVICE_DIM_1:
+      case wave::WaveIndexSymbol::DEVICE_DIM_2:
+        return rewriter.notifyMatchFailure(
+            loc, "materialization of affine expressions containing device "
+                 "dimension symbols is not implemented.");
+      case wave::WaveIndexSymbol::GPR_NUMBER:
+        return rewriter.notifyMatchFailure(
+            loc, "materialization of affine expressions containing gpr number "
+                 "symbols is not implemented.");
+      }
+      continue;
+    }
   }
+
   // In case map contains multiple results, create one apply per result.
   SmallVector<Value> results;
   results.reserve(map.getNumResults());
@@ -111,7 +136,7 @@ materializeAffine(Location loc, ArrayRef<wave::WaveSymbolAttr> symbols,
     SmallVector<Value> symVals = baseSymVals;
     affine::canonicalizeMapAndOperands(&submap, &symVals);
 
-    Value apply = rewriter.create<affine::AffineApplyOp>(loc, submap, symVals);
+    Value apply = affine::AffineApplyOp::create(rewriter, loc, submap, symVals);
     results.push_back(apply);
   }
 
@@ -136,7 +161,7 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
     auto mapAttr = cast<wave::WaveIndexMappingAttr>(a);
 
     FailureOr<SmallVector<Value>> startFo = materializeAffine(
-        loc, mapAttr.getSymbolNames(), mapAttr.getStart(), rewriter, hyper);
+        loc, mapAttr.getSymbols(), mapAttr.getStart(), rewriter, hyper);
     if (failed(startFo))
       return failure();
     SmallVector<Value> start = std::move(*startFo);
@@ -186,30 +211,30 @@ buildMask(Location loc, wave::WaveReadWriteBoundsAttr boundsDict,
     Value clause;
     if (d == rank - 1) {
       // iota [0..L-1] : vector<index>
-      Value iota = rewriter.create<vector::StepOp>(loc, vecIdxType);
+      Value iota = vector::StepOp::create(rewriter, loc, vecIdxType);
 
       // Lane indices for fastest dim: start + iota.
       Value startFastVec =
-          rewriter.create<vector::BroadcastOp>(loc, vecIdxType, startIdx[d]);
+          vector::BroadcastOp::create(rewriter, loc, vecIdxType, startIdx[d]);
       Value laneIdxFast =
-          rewriter.create<arith::AddIOp>(loc, startFastVec, iota);
+          arith::AddIOp::create(rewriter, loc, startFastVec, iota);
 
       // lane-wise compare: (start + iota) < bound.
       Value boundVec =
-          rewriter.create<vector::BroadcastOp>(loc, vecIdxType, bound);
-      clause = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                              laneIdxFast, boundVec);
+          vector::BroadcastOp::create(rewriter, loc, vecIdxType, bound);
+      clause = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                     laneIdxFast, boundVec);
     } else {
       // scalar compare then broadcast: startIdx[d] < bound.
-      Value scalarCmp = rewriter.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::slt, startIdx[d], bound);
-      clause = rewriter.create<vector::BroadcastOp>(loc, maskType, scalarCmp);
+      Value scalarCmp = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::slt, startIdx[d], bound);
+      clause = vector::BroadcastOp::create(rewriter, loc, maskType, scalarCmp);
     }
 
-    finalMask =
-        finalMask
-            ? rewriter.create<arith::AndIOp>(loc, finalMask, clause).getResult()
-            : clause;
+    finalMask = finalMask
+                    ? arith::AndIOp::create(rewriter, loc, finalMask, clause)
+                          .getResult()
+                    : clause;
   }
 
   return finalMask;
@@ -272,14 +297,14 @@ static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
   // vector.load or vector.masked_load
   if (usePlainVectorRead) {
     if (!mask)
-      return rewriter.create<vector::LoadOp>(loc, vecType, mem, indices);
+      return vector::LoadOp::create(rewriter, loc, vecType, mem, indices);
 
     // Create a passthrough vector with elements set to zero corresponding to
     // the element type in memory.
-    Value passthrough = rewriter.create<arith::ConstantOp>(
-        loc, vecType, SplatElementsAttr::get(vecType, zeroElement));
-    return rewriter.create<vector::MaskedLoadOp>(loc, vecType, mem, indices,
-                                                 mask, passthrough);
+    Value passthrough = arith::ConstantOp::create(
+        rewriter, loc, vecType, SplatElementsAttr::get(vecType, zeroElement));
+    return vector::MaskedLoadOp::create(rewriter, loc, vecType, mem, indices,
+                                        mask, passthrough);
   }
 
   // vector.transfer_read (masked or unmasked)
@@ -287,18 +312,19 @@ static Value buildVectorRead(Location loc, PatternRewriter &rewriter, Value mem,
       make1DTransferCommonAttrs(memrefType, vectorizedDim, vecType, rewriter);
   // Padding value used by vector.transfer_read to fill lanes that are
   // out-of-bounds or masked-off.
-  Value padding = rewriter.create<arith::ConstantOp>(loc, eltType, zeroElement);
+  Value padding =
+      arith::ConstantOp::create(rewriter, loc, eltType, zeroElement);
 
   if (!mask) {
-    return rewriter.create<vector::TransferReadOp>(
-        loc, vecType, mem, indices, /*padding=*/padding,
-        /*permutation_map=*/common.perm,
-        /*in_bounds=*/common.inFalse);
+    return vector::TransferReadOp::create(rewriter, loc, vecType, mem, indices,
+                                          /*padding=*/padding,
+                                          /*permutation_map=*/common.perm,
+                                          /*in_bounds=*/common.inFalse);
   }
-  return rewriter.create<vector::TransferReadOp>(
-      loc, vecType, mem, indices, /*permutation_map=*/common.perm, padding,
-      mask,
-      /*in_bounds=*/common.inTrue);
+  return vector::TransferReadOp::create(rewriter, loc, vecType, mem, indices,
+                                        /*permutation_map=*/common.perm,
+                                        padding, mask,
+                                        /*in_bounds=*/common.inTrue);
 }
 
 /// Build a write or a masked write operation based on presence of a mask.
@@ -323,9 +349,10 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
   // vector.store or vector.masked_store
   if (usePlainVectorStore) {
     if (mask) {
-      rewriter.create<vector::MaskedStoreOp>(loc, mem, indices, mask, vecValue);
+      vector::MaskedStoreOp::create(rewriter, loc, mem, indices, mask,
+                                    vecValue);
     } else {
-      rewriter.create<vector::StoreOp>(loc, vecValue, mem, indices);
+      vector::StoreOp::create(rewriter, loc, vecValue, mem, indices);
     }
   }
 
@@ -335,15 +362,15 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
       make1DTransferCommonAttrs(memrefType, vectorizedDim, vecType, rewriter);
 
   if (mask) {
-    rewriter.create<vector::TransferWriteOp>(loc, vecValue, mem, indices,
-                                             /*permutation_map=*/common.perm,
-                                             /*mask=*/mask,
-                                             /*in_bounds=*/common.inTrue);
+    vector::TransferWriteOp::create(rewriter, loc, vecValue, mem, indices,
+                                    /*permutation_map=*/common.perm,
+                                    /*mask=*/mask,
+                                    /*in_bounds=*/common.inTrue);
 
   } else {
-    rewriter.create<vector::TransferWriteOp>(loc, vecValue, mem, indices,
-                                             /*permutation_map=*/common.perm,
-                                             /*in_bounds=*/common.inFalse);
+    vector::TransferWriteOp::create(rewriter, loc, vecValue, mem, indices,
+                                    /*permutation_map=*/common.perm,
+                                    /*in_bounds=*/common.inFalse);
   }
 }
 

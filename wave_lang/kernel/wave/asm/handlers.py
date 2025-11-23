@@ -53,12 +53,34 @@ class OperationHandlers:
         self._expr_emitters_by_kernel = {}
 
     def _get_expr_emitter(self, kernel_info: KernelInfo) -> ExprEmitter:
-        """Get or create expression emitter for this kernel (with CSE)."""
+        """
+        Get or create expression emitter for this kernel (with CSE).
+
+        Binds workgroup ID and thread ID symbols if they are available.
+        """
         key = id(kernel_info)
         if key not in self._expr_emitters_by_kernel:
-            self._expr_emitters_by_kernel[key] = ExprEmitter(
-                self.walker.emitter, kernel_info
-            )
+            expr_emitter = ExprEmitter(self.walker.emitter, kernel_info)
+
+            emitter = self.walker.emitter
+
+            # Bind workgroup ID symbols to their SGPRs
+            if emitter.sgpr_workgroup_id_x is not None:
+                expr_emitter.bind_symbol("wgid_x", f"s{emitter.sgpr_workgroup_id_x}")
+            if emitter.sgpr_workgroup_id_y is not None:
+                expr_emitter.bind_symbol("wgid_y", f"s{emitter.sgpr_workgroup_id_y}")
+            if emitter.sgpr_workgroup_id_z is not None:
+                expr_emitter.bind_symbol("wgid_z", f"s{emitter.sgpr_workgroup_id_z}")
+
+            # Bind thread/workitem ID symbols to their VGPRs (for multi-wave support)
+            if emitter.vgpr_tid_x is not None:
+                expr_emitter.bind_symbol("tid_x", f"v{emitter.vgpr_tid_x}")
+            if emitter.vgpr_tid_y is not None:
+                expr_emitter.bind_symbol("tid_y", f"v{emitter.vgpr_tid_y}")
+            if emitter.vgpr_tid_z is not None:
+                expr_emitter.bind_symbol("tid_z", f"v{emitter.vgpr_tid_z}")
+
+            self._expr_emitters_by_kernel[key] = expr_emitter
         return self._expr_emitters_by_kernel[key]
 
     def handle_arith_constant_op(
@@ -93,17 +115,38 @@ class OperationHandlers:
         # Extract dimension from MLIR attribute string like "#gpu<dim x>"
         dimension_string = str(dimension)
         if "dim x" in dimension_string:
-            kernel_info.index_env[str(operation.result)] = "tid.x"
+            kernel_info.index_env[str(operation.result)] = "tid_x"
             if upper_bound is not None:
                 kernel_info.tid_ub_x = upper_bound
         elif "dim y" in dimension_string:
-            kernel_info.index_env[str(operation.result)] = "tid.y"
+            kernel_info.index_env[str(operation.result)] = "tid_y"
             if upper_bound is not None:
                 kernel_info.tid_ub_y = upper_bound
         elif "dim z" in dimension_string:
-            kernel_info.index_env[str(operation.result)] = "tid.z"
             if upper_bound is not None:
                 kernel_info.tid_ub_z = upper_bound
+            kernel_info.index_env[str(operation.result)] = "tid_z"
+
+    def handle_gpu_block_id_op(
+        self, operation: gpu_d.BlockIdOp, kernel_info: KernelInfo
+    ):
+        """
+        Handle gpu.block_id operations - map to workgroup ID symbols.
+
+        Maps block IDs to symbolic names that the expression emitter can use:
+        - block_id x -> wgid_x
+        - block_id y -> wgid_y
+        - block_id z -> wgid_z
+        """
+        dimension = operation.dimension
+        dimension_string = str(dimension)
+
+        if "dim x" in dimension_string:
+            kernel_info.index_env[str(operation.result)] = "wgid_x"
+        elif "dim y" in dimension_string:
+            kernel_info.index_env[str(operation.result)] = "wgid_y"
+        elif "dim z" in dimension_string:
+            kernel_info.index_env[str(operation.result)] = "wgid_z"
 
     def _extract_dimension_values(
         self,
@@ -121,8 +164,15 @@ class OperationHandlers:
 
                 if isinstance(operand_value, int):
                     dimension_values.append(operand_value)
-                elif operand_value in ["tid.x", "tid.y", "tid.z"]:
-                    # Thread IDs can be represented as symbols in the expression
+                elif operand_value in [
+                    "tid_x",
+                    "tid_y",
+                    "tid_z",
+                    "wgid_x",
+                    "wgid_y",
+                    "wgid_z",
+                ]:
+                    # Thread IDs and workgroup IDs can be represented as symbols in the expression
                     dimension_values.append(operand_value)
                 else:
                     # If we can't resolve the dimension value, we can't simplify
@@ -151,8 +201,15 @@ class OperationHandlers:
 
                 if isinstance(operand_value, int):
                     symbol_values.append(operand_value)
-                elif operand_value in ["tid.x", "tid.y", "tid.z"]:
-                    # Thread IDs can be used as symbol values
+                elif operand_value in [
+                    "tid_x",
+                    "tid_y",
+                    "tid_z",
+                    "wgid_x",
+                    "wgid_y",
+                    "wgid_z",
+                ]:
+                    # Thread IDs and workgroup IDs can be used as symbol values
                     symbol_values.append(operand_value)
                 else:
                     # If we can't resolve the symbol value, we can't simplify
@@ -380,13 +437,15 @@ class OperationHandlers:
 
             if lhs_pair and rhs_pair:
                 self.walker.emitter.emit_mfma_16x16x16_f16(lhs_pair, rhs_pair)
-                spilled_quad = self.walker.emitter.spill_agprs_to_vgprs()
+
+                # MFMA now writes directly to VGPRs (not AGPRs), so result is already in VGPRs
+                result_quad = self.walker.emitter.current_vgpr_quad
 
                 # Free input pairs
                 self.walker.emitter.vgpr_allocator.free_v_pair(lhs_pair)
                 self.walker.emitter.vgpr_allocator.free_v_pair(rhs_pair)
 
-                self.walker.last_regs = list(spilled_quad)
+                self.walker.last_regs = list(result_quad)
                 self.walker.last_vmem_ticket = None  # Data now from MFMA, not VMEM
                 self.walker._mfma_emitted = True
                 return

@@ -97,6 +97,8 @@ jobs:
             -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen;mlir-python-sources" \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON                                   \
             -DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
+          echo "INFO: working around a missing dependency on stubgen"
+          ninja MLIRPythonModules.extension._mlir.dso._mlir.type_stubs
           ninja install-distribution-stripped
           popd
 

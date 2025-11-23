@@ -5,6 +5,7 @@
 
 import logging
 import torch
+import operator
 import torch.fx as fx
 import wave_lang.kernel.lang as tkl
 
@@ -20,6 +21,7 @@ from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
 )
 from wave_lang.kernel.wave.utils.torch_utils import device_zeros, device_tensor
+from wave_lang.kernel.wave.utils.run_utils import get_default_arch
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -81,7 +83,8 @@ class GraphAnalyzer:
         """Check if a node can be optimized with custom kernels"""
         # Add your custom logic here
         optimizable_ops = [
-            torch.ops.aten.mm.default,
+            torch.matmul,
+            operator.matmul,
         ]
 
         if node.op == "call_function" and node.target in optimizable_ops:
@@ -185,8 +188,15 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     dynamic_dims = False
     datatype = torch.float16
     mfma_variant = MMAType.F32_16x16x16_F16
+    threads_per_wave = 64
+
+    # TODO(vinayakdsci): Add a branch for `gfx1250` once we add support for it.
+    if "gfx120" in get_default_arch():
+        mfma_variant = MMAType.RDNA4_WAVE32_F32_16x16x16_F16
+        threads_per_wave = 32
+
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=64
+        shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=threads_per_wave
     )
 
     multibuffer = False
@@ -196,7 +206,6 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
-        schedule=False,
         dynamic_symbols=dynamic_symbols,
     )
     options.postprocess = """
@@ -212,7 +221,7 @@ def wave_gemm_kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     gemm = wave_compile(options, gemm)
 
     a_tensor_wave = device_tensor(a.detach().clone(), dtype=datatype)
-    b_tensor_wave = device_tensor(b.detach().clone(), dtype=datatype)
+    b_tensor_wave = device_tensor(b.detach().clone().t(), dtype=datatype)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
     gemm(a_tensor_wave, b_tensor_wave, c)
 

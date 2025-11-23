@@ -941,11 +941,11 @@ static SLPGraph buildSLPGraph(ArrayRef<MemoryOpGroup> rootGroups) {
       if (!extractIndex)
         return;
 
-      Value vector = extractOp.getVector();
+      Value vector = extractOp.getSource();
       int64_t currentIndex = *extractIndex;
       for (Operation *op : node->getNonRootOps()) {
         auto otherOp = op->getOperand(index).getDefiningOp<vector::ExtractOp>();
-        if (!otherOp || otherOp.getVector() != vector)
+        if (!otherOp || otherOp.getSource() != vector)
           break;
 
         std::optional<int64_t> otherExtractIndex = getExtractIndex(otherOp);
@@ -1090,7 +1090,7 @@ SLPGraph::vectorize(IRRewriter &rewriter,
         if (auto vecType = dyn_cast<VectorType>(arg.getType())) {
           assert(vecType.getRank() == 1);
           for (auto j : llvm::seq(vecType.getNumElements()))
-            args.push_back(rewriter.create<vector::ExtractOp>(loc, arg, j));
+            args.push_back(vector::ExtractOp::create(rewriter, loc, arg, j));
 
         } else {
           args.push_back(arg);
@@ -1100,7 +1100,7 @@ SLPGraph::vectorize(IRRewriter &rewriter,
       auto vecType =
           VectorType::get(numElements, getElementTypeOrSelf(operand.getType()));
       Value vector =
-          rewriter.create<vector::FromElementsOp>(loc, vecType, args);
+          vector::FromElementsOp::create(rewriter, loc, vecType, args);
       mapping.map(operand, vector);
     };
 
@@ -1128,14 +1128,16 @@ SLPGraph::vectorize(IRRewriter &rewriter,
           if (auto vecType = dyn_cast<VectorType>(originalResultType)) {
             assert(vecType.getRank() <= 1);
             if (vecType.getRank() == 0) {
-              elem = rewriter.create<vector::ExtractOp>(loc, newResult, offset);
-              elem = rewriter.create<vector::BroadcastOp>(loc, vecType, elem);
+              elem =
+                  vector::ExtractOp::create(rewriter, loc, newResult, offset);
+              elem = vector::BroadcastOp::create(rewriter, loc, vecType, elem);
             } else {
-              elem = rewriter.create<vector::ExtractStridedSliceOp>(
-                  loc, newResult, offset, vecType.getNumElements(), 1);
+              elem = vector::ExtractStridedSliceOp::create(
+                  rewriter, loc, newResult, offset, vecType.getNumElements(),
+                  1);
             }
           } else {
-            elem = rewriter.create<vector::ExtractOp>(loc, newResult, offset);
+            elem = vector::ExtractOp::create(rewriter, loc, newResult, offset);
           }
 
           use.set(elem);
@@ -1150,8 +1152,8 @@ SLPGraph::vectorize(IRRewriter &rewriter,
       if (srcType.getDimSize(0) == numElements)
         return arg;
 
-      return rewriter.create<vector::ExtractStridedSliceOp>(loc, arg, offset,
-                                                            numElements, 1);
+      return vector::ExtractStridedSliceOp::create(rewriter, loc, arg, offset,
+                                                   numElements, 1);
     };
 
     auto getOperandIndex = [&](Value target) -> unsigned {
@@ -1175,11 +1177,12 @@ SLPGraph::vectorize(IRRewriter &rewriter,
         handleNonvectorInput(passthru, getOperandIndex(passthru));
         mask = mapping.lookupOrDefault(mask);
         passthru = mapping.lookupOrDefault(passthru);
-        result = rewriter.create<vector::MaskedLoadOp>(
-            loc, vecType, getBase(op), getIndices(op), mask, passthru);
+        result =
+            vector::MaskedLoadOp::create(rewriter, loc, vecType, getBase(op),
+                                         getIndices(op), mask, passthru);
       } else {
-        result = rewriter.create<vector::LoadOp>(loc, vecType, getBase(op),
-                                                 getIndices(op));
+        result = vector::LoadOp::create(rewriter, loc, vecType, getBase(op),
+                                        getIndices(op));
       }
       Value originalResult = op->getResult(0);
       mapping.map(originalResult, result);
@@ -1192,10 +1195,11 @@ SLPGraph::vectorize(IRRewriter &rewriter,
       if (auto mask = getMask(op)) {
         handleNonvectorInput(mask, getOperandIndex(mask));
         mask = mapping.lookupOrDefault(mask);
-        rewriter.create<vector::MaskedStoreOp>(loc, getBase(op), getIndices(op),
-                                               mask, val);
+        vector::MaskedStoreOp::create(rewriter, loc, getBase(op),
+                                      getIndices(op), mask, val);
       } else {
-        rewriter.create<vector::StoreOp>(loc, val, getBase(op), getIndices(op));
+        vector::StoreOp::create(rewriter, loc, val, getBase(op),
+                                getIndices(op));
       }
     } else if (isVectorizable(op)) {
       handleNonVectorInputs(op->getOperands());
@@ -1219,7 +1223,7 @@ SLPGraph::vectorize(IRRewriter &rewriter,
       // We alredy verified index is valid during graph construction, so
       // do need to check `getExtractIndex` result.
       int64_t offset = *getExtractIndex(extract);
-      Value val = handleVecSizeMismatch(extract.getVector(), offset);
+      Value val = handleVecSizeMismatch(extract.getSource(), offset);
       mapping.map(extract.getResult(), val);
     } else {
       op->emitError("unsupported operation");

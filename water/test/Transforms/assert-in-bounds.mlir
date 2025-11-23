@@ -51,8 +51,7 @@ func.func @shape_static_one_index_dynamic(%memref: memref<5x2xf32>, %i: index) -
   // CHECK:          %[[BOUND:.+]] = arith.andi %[[LB]], %[[UB]]
   // PERDIM:         cf.assert %[[BOUND]], "memref access out of bounds along dimension 1"
   //
-  // COMPOUND:       %[[COMPOUND:.+]] = arith.andi %[[BOUND]], %[[TRUE]]
-  // COMPOUND:       cf.assert %[[COMPOUND]], "memref access out of bounds"
+  // COMPOUND:       cf.assert %[[BOUND]], "memref access out of bounds"
   // INPLC:          memref.load
   // SPEC-NOT:       memref.load
   %1 = memref.load %memref[%0, %i] : memref<5x2xf32>
@@ -77,18 +76,14 @@ func.func @shape_dynamic(%memref: memref<?x?xf32>) -> f32 {
   // CHECK:          %[[DIM0:.+]] = memref.dim %{{.*}}, %[[ZERO2]]
   // Note that folding changed index0 < dim0 into dim0 > index0.
   // CHECK:          %[[UB0:.+]] = arith.cmpi sgt, %[[DIM0]], %[[INDEX0]]
-  // PERDIM:         %[[BOUND0:.+]] = arith.andi %[[UB0]]
-  // PERDIM:         cf.assert %[[BOUND0]], "memref access out of bounds along dimension 0"
-  // COMPOUND:       %[[PREBOUND0:.+]] = arith.andi %[[UB0]]
-  // COMPOUND:       %[[BOUND0:.+]] = arith.andi %[[PREBOUND0]]
+  // PERDIM:         cf.assert %[[UB0]], "memref access out of bounds along dimension 0"
   //
   // CHECK:          %[[ONE1:.+]] = arith.constant 1 : index
   // CHECK:          %[[DIM1:.+]] = memref.dim %{{.*}}, %[[ONE1]]
   // CHECK:          %[[UB1:.+]] = arith.cmpi sgt, %[[DIM1]], %[[INDEX1]]
-  // CHECK:          %[[BOUND1:.+]] = arith.andi %[[UB1]]
-  // PERDIM:         cf.assert %[[BOUND1]], "memref access out of bounds along dimension 1"
+  // PERDIM:         cf.assert %[[UB1]], "memref access out of bounds along dimension 1"
   //
-  // COMPOUND:       %[[COMPOUND:.+]] = arith.andi %[[BOUND0]], %[[BOUND1]]
+  // COMPOUND:       %[[COMPOUND:.+]] = arith.andi %[[UB0]], %[[UB1]]
   // COMPOUND:       cf.assert %[[COMPOUND]], "memref access out of bounds"
   //
   // INPLC:          memref.load

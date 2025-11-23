@@ -177,6 +177,7 @@ class WaveCacheManager(object):
         # Add subfunctions invariant property to hash.
         arg_dtypes = extract_arg_types(kernel_fn)
         processed_constraints = anonymize_constraints(constraints)
+
         key = [
             arg_dtypes,
             processed_constraints,
@@ -193,6 +194,7 @@ class WaveCacheManager(object):
             options.dynamic_symbols,
             options.schedule,
             options.use_scheduling_barriers,
+            options.backend,  # Include backend to differentiate llvm vs asm
             options.device,
             options.num_devices,
             options.target,

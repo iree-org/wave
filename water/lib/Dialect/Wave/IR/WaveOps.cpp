@@ -97,6 +97,12 @@ llvm::LogicalResult wave::AllocateOp::verify() {
            << "expects parent and offset to be present simultaneously";
   }
 
+  if (!llvm::all_of(getDistributedShape().getSymbols(),
+                    llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError()
+           << "distributed_shape must only contain WaveSymbolAttr";
+  }
+
   return llvm::success();
 }
 
@@ -112,7 +118,7 @@ bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
 }
 
 mlir::OperandRange
-wave::IterateOp::getEntrySuccessorOperands(mlir::RegionBranchPoint point) {
+wave::IterateOp::getEntrySuccessorOperands(mlir::RegionSuccessor) {
   return getIterArgs();
 }
 
@@ -120,7 +126,7 @@ void wave::IterateOp::getSuccessorRegions(
     mlir::RegionBranchPoint point,
     ::llvm::SmallVectorImpl<::mlir::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
-  regions.emplace_back(mlir::RegionSuccessor(getResults()));
+  regions.emplace_back(mlir::RegionSuccessor(getOperation(), getResults()));
   regions.emplace_back(
       mlir::RegionSuccessor(&getBody(), getBody().front().getArguments()));
 }
@@ -517,6 +523,18 @@ LogicalResult ExtractSliceOp::verify() {
                          << stride.getNumSymbols() << " symbols";
   }
 
+  if (!llvm::all_of(offset.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError() << "offset must only contain WaveSymbolAttr";
+  }
+
+  if (!llvm::all_of(size.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError() << "size must only contain WaveSymbolAttr";
+  }
+
+  if (!llvm::all_of(stride.getSymbols(), llvm::IsaPred<wave::WaveSymbolAttr>)) {
+    return emitOpError() << "stride must only contain WaveSymbolAttr";
+  }
+
   return success();
 }
 
@@ -544,6 +562,37 @@ LogicalResult WriteOp::verify() {
 //-----------------------------------------------------------------------------
 
 mlir::MutableOperandRange
-wave::YieldOp::getMutableSuccessorOperands(mlir::RegionBranchPoint) {
+wave::YieldOp::getMutableSuccessorOperands(mlir::RegionSuccessor) {
   return getValuesMutable();
+}
+
+//-----------------------------------------------------------------------------
+// CastOp
+//-----------------------------------------------------------------------------
+
+mlir::LogicalResult wave::CastOp::verify() {
+  mlir::Type valueType = getValueToCast().getType();
+  mlir::Type resultType = getResult().getType();
+
+  wave::WaveTensorType valueTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(valueType);
+  wave::WaveTensorType resultTensor =
+      llvm::dyn_cast<wave::WaveTensorType>(resultType);
+  mlir::VectorType valueVec = llvm::dyn_cast<mlir::VectorType>(valueType);
+  mlir::VectorType resultVec = llvm::dyn_cast<mlir::VectorType>(resultType);
+  if (valueTensor && resultTensor && valueTensor.getFullySpecified() &&
+      resultTensor.getFullySpecified() &&
+      valueTensor.getShape() != resultTensor.getShape()) {
+    return emitOpError("shape of input (")
+           << valueTensor.getShape() << ") must match shape of result ("
+           << resultTensor.getShape() << ")";
+  }
+
+  if (valueVec && resultVec && valueVec.getShape() != resultVec.getShape()) {
+    return emitOpError("shape of input (")
+           << valueVec.getShape() << ") must match shape of result ("
+           << resultVec.getShape() << ")";
+  }
+
+  return mlir::success();
 }
