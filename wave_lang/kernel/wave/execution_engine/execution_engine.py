@@ -23,6 +23,10 @@ except ImportError:
     ExecutionEngineOptions = None
 
 
+def is_execution_engine_available() -> bool:
+    return ExecutionEngine is not None and ExecutionEngineOptions is not None
+
+
 # Global weak reference to the cached ExecutionEngine instance
 _cached_engine: Optional[weakref.ref] = None
 

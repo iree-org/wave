@@ -12,19 +12,15 @@ import os
 import pytest
 import weakref
 
-try:
-    from wave_lang.kernel.wave.execution_engine import (
-        get_execution_engine,
-        clear_engine_cache,
-        is_engine_cached,
-    )
-
-    EXECUTION_ENGINE_AVAILABLE = True
-except ImportError:
-    EXECUTION_ENGINE_AVAILABLE = False
+from wave_lang.kernel.wave.execution_engine import (
+    clear_engine_cache,
+    get_execution_engine,
+    is_engine_cached,
+    is_execution_engine_available,
+)
 
 pytestmark = pytest.mark.skipif(
-    not EXECUTION_ENGINE_AVAILABLE,
+    not is_execution_engine_available(),
     reason="ExecutionEngine not available (C++ extension not built)",
 )
 

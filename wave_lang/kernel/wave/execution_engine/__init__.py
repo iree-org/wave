@@ -12,18 +12,12 @@ ExecutionEngine instance using weak references and configures it via environment
 variables.
 """
 
-# Import C++ bindings (may not be available if not built yet)
-try:
-    from wave_execution_engine import ExecutionEngine, ExecutionEngineOptions
-except ImportError:
-    ExecutionEngine = None
-    ExecutionEngineOptions = None
-
 # Import Python wrapper with caching
 from .execution_engine import (
-    get_execution_engine,
     clear_engine_cache,
+    get_execution_engine,
     is_engine_cached,
+    is_execution_engine_available,
 )
 
 __all__ = [
@@ -31,6 +25,7 @@ __all__ = [
     "ExecutionEngine",
     "ExecutionEngineOptions",
     # Python wrapper
+    "is_execution_engine_available",
     "get_execution_engine",
     "clear_engine_cache",
     "is_engine_cached",
