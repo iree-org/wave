@@ -65,4 +65,4 @@ def param_bool(name, shortname=None, values=None):
     shortname = shortname or name
     values = values or [False, True]
     ids = [f"{shortname}" if v else f"no_{shortname}" for v in values]
-    return pytest.mark.parametrize(name, [pytest.param(v) for v in values], ids=ids)
+    return pytest.mark.parametrize(name, values, ids=ids)
