@@ -394,10 +394,13 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     binary = get_water_binary_path()
     mlir_asm = module.operation.get_asm()
     target_chip = options.target
+    opt_pass = "composite-fixed-point-pass", {
+        "name": "CompositePass",
+        "pipeline": "any(canonicalize,cse)",
+    }
     pipeline = [
         "lower-affine",
-        "canonicalize",
-        "cse",
+        opt_pass,
         "loop-invariant-code-motion",
         "int-range-optimizations",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
@@ -405,13 +408,11 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         ("rocdl-attach-target", {"chip": target_chip}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "reconcile-unrealized-casts",
-        "canonicalize",
-        "cse",
+        opt_pass,
         "gpu-module-to-binary",
         "water-gpu-to-gpu-runtime",
         "symbol-dce",
-        "canonicalize",
-        "cse",
+        opt_pass,
     ]
     try:
         result = subprocess.check_output(
