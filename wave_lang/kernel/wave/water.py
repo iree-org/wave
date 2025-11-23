@@ -398,6 +398,7 @@ def water_lowering_pipeline(module: Module, target_chip: str) -> Module:
         "cse",
         "loop-invariant-code-motion",
         "int-range-optimizations",
+        ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
         ("rocdl-attach-target", {"chip": target_chip}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
