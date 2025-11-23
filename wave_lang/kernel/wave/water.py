@@ -16,6 +16,7 @@ from typing import Any, Sequence, Optional
 import importlib
 from functools import lru_cache
 
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.ir_imports import (
     Attribute,
     BlockArgument,
@@ -389,9 +390,10 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         print("[info] No out-of-bounds accesses detected.")
 
 
-def water_lowering_pipeline(module: Module, target_chip: str) -> Module:
+def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:
     binary = get_water_binary_path()
     mlir_asm = module.operation.get_asm()
+    target_chip = options.target
     pipeline = [
         "lower-affine",
         "canonicalize",
