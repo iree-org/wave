@@ -75,6 +75,7 @@ target_link_libraries(wave_execution_engine PRIVATE
   LLVM${LLVM_NATIVE_ARCH}AsmParser
   LLVM${LLVM_NATIVE_ARCH}CodeGen
   LLVM${LLVM_NATIVE_ARCH}Desc
+  LLVMExecutionEngine
   LLVMOrcJIT
   LLVMTarget
   MLIRCAPIDebug
