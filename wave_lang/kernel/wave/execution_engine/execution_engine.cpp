@@ -22,6 +22,7 @@
 #include <llvm/Target/TargetMachine.h>
 
 #include <mlir/Bytecode/BytecodeReader.h>
+#include <mlir/ExecutionEngine/OptUtils.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Location.h>
 #include <mlir/IR/MLIRContext.h>
@@ -41,103 +42,13 @@
 
 #define DEBUG_TYPE "wave-execution-engine"
 
-// Ensure LLVM native target is initialized only once
-static std::once_flag llvmInitFlag;
-
 static void initializeLLVMTarget() {
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
-  llvm::InitializeNativeTargetAsmParser();
-}
-
-static llvm::OptimizationLevel mapToLevel(llvm::CodeGenOptLevel level) {
-  unsigned optimizeSize = 0; // TODO: unhardcode
-
-  switch (level) {
-  default:
-    llvm_unreachable("Invalid optimization level!");
-
-  case llvm::CodeGenOptLevel::None:
-    return llvm::OptimizationLevel::O0;
-
-  case llvm::CodeGenOptLevel::Less:
-    return llvm::OptimizationLevel::O1;
-
-  case llvm::CodeGenOptLevel::Default:
-    switch (optimizeSize) {
-    default:
-      llvm_unreachable("Invalid optimization level for size!");
-
-    case 0:
-      return llvm::OptimizationLevel::O2;
-
-    case 1:
-      return llvm::OptimizationLevel::Os;
-
-    case 2:
-      return llvm::OptimizationLevel::Oz;
-    }
-
-  case llvm::CodeGenOptLevel::Aggressive:
-    return llvm::OptimizationLevel::O3;
-  }
-}
-
-static llvm::PipelineTuningOptions
-getPipelineTuningOptions(llvm::CodeGenOptLevel optLevelVal) {
-  llvm::PipelineTuningOptions pto;
-  auto level = static_cast<int>(optLevelVal);
-
-  pto.LoopUnrolling = level > 0;
-  pto.LoopVectorization = level > 1;
-  pto.SLPVectorization = level > 1;
-  return pto;
-}
-
-static void runOptimizationPasses(llvm::Module &M, llvm::TargetMachine &TM) {
-  llvm::CodeGenOptLevel optLevelVal = TM.getOptLevel();
-
-  llvm::LoopAnalysisManager lam;
-  llvm::FunctionAnalysisManager fam;
-  llvm::CGSCCAnalysisManager cgam;
-  llvm::ModuleAnalysisManager mam;
-
-  llvm::PassInstrumentationCallbacks pic;
-  llvm::PrintPassOptions ppo;
-  ppo.Indent = false;
-  ppo.SkipAnalyses = false;
-  llvm::StandardInstrumentations si(M.getContext(), /*debugLogging*/ false,
-                                    /*verifyEach*/ true, ppo);
-
-  si.registerCallbacks(pic, &mam);
-
-  llvm::PassBuilder pb(&TM, getPipelineTuningOptions(optLevelVal));
-
-  llvm::ModulePassManager mpm;
-
-  if (/*verify*/ true) {
-    pb.registerPipelineStartEPCallback(
-        [&](llvm::ModulePassManager &mpm, llvm::OptimizationLevel level) {
-          mpm.addPass(createModuleToFunctionPassAdaptor(llvm::VerifierPass()));
-        });
-  }
-
-  // Register all the basic analyses with the managers.
-  pb.registerModuleAnalyses(mam);
-  pb.registerCGSCCAnalyses(cgam);
-  pb.registerFunctionAnalyses(fam);
-  pb.registerLoopAnalyses(lam);
-  pb.crossRegisterProxies(lam, fam, cgam, mam);
-
-  llvm::OptimizationLevel level = mapToLevel(optLevelVal);
-
-  if (optLevelVal == llvm::CodeGenOptLevel::None) {
-    mpm = pb.buildO0DefaultPipeline(level);
-  } else {
-    mpm = pb.buildPerModuleDefaultPipeline(level);
-  }
-
-  mpm.run(M, mam);
+  static bool initOnce = []() {
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
+    return true;
+  }();
 }
 
 /// A simple object cache following Lang's LLJITWithObjectCache example.
@@ -209,14 +120,17 @@ static void setupModule(llvm::Module &M, llvm::TargetMachine &TM) {
 namespace {
 class CustomCompiler : public llvm::orc::SimpleCompiler {
 public:
+  using Optimizer = std::function<llvm::Error(llvm::Module *)>;
   using Transformer = std::function<llvm::Error(llvm::Module &)>;
   using AsmPrinter = std::function<void(llvm::StringRef)>;
 
   CustomCompiler(Transformer t, AsmPrinter a,
                  std::unique_ptr<llvm::TargetMachine> TM,
                  llvm::ObjectCache *ObjCache = nullptr)
-      : SimpleCompiler(*TM, ObjCache), TM(std::move(TM)),
-        transformer(std::move(t)), printer(std::move(a)) {}
+      : SimpleCompiler(*TM, ObjCache),
+        optimizer(mlir::makeOptimizingTransformer(/*opLevel*/ 3,
+                                                  /*sizeLevel*/ 0, TM.get())),
+        TM(std::move(TM)), transformer(std::move(t)), printer(std::move(a)) {}
 
   llvm::Expected<CompileResult> operator()(llvm::Module &M) override {
     if (transformer) {
@@ -226,7 +140,9 @@ public:
     }
 
     setupModule(M, *TM);
-    runOptimizationPasses(M, *TM);
+    auto error = optimizer(&M);
+    if (error)
+      return error;
 
     if (printer) {
       llvm::SmallVector<char, 0> buffer;
@@ -245,6 +161,7 @@ public:
   }
 
 private:
+  Optimizer optimizer;
   std::shared_ptr<llvm::TargetMachine> TM;
   Transformer transformer;
   AsmPrinter printer;
@@ -266,7 +183,7 @@ wave::ExecutionEngine::ExecutionEngine(const ExecutionEngineOptions &options)
   }
 
   // Initialize LLVM native target (only once per process)
-  std::call_once(llvmInitFlag, initializeLLVMTarget);
+  initializeLLVMTarget();
 
   auto tmBuilder =
       llvm::cantFail(llvm::orc::JITTargetMachineBuilder::detectHost());
