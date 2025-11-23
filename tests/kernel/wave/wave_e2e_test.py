@@ -138,8 +138,9 @@ def test_dump_vmfb(shape, tmp_path):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
+@param_bool("use_water_pipeline", "water")
 @check_leaks
-def test_copy(shape, use_buffer_ops, run_bench):
+def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -183,6 +184,7 @@ def test_copy(shape, use_buffer_ops, run_bench):
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
+        use_water_pipeline=use_water_pipeline,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -194,7 +196,8 @@ def test_copy(shape, use_buffer_ops, run_bench):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_dynamic_copy(shape, use_buffer_ops, run_bench):
+@param_bool("use_water_pipeline", "water")
+def test_dynamic_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -236,7 +239,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
-        dynamic_symbols=[M, N],
+        use_water_pipeline=use_water_pipeline,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
