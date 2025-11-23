@@ -185,7 +185,7 @@ def find_local_water_binary_path(name: str) -> Optional[str]:
 
 @lru_cache
 def is_water_available() -> bool:
-    """Returns True of the water_mlir package is available."""
+    """Returns True if the water_mlir package is available."""
     if (Path(__file__).parent / "water_mlir").exists():
         return True
 
@@ -423,6 +423,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
             args,
             input=mlir_asm,
             text=True,
+            stderr=subprocess.PIPE,
         )
     except subprocess.CalledProcessError as e:
         print(e.stderr)

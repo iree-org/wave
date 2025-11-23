@@ -40,11 +40,11 @@ struct ExecutionEngineOptions {
   /// be dumped to a file via the `dumpToObjectfile` method.
   bool enableObjectCache = false;
 
-  /// If enable `enableGDBNotificationListener` is set, the JIT compiler will
+  /// If `enableGDBNotificationListener` is true, the JIT compiler will
   /// notify the llvm's global GDB notification listener.
   bool enableGDBNotificationListener = true;
 
-  /// If `enablePerfNotificationListener` is set, the JIT compiler will notify
+  /// If `enablePerfNotificationListener` is true, the JIT compiler will notify
   /// the llvm's global Perf notification listener.
   bool enablePerfNotificationListener = true;
 
@@ -60,7 +60,7 @@ struct ExecutionEngineOptions {
   /// optimization.
   std::function<llvm::Error(llvm::Module &)> lateTransformer;
 
-  /// If `asmPrinter` is provided, it will be called to print resulted assembly
+  /// If `asmPrinter` is provided, it will be called to print resulting assembly
   /// just before final code generation.
   std::function<void(llvm::StringRef)> asmPrinter;
 };
@@ -74,8 +74,8 @@ public:
   ExecutionEngine(const ExecutionEngineOptions &options);
   ~ExecutionEngine();
 
-  /// Compiles given module, adds it to execution engine and run its contructors
-  /// if any.
+  /// Compiles given module, adds it to execution engine and run its
+  /// constructors if any.
   llvm::Expected<ModuleHandle> loadModule(mlir::ModuleOp m);
 
   /// Deserializes MLIR bytecode from a memory buffer, compiles it, and loads
@@ -87,7 +87,7 @@ public:
   /// execution engine.
   llvm::Expected<ModuleHandle> loadModuleFromText(llvm::StringRef mlirText);
 
-  /// Runs module desctructors and removes it from execution engine.
+  /// Runs module destructors and removes it from execution engine.
   void releaseModule(ModuleHandle handle);
 
   /// Looks up the original function with the given name and returns a

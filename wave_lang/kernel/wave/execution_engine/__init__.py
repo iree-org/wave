@@ -14,6 +14,8 @@ variables.
 
 # Import Python wrapper with caching
 from .execution_engine import (
+    ExecutionEngine,
+    ExecutionEngineOptions,
     clear_engine_cache,
     get_execution_engine,
     is_engine_cached,
