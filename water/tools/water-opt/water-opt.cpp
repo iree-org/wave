@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
 
   mlir::registerAllGPUToLLVMIRTranslations(registry);
 
+  registry.insert<wave::WaveDialect>();
   mlir::water::test::registerWaterTestDialect(registry);
 
   return mlir::asMainReturnCode(
