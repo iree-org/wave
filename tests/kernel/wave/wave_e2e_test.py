@@ -136,10 +136,17 @@ def test_dump_vmfb(shape, tmp_path):
     assert os.path.exists(vmfb_file)
 
 
+_need_water = pytest.mark.skipif(
+    not is_water_available(), reason="Water MLIR package not installed."
+)
+
+
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-@param_bool("use_water_pipeline", "water")
+@param_bool(
+    "use_water_pipeline", "water", values=[False, pytest.param(True, marks=_need_water)]
+)
 @check_leaks
 def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
@@ -198,12 +205,7 @@ def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
 @param_bool(
-    "use_water_pipeline",
-    "water",
-    values=[
-        False,
-        pytest.param(True, marks=pytest.mark.skipif(not is_water_available())),
-    ],
+    "use_water_pipeline", "water", values=[False, pytest.param(True, marks=_need_water)]
 )
 def test_dynamic_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
