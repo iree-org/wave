@@ -263,9 +263,12 @@ class WaveKernelWithProfile(WaveKernel):
         return invoke_with_profile(self.options, self.invoke, *args, **kwargs)
 
 
-class WaveKernel2:
-    def __init__(self, options: WaveCompileOptions, module: Module | bytes | str):
+class WaveKernelExecutionEngine:
+    def __init__(
+        self, options: WaveCompileOptions, module: Module | bytes | str, mlir_asm: str
+    ):
         self.options = options
+        self.asm = mlir_asm
 
         self._engine = None
         self._module_handle = None
@@ -315,15 +318,14 @@ class WaveKernel2:
         """
 
         assert not kwargs, "kwargs are not supported"
-        # Get the current CUDA stream
+        # Get the current stream
         stream_ptr = torch.cuda.current_stream().cuda_stream
 
         # Call the JIT-compiled host wrapper function
         # Signature: void func(void* stream, void* arg0, void* arg1, ...)
         self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
 
-        # Return None (kernel modifies output tensors in place)
-        return None
+        return self.asm
 
     def __del__(self):
         """Clean up the loaded module when the kernel is destroyed."""
@@ -523,7 +525,7 @@ def wave_compile(
             from .water import water_lowering_pipeline
 
             module = water_lowering_pipeline(mb.module_op, options)
-            return WaveKernel2(options, module)
+            return WaveKernelExecutionEngine(options, module, asm)
 
         elif not options.compile_to_mlir:
             # LLVM flow: only compile to VMFB when not in MLIR-only mode
