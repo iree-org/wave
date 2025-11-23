@@ -50,6 +50,7 @@ from .common.utils import (
     require_rdna4,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
+from wave_lang.kernel.wave.water import is_water_available
 
 
 default_test_shapes = [
@@ -196,7 +197,14 @@ def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-@param_bool("use_water_pipeline", "water")
+@param_bool(
+    "use_water_pipeline",
+    "water",
+    values=[
+        False,
+        pytest.param(True, marks=pytest.mark.skipif(not is_water_available())),
+    ],
+)
 def test_dynamic_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
     N = tkl.sym.N
