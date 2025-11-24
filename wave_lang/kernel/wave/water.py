@@ -213,7 +213,7 @@ def make_linear_pass_pipeline(
     ],
 ) -> str:
     def make_pass_arguments(
-        name: str, args: dict[str, Any], module_name: str = None
+        name: str, args: dict[str, Any], module_name: Optional[str] = None
     ) -> str:
         ret = (
             name
@@ -253,7 +253,7 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
     ]
 
     def get_code_context(
-        filename: str, start_line: int, end_line, context: int = 2
+        filename: str, start_line: int, end_line: int, context: int = 2
     ) -> str:
         """
         Retrieves a line and a few lines of context around it.
