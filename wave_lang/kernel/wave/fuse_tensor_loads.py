@@ -109,9 +109,9 @@ def compute_fused_parameters(
         Tuple of (merged_distributed_shape, merged_shared_tile_index,
                   merged_global_tile_index, merged_bounds)
     """
-    # Scale distributed_shape by 2 for wave-dependent dimensions
+    # Scale distributed_shape by 2 for selector-wave-dependent dimensions
     # After fusion: even waves execute load1, odd waves execute load2
-    # Each wave needs to do 2x the work in wave-dependent dims
+    # Each wave needs to do 2x the work in selector-wave-dependent dims
     scaled_load1_shape = {
         dim: load1.distributed_shape[dim] * (2 if dim in distributed_dims else 1)
         for dim in load1.distributed_shape.keys()
@@ -318,9 +318,10 @@ def fuse_tensor_loads(
     wave_id = (
         hardware_constraint.linearized_thread_id // hardware_constraint.threads_per_wave
     )
-    # input_selector will be wave_id % 2 (0 for even waves, 1 for odd waves)
+
     input_selector = wave_id % 2
 
+    # Find the distributed dimension index, across witch we need to double the load size
     if waves_per_block[0] > 1:
         distributed_dim_idx = 0
     elif waves_per_block[1] > 1:
