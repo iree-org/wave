@@ -93,7 +93,7 @@ def merge_dicts_with_piecewise(
 def compute_fused_parameters(
     load1: TensorLoadToLDS,
     load2: TensorLoadToLDS,
-    distributed_dims: dict[IndexSymbol, int],
+    distributed_dims: set[IndexSymbol],
     threads_per_wave: int,
     waves_per_block: tuple[int, int, int],
 ) -> tuple[dict[Any, Any], Any, dict[Any, Any], dict[Any, Any]]:
@@ -295,9 +295,13 @@ def fuse_tensor_loads(
     wave_count = subs_idxc(math.prod(waves_per_block))
 
     # Check if we have an even number of waves (required for fusion)
-    if not is_literal(wave_count) or int(wave_count) % 2 != 0:
+    if (
+        not is_literal(wave_count)
+        or wave_count < 2
+        or any(v > 1 and v % 2 != 0 for v in waves_per_block)
+    ):
         logger.info(
-            f"Skipping tensor load fusion: odd number of waves ({wave_count}). "
+            f"Skipping tensor load fusion: odd number of waves ({waves_per_block}). "
             "Fusion requires an even number of waves."
         )
         return
@@ -317,10 +321,20 @@ def fuse_tensor_loads(
     # input_selector will be wave_id % 2 (0 for even waves, 1 for odd waves)
     input_selector = wave_id % 2
 
+    if waves_per_block[0] > 1:
+        distributed_dim_idx = 0
+    elif waves_per_block[1] > 1:
+        distributed_dim_idx = 1
+    elif waves_per_block[2] > 1:
+        distributed_dim_idx = 2
+    else:
+        raise ValueError(f"Invalid waves_per_block: {waves_per_block}")
+
     distributed_dims = {
-        c.dim: None
+        c.dim
         for c in constraints
-        if isinstance(c, WaveConstraint) and c.wg_constraint.tile_size != c.tile_size
+        if isinstance(c, WaveConstraint)
+        and c.wg_constraint.workgroup_dim == distributed_dim_idx
     }
 
     logger.info(f"Fusing {len(fusable_pairs)} tensor load pairs")
