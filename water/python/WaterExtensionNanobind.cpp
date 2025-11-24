@@ -136,40 +136,19 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveHyperparameterAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, const nb::dict &symbolDict,
+          [](const nb::object &cls,
+             const std::unordered_map<std::string, int64_t> &symbolDict,
              // MlirContext should always come last to allow for being
              // automatically deduced from context.
              MlirContext context) {
             std::vector<MlirNamedAttribute> namedAttrs;
             namedAttrs.reserve(symbolDict.size());
 
-            for (auto item : symbolDict) {
-              // Get the key (symbol name)
-              nb::handle key_handle = item.first;
-              if (!nb::isinstance<nb::str>(key_handle)) {
-                throw nb::type_error("Symbol dictionary key must be a string");
-              }
-              std::string symbolName = nb::cast<std::string>(key_handle);
-
-              // Get the value (resolved value)
-              nb::handle value_handle = item.second;
-              if (!nb::isinstance<nb::int_>(value_handle)) {
-                throw nb::type_error(
-                    "Symbol dictionary value must be an integer");
-              }
-              int64_t resolvedValue;
-              try {
-                resolvedValue = nb::cast<int64_t>(value_handle);
-              } catch (const nb::cast_error &e) {
-                throw nb::value_error("Value is too large for int64_t");
-              }
-
+            for (auto [key, value] : symbolDict) {
               namedAttrs.push_back(mlirNamedAttributeGet(
-                  mlirIdentifierGet(context,
-                                    mlirStringRefCreate(symbolName.data(),
-                                                        symbolName.size())),
-                  mlirIntegerAttrGet(mlirIntegerTypeGet(context, 64),
-                                     resolvedValue)));
+                  mlirIdentifierGet(
+                      context, mlirStringRefCreate(key.data(), key.size())),
+                  mlirIntegerAttrGet(mlirIntegerTypeGet(context, 64), value)));
             }
 
             return cls(mlirWaveHyperparameterAttrGet(mlirDictionaryAttrGet(
@@ -327,7 +306,8 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveReadWriteBoundsAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, const nb::dict &symDimDict,
+          [](const nb::object &cls,
+             const std::unordered_map<std::string, MlirAttribute> &symDimDict,
              // MlirContext should always come last to allow for being
              // automatically deduced from context.
              MlirContext context) {
@@ -335,32 +315,15 @@ NB_MODULE(_waterDialects, m) {
             namedAttrs.reserve(symDimDict.size());
 
             for (auto [key, value] : symDimDict) {
-              // Get the key (symbolic dimension)
-              nb::handle key_handle = key;
-              if (!nb::isinstance<nb::str>(key_handle)) {
-                throw nb::type_error(
-                    "Symbolic dimension dictionary key must be a string");
-              }
-              std::string symbolicDim = nb::cast<std::string>(key_handle);
-
-              // Get the value (bound expression)
-              MlirAttribute attr;
-              try {
-                attr = nb::cast<MlirAttribute>(value);
-              } catch (const nb::cast_error &e) {
-                throw nb::type_error(
-                    "Symbolic dimension dictionary value must be an attribute");
-              }
-              if (!mlirAttributeIsAWaveExprListAttr(attr)) {
+              if (!mlirAttributeIsAWaveExprListAttr(value)) {
                 throw nb::type_error("Symbolic dimension dictionary value must "
                                      "be a WaveExprListAttr");
               }
 
               namedAttrs.push_back(mlirNamedAttributeGet(
-                  mlirIdentifierGet(context,
-                                    mlirStringRefCreate(symbolicDim.data(),
-                                                        symbolicDim.size())),
-                  attr));
+                  mlirIdentifierGet(
+                      context, mlirStringRefCreate(key.data(), key.size())),
+                  value));
             }
 
             return cls(mlirWaveReadWriteBoundsAttrGet(mlirDictionaryAttrGet(
