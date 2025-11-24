@@ -50,31 +50,12 @@ extern "C" void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret,
         "wave_get_buffer: data_ptr() did not return a valid pointer");
   }
 
-  // Get tensor.numel() method and call it
-  PyObjectPtr numel_method(PyObject_GetAttrString(obj_ptr, "numel"));
-  if (!numel_method) {
-    PyErr_Clear();
-    throw std::runtime_error(
-        "wave_get_buffer: Object does not have 'numel' attribute");
-  }
-
-  PyObjectPtr numel_result(PyObject_CallNoArgs(numel_method.get()));
-  if (!numel_result) {
-    PyErr_Clear();
-    throw std::runtime_error("wave_get_buffer: Failed to call numel()");
-  }
-
-  int64_t numel = PyLong_AsLongLong(numel_result.get());
-  if (PyErr_Occurred()) {
-    PyErr_Clear();
-    throw std::runtime_error("wave_get_buffer: numel() returned invalid value");
-  }
-
   // Fill in the memref descriptor
   ret->basePtr = static_cast<uint8_t *>(data_ptr);
   ret->data = static_cast<uint8_t *>(data_ptr);
   ret->offset = 0;
-  ret->sizes[0] = numel;
+  // Actual size doesn't matter we will cast it to 0D memref immediately.
+  ret->sizes[0] = -1;
   ret->strides[0] = 1;
 }
 
