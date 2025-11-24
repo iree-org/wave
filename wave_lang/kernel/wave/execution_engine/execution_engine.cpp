@@ -363,7 +363,7 @@ wave::ExecutionEngine::lookup(wave::ExecutionEngine::ModuleHandle handle,
   auto expectedSymbol = jit->lookup(*dylib, name);
 
   // JIT lookup may return an Error referring to strings stored internally by
-  // the JIT. If the Error outlives the ExecutionEngine, it would want have a
+  // the JIT. If the Error outlives the ExecutionEngine, it would have a
   // dangling reference, which is currently caught by an assertion inside JIT
   // thanks to hand-rolled reference counting. Rewrap the error message into a
   // string before returning. Alternatively, ORC JIT should consider copying
