@@ -70,20 +70,22 @@ NB_MODULE(wave_execution_engine, m) {
             };
           },
           nb::arg("symbols"),
-          "Set symbol map from a dictionary of symbol names to addresses.\n\n"
-          "Args:\n"
-          "    symbols: Dictionary mapping symbol names (str) to addresses "
-          "(int)\n\n"
-          "Example:\n"
-          "    options.set_symbol_map({'my_function': 0x12345678})");
+          R"(Set symbol map from a dictionary of symbol names to addresses.
+
+Args:
+    symbols: Dictionary mapping symbol names (str) to addresses (int)
+
+Example:
+    options.set_symbol_map({'my_function': 0x12345678}))");
 
   // Bind ExecutionEngine class
   nb::class_<wave::ExecutionEngine>(m, "ExecutionEngine",
                                     nb::is_weak_referenceable())
       .def(nb::init<const wave::ExecutionEngineOptions &>(), nb::arg("options"),
-           "Create a new ExecutionEngine with the given options.\n\n"
-           "Args:\n"
-           "    options: ExecutionEngineOptions to configure the engine")
+           R"(Create a new ExecutionEngine with the given options.
+
+Args:
+    options: ExecutionEngineOptions to configure the engine)")
       .def(
           "load_module",
           [](wave::ExecutionEngine &self, MlirModule cModule) {
@@ -93,13 +95,16 @@ NB_MODULE(wave_execution_engine, m) {
             return reinterpret_cast<uintptr_t>(handle);
           },
           nb::arg("module"),
-          "Compile and load an MLIR module into the execution engine.\n\n"
-          "Args:\n"
-          "    module: MLIR module (MlirModule from MLIR C API)\n\n"
-          "Returns:\n"
-          "    Module handle as integer\n\n"
-          "Raises:\n"
-          "    RuntimeError: If compilation or loading fails")
+          R"(Compile and load an MLIR module into the execution engine.
+
+Args:
+    module: MLIR module (MlirModule from MLIR C API)
+
+Returns:
+    Module handle as integer
+
+Raises:
+    RuntimeError: If compilation or loading fails)")
       .def(
           "load_module_from_bytecode",
           [](wave::ExecutionEngine &self, nb::bytes bytecode) {
@@ -110,13 +115,16 @@ NB_MODULE(wave_execution_engine, m) {
             return reinterpret_cast<uintptr_t>(handle);
           },
           nb::arg("bytecode"),
-          "Deserialize MLIR bytecode and load it into the execution engine.\n\n"
-          "Args:\n"
-          "    bytecode: MLIR module serialized as bytecode (bytes)\n\n"
-          "Returns:\n"
-          "    Module handle as integer\n\n"
-          "Raises:\n"
-          "    RuntimeError: If deserialization, compilation or loading fails")
+          R"(Deserialize MLIR bytecode and load it into the execution engine.
+
+Args:
+    bytecode: MLIR module serialized as bytecode (bytes)
+
+Returns:
+    Module handle as integer
+
+Raises:
+    RuntimeError: If deserialization, compilation or loading fails)")
       .def(
           "load_module_from_text",
           [](wave::ExecutionEngine &self, const std::string &mlirText) {
@@ -126,22 +134,26 @@ NB_MODULE(wave_execution_engine, m) {
             return reinterpret_cast<uintptr_t>(handle);
           },
           nb::arg("mlir_text"),
-          "Parse MLIR text and load it into the execution engine.\n\n"
-          "Args:\n"
-          "    mlir_text: MLIR module as text string\n\n"
-          "Returns:\n"
-          "    Module handle as integer\n\n"
-          "Raises:\n"
-          "    RuntimeError: If parsing, compilation or loading fails")
+          R"(Parse MLIR text and load it into the execution engine.
+
+Args:
+    mlir_text: MLIR module as text string
+
+Returns:
+    Module handle as integer
+
+Raises:
+    RuntimeError: If parsing, compilation or loading fails)")
       .def(
           "release_module",
           [](wave::ExecutionEngine &self, uintptr_t handle) {
             self.releaseModule(reinterpret_cast<void *>(handle));
           },
           nb::arg("handle"),
-          "Release a loaded module from the execution engine.\n\n"
-          "Args:\n"
-          "    handle: Module handle returned from load_module")
+          R"(Release a loaded module from the execution engine.
+
+Args:
+    handle: Module handle returned from load_module)")
       .def(
           "lookup",
           [](const wave::ExecutionEngine &self, uintptr_t handle,
@@ -152,18 +164,22 @@ NB_MODULE(wave_execution_engine, m) {
             return reinterpret_cast<uintptr_t>(ptr);
           },
           nb::arg("handle"), nb::arg("name"),
-          "Look up a function in a loaded module.\n\n"
-          "Args:\n"
-          "    handle: Module handle returned from load_module\n"
-          "    name: Name of the function to look up\n\n"
-          "Returns:\n"
-          "    Function address as integer\n\n"
-          "Raises:\n"
-          "    RuntimeError: If function lookup fails")
+          R"(Look up a function in a loaded module.
+
+Args:
+    handle: Module handle returned from load_module
+    name: Name of the function to look up
+
+Returns:
+    Function address as integer
+
+Raises:
+    RuntimeError: If function lookup fails)")
       .def("dump_to_object_file", &wave::ExecutionEngine::dumpToObjectFile,
-           nb::arg("filename"),
-           "Dump compiled object code to a file.\n\n"
-           "Note: Object cache must be enabled in ExecutionEngineOptions.\n\n"
-           "Args:\n"
-           "    filename: Path to output file");
+           nb::arg("filename"), R"(Dump compiled object code to a file.
+
+Note: Object cache must be enabled in ExecutionEngineOptions.
+
+Args:
+    filename: Path to output file)");
 }

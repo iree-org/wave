@@ -19,7 +19,8 @@ template <typename T, int N> struct StridedMemRefType {
   int64_t strides[N]; // Stride of each dimension in elements
 };
 
-/// Rank-1 memref descriptor for memref<?xi8>
+/// Rank-1 memref descriptor for memref<?xi8>, we need to pass this to
+// memref.view op which only accepts 1D i8 memrefs.
 using MemRef1Di8 = StridedMemRefType<uint8_t, 1>;
 
 extern "C" {
