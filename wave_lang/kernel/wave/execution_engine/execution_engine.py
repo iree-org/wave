@@ -15,6 +15,10 @@ import os
 import weakref
 from typing import Optional
 
+import ctypes
+import platform
+from pathlib import Path
+
 try:
     from .wave_execution_engine import ExecutionEngine, ExecutionEngineOptions
 except ImportError:
@@ -44,9 +48,6 @@ def _load_library(lib_basename: str):
     Raises:
         RuntimeError: If the library cannot be found or loaded
     """
-    import ctypes
-    import platform
-    from pathlib import Path
 
     # Find the library file
     lib_name = {
