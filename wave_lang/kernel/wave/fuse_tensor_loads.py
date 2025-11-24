@@ -96,14 +96,16 @@ def compute_fused_parameters(
     distributed_dims: set[IndexSymbol],
     threads_per_wave: int,
     waves_per_block: tuple[int, int, int],
-) -> tuple[dict[Any, Any], Any, dict[Any, Any], dict[Any, Any]]:
+) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
     """
     Compute fused parameters for two tensor loads.
 
     Args:
         load1: First TensorLoadToLDS operation
         load2: Second TensorLoadToLDS operation
+        distributed_dims: Dimensions across which we need to double the load size
         threads_per_wave: Number of threads per wave
+        waves_per_block: Number of waves per block
 
     Returns:
         Tuple of (merged_distributed_shape, merged_shared_tile_index,
@@ -321,7 +323,7 @@ def fuse_tensor_loads(
 
     input_selector = wave_id % 2
 
-    # Find the distributed dimension index, across witch we need to double the load size
+    # Find the distributed dimension index, across which we need to double the load size
     if waves_per_block[0] > 1:
         distributed_dim_idx = 0
     elif waves_per_block[1] > 1:
