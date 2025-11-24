@@ -151,6 +151,10 @@ def stagger(loop: Any): ...
 def filter_nodes(nodes: Any, subgraph: Any = None, node_type: Any = None): ...
 
 
+@define_schedule_op
+def get_node_count(nodes: Any): ...
+
+
 def add_op_before(op, subgraph: fx.Graph, anchor: fx.Node, location=None):
     """Insert a scheduling operation before the anchor node."""
     with subgraph.inserting_before(anchor):
@@ -222,6 +226,7 @@ class GetNodeByTag(CustomScheduleOp):
         cls, region_graph, kernel_trace, constraints: list[Constraint], tag: str
     ):
         # Always execute the real logic during tracing to apply scheduling
+        breakpoint()
         real_result = get_node_by_tag_helper(kernel_trace, tag)
 
         # Create a proxy that embeds the real result
@@ -1095,3 +1100,35 @@ class FilterNodes(CustomScheduleOp):
             )
 
         return create_schedule_proxy(region_graph, filtered_nodes, cls.schedule_op_name)
+
+
+@dataclass
+class GetNodeCount(CustomScheduleOp):
+    schedule_op_name = "get_node_count"
+
+    @classmethod
+    def handle(
+        cls,
+        region_graph,
+        kernel_trace,
+        constraints: list[Constraint],
+        nodes: Any,
+    ):
+        """
+        Get the count of nodes in a proxy.
+
+        Args:
+            nodes: The nodes proxy to count
+
+        Returns:
+            The count of nodes as an integer
+        """
+        assert hasattr(
+            nodes, "node"
+        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
+        nodes_list = get_proxy_result(nodes)
+        assert nodes_list is not None, "Nodes must have a result"
+
+        count = len(nodes_list)
+        logger.info(f"Node count: {count}")
+        return count
