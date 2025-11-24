@@ -64,7 +64,7 @@ def _load_library(lib_basename: str):
     lib_path = module_dir / lib_name
 
     if not lib_path.exists():
-        raise RuntimeError(f"{lib_basename} library not found at {lib_path}. ")
+        raise RuntimeError(f"{lib_basename} library not found at {lib_path}.")
 
     return ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
 

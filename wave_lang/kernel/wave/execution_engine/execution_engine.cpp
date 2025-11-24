@@ -256,7 +256,7 @@ wave::ExecutionEngine::loadModule(mlir::ModuleOp m) {
   if (!llvmModule)
     return makeStringError("could not convert to LLVM IR");
 
-  // Add a ThreadSafemodule to the engine and return.
+  // Add a ThreadSafeModule to the engine and return.
   llvm::orc::ThreadSafeModule tsm(std::move(llvmModule), std::move(ctx));
   if (transformer)
     cantFail(tsm.withModuleDo(
