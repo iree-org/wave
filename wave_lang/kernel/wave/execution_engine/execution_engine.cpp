@@ -134,14 +134,12 @@ public:
 
   llvm::Expected<CompileResult> operator()(llvm::Module &M) override {
     if (transformer) {
-      auto err = transformer(M);
-      if (err)
-        return err;
+      if (auto error = transformer(M))
+        return error;
     }
 
     setupModule(M, *TM);
-    auto error = optimizer(&M);
-    if (error)
+    if (auto error = optimizer(&M))
       return error;
 
     if (printer) {
