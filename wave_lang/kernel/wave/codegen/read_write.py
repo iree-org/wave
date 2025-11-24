@@ -995,7 +995,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     # cpol
     cpol = arith_d.constant(i32, 0)
 
-    return llvm_d.call_intrinsic(
+    llvm_d.call_intrinsic(
         None,
         "llvm.amdgcn.tensor.load.to.lds",
         [d0_selected, d1_selected, d2_selected, d3_selected, cpol],
