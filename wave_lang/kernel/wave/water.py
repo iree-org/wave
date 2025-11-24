@@ -212,8 +212,21 @@ def make_linear_pass_pipeline(
         tuple[str, dict[str, Any]] | tuple[str, dict[str, Any], str] | str
     ],
 ) -> str:
+    """
+    Construct a pass pipeline string for mlir-opt style tool.
+
+    Args:
+        pipeline: A sequence of pass names and arguments.
+            - For the pass with no arguments/all default arguments, pass just the name as a string.
+            - For the pass with arguments, pass a tuple with the name and a dictionary of arguments.
+            - For the pass with a root op, pass a tuple with the name, a dictionary of arguments, and the root op name.
+              Arguments dict can be empty.
+        Returns:
+            A string representing the pass pipeline command line argument.
+    """
+
     def make_pass_arguments(
-        name: str, args: dict[str, Any], module_name: Optional[str] = None
+        name: str, args: dict[str, Any], root_op: Optional[str] = None
     ) -> str:
         ret = (
             name
@@ -221,8 +234,8 @@ def make_linear_pass_pipeline(
             + " ".join("=".join((key, str(value))) for (key, value) in args.items())
             + "}"
         )
-        if module_name:
-            ret = module_name + "(" + ret + ")"
+        if root_op:
+            ret = root_op + "(" + ret + ")"
         return ret
 
     return (
