@@ -703,6 +703,12 @@ def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
     return res
 
 
+def _subs_index_dict(
+    index_dict: dict[IndexSymbol, IndexExpr], subs: dict[IndexSymbol, int]
+) -> dict[IndexSymbol, IndexExpr]:
+    return {k: safe_subs(v, subs) for k, v in index_dict.items()}
+
+
 @handle_op(tensor_load_to_lds)
 def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
@@ -739,16 +745,16 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     d2_results = []
     d3_results = []
 
-    subs_init = add_emitter_subs(emitter)
+    subs = add_emitter_subs(emitter)
 
     for i, (src, dst) in enumerate(zip(sources, destinations)):
-        subs = copy.copy(subs_init)
-        subs[INPUT_SELECTOR] = arith_d.constant(IndexType.get(), i)
-
         dst_memory = get_custom(dst)
 
         symbolic_shape = _get_symbolic_shape(src)
         global_tile_index_current = {k: global_tile_index[k] for k in symbolic_shape}
+        global_tile_index_current = _subs_index_dict(
+            global_tile_index_current, {INPUT_SELECTOR: input_selector}
+        )
 
         local_bounds = [
             bounds[s] - global_tile_index_current[s].start for s in symbolic_shape
@@ -829,6 +835,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         )
 
         shared_tile_index_current = {k: shared_tile_index[k] for k in symbolic_shape}
+        shared_tile_index_current = _subs_index_dict(
+            shared_tile_index_current, {INPUT_SELECTOR: input_selector}
+        )
 
         linearized_index = {
             "linearized_idx": linearize_index(shared_tile_index_current, shared_strides)
@@ -981,10 +990,10 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
         return selected
 
-    d0_selected = select_descriptor(d0_results, input_selector, subs_init)
-    d1_selected = select_descriptor(d1_results, input_selector, subs_init)
-    d2_selected = select_descriptor(d2_results, input_selector, subs_init)
-    d3_selected = select_descriptor(d3_results, input_selector, subs_init)
+    d0_selected = select_descriptor(d0_results, input_selector, subs)
+    d1_selected = select_descriptor(d1_results, input_selector, subs)
+    d2_selected = select_descriptor(d2_results, input_selector, subs)
+    d3_selected = select_descriptor(d3_results, input_selector, subs)
 
     # cpol
     cpol = arith_d.constant(i32, 0)
