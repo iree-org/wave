@@ -438,8 +438,8 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        print(e.stderr)
-        raise e
+        error_msg = f"Subprocess failed with return code {e.returncode}.\nStderr output:\n{e.stderr}"
+        raise RuntimeError(error_msg) from e
 
     with module.context:
         return Module.parse(result)
