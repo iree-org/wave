@@ -42,6 +42,10 @@ MlirTypeID mlirWaveSymbolAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveSymbolAttr>());
 }
 
+MlirStringRef mlirWaveSymbolAttrGetName(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveSymbolAttr>(unwrap(attr)).getName());
+}
+
 //===---------------------------------------------------------------------===//
 // WaveIterSymbolAttr
 //===---------------------------------------------------------------------===//
@@ -125,6 +129,30 @@ MlirAttribute mlirWaveIndexMappingAttrGet(MlirContext mlirCtx,
 
 MlirTypeID mlirWaveIndexMappingAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveIndexMappingAttr>());
+}
+
+MlirAffineMap mlirWaveIndexMappingAttrGetStart(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStart());
+}
+
+MlirAffineMap mlirWaveIndexMappingAttrGetSize(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStep());
+}
+
+MlirAffineMap mlirWaveIndexMappingAttrGetStride(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStride());
+}
+
+intptr_t mlirWaveIndexMappingAttrGetNumSymbols(MlirAttribute attr) {
+  return llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr))
+      .getSymbolNames()
+      .size();
+}
+
+MlirAttribute mlirWaveIndexMappingAttrGetSymbol(MlirAttribute attr,
+                                                intptr_t index) {
+  return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr))
+                  .getSymbolNames()[index]);
 }
 
 //===---------------------------------------------------------------------===//

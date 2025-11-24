@@ -240,6 +240,132 @@ def _convert_sympy_expr_to_affine_map(
     )
 
 
+def _convert_affine_expr_to_sympy_expr(
+    expr: ir.AffineExpr,
+    symbol_mapping: Sequence[sympy.Symbol],
+) -> sympy.Expr:
+    match expr:
+        case ir.AffineConstantExpr(value):
+            return sympy.Integer(value)
+        case ir.AffineSymbolExpr(index):
+            return symbol_mapping[index]
+        case ir.AffineAddExpr(lhs, rhs):
+            return _convert_affine_expr_to_sympy_expr(
+                lhs, symbol_mapping
+            ) + _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
+        case ir.AffineMulExpr(lhs, rhs):
+            return _convert_affine_expr_to_sympy_expr(
+                lhs, symbol_mapping
+            ) * _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
+        case ir.AffineFloorDivExpr(lhs, rhs):
+            return sympy.floor(
+                _convert_affine_expr_to_sympy_expr(lhs, symbol_mapping)
+                / _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
+            )
+        case ir.AffineCeilDivExpr(lhs, rhs):
+            return sympy.ceil(
+                _convert_affine_expr_to_sympy_expr(lhs, symbol_mapping)
+                / _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
+            )
+        case ir.AffineModExpr(lhs, rhs):
+            return _convert_affine_expr_to_sympy_expr(
+                lhs, symbol_mapping
+            ) % _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
+        case _:
+            raise ValueError(f"Unsupported affine expression: {expr}")
+
+
+def _convert_index_mapping_attr_to_sympy(
+    attr: wave.WaveIndexMappingAttr,
+) -> IndexSequence:
+    def wrap_symbol(symbol_name: ir.Attribute) -> sympy.Symbol:
+        if isinstance(symbol_name, wave.WaveSymbolAttr):
+            return index_symbol(symbol_name.name)
+        elif isinstance(symbol_name, wave.WaveIndexSymbolAttr):
+            match symbol_name.value:
+                case wave.WaveIndexSymbol.WORKGROUP_0:
+                    return index_symbol("$WG0")
+                case wave.WaveIndexSymbol.WORKGROUP_1:
+                    return index_symbol("$WG1")
+                case wave.WaveIndexSymbol.WORKGROUP_2:
+                    return index_symbol("$WG2")
+                case wave.WaveIndexSymbol.THREAD_0:
+                    return index_symbol("$T0")
+                case wave.WaveIndexSymbol.THREAD_1:
+                    return index_symbol("$T1")
+                case wave.WaveIndexSymbol.THREAD_2:
+                    return index_symbol("$T2")
+                case wave.WaveIndexSymbol.DEVICE_DIM_0:
+                    return sympy.Symbol("$DD0")
+                case wave.WaveIndexSymbol.DEVICE_DIM_1:
+                    return index_symbol("$DD1")
+                case wave.WaveIndexSymbol.DEVICE_DIM_2:
+                    return index_symbol("$DD2")
+                case wave.WaveIndexSymbol.GPR_NUMBER:
+                    return index_symbol("$GPR_NUM")
+                case _:
+                    raise ValueError(f"Unsupported index symbol: {symbol_name.value}")
+        else:
+            raise ValueError(f"Unsupported symbol attribute: {symbol_name}")
+
+    symbols = list(map(wrap_symbol, attr.symbols))
+    start = _convert_affine_expr_to_sympy_expr(attr.start, symbols)
+    step = _convert_affine_expr_to_sympy_expr(attr.step, symbols)
+    stride = _convert_affine_expr_to_sympy_expr(attr.stride, symbols)
+    return IndexSequence(start, step, stride)
+
+
+def _convert_index_mapping_dict_to_sympy(
+    dict_attr: ir.DictAttr,
+) -> dict[IndexSymbol, IndexSequence]:
+    result = {}
+    for key, value in dict_attr:
+        assert isinstance(
+            value, wave.WaveIndexMappingAttr
+        ), f"Unsupported index mapping attribute: {value}"
+        result[key] = _convert_index_mapping_attr_to_sympy(value)
+    return result
+
+
+def _convert_index_mapping_array_to_sympy(
+    op: ir.Operation, array_attr: ir.ArrayAttr
+) -> dict[IndexSymbol, IndexSequence]:
+    result = {}
+    if not isinstance(op.opview, wave.MmaOp):
+        assert (
+            len(array_attr) == 1
+        ), f"Expected exactly one index mapping attribute for non-MMA op: {op}"
+        return _convert_index_mapping_attr_to_sympy(array_attr[0])
+
+    assert (
+        len(array_attr) == 4
+    ), f"Expected exactly four index mapping attributes for MMA op: {op}"
+    lhs_index = _convert_index_mapping_attr_to_sympy(array_attr[0])
+    rhs_index = _convert_index_mapping_attr_to_sympy(array_attr[1])
+    acc_index = _convert_index_mapping_attr_to_sympy(array_attr[2])
+    result_index = _convert_index_mapping_attr_to_sympy(array_attr[3])
+    mk_symbols = set(lhs_index.keys())
+    nk_symbols = set(rhs_index.keys())
+    m_symbol = (mk_symbols - nk_symbols).pop()
+    n_symbol = (nk_symbols - mk_symbols).pop()
+    k_symbol = (mk_symbols.intersection(nk_symbols)).pop()
+    assert lhs_index[k_symbol] == rhs_index[k_symbol]
+    assert rhs_index[n_symbol] == acc_index[n_symbol]
+    assert acc_index[m_symbol] == result_index[m_symbol]
+    assert acc_index[n_symbol] == result_index[n_symbol]
+    return {
+        m_symbol: sympy.Piecewise(
+            (lhs_index[m_symbol], ~index_symbol("$MMA_ACC")),
+            (acc_index[m_symbol], index_symbol("$MMA_ACC")),
+        ),
+        n_symbol: rhs_index[n_symbol],
+        k_symbol: lhs_index[k_symbol],
+    }
+
+
+# convert index expression attribute to the sympy equivalent
+
+
 def _preprocess_symbols(
     symbols: Sequence[sympy.Symbol],
 ) -> dict[sympy.Symbol, sympy.Symbol]:
@@ -681,6 +807,7 @@ def _create_kernel_module(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
+    node_backmap: dict[str, fx.Node],
     test_diagnostics: bool = False,
 ) -> tuple[ir.Module | None, list[str]]:
     """Creates an MLIR module containing the kernel function from the captured trace.
@@ -690,6 +817,7 @@ def _create_kernel_module(
         trace: Captured Wave trace to convert.
         constraints: List of Wave constraints to attach to the function.
         options: Compilation options including hyperparameters.
+        node_backmap: Map from hash of node to node.
         test_diagnostics: Whether to emit a test diagnostic
 
     Returns:
@@ -788,6 +916,16 @@ def _create_kernel_module(
             _emit_ops_from_graph(trace.get_root_graph(), trace, value_map, ctx)
             func.ReturnOp(operands_=[])
 
+    for fx_node, ir_value in value_map.items():
+        if not isinstance(ir_value, ir.OpResult):
+            continue
+        custom = get_custom(fx_node)
+        if custom not in node_backmap:
+            continue
+        ir_value.owner.attributes["wave.water_id"] = ir.StringAttr.get(
+            node_backmap[custom._water_id]
+        )
+
     return module, diagnostics
 
 
@@ -808,8 +946,16 @@ def _emit_from_captured_trace(
     if enable_debug_info and not trace.location:
         diagnostics.append("Missing debug location for wave trace")
 
-    with ir.Context() as ctx, (
-        trace.location.to_water() if trace.location else ir.Location.unknown()
+    nodes = trace.walk()
+    node_backmap = {}
+    for node in nodes:
+        custom = get_custom(node)
+        setattr(custom, "_water_id", str(hash(node)))
+        node_backmap[str(hash(node))] = node
+
+    with (
+        ir.Context() as ctx,
+        trace.location.to_water() if trace.location else ir.Location.unknown(),
     ):
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
@@ -858,6 +1004,31 @@ def _emit_from_captured_trace(
                 )
             except Exception as e:
                 diagnostics.append(f"Failed to apply transform script: {e}")
+
+        # TODO: if there was an error above, don't try to get module asm...
+
+        inferred_index_mappings = {}
+
+        def extractor(op: ir.Operation) -> ir.WalkResult:
+            attribute = op.attribute["wave.water_id"]
+            if attribute is not None:
+                assert isinstance(
+                    attribute, ir.StringAttr
+                ), f"Unexpected attribute type: {attribute}"
+                node = node_backmap[attribute.value]
+                inferred_index_mappings[node] = _convert_index_mapping_array_to_sympy(
+                    op.attribute["index"]
+                )
+                # TODO: this is the main check, we likely want to connect to diagnostics here...
+                # eventually, we want to return this back through pickling somehow,
+                # but there we have a snapshot of nodes so we may need the mapping
+                # to happen in mlir_converter.py so we can map back
+                #
+                # longer term, we may want to construct new fx nodes
+                assert node.index == inferred_index_mappings[node]
+                # TODO: we could do this in C++ by creating an "expected-index" attribute and comparing there to emit a diagnostic
+
+        module.operation.walk(extractor)
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
         _flush_output(module_str, diagnostics)
