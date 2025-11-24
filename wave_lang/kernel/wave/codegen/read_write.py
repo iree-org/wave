@@ -7,7 +7,6 @@
 import functools
 from typing import Any, Optional
 
-import copy
 import math
 import sympy
 import torch.fx as fx
@@ -969,14 +968,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     # Select the appropriate descriptors based on input_selector
     # Build chained select operations for each descriptor
-    def select_descriptor(results_list, input_selector, subs):
+    def select_descriptor(results_list, input_selector_val):
         """Select from list of results using chained arith_d.select operations."""
         assert len(results_list) > 0, "results_list must not be empty"
         if len(results_list) == 1:
             return results_list[0]
-
-        # Generate the selector value
-        input_selector_val = gen_sympy_index(subs, input_selector)
 
         # Start with the last element as default
         selected = results_list[-1]
@@ -990,10 +986,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
         return selected
 
-    d0_selected = select_descriptor(d0_results, input_selector, subs)
-    d1_selected = select_descriptor(d1_results, input_selector, subs)
-    d2_selected = select_descriptor(d2_results, input_selector, subs)
-    d3_selected = select_descriptor(d3_results, input_selector, subs)
+    input_selector_val = gen_sympy_index(subs, input_selector)
+    d0_selected = select_descriptor(d0_results, input_selector_val)
+    d1_selected = select_descriptor(d1_results, input_selector_val)
+    d2_selected = select_descriptor(d2_results, input_selector_val)
+    d3_selected = select_descriptor(d3_results, input_selector_val)
 
     # cpol
     cpol = arith_d.constant(i32, 0)
