@@ -69,6 +69,10 @@ def _load_library(lib_basename: str):
     return ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
 
 
+def _get_symbol(lib: ctypes.CDLL, name: str) -> ctypes.c_void_p:
+    return ctypes.cast(getattr(lib, name), ctypes.c_void_p).value
+
+
 def _load_runtime_helpers():
     """
     Load the wave_runtime_helpers shared library and return symbol addresses.
@@ -82,25 +86,16 @@ def _load_runtime_helpers():
     Raises:
         RuntimeError: If the library cannot be found or loaded
     """
-    import ctypes
-
     lib = _load_library("wave_runtime_helpers")
 
     symbol_map = {}
 
-    wave_get_buffer_addr = ctypes.cast(
-        lib._mlir_ciface_wave_get_buffer, ctypes.c_void_p
-    ).value
-    symbol_map["_mlir_ciface_wave_get_buffer"] = wave_get_buffer_addr
-
-    wave_get_int64_addr = ctypes.cast(lib.wave_get_int64, ctypes.c_void_p).value
-    symbol_map["wave_get_int64"] = wave_get_int64_addr
-
-    wave_get_float64_addr = ctypes.cast(lib.wave_get_float64, ctypes.c_void_p).value
-    symbol_map["wave_get_float64"] = wave_get_float64_addr
-
-    wave_get_dim_addr = ctypes.cast(lib.wave_get_dim, ctypes.c_void_p).value
-    symbol_map["wave_get_dim"] = wave_get_dim_addr
+    symbol_map["_mlir_ciface_wave_get_buffer"] = _get_symbol(
+        lib, "_mlir_ciface_wave_get_buffer"
+    )
+    symbol_map["wave_get_int64"] = _get_symbol(lib, "wave_get_int64")
+    symbol_map["wave_get_float64"] = _get_symbol(lib, "wave_get_float64")
+    symbol_map["wave_get_dim"] = _get_symbol(lib, "wave_get_dim")
 
     return symbol_map
 
@@ -117,21 +112,14 @@ def _load_hip_runtime():
     Raises:
         RuntimeError: If the library cannot be found or loaded
     """
-    import ctypes
-
     lib = _load_library("wave_hip_runtime")
 
-    # Load HIP functions eagerly
     lib.load_functions()
 
     symbol_map = {}
 
-    # Register HIP runtime functions
-    wave_load_kernel_addr = ctypes.cast(lib.wave_load_kernel, ctypes.c_void_p).value
-    symbol_map["wave_load_kernel"] = wave_load_kernel_addr
-
-    wave_launch_kernel_addr = ctypes.cast(lib.wave_launch_kernel, ctypes.c_void_p).value
-    symbol_map["wave_launch_kernel"] = wave_launch_kernel_addr
+    symbol_map["wave_load_kernel"] = _get_symbol(lib, "wave_load_kernel")
+    symbol_map["wave_launch_kernel"] = _get_symbol(lib, "wave_launch_kernel")
 
     return symbol_map
 
