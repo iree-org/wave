@@ -423,7 +423,6 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
             args,
             input=mlir_asm,
             text=True,
-            stderr=subprocess.PIPE,
         )
     except subprocess.CalledProcessError as e:
         print(e.stderr)
