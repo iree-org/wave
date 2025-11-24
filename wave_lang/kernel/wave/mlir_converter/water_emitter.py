@@ -24,13 +24,6 @@ if TYPE_CHECKING:
     from wave_lang.kernel.ops.wave_ops import *
 
 from wave_lang.support.location_config import LocationCaptureLevel
-from wave_lang.kernel.wave.constraints import (
-    WorkgroupConstraint,
-    HardwareConstraint,
-    WaveConstraint,
-    TilingConstraint,
-    DeviceConstraint,
-)
 
 try:
     from water_mlir.water_mlir import ir
@@ -624,11 +617,6 @@ def _emit_from_captured_trace(
     value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
     diagnostics = []
 
-    if pipeline:
-        raise NotImplementedError(
-            "Transform dialect pipelines are not implemented yet."
-        )
-
     enable_debug_info = (
         options.location_capture_config.level is not LocationCaptureLevel.NONE
     )
@@ -731,7 +719,6 @@ def _emit_from_captured_trace(
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(str(e))
-
 
         # If a transform script was provided, parse and apply it to the module.
         # This expects a transform module with a named sequence as first operation.
