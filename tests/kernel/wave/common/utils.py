@@ -68,13 +68,14 @@ def param_bool(name, shortname=None, values=None):
     return pytest.mark.parametrize(name, values, ids=ids)
 
 
-def _is_water_lowering_available() -> bool:
+def _is_water_and_ee_available() -> bool:
     from wave_lang.kernel.wave.water import is_water_available
     from wave_lang.kernel.wave.execution_engine import is_execution_engine_available
 
     return is_water_available() and is_execution_engine_available()
 
 
-require_water_lowering = pytest.mark.skipif(
-    not _is_water_lowering_available(), reason="Water lowering is not available."
+require_water_and_ee = pytest.mark.skipif(
+    not _is_water_and_ee_available(),
+    reason="Water or execution engine are not available.",
 )

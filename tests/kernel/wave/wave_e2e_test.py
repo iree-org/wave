@@ -48,7 +48,7 @@ from .common.utils import (
     require_cdna_2_or_3_or_4,
     require_e2e,
     require_rdna4,
-    require_water_lowering,
+    require_water_and_ee,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
 
@@ -142,7 +142,7 @@ def test_dump_vmfb(shape, tmp_path):
 @param_bool(
     "use_water_pipeline",
     "water",
-    values=[False, pytest.param(True, marks=require_water_lowering)],
+    values=[False, pytest.param(True, marks=require_water_and_ee)],
 )
 @check_leaks
 def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
@@ -204,7 +204,7 @@ def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
 @param_bool(
     "use_water_pipeline",
     "water",
-    values=[False, pytest.param(True, marks=require_water_lowering)],
+    values=[False, pytest.param(True, marks=require_water_and_ee)],
 )
 def test_dynamic_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
