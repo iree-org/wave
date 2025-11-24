@@ -17,6 +17,7 @@ from .cache import (
     get_temp_binary_dir,
     is_cache_enabled,
 )
+from .water import water_lowering_pipeline
 from .compile_options import WaveCompileOptions
 from .utils.compile_utils import compile_to_vmfb
 from .utils.general_utils import wave_dtype_to_torch
@@ -278,16 +279,16 @@ class WaveKernelExecutionEngine:
         # TODO: investigate why bytecode deserialization is not working
         if isinstance(module, (bytes, str)):
             # Assume it's already MLIR text
-            mlir_asm = module.decode() if isinstance(module, bytes) else module
+            optimized_mlir = module.decode() if isinstance(module, bytes) else module
         else:
             # Serialize the MLIR module to text
-            mlir_asm = str(module)
+            optimized_mlir = str(module)
 
-        # Load module eagerly
+        # Get the execution engine instance and load the module
         from wave_lang.kernel.wave.execution_engine import get_execution_engine
 
         self._engine = get_execution_engine()
-        self._module_handle = self._engine.load_module_from_text(mlir_asm)
+        self._module_handle = self._engine.load_module_from_text(optimized_mlir)
 
         # Look up the host wrapper function
         func_name = self.options.func_name
@@ -299,8 +300,8 @@ class WaveKernelExecutionEngine:
                 f"Make sure the module was compiled with emit_host_func. Error: {e}"
             )
 
-        # Create ctypes function type once
-        # The host wrapper signature is: void func(void* stream, void* arg0, void* arg1, ...)
+        # Create ctypes function type
+        # The host wrapper signature is: void func(void* stream, PyObject* arg0, PyObject* arg1, ...)
 
         num_kernel_args = len(self.options.kernel_usages)
         arg_types = [ctypes.c_void_p] + [
@@ -309,20 +310,18 @@ class WaveKernelExecutionEngine:
         func_type = ctypes.CFUNCTYPE(None, *arg_types)
         self._cfunc = func_type(self._host_func_ptr)
 
-    def __call__(self, *args, **kwargs):
-        return self.invoke(*args, **kwargs)
+    def __call__(self, *args):
+        return self.invoke(*args)
 
-    def invoke(self, *args, **kwargs):
+    def invoke(self, *args):
         """
         Invokes the wave kernel with the given arguments using the ExecutionEngine.
         """
-
-        assert not kwargs, "kwargs are not supported"
         # Get the current stream
         stream_ptr = torch.cuda.current_stream().cuda_stream
 
         # Call the JIT-compiled host wrapper function
-        # Signature: void func(void* stream, void* arg0, void* arg1, ...)
+        # Signature: void func(void* stream, PyObject* arg0, PyObject* arg1, ...)
         self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
 
         return self.asm
@@ -524,8 +523,6 @@ def wave_compile(
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
         if options.use_water_pipeline:
-            from .water import water_lowering_pipeline
-
             module = water_lowering_pipeline(mb.module_op, options)
             return WaveKernelExecutionEngine(options, module, asm)
 
