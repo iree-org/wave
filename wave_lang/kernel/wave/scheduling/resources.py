@@ -19,6 +19,7 @@ from ...ops.wave_ops import (
     CustomOp,
     Extract,
     GatherToLDS,
+    TensorLoadToLDS,
     IterArg,
     MMABase,
     Output,
@@ -128,6 +129,8 @@ def get_custom_operation_type(custom: CustomOp) -> Operation:
         )
     elif isinstance(custom, (GatherToLDS, TensorLoadToLDS)):
         return Operation.GLOBAL_TO_SHARED
+    elif isinstance(custom, TensorLoadToLDS):
+        return Operation.GLOBAL_TO_SHARED
     elif isinstance(custom, MMABase):
         return Operation.MMA
     elif isinstance(custom, SCHEDULING_NOOPS + (Output,)):
@@ -161,6 +164,8 @@ def annotate_resource_usage(
                 else resource_reservation_table[Operation.WRITE_SHARED]
             )
         elif isinstance(custom, (GatherToLDS, TensorLoadToLDS)):
+            custom.rrt = resource_reservation_table[Operation.GLOBAL_TO_SHARED]
+        elif isinstance(custom, TensorLoadToLDS):
             custom.rrt = resource_reservation_table[Operation.GLOBAL_TO_SHARED]
         elif isinstance(custom, MMABase):
             custom.rrt = resource_reservation_table[Operation.MMA]

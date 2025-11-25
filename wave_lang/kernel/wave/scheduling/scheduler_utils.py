@@ -10,6 +10,7 @@ from ...ops.wave_ops import (
     Read,
     Write,
     GatherToLDS,
+    TensorLoadToLDS,
     MMA,
     ScaledMMA,
 )
@@ -81,8 +82,10 @@ class GemmScheduler(BaseScheduler):
         graph: fx.Graph,
         edges: list[Edge],
         resources: list[int],
+        meta_name: str = "prefetch_stage",
     ) -> None:
         super().__init__(graph, edges, resources)
+        self.meta_name = meta_name
         self.annotate_gemm_operation_type(self.graph)
 
     def get_closest_local_load(self, node: fx.Node):
@@ -156,6 +159,13 @@ class GemmScheduler(BaseScheduler):
                 and g.graph == custom.graph
             )
             lds_gathers.update(cur_gathers)
+            cur_gathers = dict.fromkeys(
+                g
+                for g in memory_users
+                if isinstance(get_custom(g), TensorLoadToLDS)
+                and g.graph == custom.graph
+            )
+            lds_gathers.update(cur_gathers)
         return lds_gathers.keys()
 
     def get_global_loads(self, local_writes: Iterable[Write]) -> Iterable[Read]:
@@ -170,7 +180,7 @@ class GemmScheduler(BaseScheduler):
         for node in nodes:
             if isinstance(node, CustomOp):
                 node = node.fx_node
-            node.meta["prefetch_stage"] = gemm_operation_type
+            node.meta[self.meta_name] = gemm_operation_type
 
     def annotate_gemm_operation_type(self, graph):
         mma_nodes = filter_fx_graph(
