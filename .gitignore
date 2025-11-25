@@ -47,6 +47,8 @@ out
 water/.cache
 
 # Water artifacts
+wave_lang/kernel/wave/water_mlir/*
+!wave_lang/kernel/wave/water_mlir/__init__.py # __init__.py is not installed by cmake
 water/llvm-install
 water/llvm-project
 water/build_tools/wheel/water_mlir/water_mlir
