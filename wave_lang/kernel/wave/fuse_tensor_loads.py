@@ -96,7 +96,7 @@ def compute_fused_parameters(
     distributed_dims: set[IndexSymbol],
     threads_per_wave: int,
     waves_per_block: tuple[int, int, int],
-) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any], dict[Any, Any], Any]:
     """
     Compute fused parameters for two tensor loads.
 
@@ -109,7 +109,7 @@ def compute_fused_parameters(
 
     Returns:
         Tuple of (merged_distributed_shape, merged_shared_tile_index,
-                  merged_global_tile_index, merged_bounds)
+                  merged_global_tile_index, merged_bounds, multicast_mask)
     """
     # Scale distributed_shape by 2 for selector-wave-dependent dimensions
     # After fusion: even waves execute load1, odd waves execute load2
@@ -168,11 +168,16 @@ def compute_fused_parameters(
         load1.bounds, load2.bounds, INPUT_SELECTOR
     )
 
+    merged_multicast_mask = merge_with_piecewise(
+        load1.multicast_mask, load2.multicast_mask, INPUT_SELECTOR
+    )
+
     return (
         merged_distributed_shape,
         merged_shared_tile_index,
         merged_global_tile_index,
         merged_bounds,
+        merged_multicast_mask,
     )
 
 
@@ -372,6 +377,7 @@ def fuse_tensor_loads(
             merged_shared_tile_index,
             merged_global_tile_index,
             merged_bounds,
+            merged_multicast_mask,
         ) = compute_fused_parameters(
             load1, load2, distributed_dims, threads_per_wave, waves_per_block
         )
@@ -387,6 +393,7 @@ def fuse_tensor_loads(
                 shared_tile_index=merged_shared_tile_index,
                 global_tile_index=merged_global_tile_index,
                 bounds=merged_bounds,
+                multicast_mask=merged_multicast_mask,
                 input_selector=input_selector,
             ).add_to_graph(
                 load2_node.graph,
