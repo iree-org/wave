@@ -28,6 +28,7 @@ from ...ops.wave_ops import (
     SelectOp,
     SelfIndex,
     ShuffleOp,
+    TensorLoadToLDS,
     UnaryPyOp,
     Write,
     get_custom,
@@ -125,7 +126,7 @@ def get_custom_operation_type(custom: CustomOp) -> Operation:
             and custom.memory_type.address_space == SHARED_ADDRESS_SPACE
             else Operation.WRITE_GLOBAL
         )
-    elif isinstance(custom, GatherToLDS):
+    elif isinstance(custom, (GatherToLDS, TensorLoadToLDS)):
         return Operation.GLOBAL_TO_SHARED
     elif isinstance(custom, MMABase):
         return Operation.MMA
@@ -159,7 +160,7 @@ def annotate_resource_usage(
                 if custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
                 else resource_reservation_table[Operation.WRITE_SHARED]
             )
-        elif isinstance(custom, GatherToLDS):
+        elif isinstance(custom, (GatherToLDS, TensorLoadToLDS)):
             custom.rrt = resource_reservation_table[Operation.GLOBAL_TO_SHARED]
         elif isinstance(custom, MMABase):
             custom.rrt = resource_reservation_table[Operation.MMA]

@@ -5,7 +5,7 @@ import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
 
-from ..._support.indexing import IndexSymbol, IndexSequence
+from ..._support.indexing import IndexSymbol, IndexSequence, IndexExpr
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
     CustomOp,
@@ -49,9 +49,18 @@ class PipelineStage(Enum):
 
 
 def update_index(
-    index: dict[IndexSymbol, IndexSequence], subs: dict[IndexSymbol, IndexSymbol]
-) -> dict[IndexSymbol, IndexSequence]:
+    index: dict[IndexSymbol, IndexSequence | IndexExpr],
+    subs: dict[IndexSymbol, IndexSymbol],
+) -> dict[IndexSymbol, IndexSequence | IndexExpr]:
     return {k: v.subs(subs) for k, v in index.items()}
+
+
+def update_loop_dependent_args_if_present(
+    node: "CustomOp", names: list[str], subs: dict[IndexSymbol, IndexSymbol]
+) -> None:
+    for name in names:
+        if attr := getattr(node, name, None):
+            node.update_arg(name, update_index(attr, subs))
 
 
 def update_node_index(
@@ -63,10 +72,15 @@ def update_node_index(
     if node.index:
         node.index = update_index(node.index, subs)
 
-    if src_idx := getattr(node, "src_index", None):
-        node.update_arg("src_index", update_index(src_idx, subs))
-    if dst_idx := getattr(node, "dst_index", None):
-        node.update_arg("dst_index", update_index(dst_idx, subs))
+    loop_dependent_args = [
+        "src_index",
+        "dst_index",
+        "global_tile_index",
+        "shared_tile_index",
+        "bounds",
+        "src_bounds",
+    ]
+    update_loop_dependent_args_if_present(node, loop_dependent_args, subs)
 
 
 def add_nodes_by_schedule(

@@ -6,11 +6,12 @@ To be more specific, cases like RAW (read after write), WAR (write after read), 
 
 Glossary
 --------------------
-- Memory Access Types
+- Shared Memory Access Types
     * Read (READ)
     * Write (WRITE)
     * Atomic (READ_WRITE)
-    * GatherToLDS (READ_WRITE)
+    * GatherToLDS (WRITE)
+    * TensorLoadToLDS (WRITE)
 
 - Nested region op types
     * Iterate

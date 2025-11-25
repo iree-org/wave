@@ -893,7 +893,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         # get data size val packed to i32
         data_size_val = lshift(data_size, 16)
 
-        if padding := dst_memory.padding:
+        if padding := getattr(dst_memory, "padding", None):
             unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
             assert (
                 unpadded_dim >= 8

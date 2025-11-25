@@ -490,23 +490,23 @@ def is_shared_read(node: CustomOp) -> bool:
     )
 
 
-def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
+def get_shared_memory_operands(node: fx.Node) -> list[fx.Node]:
     custom = get_custom(node)
     if is_shared_read(custom) or is_shared_write(custom):
-        return custom.memory
+        return [custom.memory]
     if isinstance(custom, GatherToLDS):
-        return custom.dst
+        return [custom.dst]
     if isinstance(custom, TensorLoadToLDS):
         return custom.dst
 
-    return None
+    return []
 
 
 def collect_shared_memory_operands(graph: fx.Graph) -> list[fx.Node]:
     shared_memory_operands = {}
     for node in graph.nodes:
-        operand = get_shared_memory_operand(node)
-        if operand is not None:
+        operands = get_shared_memory_operands(node)
+        for operand in operands:
             operand = propagate_loop_carried_vars(operand)
             assert isinstance(
                 get_custom(operand), Allocate
