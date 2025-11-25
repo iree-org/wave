@@ -15,12 +15,13 @@ import sympy
 import argparse
 from pathlib import Path
 
-# Add parent directory to sys.path to enable relative imports when running standalone
-# This allows importing water_mlir from ../water_mlir/ as if it were a relative import
-_current_file = Path(__file__).resolve()
-_parent_dir = str(_current_file.parent.parent)  # Go up to wave_lang/kernel/wave/
-if _parent_dir not in sys.path:
-    sys.path.append(_parent_dir)
+if __name__ == "__main__":
+    # Add parent directory to sys.path to enable relative imports when running standalone
+    # This allows importing water_mlir from ../water_mlir/ as if it were a relative import
+    _current_file = Path(__file__).resolve()
+    _parent_dir = str(_current_file.parent.parent)  # Go up to wave_lang/kernel/wave/
+    if _parent_dir not in sys.path:
+        sys.path.append(_parent_dir)
 
 
 if TYPE_CHECKING:
