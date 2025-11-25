@@ -531,10 +531,6 @@ class LaunchableWave(Launchable):
                 count = subs_idxc(wave_constraint.waves_per_block)
                 waves_per_block[wave_constraint.workgroup_dim] = count
 
-            # check for specialization service waves
-            if hardware_constraint.n_service_waves > 0:
-                waves_per_block[0] += hardware_constraint.n_service_waves
-
             hardware_constraint.waves_per_block = waves_per_block
 
     def initialize_reductions(self, trace: CapturedTrace) -> None:
@@ -937,7 +933,12 @@ class LaunchableWave(Launchable):
                 ),
             ]
         graph_passes += [
-            partial(add_shared_memory_barriers, trace, target=options.target),
+            partial(
+                add_shared_memory_barriers,
+                trace,
+                target=options.target,
+                is_specialized=options.specialize,
+            ),
             partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
             partial(partition_gather_like_ops, trace, self.constraints, options.target),
             partial(generate_bounds_exprs, trace, self.constraints),

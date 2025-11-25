@@ -156,7 +156,15 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
 def add_shared_memory_barriers(
     trace: CapturedTrace,
     target: str = "",
+    is_specialized: bool = False,
 ):
+    if is_specialized:
+        """
+        TODO(megan.kuo)
+        currently respect barriers inserted by specializations
+        """
+        return
+
     target_arch = TargetConfig(target)
 
     sync_regions = get_barriers_analysis(trace, target_arch)
