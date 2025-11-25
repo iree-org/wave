@@ -909,10 +909,10 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
                 data_size_val, arith_d.constant(i32, pad_packed)
             )
 
-        local_multicast_mask = sympy.simplify(
-            subs_idxc(safe_subs(multicast_mask, {INPUT_SELECTOR: i}))
-        )
+        local_multicast_mask = subs_idxc(safe_subs(multicast_mask, {INPUT_SELECTOR: i}))
+
         if local_multicast_mask:
+            local_multicast_mask = sympy.simplify(local_multicast_mask)
             local_multicast_mask_val = gen_sympy_index(subs, local_multicast_mask)
             local_multicast_mask_val = arith_d.index_cast(i32, local_multicast_mask_val)
             data_size_val = arith_d.ori(data_size_val, local_multicast_mask_val)
