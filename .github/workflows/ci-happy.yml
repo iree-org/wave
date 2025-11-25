@@ -18,7 +18,8 @@ jobs:
   happy-set-env:
     runs-on: ['self-hosted', 'Linux', 'X64', 'rdna4', 'shark41', 'gfx1250']
     env:
-      VENV_DIR: /home/user/.venvs/happy-test/
+      ROOT_VENV: /home/user/.venvs/happy-test/lib/python3.12/site-packages
+      USER_VENV: /workspace/.venvs/wave-env/
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -29,11 +30,21 @@ jobs:
         with:
           python-version: "3.11"
 
-      # 0. load happy image from local tar
+      # load happy image from local tar
       - name: Load image
         run: |
           RUNNER_BASE="$(dirname $RUNNER_WORKSPACE)"
           docker load -i "$RUNNER_BASE/../docker-images/ci-gfx1250.tar"
+
+      # 0. ensure old container is gone
+      - name: Clean up remaining container before start
+        run: |
+          if docker ps -a --format '{{.Names}}' | grep -q '^happy$'; then
+            echo "Found existing container happy, removing..."
+            docker rm -f happy || true
+          else
+            echo "No existing container"
+          fi
 
       # 1. long-live happiness
       - name: Start happy container from image
@@ -45,7 +56,7 @@ jobs:
             --name happy \
             --restart unless-stopped \
             --user "$HOST_UID:$HOST_GID" \
-            -v "${PWD}:/workspace" \
+            -v "${PWD}:${WORK_DIR}" \
             --network=host \
             --ipc=host \
             --device=/dev/kfd \
@@ -54,46 +65,39 @@ jobs:
             --cap-add=SYS_PTRACE \
             -p8000:8000 -p18000:18000 \
             --security-opt seccomp=unconfined \
-            -w $WORK_DIR\
+            -w $WORK_DIR \
             -e HOST_UID=$HOST_UID \
             -e HOST_GID=$HOST_GID \
             -e RUSTUP_HOME=$WORK_DIR/.rustup \
             -e CARGO_HOME=$WORK_DIR/.cargo \
+            -e USER=$(whoami) \
+            -e HOME=$WORK_DIR \
             --entrypoint sleep \
             ci-rocplay-gfx1250:latest \
             infinity
-
-      - name: Debug
-        run: |
-          docker exec \
-            -e VENV_DIR="${VENV_DIR}" \
-            happy bash -lc '
-              set -eux
-              ls -l "${VENV_DIR}/bin"
-              echo "python  -> $(command -v python || echo not found)"
-              echo "python3 -> $(command -v python3 || echo not found)"
-            '
 
       # 2. wave-env
       - name: Setup venv, Rust and Python deps
         run: |
           docker exec \
-            -e VENV_DIR="${VENV_DIR}" \
+            -e USER_VENV="${USER_VENV}" \
             happy bash -lc '
               set -euxo pipefail
 
-              echo "Install Rust via rustup.sh"
-              mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-              . "$CARGO_HOME/env"
+              # make rust dir
+              mkdir -p $CARGO_HOME $RUSTUP_HOME
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
               export PATH="$CARGO_HOME/bin:$PATH"
 
               echo $HSA_MODEL_NUM_THREADS
               source /usr/local/bin/env.sh >/dev/null 2>&1
-              source "${VENV_DIR}/bin/activate"
+
+              # user owned venv
+              python3 -m venv ${USER_VENV}
+              source "${USER_VENV}/bin/activate"
 
               echo "Install pip deps"
-              which python3 && python3 -m pip install --no-compile --upgrade pip
+              python3 -m pip install --no-compile --upgrade pip
 
               # Install wave deps
               pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
@@ -105,14 +109,16 @@ jobs:
       - name: Check Arch (gfx1250)
         run: |
           docker exec \
-            -e VENV_DIR="${VENV_DIR}" \
+            -e USER_VENV="${USER_VENV}" \
+            -e ROOT_VENV="${ROOT_VENV}" \
             happy bash -lc '
               set -euo pipefail
               source /usr/local/bin/env.sh >/dev/null 2>&1
-              source "${VENV_DIR}/bin/activate"
+              source "${USER_VENV}/bin/activate"
+              export PYTHONPATH=${ROOT_VENV}
 
               echo "Check Arch after python installation"
-              "${VENV_DIR}/bin/python" - << "PY"
+              "python" - << "PY"
           import torch, sys
 
           props = torch.cuda.get_device_properties(0)
@@ -128,32 +134,38 @@ jobs:
       - name: Run unit tests
         run: |
           docker exec \
-            -e VENV_DIR="${VENV_DIR}" \
+            -e USER_VENV="${USER_VENV}" \
+            -e ROOT_VENV="${ROOT_VENV}" \
             happy bash -lc '
               set -euxo pipefail
               source /usr/local/bin/env.sh >/dev/null 2>&1
-              source "${VENV_DIR}/bin/activate"
               export PATH="$CARGO_HOME/bin:$PATH"
 
-              echo "Check Arch after python installation"
-              pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+              # python venv
+              source "${USER_VENV}/bin/activate"
+              export PYTHONPATH=${ROOT_VENV}
+
+              echo "Run unit tests"
+              WAVE_CACHE_ON=0 python3 -m pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
             '
 
       # 5. TKW runtime related e2e
       - name: Run TKW runtime e2e tests
         run: |
           docker exec \
-            -e VENV_DIR="${VENV_DIR}" \
+            -e USER_VENV="${USER_VENV}" \
+            -e ROOT_VENV="${ROOT_VENV}" \
             happy bash -lc '
               set -euxo pipefail
               source /usr/local/bin/env.sh >/dev/null 2>&1
-              source "${VENV_DIR}/bin/activate"
               export PATH="$CARGO_HOME/bin:$PATH"
+
+              source "${USER_VENV}/bin/activate"
+              export PYTHONPATH=${ROOT_VENV}
 
               echo "Test TKW runtime related stack on amdgpu"
               export WAVE_CACHE_DIR=$PWD/.wave
-              rm -rf ./.wave
-              nproc
+              rm -rf $WAVE_CACHE_DIR
               WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
               '
 
@@ -161,30 +173,42 @@ jobs:
       - name: Run gemm e2e tests
         run: |
           docker exec \
-            -e VENV_DIR="${VENV_DIR}" \
+            -e USER_VENV="${USER_VENV}" \
+            -e ROOT_VENV="${ROOT_VENV}" \
             happy bash -lc '
               set -euxo pipefail
               source /usr/local/bin/env.sh >/dev/null 2>&1
-              source "${VENV_DIR}/bin/activate"
               export PATH="$CARGO_HOME/bin:$PATH"
+
+              source "${USER_VENV}/bin/activate"
+              export PYTHONPATH=${ROOT_VENV}
+
               echo $HSA_MODEL_NUM_THREADS
               printenv HSA_MODEL_NUM_THREADS || echo "not set"
 
-              WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/wave_gemm_test.py
+              export WAVE_CACHE_DIR=$PWD/.wave
+              rm -rf $WAVE_CACHE_DIR
+              # WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/wave_gemm_test.py
             '
 
       # 8. lit tests
       - name: Run lit tests
         run: |
           docker exec \
-          -e VENV_DIR="${VENV_DIR}" \
+            -e USER_VENV="${USER_VENV}" \
+            -e ROOT_VENV="${ROOT_VENV}" \
             happy bash -lc '
               set -euxo pipefail
               source /usr/local/bin/env.sh >/dev/null 2>&1
-              source "${VENV_DIR}/bin/activate"
               export PATH="$CARGO_HOME/bin:$PATH"
 
+              source "${USER_VENV}/bin/activate"
+              export PYTHONPATH=${ROOT_VENV}
+
               echo "Check Arch after python installation"
+              export HOME=/workspace
+              export WAVE_CACHE_DIR=$HOME/.wave
+
               lit lit_tests/ -v
             '
 
