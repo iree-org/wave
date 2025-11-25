@@ -2447,7 +2447,7 @@ def test_gemm_prefetch_reorder_manual_schedule(
     - 2-way wave staggering
     """
     # Use the wrapper function to get kernel, schedule, and options
-    gemm, options = get_tagged_gemm(shape, mfma_variant, compile_to_mlir=False)
+    gemm, options = get_tagged_gemm(shape=shape, mfma_variant=mfma_variant, compile_to_mlir=False)
     schedule = get_two_pp_cluster_schedule()
     # Set runtime configuration for execution
     options = set_default_run_config(options)
@@ -2481,7 +2481,7 @@ def test_gemm_two_async_cluster_pingpong(
     """
     # Use the wrapper function to get kernel, schedule, and options
     block_shape = (128, 128, 64)
-    gemm, options = get_tagged_gemm(shape, block_shape, mfma_variant, compile_to_mlir=False, use_global_to_shared=True)
+    gemm, options = get_tagged_gemm(shape=shape, block_shape=block_shape, mfma_variant=mfma_variant, compile_to_mlir=False, use_global_to_shared=True)
     schedule = get_async_two_pp_clusters()
     # Set runtime configuration for execution
     options = set_default_run_config(options)

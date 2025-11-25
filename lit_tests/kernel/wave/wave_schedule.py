@@ -71,7 +71,7 @@ def test_gemm_prefetch_reorder_stagger():
     mfma_variant = wave.MMAType.F32_16x16x16_F16
 
     # Get the kernel, schedule, and options from the template
-    gemm, options = get_tagged_gemm(shape, mfma_variant, compile_to_mlir=True)
+    gemm, options = get_tagged_gemm(shape=shape, mfma_variant=mfma_variant, compile_to_mlir=True)
     schedule = get_two_pp_cluster_schedule()
 
     gemm = wave_compile(options, gemm, schedule)
