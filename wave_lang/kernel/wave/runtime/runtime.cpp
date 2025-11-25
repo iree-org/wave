@@ -172,11 +172,16 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
     cluster_dims[2] = info.clusterDimZ;
 
     HIP_LAUNCH_CONFIG config = {
-        info.gridX,  info.gridY,
-        info.gridZ,  info.blockX,
-        info.blockY, info.blockZ,
-        0,           stream,
-        attributes,  1 // Number of attributes
+        unsigned(info.gridX),
+        unsigned(info.gridY),
+        unsigned(info.gridZ),
+        unsigned(info.blockX),
+        unsigned(info.blockY),
+        unsigned(info.blockZ),
+        0,
+        stream,
+        attributes,
+        1 // Number of attributes
     };
 
     HIP_CHECK_EXC(hipDrvLaunchKernelEx(&config, function, nullptr,
