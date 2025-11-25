@@ -187,7 +187,7 @@ def is_water_available() -> bool:
             importlib.util.find_spec("wave_lang.kernel.wave.water_mlir.water_mlir")
             is not None
         )
-    except ImportError | ModuleNotFoundError:
+    except:
         return False
 
 
