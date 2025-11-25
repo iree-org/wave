@@ -1383,6 +1383,95 @@ def test_gemm_four_stage():
 
 
 @run_test
+def test_gemm_four_stage_global_to_lds():
+    shape = (4096, 4096, 4096)
+    dynamic_dims = None
+    mfma_variant = tkw.MMAType.GFX1250_F32_16x16x32_F16
+    block_shape = (128, 128, 256)
+    waves_per_block = (2, 2)
+    gemm, hyperparams, _ = get_gemm_kernel(
+        shape,
+        dynamic_dims,
+        mfma_variant,
+        block_shape=block_shape,
+        waves_per_block=waves_per_block,
+    )
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        target="gfx1250",
+        canonicalize=True,
+        schedule=SchedulingType.FOUR_STAGE,
+        multi_buffer_count=2,
+        use_global_to_shared=True,
+        compile_to_mlir=True,
+    )
+
+    gemm_four_stage_global_to_lds = wave_compile(options, gemm)
+    print(gemm_four_stage_global_to_lds.asm)
+    # CHECK-LABEL: test_gemm_four_stage_global_to_lds
+    # Test multibuffering: verify shared memory views are correctly allocated
+    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<266240xi8
+    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<266240xi8
+    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c66560][] : memref<266240xi8
+    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c133120][] : memref<266240xi8
+    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c199680][] : memref<266240xi8
+
+    # Prologue
+    # Verify prologue stores to shared memory
+    # CHECK: rocdl.tensor.load.to.lds
+
+    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # Verify prologue loads from shared memory
+    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%thread_id_x, %thread_id_y]
+    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
+    # CHECK: vector.load %[[VIEW1]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]]
+
+    # CHECK: rocdl.tensor.load.to.lds
+
+    # Main Loop:
+    # Verify Pipelined Loop, iter_args should contain vector values from prologue
+    # CHECK: scf.for %[[ARG3:.*]] = %c0 to %c14 step %c1 iter_args({{.*}}, %[[LVIEW3:.*]] = %[[VIEW3]], %[[LVIEW2:.*]] = %[[VIEW2]], %[[LVIEW1:.*]] = %[[VIEW1]], %[[LVIEW0:.*]] = %[[VIEW0]])
+
+    # Verify WMMA exists
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # CHECK: vector.load %[[LVIEW0]]
+    # CHECK: vector.load %[[LVIEW2]]
+
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # CHECK: rocdl.tensor.load.to.lds
+
+    # CHECK: scf.yield {{.*}}, %[[LVIEW2]], %[[LVIEW3]], %[[LVIEW0]], %[[LVIEW1]]
+
+    # Epilogue:
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # CHECK: vector.load
+    # CHECK: vector.load
+
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK-COUNT-8: vector.store
+
+
+@run_test
 def test_dynamic_gemm_pipelined():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]

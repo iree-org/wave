@@ -56,6 +56,7 @@ class SyncRegion:
     producers: Sequence[Any] = None
     consumers: Sequence[Any] = None
     cross_iter: bool = False
+    is_tdm: bool = False
     producer: fx.Node = None
     consumer: fx.Node = None
     prod_location: int = -1
@@ -102,20 +103,21 @@ def assign_preorder_index(nodes: List[fx.Node]) -> None:
         setattr(node, "_topo_location", idx)
 
 
-def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
+def get_shared_memory_access_type(op: CustomOp) -> MemoryAccessType:
     """
     Get the memory access type of a custom node.
     """
-    if isinstance(op, Read):
+    if isinstance(op, Read) and op.memory_type.address_space == SHARED_ADDRESS_SPACE:
         return MemoryAccessType.READ
-    elif isinstance(op, Write):
+    elif isinstance(op, Write) and op.memory_type.address_space == SHARED_ADDRESS_SPACE:
         return MemoryAccessType.WRITE
-    elif isinstance(op, AtomicOp):
+    elif (
+        isinstance(op, AtomicOp)
+        and op.memory_type.address_space == SHARED_ADDRESS_SPACE
+    ):
         return MemoryAccessType.READ_WRITE
-    elif isinstance(op, GatherToLDS):
-        return MemoryAccessType.READ_WRITE
-    elif isinstance(op, TensorLoadToLDS):
-        return MemoryAccessType.READ_WRITE
+    elif isinstance(op, (GatherToLDS, TensorLoadToLDS)):
+        return MemoryAccessType.WRITE
     else:
         return MemoryAccessType.NONE
 
@@ -154,10 +156,10 @@ def need_barrier(
     node1 = get_custom(node1) if isinstance(node1, fx.Node) else node1
     node2 = get_custom(node2) if isinstance(node2, fx.Node) else node2
 
-    access_type1 = get_memory_access_type(node1)
+    access_type1 = get_shared_memory_access_type(node1)
     if access_type1 == MemoryAccessType.NONE:
         return False
-    access_type2 = get_memory_access_type(node2)
+    access_type2 = get_shared_memory_access_type(node2)
     if access_type2 == MemoryAccessType.NONE:
         return False
 
@@ -273,7 +275,7 @@ def handle_hazard(
         return
 
     op = get_custom(node)
-    access_kind = get_memory_access_type(op)
+    access_kind = get_shared_memory_access_type(op)
     if access_kind == MemoryAccessType.NONE:
         return
 
@@ -533,10 +535,11 @@ def find_disjoint_interval_strategy(
     # --- Helpers ----
     get_location = lambda region: (region.prod_location, region.cons_location)
 
-    def make_request(prod: fx.Node, cons: fx.Node) -> SyncRegion:
+    def make_request(prod: fx.Node, cons: fx.Node, is_tdm: bool) -> SyncRegion:
         """Make a new request based on provided producer and consumer. dont care values are default to None."""
         return SyncRegion(
             cross_iter=False,
+            is_tdm=is_tdm,
             producer=prod,
             consumer=cons,
             prod_location=prod._topo_location,
@@ -558,14 +561,22 @@ def find_disjoint_interval_strategy(
     results = []
     for placement in minimal_placements:
         closest_signal = find_closest(ascending_producers, placement.cons_location)
+
+        is_tdm = any(
+            isinstance(get_custom(prod), TensorLoadToLDS)
+            for prod in placement.producers
+            if isinstance(prod, fx.Node)
+        )
+
         # special case 1)
         signal_placement = (
             closest_signal if closest_signal is not None else placement.consumer.prev
         )
+
         # special case 2)
         if signal_placement.graph != placement.consumer.graph:
             signal_placement = placement.consumer.prev
 
-        results.append(make_request(signal_placement, placement.consumer))
+        results.append(make_request(signal_placement, placement.consumer, is_tdm))
 
     return results

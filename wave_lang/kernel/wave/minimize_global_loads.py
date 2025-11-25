@@ -340,8 +340,8 @@ def update_write_dependencies(
                 return True
             if isinstance(custom, GatherToLDS) and custom.dst == memory:
                 return True
-            if isinstance(custom, TensorLoadToLDS) and custom.dst == memory:
-                return True
+            if isinstance(custom, TensorLoadToLDS):
+                return all(dst == memory for dst in custom.dst)
             return False
 
         for replaceable_write in trace.walk(is_replaceable_write):

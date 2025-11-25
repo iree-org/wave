@@ -11,6 +11,7 @@ import math
 import sympy
 import torch.fx as fx
 
+from wave_lang.kernel.wave.utils.graph_utils import propagate_loop_carried_vars
 from wave_lang.support.ir_imports import (
     Attribute,
     DenseElementsAttr,
@@ -965,8 +966,10 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         # get data size val packed to i32
         data_size_val = lshift(data_size, 16)
 
-        if padding := dst_memory.padding:
-            unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
+        original_dst = propagate_loop_carried_vars(dst)
+        original_dst = get_custom(original_dst)
+        if padding := original_dst.padding:
+            unpadded_dim = int(subs_idxc(original_dst.unpadded_shape[-1])) * bytewidth
             assert (
                 unpadded_dim >= 8
             ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"

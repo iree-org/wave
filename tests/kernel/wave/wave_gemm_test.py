@@ -229,51 +229,62 @@ def testPureGemm(
     assert_close(c, iree_ref, check_device=False)
 
 
-_global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
+global_to_lds_shapes = [pytest.param(s) for s in get_test_shapes("test_gemm")[:1]]
+
+global_to_lds_shapes += [
+    pytest.param((17, 23, 32), marks=require_cdna_3_or_4),
+    pytest.param((15, 13, 4), marks=require_cdna_3_or_4),
+]
 
 
 @require_e2e
-@require_cdna_3_or_4
-@pytest.mark.parametrize(
-    "shape", _global_to_lds_shapes + get_test_shapes("test_gemm")[:1]
-)
+@pytest.mark.parametrize("shape", global_to_lds_shapes)
 @pytest.mark.parametrize(
     "enable_scheduling",
     [
-        SchedulingType.NONE,
-        SchedulingType.PREFETCH,
-        SchedulingType.FOUR_STAGE,
-        SchedulingType.MODULO,
+        pytest.param(SchedulingType.NONE),
+        pytest.param(SchedulingType.PREFETCH, marks=require_cdna_3_or_4),
+        pytest.param(SchedulingType.FOUR_STAGE, marks=require_cdna_3_or_4),
+        pytest.param(SchedulingType.MODULO, marks=require_cdna_3_or_4),
     ],
 )
 @pytest.mark.parametrize(
     "dynamic_dims",
     [
-        (False, False, False),
-        (True, True, False),
+        pytest.param((False, False, False)),
+        pytest.param((True, True, False), marks=require_cdna_3_or_4),
     ],
 )
 @pytest.mark.parametrize(
-    "mfma_variant",
+    "mfma_variant, threads_per_wave",
     [
-        MMAType.F32_16x16x16_F16,
-        MMAType.F32_32x32x8_F16,
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.GFX1250_F32_16x16x32_F16, 32, marks=require_gfx1250),
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
-def testGemmGatherToLDS(
-    shape: tuple[int],
+def testGemmGlobalToLDS(
+    shape: tuple[int, int, int],
     enable_scheduling: SchedulingType,
     dynamic_dims: tuple[bool, bool, bool],
     mfma_variant: MMAType,
+    threads_per_wave: int,
     datatype: torch.dtype,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
 ):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
-        shape, dynamic_dims, mfma_variant, datatype
+        shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=threads_per_wave
     )
+
+    multibuffer = enable_scheduling in [
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ]
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    hyperparams[UNROLL_FACTOR] = 2 if multibuffer else 1
 
     options = WaveCompileOptions(
         subs=hyperparams,
@@ -287,6 +298,16 @@ def testGemmGatherToLDS(
         use_global_to_shared=True,
     )
     options = set_default_run_config(options)
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
+
     gemm = wave_compile(options, gemm)
 
     a = device_randn(shape[0], shape[2], dtype=datatype)
@@ -295,7 +316,9 @@ def testGemmGatherToLDS(
     gemm(a, b, c)
     asm = gemm.asm
 
-    assert "amdgpu.gather_to_lds" in asm, "gather_to_lds not found in asm"
+    assert (
+        "amdgpu.gather_to_lds" in asm or "tensor.load.to.lds" in asm
+    ), "gather_to_lds / tensor.load.to.lds not found in asm"
 
     if run_bench:
         options.benchmark_results_file = perf_filename_iree
