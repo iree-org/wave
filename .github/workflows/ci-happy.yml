@@ -188,7 +188,7 @@ jobs:
 
               export WAVE_CACHE_DIR=$PWD/.wave
               rm -rf $WAVE_CACHE_DIR
-              # WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/wave_gemm_test.py
+              WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/wave_gemm_test.py
             '
 
       # 8. lit tests
@@ -205,9 +205,7 @@ jobs:
               source "${USER_VENV}/bin/activate"
               export PYTHONPATH=${ROOT_VENV}
 
-              echo "Check Arch after python installation"
-              export HOME=/workspace
-
+              echo "Lit tests"
               lit lit_tests/ -v
             '
 
