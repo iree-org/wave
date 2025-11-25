@@ -281,8 +281,19 @@ def fuse_tensor_loads(
     """
     Fuse adjacent TensorLoadToLDS operations to reduce the number of tensor loads.
 
-    Fusion is only performed when we have an even number of waves, as this
-    is a requirement for correct fusion behavior.
+    Fusion is only performed when we have an even number of waves.
+
+    Example:
+        Before fusion (4 waves total):
+            load1 = TensorLoadToLDS(...)  # All waves execute
+            load2 = TensorLoadToLDS(...)  # All waves execute
+
+        After fusion (4 waves total):
+            fused = TensorLoadToLDS(...)  # Even waves (0,2) do load1's work
+                                          # Odd waves (1,3) do load2's work
+                                          # Uses INPUT_SELECTOR for conditional behavior
+
+        This reduces the total number of load operations from 2 to 1.
 
     Args:
         trace: The captured trace to transform
