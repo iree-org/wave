@@ -68,7 +68,7 @@ def emit_wave_dialect(
 
     if proc.returncode != 0:
         raise RuntimeError(
-            f"water_emitter failed (code {proc.returncode}):\n{err}\n{output}"
+            f"water_emitter failed (code {proc.returncode}):\n{err.decode('utf-8')}\n{output.decode('utf-8')}"
         )
 
     try:
