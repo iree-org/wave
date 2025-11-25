@@ -141,7 +141,11 @@ class WaveBhsdFlashAttentionSharktankOp(CustomOp):
         )
 
         match get_arch_family():
-            #TODO(megan.kuo) when gfx1250 has tested with attention
+            case "GFX1250":
+                mfma_variant = (
+                    tkw.MMAType.GFX1250_F32_16x16x32_F16,
+                    tkw.MMAType.GFX1250_F32_16x16x32_F16,
+                )
             case "RDNA":
                 mfma_variant = (
                     tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,
