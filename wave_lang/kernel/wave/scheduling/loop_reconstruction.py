@@ -5,7 +5,7 @@ import torch.fx as fx
 
 from wave_lang.support.logging import get_logger
 
-from ..._support.indexing import IndexSymbol, IndexSequence
+from ..._support.indexing import IndexSymbol, IndexSequence, IndexExpr
 from ..._support.tracing import CapturedTrace
 from ...ops.wave_ops import (
     CustomOp,
@@ -49,7 +49,8 @@ class PipelineStage(Enum):
 
 
 def update_index(
-    index: dict[IndexSymbol, IndexSequence], subs: dict[IndexSymbol, IndexSymbol]
+    index: dict[IndexSymbol, IndexSequence | IndexExpr],
+    subs: dict[IndexSymbol, IndexSymbol],
 ) -> dict[IndexSymbol, IndexSequence]:
     return {k: v.subs(subs) for k, v in index.items()}
 
@@ -67,6 +68,16 @@ def update_node_index(
         node.update_arg("src_index", update_index(src_idx, subs))
     if dst_idx := getattr(node, "dst_index", None):
         node.update_arg("dst_index", update_index(dst_idx, subs))
+
+    if global_tile_index := getattr(node, "global_tile_index", None):
+        node.update_arg("global_tile_index", update_index(global_tile_index, subs))
+    if shared_tile_index := getattr(node, "shared_tile_index", None):
+        node.update_arg("shared_tile_index", update_index(shared_tile_index, subs))
+
+    if bounds := getattr(node, "bounds", None):
+        node.update_arg("bounds", update_index(bounds, subs))
+    if src_bounds := getattr(node, "src_bounds", None):
+        node.update_arg("src_bounds", update_index(src_bounds, subs))
 
 
 def add_nodes_by_schedule(

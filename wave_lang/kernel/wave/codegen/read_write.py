@@ -59,6 +59,7 @@ from ...ops.wave_ops import (
     read_meets_hw_transpose_requirements,
 )
 from ..utils.general_utils import get_fastest_index, linearize_index
+from ..utils.graph_utils import propagate_loop_carried_vars
 from ..utils.mapping_utils import transform_index_on_mapping
 from ..utils.symbol_utils import safe_subs
 from .emitter import (
@@ -747,6 +748,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     subs = add_emitter_subs(emitter)
 
     for i, (src, dst) in enumerate(zip(sources, destinations)):
+        # In pipelined loops, dst might be an IterArg, so propagate to the actual Allocate
+        dst = propagate_loop_carried_vars(dst)
         dst_memory = get_custom(dst)
 
         symbolic_shape = _get_symbolic_shape(src)
