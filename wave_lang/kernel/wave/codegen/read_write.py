@@ -910,7 +910,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             )
 
         local_multicast_mask = sympy.simplify(
-            safe_subs(multicast_mask, {INPUT_SELECTOR: i})
+            subs_idxc(safe_subs(multicast_mask, {INPUT_SELECTOR: i}))
         )
         if local_multicast_mask:
             local_multicast_mask_val = gen_sympy_index(subs, local_multicast_mask)

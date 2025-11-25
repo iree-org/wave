@@ -643,11 +643,6 @@ def test_wmma_with_tensor_load():
     # CHECK-LABEL: test_wmma_with_tensor_load
     # CHECK:          func.func @mma
 
-    # CHECK-DAG:    %[[C0:.*]] = arith.constant 0 : index
-    # CHECK-DAG:    %[[C1:.*]] = arith.constant 1 : index
-    # CHECK-DAG:    %[[C2:.*]] = arith.constant 2 : index
-    # CHECK-DAG:    %[[C3:.*]] = arith.constant 3 : index
-
     ### global buffer is bound to %0, %1 and %2 : MK, NK, MN
     # CHECK:        %[[SUBSPAN0:.*]] = stream.binding.subspan
     # CHECK:        %[[SUBSPAN1:.*]] = stream.binding.subspan
@@ -673,10 +668,10 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[D0:.*]] = vector.from_elements
 
     # Cluster mask generation
-    # CHECK:        %[[COND0:.*]] = arith.cmpi eq, %{{.*}}, %[[C1]] : index
-    # CHECK:        %[[COND1:.*]] = arith.cmpi eq, %{{.*}}, %[[C0]] : index
-    # CHECK:        %[[COND2:.*]] = arith.cmpi eq, %{{.*}}, %[[C3]] : index
-    # CHECK:        %[[COND3:.*]] = arith.cmpi eq, %{{.*}}, %[[C2]] : index
+    # CHECK:        %[[COND0:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
+    # CHECK:        %[[COND1:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
+    # CHECK:        %[[COND2:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
+    # CHECK:        %[[COND3:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
     # CHECK:        %[[MASK1:.*]] = arith.select %[[COND3]], %{{.*}}, %[[C0]] : index
     # CHECK:        %[[MASK2:.*]] = arith.select %[[COND2]], %{{.*}}, %[[MASK1]] : index
     # CHECK:        %[[MASK3:.*]] = arith.select %[[COND1]], %{{.*}}, %[[MASK2]] : index
