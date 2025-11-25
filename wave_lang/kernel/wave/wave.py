@@ -534,7 +534,7 @@ class LaunchableWave(Launchable):
                 count = subs_idxc(wave_constraint.waves_per_block)
                 waves_per_block[wave_constraint.workgroup_dim] = count
 
-            hardware_constraint.waves_per_block = waves_per_block
+            hardware_constraint.waves_per_block = tuple(waves_per_block)
 
     def initialize_reductions(self, trace: CapturedTrace) -> None:
         """
