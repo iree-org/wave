@@ -143,6 +143,8 @@ jobs:
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
           echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
+          echo "WAVE_BUILD_WATER=1" >> $GITHUB_ENV
+          echo "WAVE_LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install" >> $GITHUB_ENV
 
       - name: Setup env
         if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
