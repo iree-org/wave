@@ -138,7 +138,7 @@ Before installing Wave, ensure you have the following prerequisites:
      export WAVE_BUILD_TYPE=Debug
      ```
 
-   - `WAVE_BUILD_WATER`: Build the Water MLIR dialect and infrastruture (default: `0`)
+   - `WAVE_BUILD_WATER`: Build the Water MLIR dialect and infrastructure (default: `0`)
      ```bash
      export WAVE_BUILD_WATER=1
      ```
