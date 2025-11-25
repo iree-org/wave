@@ -452,7 +452,7 @@ class HardwareConstraint(Constraint):
     def threads_per_block(self) -> List[int]:
         # threads_per_block is set in initialize_wave_constraints method
         return [
-            self.waves_per_block[0] * self.threads_per_wave,
+            (self.waves_per_block[0] + self.n_service_waves) * self.threads_per_wave,
         ] + self.waves_per_block[1:]
 
     @property
