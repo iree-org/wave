@@ -36,6 +36,7 @@ from ..constraints import (
     DistributionConstraint,
     HardwareConstraint,
     TilingConstraint,
+    WaveConstraint,
     WorkgroupConstraint,
 )
 from .graph_utils import propagate_loop_carried_vars
@@ -315,6 +316,12 @@ def get_hardware_constraint(constraints: list[Constraint]) -> HardwareConstraint
             return constraint
     else:
         raise ValueError(f"Could not find hardware constraint in {constraints}")
+
+
+def get_wave_constraints(
+    constraints: list[Constraint],
+) -> list[WaveConstraint]:
+    return [x for x in constraints if isinstance(x, WaveConstraint)]
 
 
 def get_workgroup_constraints(
