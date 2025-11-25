@@ -11,7 +11,7 @@ import wave_lang.kernel.wave.wave_schedule as wave_schedule
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions
 from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
-
+from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
 
 def get_tagged_gemm(
     shape: tuple[int, int, int] = (128, 256, 1024),
@@ -81,31 +81,21 @@ def get_tagged_gemm(
 
         tkw.write(repeat, c)
 
+    hyperparams = {
+        M: shape[0],
+        N: shape[1],
+        K: shape[2],
+        BLOCK_M: block_shape[0],
+        BLOCK_N: block_shape[1],
+        BLOCK_K: block_shape[2],
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
     # Define compile options
-    M_val, N_val, K_val = shape
     options = WaveCompileOptions(
-        subs={
-            M: M_val,
-            N: N_val,
-            K: K_val,
-            BLOCK_M: block_shape[0],
-            BLOCK_N: block_shape[1],
-            BLOCK_K: block_shape[2],
-            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
-            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
-            READ_SHARED_DELAY: 1,
-            WRITE_SHARED_DELAY: 1,
-            READ_GLOBAL_DELAY: 2,
-            WRITE_GLOBAL_DELAY: 2,
-            MMA_DELAY: 1,
-            VALU_DELAY: 1,
-            SHUFFLE_DELAY: 1,
-            SHARED_MEMORY_UNITS: 4,
-            GLOBAL_MEMORY_UNITS: 4,
-            MMA_UNITS: 4,
-            VALU_UNITS: 8,
-            SHUFFLE_UNITS: 8,
-        },
+        subs=hyperparams,
         canonicalize=True,
         schedule=SchedulingType.MANUAL,
         use_scheduling_barriers=False,
