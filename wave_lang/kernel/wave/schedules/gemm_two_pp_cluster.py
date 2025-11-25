@@ -15,6 +15,7 @@ from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
 
 def get_tagged_gemm(
     shape: tuple[int, int, int] = (128, 256, 1024),
+    block_shape: tuple[int, int, int] = (128, 256, 64),
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16,
     compile_to_mlir: bool = False,
     use_global_to_shared: bool = False,
@@ -87,9 +88,9 @@ def get_tagged_gemm(
             M: M_val,
             N: N_val,
             K: K_val,
-            BLOCK_M: 128,
-            BLOCK_N: 256,
-            BLOCK_K: 64,
+            BLOCK_M: block_shape[0],
+            BLOCK_N: block_shape[1],
+            BLOCK_K: block_shape[2],
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
             READ_SHARED_DELAY: 1,
