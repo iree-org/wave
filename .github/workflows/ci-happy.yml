@@ -207,7 +207,6 @@ jobs:
 
               echo "Check Arch after python installation"
               export HOME=/workspace
-              export WAVE_CACHE_DIR=$HOME/.wave
 
               lit lit_tests/ -v
             '
