@@ -13,6 +13,7 @@ from wave_lang.kernel.wave.compile import WaveCompileOptions
 from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
 from wave_lang.kernel.wave.utils.general_utils import get_default_scheduling_params
 
+
 def get_tagged_gemm(
     shape: tuple[int, int, int] = (128, 256, 1024),
     block_shape: tuple[int, int, int] = (128, 256, 64),
