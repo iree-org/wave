@@ -26,8 +26,8 @@ from wave_lang.support.ir_imports import (
     VectorType,
     amdgpu_d,
     arith_d,
-    llvm_d,
     memref_d,
+    rocdl_d,
     vector_d,
     func_d,
     Operation,
@@ -694,10 +694,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
     original_type = value.type
     idx = arith_d.index_cast(element_type, value)
-    # TODO: use a proper ROCDL intrinsic for this after IREE is updated.
-    res = llvm_d.call_intrinsic(
-        element_type, "llvm.amdgcn.readfirstlane", [idx], [], []
-    )
+    res = rocdl_d.readfirstlane(element_type, idx)
     res = arith_d.index_cast(original_type, res)
     return res
 
@@ -992,15 +989,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     d2_selected = select_descriptor(d2_results, input_selector_val)
     d3_selected = select_descriptor(d3_results, input_selector_val)
 
-    # cpol
-    cpol = arith_d.constant(i32, 0)
-
-    llvm_d.call_intrinsic(
-        None,
-        "llvm.amdgcn.tensor.load.to.lds",
-        [d0_selected, d1_selected, d2_selected, d3_selected, cpol],
-        [],
-        [],
+    return rocdl_d.tensor_load_to_lds(
+        d0_selected, d1_selected, d2_selected, d3_selected, 0
     )
 
 

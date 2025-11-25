@@ -680,8 +680,8 @@ def test_wmma_with_tensor_load():
     ### pack descriptors and invoke tensor load
 
     # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
-    # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"
-    # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK-NOT:    rocdl.tensor.load.to.lds
+    # CHECK-NOT:    rocdl.s.wait.tensorcnt
     # CHECK-NOT:    amdgpu.lds_barrier
 
     ### get shared buffer pointer
@@ -700,8 +700,8 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[DESC_FUSED:.*]] = arith.select %[[SELECTED]], %[[TENSOR_DESC_0]], %[[TENSOR_DESC_1]] : vector<8xi32>
 
     ### resource provider
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D_FUSED]], %[[DESC_FUSED]], {{.*}}, {{.*}}, {{.*}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK:        rocdl.tensor.load.to.lds %[[D_FUSED]], %[[DESC_FUSED]], {{.*}}, {{.*}} cachepolicy {{.*}} : vector<4xi32>, vector<8xi32>
+    # CHECK:        rocdl.s.wait.tensorcnt 0
     # CHECK:        rocdl.s.wait.dscnt 0
     # CHECK:        rocdl.s.barrier.signal -1
 

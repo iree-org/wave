@@ -1171,13 +1171,13 @@ def test_gemm_pipelined():
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-6:    vector.load
-    # CHECK-COUNT-3:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-3:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    vector.load
-    # CHECK-COUNT-1:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-1:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-2:    vector.store
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
     # CHECK-COUNT-1:    scf.yield
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
@@ -1266,7 +1266,7 @@ def test_gemm_prefetch():
 
     # Steady State Global Read
     # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1]>>, vector<8xf16>
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
 
     # Compute
     # CHECK-COUNT-8:    amdgpu.mfma
@@ -1274,7 +1274,7 @@ def test_gemm_prefetch():
 
     # Steady State Local Write
     # CHECK-COUNT-2:    vector.store
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
     # CHECK:          scf.yield
 
     # Prologue
@@ -1459,13 +1459,13 @@ def test_dynamic_gemm_pipelined():
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-4:    vector.load
     # CHECK-COUNT-2:    vector.maskedload
-    # CHECK-COUNT-3:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-3:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    vector.load
-    # CHECK-COUNT-1:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-1:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-2:    vector.store
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
     # CHECK-COUNT-1:    scf.yield
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
@@ -1566,41 +1566,41 @@ def test_gemm_two_cluster_pingpong():
     # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K1:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K0]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K1]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load LHS
     # CHECK-COUNT-2:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
     # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K2:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K3:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K2]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K3]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load RHS
     # CHECK-COUNT-4:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
     # CHECK:            rocdl.s.barrier
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # First dot slice
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-32:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
     # CHECK:            amdgpu.lds_barrier
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # 2nd cluster local writes.
     # CHECK-COUNT-6:    vector.store
     # CHECK:            rocdl.s.barrier
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # Second dot slice:
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-32:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # Final LDS barrier to synchronize shared writes.
     # CHECK:            amdgpu.lds_barrier
@@ -1669,17 +1669,17 @@ def test_gemm_two_async_cluster_pingpong():
     # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K1:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER:.+]][{{.*}}, %[[K0]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K1]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load to shared
     # CHECK-COUNT-4:    amdgpu.gather_to_lds
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # First dot slice
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-16:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
     # CHECK-NEXT:       amdgpu.memory_counter_wait load(4)
     # CHECK-NEXT:       rocdl.s.barrier
 
@@ -1688,7 +1688,7 @@ def test_gemm_two_async_cluster_pingpong():
     # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K3:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K2]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K3]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
     # CHECK-NEXT:       amdgpu.memory_counter_wait load(0)
     # CHECK-NEXT:       rocdl.s.barrier
 
@@ -1696,7 +1696,7 @@ def test_gemm_two_async_cluster_pingpong():
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-16:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # Final LDS barrier to synchronize shared writes.
     # CHECK:            amdgpu.lds_barrier

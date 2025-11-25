@@ -1120,7 +1120,7 @@ def test_tensor_waitcnt():
     print(schedule_ops.asm)
 
     # CHECK-LABEL:    func.func @schedule_ops
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK:            rocdl.s.wait.tensorcnt 0
     # CHECK:            rocdl.s.wait.dscnt 0
     # CHECK:            rocdl.s.barrier.signal -1
     # CHECK:            rocdl.s.barrier.wait -1

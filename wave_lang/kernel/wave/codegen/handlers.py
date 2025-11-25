@@ -1644,9 +1644,7 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Malformed arguments") from e
 
     if tensor_wait:
-        # TODO(megan.kuo): Use rocdl intrinsic when iree has support
-        c0 = arith_d.constant(IntegerType.get_signless(16), 0)
-        llvm_d.call_intrinsic(None, "llvm.amdgcn.s.wait.tensorcnt", [c0], [], [])
+        rocdl_d.s_wait_tensorcnt(0)
 
     if barId != CLUSTER_BARRIER_ID:
         rocdl_d.s_wait_dscnt(0)
@@ -1689,8 +1687,7 @@ def handle_scheduling_barrier(emitter: WaveEmitter, node: fx.Node):
     for operation in operations:
         mask |= get_scheduling_mask(operation)
 
-    mask = arith_d.constant(IntegerType.get_signless(32), mask)
-    llvm_d.call_intrinsic(None, "llvm.amdgcn.sched.barrier", [mask], [], [])
+    rocdl_d.sched_barrier(mask)
 
 
 @handle_op(scheduling_group_barrier)
@@ -1699,16 +1696,11 @@ def handle_scheduling_group_barrier(emitter: WaveEmitter, node: fx.Node):
         instructions, sync_id = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
-    sync_id = arith_d.constant(IntegerType.get_signless(32), sync_id)
     for instruction, counts in instructions.items():
         mask = get_scheduling_mask(instruction)
         if mask is None:
             continue
-        mask = arith_d.constant(IntegerType.get_signless(32), mask)
-        counts = arith_d.constant(IntegerType.get_signless(32), counts)
-        llvm_d.call_intrinsic(
-            None, "llvm.amdgcn.sched.group.barrier", [mask, counts, sync_id], [], []
-        )
+        rocdl_d.sched_group_barrier(mask, counts, sync_id)
 
 
 @handle_op(memory_counter_wait)
