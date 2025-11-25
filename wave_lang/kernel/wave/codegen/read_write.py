@@ -752,7 +752,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         symbolic_shape = _get_symbolic_shape(src)
         global_tile_index_current = {k: global_tile_index[k] for k in symbolic_shape}
         global_tile_index_current = _subs_index_dict(
-            global_tile_index_current, {INPUT_SELECTOR: input_selector}
+            global_tile_index_current, {INPUT_SELECTOR: i}
         )
 
         local_bounds = [
@@ -835,7 +835,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
         shared_tile_index_current = {k: shared_tile_index[k] for k in symbolic_shape}
         shared_tile_index_current = _subs_index_dict(
-            shared_tile_index_current, {INPUT_SELECTOR: input_selector}
+            shared_tile_index_current, {INPUT_SELECTOR: i}
         )
 
         linearized_index = {
