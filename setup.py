@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
@@ -33,13 +34,13 @@ class CMakeExtension(Extension):
         sourcedir: str,
         install_dir: str = None,
         need_llvm: bool = False,
-        cmake_args: list[str] = [],
+        cmake_args: Optional[list[str]] = None,
     ) -> None:
         super().__init__(name, sources=[])
         self.sourcedir = os.fspath(Path(sourcedir).resolve())
         self.install_dir = install_dir
         self.need_llvm = need_llvm
-        self.cmake_args = cmake_args
+        self.cmake_args = cmake_args or []
 
 
 def invoke_cmake(*args, cwd=None):

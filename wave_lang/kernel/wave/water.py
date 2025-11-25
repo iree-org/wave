@@ -176,13 +176,16 @@ def _deiree(module: Module) -> str:
 def find_binary(name: str) -> str:
     this_path = Path(__file__).parent
     path = this_path / "water_mlir" / "bin" / name
-    assert path.is_file(), f"Could not find the {name} executable in package."
+    assert path.is_file(), f"Could not find the {name} executable at {path}"
     return str(path)
 
 
 def is_water_available() -> bool:
-    """Returns True of the water_mlir package is available."""
-    return importlib.util.find_spec(".water_mlir.water_mlir") is not None
+    """Returns True if the water_mlir package is available."""
+    return (
+        importlib.util.find_spec("wave_lang.kernel.wave.water_mlir.water_mlir")
+        is not None
+    )
 
 
 def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
