@@ -32,7 +32,7 @@ class CMakeExtension(Extension):
         self,
         name: str,
         sourcedir: str,
-        install_dir: str = None,
+        install_dir: Optional[str] = None,
         need_llvm: bool = False,
         cmake_args: Optional[list[str]] = None,
     ) -> None:
