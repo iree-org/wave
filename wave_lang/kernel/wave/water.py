@@ -182,10 +182,13 @@ def find_binary(name: str) -> str:
 
 def is_water_available() -> bool:
     """Returns True if the water_mlir package is available."""
-    return (
-        importlib.util.find_spec("wave_lang.kernel.wave.water_mlir.water_mlir")
-        is not None
-    )
+    try:
+        return (
+            importlib.util.find_spec("wave_lang.kernel.wave.water_mlir.water_mlir")
+            is not None
+        )
+    except ImportError | ModuleNotFoundError:
+        return False
 
 
 def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
