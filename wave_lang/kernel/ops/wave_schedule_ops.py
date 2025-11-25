@@ -226,7 +226,6 @@ class GetNodeByTag(CustomScheduleOp):
         cls, region_graph, kernel_trace, constraints: list[Constraint], tag: str
     ):
         # Always execute the real logic during tracing to apply scheduling
-        breakpoint()
         real_result = get_node_by_tag_helper(kernel_trace, tag)
 
         # Create a proxy that embeds the real result

@@ -352,7 +352,6 @@ def test_async_gemm_schedule(is_debug=False):
 
         mma = tkw.get_node_by_tag("mma")
 
-        breakpoint()
         pipeline_loop = tkw.pipeline(k_loop)
         # First, create the basic 2-stage pipeline
         with pipeline_loop as pl:
