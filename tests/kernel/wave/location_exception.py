@@ -53,5 +53,5 @@ def test_error_messages():
     with pytest.raises(Exception) as exception:
         wave_compile(options, empty)
 
-    assert "assertion known to be false" in str(exception)
+    assert "assertion known to be false" in repr(exception.value)
     assert "location_exception.py" in repr(exception.value)
