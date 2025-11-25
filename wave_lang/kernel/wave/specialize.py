@@ -257,6 +257,9 @@ def specialize_kernel(
     2. add condition around the rest of the graph -> else, these are compute waves' workload
     3. add `signal empty` and
     """
+    if not options.specialize:
+        return
+
     hardware_constraint = get_hardware_constraint(constraints)
     wave_constraints = get_wave_constraints(constraints)
     physical_wid = hardware_constraint.waves_per_block
