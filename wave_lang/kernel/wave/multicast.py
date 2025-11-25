@@ -24,7 +24,7 @@ from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import WORKGROUP_0, WORKGROUP_1, WORKGROUP_2
 from ..ops.wave_ops import TensorLoadToLDS, get_custom
 from .compile_options import WaveCompileOptions
-from .constraints import Constraint
+from .constraints import Constraint, WorkgroupConstraint
 from .utils.general_utils import get_hardware_constraint
 
 logger = logging.getLogger(__name__)
@@ -119,6 +119,10 @@ def multicast(
     hardware_constraint = get_hardware_constraint(constraints)
 
     workgroups_per_cluster = hardware_constraint.workgroups_per_cluster
+    if "gfx1250" not in options.target:
+        logger.info("Multicast optimization is not supported on this architecture")
+        return
+
     if not workgroups_per_cluster:
         logger.info(
             "No workgroups_per_cluster specified, skipping multicast optimization"
@@ -130,11 +134,19 @@ def multicast(
         logger.info(f"Cluster size is {cluster_size}, skipping multicast optimization")
         return
 
-    if cluster_size > 16:
-        logger.warning(
-            f"Cluster size {cluster_size} exceeds maximum supported size of 16; skipping multicast optimization"
+    num_workgroups = (
+        max(
+            wg.workgroup_dim
+            for wg in constraints
+            if isinstance(wg, WorkgroupConstraint)
         )
-        return
+        + 1
+    )
+    if num_workgroups > 3:
+        raise ValueError(f"Unsupported number of workgroups: {num_workgroups}")
+
+    if cluster_size > 16 or len(workgroups_per_cluster) != 3:
+        raise ValueError(f"Invalid cluster configuration: {workgroups_per_cluster}")
 
     logger.info(
         f"Cluster configuration: {workgroups_per_cluster} (total {cluster_size} workgroups)"
