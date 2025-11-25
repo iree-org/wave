@@ -178,6 +178,7 @@ def test_gemm_two_async_cluster_pingpong():
         compile_to_mlir=True,
         use_global_to_shared=True,
     )
+    options.target = "gfx950"
     schedule = get_async_two_pp_clusters()
 
     gemm = wave_compile(options, gemm, schedule)
