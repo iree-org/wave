@@ -3091,7 +3091,7 @@ class TensorLoadToLDS(CustomOp):
     global_tile_index: dict[IndexSymbol, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
     multicast_mask: Optional[IndexExpr] = None
-    input_selector: IndexSymbol = 0
+    input_selector: IndexSymbol | int = 0
 
     @property
     def has_side_effects(self) -> bool:

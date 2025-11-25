@@ -122,7 +122,8 @@ def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
 
 def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> list[fx.Node]:
     """
-    Given a customOp, returns the shared memory node if it operates on a shared memory region, otherwise None.
+    Given a CustomOp, returns a list of shared memory nodes if the operation accesses shared memory,
+    otherwise returns an empty list.
     """
     if (
         isinstance(op, (Read, Write))
