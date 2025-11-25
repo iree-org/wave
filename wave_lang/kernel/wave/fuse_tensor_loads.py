@@ -79,7 +79,7 @@ def merge_dicts_with_piecewise(
     result = {}
     all_keys = dict1 | dict2
 
-    for key in all_keys.keys():
+    for key in all_keys:
         if key not in dict2:
             result[key] = dict1[key]
         elif key not in dict1:
