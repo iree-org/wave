@@ -173,18 +173,6 @@ jobs:
           echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
           echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
 
-      - name: Build water
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
-        run: |
-          cd ${GITHUB_WORKSPACE}/water/build_tools/wheel
-          WATER_MLIR_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install/lib/cmake/mlir python -m pip wheel .
-
-      - name: Install water
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
-        run: |
-          cd ${GITHUB_WORKSPACE}/water/build_tools/wheel
-          pip install --force-reinstall *.whl
-
       - name: "Setting up Rust"
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
