@@ -684,6 +684,7 @@ def test_wmma_with_tensor_load():
 
     ### pack descriptors and invoke tensor load
 
+    # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
     # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"
     # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
     # CHECK-NOT:    amdgpu.lds_barrier
@@ -696,11 +697,12 @@ def test_wmma_with_tensor_load():
 
     ### pack descriptors and invoke tensor load
     # CHECK:        %[[D1:.*]] = vector.from_elements %{{.*}}, %[[INT_PTR_2_CAST_ADDED]], %{{.*}}, %{{.*}} : vector<4xi32>
+    # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
 
     # Fused descriptors
     # CHECK:        %[[SELECTED:.*]] = arith.cmpi eq, %{{.*}}, %[[C0]] : index
     # CHECK:        %[[D_FUSED:.*]] = arith.select %[[SELECTED]], %[[D0]], %[[D1]] : vector<4xi32>
-    # CHECK:        %[[DESC_FUSED:.*]] = arith.select %[[SELECTED]], %{{.*}}, %{{.*}} : vector<8xi32>
+    # CHECK:        %[[DESC_FUSED:.*]] = arith.select %[[SELECTED]], %[[TENSOR_DESC_0]], %[[TENSOR_DESC_1]] : vector<8xi32>
 
     ### resource provider
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D_FUSED]], %[[DESC_FUSED]], {{.*}}, {{.*}}, {{.*}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
