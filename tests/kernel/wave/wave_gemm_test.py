@@ -2550,6 +2550,7 @@ def testTensorLoadToShared(
         use_global_to_shared=True,
         wave_runtime=True,
         target="gfx1250",
+        cluster_barrier_delay=1,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
