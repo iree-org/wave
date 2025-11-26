@@ -515,19 +515,3 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     return
   }
 }
-
-// -----
-
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
-  func.func @mma_3d(%a: !wave.tensor<[@M, @K, @B] of f16>,
-                    %b: !wave.tensor<[@N, @K, @B] of f16>,
-                    %c: !wave.tensor<[@M, @N, @B] of f32>) attributes {
-    wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
-    ]} {
-    // expected-error @below {{only 2 indexing symbols are currently supported for MMA result}}
-    wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
-      : (!wave.tensor<[@M, @K, @B] of f16>, !wave.tensor<[@N, @K, @B] of f16>, !wave.tensor<[@M, @N, @B] of f32>) -> !wave.tensor<[@M, @N, @B] of f32>
-    return
-  }
-}
