@@ -190,11 +190,10 @@ struct WaterGPUToGPURuntimePass final
 
       Location loc = op.getLoc();
       auto getStr = [&](StringRef varName, StringRef str) -> Value {
-        std::string strVal = str.str();
-        strVal.append(std::string_view("\0", 1));
+        Twine strVal = str + StringRef("\0", 1);
         return LLVM::createGlobalString(
             loc, builder, getUniqueLLVMGlobalName(mod, symbolTable, varName),
-            strVal, LLVM::Linkage::Internal);
+            strVal.str(), LLVM::Linkage::Internal);
       };
 
       auto createConst = [&](Type type, int64_t val) -> Value {
