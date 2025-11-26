@@ -30,8 +30,8 @@ getUniqueLLVMGlobalName(ModuleOp mod, SymbolTable &table, llvm::Twine srcName) {
       counter);
 }
 
-///  Helper to build a function call to a given function name with the given
-///  return type and argument types.
+/// Helper to build a function call to a given function name with the given
+/// return type and argument types.
 struct FunctionCallBuilder {
   // TODO: cannot use TypeRange as `LLVM::LLVMFunctionType::get` refuses to
   // accept it.
