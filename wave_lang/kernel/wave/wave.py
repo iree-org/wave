@@ -29,6 +29,7 @@ from wave_lang.support.ir_imports import (
     Module,
     Operation,
     arith_d,
+    builtin_d,
     stream_d,
 )
 from .scheduling.schedule_enums import SchedulingType
@@ -709,12 +710,15 @@ class LaunchableWave(Launchable):
                 self.constraints,
                 options,
                 self.grid_type.dims,
+                entrypoint_name,
             )
             with mb.module_op.context, Location.unknown():
-                module_op = Module.create()
+                module_op = builtin_d.ModuleOp()
 
             with InsertionPoint(module_op.body), Location.unknown():
-                emitter.emit(trace.get_root_graph())
+                func = emitter.emit(trace.get_root_graph())
+                if options.use_water_pipeline:
+                    emitter.emit_host_func(func)
 
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave
@@ -724,11 +728,14 @@ class LaunchableWave(Launchable):
         # Also we'll need to update the uses of the memref arguments (from the
         # existing module) to be compatible with the new stream.binding arguments.
 
-        assert not any(
-            isinstance(op, stream_d.ExecutableOp)
-            for op in module_op.operation.regions[0].blocks[0]
-        ), "expected overriding module to contain only upstream MLIR ops"
-        _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
+        if options.use_water_pipeline:
+            mb.module_op = module_op
+        else:
+            assert not any(
+                isinstance(op, stream_d.ExecutableOp)
+                for op in module_op.operation.regions[0].blocks[0]
+            ), "expected overriding module to contain only upstream MLIR ops"
+            _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
