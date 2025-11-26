@@ -236,7 +236,7 @@ struct WaterGPUToGPURuntimePass final
         argsArray =
             LLVM::InsertValueOp::create(builder, loc, argsArray, argData, i);
       }
-      Value argsArrayPtr = createAlloca(ptrType, args.size());
+      Value argsArrayPtr = createAlloca(argsPtrArrayType, 1);
       LLVM::StoreOp::create(builder, loc, argsArray, argsArrayPtr);
       Value argsCount = createConst(i32Type, args.size());
 

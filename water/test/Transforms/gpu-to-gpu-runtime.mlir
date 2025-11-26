@@ -40,7 +40,7 @@ module attributes {gpu.container_module} {
     // CHECK-DAG: %[[ARGS_ARRAY_1:.*]] = llvm.insertvalue %[[ARG0_ALLOCA]], %[[ARGS_ARRAY]][0]
     // CHECK-DAG: %[[ARGS_ARRAY_2:.*]] = llvm.insertvalue %[[ARG1_ALLOCA]], %[[ARGS_ARRAY_1]][1]
 
-    // CHECK: %[[ARGS_PTR:.*]] = llvm.alloca %{{.*}} x !llvm.ptr
+    // CHECK: %[[ARGS_PTR:.*]] = llvm.alloca %{{.*}} x !llvm.array<2 x ptr>
     // CHECK: llvm.store %[[ARGS_ARRAY_2]], %[[ARGS_PTR]]
 
     // CHECK: %[[ARGS_COUNT:.*]] = llvm.mlir.constant(2 : i32) : i32
