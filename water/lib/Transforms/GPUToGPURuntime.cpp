@@ -90,7 +90,7 @@ static gpu::ObjectAttr getSelectedObject(gpu::BinaryOp op) {
     } else {
       for (auto &&[i, attr] : llvm::enumerate(objects)) {
         auto obj = dyn_cast<gpu::ObjectAttr>(attr);
-        if (obj.getTarget() == target) {
+        if (obj && obj.getTarget() == target) {
           index = i;
           break;
         }
