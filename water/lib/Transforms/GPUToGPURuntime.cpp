@@ -21,8 +21,9 @@ using namespace mlir::water;
 
 namespace {
 /// Generate a unique LLVM global name for a given source name.
-static SmallString<128>
-getUniqueLLVMGlobalName(ModuleOp mod, SymbolTable &table, llvm::Twine srcName) {
+static SmallString<128> getUniqueLLVMGlobalName(ModuleOp mod,
+                                                SymbolTable &table,
+                                                const llvm::Twine &srcName) {
   unsigned counter = 0;
   return SymbolTable::generateSymbolName<128>(
       srcName.str(),
@@ -59,7 +60,7 @@ struct FunctionCallBuilder {
 /// Create a unique LLVM global for a kernel handle.
 static Value createKernelHandle(OpBuilder &builder, SymbolTable &symbolTable,
                                 Type globalType, ModuleOp mod,
-                                llvm::Twine name) {
+                                const llvm::Twine &name) {
   Type ptrType = LLVM::LLVMPointerType::get(builder.getContext());
   Location loc = builder.getUnknownLoc();
   LLVM::GlobalOp handle;
