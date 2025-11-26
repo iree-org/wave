@@ -1,9 +1,9 @@
 // RUN: water-opt %s --water-gpu-to-gpu-runtime --split-input-file --verify-diagnostics | FileCheck %s
 
 module attributes {gpu.container_module} {
-  // CHECK: llvm.mlir.global internal constant @[[KERNEL_DATA:kernel_data[_0-9]*]]
+  // CHECK: llvm.mlir.global internal constant @[[KERNEL_DATA:my_kernel_data[_0-9]*]]
   // CHECK: llvm.mlir.global internal constant @[[KERNEL_NAME:my_kernel[_0-9]*]]
-  // CHECK: llvm.mlir.global internal @[[KERNEL_HANDLE:kernel_handle[_0-9]*]]
+  // CHECK: llvm.mlir.global internal @[[KERNEL_HANDLE:my_kernel_handle[_0-9]*]]
 
   gpu.binary @kernel_binary [
     #gpu.object<#rocdl.target, "\00\01\02\03">
@@ -63,17 +63,17 @@ module attributes {gpu.container_module} {
 // -----
 
 module attributes {gpu.container_module} {
-  // CHECK: llvm.mlir.global internal constant @[[KERNEL3_DATA:kernel_data[_0-9]*]]
+  // CHECK: llvm.mlir.global internal constant @[[KERNEL3_DATA:kernel_a_data[_0-9]*]]
   // CHECK: llvm.mlir.global internal constant @[[KERNEL3_NAME:kernel_a[_0-9]*]]
-  // CHECK: llvm.mlir.global internal @[[KERNEL3_HANDLE:kernel_handle[_0-9]*]]
+  // CHECK: llvm.mlir.global internal @[[KERNEL3_HANDLE:kernel_a_handle[_0-9]*]]
 
-  // CHECK: llvm.mlir.global internal constant @[[KERNEL2_DATA:kernel_data[_0-9]*]]
+  // CHECK: llvm.mlir.global internal constant @[[KERNEL2_DATA:kernel_b_data[_0-9]*]]
   // CHECK: llvm.mlir.global internal constant @[[KERNEL2_NAME:kernel_b[_0-9]*]]
-  // CHECK: llvm.mlir.global internal @[[KERNEL2_HANDLE:kernel_handle[_0-9]*]]
+  // CHECK: llvm.mlir.global internal @[[KERNEL2_HANDLE:kernel_b_handle[_0-9]*]]
 
-  // CHECK: llvm.mlir.global internal constant @[[KERNEL1_DATA:kernel_data[_0-9]*]]
+  // CHECK: llvm.mlir.global internal constant @[[KERNEL1_DATA:kernel_a_data[_0-9]*]]
   // CHECK: llvm.mlir.global internal constant @[[KERNEL1_NAME:kernel_a[_0-9]*]]
-  // CHECK: llvm.mlir.global internal @[[KERNEL1_HANDLE:kernel_handle[_0-9]*]]
+  // CHECK: llvm.mlir.global internal @[[KERNEL1_HANDLE:kernel_a_handle[_0-9]*]]
 
   gpu.binary @kernel_binary_a [
     #gpu.object<#rocdl.target, "\00\01\02\03\04\05">

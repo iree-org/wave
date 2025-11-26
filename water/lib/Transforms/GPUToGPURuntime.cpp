@@ -58,15 +58,15 @@ struct FunctionCallBuilder {
 
 /// Create a unique LLVM global for a kernel handle.
 static Value createKernelHandle(OpBuilder &builder, SymbolTable &symbolTable,
-                                Type globalType, ModuleOp mod, StringRef name) {
+                                Type globalType, ModuleOp mod,
+                                llvm::Twine name) {
   Type ptrType = LLVM::LLVMPointerType::get(builder.getContext());
   Location loc = builder.getUnknownLoc();
   LLVM::GlobalOp handle;
   {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPointToStart(mod.getBody());
-    auto handleName =
-        getUniqueLLVMGlobalName(mod, symbolTable, "kernel_handle");
+    auto handleName = getUniqueLLVMGlobalName(mod, symbolTable, name);
     handle = LLVM::GlobalOp::create(
         builder, loc, globalType, /*isConstant*/ false, LLVM::Linkage::Internal,
         handleName, LLVM::ZeroAttr::get(builder.getContext()));
@@ -210,14 +210,14 @@ struct WaterGPUToGPURuntimePass final
 
       builder.setInsertionPoint(op);
       StringRef kernelName = op.getKernelName();
-      Value kernelHandle = createKernelHandle(
-          builder, symbolTable, ptrType, mod, (kernelName + "_handle").str());
+      Value kernelHandle = createKernelHandle(builder, symbolTable, ptrType,
+                                              mod, kernelName + "_handle");
       Value kernelNameStr = getStr(kernelName, kernelName);
 
       Value dataPtr = LLVM::createGlobalString(
           loc, builder,
-          getUniqueLLVMGlobalName(mod, symbolTable, "kernel_data"), objData,
-          LLVM::Linkage::Internal);
+          getUniqueLLVMGlobalName(mod, symbolTable, kernelName + "_data"),
+          objData, LLVM::Linkage::Internal);
       Value dataSize = createConst(i64Type, objData.size());
 
       Value funcObject =
