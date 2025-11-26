@@ -239,7 +239,7 @@ def make_linear_pass_pipeline(
 
 
 def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
-    binary = get_water_binary_path()
+    binary = get_water_opt()
     generic_mlir = _deiree(module) if override_ir == "" else override_ir
     pipeline = [
         (
@@ -394,7 +394,7 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
 
 
 def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:
-    binary = get_water_binary_path()
+    binary = get_water_opt()
     mlir_asm = module.operation.get_asm()
     target_chip = options.target
     opt_pass = "composite-fixed-point-pass", {
