@@ -126,9 +126,9 @@ static gpu::ObjectAttr getBinary(OpBuilder &builder, Location loc,
   return getSelectedObject(kernelBinary);
 }
 
-struct WaterGPUtoGPURuntimePass final
-    : public water::impl::WaterGPUtoGPURuntimeBase<WaterGPUtoGPURuntimePass> {
-  using WaterGPUtoGPURuntimeBase::WaterGPUtoGPURuntimeBase;
+struct WaterGPUToGPURuntimePass final
+    : public water::impl::WaterGPUToGPURuntimeBase<WaterGPUToGPURuntimePass> {
+  using WaterGPUToGPURuntimeBase::WaterGPUToGPURuntimeBase;
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
