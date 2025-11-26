@@ -113,8 +113,7 @@ static gpu::ObjectAttr getSelectedObject(gpu::BinaryOp op) {
 }
 
 /// Lookup the binary holding the kernel from enclosing module.
-static gpu::ObjectAttr getBinary(OpBuilder &builder, Location loc,
-                                 gpu::LaunchFuncOp op) {
+static gpu::ObjectAttr getBinary(gpu::LaunchFuncOp op) {
   auto kernelBinary = SymbolTable::lookupNearestSymbolFrom<gpu::BinaryOp>(
       op, op.getKernelModuleName());
   if (!kernelBinary) {
@@ -182,7 +181,7 @@ struct WaterGPUToGPURuntimePass final
         return WalkResult::interrupt();
       }
 
-      gpu::ObjectAttr object = getBinary(builder, op.getLoc(), op);
+      gpu::ObjectAttr object = getBinary(op);
       if (!object)
         return WalkResult::interrupt();
 
