@@ -92,6 +92,7 @@ static gpu::ObjectAttr getSelectedObject(gpu::BinaryOp op) {
         auto obj = dyn_cast<gpu::ObjectAttr>(attr);
         if (obj.getTarget() == target) {
           index = i;
+          break;
         }
       }
     }
