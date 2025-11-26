@@ -174,7 +174,7 @@ def _deiree(module: Module) -> str:
     return local_module.get_asm(binary=False, print_generic_op_form=True)
 
 
-def get_binary(name: str) -> Optional[str]:
+def find_binary(name: str) -> Optional[str]:
     this_path = Path(__file__).parent
     tool_path = this_path / "water_mlir" / "bin" / name
     if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
@@ -190,7 +190,7 @@ def is_water_available() -> bool:
 
 @lru_cache
 def get_water_opt() -> str:
-    path = get_binary("water-opt")
+    path = find_binary("water-opt")
     if path is None:
         raise RuntimeError("water-opt binary not found")
 
