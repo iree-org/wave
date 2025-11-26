@@ -901,12 +901,8 @@ LogicalResult MmaOp::initializeForward(
   SmallVector<NamedAttribute> symbolMappings;
   symbolMappings.reserve(indexingSymbols.size());
 
-  // TODO: consider whether we want to allow for some batched MMA
-  // operations at this level and in general. If not, disallow this
-  // at the operation verifier level instead.
-  if (indexingSymbols.size() != 2)
-    return emitError() << "only 2 indexing symbols are currently "
-                          "supported for MMA result";
+  assert(indexingSymbols.size() == 2 &&
+         "only 2 indexing symbols are currently supported for MMA result");
   wave::WaveSymbolAttr mSymbol = indexingSymbols[0];
   wave::WaveSymbolAttr nSymbol = indexingSymbols[1];
 
@@ -941,7 +937,6 @@ LogicalResult MmaOp::initializeBackward(
     wave::EmitErrorFn emitError) {
   auto resultType = llvm::cast<wave::WaveTensorType>(getResult().getType());
   auto lhsType = llvm::cast<wave::WaveTensorType>(getLhs().getType());
-  // TODO: check whether this is actually the case in op verifier
   assert(resultType.getRank() == lhsType.getRank() && lhsType.getRank() == 2 &&
          "only 2D MMA operations are supported");
   wave::WaveSymbolAttr mSymbol = resultType.getShape()[0];
@@ -1051,6 +1046,11 @@ LogicalResult MmaOp::verify() {
       failed(detail::verifyElementTypesMatch(getLoc(), "result", resultType,
                                              "accumulator", accumulatorType)))
     return mlir::failure();
+
+  if (lhsType.getRank() != 2 || rhsType.getRank() != 2 ||
+      accumulatorType.getRank() != 2) {
+    return emitError() << "only 2D MMA operations are supported";
+  }
 
   if (detail::verifyTypesMatchingDimensions(getLoc(), "LHS", lhsType, {1},
                                             "RHS", rhsType, {1})
