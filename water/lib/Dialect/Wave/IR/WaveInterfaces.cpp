@@ -543,13 +543,9 @@ static wave::HardwareConstraintAttr parseWaveConstraints(
       symbolConstraints[tiling.getDim()].push_back(tiling);
     } else if (auto hardware =
                    llvm::dyn_cast<wave::HardwareConstraintAttr>(constraint)) {
-      if (!hardwareConstraint) {
-        hardwareConstraint = hardware;
-      } else {
-        // TODO: this should be checked by the verifier.
-        emitError(loc) << "multiple hardware constraints are not supported";
-        return nullptr;
-      }
+      assert(hardwareConstraint == nullptr &&
+             "multiple hardware constraints are not supported");
+      hardwareConstraint = hardware;
     } else {
       emitError(loc) << "unsupported constraint type: " << constraint;
       return nullptr;

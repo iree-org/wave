@@ -531,17 +531,3 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     return
   }
 }
-
-// -----
-
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
-  // expected-error @below {{multiple hardware constraints are not supported}}
-  func.func @empty() attributes {
-    wave.constraints = [
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>,
-      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
-    ]
-  } {
-    return
-  }
-}

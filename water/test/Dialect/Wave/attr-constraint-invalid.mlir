@@ -18,6 +18,13 @@ func.func private @test_num_dimensions_mismatch2() attributes { wave.constraints
 
 // -----
 
+#hw_constraint = #wave.hardware_constraint<threads_per_wave = 64>
+#hw_constraint2 = #wave.hardware_constraint<threads_per_wave = 32>
+// expected-error @below {{only one hardware constraint is allowed}}
+func.func private @test_repeated_hw_constraint() attributes { wave.constraints = [#hw_constraint, #hw_constraint2] }
+
+// -----
+
 #hyperparams = #wave.hyperparameters<{M = 1024, K = 1024, BLOCK_M = 128, BLOCK_K = 128}>
 #wg_constraint = #wave.workgroup_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>, workgroup_dim = <x>>
 #wv_constraint = #wave.wave_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M floordiv 4)>>
