@@ -39,10 +39,9 @@ def add_cluster_barriers_to_iterate(
 
     When multiplier is None: Add barrier signal and wait before the loop.
     When multiplier is set: Add pipelined barriers:
-      - barrier_signal before the loop
-      - barrier_wait at start of body if current_iteration % multiplier == 0
-      - barrier_signal at end of body if (current_iteration + 1) % multiplier == 0
-      - barrier_wait after the loop
+      - barrier_signal and wait before the loop
+      - barrier_signal at start of body if current_iteration % multiplier == 0
+      - barrier_wait at end of body if current_iteration % multiplier == multiplier - 1
 
     Args:
         trace: The captured trace
@@ -80,44 +79,44 @@ def add_cluster_barriers_to_iterate(
             f"Could not find induction variable for axis {custom.axis} in TilingConstraints"
         )
 
-    # Add conditional barrier_wait at start of body
+    # Add conditional barrier_signal at start of body
     first_node = next(
         n for n in subgraph.nodes if n.op not in ["placeholder", "output"]
     )
     with subgraph.inserting_before(first_node):
         condition = sympy.Eq(induction_var % multiplier, 0)
 
-        wait_subgraph_name = f"{custom.subgraph_name}_barrier_wait"
-        wait_subgraph = fx.Graph()
-
-        SharedMemoryBarrierSignal(
-            barId=CLUSTER_BARRIER_ID, tensor_wait=False
-        ).add_to_graph(wait_subgraph, loc=location)
-
-        wait_subgraph.output(None)
-
-        trace.add_subgraph(wait_subgraph_name, wait_subgraph)
-
-        Conditional(condition, wait_subgraph_name, []).add_to_graph(
-            subgraph, loc=location
-        )
-
-    # Add conditional barrier_signal at end of body
-    output_node = next(n for n in subgraph.nodes if n.op == "output")
-    with subgraph.inserting_before(output_node):
-        condition = sympy.Eq(induction_var % multiplier, multiplier - 1)
-
         signal_subgraph_name = f"{custom.subgraph_name}_barrier_signal"
         signal_subgraph = fx.Graph()
 
-        SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
-            signal_subgraph, loc=location
-        )
+        SharedMemoryBarrierSignal(
+            barId=CLUSTER_BARRIER_ID, tensor_wait=False
+        ).add_to_graph(signal_subgraph, loc=location)
+
         signal_subgraph.output(None)
 
         trace.add_subgraph(signal_subgraph_name, signal_subgraph)
 
         Conditional(condition, signal_subgraph_name, []).add_to_graph(
+            subgraph, loc=location
+        )
+
+    # Add conditional barrier_wait at end of body
+    output_node = next(n for n in subgraph.nodes if n.op == "output")
+    with subgraph.inserting_before(output_node):
+        condition = sympy.Eq(induction_var % multiplier, multiplier - 1)
+
+        wait_subgraph_name = f"{custom.subgraph_name}_barrier_wait"
+        wait_subgraph = fx.Graph()
+
+        SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
+            wait_subgraph, loc=location
+        )
+        wait_subgraph.output(None)
+
+        trace.add_subgraph(wait_subgraph_name, wait_subgraph)
+
+        Conditional(condition, wait_subgraph_name, []).add_to_graph(
             subgraph, loc=location
         )
 
