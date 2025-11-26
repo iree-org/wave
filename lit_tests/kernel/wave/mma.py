@@ -713,3 +713,90 @@ def test_wmma_with_tensor_load():
 
     ### wmma
     # CHECK:        rocdl.wmma.f32.16x16x32.f16 {{.*}} : (vector<16xf16>, vector<16xf16>, vector<8xf32>) -> vector<8xf32>
+
+
+@run_test
+def test_wmma_with_tensor_load_delay():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            mma_type=tkw.MMAType.GFX1250_F32_16x16x32_F16,
+            workgroups_per_cluster=(4, 4, 1),
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def mma(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            return tkw.mma(a_reg, b_reg, acc)
+
+        tkw.write(repeat, c)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 1024,
+            N: 1024,
+            K: 1024,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 32,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        target="gfx1250",
+        use_global_to_shared=True,
+        cluster_barrier_delay=1,
+    )
+    mma = wave_compile(compile_options, mma)
+    print(mma.asm)
+
+    # CHECK-LABEL: test_wmma_with_tensor_load_delay
+    # CHECK-DAG:     #[[MAP0:.*]] = affine_map<()[s0] -> (s0 floordiv 32)>
+    # CHECK-DAG:     #[[MAP1:.*]] = affine_map<()[s0] -> (s0 mod 2)>
+    # CHECK:          func.func @mma
+
+    # CHECK-DAG:      %[[THREAD_ID_X:.*]] = gpu.thread_id  x upper_bound 32
+    # CHECK-DAG:      %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG:      %[[C1:.*]] = arith.constant 1 : index
+
+    # CHECK:          %[[WAVE_ID:.*]] = affine.apply #[[MAP0]]()[%[[THREAD_ID_X]]]
+    # CHECK:          %[[COND0:.*]] = arith.cmpi eq, %[[WAVE_ID]], %[[C0]] : index
+    # CHECK:          scf.if %[[COND0]] {
+    # CHECK-NEXT:         rocdl.s.barrier.signal -3
+    # CHECK-NEXT:     }
+
+    # CHECK:          scf.for %[[ITER_ARG:.*]] = %[[C0]]
+
+    # CHECK:            %[[ITER_COND:.*]] = affine.apply #[[MAP1]]()[%[[ITER_ARG]]]
+    # CHECK:            %[[COND1:.*]] = arith.cmpi eq, %[[ITER_COND]], %[[C0]] : index
+    # CHECK:            scf.if %[[COND1]] {
+    # CHECK-NEXT:         scf.if %[[COND0]] {
+    # CHECK-NEXT:             rocdl.s.barrier.signal -3
+    # CHECK-NEXT:         }
+    # CHECK-NEXT:       }
+
+    # CHECK-COUNT-4:    rocdl.wmma
+
+    # CHECK:            %[[COND2:.*]] = arith.cmpi eq, %[[ITER_COND]], %[[C1]] : index
+    # CHECK:            scf.if %[[COND2]] {
+    # CHECK-NEXT:           rocdl.s.barrier.wait -3
+    # CHECK-NEXT:       }
+
+    # CHECK-NEXT:       scf.yield
