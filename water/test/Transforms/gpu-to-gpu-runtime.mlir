@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-gpu-to-gpu-runtime --split-input-file | FileCheck %s
+// RUN: water-opt %s --water-gpu-to-gpu-runtime --split-input-file --verify-diagnostics | FileCheck %s
 
 module attributes {gpu.container_module} {
   // CHECK: llvm.mlir.global internal constant @[[KERNEL_DATA:kernel_data[_0-9]*]]
@@ -166,4 +166,42 @@ module attributes {gpu.container_module} {
   }
 
   // CHECK-NOT: gpu.binary
+}
+
+// -----
+
+module attributes {gpu.container_module} {
+  gpu.binary @kernel_binary [
+    #gpu.object<#rocdl.target, "\00\01\02\03">
+  ]
+
+  llvm.func @test_no_arguments() {
+    %c1 = arith.constant 1 : i64
+
+    // expected-error @+1 {{func op must have at least one argument}}
+    gpu.launch_func @kernel_binary::@my_kernel
+      blocks in (%c1, %c1, %c1)
+      threads in (%c1, %c1, %c1) : i64
+
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {gpu.container_module} {
+  gpu.binary @kernel_binary [
+    #gpu.object<#rocdl.target, "\00\01\02\03">
+  ]
+
+  llvm.func @test_non_pointer_stream(%stream: i64) {
+    %c1 = arith.constant 1 : i64
+
+    // expected-error @+1 {{stream argument must be a pointer}}
+    gpu.launch_func @kernel_binary::@my_kernel
+      blocks in (%c1, %c1, %c1)
+      threads in (%c1, %c1, %c1) : i64
+
+    llvm.return
+  }
 }
