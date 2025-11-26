@@ -456,6 +456,137 @@ DeviceConstraintAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// WaveMemoryAccessPatternAttr
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+WaveMemoryAccessPatternAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                    bool use_lds_promotion, StringRef group_id,
+                                    WaveExprListAttr lds_block_global_base,
+                                    WaveExprListAttr lds_block_shape,
+                                    WaveExprListAttr lds_load_indices,
+                                    WaveExprListAttr lds_load_vector_sizes,
+                                    WaveExprListAttr global_store_indices,
+                                    WaveExprListAttr global_store_vector_sizes) {
+  // Validate group_id is not empty
+  if (group_id.empty()) {
+    return emitError() << "group_id cannot be empty";
+  }
+
+  // When LDS promotion is disabled, no LDS-related parameters should be specified
+  if (!use_lds_promotion) {
+    if (lds_block_global_base || lds_block_shape || lds_load_indices ||
+        lds_load_vector_sizes || global_store_indices || global_store_vector_sizes) {
+      return emitError() << "LDS promotion parameters should not be specified when use_lds_promotion=false";
+    }
+    return success();
+  }
+
+  // When LDS promotion is enabled, validate completeness and consistency
+  bool hasLdsBase = static_cast<bool>(lds_block_global_base);
+  bool hasLdsShape = static_cast<bool>(lds_block_shape);
+  bool hasLdsLoadIndices = static_cast<bool>(lds_load_indices);
+  bool hasLdsLoadVectorSizes = static_cast<bool>(lds_load_vector_sizes);
+  bool hasGlobalStoreIndices = static_cast<bool>(global_store_indices);
+  bool hasGlobalStoreVectorSizes = static_cast<bool>(global_store_vector_sizes);
+
+  // Check for partial specification - either all or none should be provided
+  if (hasLdsBase || hasLdsShape || hasLdsLoadIndices || hasLdsLoadVectorSizes ||
+      hasGlobalStoreIndices || hasGlobalStoreVectorSizes) {
+    if (!hasLdsBase || !hasLdsShape || !hasLdsLoadIndices || !hasLdsLoadVectorSizes ||
+        !hasGlobalStoreIndices || !hasGlobalStoreVectorSizes) {
+      return emitError() << "when LDS promotion is enabled, all LDS parameters must be specified: "
+                            "lds_block_global_base, lds_block_shape, lds_load_indices, lds_load_vector_sizes, "
+                            "global_store_indices, global_store_vector_sizes";
+    }
+  }
+
+  // If all LDS parameters are provided, perform detailed validation
+  if (hasLdsBase && hasLdsShape && hasLdsLoadIndices && hasLdsLoadVectorSizes &&
+      hasGlobalStoreIndices && hasGlobalStoreVectorSizes) {
+
+    // Validate that lds_block_global_base and lds_block_shape have consistent ranks
+    unsigned ldsBaseRank = lds_block_global_base.getRank();
+    unsigned ldsShapeRank = lds_block_shape.getRank();
+
+    if (ldsBaseRank != ldsShapeRank) {
+      return emitError() << "lds_block_global_base rank (" << ldsBaseRank
+                         << ") must match lds_block_shape rank (" << ldsShapeRank << ")";
+    }
+
+    // Validate that load indices and vector sizes have consistent ranks
+    unsigned ldsLoadIndicesRank = lds_load_indices.getRank();
+    unsigned ldsLoadVectorSizesRank = lds_load_vector_sizes.getRank();
+    unsigned globalStoreIndicesRank = global_store_indices.getRank();
+    unsigned globalStoreVectorSizesRank = global_store_vector_sizes.getRank();
+
+    if (ldsLoadIndicesRank != ldsLoadVectorSizesRank) {
+      return emitError() << "lds_load_indices rank (" << ldsLoadIndicesRank
+                         << ") must match lds_load_vector_sizes rank (" << ldsLoadVectorSizesRank << ")";
+    }
+
+    if (globalStoreIndicesRank != globalStoreVectorSizesRank) {
+      return emitError() << "global_store_indices rank (" << globalStoreIndicesRank
+                         << ") must match global_store_vector_sizes rank (" << globalStoreVectorSizesRank << ")";
+    }
+
+    if (ldsBaseRank != ldsLoadIndicesRank) {
+      return emitError() << "LDS block rank (" << ldsBaseRank
+                         << ") must match LDS load indices rank (" << ldsLoadIndicesRank << ")";
+    }
+
+    if (ldsBaseRank != globalStoreIndicesRank) {
+      return emitError() << "LDS block rank (" << ldsBaseRank
+                         << ") must match global store indices rank (" << globalStoreIndicesRank << ")";
+    }
+
+
+    // Validate that all symbols are WaveSymbolAttr or WaveIndexSymbolAttr
+    if (!llvm::all_of(lds_block_global_base.getSymbols(),
+                      llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>)) {
+      return emitError() << "lds_block_global_base must only contain WaveSymbolAttr or WaveIndexSymbolAttr";
+    }
+
+    if (!llvm::all_of(lds_block_shape.getSymbols(),
+                      llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>)) {
+      return emitError() << "lds_block_shape must only contain WaveSymbolAttr or WaveIndexSymbolAttr";
+    }
+
+    if (!llvm::all_of(lds_load_indices.getSymbols(),
+                      llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>)) {
+      return emitError() << "lds_load_indices must only contain WaveSymbolAttr or WaveIndexSymbolAttr";
+    }
+
+    if (!llvm::all_of(lds_load_vector_sizes.getSymbols(),
+                      llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>)) {
+      return emitError() << "lds_load_vector_sizes must only contain WaveSymbolAttr or WaveIndexSymbolAttr";
+    }
+
+    if (!llvm::all_of(global_store_indices.getSymbols(),
+                      llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>)) {
+      return emitError() << "global_store_indices must only contain WaveSymbolAttr or WaveIndexSymbolAttr";
+    }
+
+    if (!llvm::all_of(global_store_vector_sizes.getSymbols(),
+                      llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>)) {
+      return emitError() << "global_store_vector_sizes must only contain WaveSymbolAttr or WaveIndexSymbolAttr";
+    }
+
+    // Validate that mappings have at least one dimension
+    if (ldsBaseRank == 0) {
+      return emitError() << "LDS block must have at least one dimension";
+    }
+
+    // Note: We cannot validate that the ranks match the original global memory tensor rank here
+    // because this attribute verification doesn't have access to the WriteOp's memory operand.
+    // This validation should be performed in the WriteOp's verifier where both the attribute
+    // and the memory operand type are available.
+  }
+
+  return success();
+}
+
 void wave::WaveDialect::registerAttributes() {
   addAttributes<
 #define GET_ATTRDEF_LIST
