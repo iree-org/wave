@@ -197,13 +197,13 @@ struct WaterGPUtoGPURuntimePass final
             strVal, LLVM::Linkage::Internal);
       };
 
-      auto createConst = [&](int64_t val, Type type) -> Value {
+      auto createConst = [&](Type type, int64_t val) -> Value {
         return LLVM::ConstantOp::create(builder, loc, type,
                                         builder.getIntegerAttr(type, val));
       };
 
       auto createAlloca = [&](Type elemType, int64_t size) -> Value {
-        Value sizeVal = createConst(size, i64Type);
+        Value sizeVal = createConst(i64Type, size);
         return LLVM::AllocaOp::create(builder, loc, ptrType, elemType, sizeVal,
                                       0);
       };
@@ -218,7 +218,7 @@ struct WaterGPUtoGPURuntimePass final
           loc, builder,
           getUniqueLLVMGlobalName(mod, symbolTable, "kernel_data"), objData,
           LLVM::Linkage::Internal);
-      Value dataSize = createConst(objData.size(), i64Type);
+      Value dataSize = createConst(i64Type, objData.size());
 
       Value funcObject =
           loadFuncBuilder
@@ -226,7 +226,7 @@ struct WaterGPUtoGPURuntimePass final
                       {stream, kernelHandle, dataPtr, dataSize, kernelNameStr})
               ->getResult(0);
 
-      Value sharedMemoryBytes = createConst(0, i32Type);
+      Value sharedMemoryBytes = createConst(i32Type, 0);
       ValueRange args = op.getKernelOperands();
       auto argsPtrArrayType = LLVM::LLVMArrayType::get(ptrType, args.size());
       Value argsArray = LLVM::PoisonOp::create(builder, loc, argsPtrArrayType);
@@ -239,7 +239,7 @@ struct WaterGPUtoGPURuntimePass final
       }
       Value argsArrayPtr = createAlloca(ptrType, args.size());
       LLVM::StoreOp::create(builder, loc, argsArray, argsArrayPtr);
-      Value argsCount = createConst(args.size(), i32Type);
+      Value argsCount = createConst(i32Type, args.size());
 
       launchFuncBuilder.create(
           loc, builder,
