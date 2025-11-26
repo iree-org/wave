@@ -21,12 +21,13 @@ using namespace mlir::water;
 
 namespace {
 /// Generate a unique LLVM global name for a given source name.
-static SmallString<128> getUniqueLLVMGlobalName(SymbolTable &table,
-                                                llvm::Twine srcName) {
+static SmallString<128>
+getUniqueLLVMGlobalName(ModuleOp mod, SymbolTable &table, llvm::Twine srcName) {
   unsigned counter = 0;
   return SymbolTable::generateSymbolName<128>(
       srcName.str(),
-      [&](StringRef candidate) { return table.lookup(candidate); }, counter);
+      [&](StringRef candidate) { return table.lookupSymbolIn(mod, candidate); },
+      counter);
 }
 
 ///  Helper to build a function call to a given function name with the given
@@ -64,7 +65,8 @@ static Value createKernelHandle(OpBuilder &builder, SymbolTable &symbolTable,
   {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPointToStart(mod.getBody());
-    auto handleName = getUniqueLLVMGlobalName(symbolTable, "kernel_handle");
+    auto handleName =
+        getUniqueLLVMGlobalName(mod, symbolTable, "kernel_handle");
     handle = LLVM::GlobalOp::create(
         builder, loc, globalType, /*isConstant*/ false, LLVM::Linkage::Internal,
         handleName, LLVM::ZeroAttr::get(builder.getContext()));
@@ -191,8 +193,8 @@ struct WaterGPUtoGPURuntimePass final
         std::string strVal = str.str();
         strVal.append(std::string_view("\0", 1));
         return LLVM::createGlobalString(
-            loc, builder, getUniqueLLVMGlobalName(symbolTable, varName), strVal,
-            LLVM::Linkage::Internal);
+            loc, builder, getUniqueLLVMGlobalName(mod, symbolTable, varName),
+            strVal, LLVM::Linkage::Internal);
       };
 
       auto createConst = [&](int64_t val, Type type) -> Value {
@@ -213,8 +215,9 @@ struct WaterGPUtoGPURuntimePass final
       Value kernelNameStr = getStr(kernelName, kernelName);
 
       Value dataPtr = LLVM::createGlobalString(
-          loc, builder, getUniqueLLVMGlobalName(symbolTable, "kernel_data"),
-          objData, LLVM::Linkage::Internal);
+          loc, builder,
+          getUniqueLLVMGlobalName(mod, symbolTable, "kernel_data"), objData,
+          LLVM::Linkage::Internal);
       Value dataSize = createConst(objData.size(), i64Type);
 
       Value funcObject =
