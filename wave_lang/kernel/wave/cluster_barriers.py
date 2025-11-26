@@ -87,20 +87,17 @@ def add_cluster_barriers_to_iterate(
     with subgraph.inserting_before(first_node):
         condition = sympy.Eq(induction_var % multiplier, 0)
 
-        # Create a conditional subgraph for the barrier wait
         wait_subgraph_name = f"{custom.subgraph_name}_barrier_wait"
         wait_subgraph = fx.Graph()
 
-        # Add the barrier operation to the graph
         SharedMemoryBarrierSignal(
             barId=CLUSTER_BARRIER_ID, tensor_wait=False
         ).add_to_graph(wait_subgraph, loc=location)
-        # Add output node
+
         wait_subgraph.output(None)
 
         trace.add_subgraph(wait_subgraph_name, wait_subgraph)
 
-        # Add conditional node
         Conditional(condition, wait_subgraph_name, []).add_to_graph(
             subgraph, loc=location
         )
@@ -110,20 +107,16 @@ def add_cluster_barriers_to_iterate(
     with subgraph.inserting_before(output_node):
         condition = sympy.Eq(induction_var % multiplier, multiplier - 1)
 
-        # Create a conditional subgraph for the barrier signal
         signal_subgraph_name = f"{custom.subgraph_name}_barrier_signal"
         signal_subgraph = fx.Graph()
 
-        # Add the barrier operation to the graph
         SharedMemoryBarrierWait(barId=CLUSTER_BARRIER_ID).add_to_graph(
             signal_subgraph, loc=location
         )
-        # Add output node
         signal_subgraph.output(None)
 
         trace.add_subgraph(signal_subgraph_name, signal_subgraph)
 
-        # Add conditional node
         Conditional(condition, signal_subgraph_name, []).add_to_graph(
             subgraph, loc=location
         )
@@ -164,7 +157,7 @@ def add_cluster_barriers(
         if isinstance(constraint, TilingConstraint):
             axis_to_induction_var[constraint.dim] = constraint.induction_var
 
-    # Look for iterate ops and check if they contain tensor load ops
+    # Look for iterate ops and check if they contain tensor load ops with multicast mask
     iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
 
     delay = options.cluster_barrier_delay
