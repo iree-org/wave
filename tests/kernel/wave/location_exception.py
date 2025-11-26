@@ -3,9 +3,6 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.location import StackTraceInfo
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.utils.general_utils import (
-    run_test,
-)
 from wave_lang.kernel.wave.water import is_water_available
 import pytest
 
@@ -53,7 +50,8 @@ def test_error_messages():
         use_water_leak_check=override_ir,
     )
 
-    with pytest.raises(RuntimeError) as exception:
+    with pytest.raises(Exception) as exception:
         wave_compile(options, empty)
-        assert "assertion known to be false" in str(exception.value)
-        assert "location_exception.py" in str(exception.value)
+
+    assert "assertion known to be false" in repr(exception.value)
+    assert "location_exception.py" in repr(exception.value)
