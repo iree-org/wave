@@ -93,7 +93,7 @@ module attributes {gpu.container_module} {
     %c1 = arith.constant 1 : i64
     %c2 = arith.constant 2 : i64
 
-    // First launch - kernel_a with 2 arguments
+    // First launch
     // CHECK-DAG: %[[HANDLE1_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL1_HANDLE]]
     // CHECK-DAG: %[[NAME1_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL1_NAME]]
     // CHECK-DAG: %[[DATA1_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL1_DATA]]
@@ -116,7 +116,7 @@ module attributes {gpu.container_module} {
       threads in (%c256, %c1, %c1) : i64
       args(%arg0: f32, %arg1: i64)
 
-    // Second launch - kernel_b with 1 argument and different dimensions
+    // Second launch
     // CHECK-DAG: %[[HANDLE2_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL2_HANDLE]]
     // CHECK-DAG: %[[DATA2_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL2_DATA]]
     // CHECK-DAG: %[[NAME2_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL2_NAME]]
@@ -139,7 +139,7 @@ module attributes {gpu.container_module} {
       threads in (%c512, %c1, %c1) : i64
       args(%arg2: i32)
 
-    // Third launch - reuse kernel_a with different arguments and dimensions
+    // Third launch
     // CHECK-DAG: %[[HANDLE3_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL3_HANDLE]]
     // CHECK-DAG: %[[DATA3_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL3_DATA]]
     // CHECK-DAG: %[[NAME3_ADDR:.*]] = llvm.mlir.addressof @[[KERNEL3_NAME]]
