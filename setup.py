@@ -283,6 +283,12 @@ ext_modules = [
 if BUILD_WATER:
     ext_modules += [
         CMakeExtension(
+            "wave_execution_engine",
+            "wave_lang/kernel/wave/execution_engine",
+            install_dir="wave_lang/kernel/wave/execution_engine",
+            need_llvm=True,
+        ),
+        CMakeExtension(
             "water",
             "water",
             install_dir="wave_lang/kernel/wave/water_mlir",

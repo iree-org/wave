@@ -92,5 +92,6 @@ using hipGetErrorName_t = const char *(*)(hipError_t);
 using hipGetErrorString_t = const char *(*)(hipError_t);
 using hipModuleUnload_t = hipError_t (*)(hipModule_t);
 using hipModuleLoad_t = hipError_t (*)(hipModule_t *, const char *);
+using hipModuleLoadData_t = hipError_t (*)(hipModule_t *, const void *);
 using hipModuleGetFunction_t = hipError_t (*)(hipFunction_t *, hipModule_t,
                                               const char *);
