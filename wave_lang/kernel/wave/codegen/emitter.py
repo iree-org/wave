@@ -255,7 +255,12 @@ class WaveEmitter:
         # arguments order, so map kernel order to host function arguments order.
         binding_map = {}
         symbol_map = {}
-        for i, b in enumerate(self.root_sig.sig.bindings):
+        host_bindings = [
+            b
+            for b in self.root_sig.sig.bindings
+            if b.binding_type not in (BindingType.SYMBOL_VALUE, BindingType.INDEX_VALUE)
+        ]
+        for i, b in enumerate(host_bindings):
             binding_map[id(b)] = i
             if b.binding_type == BindingType.KERNEL_BUFFER:
                 for j, symbol in enumerate(b.kernel_buffer_type.symbolic_shape):
@@ -347,14 +352,12 @@ class WaveEmitter:
         # Declare host function
         # First argument is stream pointer
         # Rest are kernel arguments as PyObject*
-        host_args_types = [ptr] + [ptr] * len(arg_types)
+        host_args_types = [ptr] + [ptr] * len(host_bindings)
         host_ftype = FunctionType.get(host_args_types, [])
         func_name = self.options.func_name
         func_op = func_d.FuncOp(func_name, host_ftype)
 
-        locs = [Location.name("stream")] + create_argument_locations(
-            self.root_sig.sig.bindings[: len(arg_types)]
-        )
+        locs = [Location.name("stream")] + create_argument_locations(host_bindings)
         entry_block = func_op.add_entry_block(locs)
 
         symbol_vals = {}

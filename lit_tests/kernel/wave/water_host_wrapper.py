@@ -149,3 +149,49 @@ def test_scalars():
     # CHECK:            %[[I32:.*]] = arith.trunci %[[I64]] : i64 to i32
     # CHECK:            gpu.launch_func @gpu_module::@scalars blocks in (%[[C1]], %[[C1]], %[[C1]]) threads in (%[[C64]], %[[C1]], %[[C1]]) args(%[[VIEW]] : memref<f16>, %[[F16]] : f16, %[[I32]] : i32)
     # CHECK:            return
+
+
+@run_test
+def test_dynamic_symbols():
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def read_write(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a)
+        tkw.write(res, b)
+
+    read_write = wave_compile(
+        get_wave_compile_options(canonicalize=True, dynamic_symbols=[M, N]), read_write
+    )
+    print(read_write.asm)
+
+    # CHECK-LABEL:    test_dynamic_symbols
+
+    # CHECK-LABEL:    func.func @isolated_benchmark
+    # CHECK-SAME:       (%[[ARG0:.*]]: !llvm.ptr, %[[ARG1:.*]]: !llvm.ptr, %[[ARG2:.*]]: !llvm.ptr)
+    # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG:        %[[C1:.*]] = arith.constant 1 : index
+    # CHECK-DAG:        %[[C64:.*]] = arith.constant 64 : index
+    # CHECK-DAG:        %[[C0_I32:.*]] = arith.constant 0 : i32
+    # CHECK-DAG:        %[[C1_I32:.*]] = arith.constant 1 : i32
+    # CHECK:            %[[DIM0_I64:.*]] = call @wave_get_dim(%[[ARG1]], %[[C0_I32]]) : (!llvm.ptr, i32) -> i64
+    # CHECK:            %[[DIM0:.*]] = arith.index_cast %[[DIM0_I64]] : i64 to index
+    # CHECK:            %[[DIM1_I64:.*]] = call @wave_get_dim(%[[ARG1]], %[[C1_I32]]) : (!llvm.ptr, i32) -> i64
+    # CHECK:            %[[DIM1:.*]] = arith.index_cast %[[DIM1_I64]] : i64 to index
+    # CHECK:            %[[BLOCK_M:.*]] = affine.apply #map2()[%[[DIM0]]]
+    # CHECK:            %[[BLOCK_N:.*]] = affine.apply #map2()[%[[DIM1]]]
+    # CHECK:            %[[BUF1:.*]] = call @wave_get_buffer(%[[ARG1]]) : (!llvm.ptr) -> memref<?xi8>
+    # CHECK:            %[[VIEW1:.*]] = memref.view %[[BUF1]][%[[C0]]][] : memref<?xi8> to memref<f16>
+    # CHECK:            %[[BUF2:.*]] = call @wave_get_buffer(%[[ARG2]]) : (!llvm.ptr) -> memref<?xi8>
+    # CHECK:            %[[VIEW2:.*]] = memref.view %[[BUF2]][%[[C0]]][] : memref<?xi8> to memref<f16>
+    # CHECK:            gpu.launch_func @gpu_module::@read_write blocks in (%[[BLOCK_M]], %[[BLOCK_N]], %[[C1]]) threads in (%[[C64]], %[[C1]], %[[C1]]) args(%[[VIEW1]] : memref<f16>, %[[VIEW2]] : memref<f16>, %[[DIM0]] : index, %[[DIM1]] : index)
+    # CHECK:            return
