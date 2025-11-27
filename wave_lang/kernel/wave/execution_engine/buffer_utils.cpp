@@ -59,7 +59,7 @@ extern "C" void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret,
   ret->strides[0] = 1;
 }
 
-extern "C" int64_t wave_get_int64(PyObject *obj_ptr) {
+extern "C" int64_t _mlir_ciface_wave_get_int64(PyObject *obj_ptr) {
   GILState gil_state;
 
   int64_t value = PyLong_AsLongLong(obj_ptr);
@@ -71,7 +71,7 @@ extern "C" int64_t wave_get_int64(PyObject *obj_ptr) {
   return value;
 }
 
-extern "C" double wave_get_float64(PyObject *obj_ptr) {
+extern "C" double _mlir_ciface_wave_get_float64(PyObject *obj_ptr) {
   GILState gil_state;
 
   double value = PyFloat_AsDouble(obj_ptr);
@@ -83,7 +83,8 @@ extern "C" double wave_get_float64(PyObject *obj_ptr) {
   return value;
 }
 
-extern "C" int64_t wave_get_dim(PyObject *obj_ptr, int32_t dim_idx) {
+extern "C" int64_t _mlir_ciface_wave_get_dim(PyObject *obj_ptr,
+                                             int32_t dim_idx) {
   GILState gil_state;
 
   // Get tensor.size() method

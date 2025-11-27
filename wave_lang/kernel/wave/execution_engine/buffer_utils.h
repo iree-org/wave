@@ -41,11 +41,11 @@ void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret, PyObject *obj);
 
 /// Extract an int64_t value from a PyObject.
 /// Throws std::runtime_error if conversion fails.
-int64_t wave_get_int64(PyObject *obj);
+int64_t _mlir_ciface_wave_get_int64(PyObject *obj);
 
 /// Extract a double value from a PyObject.
 /// Throws std::runtime_error if conversion fails.
-double wave_get_float64(PyObject *obj);
+double _mlir_ciface_wave_get_float64(PyObject *obj);
 
 /// Extract the size of a specific dimension from a PyObject (PyTorch tensor).
 ///
@@ -59,5 +59,5 @@ double wave_get_float64(PyObject *obj);
 /// Throws:
 ///   std::runtime_error if the object doesn't have a size() method or
 ///   if the dimension index is invalid
-int64_t wave_get_dim(PyObject *obj, int32_t dim_idx);
+int64_t _mlir_ciface_wave_get_dim(PyObject *obj, int32_t dim_idx);
 }
