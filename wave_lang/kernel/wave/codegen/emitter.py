@@ -294,30 +294,31 @@ class WaveEmitter:
         gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()
         module_block = gpu_module.bodyRegion.blocks.append()
 
+        # TODO: propagate locations from the kernel
         with InsertionPoint(module_block), Location.name("wave-generated gpu module"):
             kernel_func_wrapper = gpu_d.GPUFuncOp(
                 TypeAttr.get(ftype), sym_name=self.kernel_name, kernel=True
             )
 
-        kernel_entry_block = kernel_func_wrapper.body.blocks.append(
+        new_kernel_entry_block = kernel_func_wrapper.body.blocks.append(
             *arg_types,
             arg_locs=locs,
         )
 
         # Inline the kernel function into the gpu module function body and erase the original function
         with (
-            InsertionPoint(kernel_entry_block),
+            InsertionPoint(new_kernel_entry_block),
             Location.name("wave-generated kernel function"),
         ):
             # Move operations except terminator
             ops_to_move = list(kernel_func.entry_block)[:-1]
             for op in ops_to_move:
                 op.detach_from_parent()
-                kernel_entry_block.append(op)
+                new_kernel_entry_block.append(op)
 
             # Replace all uses of old arguments
             for old_arg, new_value in zip(
-                kernel_func.entry_block.arguments, kernel_entry_block.arguments
+                kernel_func.entry_block.arguments, new_kernel_entry_block.arguments
             ):
                 old_arg.replace_all_uses_with(new_value)
 
@@ -333,22 +334,23 @@ class WaveEmitter:
             [MemRefType.get_dynamic_size()], element_type=IntegerType.get_signless(8)
         )
 
-        # wave_get_buffer returns memref so we need emit_c_interface to have a C-compatible ABI
+        # Get buffer from PyObject*
         get_buffer_func, get_buffer_func_symbol = self._declare_runtime_func(
             "wave_get_buffer", [ptr], [buffer_type], emit_c_interface=True
         )
 
+        # Get tensor dimension function from PyObject*
         get_dim_func, get_dim_func_symbol = self._declare_runtime_func(
-            "wave_get_dim", [ptr, i32], [i64]
+            "wave_get_dim", [ptr, i32], [i64], emit_c_interface=True
         )
 
-        # Declare scalar extraction functions
+        # Scalar extraction functions from PyObject*
         get_int64_func, get_int64_func_symbol = self._declare_runtime_func(
-            "wave_get_int64", [ptr], [i64]
+            "wave_get_int64", [ptr], [i64], emit_c_interface=True
         )
 
         get_float64_func, get_float64_func_symbol = self._declare_runtime_func(
-            "wave_get_float64", [ptr], [f64]
+            "wave_get_float64", [ptr], [f64], emit_c_interface=True
         )
 
         # Declare host function
@@ -377,9 +379,9 @@ class WaveEmitter:
                 arg_idx, dim_idx = symbol_map[sym]
                 arg = func_args[arg_idx]
                 dim = arith_d.constant(i32, dim_idx)
-                value = func_d.CallOp(
+                value = func_d.call(
                     get_dim_func.type.results, get_dim_func_symbol, [arg, dim]
-                ).results[0]
+                )
                 value = arith_d.index_cast(IndexType.get(), value)
                 symbol_vals[sym] = value
                 subs[sym] = value
@@ -393,10 +395,9 @@ class WaveEmitter:
                 if binding.binding_type == BindingType.KERNEL_BUFFER:
                     arg = func_args[binding_map[id(binding)]]
                     # Extract buffer from PyObject
-                    call = func_d.CallOp(
+                    buffer = func_d.call(
                         get_buffer_func.type.results, get_buffer_func_symbol, [arg]
                     )
-                    buffer = call.results[0]
                     offset = arith_d.constant(IndexType.get(), 0)
                     buffer = memref_d.view(dst_type, buffer, offset, [])
                     launch_args.append(buffer)
@@ -406,20 +407,18 @@ class WaveEmitter:
                     # Determine if it's float or int based on MLIR type
                     if isinstance(dst_type, (F16Type, F32Type, F64Type)):
                         # Float type - call wave_get_float64 and cast
-                        call = func_d.CallOp(
+                        scalar = func_d.call(
                             get_float64_func.type.results,
                             get_float64_func_symbol,
                             [arg],
                         )
-                        scalar = call.results[0]
                         if not isinstance(dst_type, F64Type):
                             scalar = arith_d.truncf(dst_type, scalar)
                     elif isinstance(dst_type, (IndexType, IntegerType)):
                         # Integer/Index type - call wave_get_int64 and cast
-                        call = func_d.CallOp(
+                        scalar = func_d.call(
                             get_int64_func.type.results, get_int64_func_symbol, [arg]
                         )
-                        scalar = call.results[0]
                         # Cast to target type if needed
                         if isinstance(dst_type, IndexType):
                             scalar = arith_d.index_cast(dst_type, scalar)
