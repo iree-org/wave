@@ -63,8 +63,7 @@ def get_wave_compile_options(
     )
 
 
-@run_test
-def test_read_write():
+def get_constraints():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
     ]
@@ -72,6 +71,12 @@ def test_read_write():
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.WaveConstraint(M, BLOCK_M)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    return constraints
+
+
+@run_test
+def test_read_write():
+    constraints = get_constraints()
 
     @tkw.wave(constraints)
     def read_write(
@@ -90,7 +95,7 @@ def test_read_write():
     # CHECK:          gpu.func @read_write
     # CHECK-SAME:       (%[[D0:.*]]: memref<f16>, %[[D1:.*]]: memref<f16>)
     # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
-    # CHECK-DAG:        %[[thread_id_x:.*]] = gpu.thread_id  x
+    # CHECK:            %[[thread_id_x:.*]] = gpu.thread_id  x
     # CHECK:            %[[S0:.*]] = memref.reinterpret_cast %[[D0]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK:            %[[S1:.*]] = memref.reinterpret_cast %[[D1]] to offset: [0], sizes: [16, 16], strides: [16, 1] : memref<f16> to memref<16x16xf16, strided<[16, 1]>>
     # CHECK:            %[[I0:.*]] = affine.apply #[[MAP0]]()[%[[thread_id_x]]]
@@ -113,13 +118,7 @@ def test_read_write():
 
 @run_test
 def test_scalars():
-    constraints: list[tkw.Constraint] = [
-        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
-    ]
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints = get_constraints()
 
     @tkw.wave(constraints)
     def scalars(
@@ -153,13 +152,7 @@ def test_scalars():
 
 @run_test
 def test_dynamic_symbols():
-    constraints: list[tkw.Constraint] = [
-        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
-    ]
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints = get_constraints()
 
     @tkw.wave(constraints)
     def read_write(
