@@ -32,10 +32,8 @@
 #include <mlir/IR/Location.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/OwningOpRef.h>
-#include <mlir/InitAllDialects.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Support/FileUtilities.h>
-#include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
 #define DEBUG_TYPE "wave-execution-engine"
@@ -293,12 +291,7 @@ wave::ExecutionEngine::loadModule(mlir::ModuleOp m) {
   return static_cast<ModuleHandle>(dylib);
 }
 
-static mlir::DialectRegistry createMLIRContextRegistry() {
-  mlir::DialectRegistry registry;
-  mlir::registerAllDialects(registry);
-  mlir::registerAllToLLVMIRTranslations(registry);
-  return registry;
-}
+mlir::DialectRegistry createMLIRContextRegistry();
 
 llvm::Expected<wave::ExecutionEngine::ModuleHandle>
 wave::ExecutionEngine::loadModuleFromBytecode(llvm::ArrayRef<char> bytecode) {
