@@ -28,6 +28,10 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
+    F16Type,
+    F32Type,
+    F64Type,
+    FlatSymbolRefAttr,
     FloatAttr,
     FunctionType,
     IndexType,
@@ -41,12 +45,15 @@ from wave_lang.support.ir_imports import (
     Operation,
     ShapedType,
     StridedLayoutAttr,
+    TypeAttr,
+    UnitAttr,
     Value,
     VectorType,
     affine_d,
     arith_d,
     func_d,
     gpu_d,
+    llvm_d,
     memref_d,
     vector_d,
 )
@@ -87,6 +94,7 @@ class WaveEmitter:
     constraints: list[Constraint]
     options: WaveCompileOptions
     grid: list[IndexExpr]
+    kernel_name: str
     OP_HANDLERS: ClassVar[dict[str, Callable[["WaveEmitter", fx.Node], None]]] = {}
     _node_values: ClassVar[dict[fx.Node, List[IRProxyValue]]] = {}
 
@@ -143,7 +151,7 @@ class WaveEmitter:
         arg_types = [abi_type(b) for b in bindings]
 
         ftype = FunctionType.get(arg_types, [])
-        func_op = func_d.FuncOp("kernel", ftype, visibility="private")
+        func_op = func_d.FuncOp(self.kernel_name, ftype, visibility="private")
 
         locs = create_argument_locations(bindings)
         entry_block = func_op.add_entry_block(locs)
@@ -213,7 +221,7 @@ class WaveEmitter:
                     static_strides=static_strides,
                 )
                 self._node_values[node] = [res]
-            func_d.ReturnOp([])
+            func_d.return_([])
 
         return func_op
 
@@ -225,6 +233,220 @@ class WaveEmitter:
             )
 
         return func
+
+    def _declare_runtime_func(
+        self,
+        name: str,
+        arg_types: list[IrType],
+        result_types: list[IrType],
+        emit_c_interface: bool = False,
+    ) -> tuple[Operation, FlatSymbolRefAttr]:
+        """Helper to declare a runtime function and return both the func and its symbol."""
+        ftype = FunctionType.get(arg_types, result_types)
+        func_op = func_d.FuncOp(name, ftype, visibility="private")
+        if emit_c_interface:
+            func_op.attributes["llvm.emit_c_interface"] = UnitAttr.get()
+        symbol = FlatSymbolRefAttr.get(func_op.sym_name.value)
+        return func_op, symbol
+
+    def emit_host_func(self, kernel_func: Operation) -> Operation:
+        # TODO: kernel bindings order may not be the same as the kernel function
+        # arguments order, so map kernel order to host function arguments order.
+        binding_map = {}
+        symbol_map = {}
+
+        # SYMBOL_VALUE and INDEX_VALUE are determined by the kernel tensor args
+        # shapes so they are not included in the host function arguments.
+        host_bindings = [
+            b
+            for b in self.root_sig.sig.bindings
+            if b.binding_type not in (BindingType.SYMBOL_VALUE, BindingType.INDEX_VALUE)
+        ]
+        for i, b in enumerate(host_bindings):
+            binding_map[id(b)] = i
+            if b.binding_type == BindingType.KERNEL_BUFFER:
+                for j, symbol in enumerate(b.kernel_buffer_type.symbolic_shape):
+                    if symbol in symbol_map:
+                        continue
+                    symbol_map[symbol] = (i, j)
+
+        bindings = self.root_sig.sig.linear_bindings
+
+        ptr = llvm_d.PointerType.get()
+
+        def abi_type(binding: BindingDesc):
+            if binding.binding_type == BindingType.KERNEL_BUFFER:
+                # Buffer passed to kernel as 0D memrefs to simplify ABI.
+                element_type = IrType.parse(
+                    binding.kernel_buffer_type.dtype.ir_type_asm()
+                )
+                return MemRefType.get([], element_type=element_type)
+
+            # Scalars are passed as is.
+            return binding.as_mlir_type()
+
+        arg_types = [abi_type(b) for b in bindings]
+
+        ftype = FunctionType.get(arg_types, [])
+        locs = [a.location for a in kernel_func.body.blocks[0].arguments]
+
+        gpu_module = gpu_d.module("gpu_module")
+        gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()
+        module_block = gpu_module.bodyRegion.blocks.append()
+
+        # TODO: propagate locations from the kernel
+        with InsertionPoint(module_block), Location.name("wave-generated gpu module"):
+            # TODO: GPUFuncOp doesn't seem to have a convenoent contructor yet
+            kernel_func_wrapper = gpu_d.GPUFuncOp(
+                TypeAttr.get(ftype), sym_name=self.kernel_name, kernel=True
+            )
+
+        new_kernel_entry_block = kernel_func_wrapper.body.blocks.append(
+            *arg_types,
+            arg_locs=locs,
+        )
+
+        # Inline the kernel function into the gpu module function body and erase the original function
+        with (
+            InsertionPoint(new_kernel_entry_block),
+            Location.name("wave-generated kernel function"),
+        ):
+            # Move operations except terminator
+            ops_to_move = list(kernel_func.entry_block)[:-1]
+            for op in ops_to_move:
+                op.detach_from_parent()
+                new_kernel_entry_block.append(op)
+
+            # Replace all uses of old arguments
+            for old_arg, new_value in zip(
+                kernel_func.entry_block.arguments, new_kernel_entry_block.arguments
+            ):
+                old_arg.replace_all_uses_with(new_value)
+
+            gpu_d.return_([])
+            kernel_func.erase()
+
+        # Declare runtime functions
+        i32 = IntegerType.get_signless(32)
+        i64 = IntegerType.get_signless(64)
+        f64 = F64Type.get()
+
+        buffer_type = MemRefType.get(
+            [MemRefType.get_dynamic_size()], element_type=IntegerType.get_signless(8)
+        )
+
+        # Get buffer from PyObject*
+        get_buffer_func, get_buffer_func_symbol = self._declare_runtime_func(
+            "wave_get_buffer", [ptr], [buffer_type], emit_c_interface=True
+        )
+
+        # Get tensor dimension function from PyObject*
+        get_dim_func, get_dim_func_symbol = self._declare_runtime_func(
+            "wave_get_dim", [ptr, i32], [i64], emit_c_interface=True
+        )
+
+        # Scalar extraction functions from PyObject*
+        get_int64_func, get_int64_func_symbol = self._declare_runtime_func(
+            "wave_get_int64", [ptr], [i64], emit_c_interface=True
+        )
+
+        get_float64_func, get_float64_func_symbol = self._declare_runtime_func(
+            "wave_get_float64", [ptr], [f64], emit_c_interface=True
+        )
+
+        # Declare host function
+        # First argument is stream pointer
+        # Rest are kernel arguments as PyObject*
+        host_args_types = [ptr] + [ptr] * len(host_bindings)
+        host_ftype = FunctionType.get(host_args_types, [])
+        func_name = self.options.func_name
+        func_op = func_d.FuncOp(func_name, host_ftype)
+
+        locs = [Location.name("stream")] + create_argument_locations(host_bindings)
+        entry_block = func_op.add_entry_block(locs)
+
+        symbol_vals = {}
+
+        subs = add_emitter_subs(self)
+        threads_per_block = self.hardware_constraint.threads_per_block
+        with InsertionPoint(entry_block), Location.name("wave-generated host function"):
+            func_args = entry_block.arguments[1:]
+            # Populate dynamic symbols from kernel function arguments
+            for binding in bindings:
+                if binding.binding_type != BindingType.SYMBOL_VALUE:
+                    continue
+
+                sym = binding.symbol_type
+                arg_idx, dim_idx = symbol_map[sym]
+                arg = func_args[arg_idx]
+                dim = arith_d.constant(i32, dim_idx)
+                value = func_d.call(
+                    get_dim_func.type.results, get_dim_func_symbol, [arg, dim]
+                )
+                value = arith_d.index_cast(IndexType.get(), value)
+                symbol_vals[sym] = value
+                subs[sym] = value
+
+            grid = [gen_sympy_index(subs, s) for s in self.grid]
+            threads = [gen_sympy_index(subs, s) for s in threads_per_block]
+
+            # Populate launch arguments
+            launch_args = []
+            for binding, dst_type in zip(bindings, arg_types):
+                if binding.binding_type == BindingType.KERNEL_BUFFER:
+                    arg = func_args[binding_map[id(binding)]]
+                    # Extract buffer from PyObject
+                    buffer = func_d.call(
+                        get_buffer_func.type.results, get_buffer_func_symbol, [arg]
+                    )
+                    offset = arith_d.constant(IndexType.get(), 0)
+                    buffer = memref_d.view(dst_type, buffer, offset, [])
+                    launch_args.append(buffer)
+                elif binding.binding_type == BindingType.SCALAR_VALUE:
+                    arg = func_args[binding_map[id(binding)]]
+                    # Extract scalar from PyObject
+                    # Determine if it's float or int based on MLIR type
+                    if isinstance(dst_type, (F16Type, F32Type, F64Type)):
+                        # Float type - call wave_get_float64 and cast
+                        scalar = func_d.call(
+                            get_float64_func.type.results,
+                            get_float64_func_symbol,
+                            [arg],
+                        )
+                        if not isinstance(dst_type, F64Type):
+                            scalar = arith_d.truncf(dst_type, scalar)
+                    elif isinstance(dst_type, (IndexType, IntegerType)):
+                        # Integer/Index type - call wave_get_int64 and cast
+                        scalar = func_d.call(
+                            get_int64_func.type.results, get_int64_func_symbol, [arg]
+                        )
+                        # Cast to target type if needed
+                        if isinstance(dst_type, IndexType):
+                            scalar = arith_d.index_cast(dst_type, scalar)
+                        elif isinstance(dst_type, IntegerType) and dst_type.width != 64:
+                            scalar = arith_d.trunci(dst_type, scalar)
+                    else:
+                        raise CodegenError(f"Unsupported scalar type: {dst_type}")
+
+                    launch_args.append(scalar)
+
+                elif binding.binding_type == BindingType.SYMBOL_VALUE:
+                    sym = binding.symbol_type
+                    value = symbol_vals[sym]
+                    launch_args.append(value)
+                else:
+                    raise CodegenError(f"Unsupported binding type: {binding}")
+
+            gpu_d.launch_func(
+                async_dependencies=[],
+                kernel=[gpu_module.sym_name.value, self.kernel_name],
+                grid_size=grid,
+                block_size=threads,
+                kernel_operands=launch_args,
+            )
+            func_d.return_([])
+
+        return func_op
 
     def _emit_graph(self, graph: fx.Graph):
         """Emits the given graph at the current insertion point."""
