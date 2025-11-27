@@ -296,6 +296,7 @@ class WaveEmitter:
 
         # TODO: propagate locations from the kernel
         with InsertionPoint(module_block), Location.name("wave-generated gpu module"):
+            # TODO: GPUFuncOp doesn't seem to have a convenoent contructor yet
             kernel_func_wrapper = gpu_d.GPUFuncOp(
                 TypeAttr.get(ftype), sym_name=self.kernel_name, kernel=True
             )
