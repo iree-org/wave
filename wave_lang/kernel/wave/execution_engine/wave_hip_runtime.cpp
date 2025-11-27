@@ -98,7 +98,8 @@ extern "C" void load_functions() {
     }                                                                          \
   } while (0)
 
-extern "C" void *wave_load_kernel(void *stream, void **cached_kernel_handle,
+extern "C" void *wave_load_kernel(void * /*stream*/,
+                                  void **cached_kernel_handle,
                                   const void *binary_pointer,
                                   size_t /*binary_size*/,
                                   const char *kernel_name) {
