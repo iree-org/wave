@@ -447,7 +447,7 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
     # CHECK: rocdl.s.setprio 0
     # Softmax
     # CHECK: gpu.shuffle
-    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK: rocdl.sched.barrier
 
     # Global load, shared write, shared read
     # CHECK-COUNT-2: vector.load
@@ -455,7 +455,7 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
     # CHECK-COUNT-2: vector.store
     # CHECK-COUNT-4: memref.load
     # CHECK-COUNT-1: vector.from_elements
-    # CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK-DAG: rocdl.sched.barrier
 
     # MMA
     # CHECK: rocdl.s.setprio 1
@@ -463,14 +463,14 @@ def test_bshd_attention_pipelined_prefetch_pingpong():
     # CHECK: rocdl.s.setprio 0
     # Softmax
     # CHECK: gpu.shuffle
-    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK: rocdl.sched.barrier
 
     # Global load, shared write, shared read
     # CHECK-COUNT: vector.load
     # CHECK: amdgpu.lds_barrier
     # CHECK-COUNT: vector.store
     # CHECK-COUNT-32: vector.load
-    # CHECK: llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK: rocdl.sched.barrier
 
     # CHECK: scf.if
     # CHECK-NEXT: rocdl.s.barrier
