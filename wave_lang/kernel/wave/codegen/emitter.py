@@ -281,7 +281,7 @@ class WaveEmitter:
         arg_types = [abi_type(b) for b in bindings]
 
         ftype = FunctionType.get(arg_types, [])
-        locs = [Location.unknown()] * len(arg_types)
+        locs = [a.location for a in kernel_func.body.blocks[0].arguments]
 
         gpu_module = gpu_d.GPUModuleOp("gpu_module")
         gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()
@@ -352,9 +352,10 @@ class WaveEmitter:
         func_name = self.options.func_name
         func_op = func_d.FuncOp(func_name, host_ftype)
 
-        entry_block = func_op.add_entry_block(
-            [Location.unknown()] * len(host_args_types)
+        locs = [Location.name("stream")] + create_argument_locations(
+            self.root_sig.sig.bindings[: len(arg_types)]
         )
+        entry_block = func_op.add_entry_block(locs)
 
         symbol_vals = {}
 
