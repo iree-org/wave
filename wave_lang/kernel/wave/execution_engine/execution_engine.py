@@ -1,4 +1,5 @@
-# Copyright 2025 The IREE Authors
+# Copyright 2025 The Wave Authors
+#
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -66,7 +67,7 @@ def _load_library(lib_basename: str):
     if not lib_path.exists():
         raise RuntimeError(f"{lib_basename} library not found at {lib_path}.")
 
-    return ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+    return ctypes.CDLL(str(lib_path))
 
 
 def _get_symbol(lib: ctypes.CDLL, name: str) -> ctypes.c_void_p:

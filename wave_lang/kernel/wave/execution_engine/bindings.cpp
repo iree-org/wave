@@ -5,6 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
 #include <llvm/Support/Error.h>
