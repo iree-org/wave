@@ -255,6 +255,9 @@ class WaveEmitter:
         # arguments order, so map kernel order to host function arguments order.
         binding_map = {}
         symbol_map = {}
+
+        # SYMBOL_VALUE and INDEX_VALUE are determined by the kernel tensor args
+        # shapes so they are not included in the host function arguments.
         host_bindings = [
             b
             for b in self.root_sig.sig.bindings
