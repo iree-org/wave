@@ -38,6 +38,7 @@ static void initializeLLVMTarget() {
     llvm::InitializeNativeTargetAsmParser();
     return true;
   }();
+  (void)initOnce;
 }
 
 /// A simple object cache following Lang's LLJITWithObjectCache example.
