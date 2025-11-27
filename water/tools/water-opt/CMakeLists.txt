@@ -6,6 +6,7 @@ set(LIBS
         MLIRArithDialect
         MLIRGPUDialect
         MLIROptLib
+        MLIRROCDLDialect
         MLIRWaterTransforms
         MLIRWaveTransforms
 
