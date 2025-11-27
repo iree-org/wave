@@ -237,10 +237,7 @@ jobs:
       fail-fast: false
       matrix:
         name: [linux-mi325-1gpu-ossci-iree-org]
-        shared_libs: ["OFF"]
-        # TODO: we are linking water shared libs with static LLVM libraries,
-        # which doesn't really work if multiple of them linked with LLVM proper.
-        # shared_libs: ["ON", "OFF"]
+        shared_libs: ["ON", "OFF"]
     runs-on: ${{ matrix.name }}
     timeout-minutes: 60
     needs: build_llvm_linux
