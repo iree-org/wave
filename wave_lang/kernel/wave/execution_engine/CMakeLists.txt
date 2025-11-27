@@ -49,6 +49,9 @@ add_library(wave_hip_runtime SHARED
   wave_hip_runtime.cpp
 )
 
+# Add other runtime dir so we can include hip_types.h
+target_include_directories(wave_hip_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime")
+
 nanobind_add_module(wave_execution_engine NB_STATIC
   execution_engine.cpp
   bindings.cpp

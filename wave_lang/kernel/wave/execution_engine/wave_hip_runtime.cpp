@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "hip_types.h"
+
 #if defined(__linux__)
 #include <dlfcn.h> // dlopen, dlsym, dlerror
 using module_handle_t = void *;
@@ -19,29 +21,6 @@ using module_handle_t = HMODULE;
 #else
 #error "Unsupported platform"
 #endif
-
-// HIP constants and types
-#define HIP_LAUNCH_PARAM_BUFFER_POINTER ((void *)0x01)
-#define HIP_LAUNCH_PARAM_BUFFER_SIZE ((void *)0x02)
-#define HIP_LAUNCH_PARAM_END ((void *)0x03)
-
-using hipError_t = int;
-using hipStream_t = void *;
-using hipFunction_t = void *;
-using hipModule_t = void *;
-
-using hipModuleLaunchKernel_t = hipError_t (*)(hipFunction_t, unsigned int,
-                                               unsigned int, unsigned int,
-                                               unsigned int, unsigned int,
-                                               unsigned int, unsigned int,
-                                               hipStream_t, void **, void **);
-
-using hipGetErrorName_t = const char *(*)(hipError_t);
-using hipGetErrorString_t = const char *(*)(hipError_t);
-using hipModuleUnload_t = hipError_t (*)(hipModule_t);
-using hipModuleLoadData_t = hipError_t (*)(hipModule_t *, const void *);
-using hipModuleGetFunction_t = hipError_t (*)(hipFunction_t *, hipModule_t,
-                                              const char *);
 
 // Global function pointers
 static hipModuleLaunchKernel_t hipModuleLaunchKernel = nullptr;
