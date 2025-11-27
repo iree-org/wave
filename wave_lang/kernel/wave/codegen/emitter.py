@@ -290,7 +290,7 @@ class WaveEmitter:
         ftype = FunctionType.get(arg_types, [])
         locs = [a.location for a in kernel_func.body.blocks[0].arguments]
 
-        gpu_module = gpu_d.GPUModuleOp("gpu_module")
+        gpu_module = gpu_d.module("gpu_module")
         gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()
         module_block = gpu_module.bodyRegion.blocks.append()
 
