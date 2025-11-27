@@ -20,7 +20,6 @@ from .ir_utils import (
 from wave_lang.kernel.ops.wave_ops import get_custom
 from wave_lang.kernel.lang import Memory
 from wave_lang.kernel.lang.kernel_buffer import KernelBuffer
-from wave_lang.kernel.compiler.kernel_codegen import BindingType
 from wave_lang.kernel.compiler.utils import strides_from_symbolic_shape
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.support.logging import get_logger
