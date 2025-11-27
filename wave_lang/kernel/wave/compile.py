@@ -3,6 +3,8 @@ from itertools import chain
 from typing import Any, Optional, Callable, Sequence
 
 import torch
+import ctypes
+from ctypes import py_object
 
 from wave_lang.kernel.lang import IndexSymbol
 from wave_lang.support.ir_imports import Module, stream_d
@@ -15,6 +17,7 @@ from .cache import (
     get_temp_binary_dir,
     is_cache_enabled,
 )
+from .water import water_lowering_pipeline
 from .compile_options import WaveCompileOptions
 from .utils.compile_utils import compile_to_vmfb
 from .utils.general_utils import wave_dtype_to_torch
@@ -264,6 +267,76 @@ class WaveKernelWithProfile(WaveKernel):
         return invoke_with_profile(self.options, self.invoke, *args, **kwargs)
 
 
+class WaveKernelExecutionEngine:
+    def __init__(
+        self, options: WaveCompileOptions, module: Module | bytes | str, mlir_asm: str
+    ):
+        self.options = options
+        self.asm = mlir_asm
+
+        self._engine = None
+        self._module_handle = None
+        self._host_func_ptr = None
+
+        # Serialize MLIR module to text if needed
+        # TODO: investigate why bytecode deserialization is not working
+        if isinstance(module, (bytes, str)):
+            # Assume it's already MLIR text
+            optimized_mlir = module.decode() if isinstance(module, bytes) else module
+        else:
+            # Serialize the MLIR module to text
+            optimized_mlir = str(module)
+
+        # Get the execution engine instance and load the module
+        from wave_lang.kernel.wave.execution_engine import get_execution_engine
+
+        self._engine = get_execution_engine()
+        self._module_handle = self._engine.load_module_from_text(optimized_mlir)
+
+        # Look up the host wrapper function
+        func_name = self.options.func_name
+        try:
+            self._host_func_ptr = self._engine.lookup(self._module_handle, func_name)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Failed to lookup function '{func_name}' in loaded module. "
+                f"Make sure the module was compiled with emit_host_func. Error: {e}"
+            )
+
+        # Create ctypes function type
+        # The host wrapper signature is: void func(void* stream, PyObject* arg0, PyObject* arg1, ...)
+
+        num_kernel_args = len(self.options.kernel_usages)
+        arg_types = [ctypes.c_void_p] + [
+            py_object
+        ] * num_kernel_args  # +1 for stream pointer
+        func_type = ctypes.CFUNCTYPE(None, *arg_types)
+        self._cfunc = func_type(self._host_func_ptr)
+
+    def __call__(self, *args):
+        return self.invoke(*args)
+
+    def invoke(self, *args):
+        """
+        Invokes the wave kernel with the given arguments using the ExecutionEngine.
+        """
+        # Get the current stream
+        stream_ptr = torch.cuda.current_stream().cuda_stream
+
+        # Call the JIT-compiled host wrapper function
+        # Signature: void func(void* stream, PyObject* arg0, PyObject* arg1, ...)
+        self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
+
+        return self.asm
+
+    # TODO: __del__ call order is not guaranteed, need a better way to clean up
+    # the loaded module when the kernel is destroyed.
+    # def __del__(self):
+    #     """Clean up the loaded module when the kernel is destroyed."""
+    #     if self._module_handle is not None and self._engine is not None:
+    #         self._engine.release_module(self._module_handle)
+
+
 def wave_compile(
     options: WaveCompileOptions,
     kernel: "LaunchableWave",
@@ -441,11 +514,21 @@ def wave_compile(
         # Handle ASM and LLVM backends in a clear, single-pass flow
         compiled_wave_vmfb = None
 
+        kernel_usages = [
+            binding.kernel_buffer_type.usage
+            for binding in kernel_sig.kernel_buffer_bindings
+        ]
+        options.kernel_usages = kernel_usages
+
         if options.compile_to_asm or options.backend == "asm":
             # ASM flow: generate AMDGCN assembly; optionally build a binary
             asm = _generate_asm_code(mb, options)
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
+        if options.use_water_pipeline:
+            module = water_lowering_pipeline(mb.module_op, options)
+            return WaveKernelExecutionEngine(options, module, asm)
+
         elif not options.compile_to_mlir:
             # LLVM flow: only compile to VMFB when not in MLIR-only mode
             compiled_wave_vmfb = compile_to_vmfb(asm, options)
@@ -466,12 +549,6 @@ def wave_compile(
             )
         if options.create_vmfb_file:
             write_file(options.create_vmfb_file, "wb", compiled_wave_vmfb)
-
-        kernel_usages = [
-            binding.kernel_buffer_type.usage
-            for binding in kernel_sig.kernel_buffer_bindings
-        ]
-        options.kernel_usages = kernel_usages
 
         if is_cache_enabled() and not debug_arg_info:
             cache_manager.store_kernel(

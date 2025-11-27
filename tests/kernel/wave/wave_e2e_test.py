@@ -44,10 +44,11 @@ from .common.utils import (
     param_bool,
     perf_test,
     require_cdna3,
-    require_e2e,
-    require_cdna_2_or_3_or_4,
     require_cdna4,
+    require_cdna_2_or_3_or_4,
+    require_e2e,
     require_rdna4,
+    require_water_and_ee,
 )
 from .common.shapes import get_test_shapes as get_common_test_shape
 
@@ -138,8 +139,13 @@ def test_dump_vmfb(shape, tmp_path):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
+@param_bool(
+    "use_water_pipeline",
+    "water",
+    values=[False, pytest.param(True, marks=require_water_and_ee)],
+)
 @check_leaks
-def test_copy(shape, use_buffer_ops, run_bench):
+def test_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -183,6 +189,7 @@ def test_copy(shape, use_buffer_ops, run_bench):
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
+        use_water_pipeline=use_water_pipeline,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -194,7 +201,12 @@ def test_copy(shape, use_buffer_ops, run_bench):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_dynamic_copy(shape, use_buffer_ops, run_bench):
+@param_bool(
+    "use_water_pipeline",
+    "water",
+    values=[False, pytest.param(True, marks=require_water_and_ee)],
+)
+def test_dynamic_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -238,6 +250,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
+        use_water_pipeline=use_water_pipeline,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
