@@ -53,8 +53,9 @@ add_library(wave_hip_runtime SHARED
 target_include_directories(wave_hip_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime")
 
 nanobind_add_module(wave_execution_engine NB_STATIC
-  execution_engine.cpp
   bindings.cpp
+  execution_engine.cpp
+  register_dialects.cpp
 )
 
 # Disable RTTI for execution_engine.cpp to avoid typeinfo symbol dependencies
@@ -64,10 +65,6 @@ endif()
 
 # Include current directory for header files
 target_include_directories(wave_execution_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-get_property(mlir_dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-get_property(mlir_conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-get_property(mlir_extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 
 target_link_libraries(wave_execution_engine PRIVATE
   Python::Python
@@ -79,16 +76,9 @@ target_link_libraries(wave_execution_engine PRIVATE
   LLVMExecutionEngine
   LLVMOrcJIT
   LLVMTarget
-  MLIRCAPIDebug
-  MLIRCAPIIR
-  MLIRCAPIInterfaces
-  MLIRCAPITransforms
-  MLIRPass
-  MLIRRegisterAllDialects
+  MLIRExecutionEngineUtils
+  MLIRLLVMDialect
   MLIRToLLVMIRTranslationRegistration
-  ${mlir_dialect_libs}
-  ${mlir_conversion_libs}
-  ${mlir_extension_libs}
 )
 
 set_target_properties(wave_execution_engine PROPERTIES LINK_WHAT_YOU_USE TRUE)
