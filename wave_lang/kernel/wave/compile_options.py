@@ -47,6 +47,7 @@ class WaveCompileOptions:
     codeobj: str = "5"  # Code object version ("4" or "5")
     iree_preprocessing_pass_pipeline: str = None
     num_devices: int = 1
+    use_water_pipeline: bool = False  # Use Water lowering pipeline with host wrapper
 
     # === Benchmark options ===
     run_bench: bool = False

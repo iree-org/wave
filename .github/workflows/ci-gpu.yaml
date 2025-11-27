@@ -287,6 +287,10 @@ jobs:
           cmake --build .
 
       - name: Test water
+        # As we are mixing static LLVM build with shared Water we will get a
+        # usual double option registration LLVM issue. Only compile Water in
+        # this case to look for missing libraries.
+        if: ${{ matrix.shared_libs == 'OFF' }}
         run: |
           cd cmake_build
           cmake --build . --target check-water
