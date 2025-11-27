@@ -476,4 +476,173 @@ def WaveReadWriteBoundsAttr : AttrDef<WaveDialect, "WaveReadWriteBounds"> {
   }];
 }
 
+def WaveMemoryAccessPatternAttr : AttrDef<WaveDialect, "WaveMemoryAccessPattern"> {
+  let mnemonic = "memory_access_pattern";
+  let description = [{
+    This attribute specifies how memory access should be handled during lowering,
+    particularly for operations that may require LDS (Local Data Store) promotion.
+
+    LDS promotion transforms inefficient scalar memory accesses into efficient vectorized
+    accesses by using Local Data Store (LDS) as an intermediate buffer. The transformation
+    converts:
+
+    **Original Pattern**: Register -> Global Memory (scalar, potentially uncoalesced)
+
+    **LDS Promotion Pattern**:
+    1. Register -> LDS (scalar stores, same as original pattern but to LDS)
+    2. LDS -> Register (vectorized loads from LDS)
+    3. Register -> Global Memory (vectorized stores to global memory)
+
+    ## Index Transformation Logic
+
+    ### Step 1: Register -> LDS Store
+    The original global memory indices are transformed to LDS indices by subtracting
+    the LDS block's base address in global memory coordinates:
+    ```
+    lds_store_indices = original_global_indices - lds_block_global_base
+    ```
+
+    Example:
+    - Original: `global[WG0 * BLOCK_M + T0 * 4 + offset]`
+    - LDS base: `WG0 * BLOCK_M`
+    - LDS store: `lds[(WG0 * BLOCK_M + T0 * 4 + offset) - (WG0 * BLOCK_M)] = lds[T0 * 4 + offset]`
+
+    ### Step 2: LDS -> Register Load (Vectorized)
+    Uses `lds_load_mapping` to define vectorized access patterns within the LDS:
+    ```
+    lds_load_start = start_expr(thread_indices)
+    lds_load_vector_size = step_expr(thread_indices)
+    lds_load_stride = stride_expr(thread_indices)
+    ```
+
+    ### Step 3: Register -> Global Store (Vectorized)
+    Uses `global_store_mapping` to define vectorized stores back to global memory:
+    ```
+    global_store_start = start_expr(thread_indices)
+    global_store_vector_size = step_expr(thread_indices)
+    global_store_stride = stride_expr(thread_indices)
+    ```
+
+    ## Complete Example
+    ```mlir
+    #wave.memory_access_pattern<
+      use_lds_promotion = true,
+      group_id = "mfma_result_0",
+
+      // LDS block placement: where in global memory this LDS block maps to
+      lds_block_global_base = #wave.expr_list<
+        [#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M)
+      >,
+
+      // LDS allocation size
+      lds_block_shape = #wave.expr_list<
+        [#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_N">] -> (BLOCK_M, BLOCK_N)
+      >,
+
+      // Vectorized LDS -> Register: each thread loads 64 elements starting at T0*64
+      lds_load_mapping = #wave.index_mapping<
+        [#wave.index_symbol<T0>] -> (T0 * 64, 64, 1)
+      >,
+
+      // Vectorized Register -> Global: each thread stores 64 elements
+      global_store_mapping = #wave.index_mapping<
+        [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">]
+        -> (WG0 * BLOCK_M + T0 * 64, 64, 1)
+      >
+    >
+    ```
+
+    ## Parameters:
+    - **use_lds_promotion**: Whether to enable LDS promotion transformation
+    - **group_id**: String identifier for grouping related operations that share the same LDS allocation
+    - **lds_block_global_base**: Global memory base address that this LDS block represents (for index transformation)
+    - **lds_block_shape**: Shape/size of the LDS block allocation in elements
+    - **lds_load_mapping**: Index mapping for vectorized loads from LDS (start, vector_size, stride)
+    - **global_store_mapping**: Index mapping for vectorized stores to global memory (start, vector_size, stride)
+
+    ## Verification Requirements:
+    - All index mappings must have the same rank as the original global memory tensor
+    - lds_block_global_base and lds_block_shape must have consistent ranks
+    - When LDS promotion is enabled, all LDS-related parameters must be specified
+  }];
+
+  let parameters = (ins
+    "bool":$use_lds_promotion,
+    StringRefParameter<"group identifier for shared LDS allocation">:$group_id,
+
+    // LDS block placement information
+    OptionalParameter<"::wave::WaveExprListAttr">:$lds_block_global_base,
+    OptionalParameter<"::wave::WaveExprListAttr">:$lds_block_shape,
+
+    // Vectorized access patterns - split into indices and vector sizes for simplicity
+    OptionalParameter<"::wave::WaveExprListAttr">:$lds_load_indices,
+    OptionalParameter<"::wave::WaveExprListAttr">:$lds_load_vector_sizes,
+    OptionalParameter<"::wave::WaveExprListAttr">:$global_store_indices,
+    OptionalParameter<"::wave::WaveExprListAttr">:$global_store_vector_sizes
+  );
+
+  let assemblyFormat = [{
+    `<` `use_lds_promotion` `=` $use_lds_promotion
+    `,` `group_id` `=` $group_id
+    (`,` `lds_block_global_base` `=` $lds_block_global_base^)?
+    (`,` `lds_block_shape` `=` $lds_block_shape^)?
+    (`,` `lds_load_indices` `=` $lds_load_indices^)?
+    (`,` `lds_load_vector_sizes` `=` $lds_load_vector_sizes^)?
+    (`,` `global_store_indices` `=` $global_store_indices^)?
+    (`,` `global_store_vector_sizes` `=` $global_store_vector_sizes^)? `>`
+  }];
+
+  let genVerifyDecl = 1;
+
+  let extraClassDeclaration = [{
+    /// Check if LDS promotion is enabled.
+    bool shouldUseLdsPromotion() const { return getUseLdsPromotion(); }
+
+    /// Check if complete LDS promotion information is provided.
+    bool hasCompleteLdsPromotionInfo() const {
+      return shouldUseLdsPromotion() &&
+             getLdsBlockGlobalBase() &&
+             getLdsBlockShape() &&
+             getLdsLoadIndices() &&
+             getLdsLoadVectorSizes() &&
+             getGlobalStoreIndices() &&
+             getGlobalStoreVectorSizes();
+    }
+
+    /// Check if any LDS promotion parameters are specified.
+    bool hasAnyLdsPromotionParams() const {
+      return getLdsBlockGlobalBase() ||
+             getLdsBlockShape() ||
+             getLdsLoadIndices() ||
+             getLdsLoadVectorSizes() ||
+             getGlobalStoreIndices() ||
+             getGlobalStoreVectorSizes();
+    }
+
+    /// Get the rank/dimensionality of the LDS block.
+    unsigned getLdsBlockRank() const {
+      if (!getLdsBlockShape()) return 0;
+      return getLdsBlockShape().getRank();
+    }
+
+    /// Get the rank of the global base address expression.
+    unsigned getGlobalBaseRank() const {
+      if (!getLdsBlockGlobalBase()) return 0;
+      return getLdsBlockGlobalBase().getRank();
+    }
+
+    /// Get the rank of the LDS load indices.
+    unsigned getLdsLoadIndicesRank() const {
+      if (!getLdsLoadIndices()) return 0;
+      return getLdsLoadIndices().getRank();
+    }
+
+    /// Get the rank of the global store indices.
+    unsigned getGlobalStoreIndicesRank() const {
+      if (!getGlobalStoreIndices()) return 0;
+      return getGlobalStoreIndices().getRank();
+    }
+  }];
+}
+
 #endif // WATER_DIALECT_WAVE_WAVEATTRS
