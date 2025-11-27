@@ -598,8 +598,8 @@ def test_wmma_f32_16x16x32_f16():
 def test_wmma_with_tensor_load():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
     constraints += [
         tkw.HardwareConstraint(
@@ -626,8 +626,8 @@ def test_wmma_with_tensor_load():
             M: 64,
             N: 128,
             K: 32,
-            BLOCK_M: 16,
-            BLOCK_N: 16,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
             BLOCK_K: 16,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
@@ -643,11 +643,6 @@ def test_wmma_with_tensor_load():
     # CHECK-LABEL: test_wmma_with_tensor_load
     # CHECK:          func.func @mma
 
-    # CHECK-DAG:    %[[C0:.*]] = arith.constant 0 : index
-    # CHECK-DAG:    %[[C1:.*]] = arith.constant 1 : index
-    # CHECK-DAG:    %[[C2:.*]] = arith.constant 2 : index
-    # CHECK-DAG:    %[[C3:.*]] = arith.constant 3 : index
-
     ### global buffer is bound to %0, %1 and %2 : MK, NK, MN
     # CHECK:        %[[SUBSPAN0:.*]] = stream.binding.subspan
     # CHECK:        %[[SUBSPAN1:.*]] = stream.binding.subspan
@@ -659,9 +654,9 @@ def test_wmma_with_tensor_load():
 
     ### shared memory alloc
     #   Make sure the shared memory allocation is padded
-    # CHECK:        %[[SMEM:.*]] = memref.alloc() : memref<2304xi8, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW0:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<2304xi8, #gpu.address_space<workgroup>> to memref<16x36xf16, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW1:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<2304xi8, #gpu.address_space<workgroup>> to memref<16x36xf16, #gpu.address_space<workgroup>>
+    # CHECK:        %[[SMEM:.*]] = memref.alloc() : memref<4608xi8, #gpu.address_space<workgroup>>
+    # CHECK:        %[[VIEW0:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<32x36xf16, #gpu.address_space<workgroup>>
+    # CHECK:        %[[VIEW1:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<32x36xf16, #gpu.address_space<workgroup>>
 
     ### get global buffer pointer
     # CHECK:        %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
@@ -673,18 +668,19 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[D0:.*]] = vector.from_elements
 
     # Cluster mask generation
-    # CHECK:        %[[COND0:.*]] = arith.cmpi eq, %{{.*}}, %[[C1]] : index
-    # CHECK:        %[[COND1:.*]] = arith.cmpi eq, %{{.*}}, %[[C0]] : index
-    # CHECK:        %[[COND2:.*]] = arith.cmpi eq, %{{.*}}, %[[C3]] : index
-    # CHECK:        %[[COND3:.*]] = arith.cmpi eq, %{{.*}}, %[[C2]] : index
+    # CHECK:        %[[COND0:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
+    # CHECK:        %[[COND1:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
+    # CHECK:        %[[COND2:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
+    # CHECK:        %[[COND3:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
     # CHECK:        %[[MASK1:.*]] = arith.select %[[COND3]], %{{.*}}, %[[C0]] : index
     # CHECK:        %[[MASK2:.*]] = arith.select %[[COND2]], %{{.*}}, %[[MASK1]] : index
     # CHECK:        %[[MASK3:.*]] = arith.select %[[COND1]], %{{.*}}, %[[MASK2]] : index
     # CHECK:        %[[MASK4:.*]] = arith.select %[[COND0]], %{{.*}}, %[[MASK3]] : index
 
     ### pack descriptors and invoke tensor load
+
     # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D0]], %[[TENSOR_DESC_0]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"
     # CHECK-NOT:    llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
     # CHECK-NOT:    amdgpu.lds_barrier
 
@@ -692,13 +688,19 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[CAST_4:.*]] = memref.reinterpret_cast %[[VIEW0]]
     # CHECK:        %[[INT_PTR_2:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_4]]
     # CHECK:        %[[INT_PTR_2_CAST:.+]] = arith.index_cast %[[INT_PTR_2]] : index to i32
+    # CHECK:        %[[INT_PTR_2_CAST_ADDED:.+]] = arith.addi %[[INT_PTR_2_CAST]], %{{.*}} : i32
 
     ### pack descriptors and invoke tensor load
-    # CHECK:        %[[D1:.*]] = vector.from_elements %{{.*}}, %[[INT_PTR_2_CAST]], %{{.*}}, %{{.*}} : vector<4xi32>
+    # CHECK:        %[[D1:.*]] = vector.from_elements %{{.*}}, %[[INT_PTR_2_CAST_ADDED]], %{{.*}}, %{{.*}} : vector<4xi32>
     # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
 
+    # Fused descriptors
+    # CHECK:        %[[SELECTED:.*]] = arith.cmpi eq, %{{.*}}, %[[C0]] : index
+    # CHECK:        %[[D_FUSED:.*]] = arith.select %[[SELECTED]], %[[D0]], %[[D1]] : vector<4xi32>
+    # CHECK:        %[[DESC_FUSED:.*]] = arith.select %[[SELECTED]], %[[TENSOR_DESC_0]], %[[TENSOR_DESC_1]] : vector<8xi32>
+
     ### resource provider
-    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D1]], %[[TENSOR_DESC_1]], {{.*}} : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
+    # CHECK:        llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"(%[[D_FUSED]], %[[DESC_FUSED]], {{.*}}, {{.*}}, {{.*}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, i32) -> ()
     # CHECK:        llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
     # CHECK:        rocdl.s.wait.dscnt 0
     # CHECK:        rocdl.s.barrier.signal -1

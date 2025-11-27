@@ -14,6 +14,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -49,9 +50,9 @@ int main(int argc, char **argv) {
   registry.insert<mlir::affine::AffineDialect, mlir::amdgpu::AMDGPUDialect,
                   mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
                   mlir::func::FuncDialect, mlir::gpu::GPUDialect,
-                  mlir::LLVM::LLVMDialect, mlir::memref::MemRefDialect,
-                  mlir::scf::SCFDialect, mlir::vector::VectorDialect,
-                  wave::WaveDialect>();
+                  mlir::LLVM::LLVMDialect, mlir::ROCDL::ROCDLDialect,
+                  mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
+                  mlir::vector::VectorDialect, wave::WaveDialect>();
 
   mlir::water::test::registerWaterTestDialect(registry);
 

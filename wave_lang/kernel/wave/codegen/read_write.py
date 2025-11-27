@@ -160,10 +160,6 @@ def _build_start_indices(
     return indices, indices_wg, indices_th
 
 
-def _compute_offset(indices: list[IndexExpr], strides: list[IndexExpr]) -> IndexExpr:
-    return sum(i * s for i, s in zip(indices, strides))
-
-
 def _get_symbolic_shape(node: fx.Node) -> tuple[IndexExpr]:
     return get_custom(node).type.symbolic_shape
 
@@ -706,37 +702,32 @@ def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
     return res
 
 
+def _subs_index_dict(
+    index_dict: dict[IndexSymbol, IndexExpr], subs: dict[IndexSymbol, int]
+) -> dict[IndexSymbol, IndexExpr]:
+    return {k: safe_subs(v, subs) for k, v in index_dict.items()}
+
+
 @handle_op(tensor_load_to_lds)
 def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     try:
         (
-            src,
-            dst,
+            sources,
+            destinations,
             element_type,
             distributed_shape,
             shared_tile_index,
             global_tile_index,
             bounds,
             multicast_mask,
+            input_selector,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    dst_memory = get_custom(dst)
-
-    symbolic_shape = _get_symbolic_shape(src)
-    local_bounds = [bounds[s] - global_tile_index[s].start for s in symbolic_shape]
-    subs = add_emitter_subs(emitter)
-    local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
-
-    strides = strides_from_symbolic_shape(
-        IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
-    )
-    # Descriptor assumes rightmost stride 1 and expect last stride as full data size
-    strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
-    strides = [gen_sympy_index(subs, s) for s in strides]
-
-    distributed_shape_values = [gen_sympy_index(subs, s) for s in distributed_shape]
+    assert len(sources) == len(
+        destinations
+    ), "sources and destinations must have the same number of elements."
 
     # construct default descriptors
     i32 = IntegerType.get_signless(32)
@@ -748,185 +739,268 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     c0 = arith_d.constant(i32, 0)
 
-    d0 = vector_d.broadcast(vec_type_4, c0)
-    d1 = vector_d.broadcast(vec_type_8, c0)
-    d2 = vector_d.broadcast(vec_type_4, c0)
-    d3 = vector_d.broadcast(vec_type_4, c0)
+    d0_results = []
+    d1_results = []
+    d2_results = []
+    d3_results = []
 
-    # descriptor properties
-    mode = 2  # vimage
-    valid = 1
-    dim_stride_1 = arith_d.index_cast(i48, strides[0])
-    dim_stride_0 = arith_d.index_cast(i48, strides[1])
-    tile_size_1 = arith_d.index_cast(i32, distributed_shape_values[0])
-    tile_size_0 = arith_d.index_cast(i32, distributed_shape_values[1])
-    dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
-    dim_size_0 = arith_d.index_cast(i32, local_bounds[1])
+    subs = add_emitter_subs(emitter)
 
-    # 0: 1 byte; 1: 2 byte; 2: 4 byte; 3: 8 byte
-    descriptor_type = lambda x: int(math.log2(x.bitwidth() >> 3))
-    data_size = cast_py_value(emitter, descriptor_type(element_type), i32).ir_value
+    for i, (src, dst) in enumerate(zip(sources, destinations)):
+        dst_memory = get_custom(dst)
 
-    global_mem = cast_py_value(emitter, src)
-    shared_mem = cast_py_value(emitter, dst)
+        symbolic_shape = _get_symbolic_shape(src)
+        global_tile_index_current = {k: global_tile_index[k] for k in symbolic_shape}
+        global_tile_index_current = _subs_index_dict(
+            global_tile_index_current, {INPUT_SELECTOR: i}
+        )
 
-    global_value = global_mem.ir_value
-    shared_value = shared_mem.ir_value
+        local_bounds = [
+            bounds[s] - global_tile_index_current[s].start for s in symbolic_shape
+        ]
+        local_bounds = [gen_sympy_index(subs, b) for b in local_bounds]
 
-    bytewidth = element_type.bitwidth() // 8
-    element_byte_index = arith_d.constant(IndexType.get(), bytewidth)
+        strides = strides_from_symbolic_shape(
+            IndexingContext.current(), symbolic_shape, allow_mixed_shapes=True
+        )
+        # Descriptor assumes rightmost stride 1 and expect last stride as full data size
+        strides = [strides[0] * symbolic_shape[0]] + strides[:-1]
+        strides = [gen_sympy_index(subs, s) for s in strides]
 
-    # calculcate global address
-    # 0. breakdown index sequence to WG & TH offsets : ele
-    # 1. uniform per wave access : ele
-    # 2. linearize global memory buffer
-    # 3. offset = X + Y * tensor dim 0 stride : ele
-    # 4. offset_byte = offset * element byte : byte
-    # 5. get global memory pointer
-    # 6. move global memory pointer by offset_byte to get global address of a tile : byte
-    index, _, _ = _build_start_indices(emitter, global_tile_index)
+        distributed_shape_vals = [
+            gen_sympy_index(subs, distributed_shape[s]) for s in symbolic_shape
+        ]
 
-    wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
-    wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
+        d0 = vector_d.broadcast(vec_type_4, c0)
+        d1 = vector_d.broadcast(vec_type_8, c0)
+        d2 = vector_d.broadcast(vec_type_4, c0)
+        d3 = vector_d.broadcast(vec_type_4, c0)
 
-    stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
-    y_offset = arith_d.muli(wave_index_y, stride0)
-    global_base_offset = arith_d.addi(wave_index_x, y_offset)
-    global_index_offset = arith_d.muli(global_base_offset, element_byte_index)
+        # descriptor properties
+        mode = 2  # vimage
+        valid = 1
+        dim_stride_1 = arith_d.index_cast(i48, strides[0])
+        dim_stride_0 = arith_d.index_cast(i48, strides[1])
+        tile_size_1 = arith_d.index_cast(i32, distributed_shape_vals[0])
+        tile_size_0 = arith_d.index_cast(i32, distributed_shape_vals[1])
+        dim_size_1 = arith_d.index_cast(i32, local_bounds[0])
+        dim_size_0 = arith_d.index_cast(i32, local_bounds[1])
 
-    global_ptr = memref_d.extract_aligned_pointer_as_index(global_value)
-    global_byte_address = arith_d.addi(global_ptr, global_index_offset)
+        # 0: 1 byte; 1: 2 byte; 2: 4 byte; 3: 8 byte
+        descriptor_type = lambda x: int(math.log2(x.bitwidth() >> 3))
+        data_size = cast_py_value(emitter, descriptor_type(element_type), i32).ir_value
 
-    # calculate shared address
-    # 0. extract shared tile index from IndexSequence structure
-    # 1. calculate byte offset from tile indices and distributed shape
-    # 2. get shared memory pointer
-    # 3. move shared memory pointer by offset_byte to get shared memory address of a tile.
-    shared_buffer = _linearize_shared_mem(shared_value)
+        global_mem = cast_py_value(emitter, src)
+        shared_mem = cast_py_value(emitter, dst)
 
-    shared_strides = strides_from_symbolic_shape(
-        IndexingContext.current(), dst_memory.distributed_shape, allow_mixed_shapes=True
-    )
-    linearized_index = {
-        "linearized_idx": linearize_index(shared_tile_index, shared_strides)
-    }
+        global_value = global_mem.ir_value
+        shared_value = shared_mem.ir_value
 
-    # Calculate shared memory offset from tile indices
-    shared_index, _, _ = _build_start_indices(emitter, linearized_index)
+        bytewidth = element_type.bitwidth() // 8
+        element_byte_index = arith_d.constant(IndexType.get(), bytewidth)
 
-    shared_index_offset = arith_d.muli(shared_index[0], element_byte_index)
-    shared_byte_offset = arith_d.index_cast(i32, shared_index_offset)
+        # calculcate global address
+        # 0. breakdown index sequence to WG & TH offsets : ele
+        # 1. uniform per wave access : ele
+        # 2. linearize global memory buffer
+        # 3. offset = X + Y * tensor dim 0 stride : ele
+        # 4. offset_byte = offset * element byte : byte
+        # 5. get global memory pointer
+        # 6. move global memory pointer by offset_byte to get global address of a tile : byte
+        index, _, _ = _build_start_indices(emitter, global_tile_index_current)
 
-    shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
-    shared_ptr = arith_d.index_cast(i32, shared_ptr)
+        wave_index_x = assume_index_subgroup_uniform(index[1], i32)  # k
+        wave_index_y = assume_index_subgroup_uniform(index[0], i32)  # m
 
-    shared_ptr_base_offset = memref_d.extract_strided_metadata(shared_buffer)[1]
-    shared_ptr_base_offset = arith_d.index_cast(i32, shared_ptr_base_offset)
+        stride0 = arith_d.index_cast(IndexType.get(), dim_stride_0)
+        y_offset = arith_d.muli(wave_index_y, stride0)
+        global_base_offset = arith_d.addi(wave_index_x, y_offset)
+        global_index_offset = arith_d.muli(global_base_offset, element_byte_index)
 
-    shared_byte_address = arith_d.addi(shared_ptr_base_offset, shared_byte_offset)
-    shared_byte_address = arith_d.addi(shared_ptr, shared_byte_address)
+        global_ptr = memref_d.extract_aligned_pointer_as_index(global_value)
+        global_byte_address = arith_d.addi(global_ptr, global_index_offset)
 
-    # assume no mapping
-    def lshift(value, bits):
-        sh = arith_d.constant(value.type, bits)
-        val = arith_d.shli(value, sh)
-        return val
+        # calculate shared address
+        # 0. extract shared tile index from IndexSequence structure
+        # 1. calculate byte offset from tile indices and distributed shape
+        # 2. get shared memory pointer
+        # 3. move shared memory pointer by offset_byte to get shared memory address of a tile.
+        shared_buffer = _linearize_shared_mem(shared_value)
 
-    def rshift(value, bits):
-        sh = arith_d.constant(value.type, bits)
-        val = arith_d.shrui(value, sh)
-        return val
+        shared_strides = strides_from_symbolic_shape(
+            IndexingContext.current(),
+            dst_memory.distributed_shape,
+            allow_mixed_shapes=True,
+        )
 
-    # pack global address of a tile
-    # 1. get lower 32 bit from global value
-    global_val = arith_d.index_cast(i57, global_byte_address)  # i57
-    global_val_lower = arith_d.trunci(i32, global_val)
-    d0 = vector_d.insert(global_val_lower, d0, static_position=[2], dynamic_position=[])
-    # 2. get rest of the upper 25 bit from global value and cast to i32
-    global_val_rest = rshift(global_val, 32)
-    global_val_upper = arith_d.trunci(i32, global_val_rest)
-    # 3. pack with image mode bit
-    mode = arith_d.constant(i32, mode)
-    image_mode = lshift(mode, 30)
-    pack = arith_d.ori(image_mode, global_val_upper)
-    d0 = vector_d.insert(pack, d0, static_position=[3], dynamic_position=[])
+        shared_tile_index_current = {k: shared_tile_index[k] for k in symbolic_shape}
+        shared_tile_index_current = _subs_index_dict(
+            shared_tile_index_current, {INPUT_SELECTOR: i}
+        )
 
-    # insert shared addreess to descriptor 0
-    d0 = vector_d.insert(
-        shared_byte_address, d0, static_position=[1], dynamic_position=[]
-    )
+        linearized_index = {
+            "linearized_idx": linearize_index(shared_tile_index_current, shared_strides)
+        }
 
-    # valid tensor
-    valid_tensor = arith_d.constant(i32, valid)
-    d0 = vector_d.insert(valid_tensor, d0, static_position=[0], dynamic_position=[])
+        # Calculate shared memory offset from tile indices
+        shared_index, _, _ = _build_start_indices(emitter, linearized_index)
 
-    # get data size val packed to i32
-    data_size_val = lshift(data_size, 16)
+        shared_index_offset = arith_d.muli(shared_index[0], element_byte_index)
+        shared_byte_offset = arith_d.index_cast(i32, shared_index_offset)
 
-    if padding := dst_memory.padding:
-        unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
-        assert (
-            unpadded_dim >= 8
-        ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
-        pad_enable = 1 << 20
-        pad_interval = int(math.log2((unpadded_dim // 4) - 1)) << 22
-        pad_amount = ((padding * bytewidth) // 4 - 1) << 25
-        pad_packed = pad_enable | pad_interval | pad_amount
-        data_size_val = arith_d.ori(data_size_val, arith_d.constant(i32, pad_packed))
+        shared_ptr = memref_d.extract_aligned_pointer_as_index(shared_buffer)
+        shared_ptr = arith_d.index_cast(i32, shared_ptr)
 
-    if multicast_mask:
-        multicast_mask = sympy.simplify(subs_idxc(multicast_mask))
-        multicast_mask_val = gen_sympy_index(subs, multicast_mask)
-        multicast_mask_val = arith_d.index_cast(i32, multicast_mask_val)
-        data_size_val = arith_d.ori(data_size_val, multicast_mask_val)
+        shared_ptr_base_offset = memref_d.extract_strided_metadata(shared_buffer)[1]
+        shared_ptr_base_offset = arith_d.index_cast(i32, shared_ptr_base_offset)
 
-    d1 = vector_d.insert(data_size_val, d1, static_position=[0], dynamic_position=[])
+        shared_byte_address = arith_d.addi(shared_ptr_base_offset, shared_byte_offset)
+        shared_byte_address = arith_d.addi(shared_ptr, shared_byte_address)
 
-    # get lower 16 bit from tensor dim 0 and pack to i32
-    tensor_dim_0_lower = lshift(dim_size_0, 16)
-    d1 = vector_d.insert(
-        tensor_dim_0_lower, d1, static_position=[1], dynamic_position=[]
-    )
+        # assume no mapping
+        def lshift(value, bits):
+            sh = arith_d.constant(value.type, bits)
+            val = arith_d.shli(value, sh)
+            return val
 
-    # get upper 16 bit from tensor dim 0 and lower 16 bit from tensor dim 1, pack to i32
-    tensor_dim_0_upper = rshift(dim_size_0, 16)
-    tensor_dim_1_lower = lshift(dim_size_1, 16)
-    pack = arith_d.ori(tensor_dim_1_lower, tensor_dim_0_upper)
-    d1 = vector_d.insert(pack, d1, static_position=[2], dynamic_position=[])
+        def rshift(value, bits):
+            sh = arith_d.constant(value.type, bits)
+            val = arith_d.shrui(value, sh)
+            return val
 
-    # get upper 16 bit from tensor dim 1, packed with tile size 0
-    tensor_dim_1_upper = rshift(dim_size_1, 16)
-    tile_size_0_shift = lshift(tile_size_0, 16)
-    pack = arith_d.ori(tensor_dim_1_upper, tile_size_0_shift)
-    d1 = vector_d.insert(pack, d1, static_position=[3], dynamic_position=[])
+        # pack global address of a tile
+        # 1. get lower 32 bit from global value
+        global_val = arith_d.index_cast(i57, global_byte_address)  # i57
+        global_val_lower = arith_d.trunci(i32, global_val)
+        d0 = vector_d.insert(
+            global_val_lower, d0, static_position=[2], dynamic_position=[]
+        )
+        # 2. get rest of the upper 25 bit from global value and cast to i32
+        global_val_rest = rshift(global_val, 32)
+        global_val_upper = arith_d.trunci(i32, global_val_rest)
+        # 3. pack with image mode bit
+        mode = arith_d.constant(i32, mode)
+        image_mode = lshift(mode, 30)
+        pack = arith_d.ori(image_mode, global_val_upper)
+        d0 = vector_d.insert(pack, d0, static_position=[3], dynamic_position=[])
 
-    # tile size 1 is in good form
-    d1 = vector_d.insert(tile_size_1, d1, static_position=[4], dynamic_position=[])
+        # insert shared addreess to descriptor 0
+        d0 = vector_d.insert(
+            shared_byte_address, d0, static_position=[1], dynamic_position=[]
+        )
 
-    # truncate upper 16 bit from dim stride 0 -> i48 to i32
-    dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0)
-    d1 = vector_d.insert(
-        dim_stride_0_trunc, d1, static_position=[5], dynamic_position=[]
-    )
+        # valid tensor
+        valid_tensor = arith_d.constant(i32, valid)
+        d0 = vector_d.insert(valid_tensor, d0, static_position=[0], dynamic_position=[])
 
-    # get upper 16 bit from dim stride 0, get lower 16 bit from dim stride 1, packed to i32
-    dim_stride_0_upper = rshift(dim_stride_0, 32)
-    dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0_upper)
-    dim_stride_1_lower = arith_d.trunci(i32, dim_stride_1)
-    dim_stride_1_trunc = lshift(dim_stride_1_lower, 16)
-    pack = arith_d.ori(dim_stride_0_trunc, dim_stride_1_trunc)
-    d1 = vector_d.insert(pack, d1, static_position=[6], dynamic_position=[])
+        # get data size val packed to i32
+        data_size_val = lshift(data_size, 16)
 
-    # shift dim stride 1 to get upper 32 bit and pack to i32
-    dim_stride_1_sh = rshift(dim_stride_1, 16)
-    pack = arith_d.trunci(i32, dim_stride_1_sh)
-    d1 = vector_d.insert(pack, d1, static_position=[7], dynamic_position=[])
+        if padding := dst_memory.padding:
+            unpadded_dim = int(subs_idxc(dst_memory.unpadded_shape[-1])) * bytewidth
+            assert (
+                unpadded_dim >= 8
+            ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
+            pad_enable = 1 << 20
+            pad_interval = int(math.log2((unpadded_dim // 4) - 1)) << 22
+            pad_amount = ((padding * bytewidth) // 4 - 1) << 25
+            pad_packed = pad_enable | pad_interval | pad_amount
+            data_size_val = arith_d.ori(
+                data_size_val, arith_d.constant(i32, pad_packed)
+            )
+
+        local_multicast_mask = subs_idxc(safe_subs(multicast_mask, {INPUT_SELECTOR: i}))
+
+        if local_multicast_mask:
+            local_multicast_mask = sympy.simplify(local_multicast_mask)
+            local_multicast_mask_val = gen_sympy_index(subs, local_multicast_mask)
+            local_multicast_mask_val = arith_d.index_cast(i32, local_multicast_mask_val)
+            data_size_val = arith_d.ori(data_size_val, local_multicast_mask_val)
+
+        d1 = vector_d.insert(
+            data_size_val, d1, static_position=[0], dynamic_position=[]
+        )
+
+        # get lower 16 bit from tensor dim 0 and pack to i32
+        tensor_dim_0_lower = lshift(dim_size_0, 16)
+        d1 = vector_d.insert(
+            tensor_dim_0_lower, d1, static_position=[1], dynamic_position=[]
+        )
+
+        # get upper 16 bit from tensor dim 0 and lower 16 bit from tensor dim 1, pack to i32
+        tensor_dim_0_upper = rshift(dim_size_0, 16)
+        tensor_dim_1_lower = lshift(dim_size_1, 16)
+        pack = arith_d.ori(tensor_dim_1_lower, tensor_dim_0_upper)
+        d1 = vector_d.insert(pack, d1, static_position=[2], dynamic_position=[])
+
+        # get upper 16 bit from tensor dim 1, packed with tile size 0
+        tensor_dim_1_upper = rshift(dim_size_1, 16)
+        tile_size_0_shift = lshift(tile_size_0, 16)
+        pack = arith_d.ori(tensor_dim_1_upper, tile_size_0_shift)
+        d1 = vector_d.insert(pack, d1, static_position=[3], dynamic_position=[])
+
+        # tile size 1 is in good form
+        d1 = vector_d.insert(tile_size_1, d1, static_position=[4], dynamic_position=[])
+
+        # truncate upper 16 bit from dim stride 0 -> i48 to i32
+        dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0)
+        d1 = vector_d.insert(
+            dim_stride_0_trunc, d1, static_position=[5], dynamic_position=[]
+        )
+
+        # get upper 16 bit from dim stride 0, get lower 16 bit from dim stride 1, packed to i32
+        dim_stride_0_upper = rshift(dim_stride_0, 32)
+        dim_stride_0_trunc = arith_d.trunci(i32, dim_stride_0_upper)
+        dim_stride_1_lower = arith_d.trunci(i32, dim_stride_1)
+        dim_stride_1_trunc = lshift(dim_stride_1_lower, 16)
+        pack = arith_d.ori(dim_stride_0_trunc, dim_stride_1_trunc)
+        d1 = vector_d.insert(pack, d1, static_position=[6], dynamic_position=[])
+
+        # shift dim stride 1 to get upper 32 bit and pack to i32
+        dim_stride_1_sh = rshift(dim_stride_1, 16)
+        pack = arith_d.trunci(i32, dim_stride_1_sh)
+        d1 = vector_d.insert(pack, d1, static_position=[7], dynamic_position=[])
+
+        d0_results.append(d0)
+        d1_results.append(d1)
+        d2_results.append(d2)
+        d3_results.append(d3)
+
+    # Select the appropriate descriptors based on input_selector
+    # Build chained select operations for each descriptor
+    def select_descriptor(results_list, input_selector_val):
+        """Select from list of results using chained arith_d.select operations."""
+        assert len(results_list) > 0, "results_list must not be empty"
+        if len(results_list) == 1:
+            return results_list[0]
+
+        # Start with the last element as default
+        selected = results_list[-1]
+
+        # Chain selects from second-to-last backwards to first
+        for i in range(len(results_list) - 2, -1, -1):
+            # Create condition: selector_val == i
+            i_const = arith_d.constant(input_selector_val.type, i)
+            cond = arith_d.cmpi(arith_d.CmpIPredicate.eq, input_selector_val, i_const)
+            selected = arith_d.select(cond, results_list[i], selected)
+
+        return selected
+
+    input_selector_val = gen_sympy_index(subs, input_selector)
+    d0_selected = select_descriptor(d0_results, input_selector_val)
+    d1_selected = select_descriptor(d1_results, input_selector_val)
+    d2_selected = select_descriptor(d2_results, input_selector_val)
+    d3_selected = select_descriptor(d3_results, input_selector_val)
 
     # cpol
     cpol = arith_d.constant(i32, 0)
 
-    return llvm_d.call_intrinsic(
-        None, "llvm.amdgcn.tensor.load.to.lds", [d0, d1, d2, d3, cpol], [], []
+    llvm_d.call_intrinsic(
+        None,
+        "llvm.amdgcn.tensor.load.to.lds",
+        [d0_selected, d1_selected, d2_selected, d3_selected, cpol],
+        [],
+        [],
     )
 
 

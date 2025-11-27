@@ -393,20 +393,21 @@ def wave_compile(
         # don't want to cache the kernel in that case.
         trace = kernel._trace()
 
-        # Disable async dispatch for benchmarking.
-        is_async = options.iree_launch_async and not options.run_bench
-        host_codegen.isolated_test_call(
-            mb,
-            exe,
-            kernel_sig,
-            entrypoint_name,
-            options.func_name,
-            options.dynamic_symbols,
-            location_capture_config=options.location_capture_config,
-            async_dispatch=is_async,
-            device_layout=device_layout,
-            device_constraints=kernel.device_constraints,
-        )
+        if not options.use_water_pipeline:
+            # Disable async dispatch for benchmarking.
+            is_async = options.iree_launch_async and not options.run_bench
+            host_codegen.isolated_test_call(
+                mb,
+                exe,
+                kernel_sig,
+                entrypoint_name,
+                options.func_name,
+                options.dynamic_symbols,
+                location_capture_config=options.location_capture_config,
+                async_dispatch=is_async,
+                device_layout=device_layout,
+                device_constraints=kernel.device_constraints,
+            )
         mb.module_op.verify()
         asm = mb.module_op.get_asm(
             enable_debug_info=options.location_capture_config.level

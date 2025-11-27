@@ -33,6 +33,9 @@ THREAD_0 = index_symbol("$T0")
 THREAD_1 = index_symbol("$T1")
 THREAD_2 = index_symbol("$T2")
 
+# Input selector symbol for selecting input from different tensors.
+INPUT_SELECTOR = index_symbol("$INPUT_SELECTOR")
+
 # MMA symbols.
 MMA_LHS = index_symbol("$MMA_LHS")
 MMA_RHS = index_symbol("$MMA_RHS")

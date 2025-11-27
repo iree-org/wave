@@ -29,6 +29,7 @@ from wave_lang.support.ir_imports import (
     Module,
     Operation,
     arith_d,
+    builtin_d,
     stream_d,
 )
 from .scheduling.schedule_enums import SchedulingType
@@ -89,6 +90,7 @@ from .decompose_vmma_ops import decompose_vmma_ops
 from .expansion.expansion import add_get_results, expand_graph
 from .tensor_load_to_shared import tensor_load_to_shared
 from .multicast import multicast
+from .fuse_tensor_loads import fuse_tensor_loads
 from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
 from .generate_bounds_exprs import generate_bounds_exprs
 from .global_to_shared_gathers import global_to_shared_gathers
@@ -710,12 +712,15 @@ class LaunchableWave(Launchable):
                 self.constraints,
                 options,
                 self.grid_type.dims,
+                entrypoint_name,
             )
             with mb.module_op.context, Location.unknown():
-                module_op = Module.create()
+                module_op = builtin_d.ModuleOp()
 
             with InsertionPoint(module_op.body), Location.unknown():
-                emitter.emit(trace.get_root_graph())
+                func = emitter.emit(trace.get_root_graph())
+                if options.use_water_pipeline:
+                    emitter.emit_host_func(func)
 
         # Otherwise, we need to iree-fy the existing module (that supposedly has
         # upstream MLIR ops only) in order for it to be executable in the wave
@@ -725,11 +730,14 @@ class LaunchableWave(Launchable):
         # Also we'll need to update the uses of the memref arguments (from the
         # existing module) to be compatible with the new stream.binding arguments.
 
-        assert not any(
-            isinstance(op, stream_d.ExecutableOp)
-            for op in module_op.operation.regions[0].blocks[0]
-        ), "expected overriding module to contain only upstream MLIR ops"
-        _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
+        if options.use_water_pipeline:
+            mb.module_op = module_op
+        else:
+            assert not any(
+                isinstance(op, stream_d.ExecutableOp)
+                for op in module_op.operation.regions[0].blocks[0]
+            ), "expected overriding module to contain only upstream MLIR ops"
+            _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
 
         if options.postprocess:
             apply_transform(mb.module_op, options.postprocess, options.subs)
@@ -862,6 +870,7 @@ class LaunchableWave(Launchable):
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(tensor_load_to_shared, trace, self.constraints, options),
                 partial(multicast, trace, self.constraints, options),
+                partial(fuse_tensor_loads, trace, self.constraints),
                 partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
