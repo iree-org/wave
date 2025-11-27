@@ -42,12 +42,17 @@ struct FunctionCallBuilder {
         functionType(LLVM::LLVMFunctionType::get(returnType, argumentTypes)) {}
   LLVM::CallOp create(Location loc, OpBuilder &builder,
                       ValueRange arguments) const {
-    auto module = builder.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Operation *module = builder.getBlock()
+                            ->getParentOp()
+                            ->getParentWithTrait<OpTrait::SymbolTable>();
+    assert(module && "module not found");
+    SymbolTable symbolTable(module);
     auto function = [&] {
-      OpBuilder::InsertionGuard g(builder);
-      builder.setInsertionPointToEnd(module.getBody());
-      if (auto function = module.lookupSymbol<LLVM::LLVMFuncOp>(functionName))
+      if (auto function = symbolTable.lookup<LLVM::LLVMFuncOp>(functionName))
         return function;
+
+      OpBuilder::InsertionGuard g(builder);
+      builder.setInsertionPointToEnd(&module->getRegion(0).front());
       return LLVM::LLVMFuncOp::create(builder, loc, functionName, functionType);
     }();
     return LLVM::CallOp::create(builder, loc, function, arguments);
@@ -67,7 +72,8 @@ static Value createKernelHandle(OpBuilder &builder, SymbolTable &symbolTable,
   {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPointToStart(mod.getBody());
-    auto handleName = getUniqueLLVMGlobalName(mod, symbolTable, name);
+    SmallString<128> handleName =
+        getUniqueLLVMGlobalName(mod, symbolTable, name);
     handle = LLVM::GlobalOp::create(
         builder, loc, globalType, /*isConstant*/ false, LLVM::Linkage::Internal,
         handleName, LLVM::ZeroAttr::get(builder.getContext()));
