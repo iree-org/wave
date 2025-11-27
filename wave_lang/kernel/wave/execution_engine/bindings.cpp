@@ -4,23 +4,14 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "execution_engine.h"
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/map.h>
-#include <nanobind/stl/optional.h>
-#include <nanobind/stl/string.h>
 
-#include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
 #include <llvm/Support/Error.h>
-#include <llvm/Support/MemoryBuffer.h>
 
-#include <mlir-c/IR.h>
-#include <mlir/Bytecode/BytecodeReader.h>
 #include <mlir/CAPI/IR.h>
-#include <mlir/IR/BuiltinOps.h>
-#include <mlir/IR/MLIRContext.h>
-#include <mlir/IR/OwningOpRef.h>
+
+#include "execution_engine.h"
 
 namespace nb = nanobind;
 
