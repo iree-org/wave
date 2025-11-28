@@ -1,6 +1,7 @@
 add_mlir_dialect_library(MLIRWaterTransforms
   AccessCheckers.cpp
   CheckStaticAssertions.cpp
+  GPUToGPURuntime.cpp
   SLPVectorizer.cpp
 
   ADDITIONAL_HEADER_DIRS
@@ -14,7 +15,9 @@ add_mlir_dialect_library(MLIRWaterTransforms
   MLIRArithDialect
   MLIRControlFlowDialect
   MLIRFuncDialect
+  MLIRGPUDialect
   MLIRIR
+  MLIRLLVMDialect
   MLIRMemRefDialect
   MLIRPass
   MLIRRewrite

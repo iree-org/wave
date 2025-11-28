@@ -7,7 +7,8 @@ from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
 )
 from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
-    get_gemm_two_pp_cluster_schedule,
+    get_tagged_gemm,
+    get_two_pp_cluster_schedule,
 )
 
 
@@ -67,21 +68,15 @@ def test_gemm_prefetch_reorder_stagger():
     # Define test parameters for advanced scheduling
     shape = (4096, 4096, 4096)  # M, N, K dimensions
     mfma_variant = wave.MMAType.F32_16x16x16_F16
-    compile_to_mlir = True
 
     # Get the kernel, schedule, and options from the template
-    (
-        gemm_prefetch_reorder,
-        prefetch_reorder_schedule,
-        options,
-    ) = get_gemm_two_pp_cluster_schedule(shape, mfma_variant, compile_to_mlir)
+    gemm, options = get_tagged_gemm(shape, mfma_variant, compile_to_mlir=True)
+    schedule = get_two_pp_cluster_schedule()
 
-    gemm_prefetch_reorder = wave_compile(
-        options, gemm_prefetch_reorder, prefetch_reorder_schedule
-    )
-    print(gemm_prefetch_reorder.asm)
+    gemm = wave_compile(options, gemm, schedule)
+    print(gemm.asm)
 
-    # CHECK-LABEL:    func.func @gemm_prefetch_reorder
+    # CHECK-LABEL:    func.func @gemm
     # CHECK-DAG:       %[[C0:.+]] = arith.constant 0 : index
     # CHECK-DAG:       %[[C34816:.+]] = arith.constant 34816 : index
     # CHECK:           %[[VIEW_0:.*]] = memref.view %alloc[%[[C0]]][] : memref<52224xi8, #gpu.address_space<workgroup>> to memref<256x68xf16, #gpu.address_space<workgroup>>

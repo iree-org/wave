@@ -44,7 +44,8 @@ from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
 )
 from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
-    get_gemm_two_pp_cluster_schedule,
+    get_tagged_gemm,
+    get_two_pp_cluster_schedule,
 )
 from wave_lang.kernel.lang import DataType
 import os
@@ -2444,21 +2445,13 @@ def test_gemm_prefetch_reorder_manual_schedule(
     - 2-way wave staggering
     """
     # Use the wrapper function to get kernel, schedule, and options
-    (
-        gemm_prefetch_reorder,
-        prefetch_reorder_schedule,
-        options,
-    ) = get_gemm_two_pp_cluster_schedule(
-        shape=shape, mfma_variant=mfma_variant, compile_to_mlir=False
-    )
-
+    gemm, options = get_tagged_gemm(shape, mfma_variant, compile_to_mlir=False)
+    schedule = get_two_pp_cluster_schedule()
     # Set runtime configuration for execution
     options = set_default_run_config(options)
 
     # Compile the kernel with the schedule
-    gemm_prefetch_reorder = wave_compile(
-        options, gemm_prefetch_reorder, prefetch_reorder_schedule
-    )
+    gemm = wave_compile(options, gemm, schedule)
 
     # Create test data
     a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
@@ -2466,7 +2459,7 @@ def test_gemm_prefetch_reorder_manual_schedule(
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
 
     # Run the kernel
-    asm = gemm_prefetch_reorder(a, b, c)
+    asm = gemm(a, b, c)
 
     # Verify results with IREE reference
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
@@ -2509,8 +2502,15 @@ def testTensorLoadToShared(
     constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
     constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
 
+    cluster_x = 4 if shape[0] % (16 * 4) == 0 else 1
+    cluster_y = 4 if shape[1] % (16 * 4) == 0 else 1
+
     constraints += [
-        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            workgroups_per_cluster=(cluster_x, cluster_y, 1),
+        )
     ]
 
     @tkw.wave(constraints)
@@ -2550,6 +2550,7 @@ def testTensorLoadToShared(
         use_global_to_shared=True,
         wave_runtime=True,
         target="gfx1250",
+        cluster_barrier_delay=1,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)

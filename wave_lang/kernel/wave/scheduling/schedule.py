@@ -201,7 +201,7 @@ def apply_pipelined_schedule(
     scheduling_type: SchedulingType = SchedulingType.NONE,
     visualize: bool = False,
     multi_buffer_count: Optional[int] = None,
-):
+) -> Optional[tuple[fx.Node, dict]]:
 
     # After scheduling has completed, we have enough information to decide
     # whether to pipeline the loop. For pipelining to be possible, we need
@@ -218,7 +218,7 @@ def apply_pipelined_schedule(
             logger.warning(
                 "Not enough iterations to pipeline the loop. Skipping pipelining."
             )
-            return {}
+            return None
     else:
         # Otherwise, we need to rely on assumptions provided by the author.
         assumptions = get_assumptions(constraints)
@@ -226,7 +226,7 @@ def apply_pipelined_schedule(
             logger.warning(
                 "No assumptions provided to determine if the loop can be pipelined. Skipping pipelining."
             )
-            return {}
+            return None
 
         result = evaluate_with_assumptions(
             constraints, max_induction_variable > num_stages - 1
@@ -235,9 +235,9 @@ def apply_pipelined_schedule(
             logger.warning(
                 "Not enough iterations to pipeline the loop. Skipping pipelining."
             )
-            return {}
+            return None
 
-    new_reduction = construct_pipelined_loop(
+    new_reduction, node_mapping = construct_pipelined_loop(
         trace,
         reduction,
         reduction_graph,
@@ -252,6 +252,8 @@ def apply_pipelined_schedule(
 
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (num_stages - 1)
+
+    return new_reduction, node_mapping
 
 
 def propagate_scheduling_parameters_to_iter_args(

@@ -7,8 +7,6 @@
 from importlib import import_module as _import_module
 import sys
 
-from . import binaries
-
 # Re-export core modules from the nested relocated package.
 ir = _import_module(".water_mlir.ir", __name__)
 passmanager = _import_module(".water_mlir.passmanager", __name__)
@@ -34,5 +32,4 @@ __all__ = [
     "dialects",
     "extras",
     "runtime",
-    "binaries",
 ]

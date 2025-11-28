@@ -12,6 +12,7 @@ from enum import Enum
 class KernelLaunchInfo:
     grid: tuple[int] = None
     blocks: tuple[int] = None
+    cluster_dims: tuple[int] = None
     shared_memory_bytes: int = 0
     func_name: str = ""
     grid_str: str = ""

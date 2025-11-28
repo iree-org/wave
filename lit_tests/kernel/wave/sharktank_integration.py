@@ -141,6 +141,11 @@ class WaveBhsdFlashAttentionSharktankOp(CustomOp):
         )
 
         match get_arch_family():
+            case "GFX1250":
+                mfma_variant = (
+                    tkw.MMAType.GFX1250_F32_16x16x32_F16,
+                    tkw.MMAType.GFX1250_F32_16x16x32_F16,
+                )
             case "RDNA":
                 mfma_variant = (
                     tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,

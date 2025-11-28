@@ -47,6 +47,7 @@ class WaveCompileOptions:
     codeobj: str = "5"  # Code object version ("4" or "5")
     iree_preprocessing_pass_pipeline: str = None
     num_devices: int = 1
+    use_water_pipeline: bool = False  # Use Water lowering pipeline with host wrapper
 
     # === Benchmark options ===
     run_bench: bool = False
@@ -95,6 +96,12 @@ class WaveCompileOptions:
     override_schedule: Optional[str] = None
     dump_schedule: Optional[str] = None
     use_bound_check: bool = False
+
+    # Cluster barrier signal/wait delay in number of loop iterations
+    # None - no barriers inside the loop
+    # 0 - signal and wait on same iteration
+    # 1 - one iteration apart, 2 - two, etc
+    cluster_barrier_delay: Optional[int] = None
 
     # === Print options ===
     mlir_print_ir_after_all: bool = False

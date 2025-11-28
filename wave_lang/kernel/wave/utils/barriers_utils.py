@@ -120,26 +120,27 @@ def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
         return MemoryAccessType.NONE
 
 
-def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> Optional[fx.Node]:
+def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> list[fx.Node]:
     """
-    Given a customOp, returns the shared memory node if it operates on a shared memory region, otherwise None.
+    Given a CustomOp, returns a list of shared memory nodes if the operation accesses shared memory,
+    otherwise returns an empty list.
     """
     if (
         isinstance(op, (Read, Write))
         and op.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
-        return propagate_loop_carried_vars(op.memory, depth)
+        return [propagate_loop_carried_vars(op.memory, depth)]
     if (
         isinstance(op, AtomicOp)
         and op.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
-        return propagate_loop_carried_vars(op.rhs, depth)
+        return [propagate_loop_carried_vars(op.rhs, depth)]
     if isinstance(op, GatherToLDS):
-        return propagate_loop_carried_vars(op.dst, depth)
+        return [propagate_loop_carried_vars(op.dst, depth)]
     if isinstance(op, TensorLoadToLDS):
-        return propagate_loop_carried_vars(op.dst, depth)
+        return [propagate_loop_carried_vars(dst, depth) for dst in op.dst]
 
-    return None
+    return []
 
 
 def need_barrier(
@@ -276,25 +277,25 @@ def handle_hazard(
     if access_kind == MemoryAccessType.NONE:
         return
 
-    resource = get_shared_memory_from_op(op, depth)
+    resources = get_shared_memory_from_op(op, depth)
     assert (
-        resource is not None
+        resources
     ), "Expected op to access shared memory, but no shared memory resource found."
+    for resource in resources:
+        hazard_window = windows[resource]
+        if graph_info is not None:
+            hazard_window.graph_info = graph_info
 
-    hazard_window = windows[resource]
-    if graph_info is not None:
-        hazard_window.graph_info = graph_info
+        is_prod = access_kind & producer_kinds
+        is_cons = access_kind & consumer_kinds
 
-    is_prod = access_kind & producer_kinds
-    is_cons = access_kind & consumer_kinds
+        if is_prod:
+            add_hazard_if_window_valid(results, resource, hazard_window)
+            hazard_window.producers.append(node)
 
-    if is_prod:
-        add_hazard_if_window_valid(results, resource, hazard_window)
-        hazard_window.producers.append(node)
-
-    # Consumers only count after at least one producer for this resource.
-    if is_cons and hazard_window.producers:
-        hazard_window.consumers.append(node)
+        # Consumers only count after at least one producer for this resource.
+        if is_cons and hazard_window.producers:
+            hazard_window.consumers.append(node)
 
 
 def get_hazard_handle(
@@ -319,8 +320,8 @@ def get_barriers_analysis(
     all_nodes = trace.preorder_walk()
     assign_preorder_index(all_nodes)
 
-    is_shared_memory_node = (
-        lambda node: get_shared_memory_from_op(get_custom(node)) is not None
+    is_shared_memory_node = lambda node: bool(
+        get_shared_memory_from_op(get_custom(node))
     )
     is_iterate_node = lambda node: isinstance(get_custom(node), Iterate)
     is_condition_node = lambda node: isinstance(get_custom(node), Conditional)

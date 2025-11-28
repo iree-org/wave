@@ -40,20 +40,6 @@ using namespace wave;
 // Helpers
 //===----------------------------------------------------------------------===//
 
-/// Helper function to parse a `WaveSymbolAttr`, keeping track of both the
-/// parse WaveSymbolAttr and the symbol name string.
-static ParseResult parseSymbol(SmallVectorImpl<WaveSymbolAttr> &symbolNameAttrs,
-                               SmallVectorImpl<StringRef> &symbolNames,
-                               AsmParser &parser) {
-  MLIRContext *context = parser.getContext();
-  StringRef symbolName;
-  if (failed(parser.parseKeyword(&symbolName)))
-    return failure();
-  symbolNameAttrs.push_back(WaveSymbolAttr::get(context, symbolName));
-  symbolNames.push_back(symbolName);
-  return success();
-};
-
 /// Helper function to parse an affine wave expression with the wave
 /// symbol names passed in `names`.
 static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
