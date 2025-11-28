@@ -22,3 +22,8 @@ module attributes {wave.elements_per_thread = "abc"} {}
 
 // expected-error @below {{unexpected wave dialect attribute "wave.unexpected"}}
 module attributes {wave.unexpected = 42} {}
+
+// -----
+
+// expected-error @below {{symbols names starting with '_' are reserved for internal use}}
+module attributes {wave_test.symbol = #wave.symbol<"_A">}

@@ -71,7 +71,7 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
       unsigned declared = mapping.getSymbols().size();
       if (startMap.getNumSymbols() != declared ||
           stepMap.getNumSymbols() != declared ||
-          strideMap.getNumSymbols() != declared)
+          strideMap.getNumSymbols() != declared) {
         return op->emitError(
                    "inconsistent symbol count between symbol_names and "
                    "affine maps for index symbol '")
@@ -79,6 +79,35 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
                << ", got start=" << startMap.getNumSymbols()
                << ", step=" << stepMap.getNumSymbols()
                << ", stride=" << strideMap.getNumSymbols() << ")";
+      }
+
+      for (auto symbol : mapping.getSymbols()) {
+        auto iterSymbol = dyn_cast<wave::WaveIterSymbolAttr>(symbol);
+        if (!iterSymbol)
+          continue;
+
+        bool found = false;
+        for (Operation *currentOp = op->getParentOp(); currentOp != nullptr;
+             currentOp = currentOp->getParentOp()) {
+          // TODO: we don't want to depend on the IterateOp specifically from
+          // the interface (though technically we can), so we use the opaque
+          // attribute name. We should add something like a "wave control flow
+          // interface" that would provide it without hardcoded strings.
+          auto parentIterSymbol =
+              currentOp->getAttrOfType<wave::WaveSymbolAttr>("iterator");
+          if (!parentIterSymbol)
+            continue;
+          if (parentIterSymbol.getName() == iterSymbol.getName()) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          return op->emitError("index expression uses iterator symbol ")
+                 << iterSymbol.getName()
+                 << " which is not defined by any parent op";
+        }
+      }
     }
   }
   return success();

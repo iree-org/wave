@@ -119,12 +119,10 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
       }
     }
   }
-  // TODO: somehow get rid of hardcoded magic names (_ARG).
   mlir::WalkResult walkResult =
       namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
         usedSymbols.insert(symbolAttr.getName());
-        if (hyperparam.getMapping().contains(symbolAttr.getName()) ||
-            symbolAttr.getName().starts_with("_ARG"))
+        if (hyperparam.getMapping().contains(symbolAttr.getName()))
           return mlir::WalkResult::advance();
 
         mlir::InFlightDiagnostic diag = emitError()
