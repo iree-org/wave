@@ -170,6 +170,10 @@ class AsmEmitter:
         self.needs_wgid_y = False
         self.needs_wgid_z = False
 
+        # Loop management for scf.for lowering
+        self.loop_counter = 0  # Counter for generating unique loop labels
+        self.loop_stack = []  # Stack of active loop contexts
+
     @staticmethod
     def _detect_needed_workgroup_ids(fn) -> tuple[bool, bool, bool]:
         """
@@ -299,6 +303,7 @@ class AsmEmitter:
 
     # ---- low-level ----
     def emit(self, s: str):
+        """Emit a line of assembly."""
         self.lines.append(s)
 
     def emit_instruction(self, instr):
@@ -490,6 +495,70 @@ class AsmEmitter:
         self.emit(f".set Srd127_96, {self.SRD127_96}\n")
         self.emit(f"{kernel_name}:")
 
+    def begin_loop(self, lower_bound, upper_bound, step):
+        """Begin a loop structure. Returns loop context dict."""
+        loop_id = self.loop_counter
+        self.loop_counter += 1
+
+        # Allocate SGPR for loop counter
+        counter_sgpr = self.sgpr_allocator.alloc_s()
+        step_sgpr = self.sgpr_allocator.alloc_s()
+        upper_bound_sgpr = self.sgpr_allocator.alloc_s()
+
+        # Initialize loop counter
+        from .instructions import SMovB32
+
+        self.emit(f"    # Initialize loop {loop_id} counter and bounds")
+        self.emit_instruction(SMovB32(counter_sgpr, lower_bound))
+        self.emit_instruction(SMovB32(step_sgpr, step))
+        self.emit_instruction(SMovB32(upper_bound_sgpr, upper_bound))
+
+        loop_ctx = {
+            "loop_id": loop_id,
+            "counter_sgpr": counter_sgpr,
+            "step_sgpr": step_sgpr,
+            "upper_bound_sgpr": upper_bound_sgpr,
+            "lower_bound": lower_bound,
+            "upper_bound": upper_bound,
+            "step": step,
+        }
+
+        self.loop_stack.append(loop_ctx)
+        return loop_ctx
+
+    def emit_loop_header(self, loop_ctx):
+        """Emit loop header with comparison and conditional branch."""
+        loop_id = loop_ctx["loop_id"]
+        counter = loop_ctx["counter_sgpr"]
+        upper = loop_ctx["upper_bound_sgpr"]
+
+        from .instructions import SCmpLtU32, SCBranchSCC1
+
+        self.emit(f"loop_{loop_id}_header:    # Loop {loop_id} header")
+        # Use s_cmp_lt_u32 (less than, not equal) for scf.for semantics [lower, upper)
+        self.emit_instruction(SCmpLtU32(f"s{counter}", f"s{upper}"))
+        self.emit_instruction(SCBranchSCC1(f"loop_{loop_id}_body"))
+        self.emit(f"    s_branch loop_{loop_id}_exit")
+        self.emit(f"loop_{loop_id}_body:    # Loop {loop_id} body")
+
+    def emit_loop_latch(self, loop_ctx):
+        """Emit loop latch with increment and branch back."""
+        loop_id = loop_ctx["loop_id"]
+        counter = loop_ctx["counter_sgpr"]
+        step = loop_ctx["step_sgpr"]
+
+        from .instructions import SAddU32, SBranch
+
+        self.emit(f"loop_{loop_id}_latch:    # Loop {loop_id} latch")
+        self.emit_instruction(SAddU32(f"s{counter}", f"s{counter}", f"s{step}"))
+        self.emit_instruction(SBranch(f"loop_{loop_id}_header"))
+
+    def end_loop(self):
+        """End loop and emit exit label."""
+        loop_ctx = self.loop_stack.pop()
+        loop_id = loop_ctx["loop_id"]
+        self.emit(f"loop_{loop_id}_exit:    # Loop {loop_id} exit")
+
     def emit_epilogue(
         self,
         kernel_name: str,
@@ -540,12 +609,6 @@ class AsmEmitter:
             vgprs_used = max(vgprs_used, total_arch_vgprs)
 
         txt = "\n".join(self.lines)
-        # Patch system_vgpr_workitem_id if lane-id sequence was emitted
-        if self.lane_id_emitted:
-            txt = txt.replace(
-                "  .amdhsa_system_vgpr_workitem_id 0",
-                "  .amdhsa_system_vgpr_workitem_id 1",
-            )
         txt = txt.replace(
             "  .amdhsa_next_free_vgpr 0", f"  .amdhsa_next_free_vgpr {vgprs_used}"
         )
@@ -789,28 +852,56 @@ amdhsa.kernels:
 
         self.emit_instruction(DSReadB64(dst_pair, addr_vreg))
 
-    def emit_mfma_16x16x16_f16(self, a_pair: Tuple[int, int], b_pair: Tuple[int, int]):
+    def emit_mfma_16x16x16_f16(
+        self, a_pair: Tuple[int, int], b_pair: Tuple[int, int], acc_quad=None
+    ):
         """
         Emit MFMA instruction with VGPR result (not AGPR).
 
         Uses VGPR-variant of MFMA instruction to write results directly to VGPRs,
         avoiding accumulator complexity. This is required for multi-wave support
         and matches LLVM backend behavior.
+
+        Args:
+            a_pair: VGPR pair for A operand
+            b_pair: VGPR pair for B operand
+            acc_quad: Optional VGPR quad to use as accumulator (for chained MFMAs)
         """
         from .instructions import VMfmaF32_16x16x16F16, SWaitcnt
 
         # Wait for LDS reads to complete before MFMA
         self.emit_instruction(SWaitcnt("lgkmcnt(0)"))
 
-        # Allocate VGPR quad for MFMA result (not AGPR)
-        result_quad = self.vgpr_allocator.alloc_v_quad()
+        # Determine result/accumulator quad
+        use_loop_accumulator = False
+        result_quad = None
+
+        # If explicit accumulator quad is passed (for chained MFMAs), use it
+        if acc_quad is not None:
+            result_quad = acc_quad
+            use_loop_accumulator = True  # Use acc_quad as both input and output
+        # Otherwise check if we're in a loop with pre-allocated accumulator
+        elif hasattr(self, "loop_stack") and self.loop_stack:
+            loop_ctx = self.loop_stack[-1]
+            iter_arg_vgprs = loop_ctx.get("iter_arg_vgprs", [])
+            if iter_arg_vgprs:
+                # Use first accumulator (K-loop pattern)
+                result_quad = iter_arg_vgprs[0]
+                use_loop_accumulator = True
+
+        # Fall back to allocating new quad if no loop accumulator
+        if result_quad is None:
+            result_quad = self.vgpr_allocator.alloc_v_quad()
+
         vgpr_base = result_quad[0]
 
-        # Emit MFMA into VGPR quad (VGPR-variant instruction)
-        # The 0 at the end means no accumulator input (zero initialization)
-        # use_vgpr=True makes it write to VGPRs instead of AGPRs
+        # Emit MFMA into VGPR quad
+        # If using loop accumulator or explicit accumulator, pass it as the accumulator operand
+        # Otherwise use 0 (zero initialization)
+        acc_operand = vgpr_base if use_loop_accumulator else 0
+
         self.emit_instruction(
-            VMfmaF32_16x16x16F16(vgpr_base, a_pair, b_pair, 0, use_vgpr=True)
+            VMfmaF32_16x16x16F16(vgpr_base, a_pair, b_pair, acc_operand, use_vgpr=True)
         )
         # Track MFMA for latency-aware scheduling
         self.track_mfma("v_mfma_f32_16x16x16_f16")
@@ -853,6 +944,7 @@ amdhsa.kernels:
         self.register_file.s_max = max(self.register_file.s_max, sreg)
 
     def emit_kernargs(self, num_args: int):
+        """Emit kernel argument loading code."""
         # Kernarg pointer is ALWAYS at s[0:1] (user SGPR, comes before system SGPRs)
         kernarg_ptr_low = 0
         kernarg_ptr_high = 1
@@ -862,10 +954,11 @@ amdhsa.kernels:
         )
         for i, instruction in enumerate(kernarg_instructions):
             if isinstance(instruction, SLoadDwordx2):
-                # Extract register numbers from the instruction and store them
+                # Allocate SGPR pair for this kernel argument
                 low_register, high_register = self.sgpr_allocator.pair()
                 self.ptr_pairs[i] = (low_register, high_register)
-                # Create a new instruction with the allocated registers
+
+                # Create instruction with allocated registers
                 new_instruction = SLoadDwordx2(
                     (low_register, high_register),
                     (kernarg_ptr_low, kernarg_ptr_high),
@@ -877,8 +970,10 @@ amdhsa.kernels:
         self.emit("")  # Add empty line
 
     def ensure_srd_for_subspan(self, memref_ssa: str, arg_index: int, limit_bytes: int):
+        # Check if SRD already allocated
         if memref_ssa in self.srds:
             return
+
         base_low_register, base_high_register = self.ptr_pairs[arg_index]
         srd_register_0, srd_register_1, srd_register_2, srd_register_3 = (
             self.sgpr_allocator.quad()
@@ -890,7 +985,6 @@ amdhsa.kernels:
             srd_register_3,
         )
 
-        # Use instruction classes for SRD setup
         self.emit(f"    # SRD for {memref_ssa} (arg{arg_index})")
         self.emit_instruction(SMovB32(srd_register_0, f"s{base_low_register}"))
         self.emit_instruction(SMovB32(srd_register_1, f"s{base_high_register}"))
