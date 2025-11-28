@@ -8,6 +8,7 @@ import pytest
 from wave_lang.kernel.lang import sym
 from wave_lang.kernel.wave.utils.general_utils import (
     delinearize_index,
+    divide_shape_into_chunks,
 )
 from wave_lang.kernel.wave.utils.mapping_utils import (
     _simplify_sympy_expr,
@@ -23,6 +24,64 @@ def test_delinearize_index():
     nd_index = delinearize_index(M, shape)
     np_nd_index = np.unravel_index(23, shape)
     assert np.equal([x.subs({M: 23}) for x in nd_index], np_nd_index).all()
+
+
+def test_divide_shape_into_chunks():
+    # Test case 1: All chunks fit in first dimension
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([128, 256], 8)
+    assert chunks_per_dim == [8, 1]
+    assert chunk_shape == [16, 256]
+
+    # Test case 2: Single chunk (no division)
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([128, 256], 1)
+    assert chunks_per_dim == [1, 1]
+    assert chunk_shape == [128, 256]
+
+    # Test case 3: Division only in first dimension (larger num_chunks)
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([128, 256], 16)
+    assert chunks_per_dim == [16, 1]
+    assert chunk_shape == [8, 256]
+
+    # Test case 4: Division only in first dimension (3D)
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([64, 128, 256], 8)
+    assert chunks_per_dim == [8, 1, 1]
+    assert chunk_shape == [8, 128, 256]
+
+    # Test case 5: Division across TWO dimensions
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([6, 10], 15)
+    assert chunks_per_dim == [3, 5]
+    assert chunk_shape == [2, 2]
+
+    # Test case 6: Division across TWO dimensions (different factorization)
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([4, 8, 16], 8)
+    assert chunks_per_dim == [4, 2, 1]
+    assert chunk_shape == [1, 4, 16]
+
+    # Test case 7: Division across THREE dimensions
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([6, 4, 2], 48)
+    assert chunks_per_dim == [6, 4, 2]
+    assert chunk_shape == [1, 1, 1]
+
+    # Test case 8: Prime number of chunks
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks([35, 100], 5)
+    assert chunks_per_dim == [5, 1]
+    assert chunk_shape == [7, 100]
+
+    # Test case 9: Error case - cannot evenly divide
+    with pytest.raises(ValueError, match="Cannot evenly divide"):
+        divide_shape_into_chunks([128, 256], 12)
+
+    # Test case 10: Error case - dimension too small
+    with pytest.raises(ValueError, match="Cannot evenly divide"):
+        divide_shape_into_chunks([10, 20], 7)
+
+    # Test case 11: Error case - invalid num_chunks
+    with pytest.raises(ValueError, match="num_chunks must be positive"):
+        divide_shape_into_chunks([128, 256], 0)
+
+    # Test case 12: Error case - empty shape
+    with pytest.raises(ValueError, match="shape must be non-empty"):
+        divide_shape_into_chunks([], 4)
 
 
 def test_custom_sympy_simplifications():
