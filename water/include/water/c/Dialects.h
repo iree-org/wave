@@ -37,6 +37,24 @@ mlirWaveSymbolAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveSymbolAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
+// WaveIterSymbolAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveIterSymbolAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveIterSymbolAttr(MlirAttribute attr);
+
+/// Creates a new WaveIterSymbolAttr with the given induction variable name.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveIterSymbolAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
+
+/// Returns the typeID of a WaveIterSymbolAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIterSymbolAttrGetTypeID();
+
+/// Gets the induction variable name.
+MLIR_CAPI_EXPORTED MlirStringRef
+mlirWaveIterSymbolAttrGetName(MlirAttribute attr);
+
+//===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr
 //===---------------------------------------------------------------------===//
 
