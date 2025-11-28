@@ -689,3 +689,86 @@ def topological_sort_with_dependencies(
 
 def rotate_list(src: Sequence[Any], k: int) -> list[Any]:
     return src[k:] + src[:k]
+
+
+def divide_shape_into_chunks(
+    shape: Sequence[int], num_chunks: int
+) -> tuple[list[int], list[int]]:
+    """
+    Divides an N-dimensional shape into chunks, starting from the leftmost dimension.
+
+    This function attempts to divide the shape by num_chunks, starting from dimension 0
+    and moving right. For each dimension, it applies as many factors of the remaining
+    chunks as possible while keeping the dimension evenly divisible.
+
+    Args:
+        shape: N-dimensional shape as a sequence of integers
+        num_chunks: Total number of chunks to divide the shape into
+
+    Returns:
+        A tuple of (chunks_per_dim, chunk_shape) where:
+        - chunks_per_dim: List showing how many chunks per dimension
+        - chunk_shape: Shape of each chunk (evenly divided)
+
+    Raises:
+        ValueError: If the shape cannot be evenly divided into num_chunks
+
+    Example:
+        >>> divide_shape_into_chunks([128, 256], 8)
+        ([8, 1], [16, 256])
+        >>> divide_shape_into_chunks([128, 256], 4)
+        ([4, 1], [32, 256])
+        >>> divide_shape_into_chunks([128, 256], 12)
+        ([4, 3], [32, 85])  # Error: 256 not divisible by 3
+    """
+    if num_chunks <= 0:
+        raise ValueError(f"num_chunks must be positive, got {num_chunks}")
+
+    ndim = len(shape)
+    if ndim == 0:
+        raise ValueError("shape must be non-empty")
+
+    # Start with no division
+    chunks_per_dim = [1] * ndim
+    remaining_chunks = num_chunks
+
+    # Process dimensions from left to right
+    for dim_idx in range(ndim):
+        if remaining_chunks == 1:
+            break
+
+        # Try to divide this dimension by as many factors as possible
+        dim_size = shape[dim_idx]
+
+        # Find all factors of remaining_chunks that evenly divide this dimension
+        factor = 1
+        for divisor in range(2, remaining_chunks + 1):
+            if remaining_chunks % divisor == 0 and dim_size % divisor == 0:
+                if dim_size % (factor * divisor) == 0 and remaining_chunks % (factor * divisor) == 0:
+                    factor = factor * divisor
+                elif dim_size % divisor == 0:
+                    factor = divisor
+
+        # Apply the largest factor we can to this dimension
+        test_factor = remaining_chunks
+        while test_factor > 1:
+            if dim_size % test_factor == 0:
+                chunks_per_dim[dim_idx] = test_factor
+                remaining_chunks //= test_factor
+                break
+            # Try next smaller factor of remaining_chunks
+            test_factor -= 1
+            while test_factor > 1 and remaining_chunks % test_factor != 0:
+                test_factor -= 1
+
+    # Check if we successfully divided into all chunks
+    if remaining_chunks != 1:
+        raise ValueError(
+            f"Cannot evenly divide shape {list(shape)} into {num_chunks} chunks. "
+            f"Remaining chunks after processing: {remaining_chunks}"
+        )
+
+    # Calculate the resulting chunk shape
+    chunk_shape = [shape[i] // chunks_per_dim[i] for i in range(ndim)]
+
+    return chunks_per_dim, chunk_shape
