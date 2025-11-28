@@ -94,6 +94,30 @@ static void printSingleSymbol(mlir::OpAsmPrinter &printer, mlir::Operation *,
 // AllocateOp
 //-----------------------------------------------------------------------------
 
+// Index expressions don't propagate through allocations.
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::AllocateOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
+    wave::EmitErrorFn /*emitError*/) {
+  return mlir::ChangeResult::NoChange;
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::AllocateOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
+    wave::EmitErrorFn /*emitError*/) {
+  return mlir::ChangeResult::NoChange;
+}
+
+llvm::LogicalResult wave::AllocateOp::setIndexFromLattices(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*results*/) {
+  return llvm::success();
+}
+
 llvm::LogicalResult wave::AllocateOp::verify() {
   bool hasParent = getParent() != Value();
   bool hasOffset = getOffset() != std::nullopt;
@@ -216,6 +240,27 @@ void wave::IterateOp::getSuccessorRegions(
   regions.emplace_back(mlir::RegionSuccessor(
       &getBody(),
       getLoopBody()->getArguments().drop_back(getCaptures().size())));
+}
+
+llvm::FailureOr<mlir::ChangeResult> wave::IterateOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
+    wave::EmitErrorFn /*emitError*/) {
+  llvm_unreachable("IterateOp should be handled by control flow interfaces");
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::IterateOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
+    wave::EmitErrorFn /*emitError*/) {
+  llvm_unreachable("IterateOp should be handled by control flow interfaces");
+}
+
+llvm::LogicalResult wave::IterateOp::setIndexFromLattices(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operands,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
+  return detail::identitySetIndexFromLattices(*this, operands, resultExprs);
 }
 
 mlir::LogicalResult wave::IterateOp::verify() {
@@ -840,107 +885,6 @@ static llvm::LogicalResult populateMmaIndexingExpr(
   }
 }
 
-// Get the (indexed) affine symbol expression corresponding to the given symbol,
-// insert it into the list if it isn't already present.
-static mlir::AffineExpr
-getOrInsertSymbolExpr(mlir::Attribute symbol,
-                      llvm::SmallVectorImpl<mlir::Attribute> &symbolNames) {
-  auto it = llvm::find(symbolNames, symbol);
-  unsigned position = [&] {
-    if (it != symbolNames.end())
-      return static_cast<unsigned>(std::distance(symbolNames.begin(), it));
-    symbolNames.push_back(symbol);
-    return static_cast<unsigned>(symbolNames.size() - 1);
-  }();
-  return mlir::getAffineSymbolExpr(position, symbol.getContext());
-}
-
-// Create an index mapping induced by the given constraint. Combine it with the
-// base index mapping if provided. Call `applyConstraintGeneric` if the
-// constraint is only available as an Attribute.
-template <typename ConstraintAttrT>
-static wave::WaveIndexMappingAttr
-applyConstraint(ConstraintAttrT constraint,
-                wave::WaveIndexMappingAttr baseMapping = nullptr) {
-  static_assert(llvm::is_one_of<ConstraintAttrT, wave::WorkgroupConstraintAttr,
-                                wave::TilingConstraintAttr>(),
-                "unsupported constraint type for applyConstraint");
-
-  llvm::SmallVector<mlir::Attribute> symbols =
-      llvm::map_to_vector(constraint.getTileSize().getSymbols(),
-                          [](mlir::Attribute symbol) { return symbol; });
-
-  mlir::AffineExpr symbolExpr;
-  mlir::MLIRContext *context = constraint.getContext();
-
-  if constexpr (std::is_same_v<ConstraintAttrT,
-                               wave::WorkgroupConstraintAttr>) {
-    // TODO: we should just use workgroup attributes in expressions directly.
-    wave::WaveIndexSymbol symbol = [&] {
-      switch (constraint.getWorkgroupDim().getValue()) {
-      case wave::WaveWorkgroupDim::X:
-        return wave::WaveIndexSymbol::WORKGROUP_0;
-      case wave::WaveWorkgroupDim::Y:
-        return wave::WaveIndexSymbol::WORKGROUP_1;
-      case wave::WaveWorkgroupDim::Z:
-        return wave::WaveIndexSymbol::WORKGROUP_2;
-      }
-      llvm::report_fatal_error("unsupported workgroup dimension");
-    }();
-    symbolExpr = getOrInsertSymbolExpr(
-        wave::WaveIndexSymbolAttr::get(context, symbol), symbols);
-
-  } else if constexpr (std::is_same_v<ConstraintAttrT,
-                                      wave::TilingConstraintAttr>) {
-    symbolExpr = getOrInsertSymbolExpr(constraint.getDim(), symbols);
-  }
-
-  assert(constraint.getTileSize().getMap().getNumResults() == 1 &&
-         "expected a single result expression in affine map");
-  mlir::AffineMap map = mlir::AffineMap::get(
-      /*dimCount=*/0, symbols.size(),
-      symbolExpr * constraint.getTileSize().getMap().getResult(0));
-  if (baseMapping == nullptr)
-    return wave::WaveIndexMappingAttr::get(
-        context, symbols, map, mlir::AffineMap::getConstantMap(1, context),
-        mlir::AffineMap::getConstantMap(1, context));
-
-  llvm::SmallVector<mlir::Attribute> allSymbols;
-  wave::aggregateAllSymbols(
-      std::initializer_list<llvm::ArrayRef<mlir::Attribute>>{
-          baseMapping.getSymbols(), symbols},
-      allSymbols);
-
-  mlir::AffineMap baseStart = alignMapSymbols(
-      baseMapping.getStart(), baseMapping.getSymbols(), allSymbols);
-  mlir::AffineMap baseStep = alignMapSymbols(
-      baseMapping.getStep(), baseMapping.getSymbols(), allSymbols);
-  mlir::AffineMap baseStride = alignMapSymbols(
-      baseMapping.getStride(), baseMapping.getSymbols(), allSymbols);
-  map = alignMapSymbols(map, symbols, allSymbols);
-  map = mlir::AffineMap::get(/*dimCount=*/0, allSymbols.size(),
-                             baseStart.getResult(0) + map.getResult(0));
-  return wave::WaveIndexMappingAttr::get(context, allSymbols, map, baseStep,
-                                         baseStride);
-}
-
-// Create an index mapping induced by the given constraint. Combine it with the
-// base index mapping if provided. Call `applyConstraint` if the specific kind
-// of constraint is already known.
-static wave::WaveIndexMappingAttr
-applyConstraintGeneric(mlir::Attribute constraint,
-                       wave::WaveIndexMappingAttr baseMapping = nullptr) {
-  return llvm::TypeSwitch<mlir::Attribute, wave::WaveIndexMappingAttr>(
-             constraint)
-      .Case<wave::WorkgroupConstraintAttr, wave::TilingConstraintAttr>(
-          [&](auto constraint) {
-            // This double dispatching is necessary in absence of interfaces to
-            // dispatch to a class method based on a specific type.
-            return applyConstraint(constraint, baseMapping);
-          })
-      .Default([&](mlir::Attribute constraint) { return nullptr; });
-}
-
 /// Create per-symbol thread-independent index expressions for `indexingSymbols`
 /// given constraints on them and put them into `symbolMappings` as named pairs
 /// (symbol, index mapping attribute). Thread-independent means affected by
@@ -969,7 +913,9 @@ static void mixInThreadIndependentConstraints(
     wave::WaveIndexMappingAttr mapping =
         llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue());
     for (mlir::Attribute constraint : it->second) {
-      mapping = applyConstraintGeneric(constraint, mapping);
+      // Tiling constraints are handled separately in loop propagation.
+      if (!isa<wave::TilingConstraintAttr>(constraint))
+        mapping = wave::applyConstraintGeneric(constraint, mapping);
     }
     mappingIt->setValue(mapping);
   }

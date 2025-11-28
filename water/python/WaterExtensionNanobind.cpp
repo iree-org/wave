@@ -29,6 +29,9 @@ NB_MODULE(_waterDialects, m) {
           mlirDialectHandleLoadDialect(h, context);
       },
       nb::arg("context").none() = nb::none(), nb::arg("load") = true);
+  d.def(
+      "register_passes", []() { mlirWaveDialectRegisterPasses(); },
+      "Registers the wave dialect passes.");
 
   // Export dialect constants
   d.attr("WAVE_CONSTRAINTS_ATTR_NAME") = mlirWaveDialectConstraintsAttrName;

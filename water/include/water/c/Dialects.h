@@ -16,6 +16,9 @@ extern "C" {
 
 MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Wave, wave);
 
+/// Register the Wave dialect passes.
+MLIR_CAPI_EXPORTED void mlirWaveDialectRegisterPasses();
+
 //===---------------------------------------------------------------------===//
 // Wave Dialect Constants
 //===---------------------------------------------------------------------===//

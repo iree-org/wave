@@ -139,7 +139,8 @@ def MmaOp : WaveOp<"mma",
 def IterateOp : Op<WaveDialect, "iterate", [
     AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<RegionBranchOpInterface,
-        ["areTypesCompatible", "getEntrySuccessorOperands"]>]> {
+        ["areTypesCompatible", "getEntrySuccessorOperands"]>,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Executes the body repeatedly";
   let description = [{
     Intrinsically sequential iterative execution that is akin to a loop with
@@ -215,7 +216,9 @@ def YieldOp : Op<WaveDialect, "yield",
 // Memory-related operations
 //-----------------------------------------------------------------------------
 
-def AllocateOp : WaveOp<"allocate"> {
+def AllocateOp : WaveOp<"allocate", [
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>
+  ]> {
   let summary = "Represents an allocation in an address space";
   let description = [{
     Allocates memory for a Wave tensor in the address space indicated by the

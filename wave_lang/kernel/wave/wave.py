@@ -52,6 +52,7 @@ from ..ops.wave_ops import CustomOp, Iterate, get_custom, Placeholder, Output
 
 # Passes
 from .analysis.index_sequence_analysis import (
+    set_node_indices_water_checked,
     set_node_indices,
     set_post_expansion_indices,
 )
@@ -764,41 +765,55 @@ class LaunchableWave(Launchable):
         def substitute_vector_shapes():
             self.hardware_constraints[0].subs_vector_shapes(idxc.subs)
 
-        return [
-            partial(debug_log_hoist, trace, debug_handlers),
-            partial(initialize_iter_args, trace),
-            partial(self.create_induction_vars, trace),
-            partial(self.initialize_reductions, trace),
-            finalize_indices,
-            substitute_vector_shapes,
-            partial(add_get_results, trace),
-            partial(infer_types, trace, self.constraints),
-            partial(construct_index_mapping, trace, self.constraints),
-            partial(
-                debug_log_write_replace,
-                trace,
-                self.constraints,
-                options,
-                debug_arg_info,
-            ),
-            partial(
-                promote_placeholders,
-                trace,
-                self.constraints,
-                options.reorder_allocs,
-            ),
-            partial(
-                set_node_indices,
-                trace,
-                self.constraints,
-                print_ir_before,
-                print_ir_after,
-            ),
-            partial(reorder_workgroups, trace, self.reordering_constraints),
-            partial(expand_graph, trace, self.constraints),
-            partial(set_post_expansion_indices, trace, self.constraints),
-            partial(remove_chained_getresult, trace),
-        ]
+        return (
+            [
+                partial(debug_log_hoist, trace, debug_handlers),
+                partial(initialize_iter_args, trace),
+                partial(self.create_induction_vars, trace),
+                partial(self.initialize_reductions, trace),
+                finalize_indices,
+                substitute_vector_shapes,
+                partial(add_get_results, trace),
+                partial(infer_types, trace, self.constraints),
+                partial(construct_index_mapping, trace, self.constraints),
+                partial(
+                    debug_log_write_replace,
+                    trace,
+                    self.constraints,
+                    options,
+                    debug_arg_info,
+                ),
+                partial(
+                    promote_placeholders,
+                    trace,
+                    self.constraints,
+                    options.reorder_allocs,
+                ),
+            ]
+            + (
+                [
+                    partial(
+                        set_node_indices_water_checked, trace, self.constraints, options
+                    )
+                ]
+                if options.check_water_analysis
+                else [
+                    partial(
+                        set_node_indices,
+                        trace,
+                        self.constraints,
+                        print_ir_before,
+                        print_ir_after,
+                    )
+                ]
+            )
+            + [
+                partial(reorder_workgroups, trace, self.reordering_constraints),
+                partial(expand_graph, trace, self.constraints),
+                partial(set_post_expansion_indices, trace, self.constraints),
+                partial(remove_chained_getresult, trace),
+            ]
+        )
 
     def _trace_and_get_kernel_signature(
         self,

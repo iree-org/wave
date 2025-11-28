@@ -14,6 +14,8 @@ import torch.fx as fx
 
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel._support.dtype import DataType
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.logging import get_logger
 
 from ..._support.indexing import IndexSequence, IndexSymbol
@@ -257,6 +259,86 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
         assert (
             custom.vector_shapes
         ), f"Vector shapes not set for node {custom.fx_node}: {custom}"
+
+
+def _set_water_id(trace: CapturedTrace):
+    for node in trace.walk(lambda x: x):
+        setattr(node, "_water_id", str(id(node)))
+
+
+def _reset_water_id(trace: CapturedTrace):
+    for node in trace.walk(lambda x: x):
+        delattr(node, "_water_id")
+
+
+def _index_diff_is_zero(
+    index1: dict[IndexSymbol, IndexSequence], index2: dict[IndexSymbol, IndexSequence]
+) -> dict[IndexSymbol, IndexSequence]:
+    def f(seq1: IndexSequence, seq2: IndexSequence) -> bool:
+        start = sympy.simplify(seq1.start - seq2.start)
+        size = sympy.simplify(seq1.size - seq2.size)
+        stride = sympy.simplify(seq1.stride - seq2.stride)
+        if start != 0:
+            print(f"Start difference: {start}")
+        if size != 0:
+            print(f"Size difference: {size}")
+        if stride != 0:
+            print(f"Stride difference: {stride}")
+        return start == 0 and size == 0 and stride == 0
+
+    return index1.keys() == index2.keys() and all(
+        f(seq, index2[dim]) for dim, seq in index1.items()
+    )
+
+
+def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence]):
+    for node in trace.walk(lambda x: x):
+        water_id = getattr(node, "_water_id")
+        custom = get_custom(node)
+        if isinstance(custom, (Placeholder, Output)):
+            continue
+        if water_id not in inferred:
+            raise RuntimeError(
+                f"Node {get_custom(node)} with id {water_id} not found in water-inferred index expressions."
+            )
+        inferred_index = inferred[water_id].get("index", None)
+        if not getattr(node, "index", None):
+            assert isinstance(
+                custom, NestedRegionOp
+            ), "Index may only be missing for NestedRegionOps."
+            continue
+        # Skip GetResult because they are special-cased in Python propagation,
+        # making them have incorrect indexes in dataflow sense.
+        if isinstance(custom, GetResult):
+            continue
+        if node.index != inferred_index and not _index_diff_is_zero(
+            node.index, inferred_index
+        ):
+            raise RuntimeError(
+                f"Index for node {get_custom(node)}, {get_custom(node).index} does not match inferred index {inferred_index}"
+            )
+
+
+# pipeline: set water ids, run water pass and record, run actual pass, verify
+
+
+def set_node_indices_water_checked(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    print_ir_before: Sequence[str] = [],
+    print_ir_after: Sequence[str] = [],
+):
+    _set_water_id(trace)
+    # TODO: make sure _water_id gets printed as an attribute
+    # TODO: recover an `extras` field from here, which would contain a dictionary between _water_id and the inferred index expressions for that node
+    _, diagnostics, inferred_attributes = emit_wave_dialect(trace, constraints, options)
+    if diagnostics:
+        raise RuntimeError(f"Water indices check failed: {diagnostics}")
+    set_node_indices(trace, constraints, print_ir_before, print_ir_after)
+    # TODO: use the extras field to fetch the inferred indices
+    _check_water_indices(trace, inferred_attributes)
+    _reset_water_id(trace)
 
 
 def set_node_indices(
