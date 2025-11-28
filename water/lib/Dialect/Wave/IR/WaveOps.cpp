@@ -10,7 +10,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "water/Dialect/Wave/IR/IndexExpr.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
@@ -18,6 +20,7 @@
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -112,6 +115,89 @@ llvm::LogicalResult wave::AllocateOp::verify() {
 // IterateOp
 //-----------------------------------------------------------------------------
 
+void wave::IterateOp::makeIsolated(mlir::RewriterBase &rewriter) {
+  // Find all uses inside the body of values defined above.
+  llvm::SetVector<mlir::Value> captures;
+  llvm::SmallVector<mlir::OpOperand *> captureOperands;
+  llvm::SmallPtrSet<mlir::Region *, 8> ancestorRegions;
+  for (mlir::Operation *op = getOperation(); op != nullptr;
+       op = op->getParentOp()) {
+    ancestorRegions.insert(op->getParentRegion());
+  }
+  getOperation()->walk([&](mlir::Operation *op) {
+    if (op == getOperation())
+      return mlir::WalkResult::advance();
+
+    for (mlir::OpOperand &operand : op->getOpOperands()) {
+      if (!ancestorRegions.contains(operand.get().getParentRegion()))
+        continue;
+      captureOperands.push_back(&operand);
+      captures.insert(operand.get());
+    }
+    return mlir::WalkResult::advance();
+  });
+
+  // Capture values defined above.
+  llvm::SmallVector<mlir::Location> newCaptureLocs =
+      llvm::map_to_vector(captures.getArrayRef(),
+                          [&](mlir::Value value) { return value.getLoc(); });
+  rewriter.modifyOpInPlace(
+      *this, [&] { getCapturesMutable().append(captures.getArrayRef()); });
+
+  // Add trailing block arguments for captured values. The little dance with the
+  // rewriter is a way to append block arguments.
+  llvm::SmallVector<mlir::Type> allTypes(getCaptureBlockArgs().getTypes());
+  llvm::append_range(allTypes,
+                     mlir::ValueRange(captures.getArrayRef()).getTypes());
+  llvm::SmallVector<mlir::Location> allLocs = llvm::map_to_vector(
+      getCaptureBlockArgs(), [](mlir::Value value) { return value.getLoc(); });
+  llvm::append_range(allLocs, newCaptureLocs);
+  mlir::Block *originalBlock = getLoopBody();
+  mlir::Block *newBlock =
+      rewriter.createBlock(originalBlock, allTypes, allLocs);
+  rewriter.mergeBlocks(originalBlock, newBlock,
+                       newBlock->getArguments().drop_back(captures.size()));
+  ValueRange innerValues = newBlock->getArguments().take_back(captures.size());
+
+  // Update uses in the body to use block arguments instead of the captured
+  // values.
+  for (mlir::OpOperand *opOperand : captureOperands) {
+    rewriter.modifyOpInPlace(opOperand->getOwner(), [&] {
+      auto capturesRef = captures.getArrayRef();
+      auto it = llvm::find(capturesRef, opOperand->get());
+      assert(it != capturesRef.end() && "expected capture to be found");
+      size_t position = std::distance(capturesRef.begin(), it);
+      opOperand->set(innerValues[position]);
+    });
+  }
+}
+
+void wave::IterateOp::makeNonIsolated(mlir::RewriterBase &rewriter) {
+  // Replace uses of block arguments with the captured values, these uses can
+  // only be inside the body in well-formed SSA.
+  for (auto &&[captureBlockArg, captured] :
+       llvm::zip_equal(getCaptureBlockArgs(), getCaptures())) {
+    rewriter.replaceAllUsesWith(captureBlockArg, captured);
+  }
+
+  // Remove block arguments for captured values that are no longer necessary.
+  // The little dance is needed because the rewriter can't directly remove block
+  // arguments. Note that it is fine to replace them with nullptr as they have
+  // no uses at this point.
+  unsigned numCaptures = getCaptures().size();
+  rewriter.modifyOpInPlace(*this, [&] { getCapturesMutable().clear(); });
+  mlir::Block *originalBlock = getLoopBody();
+  auto types =
+      mlir::TypeRange(originalBlock->getArgumentTypes()).drop_back(numCaptures);
+  auto locations =
+      llvm::map_to_vector(originalBlock->getArguments().drop_back(numCaptures),
+                          [](mlir::Value value) { return value.getLoc(); });
+  mlir::Block *newBlock = rewriter.createBlock(getLoopBody(), types, locations);
+  SmallVector<mlir::Value> replacementValues(newBlock->getArguments());
+  replacementValues.append(numCaptures, mlir::Value());
+  rewriter.mergeBlocks(originalBlock, newBlock, replacementValues);
+}
+
 bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
   return detail::verifyTypesCompatible(llvm::cast<wave::WaveTensorType>(lhs),
                                        llvm::cast<wave::WaveTensorType>(rhs),
@@ -129,8 +215,9 @@ void wave::IterateOp::getSuccessorRegions(
     ::llvm::SmallVectorImpl<::mlir::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
   regions.emplace_back(mlir::RegionSuccessor(getOperation(), getResults()));
-  regions.emplace_back(
-      mlir::RegionSuccessor(&getBody(), getBody().front().getArguments()));
+  regions.emplace_back(mlir::RegionSuccessor(
+      &getBody(),
+      getLoopBody()->getArguments().drop_back(getCaptures().size())));
 }
 
 mlir::LogicalResult wave::IterateOp::verify() {

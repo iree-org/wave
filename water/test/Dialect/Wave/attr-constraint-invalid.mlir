@@ -1,4 +1,4 @@
-// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-constructors --split-input-file --verify-diagnostics
+// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-functions --split-input-file --verify-diagnostics
 
 // expected-error @below {{waves_per_block (1) should have 3 elements}}
 #hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,

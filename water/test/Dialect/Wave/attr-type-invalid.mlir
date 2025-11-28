@@ -1,4 +1,4 @@
-// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-constructors --split-input-file --verify-diagnostics
+// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-functions --split-input-file --verify-diagnostics
 
 // expected-error @below {{expected element type to be integer, index or floating point scalar}}
 func.func private @unspecified_tensor() -> !wave.tensor<any of !wave.tensor<any of bf16>>
