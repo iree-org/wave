@@ -65,7 +65,6 @@ from ..wave.constraints import (
     Constraint,
     TilingConstraint,
     WorkgroupConstraint,
-    WaveConstraint,
 )
 from ..wave.utils.graph_utils import DCE
 from .compile_options import WaveCompileOptions
@@ -80,7 +79,6 @@ from .utils.general_utils import (
     get_hardware_constraint,
     infer_dim,
     is_pow2,
-    remove_global_indexing,
     remove_thread_indexing,
 )
 from .utils.symbol_utils import subs_idxc
@@ -148,30 +146,17 @@ def get_global_element_index(
     assert isinstance(node, Read), "Expect Read custom node as caller argument"
     index = remove_thread_indexing(node.index)
 
-    return {key: IndexSequence(index[key].start + thread_index[key], 1, 1) for key in index.keys()}
-
-
-def get_shared_element_offset(
-    node: CustomOp, constraints: list[Constraint], wave_subs
-) -> dict[IndexSymbol, IndexSequence]:
-    """
-    Shared memory address = shared mem buffer + tile offset
-    This function returns the tile index by removing threads offset within a tile.
-    """
-    assert isinstance(node, Write), "Expect Write custom node as caller argument"
-    index = remove_global_indexing(node.index, constraints)
-
-    index = {k: v.subs(wave_subs) for k, v in index.items()}
-    return {key: IndexSequence(index[key].start, 1, 1) for key in index.keys()}
+    return {
+        key: IndexSequence(index[key].start + thread_index[key], 1, 1)
+        for key in index.keys()
+    }
 
 
 def get_tensor_load_descriptor_config(
     read: Read,
     constraints: list[Constraint],
-    write: Write,
     constraint_tile_size: dict[IndexSymbol, int],
     element_type: "DataType",
-    wave_subs,
     hardware_constraint: "HardwareConstraint",
 ) -> TensorLoadConfig:
     """
@@ -194,24 +179,33 @@ def get_tensor_load_descriptor_config(
     else:
         bounds = {infer_dim(v): bounds.get(infer_dim(v), v) for v in symbolic_shape}
 
-    distributed_shape = materialize_shape(constraint_tile_size, symbolic_shape, read.vector_shapes)
+    distributed_shape = materialize_shape(
+        constraint_tile_size, symbolic_shape, read.vector_shapes
+    )
 
     hardware_constraint = get_hardware_constraint(constraints)
 
+    # Some waves can copy duplicated data, take the full tile shape and
+    # redistribute across the waves using linearized wave_id.
     total_waves = math.prod(hardware_constraint.waves_per_block)
-    linearized_wave_id = hardware_constraint.linearized_thread_id // hardware_constraint.threads_per_wave
-
-    chunks_per_dim, chunk_shape = divide_shape_into_chunks(distributed_shape, total_waves)
+    linearized_wave_id = (
+        hardware_constraint.linearized_thread_id // hardware_constraint.threads_per_wave
+    )
+    chunks_per_dim, chunk_shape = divide_shape_into_chunks(
+        distributed_shape, total_waves
+    )
     delinearized_wave_id = delinearize_index(linearized_wave_id, chunks_per_dim)
-    delinearized_index = {sym: v * s for v, s, sym in zip(delinearized_wave_id, chunk_shape, symbolic_shape)}
+    delinearized_index = {
+        sym: v * s
+        for v, s, sym in zip(delinearized_wave_id, chunk_shape, symbolic_shape)
+    }
 
     distributed_shape = {v: chunk_shape[i] for i, v in enumerate(symbolic_shape)}
 
-    # get shared tile index
-    # shared_tile_index = get_shared_element_offset(write, constraints, wave_subs)
-    shared_tile_index = {sym: IndexSequence(v, 1, 1) for sym, v in delinearized_index.items()}
+    shared_tile_index = {
+        sym: IndexSequence(v, 1, 1) for sym, v in delinearized_index.items()
+    }
 
-    # get global tile index
     global_tile_index = get_global_element_index(read, delinearized_index)
 
     return TensorLoadConfig(
@@ -322,20 +316,6 @@ def tensor_load_to_shared(
         return
 
     hardware_constraint = get_hardware_constraint(constraints)
-    threads_per_wave = hardware_constraint.threads_per_wave
-    waves_per_block = hardware_constraint.waves_per_block
-
-    # uniform shared memory write base address by aligning thread indexing position.
-    # $T0 // wave size -> wave id
-    wave_subs = {
-        THREAD_0: (
-            (THREAD_0 // threads_per_wave) * threads_per_wave
-            if waves_per_block[0] > 1
-            else 0
-        ),
-        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
-        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
-    }
 
     constraint_tile_size = {
         c.dim: c.tile_size
@@ -359,10 +339,8 @@ def tensor_load_to_shared(
         config = get_tensor_load_descriptor_config(
             read,
             constraints,
-            write,
             constraint_tile_size,
             element_type,
-            wave_subs,
             hardware_constraint,
         )
 

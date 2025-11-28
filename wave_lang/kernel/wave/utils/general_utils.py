@@ -744,7 +744,10 @@ def divide_shape_into_chunks(
         factor = 1
         for divisor in range(2, remaining_chunks + 1):
             if remaining_chunks % divisor == 0 and dim_size % divisor == 0:
-                if dim_size % (factor * divisor) == 0 and remaining_chunks % (factor * divisor) == 0:
+                if (
+                    dim_size % (factor * divisor) == 0
+                    and remaining_chunks % (factor * divisor) == 0
+                ):
                     factor = factor * divisor
                 elif dim_size % divisor == 0:
                     factor = divisor
