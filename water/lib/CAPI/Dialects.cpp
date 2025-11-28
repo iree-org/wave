@@ -12,9 +12,16 @@
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
+#include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/c/Dialects.h"
 
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Wave, wave, ::wave::WaveDialect)
+
+//===---------------------------------------------------------------------===//
+// Wave Dialect Passes
+//===---------------------------------------------------------------------===//
+
+void mlirWaveDialectRegisterPasses() { wave::registerPasses(); }
 
 //===---------------------------------------------------------------------===//
 // Wave Dialect Constants
@@ -134,7 +141,7 @@ MlirAffineMap mlirWaveIndexMappingAttrGetStart(MlirAttribute attr) {
   return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStart());
 }
 
-MlirAffineMap mlirWaveIndexMappingAttrGetSize(MlirAttribute attr) {
+MlirAffineMap mlirWaveIndexMappingAttrGetStep(MlirAttribute attr) {
   return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStep());
 }
 
@@ -144,14 +151,14 @@ MlirAffineMap mlirWaveIndexMappingAttrGetStride(MlirAttribute attr) {
 
 intptr_t mlirWaveIndexMappingAttrGetNumSymbols(MlirAttribute attr) {
   return llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr))
-      .getSymbolNames()
+      .getSymbols()
       .size();
 }
 
 MlirAttribute mlirWaveIndexMappingAttrGetSymbol(MlirAttribute attr,
                                                 intptr_t index) {
-  return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr))
-                  .getSymbolNames()[index]);
+  return wrap(
+      llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getSymbols()[index]);
 }
 
 //===---------------------------------------------------------------------===//
@@ -423,4 +430,26 @@ MlirAttribute mlirTilingConstraintAttrGet(MlirContext mlirCtx,
 
 MlirTypeID mlirTilingConstraintAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::TilingConstraintAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveNormalFormAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveNormalFormAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveNormalFormAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveNormalFormAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveNormalFormAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveNormalForm>(value)));
+}
+
+uint32_t mlirWaveNormalFormAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveNormalFormAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveNormalFormAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveNormalFormAttr>());
 }

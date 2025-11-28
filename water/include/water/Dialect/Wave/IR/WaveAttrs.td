@@ -104,6 +104,7 @@ def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
         NORMAL_FORM_FUNC_BOUNDARY, NORMAL_FORM_OP_TYPES
     ], "full_types">;
 
+// When anything changes below, also update the C and Python API.
 def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
   I32BitEnumAttrCaseNone<"None", "none">,
   // Bits.

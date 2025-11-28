@@ -16,6 +16,9 @@ extern "C" {
 
 MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Wave, wave);
 
+/// Register the Wave dialect passes.
+MLIR_CAPI_EXPORTED void mlirWaveDialectRegisterPasses();
+
 //===---------------------------------------------------------------------===//
 // Wave Dialect Constants
 //===---------------------------------------------------------------------===//
@@ -185,6 +188,35 @@ MLIR_CAPI_EXPORTED uint32_t mlirWaveMmaKindAttrGetValue(MlirAttribute attr);
 
 /// Returns the typeID of a WaveMmaKindAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveMmaKindAttrGetTypeID();
+
+//===---------------------------------------------------------------------===//
+// WaveNormalFormAttr
+//===---------------------------------------------------------------------===//
+
+/// Normal forms, this must remain consistent with WaveAttrs.td.
+enum WaveNormalForm {
+  WaveNormalFormNone = 0,
+  WaveNormalFormFunctionBoundarySpecified = 1,
+  WaveNormalFormOpTypesSpecified = 2,
+  WaveNormalFormIndexExprsSpecified = 4,
+  WaveNormalFormMemoryOnlyTypes = 8,
+
+  WaveNormalFormAllTypesSPecified =
+      WaveNormalFormFunctionBoundarySpecified | WaveNormalFormOpTypesSpecified
+};
+
+/// Checks whether the given MLIR attribute is a WaveNormalFormAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveNormalFormAttr(MlirAttribute attr);
+
+/// Creates a new WaveNormalFormAttr with the given mapping attribute.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveNormalFormAttrGet(MlirContext ctx,
+                                                           uint32_t value);
+
+/// Get the value from a WaveNormalFormAttr.
+MLIR_CAPI_EXPORTED uint32_t mlirWaveNormalFormAttrGetValue(MlirAttribute attr);
+
+/// Returns the typeID of a WaveNormalFormAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveNormalFormAttrGetTypeID();
 
 //===---------------------------------------------------------------------===//
 // WaveExprListAttr
