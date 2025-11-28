@@ -1382,6 +1382,136 @@ def test_gemm_four_stage():
 
 
 @run_test
+def test_gemm_four_stage_global_to_lds():
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            mma_type=tkw.MMAType.GFX1250_F32_16x16x32_F16,
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_four_stage(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    options = WaveCompileOptions(
+        subs={
+            M: 128,
+            N: 128,
+            K: 256,
+            BLOCK_M: 32,
+            BLOCK_N: 32,
+            BLOCK_K: 32,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            READ_SHARED_DELAY: 1,
+            WRITE_SHARED_DELAY: 1,
+            READ_GLOBAL_DELAY: 2,
+            WRITE_GLOBAL_DELAY: 2,
+            MMA_DELAY: 1,
+            VALU_DELAY: 1,
+            SHUFFLE_DELAY: 1,
+            SHARED_MEMORY_UNITS: 4,
+            GLOBAL_MEMORY_UNITS: 4,
+            MMA_UNITS: 4,
+            VALU_UNITS: 8,
+            SHUFFLE_UNITS: 8,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.FOUR_STAGE,
+        multi_buffer_count=2,
+        use_global_to_shared=True,
+        use_scheduling_barriers=True,
+        compile_to_mlir=True,
+        target="gfx1250",
+    )
+
+    gemm_four_stage = wave_compile(options, gemm_four_stage)
+    print(gemm_four_stage.asm)
+    # CHECK-LABEL: func.func @gemm_four_stage
+    # Test multibuffering: verify shared memory views are correctly allocated
+    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<9216xi8
+    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<9216xi8
+    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c2304][] : memref<9216xi8
+    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c4608][] : memref<9216xi8
+    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c6912][] : memref<9216xi8
+
+    # Prologue
+    # Verify prologue stores to shared memory
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"
+
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # Verify prologue loads from shared memory
+    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%thread_id_x, %thread_id_y]
+    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
+    # CHECK: vector.load %[[VIEW1]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]]
+
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"
+
+    # Main Loop:
+    # Verify Pipelined Loop, iter_args should contain vector values from prologue
+    # CHECK: scf.for %[[ARG3:.*]] = %c0 to %c6 step %c1 iter_args({{.*}}, %[[LVIEW3:.*]] = %[[VIEW3]], %[[LVIEW2:.*]] = %[[VIEW2]], %[[LVIEW1:.*]] = %[[VIEW1]], %[[LVIEW0:.*]] = %[[VIEW0]])
+
+    # Verify WMMA exists
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # CHECK: vector.load %[[LVIEW0]]
+    # CHECK: vector.load %[[LVIEW2]]
+
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.tensor.load.to.lds"
+
+    # CHECK: scf.yield {{.*}}, %[[LVIEW2]], %[[LVIEW3]], %[[LVIEW0]], %[[LVIEW1]]
+
+    # Epilogue:
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK: llvm.call_intrinsic "llvm.amdgcn.s.wait.tensorcnt"
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal -1
+    # CHECK: rocdl.s.barrier.wait -1
+
+    # CHECK: vector.load
+    # CHECK: vector.load
+
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK-COUNT-8: vector.store
+
+
+@run_test
 def test_dynamic_gemm_pipelined():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]

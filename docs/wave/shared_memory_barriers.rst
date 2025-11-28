@@ -10,7 +10,8 @@ Glossary
     * Read (READ)
     * Write (WRITE)
     * Atomic (READ_WRITE)
-    * GatherToLDS (READ_WRITE)
+    * GatherToLDS (WRITE)
+    * TensorLoadToLDS (WRITE)
 
 - Nested region op types
     * Iterate

@@ -4,6 +4,7 @@ from enum import Enum
 from .graph_utils import Edge
 from ..utils.general_utils import is_shared_read
 from ...ops.wave_ops import (
+    TensorLoadToLDS,
     get_custom,
     CustomOp,
     Read,
@@ -139,20 +140,21 @@ class GemmScheduler(BaseScheduler):
             local_writes.update(cur_writes)
         return list(local_writes)
 
-    def get_lds_gathers(self, local_loads):
-        lds_gathers = set()
+    def get_global_loads_to_lds(self, local_loads):
+        loads = set()
         for local_load in local_loads:
             custom = get_custom(local_load)
             # Get direct users and users from rotated registers.
             memory_users = set([g for g in custom.memory.users])
-            # Filter users for GatherToLDS
-            cur_gathers = [
+            # Filter users for GatherToLDS or TensorLoadToLDS
+            cur_loads = [
                 g
                 for g in memory_users
-                if isinstance(get_custom(g), GatherToLDS) and g.graph == custom.graph
+                if isinstance(get_custom(g), (GatherToLDS, TensorLoadToLDS))
+                and g.graph == custom.graph
             ]
-            lds_gathers.update(cur_gathers)
-        return list(lds_gathers)
+            loads.update(cur_loads)
+        return list(loads)
 
     def get_global_loads(self, local_writes):
         global_loads = set()
@@ -187,8 +189,8 @@ class GemmScheduler(BaseScheduler):
         # Early exit if cannot find either local loads
         if not local_load_lhs or not local_load_rhs:
             return
-        global_to_shared_lhs = self.get_lds_gathers(local_load_lhs)
-        global_to_shared_rhs = self.get_lds_gathers(local_load_rhs)
+        global_to_shared_lhs = self.get_global_loads_to_lds(local_load_lhs)
+        global_to_shared_rhs = self.get_global_loads_to_lds(local_load_rhs)
         local_write_lhs = self.get_local_writes(local_load_lhs)
         local_write_rhs = self.get_local_writes(local_load_rhs)
         global_load_lhs = self.get_global_loads(local_write_lhs)
@@ -223,8 +225,12 @@ class GemmScheduler(BaseScheduler):
             local_load_lhs_scale, local_load_rhs_scale = self.get_scale_local_loads(
                 mma_nodes
             )
-            global_to_shared_lhs_scale = self.get_lds_gathers(local_load_lhs_scale)
-            global_to_shared_rhs_scale = self.get_lds_gathers(local_load_rhs_scale)
+            global_to_shared_lhs_scale = self.get_global_loads_to_lds(
+                local_load_lhs_scale
+            )
+            global_to_shared_rhs_scale = self.get_global_loads_to_lds(
+                local_load_rhs_scale
+            )
             local_write_lhs_scale = self.get_local_writes(local_load_lhs_scale)
             local_write_rhs_scale = self.get_local_writes(local_load_rhs_scale)
             global_load_lhs_scale = self.get_global_loads(local_write_lhs_scale)
