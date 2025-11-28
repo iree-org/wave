@@ -635,8 +635,8 @@ static llvm::LogicalResult populateMmaIndexingExpr(
   mlir::bindSymbols(ctx, threadX, threadY, threadZ, gprNum);
 
   mlir::AffineExpr linearizedThreadId =
-      threadX + threadY * wavesPerWorkgroup[0] +
-      threadZ * wavesPerWorkgroup[1] * wavesPerWorkgroup[0];
+      threadX + threadY * wavesPerWorkgroup[0] * threadsPerWave +
+      threadZ * wavesPerWorkgroup[1] * wavesPerWorkgroup[0] * threadsPerWave;
   mlir::AffineExpr laneId = linearizedThreadId % threadsPerWave;
   MmaIndexingExprBuilder builder(symbolNames, mSymbol, nSymbol, kSymbol);
 
@@ -876,9 +876,10 @@ static void mixInThreadIndependentConstraints(
           return attr.getName() == symbol.getName();
         });
 #ifndef NDEBUG
-    llvm::errs() << "symbol: " << symbol.getName() << "\n";
-    assert(mappingIt != symbolMappings.end() &&
-           "expected a mapping for the symbol");
+    if (mappingIt == symbolMappings.end()) {
+      llvm::errs() << "symbol: " << symbol.getName() << "\n";
+      assert(false && "expected a mapping for the symbol");
+    }
 #endif // NDEBUG
     wave::WaveIndexMappingAttr mapping =
         llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue());
