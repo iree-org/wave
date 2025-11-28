@@ -138,7 +138,9 @@ def compute_fused_parameters(
         Tuple of (merged_distributed_shape, merged_shared_tile_index,
                   merged_global_tile_index, merged_bounds, multicast_mask)
     """
-
+    # As we are cutting number of waves ding the partilar load in half, we need
+    # to scale the distributed shape by 2. The code relies on the fact that the
+    # tensor_load_to_shared distributes shape starting from the leftmost dimension.
     scaled_load1_shape = _scale_distributed_shape(load1, 2)
     scaled_load2_shape = _scale_distributed_shape(load2, 2)
 
