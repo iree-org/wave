@@ -11,7 +11,7 @@ from typing import Any
 import sympy
 import torch.fx as fx
 
-from .._support.indexing import IndexSequence, IndexSymbol
+from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
 from .._support.tracing import CapturedTrace
 from ..lang.global_symbols import INPUT_SELECTOR, THREAD_0, THREAD_1, THREAD_2
 from ..ops.wave_ops import (
@@ -90,6 +90,35 @@ def merge_dicts_with_piecewise(
     return result
 
 
+def _scale_distributed_shape(
+    load: TensorLoadToLDS,
+    mult: int
+) -> dict[IndexSymbol, IndexExpr]:
+    """
+    Assuming tensor load loads are distributed across one of the dimensions starting
+    on the leftmost, return the updated distributed shape for the given load and multiplier.
+    """
+    assert len(load.dst) == 1, "Only one destination memory is supported"
+    mem = get_custom(load.dst[0])
+    symbolic_shape = mem.type.symbolic_shape
+    distributed_shape = [load.distributed_shape[k] for k in symbolic_shape]
+    mem_distributed_shape = mem.distributed_shape
+    for i, (s1, s2) in enumerate(zip(distributed_shape, mem_distributed_shape)):
+        s1 = subs_idxc(s1)
+        s2 = subs_idxc(s2)
+        if s1 == s2:
+            continue
+
+        assert s2 % s1 == 0, f"Destination memory distributed shape must be a multiple of the source distributed shape, got {s2} % {s1} != 0"
+        if s1 * mult > s2:
+            continue
+
+        distributed_shape[i] = s1 * mult
+        return {k: v for k, v in zip(symbolic_shape, distributed_shape)}
+
+    assert False, "Invalid distributed shape"
+
+
 def compute_fused_parameters(
     load1: TensorLoadToLDS,
     load2: TensorLoadToLDS,
@@ -111,17 +140,21 @@ def compute_fused_parameters(
         Tuple of (merged_distributed_shape, merged_shared_tile_index,
                   merged_global_tile_index, merged_bounds, multicast_mask)
     """
+
     # Scale distributed_shape by 2 for selector-wave-dependent dimensions
     # After fusion: even waves execute load1, odd waves execute load2
     # Each wave needs to do 2x the work in selector-wave-dependent dims
-    scaled_load1_shape = {
-        dim: load1.distributed_shape[dim] * (2 if dim in distributed_dims else 1)
-        for dim in load1.distributed_shape.keys()
-    }
-    scaled_load2_shape = {
-        dim: load2.distributed_shape[dim] * (2 if dim in distributed_dims else 1)
-        for dim in load2.distributed_shape.keys()
-    }
+    # scaled_load1_shape = {
+    #     dim: load1.distributed_shape[dim] * (2 if dim in distributed_dims else 1)
+    #     for dim in load1.distributed_shape.keys()
+    # }
+    # scaled_load2_shape = {
+    #     dim: load2.distributed_shape[dim] * (2 if dim in distributed_dims else 1)
+    #     for dim in load2.distributed_shape.keys()
+    # }
+
+    scaled_load1_shape = _scale_distributed_shape(load1, 2)
+    scaled_load2_shape = _scale_distributed_shape(load2, 2)
 
     merged_distributed_shape = merge_dicts_with_piecewise(
         scaled_load1_shape, scaled_load2_shape, INPUT_SELECTOR
