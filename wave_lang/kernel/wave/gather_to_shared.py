@@ -305,6 +305,10 @@ def emit_global_to_lds(
         # they are part of the same group later.
         new_write.pre_expansion_id = common_id
 
+        # Copy the tag from the original read node to preserve it for scheduling
+        if hasattr(read, "tag") and read.tag:
+            new_write.tag = read.tag
+
         new_writes[write.memory].append(new_write)
         if drop_padding:
             custom_memory = get_custom(write.memory)

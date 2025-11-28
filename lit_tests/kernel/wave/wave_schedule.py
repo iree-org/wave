@@ -9,6 +9,7 @@ from wave_lang.kernel.wave.templates.test_kernels import (
 from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
     get_tagged_gemm,
     get_two_pp_cluster_schedule,
+    get_async_two_pp_clusters,
 )
 
 
@@ -70,7 +71,9 @@ def test_gemm_prefetch_reorder_stagger():
     mfma_variant = wave.MMAType.F32_16x16x16_F16
 
     # Get the kernel, schedule, and options from the template
-    gemm, options = get_tagged_gemm(shape, mfma_variant, compile_to_mlir=True)
+    gemm, options = get_tagged_gemm(
+        shape=shape, mfma_variant=mfma_variant, compile_to_mlir=True
+    )
     schedule = get_two_pp_cluster_schedule()
 
     gemm = wave_compile(options, gemm, schedule)
@@ -158,3 +161,91 @@ def test_gemm_prefetch_reorder_stagger():
     # CHECK-COUNT-32: vector.load %[[VIEW_0]]
     # CHECK-COUNT-8:  vector.load %[[VIEW_1]]
     # CHECK-COUNT-64: amdgpu.mfma
+
+
+@run_test
+def test_gemm_two_async_cluster_pingpong():
+    # Define test parameters for advanced scheduling
+    shape = (4096, 4096, 4096)  # M, N, K dimensions
+    block_shape = (128, 128, 64)
+    mfma_variant = wave.MMAType.F32_16x16x16_F16
+
+    # Get the kernel, schedule, and options from the template
+    gemm, options = get_tagged_gemm(
+        shape,
+        block_shape,
+        mfma_variant,
+        compile_to_mlir=True,
+        use_global_to_shared=True,
+    )
+    options.target = "gfx950"
+    schedule = get_async_two_pp_clusters()
+
+    gemm = wave_compile(options, gemm, schedule)
+    print(gemm.asm)
+
+    # CHECK-LABEL:  gemm
+    # CHECK-DAG:      #[[MAP:.+]] = affine_map<()[s0, s1] -> (s1 * 4 + s0 floordiv 64)>
+    # CHECK:          func.func @gemm
+
+    # Warp High and Warp Lo computation
+    # CHECK:         %[[FLAT_WAVE_ID:.+]] = affine.apply #[[MAP]]()[%thread_id_x, %thread_id_y]
+    # CHECK:         %[[FLAT_WAVE_ID_I32:.+]] = arith.index_cast %[[FLAT_WAVE_ID]] : index to i32
+    # CHECK:         %[[WARP_HI:.+]] = arith.cmpi sge, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
+    # CHECK:         %[[WARP_LO:.+]] = arith.cmpi slt, %[[FLAT_WAVE_ID_I32]], %c4_i32 : i32
+
+    # cond_barrier on warp hi to brings assymetry between 2 wave in same SIMD and Block.
+    # CHECK:          scf.if %[[WARP_HI]] {
+    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK-NEXT:     }
+
+    # Steady State
+    # CHECK:          scf.for
+
+    # 1st cluster interleaved local and global reads.
+
+    # 1st Cluster: First slice of Local read lhs and rhs
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER:.+]][{{.*}}, %[[K0:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K1:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER:.+]][{{.*}}, %[[K0]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K1]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+
+    # 1st Cluster: Global load to shared
+    # CHECK-COUNT-4:    amdgpu.gather_to_lds
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+
+    # First dot slice
+    # CHECK:            rocdl.s.setprio 1
+    # CHECK-COUNT-16:   amdgpu.mfma
+    # CHECK:            rocdl.s.setprio 0
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK-NEXT:       amdgpu.memory_counter_wait load(4)
+    # CHECK-NEXT:       rocdl.s.barrier
+
+    # 2nd cluster second slice of local read lhs and rhs.
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K2:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K3:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K2]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K3]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK-NEXT:       amdgpu.memory_counter_wait load(0)
+    # CHECK-NEXT:       rocdl.s.barrier
+
+    # Second dot slice:
+    # CHECK:            rocdl.s.setprio 1
+    # CHECK-COUNT-16:   amdgpu.mfma
+    # CHECK:            rocdl.s.setprio 0
+    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+
+    # Final LDS barrier to synchronize shared writes.
+    # CHECK:            amdgpu.lds_barrier
+    # CHECK:            scf.yield
+    # CHECK:          }
+
+    # Prologue
+
+    # cond_barrier on warp low to even out assymetry between 2 wave in same SIMD and Block.
+    # CHECK:          scf.if %[[WARP_LO]] {
+    # CHECK-NEXT:       rocdl.s.barrier
+    # CHECK-NEXT:     }
