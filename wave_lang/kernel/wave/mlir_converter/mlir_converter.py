@@ -31,10 +31,14 @@ def emit_wave_dialect(
     constraints: list[Constraint],
     options: WaveCompileOptions,
     test_diagnostic_emission: bool,
+    pipeline: str = "",
 ) -> tuple[str, list[str]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
-    The `subs` field of options is the only option used during emission."""
+    The `subs` field of options is the only option used during emission.
+    If `pipeline` is provided, it must be a parsable MLIR transform module
+    containing a transform.named_sequence to be applied to the emitted module
+    via the Transform dialect interpreter."""
 
     child = Path(__file__).with_name("water_emitter.py")
     if not child.exists():
@@ -61,7 +65,7 @@ def emit_wave_dialect(
                 "trace": trace,
                 "constraints": constraints,
                 "options": options,
-                "pipeline": "",
+                "pipeline": pipeline,
             }
         )
     )
