@@ -30,6 +30,10 @@ NB_MODULE(_waterDialects, m) {
           mlirDialectHandleLoadDialect(h, context);
       },
       nb::arg("context").none() = nb::none(), nb::arg("load") = true);
+  d.def(
+      "register_passes",
+      [](MlirContext context) { mlirWaveDialectRegisterPasses(); },
+      nb::arg("context").none() = nb::none());
 
   // Export dialect constants
   d.attr("WAVE_CONSTRAINTS_ATTR_NAME") = mlirWaveDialectConstraintsAttrName;
@@ -96,13 +100,13 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
           "Gets a wave.WaveIndexSymbolAttr from an index symbol enum value.")
-      .def(
+      .def_property_readonly(
           "value",
           [](MlirAttribute self) {
             return static_cast<wave::WaveIndexSymbol>(
                 mlirWaveIndexSymbolAttrGetValue(self));
           },
-          "Returns the index symbol enum value.");
+          "Index symbol enum value.");
 
   nb::enum_<wave::WaveIndexSymbol>(d, "WaveIndexSymbol")
       .value("DEVICE_DIM_0", wave::WaveIndexSymbol::DEVICE_DIM_0)
@@ -224,6 +228,38 @@ NB_MODULE(_waterDialects, m) {
           nb::arg("cls"), nb::arg("symbol_dict"),
           nb::arg("context") = nb::none(),
           "Gets a wave.WaveHyperparameterAttr from parameters.");
+
+  //===---------------------------------------------------------------------===//
+  // WaveNormalFormAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveNormalFormAttr", mlirAttributeIsAWaveNormalFormAttr,
+      mlirWaveNormalFormAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, WaveNormalForm value, MlirContext context) {
+            return cls(mlirWaveNormalFormAttrGet(context,
+                                                 static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveNormalFormAttr from a normal form enum value.")
+      .def(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<WaveNormalForm>(
+                mlirWaveNormalFormAttrGetValue(self));
+          },
+          "Returns the normal form enum value.");
+
+  nb::enum_<WaveNormalForm>(d, "WaveNormalForm")
+      .value("None", WaveNormalFormNone)
+      .value("FunctionBoundarySpecified",
+             WaveNormalFormFunctionBoundarySpecified)
+      .value("OpTypesSpecified", WaveNormalFormOpTypesSpecified)
+      .value("IndexExprsSpecified", WaveNormalFormIndexExprsSpecified)
+      .value("MemoryOnlyTypes", WaveNormalFormMemoryOnlyTypes)
+      .value("AllTypesSpecified", WaveNormalFormAllTypesSPecified);
 
   //===---------------------------------------------------------------------===//
   // WaveWorkgroupDimAttr

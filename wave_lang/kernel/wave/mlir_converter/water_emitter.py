@@ -31,31 +31,35 @@ from wave_lang.kernel.wave.constraints import (
     TilingConstraint,
     DeviceConstraint,
 )
+from wave_lang.kernel._support.indexing import index_symbol, IndexSequence, IndexSymbol
 
 try:
     from water_mlir.water_mlir import ir
+    from water_mlir.water_mlir.passmanager import PassManager
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         AllocateOp,
         DivOp,
-        ExtractSliceOp,
         Exp2Op,
+        ExtractSliceOp,
+        IterateOp,
         MmaOp,
         MulOp,
         ReadOp,
         RegisterOp,
         WriteOp,
-        IterateOp,
         YieldOp,
-        WaveExprListAttr,
-        HardwareConstraintAttr,
-        WorkgroupConstraintAttr,
-        WaveConstraintAttr,
-        TilingConstraintAttr,
         DeviceConstraintAttr,
+        HardwareConstraintAttr,
+        TilingConstraintAttr,
+        WaveConstraintAttr,
+        WaveExprListAttr,
         WaveMmaKind,
         WaveMmaKindAttr,
+        WaveNormalForm,
+        WaveNormalFormAttr,
         WaveWorkgroupDimAttr,
+        WorkgroupConstraintAttr,
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
@@ -240,35 +244,38 @@ def _convert_affine_expr_to_sympy_expr(
     expr: ir.AffineExpr,
     symbol_mapping: Sequence[sympy.Symbol],
 ) -> sympy.Expr:
-    match expr:
-        case ir.AffineConstantExpr(value):
-            return sympy.Integer(value)
-        case ir.AffineSymbolExpr(index):
-            return symbol_mapping[index]
-        case ir.AffineAddExpr(lhs, rhs):
-            return _convert_affine_expr_to_sympy_expr(
-                lhs, symbol_mapping
-            ) + _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
-        case ir.AffineMulExpr(lhs, rhs):
-            return _convert_affine_expr_to_sympy_expr(
-                lhs, symbol_mapping
-            ) * _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
-        case ir.AffineFloorDivExpr(lhs, rhs):
-            return sympy.floor(
-                _convert_affine_expr_to_sympy_expr(lhs, symbol_mapping)
-                / _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
-            )
-        case ir.AffineCeilDivExpr(lhs, rhs):
-            return sympy.ceil(
-                _convert_affine_expr_to_sympy_expr(lhs, symbol_mapping)
-                / _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
-            )
-        case ir.AffineModExpr(lhs, rhs):
-            return _convert_affine_expr_to_sympy_expr(
-                lhs, symbol_mapping
-            ) % _convert_affine_expr_to_sympy_expr(rhs, symbol_mapping)
-        case _:
-            raise ValueError(f"Unsupported affine expression: {expr}")
+    if ir.AffineConstantExpr.isinstance(expr):
+        return sympy.Integer(ir.AffineConstantExpr(expr).value)
+    if ir.AffineSymbolExpr.isinstance(expr):
+        return symbol_mapping[ir.AffineSymbolExpr(expr).position]
+    if ir.AffineAddExpr.isinstance(expr):
+        add_expr = ir.AffineAddExpr(expr)
+        return _convert_affine_expr_to_sympy_expr(
+            add_expr.lhs, symbol_mapping
+        ) + _convert_affine_expr_to_sympy_expr(add_expr.rhs, symbol_mapping)
+    if ir.AffineMulExpr.isinstance(expr):
+        mul_expr = ir.AffineMulExpr(expr)
+        return _convert_affine_expr_to_sympy_expr(
+            mul_expr.lhs, symbol_mapping
+        ) * _convert_affine_expr_to_sympy_expr(mul_expr.rhs, symbol_mapping)
+    if ir.AffineFloorDivExpr.isinstance(expr):
+        floor_div_expr = ir.AffineFloorDivExpr(expr)
+        return sympy.floor(
+            _convert_affine_expr_to_sympy_expr(floor_div_expr.lhs, symbol_mapping)
+            / _convert_affine_expr_to_sympy_expr(floor_div_expr.rhs, symbol_mapping)
+        )
+    if ir.AffineCeilDivExpr.isinstance(expr):
+        ceil_div_expr = ir.AffineCeilDivExpr(expr)
+        return sympy.ceil(
+            _convert_affine_expr_to_sympy_expr(ceil_div_expr.lhs, symbol_mapping)
+            / _convert_affine_expr_to_sympy_expr(ceil_div_expr.rhs, symbol_mapping)
+        )
+    if ir.AffineModExpr.isinstance(expr):
+        mod_expr = ir.AffineModExpr(expr)
+        return _convert_affine_expr_to_sympy_expr(
+            mod_expr.lhs, symbol_mapping
+        ) % _convert_affine_expr_to_sympy_expr(mod_expr.rhs, symbol_mapping)
+    raise ValueError(f"Unsupported affine expression: {expr} of type {type(expr)}")
 
 
 def _convert_index_mapping_attr_to_sympy(
@@ -277,6 +284,8 @@ def _convert_index_mapping_attr_to_sympy(
     def wrap_symbol(symbol_name: ir.Attribute) -> sympy.Symbol:
         if isinstance(symbol_name, wave.WaveSymbolAttr):
             return index_symbol(symbol_name.name)
+        elif isinstance(symbol_name, wave.WaveIterSymbolAttr):
+            return index_symbol("$ARG" + symbol_name.name)
         elif isinstance(symbol_name, wave.WaveIndexSymbolAttr):
             match symbol_name.value:
                 case wave.WaveIndexSymbol.WORKGROUP_0:
@@ -305,9 +314,18 @@ def _convert_index_mapping_attr_to_sympy(
             raise ValueError(f"Unsupported symbol attribute: {symbol_name}")
 
     symbols = list(map(wrap_symbol, attr.symbols))
-    start = _convert_affine_expr_to_sympy_expr(attr.start, symbols)
-    step = _convert_affine_expr_to_sympy_expr(attr.step, symbols)
-    stride = _convert_affine_expr_to_sympy_expr(attr.stride, symbols)
+    assert (
+        len(attr.start.results) == 1
+    ), f"Expected start map to have one expression, got {attr.start}"
+    assert (
+        len(attr.step.results) == 1
+    ), f"Expected step map to have one expression, got {attr.step}"
+    assert (
+        len(attr.stride.results) == 1
+    ), f"Expected stride map to have one expression, got {attr.stride}"
+    start = _convert_affine_expr_to_sympy_expr(attr.start.results[0], symbols)
+    step = _convert_affine_expr_to_sympy_expr(attr.step.results[0], symbols)
+    stride = _convert_affine_expr_to_sympy_expr(attr.stride.results[0], symbols)
     return IndexSequence(start, step, stride)
 
 
@@ -315,31 +333,49 @@ def _convert_index_mapping_dict_to_sympy(
     dict_attr: ir.DictAttr,
 ) -> dict[IndexSymbol, IndexSequence]:
     result = {}
-    for key, value in dict_attr:
+    for named_attr in dict_attr:
+        key = named_attr.name
+        value = named_attr.attr
         assert isinstance(
             value, wave.WaveIndexMappingAttr
         ), f"Unsupported index mapping attribute: {value}"
-        result[key] = _convert_index_mapping_attr_to_sympy(value)
+        result[index_symbol(key)] = _convert_index_mapping_attr_to_sympy(value)
     return result
+
+
+def _make_piecewise_sequence(
+    *components: tuple[IndexSequence, sympy.Expr]
+) -> IndexSequence:
+    return IndexSequence(
+        start=sympy.Piecewise(
+            *[(component[0].start, component[1]) for component in components]
+        ),
+        size=sympy.Piecewise(
+            *[(component[0].size, component[1]) for component in components]
+        ),
+        stride=sympy.Piecewise(
+            *[(component[0].stride, component[1]) for component in components]
+        ),
+    )
 
 
 def _convert_index_mapping_array_to_sympy(
     op: ir.Operation, array_attr: ir.ArrayAttr
 ) -> dict[IndexSymbol, IndexSequence]:
-    result = {}
-    if not isinstance(op.opview, wave.MmaOp):
+    # TODO: for some reason, isinstance(op.opview, MmaOp) is not working. Something is off with dialect loading/registration.
+    if op.name != "wave.mma":
         assert (
             len(array_attr) == 1
         ), f"Expected exactly one index mapping attribute for non-MMA op: {op}"
-        return _convert_index_mapping_attr_to_sympy(array_attr[0])
+        return _convert_index_mapping_dict_to_sympy(array_attr[0])
 
     assert (
         len(array_attr) == 4
     ), f"Expected exactly four index mapping attributes for MMA op: {op}"
-    lhs_index = _convert_index_mapping_attr_to_sympy(array_attr[0])
-    rhs_index = _convert_index_mapping_attr_to_sympy(array_attr[1])
-    acc_index = _convert_index_mapping_attr_to_sympy(array_attr[2])
-    result_index = _convert_index_mapping_attr_to_sympy(array_attr[3])
+    lhs_index = _convert_index_mapping_dict_to_sympy(array_attr[0])
+    rhs_index = _convert_index_mapping_dict_to_sympy(array_attr[1])
+    acc_index = _convert_index_mapping_dict_to_sympy(array_attr[2])
+    result_index = _convert_index_mapping_dict_to_sympy(array_attr[3])
     mk_symbols = set(lhs_index.keys())
     nk_symbols = set(rhs_index.keys())
     m_symbol = (mk_symbols - nk_symbols).pop()
@@ -350,7 +386,7 @@ def _convert_index_mapping_array_to_sympy(
     assert acc_index[m_symbol] == result_index[m_symbol]
     assert acc_index[n_symbol] == result_index[n_symbol]
     return {
-        m_symbol: sympy.Piecewise(
+        m_symbol: _make_piecewise_sequence(
             (lhs_index[m_symbol], ~index_symbol("$MMA_ACC")),
             (acc_index[m_symbol], index_symbol("$MMA_ACC")),
         ),
@@ -372,9 +408,9 @@ def _preprocess_symbols(
     """
     result = {}
     for sym in symbols:
-        # Special case: rename ARG* symbols to _ARG*
+        # Special case: rename $ARG* symbols to _Iter_*.
         if sym.name.startswith("$ARG"):
-            new_name = sym.name.replace("$", "_")
+            new_name = sym.name.replace("$ARG", "_Iter_")
             result[sym] = sympy.Symbol(new_name, positive=True)
         else:
             result[sym] = sympy.Symbol(sym.name, positive=True)
@@ -404,6 +440,8 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
 
     if name in INDEX_SYMBOL_MAP:
         return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
+    if name.startswith("_Iter_"):
+        return wave.WaveIterSymbolAttr.get(name.replace("_Iter_", ""))
     else:
         return wave.WaveSymbolAttr.get(name)
 
@@ -439,7 +477,9 @@ def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
     return ir.DictAttr.get(index_mappings)
 
 
-def _attach_attributes(node: CustomOp, op: ir.Operation):
+def _attach_attributes(
+    node: CustomOp, op: ir.Operation, known_ids: set[str] | None = None
+):
     from wave_lang.kernel.ops.wave_ops import MMA
 
     if getattr(node, "index", None) and isinstance(node.index, dict):
@@ -474,6 +514,13 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
             ]
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
+
+    if water_id := getattr(node.fx_node, "_water_id", None):
+        op.attributes[_INTERNAL_WATER_ID_ATTR_NAME] = ir.StringAttr.get(water_id)
+        if known_ids is not None:
+            known_ids.add(water_id)
+    elif known_ids is not None:
+        raise RuntimeError(f"Water id requested but not specified for node {node}.")
 
 
 def _convert_to_wave_expr_list_tuple(
@@ -515,6 +562,7 @@ def _emit_ops_from_graph(
     trace: CapturedTrace,
     value_map: dict[fx.Node | fx.Proxy, ir.Value],
     ctx: ir.Context,
+    known_ids: set[str] | None = None,
 ):
     # Import wave types locally to avoid clashing with iree bindings
     from wave_lang.kernel.ops.wave_ops import (
@@ -596,6 +644,8 @@ def _emit_ops_from_graph(
                     result_types = []
                     result_locs = []
                     outputs = node.outputs()
+                    if not isinstance(outputs, Sequence):
+                        outputs = [outputs]
                     for fx_output in outputs:
                         output = get_custom(fx_output)
                         output.infer_type()
@@ -606,7 +656,7 @@ def _emit_ops_from_graph(
                             else ir.Location.current
                         )
 
-                    mlir_op = op_builder(result_types, axis, carried_values)
+                    mlir_op = op_builder(result_types, axis, carried_values, [])
                     body = ir.Block.create_at_start(
                         mlir_op.regions[0], result_types, result_locs
                     )
@@ -625,16 +675,20 @@ def _emit_ops_from_graph(
                             trace,
                             value_map,
                             ctx,
+                            known_ids,
                         )
 
                         # create YieldOp
                         YieldOp([value_map[output] for output in outputs])
                 elif isinstance(node, MMA):
+                    # TODO: FIXME: need to call the propagation pass upfront
                     if node.mma_type is None:
-                        raise RuntimeError("MMA op missing mma_type")
-                    mma_kind = ir.Attribute.parse(
-                        f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
-                    )
+                        mma_kind = WaveMmaKindAttr.get(WaveMmaKind.F32_16x16x16_F16)
+                        # raise RuntimeError("MMA op missing mma_type")
+                    else:
+                        mma_kind = ir.Attribute.parse(
+                            f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
+                        )
                     mlir_op = op_builder(result_type, *mlir_operands, mma_kind)
                 elif isinstance(node, Allocate):
                     mlir_op = op_builder(
@@ -663,7 +717,7 @@ def _emit_ops_from_graph(
                     f"Missing support for '{node.tkw_op_name}' operation"
                 )
 
-            _attach_attributes(node, mlir_op.operation)
+            _attach_attributes(node, mlir_op.operation, known_ids)
 
             # Add results to the value map in case they are used as
             # operands later
@@ -727,11 +781,14 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
+_INTERNAL_WATER_ID_ATTR_NAME = "_water_internal.id"
+
+
 def _emit_from_captured_trace(
     trace: "CapturedTrace",
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    pipeline: str,
+    pass_pipeline: str,
     test_diagnostics=False,
 ) -> int:
     from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
@@ -741,11 +798,6 @@ def _emit_from_captured_trace(
     value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
     diagnostics = []
 
-    if pipeline:
-        raise NotImplementedError(
-            "Transform dialect pipelines are not implemented yet."
-        )
-
     enable_debug_info = (
         options.location_capture_config.level is not LocationCaptureLevel.NONE
     )
@@ -753,20 +805,16 @@ def _emit_from_captured_trace(
     if enable_debug_info and not trace.location:
         diagnostics.append("Missing debug location for wave trace")
 
-    nodes = trace.walk()
-    node_backmap = {}
-    for node in nodes:
-        custom = get_custom(node)
-        setattr(custom, "_water_id", str(hash(node)))
-        node_backmap[str(hash(node))] = node
-
     with (
         ir.Context() as ctx,
         trace.location.to_water() if trace.location else ir.Location.unknown(),
     ):
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
+        wave.register_passes()
         module = ir.Module.create()
+
+        known_ids: set[str] | None = set() if options.check_water_analysis else None
 
         def diagnostics_handler(d):
             diagnostics.append(f"{d.location}: {d.message}")
@@ -848,49 +896,78 @@ def _emit_from_captured_trace(
                 ]
 
             with ir.InsertionPoint(entry_block):
-                _emit_ops_from_graph(trace.get_root_graph(), trace, value_map, ctx)
+                _emit_ops_from_graph(
+                    trace.get_root_graph(), trace, value_map, ctx, known_ids
+                )
                 func.ReturnOp(operands_=[])
 
-        for fx_node, ir_value in value_map.items():
-            if not isinstance(ir_value, ir.OpResult):
-                continue
-            custom = get_custom(fx_node)
-            if custom not in node_backmap:
-                continue
-            ir_value.owner.attributes["wave.water_id"] = ir.StringAttr.get(
-                node_backmap[custom._water_id]
-            )
-
-        # Verify the module before printing
+        # Verify the module before printing.
         try:
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(str(e))
+            # TODO, we likely want to return here and in similar situations below.
+            return 1
 
-        # TODO: if there was an error above, don't try to get module asm...
+        print(module.operation, file=sys.stderr)
 
-        inferred_index_mappings = {}
+        if pass_pipeline:
+            # TODO: we should detect it in a pass
+            module.operation.attributes["wave.normal_form"] = WaveNormalFormAttr.get(
+                WaveNormalForm.AllTypesSpecified
+            )
+            try:
+                module.operation.verify()
+            except ir.MLIRError as e:
+                diagnostics.append(str(e))
+                return 1
+            pass_manager = PassManager.parse(pass_pipeline)
+            pass_manager.run(module.operation)
+            try:
+                module.operation.verify()
+            except ir.MLIRError as e:
+                diagnostics.append(str(e))
+                return 1
 
-        def extractor(op: ir.Operation) -> ir.WalkResult:
-            attribute = op.attribute["wave.water_id"]
-            if attribute is not None:
+        module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
+        print(module_str, file=sys.stderr)
+
+        if options.check_water_analysis:
+            # TODO: this special-cases index attributes
+            inferred_attributes: dict[str, dict[str, Any]] = {
+                id: {} for id in known_ids
+            }
+
+            def extractor(op: ir.Operation) -> ir.WalkResult:
+                if _INTERNAL_WATER_ID_ATTR_NAME not in op.attributes:
+                    return ir.WalkResult.ADVANCE
+                attribute = op.attributes[_INTERNAL_WATER_ID_ATTR_NAME]
+
                 assert isinstance(
                     attribute, ir.StringAttr
                 ), f"Unexpected attribute type: {attribute}"
-                node = node_backmap[attribute.value]
-                inferred_index_mappings[node] = _convert_index_mapping_array_to_sympy(
-                    op.attribute["index"]
-                )
-                # TODO: this is the main check, we likely want to connect to diagnostics here...
-                # eventually, we want to return this back through pickling somehow,
-                # but there we have a snapshot of nodes so we may need the mapping
-                # to happen in mlir_converter.py so we can map back
-                #
-                # longer term, we may want to construct new fx nodes
-                assert node.index == inferred_index_mappings[node]
-                # TODO: we could do this in C++ by creating an "expected-index" attribute and comparing there to emit a diagnostic
+                assert (
+                    attribute.value in inferred_attributes
+                ), f"Unknown water id {attribute.value}."
+                assert (
+                    "index" not in inferred_attributes[attribute.value]
+                ), f"Index already set for water id {attribute.value}."
+                assert "index" in op.attributes, f"Index not inferred for {op}."
 
-        module.operation.walk(extractor)
+                inferred_attributes[attribute.value].update(
+                    {
+                        "index": _convert_index_mapping_array_to_sympy(
+                            op, op.attributes["index"]
+                        )
+                    }
+                )
+
+                return ir.WalkResult.ADVANCE
+
+            module.operation.walk(extractor)
+            for water_id, inferred_attribute in inferred_attributes.items():
+                if "index" not in inferred_attribute:
+                    raise RuntimeError(f"Index not inferred for water id {water_id}.")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
 
@@ -898,6 +975,7 @@ def _emit_from_captured_trace(
             {
                 "diagnostics": diagnostics,
                 "module": module_str,
+                "inferred_attributes": inferred_attributes,
             }
         )
         sys.stdout.buffer.write(output)
@@ -916,9 +994,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    trace, constraints, options, pipeline = _parse_input()
+    trace, constraints, options, pass_pipeline = _parse_input()
     sys.exit(
         _emit_from_captured_trace(
-            trace, constraints, options, pipeline, args.test_diagnostic_emission
+            trace, constraints, options, pass_pipeline, args.test_diagnostic_emission
         )
     )

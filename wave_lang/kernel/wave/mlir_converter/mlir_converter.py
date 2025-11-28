@@ -20,6 +20,7 @@ The converter handles:
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 import dill
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
@@ -30,8 +31,8 @@ def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    test_diagnostic_emission: bool,
-) -> tuple[str, list[str]]:
+    test_diagnostic_emission: bool = False,
+) -> tuple[str, list[str], dict[str, dict[str, Any]]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
     The `subs` field of options is the only option used during emission."""
@@ -61,15 +62,19 @@ def emit_wave_dialect(
                 "trace": trace,
                 "constraints": constraints,
                 "options": options,
-                "pipeline": "",
+                "pipeline": (
+                    "any(water-wave-infer-index-exprs)"
+                    if options.check_water_analysis
+                    else ""
+                ),
             }
         )
     )
 
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"water_emitter failed (code {proc.returncode}):\n{err}\n{output}"
-        )
+        print(output.decode("utf-8", errors="replace"), file=sys.stderr)
+        print(err.decode("utf-8", errors="replace"), file=sys.stderr)
+        raise RuntimeError(f"water_emitter failed (code {proc.returncode})")
 
     try:
         unpickled = dill.loads(output)
@@ -81,5 +86,8 @@ def emit_wave_dialect(
         ) from e
     diagnostics = unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
     module = unpickled.get("module") if isinstance(unpickled, dict) else None
+    inferred_attributes = (
+        unpickled.get("inferred_attributes") if isinstance(unpickled, dict) else None
+    )
 
-    return module, diagnostics
+    return module, diagnostics, inferred_attributes
