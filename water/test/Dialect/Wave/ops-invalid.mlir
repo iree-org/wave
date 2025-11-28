@@ -98,7 +98,7 @@ func.func @iterate_mismatching_results(%arg0: !wave.tensor<[@A] of f32>, %arg1: 
 
 // must provide the full triple (start, step, stride)
 func.func @index_attr_wrong_attr_type(%arg0: f32) {
-  // expected-error @below {{custom op 'wave.register' expected symbol names to be either a WaveSymbolAttr or WaveIndexSymbolAttr}}
+  // expected-error @below {{expected symbol names to be one of WaveSymbolAttr, WaveIndexSymbolAttr or WaveIterSymbolAtt}}
   wave.register %arg0 index [{X : [#wave.workgroup_dim<x>] -> (WG0)}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
@@ -137,6 +137,14 @@ func.func @index_attr_not_dict(%arg0: f32) {
 func.func @index_attr_wrong_value_type(%arg0: f32) {
   // expected-error @below {{'index' attribute value for key "M" must be WaveIndexMappingAttr, got 42 : i64}}
   "wave.register"(%arg0) { index = [{ M = 42 }] } : (f32) -> vector<4xf32>
+  return
+}
+
+// -----
+
+func.func @index_attr_iter_not_allowed(%arg0: f32) {
+  // expected-error @below {{index expression uses iterator symbol M which is not defined by any parent op}}
+  wave.register %arg0 index [{M : [#wave.iter<"M">] -> (0, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 

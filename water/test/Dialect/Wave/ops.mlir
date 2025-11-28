@@ -71,6 +71,16 @@ func.func @iterate(%input0: !wave.tensor<any of f32>, %input1: !wave.tensor<any 
   return %iter_result#0, %iter_result#1 : !wave.tensor<any of f32>, !wave.tensor<any of bf16>
 }
 
+func.func @using_iter_symbol(%arg0: f32) {
+  %0 = wave.register %arg0 : !wave.tensor<[@M] of f32, <register>>
+  wave.iterate @M iter_args(%0) {
+  ^bb0(%arg1: !wave.tensor<[@M] of f32, <register>>):
+    wave.register %arg0 index [{M : [#wave.iter<"M">] -> (0, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
+    wave.yield %arg1 : !wave.tensor<[@M] of f32, <register>>
+  } : (!wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<any of f32>
+  return
+}
+
 // CHECK-LABEL: @register
 func.func @register() {
   %0 = arith.constant 0.0 : f32
