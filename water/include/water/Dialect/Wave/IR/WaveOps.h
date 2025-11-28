@@ -14,6 +14,10 @@
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 
+namespace mlir {
+class RewriterBase;
+}
+
 #define GET_OP_CLASSES
 #include "water/Dialect/Wave/IR/WaveOps.h.inc"
 

@@ -15,11 +15,17 @@ def TestInUseAnalysisPass : Pass<"water-test-in-use-analysis"> {
   }];
 }
 
-def TestWaveDialectConstructorsPass : Pass<"water-test-wave-dialect-constructors"> {
-  let summary = "Test error messages from Wave dialect constructors";
+def TestWaveDialectFunctionsPass : Pass<"water-test-wave-dialect-functions"> {
+  let summary =
+    "Test functionalities of Wave dialect exercised elsewhere indirectly";
   let description = [{
-    Construct attributes and types from primitive elements using `getChecked` to
-    trigger error emission instead of assertions.
+    Tests various functionalities of the Wave dialect directly before they
+    can be called from elsewhere.
+
+    * Construct attributes and types from primitive elements using `getChecked` to
+      trigger error emission instead of assertions.
+
+    * Convert the IterateOp between isolated and non-isolated forms.
   }];
 
   let dependentDialects = ["::wave::WaveDialect"];

@@ -7,13 +7,15 @@
 #include "Transforms/Passes.h"
 #include "llvm/ADT/TypeSwitch.h"
 
+#include "mlir/IR/PatternMatch.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
 
 namespace mlir::water::test {
-#define GEN_PASS_DEF_TESTWAVEDIALECTCONSTRUCTORSPASS
+#define GEN_PASS_DEF_TESTWAVEDIALECTFUNCTIONSPASS
 #include "Transforms/Passes.h.inc"
 } // namespace mlir::water::test
 
@@ -51,9 +53,9 @@ static llvm::LogicalResult testCreateTensor(mlir::Operation *op) {
   return llvm::failure(type == nullptr);
 }
 
-class TestWaveDialectConstructorPass
-    : public mlir::water::test::impl::TestWaveDialectConstructorsPassBase<
-          TestWaveDialectConstructorPass> {
+class TestWaveDialectFunctionsPass
+    : public mlir::water::test::impl::TestWaveDialectFunctionsPassBase<
+          TestWaveDialectFunctionsPass> {
 public:
   void runOnOperation() override {
     mlir::OperationName createTensorOpName("wave_test.create_tensor",
@@ -68,5 +70,15 @@ public:
         });
     if (walkResult.wasInterrupted())
       return signalPassFailure();
+
+    mlir::IRRewriter rewriter(&getContext());
+    getOperation()->walk([&](wave::IterateOp iterateOp) {
+      if (iterateOp->getAttrOfType<mlir::UnitAttr>("wave_test.make_isolated")) {
+        iterateOp.makeIsolated(rewriter);
+      } else if (iterateOp->getAttrOfType<mlir::UnitAttr>(
+                     "wave_test.make_non_isolated")) {
+        iterateOp.makeNonIsolated(rewriter);
+      }
+    });
   };
 };
