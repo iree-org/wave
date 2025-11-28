@@ -720,7 +720,7 @@ def divide_shape_into_chunks(
         >>> divide_shape_into_chunks([128, 256], 4)
         ([4, 1], [32, 256])
         >>> divide_shape_into_chunks([128, 256], 12)
-        ([4, 3], [32, 85])  # Error: 256 not divisible by 3
+        # Error: 256 not divisible by 3
     """
     if num_chunks <= 0:
         raise ValueError(f"num_chunks must be positive, got {num_chunks}")
