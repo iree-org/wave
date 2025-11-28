@@ -17,3 +17,9 @@ func.func private @address_space_full() -> !wave.tensor<any of i32, #wave.addres
 
 // CHECK: !wave.tensor<any of i8>
 func.func private @address_space_default() -> !wave.tensor<any of i8, <unspecified>>
+
+// CHECK: #wave<index_mapping[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B, 2, 2)>
+func.func private @iter_symbol_in_mapping() attributes { wave_test.index = #wave<index_mapping[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B, 2, 2)>}
+
+// CHECK: #wave.expr_list<[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B)>
+func.func private @iter_symbol_in_expr() attributes { wave_test.index = #wave.expr_list<[#wave.iter<"A">, #wave.symbol<"B">] -> (_Iter_A + B)>}

@@ -59,6 +59,28 @@ NB_MODULE(_waterDialects, m) {
       });
 
   //===---------------------------------------------------------------------===//
+  // WaveIterSymbolAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveIterSymbolAttr", mlirAttributeIsAWaveIterSymbolAttr,
+      mlirWaveIterSymbolAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, const std::string &symbolName,
+             MlirContext context) {
+            MlirStringRef symbolNameStrRef =
+                mlirStringRefCreate(symbolName.data(), symbolName.size());
+            return cls(mlirWaveIterSymbolAttrGet(context, symbolNameStrRef));
+          },
+          nb::arg("cls"), nb::arg("symbolName"),
+          nb::arg("context") = nb::none(),
+          "Gets a wave.WaveIterSymbolAttr from parameters.")
+      .def_property_readonly("name", [](MlirAttribute self) {
+        return mlirWaveIterSymbolAttrGetName(self);
+      });
+
+  //===---------------------------------------------------------------------===//
   // WaveIndexSymbolAttr
   //===---------------------------------------------------------------------===//
 
