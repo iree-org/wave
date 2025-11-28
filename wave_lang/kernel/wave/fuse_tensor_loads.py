@@ -106,16 +106,17 @@ def _scale_distributed_shape(
         if s1 == s2:
             continue
 
-        assert (
-            subs_idxc(s2 % s1) == 0
-        ), f"Destination memory distributed shape must be a multiple of the source distributed shape, got {s2} % {s1} != 0"
-        if subs_idxc(s1 * mult) > subs_idxc(s2):
-            continue
+        if subs_idxc(s2 % s1) != 0:
+            raise ValueError(
+                f"Destination memory distributed shape must be a multiple of the source distributed shape, got {s2} % {s1} != 0, for {load.name} with memory shape {mem_distributed_shape}"
+            )
 
         distributed_shape[i] = s1 * mult
         return {k: v for k, v in zip(symbolic_shape, distributed_shape)}
 
-    assert False, "Invalid distributed shape"
+    raise ValueError(
+        f"Invalid distributed shape: {distributed_shape} for {load.name} with memory shape {mem_distributed_shape}"
+    )
 
 
 def compute_fused_parameters(
