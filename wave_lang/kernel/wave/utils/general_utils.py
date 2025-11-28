@@ -5,6 +5,7 @@
 
 import functools
 import glob
+import math
 import os
 from collections import deque
 from typing import Any, Callable, Optional, Sequence
@@ -737,32 +738,12 @@ def divide_shape_into_chunks(
         if remaining_chunks == 1:
             break
 
-        # Try to divide this dimension by as many factors as possible
         dim_size = shape[dim_idx]
 
-        # Find all factors of remaining_chunks that evenly divide this dimension
-        factor = 1
-        for divisor in range(2, remaining_chunks + 1):
-            if remaining_chunks % divisor == 0 and dim_size % divisor == 0:
-                if (
-                    dim_size % (factor * divisor) == 0
-                    and remaining_chunks % (factor * divisor) == 0
-                ):
-                    factor = factor * divisor
-                elif dim_size % divisor == 0:
-                    factor = divisor
-
-        # Apply the largest factor we can to this dimension
-        test_factor = remaining_chunks
-        while test_factor > 1:
-            if dim_size % test_factor == 0:
-                chunks_per_dim[dim_idx] = test_factor
-                remaining_chunks //= test_factor
-                break
-            # Try next smaller factor of remaining_chunks
-            test_factor -= 1
-            while test_factor > 1 and remaining_chunks % test_factor != 0:
-                test_factor -= 1
+        # Use GCD to find the largest factor of remaining_chunks that divides dim_size
+        factor = math.gcd(dim_size, remaining_chunks)
+        chunks_per_dim[dim_idx] = factor
+        remaining_chunks //= factor
 
     # Check if we successfully divided into all chunks
     if remaining_chunks != 1:
