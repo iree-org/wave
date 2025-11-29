@@ -111,7 +111,7 @@ def testGQABSHDAttention(
     )
     output = device_zeros(o_shape, dtype=torch.float32)
 
-    asm = base_attention(
+    base_attention(
         q.transpose(1, 2).contiguous(),
         k.transpose(1, 2).contiguous(),
         v.transpose(1, 2).contiguous(),

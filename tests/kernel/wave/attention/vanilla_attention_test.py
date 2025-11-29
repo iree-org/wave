@@ -442,7 +442,7 @@ def testAttentionBSHD(
         custom_mask = device_randn([1, shape.query_seq_len], dtype=torch.float32)
         custom_mask = (custom_mask > 0).int()
 
-        asm = base_attention(
+        base_attention(
             q.transpose(1, 2).contiguous(),
             k.transpose(1, 2).contiguous(),
             v.transpose(1, 2).contiguous(),
@@ -450,7 +450,7 @@ def testAttentionBSHD(
             output,
         )
     else:
-        asm = base_attention(
+        base_attention(
             q.transpose(1, 2).contiguous(),
             k.transpose(1, 2).contiguous(),
             v.transpose(1, 2).contiguous(),
@@ -591,7 +591,7 @@ def testAttentionBHSDCausal(
         custom_mask = device_randn([1, shape.query_seq_len], dtype=torch.float32)
         custom_mask = (custom_mask > 0).int()
 
-        asm = base_attention(
+        base_attention(
             q,
             k,
             v,
@@ -599,7 +599,7 @@ def testAttentionBHSDCausal(
             output,
         )
     else:
-        asm = base_attention(
+        base_attention(
             q,
             k,
             v,
@@ -1230,7 +1230,7 @@ def testAttentionBSHD_Prefetch_MultiBuffer(
         custom_mask = device_randn([1, shape.query_seq_len], dtype=torch.float32)
         custom_mask = (custom_mask > 0).int()
 
-        asm = base_attention(
+        base_attention(
             q.transpose(1, 2).contiguous(),
             k.transpose(1, 2).contiguous(),
             v.transpose(1, 2).contiguous(),
@@ -1238,7 +1238,7 @@ def testAttentionBSHD_Prefetch_MultiBuffer(
             output,
         )
     else:
-        asm = base_attention(
+        base_attention(
             q.transpose(1, 2).contiguous(),
             k.transpose(1, 2).contiguous(),
             v.transpose(1, 2).contiguous(),
