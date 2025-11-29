@@ -228,8 +228,6 @@ class WaveKernel:
             for handler in self.debug_handlers or []:
                 handler(debug_logs)
 
-        return self.asm
-
 
 def invoke_with_profile(options: WaveCompileOptions, invoke: Callable, *args, **kwargs):
 
