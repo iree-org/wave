@@ -290,7 +290,8 @@ def testGemmGatherToLDS(
     a = device_randn(shape[0], shape[2], dtype=datatype)
     b = device_randn(shape[1], shape[2], dtype=datatype)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
+    asm = gemm.asm
 
     assert "amdgpu.gather_to_lds" in asm, "gather_to_lds not found in asm"
 
@@ -743,7 +744,7 @@ def testGemmDumpOverrideSchedule(
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
     c_new = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    asm = compiled_gemm(a, b, c_new)
+    compiled_gemm(a, b, c_new)
     assert_close(c, c_new, check_device=False)
     assert_close(c_new, iree_ref, check_device=False)
 
@@ -2160,7 +2161,7 @@ def test_cdna4_mfma(shape: tuple[int], datatype: torch.dtype, mfma_variant: MMAT
     a = device_randn(shape[0], shape[2], device="cuda", dtype=datatype)
     b = device_randn(shape[1], shape[2], device="cuda", dtype=datatype)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
@@ -2243,7 +2244,7 @@ def testI8HwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
         randint_hi, (shape[2], shape[1]), device="cuda", dtype=torch.int8
     )
     c = device_zeros(shape[0], shape[1], dtype=torch.int32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     torch_ref = torch.matmul(a.cpu().to(torch.int32), b.cpu().to(torch.int32))
     assert_close(c.to(torch.int32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False)
@@ -2345,7 +2346,7 @@ def testFloatHwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
     a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
     b = device_randn(shape[2], shape[1], device="cuda", dtype=torch.float16)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     torch_ref = torch.matmul(a.to(torch.float32), b.to(torch.float32))
     assert_close(
@@ -2386,7 +2387,7 @@ def test_rdna4_wmma(
     a = device_randn(shape[0], shape[2], device="cuda", dtype=datatype)
     b = device_randn(shape[1], shape[2], device="cuda", dtype=datatype)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
@@ -2421,7 +2422,7 @@ def test_gemm_prefetch_manual_schedule(shape: tuple[int], mfma_variant: MMAType)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
 
     # Run the kernel
-    asm = gemm_prefetch(a, b, c)
+    gemm_prefetch(a, b, c)
 
     # Verify results with IREE reference
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
@@ -2459,7 +2460,7 @@ def test_gemm_prefetch_reorder_manual_schedule(
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
 
     # Run the kernel
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     # Verify results with IREE reference
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
@@ -2558,7 +2559,8 @@ def testTensorLoadToShared(
     a = torch.randn(shape[0], shape[2], dtype=datatype).cuda()
     b = torch.randn(shape[1], shape[2], dtype=datatype).cuda()
     c = torch.zeros(shape[0], shape[1], dtype=torch.float32).cuda()
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
+    asm = gemm.asm
 
     assert (
         "wait.tensorcnt" in asm
