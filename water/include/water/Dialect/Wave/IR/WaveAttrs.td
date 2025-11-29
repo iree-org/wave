@@ -577,8 +577,7 @@ def WaveMemoryAccessPatternAttr : AttrDef<WaveDialect, "WaveMemoryAccessPattern"
     // Vectorized access patterns - split into indices and vector sizes for simplicity
     OptionalParameter<"::wave::WaveExprListAttr">:$lds_load_indices,
     OptionalParameter<"::wave::WaveExprListAttr">:$lds_load_vector_sizes,
-    OptionalParameter<"::wave::WaveExprListAttr">:$global_store_indices,
-    OptionalParameter<"::wave::WaveExprListAttr">:$global_store_vector_sizes
+    OptionalParameter<"::wave::WaveExprListAttr">:$global_store_indices
   );
 
   let assemblyFormat = [{
@@ -588,8 +587,7 @@ def WaveMemoryAccessPatternAttr : AttrDef<WaveDialect, "WaveMemoryAccessPattern"
     (`,` `lds_block_shape` `=` $lds_block_shape^)?
     (`,` `lds_load_indices` `=` $lds_load_indices^)?
     (`,` `lds_load_vector_sizes` `=` $lds_load_vector_sizes^)?
-    (`,` `global_store_indices` `=` $global_store_indices^)?
-    (`,` `global_store_vector_sizes` `=` $global_store_vector_sizes^)? `>`
+    (`,` `global_store_indices` `=` $global_store_indices^)? `>`
   }];
 
   let genVerifyDecl = 1;
@@ -605,8 +603,7 @@ def WaveMemoryAccessPatternAttr : AttrDef<WaveDialect, "WaveMemoryAccessPattern"
              getLdsBlockShape() &&
              getLdsLoadIndices() &&
              getLdsLoadVectorSizes() &&
-             getGlobalStoreIndices() &&
-             getGlobalStoreVectorSizes();
+             getGlobalStoreIndices();
     }
 
     /// Check if any LDS promotion parameters are specified.
@@ -615,8 +612,7 @@ def WaveMemoryAccessPatternAttr : AttrDef<WaveDialect, "WaveMemoryAccessPattern"
              getLdsBlockShape() ||
              getLdsLoadIndices() ||
              getLdsLoadVectorSizes() ||
-             getGlobalStoreIndices() ||
-             getGlobalStoreVectorSizes();
+             getGlobalStoreIndices();
     }
 
     /// Get the rank/dimensionality of the LDS block.
