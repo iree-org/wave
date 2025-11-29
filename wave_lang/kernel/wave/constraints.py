@@ -825,16 +825,34 @@ class WaveConstraint(DistributionConstraint):
         The wave_id is the same as the thread_id, with the exception of
           wave_id[0] = thread_id[0] / threads_per_wave
         This is a convention that we adopt.
+
+        For persistent kernels with linearized grids (apply_fn on workgroup_dim=0),
+        we use linearized thread IDs to distinguish waves across different dimensions.
         """
         old_wave_id = self.wave_id
         assert self.dim == workgroup_constraint.dim, "Dimension mismatch"
-        self.wave_id = hardware_constraint.get_thread_id_from_workgroup_dim(
-            workgroup_constraint.workgroup_dim
-        )
-        # Only handling the wg_dim_0 case because Wave assumes
-        # all threads in a wave are handled in wg_dim_0.
-        if workgroup_constraint.workgroup_dim == 0:
-            self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
+
+        if (
+            workgroup_constraint.apply_fn is not None
+            and workgroup_constraint.workgroup_dim == 0
+        ):
+            # explicity use linearized thread ID to set wave_id,
+            # to separate the thread dimensions within in a wg, when the threads all use the same workgroup_dim
+            if workgroup_constraint.primary:
+                self.wave_id = floor(THREAD_0 / hardware_constraint.threads_per_wave)
+            else:
+                self.wave_id = THREAD_1
+        else:
+            self.wave_id = hardware_constraint.get_thread_id_from_workgroup_dim(
+                workgroup_constraint.workgroup_dim
+            )
+            # Only handling the wg_dim_0 case because Wave assumes
+            # all threads in a wave are handled in wg_dim_0.
+            if workgroup_constraint.workgroup_dim == 0:
+                self.wave_id = floor(
+                    self.wave_id / hardware_constraint.threads_per_wave
+                )
+
         assert (
             old_wave_id is None or self.wave_id == old_wave_id
         ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
@@ -919,6 +937,29 @@ def get_constrained_shape(
             if isinstance(x, TilingConstraint)
         ][0]
     return tuple(constrained_shape)
+
+
+@dataclass
+class GridConstraint:
+    """
+    Explicitly specify grid launch dimensions
+    """
+
+    grid_size: IndexExpr | tuple[IndexExpr, IndexExpr, IndexExpr]
+
+    def __post_init__(self):
+        if not isinstance(self.grid_size, tuple):
+            self.grid_size = (self.grid_size, 1, 1)
+        elif len(self.grid_size) == 1:
+            self.grid_size = (self.grid_size[0], 1, 1)
+        elif len(self.grid_size) == 2:
+            self.grid_size = (self.grid_size[0], self.grid_size[1], 1)
+        elif len(self.grid_size) == 3:
+            self.grid_size = (self.grid_size[0], self.grid_size[1], self.grid_size[2])
+        else:
+            raise ValueError(
+                f"Grid size must be 1D, 2D, or 3D, got {len(self.grid_size)}D"
+            )
 
 
 @dataclass

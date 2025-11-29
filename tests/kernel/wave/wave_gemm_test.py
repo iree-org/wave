@@ -2740,3 +2740,129 @@ def test_explicit_shared_gemm(m, n, k, block_m, block_n, block_k, run_bench):
 
     expected = torch.matmul(a, b.t())
     assert_close(c.to(torch.float16), expected, rtol=1e-2, atol=1e-2)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", [(2048, 2048, 2048)])
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+    ],
+)
+def test_persistent_gemm(
+    shape: tuple[int],
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+):
+    from sympy import ceiling, floor
+
+    m, n, k = shape
+
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    TOTAL_TILES = tkl.sym.TOTAL_TILES
+    NUM_CTAS = tkl.sym.NUM_CUS
+    TILE_IDX = tkl.sym.TILE_IDX
+
+    def m_offset_fn(wg_id):
+        n_tiles = ceiling(N / BLOCK_N)
+        return floor(wg_id / n_tiles) * BLOCK_M
+
+    def n_offset_fn(wg_id):
+        n_tiles = ceiling(N / BLOCK_N)
+        return (wg_id % n_tiles) * BLOCK_N
+
+    constraints = [
+        tkw.GridConstraint(NUM_CTAS),
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0, apply_fn=m_offset_fn),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 0, primary=False, apply_fn=n_offset_fn),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.TilingConstraint(TILE_IDX),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            vector_shapes={TILE_IDX: 0},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def persistent_gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        total_tiles_scalar = tkw.scalar(TOTAL_TILES, tkl.i32)
+        tkw.set_symbol(TOTAL_TILES, total_tiles_scalar)
+
+        condition = TILE_IDX < TOTAL_TILES
+
+        init_tile_id = tkw.scalar(WORKGROUP_0, tkl.i32)
+
+        @tkw.iterate(TILE_IDX, start=init_tile_id, condition=condition, init_args=[])
+        def persistent_loop():
+            tile_idx = tkw.self_index(TILE_IDX, tkl.i32)
+            tkw.set_symbol(WORKGROUP_0, tile_idx)
+
+            c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+            @tkw.iterate(axis=K, init_args=[c_reg])
+            def k_loop(acc):
+                a_reg = tkw.read(a)
+                b_reg = tkw.read(b)
+                acc = tkw.mma(a_reg, b_reg, acc)
+                return acc
+
+            tkw.write(k_loop, c)
+
+            num_ctas_scalar = tkw.scalar(NUM_CTAS, tkl.i32)
+            next_idx = tile_idx + num_ctas_scalar
+            tkw.set_symbol(TILE_IDX, next_idx)
+
+    block_m, block_n, block_k = 128, 256, 64
+    m_tiles = (m + block_m - 1) // block_m
+    n_tiles = (n + block_n - 1) // block_n
+    total_tiles = m_tiles * n_tiles
+    num_ctas = total_tiles
+
+    # Set hyperparameters
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        M: m,
+        N: n,
+        K: k,
+        TOTAL_TILES: total_tiles,
+        NUM_CTAS: num_ctas,
+    }
+
+    # Compile kernel
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, persistent_gemm)
+
+    # Run test
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_zeros(shape[0], shape[1], device="cuda", dtype=torch.float32)
+    gemm(a, b, c)
+
+    torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
+    assert_close(
+        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
+    )
