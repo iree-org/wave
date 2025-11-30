@@ -306,7 +306,9 @@ def WriteOp : WaveOp<"write", [
     Arg<OptionalAttr<I64Attr>,
         "Number of elements processed by each thread">:$elements_per_thread,
     Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
-        "Bound expressions for each symbolic dimension">:$bounds
+        "Bound expressions for each symbolic dimension">:$bounds,
+    Arg<OptionalAttr<WaveMemoryAccessPatternAttr>,
+        "Memory access pattern controlling LDS promotion">:$memory_access_pattern
   ), commonArguments);
 
   let assemblyFormat =

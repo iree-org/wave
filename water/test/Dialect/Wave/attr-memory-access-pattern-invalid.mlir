@@ -79,6 +79,3 @@ func.func @memory_access_pattern_mismatched_lds_load_ranks(%value: !wave.tensor<
   } : !wave.tensor<any of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
   return
 }
-
-
-
