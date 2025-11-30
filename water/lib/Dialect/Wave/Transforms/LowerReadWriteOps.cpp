@@ -354,6 +354,7 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
     } else {
       vector::StoreOp::create(rewriter, loc, vecValue, mem, indices);
     }
+    return;
   }
 
   // vector.transfer_write (masked or unmasked)
