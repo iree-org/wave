@@ -48,6 +48,9 @@ if (WATER_ENABLE_PYTHON)
       WaterPythonSources
       MLIRPythonExtension.RegisterEverything
       MLIRPythonSources.Core
+      MLIRPythonSources.Dialects.transform
+      MLIRPythonSources.Dialects.transform.interpreter
+      MLIRPythonSources.Dialects.transform.extras
   )
 
   add_mlir_python_modules(WaterPythonModules
