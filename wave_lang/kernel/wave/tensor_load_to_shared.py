@@ -183,8 +183,6 @@ def get_tensor_load_descriptor_config(
         constraint_tile_size, symbolic_shape, read.vector_shapes
     )
 
-    hardware_constraint = get_hardware_constraint(constraints)
-
     # Some waves can copy duplicated data, take the full tile shape and
     # redistribute across the waves using linearized wave_id.
     total_waves = math.prod(hardware_constraint.waves_per_block)
