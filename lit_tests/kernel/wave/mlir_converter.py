@@ -21,6 +21,13 @@ from wave_lang.support.location_config import (
     LocationCaptureConfig,
     LocationCaptureLevel,
 )
+from wave_lang.support.ir_imports import (
+    Context,
+    Location,
+    Module,
+    UnitAttr,
+)
+from iree.compiler.dialects.transform.extras import insert_transform_script, OpHandle
 
 M = tkl.sym.M
 N = tkl.sym.N
@@ -234,8 +241,24 @@ def mlir_converter_matmul():
 
     constraints = matmul.constraints
 
-    # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False)
+    # Check that providing a custom transform script to water does not
+    # throw errors
+    with Context(), Location.unknown():
+        transform_module = Module.create()
+        transform_module_op = transform_module.operation
+        transform_module_op.attributes["transform.with_named_sequence"] = UnitAttr.get()
+
+        def pipeline(root: OpHandle):
+            pass
+
+        insert_transform_script(transform_module.body, pipeline)
+        pipeline_asm = str(transform_module)
+
+    # Use the mlir_converter to emit wave MLIR dialect and apply the empty
+    # pipeline.
+    mlir_output, diagnostics = emit_wave_dialect(
+        trace, constraints, options, False, pipeline_asm
+    )
 
     if diagnostics:
         print(diagnostics)
@@ -244,9 +267,13 @@ def mlir_converter_matmul():
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
     # Print to stdout for FileCheck
-    print(mlir_output)
-
     # CHECK-LABEL: mlir_converter_matmul
+    print(pipeline_asm)
+    # CHECK: module
+    # CHECK-NEXT: transform.named_sequence @__transform_main
+    # CHECK-NEXT:   transform.yield
+
+    print(mlir_output)
     # CHECK: module
     # CHECK-NEXT: func.func @kernel(
     # CHECK-SAME: %[[ARG0:.*]]: !wave.tensor<[@M, @K] of f16, <global>>
