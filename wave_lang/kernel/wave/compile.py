@@ -123,7 +123,6 @@ class WaveKernel:
     def invoke(self, *args, **kwargs) -> None:
         """
         Invokes the wave kernel with the given arguments.
-        Returns the assembly code of the compiled kernel.
         """
 
         # Segregate args into kernel tensor and scalars.
