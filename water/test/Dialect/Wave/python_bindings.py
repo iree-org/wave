@@ -26,7 +26,7 @@ with ir.Context() as ctx:
     print(index_symbol_attr)
 
     # CHECK: WaveIndexSymbol.WORKGROUP_0
-    print(index_symbol_attr.value())
+    print(index_symbol_attr.value)
 
     # CHECK: #wave.index_symbol<T0>
     print(wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.THREAD_0))
@@ -113,7 +113,7 @@ with ir.Context() as ctx:
     print(addr_attr)
 
     # CHECK: WaveAddressSpace.Shared
-    print(addr_attr.value())
+    print(addr_attr.value)
 
     try:
         wave.WaveAddressSpaceAttr.get(5)

@@ -71,13 +71,13 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
           "Gets a wave.WaveIndexSymbolAttr from an index symbol enum value.")
-      .def(
+      .def_property_readonly(
           "value",
           [](MlirAttribute self) {
             return static_cast<wave::WaveIndexSymbol>(
                 mlirWaveIndexSymbolAttrGetValue(self));
           },
-          "Returns the index symbol enum value.");
+          "Index symbol enum value.");
 
   nb::enum_<wave::WaveIndexSymbol>(d, "WaveIndexSymbol")
       .value("DEVICE_DIM_0", wave::WaveIndexSymbol::DEVICE_DIM_0)
@@ -195,13 +195,13 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
           "Gets a wave.WaveWorkgroupDimAttr from a workgroup dim enum value.")
-      .def(
+      .def_property_readonly(
           "value",
           [](MlirAttribute self) {
             return static_cast<wave::WaveWorkgroupDim>(
                 mlirWaveWorkgroupDimAttrGetValue(self));
           },
-          "Returns the workgroup dim enum value.");
+          "Workgroup dim enum value.");
 
   nb::enum_<wave::WaveWorkgroupDim>(d, "WaveWorkgroupDim")
       .value("X", wave::WaveWorkgroupDim::X)
@@ -224,13 +224,13 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
           "Gets a wave.WaveAddressSpaceAttr from an address space enum value.")
-      .def(
+      .def_property_readonly(
           "value",
           [](MlirAttribute self) {
             return static_cast<wave::WaveAddressSpace>(
                 mlirWaveAddressSpaceAttrGetValue(self));
           },
-          "Returns the address space enum value.");
+          "Enum value.");
 
   nb::enum_<wave::WaveAddressSpace>(d, "WaveAddressSpace")
       .value("Unspecified", wave::WaveAddressSpace::Unspecified)
@@ -254,13 +254,13 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
           "Gets a wave.WaveMmaKindAttr from an MMA kind enum value.")
-      .def(
+      .def_property_readonly(
           "value",
           [](MlirAttribute self) {
             return static_cast<wave::WaveMmaKind>(
                 mlirWaveMmaKindAttrGetValue(self));
           },
-          "Returns the MMA kind enum value.");
+          "MMA kind enum value.");
 
   nb::enum_<wave::WaveMmaKind>(d, "WaveMmaKind")
       // CDNA1
