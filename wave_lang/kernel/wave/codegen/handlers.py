@@ -101,6 +101,7 @@ from ...ops.wave_ops import (
     self_index,
     set_symbol,
     set_wave_prio,
+    null_async_dep,
     shared_memory_barrier,
     shared_memory_barrier_signal,
     shared_memory_barrier_wait,
@@ -1619,18 +1620,27 @@ def waitcnt(vmcnt: int):
     rocdl_d.s_waitcnt(waitValue)
 
 
+@handle_op(null_async_dep)
+def handle_null_async_dep(emitter: WaveEmitter, node: fx.Node):
+    # return dummy value
+    val = arith_d.constant(IndexType.get(), 0)
+    emitter.bind_node_proxy(node, IRProxyValue(val))
+
+
 @handle_op(shared_memory_barrier)
 def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     try:
         (
-            wait_async_ops,
+            async_deps,
             tensor_wait,
+            read_counter,
+            write_counter,
         ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if wait_async_ops:
-        waitcnt(0)
+    if read_counter is not None or write_counter is not None:
+        amdgpu_d.memory_counter_wait(load=read_counter, store=write_counter)
 
     amdgpu_d.lds_barrier()
 

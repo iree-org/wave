@@ -3,7 +3,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Callable, Optional, Sequence
+from collections import deque
+from typing import Any, Callable, Optional, Sequence
 
 import torch.fx as fx
 
@@ -659,3 +660,33 @@ def finish_conditional_subgraph(
     trace.get_root_graph().subgraphs[subgraph._name] = subgraph
 
     return conditional
+
+
+def find_all_paths(src: Any, get_edges: Callable[[Any], list[Any]]) -> list[Any]:
+    """
+    Find all paths in the graph starting from `src` and ending at the point
+    indicated by ` not get_edges()`.
+    `get_edges` is used to get the edges from the current node and termination
+    condition.
+    This function can have a very high complexity so it's advised to limit the
+    maximun number of nodes scanned by terminating the search early by returning
+    an empty list from `get_edges` function.
+    """
+    all_paths = []
+    queue = deque()
+    queue.append([src])
+
+    while queue:
+        path = queue.popleft()
+        current = path[-1]
+
+        edges = get_edges(current)
+        if not edges:
+            all_paths.append(path)
+        else:
+            for edge in edges:
+                new_path = list(path)
+                new_path.append(edge)
+                queue.append(new_path)
+
+    return all_paths

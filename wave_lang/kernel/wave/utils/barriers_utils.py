@@ -7,7 +7,7 @@ import bisect
 from enum import auto, IntFlag
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 from functools import partial
 
 import torch.fx as fx
@@ -120,6 +120,21 @@ def get_shared_memory_access_type(op: CustomOp) -> MemoryAccessType:
         return MemoryAccessType.WRITE
     else:
         return MemoryAccessType.NONE
+
+
+def get_first(seq: Iterable[Any]) -> Any:
+    """
+    Get the first element of the sequence or generator.
+    """
+    return next(iter(seq))
+
+
+def get_last(seq: Iterable[Any]) -> Any:
+    """
+    Get the last element of the sequence or generator.
+    """
+    *_, last = iter(seq)
+    return last
 
 
 def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> list[fx.Node]:

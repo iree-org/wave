@@ -4,19 +4,32 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from dataclasses import dataclass
+from functools import Placeholder
 from typing import Sequence
 from collections import defaultdict
+
+from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
+from wave_lang.kernel.wave.utils.general_utils import ceildiv
 
 from .._support.tracing import CapturedTrace
 from ..ops.wave_ops import (
     GatherToLDS,
+    GetResult,
+    IterArg,
+    Iterate,
+    NullAsyncDep,
+    Output,
+    Read,
     TensorLoadToLDS,
     SharedMemoryBarrier,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
+    Write,
     get_custom,
 )
 from .utils.graph_utils import (
+    find_all_paths,
     is_barrier_between,
 )
 
@@ -80,12 +93,11 @@ class LegacyBarrierEmitter(BarrierEmitter):
         """
         is_async_op = lambda node: isinstance(get_custom(node), GatherToLDS)
 
-        producer = region.producer
+        producers = region.producers if is_async_op else []
         consumer = region.consumer
 
-        wait_async = is_async_op(producer) or is_async_op(consumer)
         with consumer.graph.inserting_before(consumer):
-            SharedMemoryBarrier(wait_async_ops=wait_async).add_to_graph(
+            SharedMemoryBarrier(async_deps=producers).add_to_graph(
                 consumer.graph, loc=get_custom(consumer).location
             )
 
@@ -165,3 +177,156 @@ def add_shared_memory_barriers(
     emitter = BarrierEmitter(target_arch)
     emitter.emit(sync_regions)
     emitter.verify(trace)
+
+
+@dataclass
+class AsyncDepNode:
+    node: fx.Node
+    dep_node: fx.Node
+    read_count: int = 0
+    write_count: int = 0
+
+
+_MAX_ASYNC_READ_WRITE_COUNT = 8
+
+
+def calculate_counter_value(elements_per_thread: int, dtype: "DataType") -> int:
+    """
+    Counter is incremented by 1 for each DWORD read/write.
+    """
+    return ceildiv(elements_per_thread * dtype.bitwidth(), 32)
+
+
+def find_async_read_write_counts(
+    barrier: fx.Node, async_dep: fx.Node
+) -> tuple[int, int]:
+    def get_edges(node: AsyncDepNode) -> list[AsyncDepNode]:
+        if (
+            node.read_count > _MAX_ASYNC_READ_WRITE_COUNT
+            or node.write_count > _MAX_ASYNC_READ_WRITE_COUNT
+        ):
+            return []
+
+        custom = get_custom(node.node)
+        if isinstance(custom, NullAsyncDep):
+            return []
+
+        read_count = node.read_count
+        write_count = node.write_count
+        if (
+            isinstance(custom, Read)
+            and custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
+        ):
+            read_count += calculate_counter_value(
+                custom.elements_per_thread, custom.type.dtype
+            )
+
+        elif (
+            isinstance(custom, Write)
+            and custom.memory_type.address_space == GLOBAL_ADDRESS_SPACE
+        ):
+            write_count += calculate_counter_value(
+                custom.elements_per_thread, custom.type.dtype
+            )
+
+        elif isinstance(custom, GatherToLDS) and node.node != node.dep_node:
+            read_count += calculate_counter_value(
+                custom.elements_per_thread, custom.dtype
+            )
+
+        if node.node == node.dep_node:
+            if isinstance(custom, IterArg):
+                idx = custom.iter_idx
+                graph = node.node.graph
+                iterate = get_custom(graph.parent_op)
+                assert isinstance(
+                    iterate, Iterate
+                ), f"Expected Iterate, but got {iterate}"
+                async_dep_iterate = iterate.init_args[idx]
+
+                output = get_custom(list(graph.nodes)[-1])
+                assert isinstance(output, Output), f"Expected Output, but got {output}"
+                async_dep_output = output.return_vals[0][idx]
+                return [
+                    AsyncDepNode(
+                        iterate.fx_node, async_dep_iterate, read_count, write_count
+                    ),
+                    AsyncDepNode(
+                        output.fx_node, async_dep_output, read_count, write_count
+                    ),
+                ]
+
+            elif isinstance(custom, GetResult):
+                idx = custom.res_idx
+                iterate = get_custom(custom.value)
+                graph = iterate.get_root_graph().subgraphs[iterate.subgraph_name]
+                assert isinstance(
+                    iterate, Iterate
+                ), f"Expected Iterate, but got {iterate}"
+                async_dep_iterate = iterate.init_args[idx]
+
+                output = get_custom(list(graph.nodes)[-1])
+                assert isinstance(output, Output), f"Expected Output, but got {output}"
+                async_dep_output = output.return_vals[0][idx]
+                return [
+                    AsyncDepNode(
+                        iterate.fx_node, async_dep_iterate, read_count, write_count
+                    ),
+                    AsyncDepNode(
+                        output.fx_node, async_dep_output, read_count, write_count
+                    ),
+                ]
+
+            elif isinstance(custom, Placeholder):
+                if parent_op := getattr(node.node.graph, "parent_op", None):
+                    lifted = node.node.meta["lifted"]
+                    return [AsyncDepNode(parent_op, lifted, read_count, write_count)]
+                else:
+                    raise ValueError(f"Reached function argument: {custom}")
+            else:
+                return []
+
+        return [AsyncDepNode(node.node.prev, node.dep_node, read_count, write_count)]
+
+    paths = find_all_paths(AsyncDepNode(barrier, async_dep), get_edges)
+
+    read_count = _MAX_ASYNC_READ_WRITE_COUNT
+    write_count = _MAX_ASYNC_READ_WRITE_COUNT
+
+    for path in paths:
+        last_node = path[-1]
+        if not isinstance(get_custom(last_node.node), GatherToLDS):
+            continue
+
+        read_count = min(read_count, last_node.read_count)
+        write_count = min(write_count, last_node.write_count)
+
+    return read_count, write_count
+
+
+def populate_bariers_counters(
+    trace: CapturedTrace,
+):
+    """
+    Populate the read and write counters for the barriers neded for async
+    dependencies.
+    """
+
+    def is_barrier(node: fx.Node) -> bool:
+        return isinstance(get_custom(node), SharedMemoryBarrier)
+
+    for node in trace.walk(is_barrier):
+        barrier = get_custom(node)
+        async_deps = barrier.async_deps
+        if not async_deps:
+            continue
+
+        read_count = _MAX_ASYNC_READ_WRITE_COUNT
+        write_count = _MAX_ASYNC_READ_WRITE_COUNT
+        for dep in async_deps:
+            r, w = find_async_read_write_counts(node, dep)
+            read_count = min(read_count, r)
+            write_count = min(write_count, w)
+
+        barrier.update_arg("read_counter", read_count)
+        barrier.update_arg("write_counter", write_count)
