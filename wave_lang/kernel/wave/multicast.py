@@ -168,6 +168,3 @@ def multicast(
         if mask != 0:
             # Update the tensor load with multicast mask
             tensor_load.update_arg("multicast_mask", mask)
-            logger.info(
-                f"TensorLoadToLDS at {tensor_load.fx_node.name}: multicast_mask = {mask}"
-            )
