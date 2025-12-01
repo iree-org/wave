@@ -313,9 +313,7 @@ class ScheduleContext(BaseContext):
         self.kernel_trace = kernel_trace
         self.constraints = constraints
         self.use_scheduling_barriers = use_scheduling_barriers
-        # Dictionary to maintain mapping from proxies to their results
-        self.proxy_to_results: Dict[fx.Proxy, Any] = {}
-        # Dictionary to maintain mapping from original nodes to pipelined nodes (for auto-update)
+        # Dictionary to maintain mapping from original nodes to pipelined nodes (for list auto-update)
         self.node_mapping: Dict[fx.Node, list[fx.Node]] = {}
 
     def register_custom_op(self, name: str, op: CustomScheduleOp):
@@ -325,17 +323,6 @@ class ScheduleContext(BaseContext):
             )
 
         setattr(self, f"handle_{name}", handler)
-
-    def get_proxy_result(self, proxy: fx.Proxy) -> Any:
-        """Get the result for a proxy, checking the dictionary first, then falling back to .target()"""
-        if proxy in self.proxy_to_results:
-            return self.proxy_to_results[proxy]
-        else:
-            # Fall back to .target() function with error handling
-            try:
-                return proxy.target()
-            except:
-                raise ValueError(f"Proxy {proxy} has no result or target function")
 
 
 ###############################################################################
