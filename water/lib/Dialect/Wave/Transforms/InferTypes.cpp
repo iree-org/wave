@@ -947,8 +947,8 @@ public:
                     return getLatticeElement(v)->getValue();
                   });
               auto emitError = [op]() { return op->emitError(); };
-              if (llvm::failed(iface.initializeForward(resultExprs, *initObject,
-                                                       emitError)))
+              if (llvm::failed(iface.initializeIndexExprsForward(
+                      resultExprs, *initObject, emitError)))
                 return mlir::WalkResult::interrupt();
 
               for (auto &&[result, lattice] :
@@ -1116,8 +1116,8 @@ public:
               });
           auto emitError = [op]() { return op->emitError(); };
 
-          if (llvm::failed(iface.initializeBackward(operandExprs, *initObject,
-                                                    emitError)))
+          if (llvm::failed(iface.initializeIndexExprsBackward(
+                  operandExprs, *initObject, emitError)))
             return mlir::WalkResult::interrupt();
           for (auto &&[operand, lattice] :
                llvm::zip_equal(op->getOperands(), operandExprs)) {

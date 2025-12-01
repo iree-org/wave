@@ -419,7 +419,7 @@ public:
 
 // Lattice for propagating index expressions across wave dialect operations.
 // In addition to the bottom and top states, it can represent a concrete state
-// manifest as a dictionary attribute mapping symbol names to index mappings.
+// manifested as a dictionary attribute mapping symbol names to index mappings.
 // The JOIN function is defined similarly to other lattices with special
 // handling for combining thread-dependent and thread-independent index
 // expressions.

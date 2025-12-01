@@ -111,7 +111,7 @@ def Exp2Op : UnaryWaveOp<"exp2"> {
 def MmaOp : WaveOp<"mma",
     [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
      DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
-      ["initializeForward", "initializeBackward"]>]>,
+      ["initializeIndexExprsForward", "initializeIndexExprsBackward"]>]>,
             WaveArithmeticOpDoc {
   let summary = "Matrix multiply and accumulate";
 

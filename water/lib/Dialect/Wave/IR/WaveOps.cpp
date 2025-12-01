@@ -894,7 +894,7 @@ static void mixInThreadIndependentConstraints(
 // This sets index expressions to values derived from the MMA operation kind and
 // wavefront-in-workgroup configuration (thread-dependent) as well as workgroup
 // constraints (thread-independent).
-LogicalResult MmaOp::initializeForward(
+LogicalResult MmaOp::initializeIndexExprsForward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     const IndexExprsAnalysisInit &initObject, wave::EmitErrorFn emitError) {
   ArrayRef<wave::WaveSymbolAttr> indexingSymbols =
@@ -936,7 +936,7 @@ LogicalResult MmaOp::initializeForward(
 // operation. This sets index expressions to values derived from the MMA
 // operation kind and wavefront-in-workgroup configuration (thread-dependent) as
 // well as workgroup constraints (thread-independent).
-LogicalResult MmaOp::initializeBackward(
+LogicalResult MmaOp::initializeIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     const wave::IndexExprsAnalysisInit &initObject,
     wave::EmitErrorFn emitError) {

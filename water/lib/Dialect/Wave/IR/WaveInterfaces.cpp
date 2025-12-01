@@ -716,7 +716,6 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
                         threadIndependentSymbols, allSymbols);
 
     // Subtract the thread-independent from thread-dependent for each.
-    mlir::MLIRContext *ctx = threadDependentMapping.getContext();
     auto subtractMaps = [&](mlir::AffineMap a,
                             mlir::AffineMap b) -> mlir::AffineMap {
       // Assert there is only one result expression in each map.

@@ -187,9 +187,20 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
            "::wave::EmitErrorFn":$emitError)
     >,
     InterfaceMethod<[{
+      Initialize index expression information for results of the current
+      operation. By default, they are initialized to lattice bottom and will be
+      updated by the analysis. Certain operations may want to initialize them
+      to specific values, e.g., MMA operations will initialize result indices
+      based on the targeted hardware layout. The initialization object contains
+      pre-processed constraints relevant to the current operation. The name
+      forward implies that this function is called from the forward analysis.
+
+      If initialization is impossible or would immediately lead to a
+      propagation conflict, report the error using the function provided and
+      return a failure. Otherwise, update the `resultExprs` and return success.
       }],
       "::llvm::LogicalResult",
-      "initializeForward",
+      "initializeIndexExprsForward",
       (ins "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$resultExprs,
            "const ::wave::IndexExprsAnalysisInit &":$initObject,
            "::wave::EmitErrorFn":$emitError),
@@ -199,9 +210,20 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
       }]
     >,
     InterfaceMethod<[{
+      Initialize index expression information for operands of the current
+      operation. By default, they are initialized to lattice bottom and will be
+      updated by the analysis. Certain operations may want to initialize them
+      to specific values, e.g., MMA operations will initialize operand indices
+      based on the targeted hardware layout. The initialization object contains
+      pre-processed constraints relevant to the current operation. The name
+      backward implies this function is called from the backward analysis.
+
+      If initialization is impossible or would immediately lead to a
+      propagation conflict, report the error using the function provided and
+      return a failure. Otherwise, update the `resultExprs` and return success.
       }],
       "::llvm::LogicalResult",
-      "initializeBackward",
+      "initializeIndexExprsBackward",
       (ins "::llvm::MutableArrayRef<::wave::IndexExprsLatticeStorage>":$operandExprs,
            "const ::wave::IndexExprsAnalysisInit &":$initObject,
            "::wave::EmitErrorFn":$emitError),
@@ -211,6 +233,13 @@ def WaveInferIndexExprsOpInterface : OpInterface<"WaveInferIndexExprsOpInterface
       }]
     >,
     InterfaceMethod<[{
+      Set the index attribute of the current operation based on (converged)
+      operand and result index expressions. Even though the index expression is
+      conceptually a property of a value, it is typically attached to the
+      operation producing these values. Some operations may require special
+      handling, e.g., operations with regions that may also want to capture
+      index expressions of their block arguments or certain operations like MMA
+      that also expect operand index expressions for legacy reasons.
       }],
       "::llvm::LogicalResult",
       "setIndexFromLattices",
