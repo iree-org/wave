@@ -26,7 +26,7 @@ static LogicalResult
 overrideInitialization(Operation *top,
                        wave::SetIndexLatticeFn setIndexForValue) {
   auto overrideIndex = [&](mlir::Operation *op, ValueRange values,
-                           llvm::Twine attributeName) -> LogicalResult {
+                           const llvm::Twine &attributeName) -> LogicalResult {
     auto overrides = op->getAttrOfType<mlir::ArrayAttr>(attributeName.str());
     if (!overrides)
       return success();

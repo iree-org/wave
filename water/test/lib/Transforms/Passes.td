@@ -34,6 +34,7 @@ def TestWaveDialectInferIndexExprsPass : Pass<"water-test-wave-infer-index-exprs
     optional values provided in the following attributes:
 
       - "wave.override_result_index" for results;
+      - "wave_test.override_operand_index" for operands;
       - "wave.override_regionN_blockM_args" for arguments of the M-th block
         of N-th region;
 

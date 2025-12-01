@@ -485,9 +485,9 @@ private:
   llvm::PointerIntPair<mlir::Attribute, 2> value;
 
   // State flags.
-  const static unsigned kUninitializedState = 0;
-  const static unsigned kSpecificTypeState = 1;
-  const static unsigned kUndecidableState = 2;
+  constexpr static unsigned kUninitializedState = 0;
+  constexpr static unsigned kSpecificTypeState = 1;
+  constexpr static unsigned kUndecidableState = 2;
 };
 
 void operator<<(mlir::Diagnostic &diag, const IndexExprsLatticeStorage &value);
@@ -516,7 +516,7 @@ llvm::LogicalResult identitySetIndexFromLattices(
 llvm::LogicalResult
 checkAndAppendIndexExpr(mlir::Location loc,
                         const IndexExprsLatticeStorage &expr,
-                        llvm::Twine description,
+                        const llvm::Twine &description,
                         llvm::SmallVectorImpl<mlir::Attribute> &indexExprs);
 } // namespace detail
 

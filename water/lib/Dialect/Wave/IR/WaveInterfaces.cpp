@@ -886,7 +886,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
 
 llvm::LogicalResult wave::detail::checkAndAppendIndexExpr(
     mlir::Location loc, const IndexExprsLatticeStorage &expr,
-    llvm::Twine description,
+    const llvm::Twine &description,
     llvm::SmallVectorImpl<mlir::Attribute> &indexExprs) {
   if (expr.isBottom()) {
     emitError(loc) << "failed to infer index expressions for " << description;
