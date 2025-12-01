@@ -113,4 +113,12 @@ def WaterGPUToGPURuntime : Pass<"water-gpu-to-gpu-runtime", "::mlir::ModuleOp"> 
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 
+def WaterBarrierCounter : Pass<"water-barrier-counter", "::mlir::ModuleOp"> {
+  let summary = "Adjust waitcnt instructions at barriers";
+  let description = [{
+    This pass sharpens waitcnt instructions at barriers.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
 #endif // WATER_PASSES
