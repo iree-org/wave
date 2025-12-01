@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
@@ -70,8 +71,11 @@ struct LowerWaveToMLIRPass
       vector::VectorDialect
         // clang-format on
         >();
+    // Allow unrealized conversion casts temporarily (should be eliminated by
+    // type converter)
+    target.addLegalOp<UnrealizedConversionCastOp>();
     target.addIllegalOp<wave::AllocateOp, wave::RegisterOp, wave::Exp2Op,
-                        wave::CastOp>();
+                        wave::CastOp, wave::ReadOp, wave::WriteOp>();
     ConversionConfig config;
     config.allowPatternRollback = false;
 

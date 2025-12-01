@@ -11,9 +11,12 @@
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
 
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -471,18 +474,331 @@ public:
   LogicalResult
   matchAndRewrite(wave::WriteOp op, wave::WriteOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value vec = adaptor.getValueToStore();
-    auto vecType = cast<VectorType>(vec.getType());
+    Value value = adaptor.getValueToStore();
 
+    // All wave.write operations require index attributes
+    if (!op.getIndexAttr()) {
+      return rewriter.notifyMatchFailure(
+          op, "wave.write operations require index attributes");
+    }
+
+    // Check if LDS promotion is requested and has complete information.
+    auto memAccessPattern = op.getMemoryAccessPatternAttr();
+    if (memAccessPattern && memAccessPattern.hasCompleteLdsPromotionInfo()) {
+      // Full LDS promotion: register->LDS, barrier, LDS->register,
+      // register->global
+      return lowerLdsPromotionGroup(op, adaptor, rewriter);
+    }
+
+    // Use existing vector write logic.
+    auto vecType = cast<VectorType>(value.getType());
     FailureOr<MemAccessInfo> memInfo = createMemoryIndicesAndMask(
         rewriter, getTypeConverter(), op, op.getMemory().getType(), vecType);
     if (failed(memInfo))
       return failure();
 
     buildVectorWrite(op.getLoc(), rewriter, adaptor.getMemory(),
-                     memInfo->startIndices, vec, memInfo->mask,
+                     memInfo->startIndices, value, memInfo->mask,
                      memInfo->vectorizedDim);
+
     rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  /// Implement group-based LDS promotion lowering.
+  /// Collects all wave.write operations in the same LDS promotion group,
+  /// then lowers them together with a single barrier per group.
+  ///
+  /// DESIGN CHOICE: All operations in the same LDS promotion group must be in
+  /// the same scope. This is required because:
+  /// 1. All register->LDS stores must complete before the barrier
+  /// 2. All LDS->register loads must happen after the barrier
+  /// 3. With operations in different scopes, we cannot guarantee this ordering
+  LogicalResult
+  lowerLdsPromotionGroup(wave::WriteOp firstOp,
+                         wave::WriteOp::Adaptor firstAdaptor,
+                         ConversionPatternRewriter &rewriter) const {
+    wave::WaveMemoryAccessPatternAttr memAccessPattern =
+        firstOp.getMemoryAccessPatternAttr();
+    StringRef groupId = memAccessPattern.getGroupId();
+    Location loc = firstOp.getLoc();
+
+    // Step 1: Collect all wave.write operations in this LDS promotion group
+    // from the entire function.
+    SmallVector<wave::WriteOp> groupOps =
+        collectLdsPromotionGroup(firstOp, groupId);
+
+    // Step 2: Verify that all operations in the group are in the same scope.
+    if (failed(verifyLdsPromotionGroupScope(groupOps, groupId))) {
+      return rewriter.notifyMatchFailure(
+          firstOp, "LDS promotion group operations must be in the same scope");
+    }
+
+    // Step 3: Create shared LDS allocation for this group.
+    Value ldsAlloc = createLdsAllocation(firstOp, rewriter, loc);
+    if (!ldsAlloc) {
+      return rewriter.notifyMatchFailure(firstOp,
+                                         "failed to create LDS allocation");
+    }
+
+    // Step 4: Lower all register->LDS stores first.
+    for (wave::WriteOp op : groupOps) {
+      if (failed(storeRegisterToLds(op, rewriter, op.getValueToStore(),
+                                    ldsAlloc, loc))) {
+        return rewriter.notifyMatchFailure(op,
+                                           "failed to store register to LDS");
+      }
+    }
+
+    // Step 5: Insert single barrier for the entire group.
+    amdgpu::LDSBarrierOp::create(rewriter, loc);
+
+    // Step 6: Lower all LDS->global transfers.
+    for (wave::WriteOp op : groupOps) {
+      // Convert the memory operand manually for each operation in the group.
+      Value convertedMemory = getTypeConverter()->materializeTargetConversion(
+          rewriter, op.getLoc(),
+          getTypeConverter()->convertType(op.getMemory().getType()),
+          op.getMemory());
+      if (!convertedMemory) {
+        return rewriter.notifyMatchFailure(op,
+                                           "failed to convert memory operand");
+      }
+
+      // Create a properly converted adaptor.
+      SmallVector<Value> convertedOperands = {op.getValueToStore(),
+                                              convertedMemory};
+      wave::WriteOp::Adaptor adaptor(convertedOperands,
+                                     op->getAttrDictionary());
+      if (failed(transferLdsToGlobal(op, adaptor, rewriter, ldsAlloc, loc))) {
+        return rewriter.notifyMatchFailure(op,
+                                           "failed to transfer LDS to global");
+      }
+    }
+
+    // Step 7: Erase all original wave.write operations.
+    for (wave::WriteOp op : groupOps) {
+      rewriter.eraseOp(op);
+    }
+
+    return success();
+  }
+
+  /// Verify that all operations in the LDS promotion group are in the same
+  /// scope. Returns failure if operations span multiple scopes, which would
+  /// break LDS promotion.
+  LogicalResult verifyLdsPromotionGroupScope(ArrayRef<wave::WriteOp> groupOps,
+                                             StringRef groupId) const {
+    if (groupOps.empty())
+      return success();
+
+    // Get the block of the first operation as the reference
+    Block *referenceBlock = groupOps[0]->getBlock();
+
+    // Verify all operations are in the same block
+    for (wave::WriteOp op : groupOps) {
+      if (op->getBlock() != referenceBlock) {
+        return op->emitError("LDS promotion group '")
+               << groupId
+               << "' contains operations in different scopes. All operations "
+               << "with the same group_id must be in the same block for "
+               << "correct LDS barrier semantics.";
+      }
+    }
+
+    return success();
+  }
+
+  /// Collect all wave.write operations in the same LDS promotion group.
+  /// Search the entire function for all wave.write ops with matching group_id.
+  SmallVector<wave::WriteOp> collectLdsPromotionGroup(wave::WriteOp firstOp,
+                                                      StringRef groupId) const {
+    SmallVector<wave::WriteOp> groupOps;
+
+    // Find the function that contains this write op.
+    func::FuncOp funcOp = firstOp->getParentOfType<func::FuncOp>();
+    assert(funcOp && "wave.write operation must be within a function");
+
+    // Walk the entire function to find all operations in this group.
+    funcOp.walk([&](wave::WriteOp writeOp) {
+      auto memPattern = writeOp.getMemoryAccessPatternAttr();
+      if (memPattern && memPattern.hasCompleteLdsPromotionInfo() &&
+          memPattern.getGroupId() == groupId) {
+        groupOps.push_back(writeOp);
+      }
+    });
+
+    return groupOps;
+  }
+
+  /// Create LDS allocation based on the LDS block shape from the attribute.
+  Value createLdsAllocation(wave::WriteOp op,
+                            ConversionPatternRewriter &rewriter,
+                            Location loc) const {
+    wave::WaveMemoryAccessPatternAttr memAccessPattern =
+        op.getMemoryAccessPatternAttr();
+
+    // Get element type from the input value.
+    auto vecType = cast<VectorType>(op.getValueToStore().getType());
+    Type elementType = vecType.getElementType();
+
+    // Get LDS block shape from the attribute.
+    auto ldsBlockShape = memAccessPattern.getLdsBlockShape();
+    wave::WaveHyperparameterAttr hyper =
+        static_cast<const wave::WaveTypeConverter &>(*getTypeConverter())
+            .getHyperparameters();
+
+    // Resolve the LDS block shape to concrete dimensions.
+    auto maybeResolvedShape = ldsBlockShape.getResolvedShape(hyper);
+    if (!maybeResolvedShape.has_value()) {
+      return nullptr;
+    }
+    SmallVector<int64_t> ldsShape = std::move(*maybeResolvedShape);
+
+    // Create LDS allocation with workgroup address space.
+    auto addressSpaceAttr = gpu::AddressSpaceAttr::get(
+        rewriter.getContext(), gpu::AddressSpace::Workgroup);
+    auto ldsMemRefType = MemRefType::get(
+        ldsShape, elementType, MemRefLayoutAttrInterface{}, addressSpaceAttr);
+
+    return memref::AllocOp::create(rewriter, loc, ldsMemRefType);
+  }
+
+  /// Transform global memory indices to LDS indices and store register value to
+  /// LDS.
+  LogicalResult storeRegisterToLds(wave::WriteOp op,
+                                   ConversionPatternRewriter &rewriter,
+                                   Value inputValue, Value ldsAlloc,
+                                   Location loc) const {
+    wave::WaveMemoryAccessPatternAttr memAccessPattern =
+        op.getMemoryAccessPatternAttr();
+
+    // Get the original global memory access info.
+    auto vecType = cast<VectorType>(inputValue.getType());
+    FailureOr<MemAccessInfo> memInfo = createMemoryIndicesAndMask(
+        rewriter, getTypeConverter(), op, op.getMemory().getType(), vecType);
+    if (failed(memInfo))
+      return failure();
+
+    // Transform global indices to LDS indices using: lds_indices =
+    // global_indices - lds_block_global_base.
+    auto ldsBlockGlobalBase = memAccessPattern.getLdsBlockGlobalBase();
+    wave::WaveHyperparameterAttr hyper =
+        static_cast<const wave::WaveTypeConverter &>(*getTypeConverter())
+            .getHyperparameters();
+
+    FailureOr<SmallVector<Value>> ldsBaseValues =
+        materializeAffine(loc, ldsBlockGlobalBase.getSymbols(),
+                          ldsBlockGlobalBase.getMap(), rewriter, hyper);
+    if (failed(ldsBaseValues))
+      return failure();
+    SmallVector<Value> ldsBase = std::move(*ldsBaseValues);
+
+    SmallVector<Value> ldsIndices;
+    ldsIndices.reserve(memInfo->startIndices.size());
+    for (size_t i = 0; i < memInfo->startIndices.size(); ++i) {
+      Value ldsIndex = arith::SubIOp::create(
+          rewriter, loc, memInfo->startIndices[i], ldsBase[i]);
+      ldsIndices.push_back(ldsIndex);
+    }
+
+    // Store to LDS using the same vectorization dimension as the original
+    // operation.
+    buildVectorWrite(loc, rewriter, ldsAlloc, ldsIndices, inputValue,
+                     memInfo->mask, memInfo->vectorizedDim);
+
+    return success();
+  }
+
+  /// Load vectorized data from LDS and store vectorized data to global memory.
+  LogicalResult transferLdsToGlobal(wave::WriteOp op,
+                                    wave::WriteOp::Adaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Value ldsAlloc, Location loc) const {
+    wave::WaveMemoryAccessPatternAttr memAccessPattern =
+        op.getMemoryAccessPatternAttr();
+
+    auto ldsLoadIndices = memAccessPattern.getLdsLoadIndices();
+    auto ldsLoadVectorSizes = memAccessPattern.getLdsLoadVectorSizes();
+    auto globalStoreIndices = memAccessPattern.getGlobalStoreIndices();
+    wave::WaveHyperparameterAttr hyper =
+        static_cast<const wave::WaveTypeConverter &>(*getTypeConverter())
+            .getHyperparameters();
+
+    // Get element type from LDS allocation.
+    auto ldsMemRefType = cast<MemRefType>(ldsAlloc.getType());
+    Type elementType = ldsMemRefType.getElementType();
+
+    // Step 1: Calculate LDS load indices using lds_load_indices.
+    FailureOr<SmallVector<Value>> ldsLoadStartValues =
+        materializeAffine(loc, ldsLoadIndices.getSymbols(),
+                          ldsLoadIndices.getMap(), rewriter, hyper);
+    if (failed(ldsLoadStartValues))
+      return failure();
+    SmallVector<Value> ldsLoadStart = std::move(*ldsLoadStartValues);
+
+    // Step 2: Resolve vector sizes from lds_load_vector_sizes.
+    auto maybeVectorSizes = ldsLoadVectorSizes.getResolvedShape(hyper);
+    if (!maybeVectorSizes.has_value()) {
+      return rewriter.notifyMatchFailure(
+          op, "failed to resolve LDS load vector sizes");
+    }
+    SmallVector<int64_t> vectorSizes = std::move(*maybeVectorSizes);
+
+    // Find dimension with largest vector size.
+    int64_t ldsVectorizedDim = 0;
+    int64_t maxVectorSize = 1;
+    for (auto [i, size] : llvm::enumerate(vectorSizes)) {
+      if (size >= maxVectorSize) {
+        maxVectorSize = size;
+        ldsVectorizedDim = i;
+      }
+    }
+
+    // Step 3: Vectorized load from LDS.
+    auto ldsLoadVecType = VectorType::get({maxVectorSize}, elementType);
+
+    Value loadedVec =
+        buildVectorRead(loc, rewriter, ldsAlloc, ldsLoadStart, ldsLoadVecType,
+                        /*mask=*/nullptr, ldsVectorizedDim);
+
+    // Step 4: Calculate global store indices using global_store_indices.
+    FailureOr<SmallVector<Value>> globalStoreStartValues =
+        materializeAffine(loc, globalStoreIndices.getSymbols(),
+                          globalStoreIndices.getMap(), rewriter, hyper);
+    if (failed(globalStoreStartValues))
+      return failure();
+    SmallVector<Value> globalStoreStart = std::move(*globalStoreStartValues);
+
+    // Step 5: Resolve global store vector sizes from lds_load_vector_sizes.
+    auto maybeGlobalVectorSizes = ldsLoadVectorSizes.getResolvedShape(hyper);
+    if (!maybeGlobalVectorSizes.has_value()) {
+      return rewriter.notifyMatchFailure(
+          op, "failed to resolve global store vector sizes");
+    }
+    SmallVector<int64_t> globalVectorSizes = std::move(*maybeGlobalVectorSizes);
+
+    // Find dimension with largest vector size.
+    int64_t globalVectorizedDim = 0;
+    int64_t globalMaxVectorSize = 1;
+    for (auto [i, size] : llvm::enumerate(globalVectorSizes)) {
+      if (size >= globalMaxVectorSize) {
+        globalMaxVectorSize = size;
+        globalVectorizedDim = i;
+      }
+    }
+
+    assert(maxVectorSize == globalMaxVectorSize &&
+           "vector sizes are guaranteed to match by attribute verification");
+
+    Value vecToStore = loadedVec;
+
+    // Step 6: Vectorized store to global memory
+    buildVectorWrite(loc, rewriter, adaptor.getMemory(), globalStoreStart,
+                     vecToStore,
+                     /*mask=*/nullptr, globalVectorizedDim);
+
     return success();
   }
 };
