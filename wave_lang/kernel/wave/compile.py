@@ -120,10 +120,9 @@ class WaveKernel:
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
 
-    def invoke(self, *args, **kwargs):
+    def invoke(self, *args, **kwargs) -> None:
         """
         Invokes the wave kernel with the given arguments.
-        Returns the assembly code of the compiled kernel.
         """
 
         # Segregate args into kernel tensor and scalars.
@@ -227,8 +226,6 @@ class WaveKernel:
                     printer(label, debug_log["value"])
             for handler in self.debug_handlers or []:
                 handler(debug_logs)
-
-        return self.asm
 
 
 def invoke_with_profile(options: WaveCompileOptions, invoke: Callable, *args, **kwargs):
