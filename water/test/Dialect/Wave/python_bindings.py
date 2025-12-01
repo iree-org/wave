@@ -244,5 +244,35 @@ with ir.Context() as ctx:
     # CHECK: #wave.tiling_constraint<dim = <"M">, tile_size = <[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>>
     print(wave.TilingConstraintAttr.get(dim="M", tile_size=expr_attr))
 
+    # CHECK: #wave.normal_form<none>
+    normal_form_attr = wave.WaveNormalFormAttr.get(wave.WaveNormalForm.None_)
+    print(normal_form_attr)
+
+    # CHECK: WaveNormalForm.None_
+    print(normal_form_attr.value)
+
+    # CHECK: #wave.normal_form<full_func_boundary>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.FunctionBoundarySpecified))
+
+    # CHECK: #wave.normal_form<full_op_types>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.OpTypesSpecified))
+
+    # CHECK: #wave.normal_form<index_exprs>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.IndexExprsSpecified))
+
+    # CHECK: #wave.normal_form<memory_only_types>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.MemoryOnlyTypes))
+
+    # CHECK: #wave.normal_form<full_types>
+    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.AllTypesSpecified))
+
+    try:
+        wave.WaveNormalFormAttr.get(100)
+    except TypeError as e:
+        assert "incompatible function arguments" in str(e)
+    else:
+        assert False, "Expected to fail with TypeError."
+
+
 # CHECK: wave_ok
 print("wave_ok")

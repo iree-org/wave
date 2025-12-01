@@ -179,6 +179,38 @@ NB_MODULE(_waterDialects, m) {
           "Gets a wave.WaveHyperparameterAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
+  // WaveNormalFormAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveNormalFormAttr", mlirAttributeIsAWaveNormalFormAttr,
+      mlirWaveNormalFormAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, WaveNormalForm value, MlirContext context) {
+            return cls(mlirWaveNormalFormAttrGet(context,
+                                                 static_cast<uint32_t>(value)));
+          },
+          nb::arg("cls"), nb::arg("value"), nb::arg("context") = nb::none(),
+          "Gets a wave.WaveNormalFormAttr from a normal form enum value.")
+      .def_property_readonly(
+          "value",
+          [](MlirAttribute self) {
+            return static_cast<WaveNormalForm>(
+                mlirWaveNormalFormAttrGetValue(self));
+          },
+          "Returns the normal form enum value.");
+
+  nb::enum_<WaveNormalForm>(d, "WaveNormalForm")
+      .value("None_", WaveNormalFormNone)
+      .value("FunctionBoundarySpecified",
+             WaveNormalFormFunctionBoundarySpecified)
+      .value("OpTypesSpecified", WaveNormalFormOpTypesSpecified)
+      .value("IndexExprsSpecified", WaveNormalFormIndexExprsSpecified)
+      .value("MemoryOnlyTypes", WaveNormalFormMemoryOnlyTypes)
+      .value("AllTypesSpecified", WaveNormalFormAllTypesSPecified);
+
+  //===---------------------------------------------------------------------===//
   // WaveWorkgroupDimAttr
   //===---------------------------------------------------------------------===//
 

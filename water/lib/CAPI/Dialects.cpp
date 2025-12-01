@@ -373,3 +373,25 @@ MlirAttribute mlirTilingConstraintAttrGet(MlirContext mlirCtx,
 MlirTypeID mlirTilingConstraintAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::TilingConstraintAttr>());
 }
+
+//===---------------------------------------------------------------------===//
+// WaveNormalFormAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveNormalFormAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveNormalFormAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveNormalFormAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveNormalFormAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveNormalForm>(value)));
+}
+
+uint32_t mlirWaveNormalFormAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveNormalFormAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveNormalFormAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveNormalFormAttr>());
+}
