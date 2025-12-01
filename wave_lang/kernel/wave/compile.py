@@ -120,7 +120,7 @@ class WaveKernel:
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
 
-    def invoke(self, *args, **kwargs):
+    def invoke(self, *args, **kwargs) -> None:
         """
         Invokes the wave kernel with the given arguments.
         Returns the assembly code of the compiled kernel.
