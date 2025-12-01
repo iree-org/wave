@@ -315,6 +315,8 @@ class ScheduleContext(BaseContext):
         self.use_scheduling_barriers = use_scheduling_barriers
         # Dictionary to maintain mapping from proxies to their results
         self.proxy_to_results: Dict[fx.Proxy, Any] = {}
+        # Dictionary to maintain mapping from original nodes to pipelined nodes (for auto-update)
+        self.node_mapping: Dict[fx.Node, list[fx.Node]] = {}
 
     def register_custom_op(self, name: str, op: CustomScheduleOp):
         def handler(*args, **kwargs):

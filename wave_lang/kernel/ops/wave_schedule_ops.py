@@ -174,24 +174,30 @@ def add_op_after(op, subgraph: fx.Graph, anchor: fx.Node, location=None):
 
 
 def extract_proxy_nodes(item):
-    """Extract fx.Node(s) from a proxy or return direct node."""
+    """Extract fx.Node(s) from a proxy, direct list, or return direct node."""
     if isinstance(item, fx.Proxy):
         result = get_proxy_result(item.node)
         return result if isinstance(result, list) else [result]
+    elif isinstance(item, (list, tuple)):
+        # Direct list of nodes
+        return list(item)
     return [item]
 
 
 def get_nodes_from_ref(ref):
     """
-    Get the actual nodes from a reference (PipelineStageRef or proxy).
+    Get the actual nodes from a reference (PipelineStageRef, list, or proxy).
     """
     if isinstance(ref, PipelineStageRef):
         # For PipelineStageRef, return the pipelined iterate node directly
         return [ref.pipelined_iterate_node]
+    elif isinstance(ref, (list, tuple)):
+        # Direct list of nodes
+        return list(ref)
     elif isinstance(ref, fx.Proxy):
         return get_proxy_result(ref.node)
     else:
-        raise ValueError(f"Expected PipelineStageRef or proxy, got {type(ref)}")
+        raise ValueError(f"Expected PipelineStageRef, list, or proxy, got {type(ref)}")
 
 
 @dataclass
@@ -228,12 +234,8 @@ class GetNodeByTag(CustomScheduleOp):
         # Always execute the real logic during tracing to apply scheduling
         real_result = get_node_by_tag_helper(kernel_trace, tag)
 
-        # Create a proxy that embeds the real result
-        return create_schedule_proxy(
-            region_graph,
-            real_result,
-            cls.schedule_op_name,
-        )
+        # Return nodes directly instead of wrapping in proxy
+        return real_result
 
 
 @dataclass
@@ -257,11 +259,8 @@ class GetNodeByTagAndType(CustomScheduleOp):
         nodes = [node for node in nodes if isinstance(get_custom(node), node_type)]
         logger.info(f"Found {len(nodes)} nodes by tag: {tag} and type: {node_type}")
 
-        return create_schedule_proxy(
-            region_graph,
-            nodes,
-            cls.schedule_op_name,
-        )
+        # Return nodes directly instead of wrapping in proxy
+        return nodes
 
 
 @dataclass
@@ -281,10 +280,17 @@ class PartitionByAddressSpace(CustomScheduleOp):
     ):
         matched, unmatched = [], []
 
-        assert hasattr(
-            nodes, "node"
-        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
-        nodes = get_proxy_result(nodes.node)
+        # Accept both proxies and direct lists
+        if hasattr(nodes, "node"):
+            # It's a proxy
+            nodes = get_proxy_result(nodes.node)
+        elif isinstance(nodes, (list, tuple)):
+            # It's already a direct list - use as is
+            pass
+        else:
+            raise ValueError(
+                f"Expected 'nodes' to be a proxy or list, but got type: {type(nodes).__name__}"
+            )
         assert nodes is not None, "Nodes must have a result"
         assert len(nodes) > 0, "Nodes must have at least one element"
 
@@ -302,11 +308,8 @@ class PartitionByAddressSpace(CustomScheduleOp):
         ]
         unmatched = [node for node in nodes if node not in matched]
 
-        return create_schedule_proxy(
-            region_graph,
-            (matched, unmatched),
-            cls.schedule_op_name,
-        )
+        # Return tuple of lists directly instead of wrapping in proxy
+        return (matched, unmatched)
 
 
 @dataclass
@@ -325,15 +328,19 @@ class Cluster(CustomScheduleOp):
 
         assert isinstance(ops, (list, tuple)), "ops must be a list"
 
-        # Find first proxy to get subgraph and context
+        # Find first node (from proxy or direct list) to get subgraph and context
         first_proxy_node = None
         for item in ops:
             if isinstance(item, fx.Proxy):
                 first_proxy_node = extract_proxy_nodes(item)[0]
                 break
+            elif isinstance(item, (list, tuple)) and len(item) > 0:
+                # Direct list of nodes
+                first_proxy_node = item[0]
+                break
 
         if first_proxy_node is None:
-            raise ValueError("Cluster must have at least one proxy operation")
+            raise ValueError("Cluster must have at least one node or proxy operation")
 
         subgraph = first_proxy_node.graph
         context_location = getattr(get_custom(first_proxy_node), "location", None)
@@ -344,7 +351,7 @@ class Cluster(CustomScheduleOp):
         last_anchor = None
         first_proxy_encountered = False
 
-        # Process ops sequentially, inserting scheduling ops relative to proxies
+        # Process ops sequentially, inserting scheduling ops relative to nodes (proxies or direct lists)
         for item in ops:
             if isinstance(item, fx.Proxy):
                 proxy_nodes = extract_proxy_nodes(item)
@@ -355,6 +362,16 @@ class Cluster(CustomScheduleOp):
                 # Update context location
                 context_location = getattr(
                     get_custom(proxy_nodes[-1]), "location", None
+                )
+            elif isinstance(item, (list, tuple)):
+                # Direct list of nodes
+                result_nodes.extend(item)
+                # Update anchor to the last node
+                last_anchor = item[-1]
+                first_proxy_encountered = True
+                # Update context location
+                context_location = getattr(
+                    get_custom(item[-1]), "location", None
                 )
             else:
                 # If we haven't encountered a proxy yet, insert before first proxy
@@ -370,7 +387,8 @@ class Cluster(CustomScheduleOp):
                 result_nodes.append(new_node)
                 last_anchor = new_node
 
-        return create_schedule_proxy(region_graph, result_nodes, cls.schedule_op_name)
+        # Return list of nodes directly instead of wrapping in proxy
+        return result_nodes
 
 
 @dataclass
@@ -414,7 +432,7 @@ class ReorderGraph(CustomScheduleOp):
 
         if reordered_subgraph is None:
             logger.warning("Failed to reorder graph, skipping reordering")
-            return empty_proxy("reorder_graph_failed")
+            return None
 
         # Replace the old subgraph with the reordered one
         reordered_subgraph.parent_op = subgraph.parent_op
@@ -436,7 +454,7 @@ class ReorderGraph(CustomScheduleOp):
             f"Successfully reordered graph: {original_subgraph_name} -> {reordered_subgraph_name}"
         )
 
-        return empty_proxy("reorder_graph_success")
+        return None
 
 
 @dataclass
@@ -467,11 +485,17 @@ class PartitionByDim(CustomScheduleOp):
         creates two partitions: first with K IDs 0-1, second with K IDs 2-3.
 
         """
-        # Get the actual nodes from the proxy
-        assert hasattr(
-            nodes, "node"
-        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
-        nodes_list = get_proxy_result(nodes.node)
+        # Accept both proxies and direct lists
+        if hasattr(nodes, "node"):
+            # It's a proxy
+            nodes_list = get_proxy_result(nodes.node)
+        elif isinstance(nodes, (list, tuple)):
+            # It's already a direct list - use as is
+            nodes_list = list(nodes)
+        else:
+            raise ValueError(
+                f"Expected 'nodes' to be a proxy or list, but got type: {type(nodes).__name__}"
+            )
         assert nodes_list is not None, "Nodes must have a result"
         assert len(nodes_list) > 0, "Nodes must have at least one element"
 
@@ -509,12 +533,8 @@ class PartitionByDim(CustomScheduleOp):
 
             partitioned_nodes.append(sorted_nodes_list[start_idx:end_idx])
 
-        # Return tuple of partitioned node lists
-        return create_schedule_proxy(
-            region_graph,
-            tuple(partitioned_nodes),
-            cls.schedule_op_name,
-        )
+        # Return tuple of partitioned node lists directly instead of wrapping in proxy
+        return tuple(partitioned_nodes)
 
 
 class PipelinedLoop:
@@ -563,7 +583,16 @@ class PipelinedLoop:
         )
         from ..wave.scheduling.schedule_enums import SchedulingType
 
-        result = get_proxy_result(self.iterate)
+        # Handle both proxies and direct lists
+        if isinstance(self.iterate, (list, tuple)):
+            # Direct list - use as is
+            result = self.iterate
+        elif hasattr(self.iterate, "node"):
+            # Proxy - extract result
+            result = get_proxy_result(self.iterate)
+        else:
+            raise ValueError(f"Expected iterate to be a proxy or list, got {type(self.iterate)}")
+            
         assert result is not None, "Iterate must have a result"
         assert isinstance(result, Sequence), "Iterate must be a sequence"
         assert len(result) == 1, "Iterate must have exactly one element"
@@ -604,6 +633,13 @@ class PipelinedLoop:
             self._node_mapping = node_mapping
             self._create_stage_proxies()
             self._update_kernel_node_mapping()
+            
+            # Store node mapping in context for auto-update of direct node references
+            from .._support.tracing import ScheduleContext
+            ctx = ScheduleContext.current()
+            if ctx is not None:
+                ctx.node_mapping.update(node_mapping)
+                logger.info(f"Stored {len(node_mapping)} node mappings in context for auto-update")
         else:
             logger.warning(
                 "Pipelining failed, KERNEL/PROLOGUE/EPILOGUE properties will not be available"
@@ -645,40 +681,48 @@ class PipelinedLoop:
 
     def _update_kernel_node_mapping(self):
         """
-        Auto-update tracked proxies to contain all mapped nodes (prologue, kernel, epilogue).
-
-        Uses direct node mapping dictionary to correctly handle partitioned proxies
-        (e.g., global_load_a vs shared_load_a which share the same tag).
+        Auto-update tracked lists to contain all mapped nodes (prologue, kernel, epilogue).
+        
+        Since lists are mutable, we update them in-place so user variables automatically
+        reflect the pipelined nodes.
         """
         from .._support.tracing import ScheduleContext
 
         ctx = ScheduleContext.current()
         if ctx is None:
-            logger.warning("No schedule context, cannot update proxy mappings")
+            logger.warning("No schedule context, cannot update node mappings")
             return
 
         if self._node_mapping is None:
-            logger.warning("No node mapping available, cannot update proxy mappings")
+            logger.warning("No node mapping available, cannot update lists")
             return
 
-        # Update each tracked proxy with its mapped nodes
+        # Update each tracked list by mutating it in-place
         updated_count = 0
-        for proxy_id, (proxy, original_nodes) in self._tracked_proxies.items():
-            # Collect all mapped versions of this proxy's original nodes using direct mapping
+        for tracked_list in self._tracked_proxies.values():
+            if not isinstance(tracked_list, list):
+                continue
+                
+            # Save original nodes
+            original_nodes = list(tracked_list)
+            
+            # Collect all mapped versions using direct mapping
             mapped_nodes = []
             for orig_node in original_nodes:
                 if orig_node in self._node_mapping:
                     mapped_nodes.extend(self._node_mapping[orig_node])
 
             if mapped_nodes:
-                ctx.proxy_to_results[proxy] = mapped_nodes
+                # Mutate the list in-place - this updates the user's variable!
+                tracked_list.clear()
+                tracked_list.extend(mapped_nodes)
                 logger.debug(
-                    f"Updated proxy: {len(original_nodes)} original -> {len(mapped_nodes)} mapped nodes"
+                    f"Updated list in-place: {len(original_nodes)} original -> {len(mapped_nodes)} mapped nodes"
                 )
                 updated_count += 1
 
         logger.info(
-            f"Auto-updated {updated_count}/{len(self._tracked_proxies)} tracked proxies"
+            f"Auto-updated {updated_count} lists in-place with pipelined nodes"
         )
 
     def get_kernel_nodes(self, tag: str, node_type=None):
@@ -691,10 +735,10 @@ class PipelinedLoop:
             node_type: Optional node type to filter by (e.g., tkw.Read, tkw.Write)
 
         Returns:
-            A proxy containing the nodes with the specified tag in the KERNEL stage
+            A list containing the nodes with the specified tag in the KERNEL stage
         """
         if not hasattr(self, "_kernel_nodes_by_tag"):
-            logger.warning("Kernel node mapping not available, returning empty proxy")
+            logger.warning("Kernel node mapping not available, returning empty list")
             nodes = []
         else:
             nodes = self._kernel_nodes_by_tag.get(tag, [])
@@ -702,18 +746,8 @@ class PipelinedLoop:
             if node_type is not None:
                 nodes = [n for n in nodes if isinstance(get_custom(n), node_type)]
 
-        # Create and return a proxy for compatibility with other schedule ops
-        from .._support.tracing import ScheduleContext
-
-        ctx = ScheduleContext.current()
-        if ctx is None:
-            logger.warning("No schedule context, returning raw nodes")
-            return nodes
-
-        type_suffix = f"_{node_type.__name__}" if node_type else ""
-        return create_schedule_proxy(
-            ctx.region_graph, nodes, f"kernel_{tag}{type_suffix}"
-        )
+        # Return list directly
+        return nodes
 
     def set_stage(self, nodes: Sequence[fx.Node]):
         """
@@ -734,17 +768,28 @@ class PipelinedLoop:
         for cluster in nodes:
             result_nodes = []
             for node in cluster:
-                node_result = get_proxy_result(node)
+                # Handle both lists (already expanded nodes)
+                if isinstance(node, list):
+                    # It's already a direct list - track it for mutation
+                    node_result = node
+                    # Track this list so we can mutate it after pipelining
+                    list_id = id(node)
+                    if list_id not in self._tracked_proxies:
+                        self._tracked_proxies[list_id] = node
+                        logger.debug(f"Tracking list with {len(node)} original nodes for auto-update")
+                elif isinstance(node, tuple):
+                    # Convert tuple to list so we can track and mutate it
+                    node_result = list(node)
+                    logger.warning("Converting tuple to list for mutation - consider using lists directly")
+                elif hasattr(node, "node"):
+                    # It's a proxy
+                    node_result = get_proxy_result(node)
+                else:
+                    # Assume it's a single node
+                    node_result = [node]
+                    
                 assert node_result is not None, "Nodes must have a result"
                 result_nodes.append(node_result)
-
-                # Track this proxy if not already tracked
-                node_id = id(node)
-                if node_id not in self._tracked_proxies:
-                    self._tracked_proxies[node_id] = (node, node_result)
-                    logger.debug(
-                        f"Tracking proxy with {len(node_result)} original nodes"
-                    )
             result_clusters.append(tuple(result_nodes))
 
         for i, cluster in enumerate(result_clusters):
@@ -763,8 +808,8 @@ class PipelinedLoop:
                     )
 
         self.num_stages += 1
-        # During tracing, return a proxy for the set_stage operation
-        return empty_proxy("set_stage")
+        # Return None - no proxy needed
+        return None
 
 
 @dataclass
@@ -782,20 +827,20 @@ class GetItem(CustomScheduleOp):
         obj: Any,
         index: int,
     ):
-        if isinstance(obj, fx.Proxy):
+        # Handle both lists/tuples and proxies
+        if isinstance(obj, (list, tuple)):
+            if len(obj) > index:
+                return obj[index]
+            else:
+                raise ValueError(f"Index {index} out of bounds for list of length {len(obj)}")
+        elif isinstance(obj, fx.Proxy):
             source_result = get_proxy_result(obj.node)
             if isinstance(source_result, (list, tuple)) and len(source_result) > index:
-                real_result = source_result[index]
+                return source_result[index]
             else:
                 raise ValueError(f"Index {index} out of bounds for {source_result}")
         else:
-            raise ValueError(f"Object {obj} is not a proxy")
-
-        return create_schedule_proxy(
-            region_graph,
-            real_result,
-            cls.schedule_op_name,
-        )
+            raise ValueError(f"Object must be a list, tuple, or proxy, got {type(obj).__name__}")
 
 
 @dataclass
@@ -812,13 +857,7 @@ class Pipeline(CustomScheduleOp):
     ):
         real_pipelined_loop = PipelinedLoop(iterate, kernel_trace, constraints)
 
-        create_schedule_proxy(
-            region_graph,
-            real_pipelined_loop,
-            cls.schedule_op_name,
-        )
-
-        # For context manager support, return the real object
+        # Return the real object directly (no proxy needed)
         return real_pipelined_loop
 
 
@@ -873,7 +912,7 @@ class Stagger(CustomScheduleOp):
 
         logger.info(f"Applied 2-way stagger scheduling to loop")
 
-        return empty_proxy("stagger")
+        return None
 
 
 @dataclass
@@ -925,7 +964,7 @@ class InsertAtStart(CustomScheduleOp):
         add_op_before(op, subgraph, first_node, custom.location)
 
         logger.info(f"Inserted {op.__class__.__name__} at start of subgraph")
-        return empty_proxy("insert_at_start")
+        return None
 
 
 @dataclass
@@ -968,7 +1007,7 @@ class InsertAtEnd(CustomScheduleOp):
         add_op_before(op, subgraph, output_node, custom.location)
 
         logger.info(f"Inserted {op.__class__.__name__} at end of subgraph")
-        return empty_proxy("insert_at_end")
+        return None
 
 
 @dataclass
@@ -1000,7 +1039,7 @@ class InsertBefore(CustomScheduleOp):
         # Use the helper function
         add_op_before(op, custom.graph, custom.fx_node, custom.location)
 
-        return empty_proxy("insert_before")
+        return None
 
 
 @dataclass
@@ -1030,7 +1069,7 @@ class InsertAfter(CustomScheduleOp):
         # Use the helper function
         add_op_after(op, custom.graph, custom.fx_node, custom.location)
 
-        return empty_proxy("insert_after")
+        return None
 
 
 @dataclass
@@ -1051,23 +1090,31 @@ class FilterNodes(CustomScheduleOp):
         Filter nodes by pipeline stage and/or node type.
 
         Args:
-            nodes: The nodes proxy to filter
+            nodes: The nodes list (or proxy for backward compatibility) to filter
             subgraph: Optional PipelineStageRef (e.g., pipelined_loop.KERNEL) to filter by stage
             node_type: Optional node type (e.g., tkw.Read, tkw.Write) to filter by type
 
         Returns:
-            A proxy containing the filtered nodes
+            A list containing the filtered nodes
         """
-
-        assert hasattr(
-            nodes, "node"
-        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
-        nodes_list = get_proxy_result(nodes)
+        
+        # Accept both proxies and direct lists
+        if hasattr(nodes, "node"):
+            # It's a proxy - use existing behavior
+            nodes_list = get_proxy_result(nodes)
+        elif isinstance(nodes, (list, tuple)):
+            # It's a direct list - already auto-updated by PipelinedLoop if needed
+            nodes_list = list(nodes)
+        else:
+            raise ValueError(
+                f"Expected 'nodes' to be a proxy or list, but got type: {type(nodes).__name__}"
+            )
+            
         assert nodes_list is not None, "Nodes must have a result"
         assert len(nodes_list) > 0, "FilterNodes: Nodes must have at least one element"
 
         if not nodes_list:
-            return create_schedule_proxy(region_graph, [], cls.schedule_op_name)
+            return []
 
         filtered_nodes = nodes_list
 
@@ -1098,7 +1145,8 @@ class FilterNodes(CustomScheduleOp):
                 f"Filtered to {len(filtered_nodes)} nodes of type {node_type.__name__}"
             )
 
-        return create_schedule_proxy(region_graph, filtered_nodes, cls.schedule_op_name)
+        # Return list directly
+        return filtered_nodes
 
 
 @dataclass
@@ -1114,18 +1162,24 @@ class GetNodeCount(CustomScheduleOp):
         nodes: Any,
     ):
         """
-        Get the count of nodes in a proxy.
+        Get the count of nodes in a list.
 
         Args:
-            nodes: The nodes proxy to count
+            nodes: The nodes list (or proxy for backward compatibility) to count
 
         Returns:
             The count of nodes as an integer
         """
-        assert hasattr(
-            nodes, "node"
-        ), f"Expected 'nodes' to be a proxy object with a 'node' attribute, but got type: {type(nodes).__name__}"
-        nodes_list = get_proxy_result(nodes)
+        # Accept both lists and proxies
+        if isinstance(nodes, (list, tuple)):
+            nodes_list = nodes
+        elif hasattr(nodes, "node"):
+            nodes_list = get_proxy_result(nodes)
+        else:
+            raise ValueError(
+                f"Expected 'nodes' to be a list or proxy, but got type: {type(nodes).__name__}"
+            )
+        
         assert nodes_list is not None, "Nodes must have a result"
 
         count = len(nodes_list)
