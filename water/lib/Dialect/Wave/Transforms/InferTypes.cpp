@@ -1089,8 +1089,8 @@ public:
         overrideInitialization(overrideInitialization) {}
 
   llvm::LogicalResult initialize(mlir::Operation *top) override {
-    if (getSolverConfig().isInterprocedural())
-      return top->emitError() << "interprocedural analysis not supported";
+    assert(!getSolverConfig().isInterprocedural() &&
+           "interprocedural analysis not supported");
 
     // Call the base class initialization in order to set up update listeners.
     // Note that this will initialize values at function/region entries to

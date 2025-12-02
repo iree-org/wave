@@ -20,7 +20,7 @@ namespace wave {
 // Aggregate all symbols from a range of ranges of attributes into a single
 // range of attributes without duplicates.
 template <typename RangeT>
-static void
+static inline void
 aggregateAllSymbols(RangeT &&symbolLists,
                     llvm::SmallVectorImpl<mlir::Attribute> &symbols) {
   static_assert(
