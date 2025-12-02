@@ -76,10 +76,6 @@ def stagger(loop: Any): ...
 def filter_nodes(nodes: Any, subgraph: Any = None, node_type: Any = None): ...
 
 
-@define_schedule_op
-def get_node_count(nodes: Any): ...
-
-
 def add_op_before(op, subgraph: fx.Graph, anchor: fx.Node, location=None):
     """Insert a scheduling operation before the anchor node."""
     with subgraph.inserting_before(anchor):
@@ -1028,35 +1024,3 @@ class FilterNodes(CustomScheduleOp):
 
         # Return list directly
         return filtered_nodes
-
-
-@dataclass
-class GetNodeCount(CustomScheduleOp):
-    schedule_op_name = "get_node_count"
-
-    @classmethod
-    def handle(
-        cls,
-        region_graph,
-        kernel_trace,
-        constraints: list[Constraint],
-        nodes: Any,
-    ):
-        """
-        Get the count of nodes in a list.
-
-        Args:
-            nodes: The nodes list to count
-
-        Returns:
-            The count of nodes as an integer
-        """
-        # Expect a list or tuple
-        if not isinstance(nodes, (list, tuple)):
-            raise ValueError(
-                f"Expected 'nodes' to be a list or tuple, but got type: {type(nodes).__name__}"
-            )
-
-        count = len(nodes)
-        logger.info(f"Node count: {count}")
-        return count

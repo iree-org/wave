@@ -309,9 +309,7 @@ def get_async_two_pp_clusters():
         )
 
         # Calculate the number of independent global_to_shared operations for MemoryCounterWait
-        independent_global_count = tkw.get_node_count(
-            global_to_shared_a
-        ) + tkw.get_node_count(global_to_shared_b)
+        independent_global_count = len(global_to_shared_a) + len(global_to_shared_b)
 
         # Create cluster ordering with async operations
         clusters = [
