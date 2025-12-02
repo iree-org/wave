@@ -97,7 +97,7 @@ public:
                                 llvm::StringRef name) const;
 
   /// Dump object code to output file `filename`.
-  void dumpToObjectFile(llvm::StringRef filename);
+  llvm::Error dumpToObjectFile(llvm::StringRef filename);
 
 private:
   /// MLIR context for deserializing bytecode.

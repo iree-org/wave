@@ -41,6 +41,12 @@ static void initializeLLVMTarget() {
   (void)initOnce;
 }
 
+/// Wrap a string into an llvm::StringError.
+static llvm::Error makeStringError(const llvm::Twine &message) {
+  return llvm::make_error<llvm::StringError>(message.str(),
+                                             llvm::inconvertibleErrorCode());
+}
+
 /// A simple object cache following Lang's LLJITWithObjectCache example.
 class wave::ExecutionEngine::SimpleObjectCache : public llvm::ObjectCache {
 public:
@@ -65,13 +71,13 @@ public:
   }
 
   /// Dump cached object to output file `filename`.
-  void dumpToObjectFile(llvm::StringRef outputFilename) {
+  llvm::Error dumpToObjectFile(llvm::StringRef outputFilename) {
     // Set up the output file.
     std::string errorMessage;
     auto file = mlir::openOutputFile(outputFilename, &errorMessage);
     if (!file) {
       llvm::errs() << errorMessage << "\n";
-      return;
+      return makeStringError(errorMessage);
     }
 
     // Dump the object generated for a single module to the output file.
@@ -79,17 +85,12 @@ public:
     auto &cachedObject = cachedObjects.begin()->second;
     file->os() << cachedObject->getBuffer();
     file->keep();
+    return llvm::Error::success();
   }
 
 private:
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> cachedObjects;
 };
-
-/// Wrap a string into an llvm::StringError.
-static llvm::Error makeStringError(const llvm::Twine &message) {
-  return llvm::make_error<llvm::StringError>(message.str(),
-                                             llvm::inconvertibleErrorCode());
-}
 
 // Setup LLVM target triple from the current machine.
 static void setupModule(llvm::Module &M, llvm::TargetMachine &TM) {
@@ -367,11 +368,10 @@ wave::ExecutionEngine::lookup(wave::ExecutionEngine::ModuleHandle handle,
   return makeStringError("looked up function is null");
 }
 
-void wave::ExecutionEngine::dumpToObjectFile(llvm::StringRef filename) {
-  if (cache == nullptr) {
-    llvm::errs() << "cannot dump ExecutionEngine object code to file: "
-                    "object cache is disabled\n";
-    return;
-  }
-  cache->dumpToObjectFile(filename);
+llvm::Error wave::ExecutionEngine::dumpToObjectFile(llvm::StringRef filename) {
+  if (cache == nullptr)
+    return makeStringError("cannot dump ExecutionEngine object code to file: "
+                           "object cache is disabled");
+
+  return cache->dumpToObjectFile(filename);
 }

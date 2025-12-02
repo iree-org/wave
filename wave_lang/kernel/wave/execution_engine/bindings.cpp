@@ -30,6 +30,16 @@ static T unwrapExpected(llvm::Expected<T> expected, const char *context) {
   return std::move(*expected);
 }
 
+static void unwrapError(llvm::Error error, const char *context) {
+  if (!error)
+    return;
+
+  std::string errorMessage;
+  llvm::raw_string_ostream os(errorMessage);
+  llvm::logAllUnhandledErrors(std::move(error), os);
+  throw std::runtime_error(std::string(context) + ": " + os.str());
+}
+
 // Nanobind module definition for Python bindings
 NB_MODULE(wave_execution_engine, m) {
   m.doc() = "LLVM ExecutionEngine bindings for Wave JIT compilation";
@@ -169,11 +179,18 @@ Returns:
 
 Raises:
     RuntimeError: If function lookup fails)")
-      .def("dump_to_object_file", &wave::ExecutionEngine::dumpToObjectFile,
-           nb::arg("filename"), R"(Dump compiled object code to a file.
-
-Note: Object cache must be enabled in ExecutionEngineOptions.
+      .def(
+          "dump_to_object_file",
+          [](wave::ExecutionEngine &self, const std::string &filename) {
+            unwrapError(self.dumpToObjectFile(filename),
+                        "Failed to dump object file");
+          },
+          nb::arg("filename"),
+          R"(Dump compiled object code to a file.
 
 Args:
-    filename: Path to output file)");
+    filename: Path to output file
+
+Raises:
+    RuntimeError: If dumping fails)");
 }
