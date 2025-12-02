@@ -103,13 +103,13 @@ def testReorderedPingPongGemm(
     [torch.float16, torch.bfloat16],
 )
 def testVariousDtypeReorderedGemm(
-    shape: tuple[int],
+    shape: tuple[int, int, int],
     enable_scheduling: SchedulingType,
     mfma_variant: MMAType,
     torch_dtype: torch.dtype,
-    run_bench,
-    perf_filename_tk,
-    perf_filename_iree,
+    run_bench: bool,
+    perf_filename_tk: str,
+    perf_filename_iree: str,
 ):
     # Input sizes
     M = shape[0]
