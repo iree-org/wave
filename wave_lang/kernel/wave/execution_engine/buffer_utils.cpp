@@ -11,12 +11,14 @@
 #include <stdexcept>
 
 namespace {
+/// RAII wrapper for acquiring and releasing the GIL.
 struct GILState {
   GILState() : gstate(PyGILState_Ensure()) {}
   ~GILState() { PyGILState_Release(gstate); }
   PyGILState_STATE gstate;
 };
 
+/// Deleter for std::unique_ptr<PyObject>.
 struct PyDeleter {
   void operator()(PyObject *obj) const { Py_DECREF(obj); }
 };
