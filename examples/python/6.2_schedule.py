@@ -387,9 +387,7 @@ def test_async_gemm_schedule(is_debug=False):
             shared_load_b, dim=K, num_partitions=2
         )
 
-        independent_global_count = tkw.get_node_count(
-            global_to_shared_a
-        ) + tkw.get_node_count(global_to_shared_b)
+        independent_global_count = len(global_to_shared_a) + len(global_to_shared_b)
 
         clusters = [
             tkw.cluster(
