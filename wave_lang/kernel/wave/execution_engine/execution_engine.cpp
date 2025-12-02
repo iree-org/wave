@@ -118,8 +118,9 @@ public:
                  std::unique_ptr<llvm::TargetMachine> TM,
                  llvm::ObjectCache *ObjCache = nullptr)
       : SimpleCompiler(*TM, ObjCache),
-        optimizer(mlir::makeOptimizingTransformer(/*opLevel*/ 3,
-                                                  /*sizeLevel*/ 0, TM.get())),
+        optimizer(mlir::makeOptimizingTransformer(
+            static_cast<unsigned>(TM->getOptLevel()),
+            /*sizeLevel*/ 0, TM.get())),
         TM(std::move(TM)), transformer(std::move(t)), printer(std::move(a)) {}
 
   llvm::Expected<CompileResult> operator()(llvm::Module &M) override {
@@ -157,7 +158,8 @@ private:
 } // namespace
 
 wave::ExecutionEngine::ExecutionEngine(const ExecutionEngineOptions &options)
-    : cache(options.enableObjectCache ? new SimpleObjectCache() : nullptr),
+    : cache(options.enableObjectCache ? std::make_unique<SimpleObjectCache>()
+                                      : nullptr),
       gdbListener(options.enableGDBNotificationListener
                       ? llvm::JITEventListener::createGDBRegistrationListener()
                       : nullptr),
@@ -243,7 +245,7 @@ llvm::Expected<wave::ExecutionEngine::ModuleHandle>
 wave::ExecutionEngine::loadModule(mlir::ModuleOp m) {
   assert(m);
 
-  std::unique_ptr<llvm::LLVMContext> ctx(new llvm::LLVMContext);
+  std::unique_ptr<llvm::LLVMContext> ctx(std::make_unique<llvm::LLVMContext>());
   auto llvmModule = mlir::translateModuleToLLVMIR(m, *ctx);
   if (!llvmModule)
     return makeStringError("could not convert to LLVM IR");

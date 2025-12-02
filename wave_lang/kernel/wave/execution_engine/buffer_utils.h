@@ -32,7 +32,7 @@ extern "C" {
 /// - basePtr: pointer to the raw data
 /// - data: same as basePtr (no alignment offset)
 /// - offset: 0
-/// - sizes[0]: number of elements
+/// - sizes[0]: -1
 /// - strides[0]: 1
 ///
 /// This function assumes the PyObject is a PyTorch tensor and uses
