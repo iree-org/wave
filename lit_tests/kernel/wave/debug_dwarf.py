@@ -1,6 +1,6 @@
 # RUN: rm -rf %t && mkdir -p %t
 # RUN: python %s %t
-# RUN: llvm-dwarfdump --debug-line %t/*.hsaco | FileCheck %s
+# RUN: dwarfdump --print-lines %t/*.hsaco | FileCheck %s
 
 """
 End-to-end test for debug information in compiled Wave kernels.  This test
@@ -89,16 +89,16 @@ def test_debug_dwarf():
 
 
 # Check that the line table header contains our source file
-# CHECK: file_names[ [[FILENUM:[0-9]+]]]:
-# CHECK-NEXT: name: "debug_dwarf.py"
+# CHECK: uri: "filepath"
+# CHECK-NEXT: uri: "{{.*}}/debug_dwarf.py"
 
 # Verify that the line table contains entries for the key operations in our Wave kernel.
 # Line 60: a_reg = tkw.read(a)
 # Line 61: b_reg = tkw.read(b)
 # Line 62: acc = tkw.mma(a_reg, b_reg, acc)
 # Line 65: tkw.write(repeat, c)
-#####        Address         Line Column     File  (other fields) Flags
-# CHECK-DAG: {{0x[0-9a-f]+}} 60   {{[0-9]+}} [[FILENUM]] {{.*}}   is_stmt
-# CHECK-DAG: {{0x[0-9a-f]+}} 61   {{[0-9]+}} [[FILENUM]] {{.*}}   is_stmt
-# CHECK-DAG: {{0x[0-9a-f]+}} 62   {{[0-9]+}} [[FILENUM]] {{.*}}   is_stmt
-# CHECK-DAG: {{0x[0-9a-f]+}} 65   {{[0-9]+}} [[FILENUM]] {{.*}}   is_stmt
+#####        Address           Line,Column Info
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 60,{{.*}}] NS
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 61,{{.*}}] NS
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 62,{{.*}}] NS
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 65,{{.*}}] NS
