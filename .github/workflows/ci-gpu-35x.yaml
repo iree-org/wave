@@ -72,7 +72,7 @@ jobs:
         run: |
           # Install TheRock
           sudo apt-get update
-          sudo apt install -y gfortran build-essential binutils
+          sudo apt install -y gfortran build-essential binutils dwarfdump
           python -m pip install \
             --index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx950-dcgpu/ \
             rocm[libraries,devel]

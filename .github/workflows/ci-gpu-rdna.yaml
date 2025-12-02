@@ -82,7 +82,7 @@ jobs:
         run: |
           # Install User libraries
           sudo apt-get update
-          sudo apt install -y libnuma1 numactl gfortran build-essential binutils
+          sudo apt install -y libnuma1 numactl gfortran build-essential binutils dwarfdump
 
           # Install torch+rocm6.4
           python -m pip install --no-compile --upgrade pip

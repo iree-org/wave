@@ -76,7 +76,19 @@ jobs:
             ci-rocplay-gfx1250:latest \
             infinity
 
-      # 2. wave-env
+      # 2.1. apt-get install for wave-env
+      - name: Setup dwarfdump for lit test
+        run: |
+          docker exec \
+            -u root \
+            happy bash -lc '
+              set -euxo pipefail
+
+              apt-get update
+              apt-get install -y dwarfdump
+            '
+
+      # 2.2. wave-env
       - name: Setup venv, Rust and Python deps
         run: |
           docker exec \

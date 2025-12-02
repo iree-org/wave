@@ -60,7 +60,7 @@ jobs:
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
         run: |
           sudo apt update
-          sudo apt install -y ninja-build cmake clang lld
+          sudo apt install -y ninja-build cmake clang lld dwarfdump
           pip install -r water/requirements-dev.txt
 
       - name: Checkout LLVM
@@ -177,6 +177,11 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+
+      - name: "Install dwarfdump"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dwarfdump
 
       - name: Install pip deps
         if: ${{ env.HAS_NO_GPU == 'true' && !cancelled() }}
