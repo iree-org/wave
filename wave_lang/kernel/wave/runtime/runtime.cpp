@@ -194,29 +194,21 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
   }
 }
 
-static void unload_binary(void *ptr) noexcept {
-//   auto module = reinterpret_cast<hipModule_t>(ptr);
-//   if (auto e = hipModuleUnload(module)) {
-//     nb::print(nb::str("Failed to unload module: ") +
-//               nb::str(hipGetErrorString(e)));
-//   }
-}
+static std::vector<char> readFileIntoVector(const std::string &filename) {
+  std::ifstream file(filename, std::ios::binary | std::ios::ate);
 
-static std::vector<char> readFileIntoVector(const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    std::cerr << "Unable to open file: " << filename << std::endl;
+    return std::vector<char>();
+  }
 
-    if (!file.is_open()) {
-        std::cerr << "Unable to open file: " << filename << std::endl;
-        return std::vector<char>();
-    }
+  std::streamsize size = file.tellg();
+  file.seekg(0, std::ios::beg);
 
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    std::vector<char> buffer(size);
-    file.read(buffer.data(), size);
-    file.close();
-    return buffer;
+  std::vector<char> buffer(size);
+  file.read(buffer.data(), size);
+  file.close();
+  return buffer;
 }
 
 static nb::tuple load_binary(const std::string &path,
@@ -226,7 +218,7 @@ static nb::tuple load_binary(const std::string &path,
   std::vector<char> hsacoVec = readFileIntoVector(path.c_str());
   HIP_CHECK_EXC(hipModuleLoadData(&module, hsacoVec.data()));
   HIP_CHECK_EXC(hipModuleGetFunction(&function, module, func_name.c_str()));
-  nb::capsule capsule(reinterpret_cast<void *>(module), &unload_binary);
+  nb::capsule capsule(reinterpret_cast<void *>(module));
   return nb::make_tuple(capsule, reinterpret_cast<uintptr_t>(function));
 }
 
