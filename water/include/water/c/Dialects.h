@@ -40,6 +40,19 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirWaveSymbolAttrGetTypeID();
 // WaveIndexSymbolAttr
 //===---------------------------------------------------------------------===//
 
+enum WaveIndexSymbol {
+  WaveIndexSymbol_DEVICE_DIM_0 = 0,
+  WaveIndexSymbol_DEVICE_DIM_1 = 1,
+  WaveIndexSymbol_DEVICE_DIM_2 = 2,
+  WaveIndexSymbol_WORKGROUP_0 = 3,
+  WaveIndexSymbol_WORKGROUP_1 = 4,
+  WaveIndexSymbol_WORKGROUP_2 = 5,
+  WaveIndexSymbol_THREAD_0 = 6,
+  WaveIndexSymbol_THREAD_1 = 7,
+  WaveIndexSymbol_THREAD_2 = 8,
+  WaveIndexSymbol_GPR_NUMBER = 9,
+};
+
 /// Checks whether the given MLIR attribute is a WaveIndexSymbolAttr.
 MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveIndexSymbolAttr(MlirAttribute attr);
 
@@ -93,6 +106,12 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirWaveHyperparameterAttrGetTypeID();
 // WaveWorkgroupDimAttr
 //===---------------------------------------------------------------------===//
 
+enum WaveWorkgroupDim {
+  WaveWorkgroupDimX = 0,
+  WaveWorkgroupDimY = 1,
+  WaveWorkgroupDimZ = 2,
+};
+
 /// Checks whether the given MLIR attribute is a WaveWorkgroupDimAttr.
 MLIR_CAPI_EXPORTED bool
 mlirAttributeIsAWaveWorkgroupDimAttr(MlirAttribute attr);
@@ -112,6 +131,13 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirWaveWorkgroupDimAttrGetTypeID();
 // WaveAddressSpaceAttr
 //===---------------------------------------------------------------------===//
 
+enum WaveAddressSpace {
+  WaveAddressSpaceUnspecified = 0,
+  WaveAddressSpaceGlobal = 1,
+  WaveAddressSpaceShared = 2,
+  WaveAddressSpaceRegister = 3,
+};
+
 /// Checks whether the given MLIR attribute is a WaveAddressSpaceAttr.
 MLIR_CAPI_EXPORTED bool
 mlirAttributeIsAWaveAddressSpaceAttr(MlirAttribute attr);
@@ -130,6 +156,27 @@ MLIR_CAPI_EXPORTED MlirTypeID mlirWaveAddressSpaceAttrGetTypeID();
 //===---------------------------------------------------------------------===//
 // WaveMmaKindAttr
 //===---------------------------------------------------------------------===//
+
+enum WaveMmaKind {
+  WaveMmaKind_F32_16x16x16_F16 = 4128,
+  WaveMmaKind_F32_32x32x8_F16 = 4129,
+  WaveMmaKind_F32_16x16x32_K8_F16 = 4130,
+  WaveMmaKind_F32_32x32x16_K8_F16 = 4131,
+  WaveMmaKind_I32_16x16x16_I8 = 4288,
+  WaveMmaKind_I32_32x32x8_I8 = 4289,
+  WaveMmaKind_F32_16x16x32_F8 = 4656,
+  WaveMmaKind_F32_32x32x16_F8 = 4657,
+  WaveMmaKind_F32_16x16x32_K4_F8 = 4658,
+  WaveMmaKind_F32_32x32x16_K4_F8 = 4659,
+  WaveMmaKind_I32_16x16x32_I8 = 4800,
+  WaveMmaKind_I32_32x32x16_I8 = 4801,
+  WaveMmaKind_F32_16x16x128_F8F6F4 = 4928,
+  WaveMmaKind_F32_32x32x64_F8F6F4 = 4929,
+  WaveMmaKind_F32_16x16x32_F16 = 4896,
+  WaveMmaKind_F32_32x32x16_F16 = 4897,
+  WaveMmaKind_F32_16x16x32_BF16 = 4898,
+  WaveMmaKind_F32_32x32x16_BF16 = 4899,
+};
 
 /// Checks whether the given MLIR attribute is a WaveMmaKindAttr.
 MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveMmaKindAttr(MlirAttribute attr);

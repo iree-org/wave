@@ -10,7 +10,6 @@
 #include "mlir-c/IR.h"
 #include "mlir/Bindings/Python/Nanobind.h"
 #include "mlir/Bindings/Python/NanobindAdaptors.h"
-#include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/c/Dialects.h"
 
 #include "nanobind/nanobind.h"
@@ -64,7 +63,7 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveIndexSymbolAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, wave::WaveIndexSymbol value,
+          [](const nb::object &cls, WaveIndexSymbol value,
              MlirContext context) {
             return cls(mlirWaveIndexSymbolAttrGet(
                 context, static_cast<uint32_t>(value)));
@@ -74,22 +73,22 @@ NB_MODULE(_waterDialects, m) {
       .def(
           "value",
           [](MlirAttribute self) {
-            return static_cast<wave::WaveIndexSymbol>(
+            return static_cast<WaveIndexSymbol>(
                 mlirWaveIndexSymbolAttrGetValue(self));
           },
           "Returns the index symbol enum value.");
 
-  nb::enum_<wave::WaveIndexSymbol>(d, "WaveIndexSymbol")
-      .value("DEVICE_DIM_0", wave::WaveIndexSymbol::DEVICE_DIM_0)
-      .value("DEVICE_DIM_1", wave::WaveIndexSymbol::DEVICE_DIM_1)
-      .value("DEVICE_DIM_2", wave::WaveIndexSymbol::DEVICE_DIM_2)
-      .value("WORKGROUP_0", wave::WaveIndexSymbol::WORKGROUP_0)
-      .value("WORKGROUP_1", wave::WaveIndexSymbol::WORKGROUP_1)
-      .value("WORKGROUP_2", wave::WaveIndexSymbol::WORKGROUP_2)
-      .value("THREAD_0", wave::WaveIndexSymbol::THREAD_0)
-      .value("THREAD_1", wave::WaveIndexSymbol::THREAD_1)
-      .value("THREAD_2", wave::WaveIndexSymbol::THREAD_2)
-      .value("GPR_NUMBER", wave::WaveIndexSymbol::GPR_NUMBER);
+  nb::enum_<WaveIndexSymbol>(d, "WaveIndexSymbol")
+      .value("DEVICE_DIM_0", WaveIndexSymbol_DEVICE_DIM_0)
+      .value("DEVICE_DIM_1", WaveIndexSymbol_DEVICE_DIM_1)
+      .value("DEVICE_DIM_2", WaveIndexSymbol_DEVICE_DIM_2)
+      .value("WORKGROUP_0", WaveIndexSymbol_WORKGROUP_0)
+      .value("WORKGROUP_1", WaveIndexSymbol_WORKGROUP_1)
+      .value("WORKGROUP_2", WaveIndexSymbol_WORKGROUP_2)
+      .value("THREAD_0", WaveIndexSymbol_THREAD_0)
+      .value("THREAD_1", WaveIndexSymbol_THREAD_1)
+      .value("THREAD_2", WaveIndexSymbol_THREAD_2)
+      .value("GPR_NUMBER", WaveIndexSymbol_GPR_NUMBER);
 
   //===---------------------------------------------------------------------===//
   // WaveIndexMappingAttr
@@ -188,7 +187,7 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveWorkgroupDimAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, wave::WaveWorkgroupDim value,
+          [](const nb::object &cls, WaveWorkgroupDim value,
              MlirContext context) {
             return cls(mlirWaveWorkgroupDimAttrGet(
                 context, static_cast<uint32_t>(value)));
@@ -198,15 +197,15 @@ NB_MODULE(_waterDialects, m) {
       .def(
           "value",
           [](MlirAttribute self) {
-            return static_cast<wave::WaveWorkgroupDim>(
+            return static_cast<WaveWorkgroupDim>(
                 mlirWaveWorkgroupDimAttrGetValue(self));
           },
           "Returns the workgroup dim enum value.");
 
-  nb::enum_<wave::WaveWorkgroupDim>(d, "WaveWorkgroupDim")
-      .value("X", wave::WaveWorkgroupDim::X)
-      .value("Y", wave::WaveWorkgroupDim::Y)
-      .value("Z", wave::WaveWorkgroupDim::Z);
+  nb::enum_<WaveWorkgroupDim>(d, "WaveWorkgroupDim")
+      .value("X", WaveWorkgroupDimX)
+      .value("Y", WaveWorkgroupDimY)
+      .value("Z", WaveWorkgroupDimZ);
 
   //===---------------------------------------------------------------------===//
   // WaveAddressSpaceAttr
@@ -217,7 +216,7 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveAddressSpaceAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, wave::WaveAddressSpace value,
+          [](const nb::object &cls, WaveAddressSpace value,
              MlirContext context) {
             return cls(mlirWaveAddressSpaceAttrGet(
                 context, static_cast<uint32_t>(value)));
@@ -227,16 +226,16 @@ NB_MODULE(_waterDialects, m) {
       .def(
           "value",
           [](MlirAttribute self) {
-            return static_cast<wave::WaveAddressSpace>(
+            return static_cast<WaveAddressSpace>(
                 mlirWaveAddressSpaceAttrGetValue(self));
           },
           "Returns the address space enum value.");
 
-  nb::enum_<wave::WaveAddressSpace>(d, "WaveAddressSpace")
-      .value("Unspecified", wave::WaveAddressSpace::Unspecified)
-      .value("Global", wave::WaveAddressSpace::Global)
-      .value("Shared", wave::WaveAddressSpace::Shared)
-      .value("Register", wave::WaveAddressSpace::Register);
+  nb::enum_<WaveAddressSpace>(d, "WaveAddressSpace")
+      .value("Unspecified", WaveAddressSpaceUnspecified)
+      .value("Global", WaveAddressSpaceGlobal)
+      .value("Shared", WaveAddressSpaceShared)
+      .value("Register", WaveAddressSpaceRegister);
 
   //===---------------------------------------------------------------------===//
   // WaveMmaKindAttr
@@ -247,8 +246,7 @@ NB_MODULE(_waterDialects, m) {
       mlirWaveMmaKindAttrGetTypeID)
       .def_classmethod(
           "get",
-          [](const nb::object &cls, wave::WaveMmaKind value,
-             MlirContext context) {
+          [](const nb::object &cls, WaveMmaKind value, MlirContext context) {
             return cls(
                 mlirWaveMmaKindAttrGet(context, static_cast<uint32_t>(value)));
           },
@@ -257,33 +255,32 @@ NB_MODULE(_waterDialects, m) {
       .def(
           "value",
           [](MlirAttribute self) {
-            return static_cast<wave::WaveMmaKind>(
-                mlirWaveMmaKindAttrGetValue(self));
+            return static_cast<WaveMmaKind>(mlirWaveMmaKindAttrGetValue(self));
           },
           "Returns the MMA kind enum value.");
 
-  nb::enum_<wave::WaveMmaKind>(d, "WaveMmaKind")
+  nb::enum_<WaveMmaKind>(d, "WaveMmaKind")
       // CDNA1
-      .value("F32_16x16x16_F16", wave::WaveMmaKind::F32_16x16x16_F16)
-      .value("F32_32x32x8_F16", wave::WaveMmaKind::F32_32x32x8_F16)
-      .value("F32_16x16x32_K8_F16", wave::WaveMmaKind::F32_16x16x32_K8_F16)
-      .value("F32_32x32x16_K8_F16", wave::WaveMmaKind::F32_32x32x16_K8_F16)
-      .value("I32_16x16x16_I8", wave::WaveMmaKind::I32_16x16x16_I8)
-      .value("I32_32x32x8_I8", wave::WaveMmaKind::I32_32x32x8_I8)
+      .value("F32_16x16x16_F16", WaveMmaKind_F32_16x16x16_F16)
+      .value("F32_32x32x8_F16", WaveMmaKind_F32_32x32x8_F16)
+      .value("F32_16x16x32_K8_F16", WaveMmaKind_F32_16x16x32_K8_F16)
+      .value("F32_32x32x16_K8_F16", WaveMmaKind_F32_32x32x16_K8_F16)
+      .value("I32_16x16x16_I8", WaveMmaKind_I32_16x16x16_I8)
+      .value("I32_32x32x8_I8", WaveMmaKind_I32_32x32x8_I8)
       // CDNA3
-      .value("F32_16x16x32_F8", wave::WaveMmaKind::F32_16x16x32_F8)
-      .value("F32_32x32x16_F8", wave::WaveMmaKind::F32_32x32x16_F8)
-      .value("F32_16x16x32_K4_F8", wave::WaveMmaKind::F32_16x16x32_K4_F8)
-      .value("F32_32x32x16_K4_F8", wave::WaveMmaKind::F32_32x32x16_K4_F8)
-      .value("I32_16x16x32_I8", wave::WaveMmaKind::I32_16x16x32_I8)
-      .value("I32_32x32x16_I8", wave::WaveMmaKind::I32_32x32x16_I8)
+      .value("F32_16x16x32_F8", WaveMmaKind_F32_16x16x32_F8)
+      .value("F32_32x32x16_F8", WaveMmaKind_F32_32x32x16_F8)
+      .value("F32_16x16x32_K4_F8", WaveMmaKind_F32_16x16x32_K4_F8)
+      .value("F32_32x32x16_K4_F8", WaveMmaKind_F32_32x32x16_K4_F8)
+      .value("I32_16x16x32_I8", WaveMmaKind_I32_16x16x32_I8)
+      .value("I32_32x32x16_I8", WaveMmaKind_I32_32x32x16_I8)
       // CDNA4
-      .value("F32_16x16x128_F8F6F4", wave::WaveMmaKind::F32_16x16x128_F8F6F4)
-      .value("F32_32x32x64_F8F6F4", wave::WaveMmaKind::F32_32x32x64_F8F6F4)
-      .value("F32_32x32x16_BF16", wave::WaveMmaKind::F32_32x32x16_BF16)
-      .value("F32_16x16x32_BF16", wave::WaveMmaKind::F32_16x16x32_BF16)
-      .value("F32_32x32x16_F16", wave::WaveMmaKind::F32_32x32x16_F16)
-      .value("F32_16x16x32_F16", wave::WaveMmaKind::F32_16x16x32_F16);
+      .value("F32_16x16x128_F8F6F4", WaveMmaKind_F32_16x16x128_F8F6F4)
+      .value("F32_32x32x64_F8F6F4", WaveMmaKind_F32_32x32x64_F8F6F4)
+      .value("F32_32x32x16_BF16", WaveMmaKind_F32_32x32x16_BF16)
+      .value("F32_16x16x32_BF16", WaveMmaKind_F32_16x16x32_BF16)
+      .value("F32_32x32x16_F16", WaveMmaKind_F32_32x32x16_F16)
+      .value("F32_16x16x32_F16", WaveMmaKind_F32_16x16x32_F16);
 
   //===---------------------------------------------------------------------===//
   // WaveExprListAttr
