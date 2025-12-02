@@ -31,6 +31,8 @@ find_package(MLIR REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 message(STATUS "Found MLIR in: ${MLIR_DIR}")
+message(STATUS "Found nanobind in: ${nanobind_ROOT}")
+
 
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
