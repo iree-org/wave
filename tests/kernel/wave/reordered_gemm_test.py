@@ -40,12 +40,12 @@ reordered_gemm_test_shapes = [
     [MMAType.F32_16x16x16_F16],
 )
 def testReorderedPingPongGemm(
-    shape: tuple[int],
+    shape: tuple[int, int, int],
     enable_scheduling: SchedulingType,
     mfma_variant: MMAType,
-    run_bench,
-    perf_filename_tk,
-    perf_filename_iree,
+    run_bench: bool,
+    perf_filename_tk: str,
+    perf_filename_iree: str,
 ):
     # Input sizes
     M = shape[0]

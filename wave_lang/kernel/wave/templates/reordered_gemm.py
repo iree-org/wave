@@ -96,9 +96,9 @@ def get_reordered_matmul(
 
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            # a_reg: tkw.Register[M, K, tkl.bf16]
+            # a_reg: tkw.Register[M, K, input_wtype]
             a_reg = tkw.read(a)
-            # b_reg: tkw.Register[N, K, tkl.bf16]
+            # b_reg: tkw.Register[N, K, input_wtype]
             b_reg = tkw.read(b)
             # acc: tkw.Register[M, N, tkl.f32]
             acc = tkw.mma(a_reg, b_reg, acc)
