@@ -13,7 +13,7 @@ from ...ops.wave_ops import (
     ScaledMMA,
 )
 import math
-from typing import TypeVar
+from typing import Iterable, TypeVar
 from enum import Enum
 from .resources import Operation
 from typing import List
@@ -127,40 +127,40 @@ class GemmScheduler(BaseScheduler):
             local_load_rhs_scale.append(rhs_scale)
         return local_load_lhs_scale, local_load_rhs_scale
 
-    def get_local_writes(self, local_loads):
-        local_writes = set()
+    def get_local_writes(self, local_loads: Iterable[Read]) -> Iterable[Write]:
+        local_writes = dict()
         for local_load in local_loads:
             custom = get_custom(local_load)
-            cur_writes = [
-                w
+            cur_writes = {
+                w: None
                 for w in custom.memory.users
                 if isinstance(get_custom(w), Write) and w.graph == custom.graph
-            ]
+            }
             local_writes.update(cur_writes)
-        return list(local_writes)
+        return local_writes.keys()
 
-    def get_lds_gathers(self, local_loads):
-        lds_gathers = set()
+    def get_lds_gathers(self, local_loads: Iterable[Read]) -> Iterable[GatherToLDS]:
+        lds_gathers = dict()
         for local_load in local_loads:
             custom = get_custom(local_load)
             # Get direct users and users from rotated registers.
-            memory_users = set([g for g in custom.memory.users])
+            memory_users = {g: None for g in custom.memory.users}
             # Filter users for GatherToLDS
-            cur_gathers = [
-                g
+            cur_gathers = {
+                g: None
                 for g in memory_users
                 if isinstance(get_custom(g), GatherToLDS) and g.graph == custom.graph
-            ]
+            }
             lds_gathers.update(cur_gathers)
-        return list(lds_gathers)
+        return lds_gathers.keys()
 
-    def get_global_loads(self, local_writes):
-        global_loads = set()
+    def get_global_loads(self, local_writes: Iterable[Write]) -> Iterable[Read]:
+        global_loads = dict()
         for local_write in local_writes:
             custom = get_custom(local_write)
             if isinstance(get_custom(custom.register_), Read):
-                global_loads.add(custom.register_)
-        return list(global_loads)
+                global_loads[custom.register_] = None
+        return global_loads.keys()
 
     def annotate_op_with_gemm_operation_type(self, nodes, gemm_operation_type):
         for node in nodes:
