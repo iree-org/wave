@@ -3,7 +3,6 @@ import warnings
 from abc import ABC, abstractmethod
 from types import FunctionType, BuiltinFunctionType
 from typing import (
-    Any,
     Callable,
     Dict,
     Optional,

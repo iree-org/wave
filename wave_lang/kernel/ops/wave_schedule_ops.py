@@ -17,8 +17,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
-
 # Stubs to enable type checking of the custom schedule ops - decorated with @define_op for dispatch
 @define_schedule_op
 def get_node_by_tag(tag: str): ...
@@ -277,9 +275,7 @@ class Cluster(CustomScheduleOp):
                 last_anchor = item[-1]
                 first_node_encountered = True
                 # Update context location
-                context_location = getattr(
-                    get_custom(item[-1]), "location", None
-                )
+                context_location = getattr(get_custom(item[-1]), "location", None)
             else:
                 # If we haven't encountered a node yet, insert before first node
                 # Otherwise, insert after the last anchor
@@ -485,8 +481,10 @@ class PipelinedLoop:
 
         # Expect a list or tuple
         if not isinstance(self.iterate, (list, tuple)):
-            raise ValueError(f"Expected iterate to be a list or tuple, got {type(self.iterate)}")
-            
+            raise ValueError(
+                f"Expected iterate to be a list or tuple, got {type(self.iterate)}"
+            )
+
         result = self.iterate
         assert isinstance(result, Sequence), "Iterate must be a sequence"
         assert len(result) == 1, "Iterate must have exactly one element"
@@ -527,13 +525,16 @@ class PipelinedLoop:
             self._node_mapping = node_mapping
             self._create_stage_refs()
             self._update_kernel_node_mapping()
-            
+
             # Store node mapping in context for auto-update of direct node references
             from .._support.tracing import ScheduleContext
+
             ctx = ScheduleContext.current()
             if ctx is not None:
                 ctx.node_mapping.update(node_mapping)
-                logger.info(f"Stored {len(node_mapping)} node mappings in context for auto-update")
+                logger.info(
+                    f"Stored {len(node_mapping)} node mappings in context for auto-update"
+                )
         else:
             logger.warning(
                 "Pipelining failed, KERNEL/PROLOGUE/EPILOGUE properties will not be available"
@@ -576,7 +577,7 @@ class PipelinedLoop:
     def _update_kernel_node_mapping(self):
         """
         Auto-update tracked lists to contain all mapped nodes (prologue, kernel, epilogue).
-        
+
         Since lists are mutable, we update them in-place so user variables automatically
         reflect the pipelined nodes.
         """
@@ -596,10 +597,10 @@ class PipelinedLoop:
         for tracked_list in self._tracked_lists.values():
             if not isinstance(tracked_list, list):
                 continue
-                
+
             # Save original nodes
             original_nodes = list(tracked_list)
-            
+
             # Collect all mapped versions using direct mapping
             mapped_nodes = []
             for orig_node in original_nodes:
@@ -615,9 +616,7 @@ class PipelinedLoop:
                 )
                 updated_count += 1
 
-        logger.info(
-            f"Auto-updated {updated_count} lists in-place with pipelined nodes"
-        )
+        logger.info(f"Auto-updated {updated_count} lists in-place with pipelined nodes")
 
     def get_kernel_nodes(self, tag: str, node_type=None):
         """
@@ -669,15 +668,19 @@ class PipelinedLoop:
                     list_id = id(node)
                     if list_id not in self._tracked_lists:
                         self._tracked_lists[list_id] = node
-                        logger.debug(f"Tracking list with {len(node)} original nodes for auto-update")
+                        logger.debug(
+                            f"Tracking list with {len(node)} original nodes for auto-update"
+                        )
                 elif isinstance(node, tuple):
                     # Convert tuple to list so we can track and mutate it
                     node_result = list(node)
-                    logger.warning("Converting tuple to list for mutation - consider using lists directly")
+                    logger.warning(
+                        "Converting tuple to list for mutation - consider using lists directly"
+                    )
                 else:
                     # Assume it's a single node
                     node_result = [node]
-                    
+
                 result_nodes.append(node_result)
             result_clusters.append(tuple(result_nodes))
 
@@ -718,12 +721,16 @@ class GetItem(CustomScheduleOp):
     ):
         # Handle lists and tuples
         if not isinstance(obj, (list, tuple)):
-            raise ValueError(f"Object must be a list or tuple, got {type(obj).__name__}")
-            
+            raise ValueError(
+                f"Object must be a list or tuple, got {type(obj).__name__}"
+            )
+
         if len(obj) > index:
             return obj[index]
         else:
-            raise ValueError(f"Index {index} out of bounds for list of length {len(obj)}")
+            raise ValueError(
+                f"Index {index} out of bounds for list of length {len(obj)}"
+            )
 
 
 @dataclass
@@ -980,13 +987,13 @@ class FilterNodes(CustomScheduleOp):
         Returns:
             A list containing the filtered nodes
         """
-        
+
         # Expect a list or tuple
         if not isinstance(nodes, (list, tuple)):
             raise ValueError(
                 f"Expected 'nodes' to be a list or tuple, but got type: {type(nodes).__name__}"
             )
-            
+
         nodes_list = list(nodes)
         assert len(nodes_list) > 0, "FilterNodes: Nodes must have at least one element"
 
