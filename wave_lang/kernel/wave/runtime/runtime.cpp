@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstring>
+#include <fstream>
+#include <iostream>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/string.h>
@@ -31,7 +33,7 @@ static hipDrvLaunchKernelEx_t hipDrvLaunchKernelEx = nullptr;
 static hipGetErrorName_t hipGetErrorName = nullptr;
 static hipGetErrorString_t hipGetErrorString = nullptr;
 static hipModuleUnload_t hipModuleUnload = nullptr;
-static hipModuleLoad_t hipModuleLoad = nullptr;
+static hipModuleLoadData_t hipModuleLoadData = nullptr;
 static hipModuleGetFunction_t hipModuleGetFunction = nullptr;
 
 static void *get_symbol_address(module_handle_t module,
@@ -55,7 +57,7 @@ static void *get_symbol_address(module_handle_t module,
 
 static void load_hip_functions() {
   if (hipModuleLaunchKernel && hipGetErrorName && hipGetErrorString &&
-      hipModuleUnload && hipModuleLoad && hipModuleGetFunction)
+      hipModuleUnload && hipModuleLoadData && hipModuleGetFunction)
     return;
 
   module_handle_t module = nullptr;
@@ -78,8 +80,7 @@ static void load_hip_functions() {
   GET_FUNC(module, hipModuleLaunchKernel);
   GET_FUNC(module, hipGetErrorName);
   GET_FUNC(module, hipGetErrorString);
-  GET_FUNC(module, hipModuleUnload);
-  GET_FUNC(module, hipModuleLoad);
+  GET_FUNC(module, hipModuleLoadData);
   GET_FUNC(module, hipModuleGetFunction);
 
   // hipDrvLaunchKernelEx may not be available.
@@ -194,18 +195,36 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
 }
 
 static void unload_binary(void *ptr) noexcept {
-  auto module = reinterpret_cast<hipModule_t>(ptr);
-  if (auto e = hipModuleUnload(module)) {
-    nb::print(nb::str("Failed to unload module: ") +
-              nb::str(hipGetErrorString(e)));
-  }
+//   auto module = reinterpret_cast<hipModule_t>(ptr);
+//   if (auto e = hipModuleUnload(module)) {
+//     nb::print(nb::str("Failed to unload module: ") +
+//               nb::str(hipGetErrorString(e)));
+//   }
+}
+
+static std::vector<char> readFileIntoVector(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary | std::ios::ate);
+
+    if (!file.is_open()) {
+        std::cerr << "Unable to open file: " << filename << std::endl;
+        return std::vector<char>();
+    }
+
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<char> buffer(size);
+    file.read(buffer.data(), size);
+    file.close();
+    return buffer;
 }
 
 static nb::tuple load_binary(const std::string &path,
                              const std::string &func_name) {
   hipModule_t module;
   hipFunction_t function;
-  HIP_CHECK_EXC(hipModuleLoad(&module, path.c_str()));
+  std::vector<char> hsacoVec = readFileIntoVector(path.c_str());
+  HIP_CHECK_EXC(hipModuleLoadData(&module, hsacoVec.data()));
   HIP_CHECK_EXC(hipModuleGetFunction(&function, module, func_name.c_str()));
   nb::capsule capsule(reinterpret_cast<void *>(module), &unload_binary);
   return nb::make_tuple(capsule, reinterpret_cast<uintptr_t>(function));
