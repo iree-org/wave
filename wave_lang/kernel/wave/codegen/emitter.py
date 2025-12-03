@@ -1016,7 +1016,8 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
                     stack.append(_get_const(1))
                     continue
                 for _ in range(sympy.Abs(power) - 1):
-                    base = arith_d.muli(base, base)
+                    operand = _get_ir_value(base)
+                    base = arith_d.muli(operand, operand)
                 if power < 0:
                     stack.append(_Rational(_get_const(1), base))
                 else:
