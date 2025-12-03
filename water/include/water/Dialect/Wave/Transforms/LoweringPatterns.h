@@ -68,10 +68,6 @@ void populateWaveReadWriteLoweringPatterns(WaveTypeConverter &typeConverter,
 void populateWaveUnaryFPOpLoweringPatterns(WaveTypeConverter &typeConverter,
                                            mlir::RewritePatternSet &patterns);
 
-// Adds pattern that lowers 'wave.extract_slice' ops to upstream MLIR ops.
-void populateWaveExtractSliceLoweringPatterns(
-    WaveTypeConverter &typeConverter, mlir::RewritePatternSet &patterns);
-
 } // namespace wave
 
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_TRANSFORMS_H

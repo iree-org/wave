@@ -101,8 +101,6 @@ struct LowerWaveToMLIRPass
           wave::populateWaveMmaLoweringPatterns(typeConverter, patterns);
           wave::populateWaveReadWriteLoweringPatterns(typeConverter, patterns);
           wave::populateWaveUnaryFPOpLoweringPatterns(typeConverter, patterns);
-          wave::populateWaveExtractSliceLoweringPatterns(typeConverter,
-                                                         patterns);
 
           if (failed(applyPartialConversion(op, target, std::move(patterns),
                                             config))) {
