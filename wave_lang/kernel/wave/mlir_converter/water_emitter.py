@@ -246,13 +246,13 @@ def _preprocess_symbols(
     """
     Preprocess symbols by:
     (1) adding assumptions about all symbols being positive to later enable more simplifications.
-    (2) replacing `$ARG` prefix of argument symbols (e.g. `ARG0`) by `_ARG` for consistency.
+    (2) replacing `$ARG` prefix of argument symbols (e.g. `ARG0`) by `_Iter_` to match dialect expectations.
     """
     result = {}
     for sym in symbols:
-        # Special case: rename ARG* symbols to _ARG*
+        # Special case: rename $ARG* symbols to _Iter_*
         if sym.name.startswith("$ARG"):
-            new_name = sym.name.replace("$", "_")
+            new_name = sym.name.replace("$ARG", "_Iter_")
             result[sym] = sympy.Symbol(new_name, positive=True)
         else:
             result[sym] = sympy.Symbol(sym.name, positive=True)
@@ -282,6 +282,8 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
 
     if name in INDEX_SYMBOL_MAP:
         return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
+    elif name.startswith("_Iter_"):
+        return wave.WaveIterSymbolAttr.get(name.replace("_Iter_", ""))
     else:
         return wave.WaveSymbolAttr.get(name)
 
