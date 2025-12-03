@@ -1,6 +1,4 @@
-# RUN: python %s | FileCheck %s --check-prefix=CHECK,CHECK-%target
-# TODO: integrate with turbine repo?
-# REQUIRES: turbine
+# RUN: python %s | FileCheck %s --check-prefixes=CHECK,CHECK-%target
 
 import textwrap
 from typing import Optional
@@ -143,6 +141,11 @@ class WaveBhsdFlashAttentionSharktankOp(CustomOp):
         )
 
         match get_arch_family():
+            case "GFX1250":
+                mfma_variant = (
+                    tkw.MMAType.GFX1250_F32_16x16x32_F16,
+                    tkw.MMAType.GFX1250_F32_16x16x32_F16,
+                )
             case "RDNA":
                 mfma_variant = (
                     tkw.MMAType.RDNA4_WAVE32_F32_16x16x16_F16,

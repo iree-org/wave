@@ -41,10 +41,13 @@ class WaveCompileOptions:
     kernel_usages: tuple[KernelBufferUsage] = None
 
     # === Backend options ===
+    backend: str = "llvm"  # "llvm" or "asm"
     device: str = "hip"
     target: str = "gfx942"
+    codeobj: str = "5"  # Code object version ("4" or "5")
     iree_preprocessing_pass_pipeline: str = None
     num_devices: int = 1
+    use_water_pipeline: bool = False  # Use Water lowering pipeline with host wrapper
 
     # === Benchmark options ===
     run_bench: bool = False
@@ -94,6 +97,12 @@ class WaveCompileOptions:
     dump_schedule: Optional[str] = None
     use_bound_check: bool = False
 
+    # Cluster barrier signal/wait delay in number of loop iterations
+    # None - no barriers inside the loop
+    # 0 - signal and wait on same iteration
+    # 1 - one iteration apart, 2 - two, etc
+    cluster_barrier_delay: Optional[int] = None
+
     # === Print options ===
     mlir_print_ir_after_all: bool = False
     print_ir_after: list[str] = field(default_factory=list)
@@ -105,3 +114,8 @@ class WaveCompileOptions:
     print_mlir: bool = False
     print_mlir_file: Optional[str] = None
     print_pass_times: bool = False
+
+    # === ASM backend options ===
+    compile_to_asm: bool = (
+        False  # Compile to AMDGCN assembly (for lit tests, no amdclang++)
+    )

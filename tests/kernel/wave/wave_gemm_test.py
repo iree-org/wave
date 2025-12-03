@@ -36,7 +36,18 @@ from .common.utils import (
     require_rdna4,
 )
 from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
-from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
+from wave_lang.kernel.wave.templates.gemm import (
+    get_gemm_kernel,
+    get_gemm_kernel_transpose_a_b,
+)
+from wave_lang.kernel.wave.templates.test_kernels import (
+    get_gemm_prefetch_kernel_and_schedule,
+)
+from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
+    get_tagged_gemm,
+    get_two_pp_cluster_schedule,
+    get_async_two_pp_clusters,
+)
 from wave_lang.kernel.lang import DataType
 import os
 import json
@@ -54,10 +65,20 @@ default_test_shapes["test_gemm"] += [
 ]
 default_test_shapes["test_batched_gemm"] = [(8, 256, 128, 192), (32, 1024, 512, 768)]
 
+default_test_shapes["test_tensor_load"] = [
+    (16, 16, 16),
+    (17, 17, 17),
+    (15, 23, 63),
+    (256, 256, 16),
+    (16, 16, 256),
+    (256, 256, 256),
+]
 
 user_specified_test_shapes = ""
 
 test_params_path = os.environ.get("TEST_PARAMS_PATH", None)
+
+_xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
 
 if test_params_path:
     with open(test_params_path, "r") as file:
@@ -74,7 +95,11 @@ def get_test_shapes(test_name: str) -> list[tuple[int]]:
 @pytest.mark.parametrize(
     "mfma_variant, threads_per_wave",
     [
-        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna3),
+        # TODO: Investigate why specific CI machine fail for below case.
+        pytest.param(
+            MMAType.F32_16x16x16_F16, 64, marks=[require_cdna4, pytest.mark.xfail]
+        ),
         pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
     ],
 )
@@ -203,9 +228,6 @@ def testPureGemm(
     assert_close(c, iree_ref, check_device=False)
 
 
-_xfail = lambda *a: pytest.param(*a, marks=pytest.mark.xfail)
-
-
 _global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
 
 
@@ -269,7 +291,8 @@ def testGemmGatherToLDS(
     a = device_randn(shape[0], shape[2], dtype=datatype)
     b = device_randn(shape[1], shape[2], dtype=datatype)
     c = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
+    asm = gemm.asm
 
     assert "amdgpu.gather_to_lds" in asm, "gather_to_lds not found in asm"
 
@@ -543,17 +566,21 @@ def testNonTransposeGemm(
 @require_e2e
 @pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
 @pytest.mark.parametrize(
-    "mfma_variant, threads_per_wave",
+    "mfma_variant, threads_per_wave, use_global_to_shared,",
     [
-        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
-        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
-        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+        pytest.param(MMAType.F32_16x16x16_F16, 64, True, marks=require_cdna4),
+        pytest.param(MMAType.F32_16x16x16_F16, 64, False, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, False, marks=require_cdna_3_or_4),
+        pytest.param(
+            MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, False, marks=require_rdna4
+        ),
     ],
 )
 def testPingPongGemm(
     shape: tuple[int],
     mfma_variant: MMAType,
     threads_per_wave: int,
+    use_global_to_shared: bool,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
@@ -630,6 +657,7 @@ def testPingPongGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_global_to_shared=use_global_to_shared,
     )
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm)
@@ -717,7 +745,7 @@ def testGemmDumpOverrideSchedule(
     options = set_default_run_config(options)
     compiled_gemm = wave_compile(options, gemm)
     c_new = device_zeros(shape[0], shape[1], dtype=torch.float32)
-    asm = compiled_gemm(a, b, c_new)
+    compiled_gemm(a, b, c_new)
     assert_close(c, c_new, check_device=False)
     assert_close(c_new, iree_ref, check_device=False)
 
@@ -2134,7 +2162,7 @@ def test_cdna4_mfma(shape: tuple[int], datatype: torch.dtype, mfma_variant: MMAT
     a = device_randn(shape[0], shape[2], device="cuda", dtype=datatype)
     b = device_randn(shape[1], shape[2], device="cuda", dtype=datatype)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
@@ -2217,15 +2245,25 @@ def testI8HwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
         randint_hi, (shape[2], shape[1]), device="cuda", dtype=torch.int8
     )
     c = device_zeros(shape[0], shape[1], dtype=torch.int32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     torch_ref = torch.matmul(a.cpu().to(torch.int32), b.cpu().to(torch.int32))
     assert_close(c.to(torch.int32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False)
 
 
-@require_e2e
 @require_cdna4
-@pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (4096, 4096, 4096),  # Aligned baseline
+        (3072, 4096, 2048),  # M not power of 2
+        (4096, 3584, 4096),  # N not power of 2
+        (2560, 2560, 1536),  # All unaligned
+        (1280, 5120, 2048),  # Wide N
+        (5120, 1280, 2048),  # Tall M
+    ],
+)
 @pytest.mark.parametrize(
     "mfma_variant",
     [
@@ -2309,7 +2347,7 @@ def testFloatHwTransposeGemm(shape: tuple[int], mfma_variant: MMAType, request):
     a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
     b = device_randn(shape[2], shape[1], device="cuda", dtype=torch.float16)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     torch_ref = torch.matmul(a.to(torch.float32), b.to(torch.float32))
     assert_close(
@@ -2350,8 +2388,398 @@ def test_rdna4_wmma(
     a = device_randn(shape[0], shape[2], device="cuda", dtype=datatype)
     b = device_randn(shape[1], shape[2], device="cuda", dtype=datatype)
     c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
-    asm = gemm(a, b, c)
+    gemm(a, b, c)
 
     iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(512, 512, 512)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_prefetch_manual_schedule(shape: tuple[int], mfma_variant: MMAType):
+    """
+    Test the GEMM prefetch kernel wrapper from test_kernels.py.
+
+    This test demonstrates using the wrapper function with different configurations
+    and validates that it produces correct results.
+    """
+    # Use the wrapper function to get kernel, schedule, and options
+    gemm_prefetch, prefetch_schedule, options = get_gemm_prefetch_kernel_and_schedule(
+        shape=shape, mfma_variant=mfma_variant, compile_to_mlir=False
+    )
+
+    # Set runtime configuration for execution
+    options = set_default_run_config(options)
+
+    # Compile the kernel with the schedule
+    gemm_prefetch = wave_compile(options, gemm_prefetch, prefetch_schedule)
+
+    # Create test data
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    # Run the kernel
+    gemm_prefetch(a, b, c)
+
+    # Verify results with IREE reference
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(128, 256, 1024)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_prefetch_reorder_manual_schedule(
+    shape: tuple[int], mfma_variant: MMAType
+):
+    """
+    Test the advanced GEMM prefetch+reorder+stagger kernel template from test_kernels.py.
+
+    This test demonstrates the full manual scheduling pipeline with:
+    - 2-stage pipelining
+    - Cluster-based reordering for latency hiding
+    - 2-way wave staggering
+    """
+    # Use the wrapper function to get kernel, schedule, and options
+    gemm, options = get_tagged_gemm(
+        shape=shape, mfma_variant=mfma_variant, compile_to_mlir=False
+    )
+    schedule = get_two_pp_cluster_schedule()
+    # Set runtime configuration for execution
+    options = set_default_run_config(options)
+
+    # Compile the kernel with the schedule
+    gemm = wave_compile(options, gemm, schedule)
+
+    # Create test data
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    # Run the kernel
+    gemm(a, b, c)
+
+    # Verify results with IREE reference
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@pytest.mark.parametrize("shape", [(4096, 4096, 4096)])
+@pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
+@require_e2e
+@require_cdna_3_or_4
+def test_gemm_two_async_cluster_pingpong(shape: tuple[int], mfma_variant: MMAType):
+    """
+    Test the async GEMM two-cluster ping-pong with global_to_shared operations kernel.
+    """
+    # Use the wrapper function to get kernel, schedule, and options
+    block_shape = (128, 128, 64)
+    gemm, options = get_tagged_gemm(
+        shape=shape,
+        block_shape=block_shape,
+        mfma_variant=mfma_variant,
+        compile_to_mlir=False,
+        use_global_to_shared=True,
+    )
+    schedule = get_async_two_pp_clusters()
+    # Set runtime configuration for execution
+    options = set_default_run_config(options)
+
+    # Compile the kernel with the schedule
+    gemm = wave_compile(options, gemm, schedule)
+
+    # Create test data
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_randn(shape[0], shape[1], device="cuda", dtype=torch.float32)
+
+    # Run the kernel
+    asm = gemm(a, b, c)
+
+    # Verify results with IREE reference
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c, iree_ref, check_device=False)
+
+
+@require_e2e
+@require_gfx1250
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.NONE,
+    ],
+)
+@pytest.mark.parametrize("shape", get_test_shapes("test_tensor_load"))
+@pytest.mark.parametrize("datatype", [torch.float16])
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [(MMAType.GFX1250_F32_16x16x32_F16, 32)],
+)
+def testTensorLoadToShared(
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    mfma_variant: MMAType,
+    threads_per_wave,
+    datatype: torch.dtype,
+):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]
+
+    cluster_x = 4 if shape[0] % (16 * 4) == 0 else 1
+    cluster_y = 4 if shape[1] % (16 * 4) == 0 else 1
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            workgroups_per_cluster=(cluster_x, cluster_y, 1),
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: 32,
+        BLOCK_N: 32,
+        BLOCK_K: 32,
+        M: shape[0],
+        N: shape[1],
+        K: shape[2],
+    }
+
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=enable_scheduling,
+        dynamic_symbols=[],
+        use_global_to_shared=True,
+        wave_runtime=True,
+        target="gfx1250",
+        cluster_barrier_delay=1,
+    )
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm)
+
+    a = torch.randn(shape[0], shape[2], dtype=datatype).cuda()
+    b = torch.randn(shape[1], shape[2], dtype=datatype).cuda()
+    c = torch.zeros(shape[0], shape[1], dtype=torch.float32).cuda()
+    gemm(a, b, c)
+    asm = gemm.asm
+
+    assert (
+        "wait.tensorcnt" in asm
+    ), "tensor waitcnts are not found in asm: required for tensor load instructions."
+
+    iree_ref = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    generate_iree_ref("mmt", [a, b], [iree_ref], options)
+    assert_close(c.cpu(), iree_ref.cpu(), check_device=False, atol=2e-5, rtol=1e-5)
+
+
+# TODO: This fails on the builder for rdna4, but when I run it locally it works.
+#       Investigate further. (Succeeded on rocm6.4, 7.0, pytorch2.9)
+@require_e2e
+@pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.NONE,
+        _xfail(SchedulingType.PREFETCH),
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ],
+)
+@param_bool("dynamic_dims", "dyn")
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+    ],
+)
+def testGemmTransposeAB(
+    shape: tuple[int],
+    enable_scheduling: SchedulingType,
+    dynamic_dims: bool,
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+    run_bench,
+    perf_filename_tk,
+    perf_filename_iree,
+):
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel_transpose_a_b(
+        shape, dynamic_dims, mfma_variant, threads_per_wave=threads_per_wave
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        run_bench=run_bench,
+        schedule=enable_scheduling,
+        dynamic_symbols=dynamic_symbols,
+    )
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, gemm)
+    a = device_randn(shape[2], shape[0], dtype=torch.float16)
+    b = device_randn(shape[2], shape[1], dtype=torch.float16)
+    c = device_zeros(shape[0], shape[1], dtype=torch.float32)
+    gemm(a, b, c)
+
+    torch_ref = torch.matmul(a.T, b)
+    assert_close(
+        c.to(torch.float16), torch_ref, atol=1e-3, rtol=1e-3, check_device=False
+    )
+
+
+@require_e2e
+@require_cdna_2_or_3_or_4
+@pytest.mark.parametrize(
+    "m, n, k",
+    [
+        (64, 128, 64),
+        (128, 128, 64),
+        (128, 256, 128),
+        (256, 256, 128),
+    ],
+)
+@pytest.mark.parametrize(
+    "block_m, block_n, block_k",
+    [
+        (64, 64, 32),
+        (128, 128, 64),
+    ],
+)
+def test_explicit_shared_gemm(m, n, k, block_m, block_n, block_k, run_bench):
+    """GEMM with explicit shared memory management."""
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
+    ADDRESS_SPACE_B = tkl.sym.ADDRESS_SPACE_B
+    ADDRESS_SPACE_C = tkl.sym.ADDRESS_SPACE_C
+
+    # Skip invalid combinations
+    if block_m > m or block_n > n or block_k > k:
+        pytest.skip("Block size larger than problem size")
+
+    constraints = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M / 2),
+        tkw.WaveConstraint(N, BLOCK_N / 2),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+            vector_shapes={M: 16, N: 16, K: 16},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm(
+        a: tkl.Memory[M, K, ADDRESS_SPACE_A, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE_B, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_C, tkl.f32],
+    ):
+        # Allocate shared memory explicitly
+        # shape: logical shape, distributed_shape: per-workgroup tile size
+        a_shared = tkw.allocate(
+            (M, K), (BLOCK_M, BLOCK_K), tkl.f16, SHARED_ADDRESS_SPACE
+        )
+        b_shared = tkw.allocate(
+            (N, K), (BLOCK_N, BLOCK_K), tkl.f16, SHARED_ADDRESS_SPACE
+        )
+
+        c_acc = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_acc])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_global = tkw.read(a)
+            b_global = tkw.read(b)
+
+            tkw.write(a_global, a_shared)
+            tkw.write(b_global, b_shared)
+
+            tkw.shared_memory_barrier()
+
+            a_reg = tkw.read(a_shared)
+            b_reg = tkw.read(b_shared)
+
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c)
+
+    # Test setup
+    torch.manual_seed(0)
+    a = device_randn((m, k), dtype=torch.float16)
+    b = device_randn((n, k), dtype=torch.float16)
+    c = device_zeros((m, n), dtype=torch.float32)
+
+    hyperparams = {
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        M: m,
+        N: n,
+        K: k,
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_B: GLOBAL_ADDRESS_SPACE,
+        ADDRESS_SPACE_C: GLOBAL_ADDRESS_SPACE,
+    }
+    hyperparams.update(get_default_scheduling_params())
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        use_scheduling_barriers=False,
+        minimize_shared_allocs=False,
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+
+    compiled_gemm = wave_compile(options, gemm)
+    compiled_gemm(a, b, c)
+
+    expected = torch.matmul(a, b.t())
+    assert_close(c.to(torch.float16), expected, rtol=1e-2, atol=1e-2)

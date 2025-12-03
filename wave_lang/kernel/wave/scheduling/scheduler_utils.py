@@ -2,12 +2,24 @@ from .resources import get_custom_operation_type
 import torch.fx as fx
 from enum import Enum
 from .graph_utils import Edge
-from ...ops.wave_ops import get_custom
+from ..utils.general_utils import is_shared_read
+from ...ops.wave_ops import (
+    get_custom,
+    CustomOp,
+    Read,
+    Write,
+    GatherToLDS,
+    MMA,
+    ScaledMMA,
+)
 import math
 from typing import TypeVar
 from enum import Enum
 from .resources import Operation
 from typing import List
+from collections import deque
+from ..utils.classes import GemmOperationType
+from ...compiler.kernel_codegen import filter_fx_graph
 
 ScheduleStage = TypeVar("ScheduleStage", bound=Enum)
 
@@ -60,3 +72,188 @@ class BaseScheduler:
         """
         max_cycle = max(t + 1 for t in self.schedule.values())
         return math.ceil(max_cycle / self.initiation_interval)
+
+
+class GemmScheduler(BaseScheduler):
+    def __init__(
+        self,
+        graph: fx.Graph,
+        edges: list[Edge],
+        resources: list[int],
+    ) -> None:
+        super().__init__(graph, edges, resources)
+        self.annotate_gemm_operation_type(self.graph)
+
+    def get_closest_local_load(self, node: fx.Node):
+        workqueue = deque([node])
+        seen = set()
+        can_extend = lambda x: isinstance(x, fx.Node) and x not in seen
+        while workqueue:
+            cur_node = workqueue.pop()
+            if is_shared_read(get_custom(cur_node)):
+                return cur_node
+            child_nodes = [
+                arg_node for arg_node in cur_node.args if can_extend(arg_node)
+            ]
+
+            # Update ancestor and seen tracker, and workqueue with new child nodes.
+            seen.update(child_nodes)
+            workqueue.extend(child_nodes)
+        return None
+
+    def get_local_loads(self, mma_nodes):
+        local_load_lhs = []
+        local_load_rhs = []
+        for mma_node in mma_nodes:
+            custom = get_custom(mma_node)
+            lhs = self.get_closest_local_load(custom.lhs)
+            rhs = self.get_closest_local_load(custom.rhs)
+            if lhs == None or rhs == None:
+                return None, None
+            local_load_lhs.append(lhs)
+            local_load_rhs.append(rhs)
+        return local_load_lhs, local_load_rhs
+
+    def get_scale_local_loads(self, mma_nodes):
+        local_load_lhs_scale = []
+        local_load_rhs_scale = []
+        for mma_node in mma_nodes:
+            custom = get_custom(mma_node)
+            lhs_scale = self.get_closest_local_load(custom.lhs_scale)
+            rhs_scale = self.get_closest_local_load(custom.rhs_scale)
+            if lhs_scale == None or rhs_scale == None:
+                return None, None
+            local_load_lhs_scale.append(lhs_scale)
+            local_load_rhs_scale.append(rhs_scale)
+        return local_load_lhs_scale, local_load_rhs_scale
+
+    def get_local_writes(self, local_loads):
+        local_writes = set()
+        for local_load in local_loads:
+            custom = get_custom(local_load)
+            cur_writes = [
+                w
+                for w in custom.memory.users
+                if isinstance(get_custom(w), Write) and w.graph == custom.graph
+            ]
+            local_writes.update(cur_writes)
+        return list(local_writes)
+
+    def get_lds_gathers(self, local_loads):
+        lds_gathers = set()
+        for local_load in local_loads:
+            custom = get_custom(local_load)
+            # Get direct users and users from rotated registers.
+            memory_users = set([g for g in custom.memory.users])
+            # Filter users for GatherToLDS
+            cur_gathers = [
+                g
+                for g in memory_users
+                if isinstance(get_custom(g), GatherToLDS) and g.graph == custom.graph
+            ]
+            lds_gathers.update(cur_gathers)
+        return list(lds_gathers)
+
+    def get_global_loads(self, local_writes):
+        global_loads = set()
+        for local_write in local_writes:
+            custom = get_custom(local_write)
+            if isinstance(get_custom(custom.register_), Read):
+                global_loads.add(custom.register_)
+        return list(global_loads)
+
+    def annotate_op_with_gemm_operation_type(self, nodes, gemm_operation_type):
+        for node in nodes:
+            if isinstance(node, CustomOp):
+                node = node.fx_node
+            node.meta["prefetch_stage"] = gemm_operation_type
+
+    def annotate_gemm_operation_type(self, graph):
+        mma_nodes = filter_fx_graph(
+            graph,
+            lambda node: isinstance(get_custom(node), (MMA, ScaledMMA)),
+        )
+        # Early exit if no MMA found.
+        if not mma_nodes:
+            return
+
+        mma_types = set([type(get_custom(mma_node)) for mma_node in mma_nodes])
+        # Only handle single MMA per kernel and need to have same type.s
+        if len(mma_types) != 1:
+            return
+
+        mma_type = mma_types.pop()
+        local_load_lhs, local_load_rhs = self.get_local_loads(mma_nodes)
+        # Early exit if cannot find either local loads
+        if not local_load_lhs or not local_load_rhs:
+            return
+        global_to_shared_lhs = self.get_lds_gathers(local_load_lhs)
+        global_to_shared_rhs = self.get_lds_gathers(local_load_rhs)
+        local_write_lhs = self.get_local_writes(local_load_lhs)
+        local_write_rhs = self.get_local_writes(local_load_rhs)
+        global_load_lhs = self.get_global_loads(local_write_lhs)
+        global_load_rhs = self.get_global_loads(local_write_rhs)
+
+        self.annotate_op_with_gemm_operation_type(
+            local_load_lhs, GemmOperationType.LOCAL_LOAD_LHS
+        )
+        self.annotate_op_with_gemm_operation_type(
+            local_load_rhs, GemmOperationType.LOCAL_LOAD_RHS
+        )
+        self.annotate_op_with_gemm_operation_type(
+            global_to_shared_lhs, GemmOperationType.GLOBAL_LOAD_TO_LDS_LHS
+        )
+        self.annotate_op_with_gemm_operation_type(
+            global_to_shared_rhs, GemmOperationType.GLOBAL_LOAD_TO_LDS_RHS
+        )
+        self.annotate_op_with_gemm_operation_type(
+            local_write_lhs, GemmOperationType.LOCAL_WRITE_LHS
+        )
+        self.annotate_op_with_gemm_operation_type(
+            local_write_rhs, GemmOperationType.LOCAL_WRITE_RHS
+        )
+        self.annotate_op_with_gemm_operation_type(
+            global_load_lhs, GemmOperationType.GLOBAL_LOAD_LHS
+        )
+        self.annotate_op_with_gemm_operation_type(
+            global_load_rhs, GemmOperationType.GLOBAL_LOAD_RHS
+        )
+
+        if mma_type == ScaledMMA:
+            local_load_lhs_scale, local_load_rhs_scale = self.get_scale_local_loads(
+                mma_nodes
+            )
+            global_to_shared_lhs_scale = self.get_lds_gathers(local_load_lhs_scale)
+            global_to_shared_rhs_scale = self.get_lds_gathers(local_load_rhs_scale)
+            local_write_lhs_scale = self.get_local_writes(local_load_lhs_scale)
+            local_write_rhs_scale = self.get_local_writes(local_load_rhs_scale)
+            global_load_lhs_scale = self.get_global_loads(local_write_lhs_scale)
+            global_load_rhs_scale = self.get_global_loads(local_write_rhs_scale)
+
+            self.annotate_op_with_gemm_operation_type(
+                local_load_lhs_scale, GemmOperationType.LOCAL_LOAD_LHS_SCALE
+            )
+            self.annotate_op_with_gemm_operation_type(
+                local_load_rhs_scale, GemmOperationType.LOCAL_LOAD_RHS_SCALE
+            )
+            self.annotate_op_with_gemm_operation_type(
+                global_to_shared_lhs_scale,
+                GemmOperationType.GLOBAL_LOAD_TO_LDS_LHS_SCALE,
+            )
+            self.annotate_op_with_gemm_operation_type(
+                global_to_shared_rhs_scale,
+                GemmOperationType.GLOBAL_LOAD_TO_LDS_RHS_SCALE,
+            )
+            self.annotate_op_with_gemm_operation_type(
+                local_write_lhs_scale, GemmOperationType.LOCAL_WRITE_LHS_SCALE
+            )
+            self.annotate_op_with_gemm_operation_type(
+                local_write_rhs_scale, GemmOperationType.LOCAL_WRITE_RHS_SCALE
+            )
+            self.annotate_op_with_gemm_operation_type(
+                global_load_lhs_scale, GemmOperationType.GLOBAL_LOAD_LHS_SCALE
+            )
+            self.annotate_op_with_gemm_operation_type(
+                global_load_rhs_scale, GemmOperationType.GLOBAL_LOAD_RHS_SCALE
+            )
+        self.annotate_op_with_gemm_operation_type(mma_nodes, GemmOperationType.MMA)

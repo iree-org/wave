@@ -4,7 +4,7 @@ from .resources import Operation
 from enum import Enum, auto
 from .scheduler_utils import (
     get_scheduling_stage,
-    BaseScheduler,
+    GemmScheduler,
     is_single_mma_source,
     is_mma_node,
 )
@@ -51,7 +51,7 @@ _operation_stage_table = {
 }
 
 
-class FourStageScheduler(BaseScheduler):
+class FourStageScheduler(GemmScheduler):
     """
     Four Stage Pipelined Scheduler
 

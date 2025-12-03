@@ -6,6 +6,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
+# Add -Wno-macro-redefined if supported by the C++ compiler
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-Wno-macro-redefined" HAS_WNO_MACRO_REDEFINED)
+if(HAS_WNO_MACRO_REDEFINED)
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wno-macro-redefined>")
+endif()
+
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   find_package(MLIR REQUIRED CONFIG)
 

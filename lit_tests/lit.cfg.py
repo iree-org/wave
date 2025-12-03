@@ -16,6 +16,8 @@ lit.llvm.initialize(lit_config, config)
 from lit.llvm import llvm_config
 
 llvm_config.with_system_environment("PYTHONPATH")
+llvm_config.with_system_environment("HOME")
+llvm_config.with_system_environment("USER")
 
 # name: The name of this test suite.
 config.name = "WAVE"

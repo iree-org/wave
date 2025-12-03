@@ -47,6 +47,7 @@ from wave_lang.kernel.wave.templates.vanilla_attention import (
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from ..common.utils import (
+    require_cdna3,
     require_cdna_3_or_4,
     require_rdna4,
     require_e2e,
@@ -774,3 +775,96 @@ def testChangeFreeVarOfNestedFunction(tmp_path):
     assert (
         len(cache_manager.session_cache) == 2
     ), "Expected len == 2, since despite same core, it has different signature."
+
+
+@require_e2e
+@require_cache
+@require_cdna3
+def testAsmBackendCache(tmp_path):
+    """Test that ASM backend caching works correctly."""
+    reset_cache_manager(tmp_path)
+
+    # Simple kernel for testing
+    M = tkl.sym.M
+    N = tkl.sym.N
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16}),
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.WaveConstraint(M, BLOCK_M),
+        tkw.WaveConstraint(N, BLOCK_N),
+    ]
+
+    @tkw.wave(constraints)
+    def simple_copy(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(a)
+        tkw.write(res, b)
+
+    hyperparams = {
+        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        BLOCK_M: 16,
+        BLOCK_N: 16,
+        M: 16,
+        N: 16,
+    }
+
+    a = device_randn(16, 16, dtype=torch.float16)
+    b = device_zeros(16, 16, dtype=torch.float16)
+
+    cache_manager = get_cache_manager()
+
+    options = WaveCompileOptions(
+        subs=copy.deepcopy(hyperparams),
+        canonicalize=True,
+        backend="asm",
+        wave_runtime=True,
+        compile_to_mlir=False,
+    )
+    options = set_default_run_config(options)
+
+    # Before compilation, nothing in cache
+    assert len(cache_manager.session_cache) == 0, "Expected to start with no cache."
+
+    # First compilation - should be a cache miss
+    kernel1 = wave_compile(options, simple_copy)
+    kernel1(a, b)
+
+    assert (
+        cache_manager.cache_misses == 1 and cache_manager.cache_hits == 0
+    ), "Expected first compilation to be a cache miss."
+    assert (
+        len(cache_manager.session_cache) == 1
+    ), "Expected cache to contain one kernel after first compilation."
+
+    # Verify binary path uses .hsaco extension
+    assert kernel1.gpu_binary_path.endswith(
+        ".hsaco"
+    ), "Expected .hsaco extension for ASM backend"
+
+    # Second compilation - should be a cache hit
+    kernel2 = wave_compile(options, simple_copy)
+    kernel2(a, b)
+
+    assert (
+        cache_manager.cache_misses == 1 and cache_manager.cache_hits == 1
+    ), "Expected second compilation to be a cache hit."
+    assert (
+        len(cache_manager.session_cache) == 1
+    ), "Expected cache size to remain 1 for identical kernel."
+
+    # Verify both kernels use the same binary path (indicating cache was used)
+    assert (
+        kernel1.gpu_binary_path == kernel2.gpu_binary_path
+    ), "Expected both kernels to use the same cached binary path."
+
+    # Verify both kernels use .hsaco extension
+    assert kernel2.gpu_binary_path.endswith(
+        ".hsaco"
+    ), "Expected .hsaco extension for cached kernel"

@@ -60,7 +60,7 @@ def generate_bounds_exprs(trace: CapturedTrace, constraints: list[Constraint]):
             # global mem, but we still need to handle masking against vector
             # size during shared mem access.
             memory = propagate_loop_carried_vars(node.memory)
-            unpadded_dims = get_custom(memory).get_unpadded_dims
+            unpadded_dims = get_custom(memory).unpadded_dims
             bounds = {
                 k: (
                     safe_subs(v, {k: _get_max_tile_size(k, constraints, unpadded_dims)})

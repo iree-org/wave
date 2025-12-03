@@ -5,6 +5,7 @@
 
 import functools
 import glob
+import math
 import os
 from collections import deque
 from typing import Any, Callable, Optional, Sequence
@@ -23,6 +24,7 @@ from ...ops.wave_ops import (
     Allocate,
     CustomOp,
     GatherToLDS,
+    TensorLoadToLDS,
     Iterate,
     Read,
     Write,
@@ -39,6 +41,21 @@ from ..constraints import (
 )
 from .graph_utils import propagate_loop_carried_vars
 from .symbol_utils import get_min_expr, safe_subs, subs_idxc
+
+
+def make_index_uniform_per_wave(index, threads_per_wave, waves_per_block):
+    # Make LDS write index to be wave-uniform by doing (THREAD_0 // 64) * 64
+    wave_subs = {
+        THREAD_0: (
+            ((THREAD_0 // threads_per_wave) * threads_per_wave)
+            if waves_per_block[0] > 1
+            else 0
+        ),
+        THREAD_1: THREAD_1 if waves_per_block[1] > 1 else 0,
+        THREAD_2: THREAD_2 if waves_per_block[2] > 1 else 0,
+    }
+
+    return {k: v.subs(wave_subs) for k, v in index.items()}
 
 
 def run_test(func: Callable[[], None]) -> Callable[[], None]:
@@ -326,6 +343,10 @@ def clamp(x: int, min_val: int, max_val: int) -> int:
     return max(min_val, min(x, max_val))
 
 
+def is_pow2(x: int) -> bool:
+    return x > 0 and (x & (x - 1)) == 0
+
+
 def all_equal(input_list: list[Any]) -> bool:
     if len(input_list) == 0:
         return True
@@ -474,6 +495,8 @@ def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
     if is_shared_read(custom) or is_shared_write(custom):
         return custom.memory
     if isinstance(custom, GatherToLDS):
+        return custom.dst
+    if isinstance(custom, TensorLoadToLDS):
         return custom.dst
 
     return None
@@ -667,3 +690,69 @@ def topological_sort_with_dependencies(
 
 def rotate_list(src: Sequence[Any], k: int) -> list[Any]:
     return src[k:] + src[:k]
+
+
+def divide_shape_into_chunks(
+    shape: Sequence[int], num_chunks: int
+) -> tuple[list[int], list[int]]:
+    """
+    Divides an N-dimensional shape into chunks, starting from the leftmost dimension.
+
+    This function attempts to divide the shape by num_chunks, starting from dimension 0
+    and moving right. For each dimension, it applies as many factors of the remaining
+    chunks as possible while keeping the dimension evenly divisible.
+
+    Args:
+        shape: N-dimensional shape as a sequence of integers
+        num_chunks: Total number of chunks to divide the shape into
+
+    Returns:
+        A tuple of (chunks_per_dim, chunk_shape) where:
+        - chunks_per_dim: List showing how many chunks per dimension
+        - chunk_shape: Shape of each chunk (evenly divided)
+
+    Raises:
+        ValueError: If the shape cannot be evenly divided into num_chunks
+
+    Example:
+        >>> divide_shape_into_chunks([128, 256], 8)
+        ([8, 1], [16, 256])
+        >>> divide_shape_into_chunks([128, 256], 4)
+        ([4, 1], [32, 256])
+        >>> divide_shape_into_chunks([128, 256], 12)
+        # Error: 256 not divisible by 3
+    """
+    if num_chunks <= 0:
+        raise ValueError(f"num_chunks must be positive, got {num_chunks}")
+
+    ndim = len(shape)
+    if ndim == 0:
+        raise ValueError("shape must be non-empty")
+
+    # Start with no division
+    chunks_per_dim = [1] * ndim
+    remaining_chunks = num_chunks
+
+    # Process dimensions from left to right
+    for dim_idx in range(ndim):
+        if remaining_chunks == 1:
+            break
+
+        dim_size = shape[dim_idx]
+
+        # Use GCD to find the largest factor of remaining_chunks that divides dim_size
+        factor = math.gcd(dim_size, remaining_chunks)
+        chunks_per_dim[dim_idx] = factor
+        remaining_chunks //= factor
+
+    # Check if we successfully divided into all chunks
+    if remaining_chunks != 1:
+        raise ValueError(
+            f"Cannot evenly divide shape {list(shape)} into {num_chunks} chunks. "
+            f"Remaining chunks after processing: {remaining_chunks}"
+        )
+
+    # Calculate the resulting chunk shape
+    chunk_shape = [shape[i] // chunks_per_dim[i] for i in range(ndim)]
+
+    return chunks_per_dim, chunk_shape

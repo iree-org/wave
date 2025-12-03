@@ -104,15 +104,7 @@ def insert_barrier_if_needed(alloc: fx.Node, first_use: fx.Node, last_use: fx.No
         )
 
 
-def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
-    """
-    Minimize the number of shared allocs by reusing them.
-    See: docs/wave/shared_memory.rst for more details.
-    """
-    if not minimize_shared_allocs:
-        return
-    update_sort_keys(trace, trace.get_root_graph())
-
+def get_alloc_info(trace: CapturedTrace):
     def is_shared_alloc(alloc: fx.Node) -> bool:
         custom = get_custom(alloc)
         return (
@@ -122,7 +114,7 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
 
     allocs = trace.walk(is_shared_alloc)
     if not allocs:
-        return
+        return None, None, None
     live_intervals = compute_live_intervals(allocs)
 
     alloc_info = [
@@ -133,6 +125,24 @@ def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
         )
         for x in allocs
     ]
+
+    return allocs, live_intervals, alloc_info
+
+
+def minimize_shared_allocs(trace: CapturedTrace, minimize_shared_allocs: bool):
+    """
+    Minimize the number of shared allocs by reusing them.
+    See: docs/wave/shared_memory.rst for more details.
+    """
+    if not minimize_shared_allocs:
+        return
+    update_sort_keys(trace, trace.get_root_graph())
+
+    allocs, live_intervals, alloc_info = get_alloc_info(trace)
+
+    if allocs is None:
+        return
+
     offsets, allocation_size = determine_allocations_offsets(alloc_info)
     if offsets is None:
         raise ValueError("No feasible solution found for shared memory allocation.")

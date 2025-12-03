@@ -104,4 +104,13 @@ def WaterGreedySLPVectorizer : Pass<"water-greedy-slp-vectorizer"> {
   ];
 }
 
+def WaterGPUToGPURuntime : Pass<"water-gpu-to-gpu-runtime", "::mlir::ModuleOp"> {
+  let summary = "Lower GPU dialect ops to runtime calls";
+  let description = [{
+    This pass lowers operations from the GPU dialect to calls into GPU runtime
+    functions.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
 #endif // WATER_PASSES

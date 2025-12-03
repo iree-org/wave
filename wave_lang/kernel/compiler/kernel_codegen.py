@@ -249,6 +249,20 @@ class KernelSignature:
         """Gets all scalar bindings."""
         return [b for b in self.bindings if b.binding_type == BindingType.SCALAR_VALUE]
 
+    @property
+    def linear_bindings(self) -> list[BindingDesc]:
+        """Gets all bindings."""
+
+        # Input bindings are always user specified.
+        # Output bindings are the real outputs.
+        # Dynamic dim bindings are the dynamic dims of the input and output tensors.
+        return (
+            self.kernel_buffer_input_bindings
+            + self.kernel_buffer_output_bindings
+            + self.scalar_bindings
+            + self.dynamic_dim_bindings
+        )
+
     def add_from_dynamic_symbols(self, dynamic_symbols: list[IndexSymbol]):
         for symbol in dynamic_symbols:
             self.bindings.append(

@@ -7,6 +7,7 @@
 #include "mlir-c/AffineMap.h"
 #include "mlir/CAPI/AffineMap.h"
 #include "mlir/CAPI/Registration.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/Support/TypeID.h"
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -14,6 +15,13 @@
 #include "water/c/Dialects.h"
 
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Wave, wave, ::wave::WaveDialect)
+
+//===---------------------------------------------------------------------===//
+// Wave Dialect Constants
+//===---------------------------------------------------------------------===//
+
+const char *const mlirWaveDialectConstraintsAttrName =
+    wave::WaveDialect::kWaveConstraintsAttrName.data();
 
 //===---------------------------------------------------------------------===//
 // WaveSymbolAttr
@@ -32,6 +40,28 @@ MlirAttribute mlirWaveSymbolAttrGet(MlirContext mlirCtx,
 
 MlirTypeID mlirWaveSymbolAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveSymbolAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveIndexSymbolAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveIndexSymbolAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveIndexSymbolAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveIndexSymbolAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveIndexSymbolAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveIndexSymbol>(value)));
+}
+
+uint32_t mlirWaveIndexSymbolAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveIndexSymbolAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveIndexSymbolAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveIndexSymbolAttr>());
 }
 
 //===---------------------------------------------------------------------===//
@@ -55,11 +85,15 @@ MlirAttribute mlirWaveIndexMappingAttrGet(MlirContext mlirCtx,
          "expected start and step to have the same number of dimensions");
   assert(mlirAffineMapGetNumSymbols(stride) == numSymbols &&
          "expected start and stride to have the same number of dimensions");
-  llvm::SmallVector<wave::WaveSymbolAttr> symbolAttrs = llvm::map_to_vector(
+  llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
       llvm::make_range(symbolNames, symbolNames + numSymbols),
-      [](MlirAttribute attr) {
-        return llvm::cast<wave::WaveSymbolAttr>(unwrap(attr));
-      });
+      [](MlirAttribute attr) { return unwrap(attr); });
+
+  assert(llvm::all_of(
+             symbolAttrs,
+             llvm::IsaPred<wave::WaveSymbolAttr, wave::WaveIndexSymbolAttr>) &&
+         "expected mapping to contain only WaveSymbolAttr or "
+         "WaveIndexSymbolAttr attributes");
 
   return wrap(wave::WaveIndexMappingAttr::get(ctx, symbolAttrs, unwrap(start),
                                               unwrap(step), unwrap(stride)));
@@ -94,4 +128,270 @@ MlirAttribute mlirWaveHyperparameterAttrGet(MlirAttribute mapping) {
 
 MlirTypeID mlirWaveHyperparameterAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveHyperparameterAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveWorkgroupDimAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveWorkgroupDimAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveWorkgroupDimAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveWorkgroupDimAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveWorkgroupDimAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveWorkgroupDim>(value)));
+}
+
+uint32_t mlirWaveWorkgroupDimAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveWorkgroupDimAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveWorkgroupDimAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveWorkgroupDimAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveAddressSpaceAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveAddressSpaceAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveAddressSpaceAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveAddressSpaceAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveAddressSpaceAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveAddressSpace>(value)));
+}
+
+uint32_t mlirWaveAddressSpaceAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveAddressSpaceAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveAddressSpaceAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveAddressSpaceAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveMmaKindAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveMmaKindAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveMmaKindAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveMmaKindAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveMmaKindAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveMmaKind>(value)));
+}
+
+uint32_t mlirWaveMmaKindAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveMmaKindAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveMmaKindAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveMmaKindAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveExprListAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveExprListAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveExprListAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveExprListAttrGet(MlirAttribute *symbolNames,
+                                      MlirAffineMap map) {
+  mlir::MLIRContext *ctx = unwrap(map).getContext();
+
+  unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
+  llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
+      llvm::make_range(symbolNames, symbolNames + numSymbols),
+      [](MlirAttribute attr) { return unwrap(attr); });
+
+  assert(llvm::all_of(
+             symbolAttrs,
+             llvm::IsaPred<wave::WaveSymbolAttr, wave::WaveIndexSymbolAttr>) &&
+         "expected mapping to contain only WaveSymbolAttr or "
+         "WaveIndexSymbolAttr attributes");
+
+  return wrap(wave::WaveExprListAttr::get(ctx, symbolAttrs, unwrap(map)));
+}
+
+MlirTypeID mlirWaveExprListAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveExprListAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveReadWriteBoundsAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveReadWriteBoundsAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveReadWriteBoundsAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveReadWriteBoundsAttrGet(MlirAttribute mapping) {
+  auto dictAttr = llvm::cast<mlir::DictionaryAttr>(unwrap(mapping));
+
+  mlir::MLIRContext *ctx = dictAttr.getContext();
+
+  assert(llvm::all_of(dictAttr,
+                      [](const mlir::NamedAttribute &namedAttr) {
+                        return llvm::isa<wave::WaveExprListAttr>(
+                            namedAttr.getValue());
+                      }) &&
+         "expected mapping to contain only WaveExprListAttr values");
+
+  return wrap(wave::WaveReadWriteBoundsAttr::get(ctx, dictAttr));
+}
+
+MlirTypeID mlirWaveReadWriteBoundsAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveReadWriteBoundsAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// HardwareConstraintAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAHardwareConstraintAttr(MlirAttribute attr) {
+  return llvm::isa<wave::HardwareConstraintAttr>(unwrap(attr));
+}
+
+MlirAttribute
+mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
+                              size_t wavesPerBlockSize, unsigned *wavesPerBlock,
+                              MlirAttribute mmaType, MlirAttribute vectorShapes,
+                              unsigned maxBitsPerLoad) {
+  mlir::MLIRContext *ctx = unwrap(mlirCtx);
+  auto mmaTypeAttr =
+      llvm::cast_if_present<wave::WaveMmaKindAttr>(unwrap(mmaType));
+  auto vectorShapesAttr =
+      llvm::cast_if_present<mlir::DictionaryAttr>(unwrap(vectorShapes));
+
+  return wrap(wave::HardwareConstraintAttr::get(
+      ctx, threadsPerWave, llvm::ArrayRef(wavesPerBlock, wavesPerBlockSize),
+      mmaTypeAttr, vectorShapesAttr, maxBitsPerLoad));
+}
+
+MlirTypeID mlirWHardwareConstraintAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::HardwareConstraintAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// DeviceConstraintAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsADeviceConstraintAttr(MlirAttribute attr) {
+  return llvm::isa<wave::DeviceConstraintAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirDeviceConstraintAttrGet(MlirContext mlirCtx,
+                                          MlirAttribute dim,
+                                          MlirAttribute tileSize,
+                                          unsigned deviceDim) {
+  mlir::MLIRContext *ctx = unwrap(mlirCtx);
+  auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dim));
+  auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
+
+  return wrap(
+      wave::DeviceConstraintAttr::get(ctx, dimAttr, tileSizeAttr, deviceDim));
+}
+
+MlirTypeID mlirDeviceConstraintAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::DeviceConstraintAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WorkgroupConstraintAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWorkgroupConstraintAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WorkgroupConstraintAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWorkgroupConstraintAttrGet(MlirContext mlirCtx,
+                                             MlirAttribute dim,
+                                             MlirAttribute tileSize,
+                                             MlirAttribute workgroupDim,
+                                             bool primary) {
+  mlir::MLIRContext *ctx = unwrap(mlirCtx);
+  auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dim));
+  auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
+  auto workgroupDimAttr =
+      llvm::cast<wave::WaveWorkgroupDimAttr>(unwrap(workgroupDim));
+
+  return wrap(wave::WorkgroupConstraintAttr::get(ctx, dimAttr, tileSizeAttr,
+                                                 workgroupDimAttr, primary));
+}
+
+MlirTypeID mlirWorkgroupConstraintAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WorkgroupConstraintAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveConstraintAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveConstraintAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveConstraintAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
+                                        MlirAttribute tileSize) {
+  mlir::MLIRContext *ctx = unwrap(mlirCtx);
+  auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dim));
+  auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
+  return wrap(wave::WaveConstraintAttr::get(ctx, dimAttr, tileSizeAttr));
+}
+
+MlirTypeID mlirWaveConstraintAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveConstraintAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// TilingConstraintAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsATilingConstraintAttr(MlirAttribute attr) {
+  return llvm::isa<wave::TilingConstraintAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirTilingConstraintAttrGet(MlirContext mlirCtx,
+                                          MlirAttribute dim,
+                                          MlirAttribute tileSize) {
+  mlir::MLIRContext *ctx = unwrap(mlirCtx);
+  auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dim));
+  auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
+
+  return wrap(wave::TilingConstraintAttr::get(ctx, dimAttr, tileSizeAttr));
+}
+
+MlirTypeID mlirTilingConstraintAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::TilingConstraintAttr>());
+}
+
+//===---------------------------------------------------------------------===//
+// WaveNormalFormAttr
+//===---------------------------------------------------------------------===//
+
+bool mlirAttributeIsAWaveNormalFormAttr(MlirAttribute attr) {
+  return llvm::isa<wave::WaveNormalFormAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirWaveNormalFormAttrGet(MlirContext mlirCtx, uint32_t value) {
+  return wrap(wave::WaveNormalFormAttr::get(
+      unwrap(mlirCtx), static_cast<wave::WaveNormalForm>(value)));
+}
+
+uint32_t mlirWaveNormalFormAttrGetValue(MlirAttribute attr) {
+  return static_cast<uint32_t>(
+      llvm::cast<wave::WaveNormalFormAttr>(unwrap(attr)).getValue());
+}
+
+MlirTypeID mlirWaveNormalFormAttrGetTypeID() {
+  return wrap(mlir::TypeID::get<wave::WaveNormalFormAttr>());
 }

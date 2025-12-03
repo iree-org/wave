@@ -102,17 +102,67 @@ def apply_promotion_pattern(
             with custom_node.graph.inserting_after(custom_node.fx_node):
                 promoted_read = Read(
                     allocate_node.fx_node, elements_per_thread
-                ).add_to_graph(custom_node.graph, loc=custom_node.location)
+                ).add_to_graph(
+                    custom_node.graph, loc=custom_node.location, tag=custom_node.tag
+                )
             custom_node.replace_all_uses_with(promoted_read)
             with custom_node.graph.inserting_before(promoted_read):
                 promoted_write = Write(
                     custom_node.fx_node, allocate_node.fx_node, elements_per_thread
-                ).add_to_graph(custom_node.graph, loc=custom_node.location)
+                ).add_to_graph(
+                    custom_node.graph, loc=custom_node.location, tag=custom_node.tag
+                )
                 custom_read = get_custom(promoted_read)
                 custom_read.write_dependency = [promoted_write]
             custom_node.memory_type.address_space = GLOBAL_ADDRESS_SPACE
             last_write_to_shared = promoted_write
             return last_write_to_shared
+
+
+def fix_manual_allocate_dependencies(trace: CapturedTrace):
+    """
+    Fix write dependencies for user-created manual allocations.
+    When users manually allocate shared memory and write to it, the subsequent
+    reads need write dependencies set to prevent DCE from removing the writes.
+    """
+    write_nodes = trace.walk(
+        lambda node: isinstance(get_custom(node), Write)
+        and subs_idxc(get_custom(node).memory_type.address_space)
+        == SHARED_ADDRESS_SPACE
+    )
+
+    # if no writes to an allocate, then there is nothing to fix
+    if len(write_nodes) == 0:
+        return
+
+    # Group writes by which allocate they target
+    writes_by_allocate = {}
+    for node in write_nodes:
+        custom = get_custom(node)
+        writes_by_allocate.setdefault(custom.memory, []).append(node)
+
+    root_graph = trace.get_root_graph()
+    for subgraph in root_graph.subgraphs.values():
+        node_list = list(subgraph.nodes)
+        read_nodes = [x for x in node_list if isinstance(get_custom(x), Read)]
+        for node in read_nodes:
+            read_idx = node_list.index(node)
+            custom = get_custom(node)
+            if custom._write_dependency is not None:
+                continue
+            if custom.memory not in writes_by_allocate:
+                continue
+
+            # Find writes that came before this read to the same allocate
+            # the we read from. In case of multiple writes, return the writes that occur before the read
+            writes_before = [
+                w
+                for w in writes_by_allocate[custom.memory]
+                if node_list.index(w) < read_idx
+            ]
+            if writes_before:
+                custom.update_arg("_write_dependency", writes_before)
+                logger.debug(f"Set write dependency for {node} to {writes_before}")
 
 
 def promote_node(
@@ -175,6 +225,11 @@ def promote_placeholders(
                 constraints,
                 reorder_allocs,
             )
+
+    # Fix write dependencies for user-created allocations
+    # When users manually allocate shared memory, the reads from those allocations
+    # need write dependencies set to prevent DCE from removing the writes
+    fix_manual_allocate_dependencies(graph)
 
 
 def compute_shared_memory_usage(

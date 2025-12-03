@@ -1,6 +1,7 @@
 add_mlir_dialect_library(MLIRWaveTransforms
   InferTypes.cpp
   LoweringPatterns.cpp
+  LowerReadWriteOps.cpp
   LowerWaveToMLIR.cpp
   TypeConverter.cpp
   Utils.cpp
@@ -12,6 +13,7 @@ add_mlir_dialect_library(MLIRWaveTransforms
   MLIRWaterWavePassesIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAMDGPUDialect
   MLIRArithDialect
   MLIRFuncDialect
   MLIRGPUDialect
@@ -19,6 +21,7 @@ add_mlir_dialect_library(MLIRWaveTransforms
   MLIRPass
   MLIRTransforms
   MLIRVectorDialect
+  MLIRMathDialect
   MLIRMemRefDialect
   MLIRWaveDialect
 )

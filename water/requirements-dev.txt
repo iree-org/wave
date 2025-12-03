@@ -1,5 +1,5 @@
 # Development requirements for building Python bindings
-nanobind>=2.4, <3.0
+nanobind>=2.9, <3.0
 pybind11>=2.10.0, <=2.13.6
 numpy
 lit

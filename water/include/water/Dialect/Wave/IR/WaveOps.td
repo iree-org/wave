@@ -24,7 +24,7 @@ include "mlir/IR/BuiltinAttributeInterfaces.td"
 class WaveOp<string mnemonic, list<Trait> traits = []>
     : Op<WaveDialect, mnemonic, !listconcat(traits, [HasWaveIndexMapping])> {
   dag commonArguments = (ins
-    Arg<OptionalAttr<DictionaryAttr>, "Index expression">:$index
+    Arg<OptionalAttr<DictArrayAttr>, "Index expression">:$index
   );
 
   string commonArgumentsSyntax = "( `index` custom<WaveIndexDict>($index)^ )?";
@@ -47,7 +47,9 @@ class WaveArithmeticOpDoc {
 class UnaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
-          CompatibleOperandsAndResultsOpTrait]>,
+          WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+          CompatibleOperandsAndResultsOpTrait,
+          WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Argument">:$argument
@@ -64,7 +66,9 @@ class UnaryWaveOp<string mnemonic>
 class BinaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
-          CompatibleOperandsAndResultsOpTrait]>,
+          WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+          CompatibleOperandsAndResultsOpTrait,
+          WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Left-hand side">:$lhs,
@@ -105,7 +109,9 @@ def Exp2Op : UnaryWaveOp<"exp2"> {
 }
 
 def MmaOp : WaveOp<"mma",
-    [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>]>,
+    [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
+      ["initializeIndexExprsForward", "initializeIndexExprsBackward"]>]>,
             WaveArithmeticOpDoc {
   let summary = "Matrix multiply and accumulate";
 
@@ -201,7 +207,7 @@ def AllocateOp : WaveOp<"allocate"> {
 
   let arguments = !con((ins
     Arg<Optional<WaveTensorType>, "Optional parent buffer to view into">:$parent,
-    Arg<WaveDistributedShapeAttr, "Distributed (physical) shape">:$distributed_shape,
+    Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset
   ), commonArguments);
 
@@ -213,9 +219,34 @@ def AllocateOp : WaveOp<"allocate"> {
   let hasVerifier = 1;
 }
 
+def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait]> {
+  let summary = "Extracts a subvector from an n-D tensor";
+  let description = [{
+    Extracts an n-D subvector from an n-D tensor using k-D offset, size, and
+    stride wave expression attributes, where k <= n. When k < n, the first k
+    dimensions are sliced while the remaining (n-k) dimensions are preserved.
+  }];
+
+  let arguments = (ins
+    Arg<WaveTensorInRegister, "Memory to extract slice from">:$memory,
+    Arg<WaveExprListAttr>:$offset,
+    Arg<WaveExprListAttr>:$size,
+    Arg<WaveExprListAttr>:$stride
+  );
+
+  let results = (outs
+    Res<WaveTensorInRegister, "Extracted values">:$result
+  );
+
+  let assemblyFormat = "$memory attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
+    WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
+    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Reads from memory";
   let description = [{
     Moves data from a memory-resident tensor to a register-resident tensor
@@ -223,7 +254,11 @@ def ReadOp : WaveOp<"read", [
   }];
 
   let arguments = !con((ins
-    Arg<WaveTensorInMemory, "Tensor representing memory to read from">:$memory
+    Arg<WaveTensorInMemory, "Tensor representing memory to read from">:$memory,
+    Arg<OptionalAttr<I64Attr>,
+        "Number of elements processed by each thread">:$elements_per_thread,
+    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
+        "Bound expressions for each symbolic dimension">:$bounds
   ), commonArguments);
 
   let results = (outs
@@ -232,10 +267,13 @@ def ReadOp : WaveOp<"read", [
 
   let assemblyFormat = "$memory " # commonArgumentsSyntax # "attr-dict `:` "
                        "functional-type(operands, results)";
+  let hasVerifier = 1;
 }
 
 def RegisterOp : WaveOp<"register", [
-    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait]> {
+    WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
+    NoOpElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Defines a tensor value known to be placed in a register";
   let description = [{
     Defines a new register-resident tensor initialized with the given scalar
@@ -260,7 +298,9 @@ def RegisterOp : WaveOp<"register", [
 
 def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
+    WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
+    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor
@@ -269,12 +309,46 @@ def WriteOp : WaveOp<"write", [
 
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Value to write">:$value_to_store,
-    Arg<WaveTensorInMemory, "Tensor representing memory to write into">:$memory
+    Arg<WaveTensorInMemory, "Tensor representing memory to write into">:$memory,
+    Arg<OptionalAttr<I64Attr>,
+        "Number of elements processed by each thread">:$elements_per_thread,
+    Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
+        "Bound expressions for each symbolic dimension">:$bounds
   ), commonArguments);
 
   let assemblyFormat =
     "$value_to_store `,` $memory " # commonArgumentsSyntax # "attr-dict `:`"
-    "type($value_to_store) `,` type($memory)";
+    "qualified(type($value_to_store)) `,` qualified(type($memory))";
+
+   let hasVerifier = 1;
+}
+
+//-----------------------------------------------------------------------------
+// Miscellaneous operations
+//-----------------------------------------------------------------------------
+
+def CastOp : WaveOp<"cast", [
+    WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
+  let summary = "Cast a register-resident tensor from one type to another";
+  let description = [{
+    Change the type of elements in the register-resident tensor without
+    changing its shape if specified. Supports integer, floating point casts
+    and combinations of both. Widening integer casts are sign-extending.
+  }];
+  let arguments = !con((ins
+    Arg<WaveTensorInRegister, "Value to cast">:$value_to_cast
+  ), commonArguments);
+  let results = (outs
+    Res<WaveTensorInRegister, "Casted value">:$result
+  );
+
+  let assemblyFormat =
+    "$value_to_cast " # commonArgumentsSyntax # " attr-dict `:`"
+    "qualified(type($value_to_cast)) `to` qualified(type($result))";
+
+  let hasVerifier = 1;
 }
 
 #endif // WATER_DIALECT_WAVE_WAVEOPS

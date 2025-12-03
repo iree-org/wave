@@ -80,11 +80,13 @@ from ...ops.wave_ops import (
     log2,
     lt,
     maximum,
+    memory_counter_wait,
     minimum,
     mma,
     ne,
     permute,
     powf,
+    remf,
     reciprocal,
     register,
     reshape,
@@ -100,6 +102,8 @@ from ...ops.wave_ops import (
     set_symbol,
     set_wave_prio,
     shared_memory_barrier,
+    shared_memory_barrier_signal,
+    shared_memory_barrier_wait,
     shuffle,
     sin,
     sinh,
@@ -110,6 +114,7 @@ from ...ops.wave_ops import (
     workgroup_barrier,
 )
 from ..compile_options import WaveCompileOptions
+from ..cluster_barriers import CLUSTER_BARRIER_ID
 from ..constraints import GenericDot, HardwareConstraint, MMAType
 from ..scheduling.resources import get_scheduling_mask
 from ..utils.classes import ShuffleMode
@@ -369,21 +374,16 @@ def emit_mfma(m: int, n: int, k: int, acc: Value, values: list[Value]) -> Value:
     return result
 
 
-def emit_wmma(intr: MMAType, acc: Value, values: list[Value]) -> Value:
+def emit_wmma(
+    intr: MMAType, m: int, n: int, k: int, acc: Value, values: list[Value]
+) -> Value:
     source_a, source_b = values
     if intr == MMAType.GFX1250_F32_16x16x32_F16:
-        # TODO: Use amdgpu intrinsic when it is supported
-        f = arith_d.constant(IntegerType.get_signless(1), 0)
-        t = arith_d.constant(IntegerType.get_signless(1), 1)
-        i16 = arith_d.constant(IntegerType.get_signless(16), 0)
-        return llvm_d.call_intrinsic(
-            acc.type,
-            "llvm.amdgcn.wmma.f32.16x16x32.f16.v8f32.v16f16",
-            [f, source_a, f, source_b, i16, acc, f, t],
-            [],
-            [],
-        )
-    return amdgpu_d.wmma(source_a, source_b, acc)
+        v8f32 = VectorType.get((8,), F32Type.get())
+        res = rocdl_d.wmma_f32_16x16x32_f16(v8f32, source_a, source_b, acc)
+        return res.result
+
+    return amdgpu_d.wmma(m, n, k, source_a, source_b, acc)
 
 
 @handle_op(mma)
@@ -411,7 +411,7 @@ def handle_mma(emitter: WaveEmitter, node: fx.Node):
 
     m, n, k = hardware_constraints[0].mma_matrix_shapes(mma_type)
     result = (
-        emit_wmma(mma_type, acc, values)
+        emit_wmma(mma_type, m, n, k, acc, values)
         if mma_type
         in [MMAType.RDNA4_WAVE32_F32_16x16x16_F16, MMAType.GFX1250_F32_16x16x32_F16]
         else emit_mfma(m, n, k, acc, values)
@@ -626,6 +626,30 @@ def get_rank(mlir_type):
         return -1
 
 
+def broadcast_scalar_args(*args: Value) -> tuple[Value, ...]:
+    """
+    Handle special scalar/rank-0 cases where arguments may be
+    Dtype, vector<Dtype>, or vector<1xDtype>. Broadcasts lower-rank
+    arguments to match higher-rank arguments when ranks differ and
+    all arguments have rank <= 1.
+
+    Returns a tuple of the arguments after broadcasting.
+    """
+    arg_ranks = [get_rank(arg.type) for arg in args]
+    max_rank = max(arg_ranks)
+
+    if max_rank <= 1 and not all(r == arg_ranks[0] for r in arg_ranks):
+        result = list(args)
+        for i, (arg, rank) in enumerate(zip(args, arg_ranks)):
+            if rank < max_rank:
+                # Find a higher-rank arg to broadcast to
+                target_type = next(a.type for a, r in zip(args, arg_ranks) if r > rank)
+                result[i] = vector_d.broadcast(target_type, arg)
+        return tuple(result)
+
+    return args
+
+
 _ops_to_scalarize = [
     operator.add,
     operator.sub,
@@ -648,14 +672,7 @@ def handle_binary_op(op):
 
             # Handle special scalar/rank-0 cases where lhs/rhs may be
             # Dtype, vector<Dtype>, or vector<1xDtype>.
-            arg_ranks = [get_rank(arg.type) for arg in (lhs, rhs)]
-            if (arg_ranks[0] != arg_ranks[1]) and max(arg_ranks) <= 1:
-                if arg_ranks[0] > arg_ranks[1]:
-                    # Case where rank(lhs) > rank(rhs)
-                    rhs = vector_d.broadcast(lhs.type, rhs)
-                else:
-                    # Case where rank(rhs) > rank(lhs)
-                    lhs = vector_d.broadcast(rhs.type, lhs)
+            lhs, rhs = broadcast_scalar_args(lhs, rhs)
 
             if lhs.type != rhs.type:
                 op = get_custom(node)
@@ -767,6 +784,16 @@ def handle_powf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult
         result = math_d.powf(lhs, rhs, fastmath=get_fast_math_flags(options))
     else:
         raise ValidationError(f"Found unhandled operand type for powf: {element_type}")
+    return result
+
+
+@handle_binary_op(remf)
+def handle_remf(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(lhs.type)
+    if is_float_type(element_type):
+        result = arith_d.remf(lhs, rhs, fastmath=get_fast_math_flags(options))
+    else:
+        raise ValidationError(f"Found unhandled operand type for remf: {element_type}")
     return result
 
 
@@ -1595,7 +1622,10 @@ def waitcnt(vmcnt: int):
 @handle_op(shared_memory_barrier)
 def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
     try:
-        (wait_async_ops,) = node.args
+        (
+            wait_async_ops,
+            tensor_wait,
+        ) = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -1603,6 +1633,48 @@ def handle_shared_memory_barrier(emitter: WaveEmitter, node: fx.Node):
         waitcnt(0)
 
     amdgpu_d.lds_barrier()
+
+
+@handle_op(shared_memory_barrier_signal)
+def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
+    try:
+        barId = node.args[0]
+        tensor_wait = node.args[1]
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    if tensor_wait:
+        rocdl_d.s_wait_tensorcnt(0)
+
+    if barId != CLUSTER_BARRIER_ID:
+        rocdl_d.s_wait_dscnt(0)
+
+    # For cluster barriers (barId == -3), only wave 0 should signal
+    if barId == CLUSTER_BARRIER_ID:
+        hw_constraint = emitter.hardware_constraint
+        threads_per_wave = hw_constraint.threads_per_wave
+
+        condition_expr = sympy.Eq(
+            hw_constraint.linearized_thread_id // threads_per_wave, 0
+        )
+        condition = gen_sympy_index(add_emitter_subs(emitter), condition_expr)
+
+        if_op = scf_d.IfOp(condition)
+        with InsertionPoint(if_op.then_block):
+            rocdl_d.s_barrier_signal(barId)
+            scf_d.YieldOp([])
+    else:
+        rocdl_d.s_barrier_signal(barId)
+
+
+@handle_op(shared_memory_barrier_wait)
+def handle_shared_memory_barrier_wait(emitter: WaveEmitter, node: fx.Node):
+    try:
+        barId = node.args[0]
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    rocdl_d.s_barrier_wait(barId)
 
 
 @handle_op(scheduling_barrier)
@@ -1615,8 +1687,7 @@ def handle_scheduling_barrier(emitter: WaveEmitter, node: fx.Node):
     for operation in operations:
         mask |= get_scheduling_mask(operation)
 
-    mask = arith_d.constant(IntegerType.get_signless(32), mask)
-    llvm_d.call_intrinsic(None, "llvm.amdgcn.sched.barrier", [mask], [], [])
+    rocdl_d.sched_barrier(mask)
 
 
 @handle_op(scheduling_group_barrier)
@@ -1625,16 +1696,31 @@ def handle_scheduling_group_barrier(emitter: WaveEmitter, node: fx.Node):
         instructions, sync_id = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
-    sync_id = arith_d.constant(IntegerType.get_signless(32), sync_id)
     for instruction, counts in instructions.items():
         mask = get_scheduling_mask(instruction)
         if mask is None:
             continue
-        mask = arith_d.constant(IntegerType.get_signless(32), mask)
-        counts = arith_d.constant(IntegerType.get_signless(32), counts)
-        llvm_d.call_intrinsic(
-            None, "llvm.amdgcn.sched.group.barrier", [mask, counts, sync_id], [], []
-        )
+        rocdl_d.sched_group_barrier(mask, counts, sync_id)
+
+
+@handle_op(memory_counter_wait)
+def handle_memory_counter_wait(emitter: WaveEmitter, node: fx.Node):
+    try:
+        load, store, ds, exp = node.args
+    except ValueError as e:
+        raise ValidationError("Malformed arguments") from e
+
+    i32 = IntegerType.get_signless(32)
+
+    def to_attr(v):
+        return None if v is None else get_constant_attr(v, i32)
+
+    amdgpu_d.memory_counter_wait(
+        load=to_attr(load),
+        store=to_attr(store),
+        ds=to_attr(ds),
+        exp=to_attr(exp),
+    )
 
 
 @handle_op(workgroup_barrier)
@@ -1767,7 +1853,15 @@ def handle_select(emitter: WaveEmitter, node: fx.Node):
         raise ValidationError("Malformed arguments") from e
 
     unwrap = lambda x: cast_py_value(emitter, x).ir_value
-    selected = arith_d.select(unwrap(cond), unwrap(if_true), unwrap(if_false))
+    cond = unwrap(cond)
+    if_true = unwrap(if_true)
+    if_false = unwrap(if_false)
+
+    # Handle special scalar/rank-0 cases where if_true/if_false may be
+    # Dtype, vector<Dtype>, or vector<1xDtype>.
+    if_true, if_false = broadcast_scalar_args(if_true, if_false)
+
+    selected = arith_d.select(cond, if_true, if_false)
     emitter.bind_node_proxy(node, IRProxyValue(selected))
 
 
@@ -2040,7 +2134,7 @@ def handle_bounds_check(emitter: WaveEmitter, node: fx.Node):
             args += [gen(bounds[dim]) for dim in index.keys()]
 
             # Print index info
-            gpu_d.printf(format=fmt, args=args)
+            gpu_d.printf(fmt, *args)
 
             # Kill the wave.
             llvm_d.intr_trap()

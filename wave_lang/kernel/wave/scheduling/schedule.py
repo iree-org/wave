@@ -176,6 +176,32 @@ def schedule_reduction(
         }
 
     erase_graph(graph)
+    apply_pipelined_schedule(
+        reduction,
+        reduction_graph,
+        trace,
+        constraints,
+        use_scheduling_barriers,
+        num_stages,
+        initiation_interval,
+        scheduling_type,
+        visualize,
+        multi_buffer_count,
+    )
+
+
+def apply_pipelined_schedule(
+    reduction: Iterate,
+    reduction_graph: fx.Graph,
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    use_scheduling_barriers: bool = False,
+    num_stages: int = None,
+    initiation_interval: int = None,
+    scheduling_type: SchedulingType = SchedulingType.NONE,
+    visualize: bool = False,
+    multi_buffer_count: Optional[int] = None,
+) -> Optional[tuple[fx.Node, dict]]:
 
     # After scheduling has completed, we have enough information to decide
     # whether to pipeline the loop. For pipelining to be possible, we need
@@ -192,7 +218,7 @@ def schedule_reduction(
             logger.warning(
                 "Not enough iterations to pipeline the loop. Skipping pipelining."
             )
-            return {}
+            return None
     else:
         # Otherwise, we need to rely on assumptions provided by the author.
         assumptions = get_assumptions(constraints)
@@ -200,7 +226,7 @@ def schedule_reduction(
             logger.warning(
                 "No assumptions provided to determine if the loop can be pipelined. Skipping pipelining."
             )
-            return {}
+            return None
 
         result = evaluate_with_assumptions(
             constraints, max_induction_variable > num_stages - 1
@@ -209,16 +235,15 @@ def schedule_reduction(
             logger.warning(
                 "Not enough iterations to pipeline the loop. Skipping pipelining."
             )
-            return {}
+            return None
 
-    new_reduction = construct_pipelined_loop(
+    new_reduction, node_mapping = construct_pipelined_loop(
         trace,
         reduction,
         reduction_graph,
         constraints,
         num_stages,
         initiation_interval,
-        node_map,
         max_induction_variable,
         visualize,
         use_scheduling_barriers,
@@ -227,6 +252,31 @@ def schedule_reduction(
 
     # Update new reduction count.
     new_reduction.count = max_induction_variable - (num_stages - 1)
+
+    return new_reduction, node_mapping
+
+
+def propagate_scheduling_parameters_to_iter_args(
+    graph: fx.Graph, initiation_interval: int
+):
+    """
+    Sets the scheduling parameters for the iter args based on the users.
+    """
+    iter_args = []
+    for node in graph.nodes:
+        custom = get_custom(node)
+        if isinstance(custom, IterArg):
+            iter_args.append(custom)
+
+    for custom in iter_args:
+        cycle = min(x.scheduling_parameters["absolute_cycle"] for x in custom.users)
+        custom.scheduling_parameters = {
+            "absolute_cycle": cycle,
+            "cycle": cycle % initiation_interval,
+            "stage": cycle // initiation_interval,
+            "initiation_interval": initiation_interval,
+            "prefetch_stage": None,
+        }
 
 
 def schedule_graph(

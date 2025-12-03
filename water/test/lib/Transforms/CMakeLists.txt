@@ -6,6 +6,7 @@ add_mlir_library(MLIRWaterTestTransforms
   Passes.cpp
   TestInUseAnalysis.cpp
   TestWaveDialectConstructors.cpp
+  TestWaveDialectInferIndexExprs.cpp
 
   EXCLUDE_FROM_LIBMLIR
 
@@ -17,6 +18,7 @@ add_mlir_library(MLIRWaterTestTransforms
   MLIRPass
   MLIRWaterAnalysis
   MLIRWaveDialect
+  MLIRWaveTransforms
 )
 target_include_directories(MLIRWaterTestTransforms
   PRIVATE

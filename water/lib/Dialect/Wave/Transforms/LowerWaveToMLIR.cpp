@@ -8,9 +8,12 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
@@ -30,9 +33,18 @@ struct LowerWaveToMLIRPass
     : public ::impl::LowerWaveToMLIRPassBase<LowerWaveToMLIRPass> {
   using LowerWaveToMLIRPassBase::LowerWaveToMLIRPassBase;
 
-  void getDependentDialects(mlir::DialectRegistry &registry) const override {
-    registry.insert<mlir::gpu::GPUDialect, mlir::memref::MemRefDialect,
-                    mlir::arith::ArithDialect>();
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<
+        // clang-format off
+      affine::AffineDialect,
+      arith::ArithDialect,
+      math::MathDialect,
+      gpu::GPUDialect,
+      amdgpu::AMDGPUDialect,
+      memref::MemRefDialect,
+      vector::VectorDialect
+        // clang-format on
+        >();
   }
 
   void runOnOperation() override {
@@ -41,18 +53,40 @@ struct LowerWaveToMLIRPass
 
     // TODO: require index expressions to be present
     if (failed(wave::verifyNormalFormPassPrecondition(
-            wave::WaveNormalForm::AllTypesSpecified, op, getPassName())))
+            wave::WaveNormalForm::AllTypesSpecified |
+                wave::WaveNormalForm::MemoryOnlyTypes,
+            op, getPassName())))
       return signalPassFailure();
 
     ConversionTarget target(*ctx);
-    target.addLegalDialect<arith::ArithDialect, vector::VectorDialect,
-                           memref::MemRefDialect, gpu::GPUDialect>();
-    target.addIllegalOp<wave::RegisterOp, wave::AllocateOp>();
+    target.addLegalDialect<
+        // clang-format off
+      affine::AffineDialect,
+      arith::ArithDialect,
+      math::MathDialect,
+      gpu::GPUDialect,
+      amdgpu::AMDGPUDialect,
+      memref::MemRefDialect,
+      vector::VectorDialect
+        // clang-format on
+        >();
+    target.addIllegalOp<wave::AllocateOp, wave::RegisterOp, wave::Exp2Op,
+                        wave::CastOp>();
     ConversionConfig config;
     config.allowPatternRollback = false;
 
+    auto *waveDialect = getContext().getLoadedDialect<wave::WaveDialect>();
     WalkResult walkResult =
         getOperation()->walk<WalkOrder::PreOrder>([&](Operation *op) {
+          // We shouldn't hit standalone Wave dialect operations as we are
+          // walking in preorder.
+          // TODO: consider turning this into a normalform.
+          if (op->getDialect() == waveDialect) {
+            op->emitError() << "wave dialect operation with no hyperparameters "
+                               "provided by any ancestor";
+            return WalkResult::interrupt();
+          }
+
           auto hyperparam = op->getAttrOfType<wave::WaveHyperparameterAttr>(
               wave::WaveDialect::kHyperparameterAttrName);
           if (!hyperparam)
@@ -60,15 +94,21 @@ struct LowerWaveToMLIRPass
 
           wave::WaveTypeConverter typeConverter(hyperparam);
           RewritePatternSet patterns(ctx);
-          wave::populateWaveRegisterLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveMiscellaneousOpsLoweringPatterns(typeConverter,
+                                                             patterns);
           wave::populateWaveBinaryOpLoweringPatterns(typeConverter, patterns);
           wave::populateWaveAllocateOpLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveMmaLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveReadWriteLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveUnaryFPOpLoweringPatterns(typeConverter, patterns);
 
           if (failed(applyPartialConversion(op, target, std::move(patterns),
                                             config))) {
             op->emitError() << "failed to convert starting at this operation";
             return WalkResult::interrupt();
           }
+
+          op->removeAttr(wave::WaveDialect::kHyperparameterAttrName);
           return WalkResult::skip();
         });
     if (walkResult.wasInterrupted())

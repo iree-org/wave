@@ -11,7 +11,7 @@ import torch.fx as fx
 
 from .graph_utils import Edge, sort_graph_by_edge_weight
 from .resources import Operation
-from .scheduler_utils import get_scheduling_stage, BaseScheduler
+from .scheduler_utils import get_scheduling_stage, BaseScheduler, GemmScheduler
 from ...ops.wave_ops import (
     get_custom,
     Read,
@@ -67,7 +67,7 @@ _operation_stage_table = {
 }
 
 
-class PrefetchScheduler(BaseScheduler):
+class PrefetchScheduler(GemmScheduler):
     """
     Prefetch Scheduler
 

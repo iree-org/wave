@@ -845,9 +845,9 @@ func.func @read_read_add_add_vec0d(%arg0: memref<8xi32>, %arg1: memref<8xi32>) -
   // CHECK: %[[V1:.*]] = vector.load %[[ARG1]][%[[C0]]] : memref<8xi32>, vector<2xi32>
   // CHECK: %[[V2:.*]] = arith.addi %[[V0]], %[[V1]] : vector<2xi32>
   // CHECK: %[[V3:.*]] = vector.extract %[[V2]][0] : i32 from vector<2xi32>
-  // CHECK: %[[V4:.*]] = vector.splat %[[V3]] : vector<i32>
+  // CHECK: %[[V4:.*]] = vector.broadcast %[[V3]] : i32 to vector<i32>
   // CHECK: %[[V5:.*]] = vector.extract %[[V2]][1] : i32 from vector<2xi32>
-  // CHECK: %[[V6:.*]] = vector.splat %[[V5]] : vector<i32>
+  // CHECK: %[[V6:.*]] = vector.broadcast %[[V5]] : i32 to vector<i32>
   // CHECK: return %[[V4]], %[[V6]] : vector<i32>, vector<i32>
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index

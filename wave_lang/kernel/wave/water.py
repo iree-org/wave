@@ -173,19 +173,26 @@ def _deiree(module: Module) -> str:
     return local_module.get_asm(binary=False, print_generic_op_form=True)
 
 
+def find_binary(name: str) -> str:
+    this_path = Path(__file__).parent
+    path = this_path / "water_mlir" / "bin" / name
+    assert path.is_file(), f"Could not find the {name} executable at {path}"
+    return str(path)
+
+
 def is_water_available() -> bool:
-    """Returns True of the water_mlir package is available."""
-    return importlib.util.find_spec("water_mlir") is not None
+    """Returns True if the water_mlir package is available."""
+    try:
+        return (
+            importlib.util.find_spec("wave_lang.kernel.wave.water_mlir.water_mlir")
+            is not None
+        )
+    except Exception:
+        return False
 
 
 def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
-    try:
-        from water_mlir import binaries as water_bin
-    except ImportError as err:
-        raise RuntimeError(
-            "optional water_mlir module not installed but its use is requested"
-        ) from err
-    binary = water_bin.find_binary("water-opt")
+    binary = find_binary("water-opt")
     generic_mlir = _deiree(module) if override_ir == "" else override_ir
     pipeline = [
         (

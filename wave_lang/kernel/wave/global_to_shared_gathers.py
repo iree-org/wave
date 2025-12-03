@@ -334,7 +334,7 @@ def add_optimized_nodes(
                     load_elems_per_thread,
                     custom.mapping,
                     custom.mapping_dynamic_vals,
-                ).add_to_graph(custom.graph, loc=custom.location)
+                ).add_to_graph(custom.graph, loc=custom.location, tag=custom.tag)
                 read.pre_expansion_id = custom.pre_expansion_id
                 read.vector_shapes = custom.vector_shapes
                 global_offset = (
@@ -366,7 +366,9 @@ def add_optimized_nodes(
                     ):
                         write = Write(
                             read, custom_user.memory, load_elems_per_thread
-                        ).add_to_graph(custom.graph, loc=custom.location)
+                        ).add_to_graph(
+                            custom.graph, loc=custom.location, tag=custom.tag
+                        )
                         write.index = read.index
                         write.pre_expansion_id = custom.pre_expansion_id
                         optimized_writes[custom_user.memory].append(write)

@@ -27,6 +27,7 @@ class DebugArgInfo(TypedDict):
     dtype: DataType
     symbolic_shape: tuple[IndexSymbol, ...]
     printer: Any
+    extra_iteration_dimensions: list[tuple[IndexSymbol, IndexSymbol, int]]
 
 
 def is_debug_log_transformer(node):
@@ -108,12 +109,13 @@ def debug_log_write_replace(
                 mapping = IndexMapping(num_dims, input_mapping, output_mapping)
 
             new_output_mapping = dict(mapping.output_mapping)
-            new_dyn_vals = list(mapping.dynamic_val_mappings) or []
+
             for dim_symbol, iter_axis, size in doc.extra_iteration_dimensions:
                 tiling_constraint = TilingConstraint(dim_symbol)
                 constraints.append(tiling_constraint)
-                options.dynamic_symbols.append(dim_symbol)
-                new_dyn_vals.append(dim_symbol)
+
+                if dim_symbol not in options.dynamic_symbols:
+                    options.dynamic_symbols.append(dim_symbol)
 
                 induction_var = get_induction_symbol(iter_axis)
                 new_output_mapping[dim_symbol] = sympy.Min(induction_var, size - 1)
@@ -122,7 +124,7 @@ def debug_log_write_replace(
                 mapping.num_iterators,
                 mapping.input_mapping,
                 new_output_mapping,
-                new_dyn_vals,
+                mapping.dynamic_val_mappings,
             )
 
         with graph.inserting_before(debug_op):

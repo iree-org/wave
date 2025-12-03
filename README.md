@@ -129,6 +129,36 @@ Before installing Wave, ensure you have the following prerequisites:
    lit lit_tests/ -v
    ```
 
-4. **Contributing**
+4. **Build Configuration Options**
+
+   Wave's build process can be customized using the following environment variables:
+
+   - `WAVE_BUILD_TYPE`: Build type for CMake (default: `Release`)
+     ```bash
+     export WAVE_BUILD_TYPE=Debug
+     ```
+
+   - `WAVE_BUILD_WATER`: Build the Water MLIR dialect and infrastructure (default: `0`)
+     ```bash
+     export WAVE_BUILD_WATER=1
+     ```
+
+   - `WAVE_LLVM_DIR`: Path to pre-built LLVM installation (optional)
+     ```bash
+     export WAVE_LLVM_DIR=/path/to/llvm-install
+     ```
+     If not set, LLVM will be built from source during installation.
+
+   - `WAVE_LLVM_REPO`: Custom LLVM repository URL (default: `https://github.com/llvm/llvm-project.git`)
+     ```bash
+     export WAVE_LLVM_REPO=https://github.com/custom/llvm-fork.git
+     ```
+
+   - `WAVE_LLVM_BUILD_SHARED_LIBS`: Build LLVM as shared libraries (default: `OFF`)
+     ```bash
+     export WAVE_LLVM_BUILD_SHARED_LIBS=ON
+     ```
+
+5. **Contributing**
 
    Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to Wave.

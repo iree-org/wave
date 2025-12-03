@@ -452,21 +452,21 @@ def test_gemm():
     # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
 
     # CHECK-NEXT: %mma_M:0_N:0_K:0
-    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:0_N:0_K:1
-    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:0_N:1_K:0
-    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:0_N:1_K:1
-    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:0_K:0
-    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:0_K:1
-    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:1_K:0
-    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:1_K:1
-    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: return [mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1]
 
     # CHECK: Custom format:
@@ -641,21 +641,21 @@ def test_batched_gemm():
     # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
 
     # CHECK-NEXT: %mma_M:0_N:0_K:0
-    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:0_N:0_K:1
-    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:0_N:1_K:0
-    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:0_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:0_N:1_K:1
-    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:0_K:0
-    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:1_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:0_K:1
-    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:1_K:0
-    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %acc_M:1_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:1_N:1_K:1
-    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: return [mma_M:0_N:0_K:1, mma_M:0_N:1_K:1, mma_M:1_N:0_K:1, mma_M:1_N:1_K:1]
 
     # CHECK: Custom format:
@@ -758,21 +758,21 @@ def test_gemm_non_direct_acc():
     # CHECK: %add_M:1_N:1_K:0
     # CHECK-SAME: [add](args = (%exp2_M:1_N:1_K:0, %acc_M:1_N:1_K:0), kwargs = {})
     # CHECK: %mma_M:0_N:0_K:0
-    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:0_N:0_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:0_N:0_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
     # CHECK: %mma_M:0_N:0_K:1
-    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
     # CHECK: %mma_M:0_N:1_K:0
-    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:0_N:1_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:0_N:1_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
     # CHECK: %mma_M:0_N:1_K:1
-    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:0_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:0_N:1_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
     # CHECK: %mma_M:1_N:0_K:0
-    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:1_N:0_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:0_K:0, %add_M:1_N:0_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
     # CHECK: %mma_M:1_N:0_K:1
-    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:1_N:0_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
     # CHECK: %mma_M:1_N:1_K:0
-    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:1_N:1_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:0, %read_1_M:0_N:1_K:0, %add_M:1_N:1_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
     # CHECK: %mma_M:1_N:1_K:1
-    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, None), kwargs = {})
+    # CHECK-SAME: [mma](args = (%read_M:1_N:0_K:1, %read_1_M:0_N:1_K:1, %mma_M:1_N:1_K:0, MMAType.F32_16x16x16_F16), kwargs = {})
 
 
 @tkw.wave_trace_only()
@@ -891,9 +891,9 @@ def test_gemm_iterate_expansion_only():
     # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
 
     # CHECK-NEXT: %mma_M:0_N:0_K:0
-    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
     # CHECK-NEXT: %mma_M:0_N:0_K:1
-    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:1, %read_1_M:0_N:0_K:1, %mma_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
 
     # CHECK-NEXT: return [mma_M:0_N:0_K:1]
 
@@ -1225,13 +1225,13 @@ def test_chained_gemm_32x32x8():
     # CHECK: %read_1_shared_M:0_K2:0_K1:3
     # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
     # CHECK: %mma_M:0_K2:0_K1:0
-    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:0, %read_M:0_K2:0_K1:0, %register_M:0_K2:0_K1:0, None)
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:0, %read_M:0_K2:0_K1:0, %register_M:0_K2:0_K1:0, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_M:0_K2:0_K1:1
-    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:1, %read_M:0_K2:0_K1:1, %mma_M:0_K2:0_K1:0, None)
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:1, %read_M:0_K2:0_K1:1, %mma_M:0_K2:0_K1:0, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_M:0_K2:0_K1:2
-    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:2, %read_M:0_K2:0_K1:2, %mma_M:0_K2:0_K1:1, None)
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:2, %read_M:0_K2:0_K1:2, %mma_M:0_K2:0_K1:1, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_M:0_K2:0_K1:3
-    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:3, %read_M:0_K2:0_K1:3, %mma_M:0_K2:0_K1:2, None)
+    # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:3, %read_M:0_K2:0_K1:3, %mma_M:0_K2:0_K1:2, MMAType.F32_32x32x8_F16)
     # CHECK: %permute_M:0_K2:0
     # CHECK-SAME: (args = (%mma_M:0_K2:0_K1:3, [B, M, K2])
     # CHECK: %cast_M:0_K2:0
@@ -1254,13 +1254,13 @@ def test_chained_gemm_32x32x8():
     # CHECK: %reshape_M:0_N:0_K2:3
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
     # CHECK: %mma_1_M:0_N:0_K2:0
-    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:0, %read_2_shared_M:0_N:0_K2:0, %acc_M:0_N:0_K2:0, None)
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:0, %read_2_shared_M:0_N:0_K2:0, %acc_M:0_N:0_K2:0, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_1_M:0_N:0_K2:1
-    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:1, %read_2_shared_M:0_N:0_K2:1, %mma_1_M:0_N:0_K2:0, None)
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:1, %read_2_shared_M:0_N:0_K2:1, %mma_1_M:0_N:0_K2:0, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_1_M:0_N:0_K2:2
-    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:2, %read_2_shared_M:0_N:0_K2:2, %mma_1_M:0_N:0_K2:1, None)
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:2, %read_2_shared_M:0_N:0_K2:2, %mma_1_M:0_N:0_K2:1, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_1_M:0_N:0_K2:3
-    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:3, %read_2_shared_M:0_N:0_K2:3, %mma_1_M:0_N:0_K2:2, None)
+    # CHECK-SAME: (args = (%reshape_M:0_N:0_K2:3, %read_2_shared_M:0_N:0_K2:3, %mma_1_M:0_N:0_K2:2, MMAType.F32_32x32x8_F16)
     # CHECK: return [mma_1_M:0_N:0_K2:3]
 
 

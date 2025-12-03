@@ -23,7 +23,7 @@ import torch.fx as fx
 from typing_extensions import Self
 from itertools import combinations
 
-from .._support.dtype import DataType, i1
+from .._support.dtype import DataType, i1, i32
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
 from .._support.location import capture_location, CapturedLocation
 from .._support.regions import RegionGraph
@@ -41,12 +41,22 @@ AccT = TypeVar("AccT")
 CustomOpT = TypeVar("CustomOpT", bound="CustomOp")
 PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
 
+# List of keywords that are ignored when creating a custom op from an fx.Node.
+# An example of this is tag, which is only used for tagging operators
+# for their use in the custom wave schedule.
+IGNORED_KEYWORDS = ["tag"]
+
 
 def read_meets_hw_transpose_requirements(
-    read: Read, constraints: list[Constraint]
+    read: Read, constraints: list[Constraint], target: str
 ) -> bool:
     from ..wave.minimize_global_loads import is_transposed_read
     from ..wave.utils.general_utils import find_index_bounds
+
+    # Check if target architecture supports amdgpu.transpose_load
+    # Only gfx950 and newer architectures support this operation
+    if not target.startswith("gfx95") and not target.startswith("gfx12"):
+        return False
 
     if read.bounds is not None:
         return False
@@ -123,6 +133,15 @@ def set_wave_prio(priority: int): ...
 def shared_memory_barrier(wait_async_ops: bool = False): ...
 
 
+def shared_memory_barrier_signal(barId: int = 0, tensor_wait: bool = False): ...
+
+
+def shared_memory_barrier_wait(barId: int = 0): ...
+
+
+def memory_counter_wait(load=None, store=None, ds=None, exp=None): ...
+
+
 def workgroup_barrier(): ...
 
 
@@ -176,7 +195,7 @@ def write(
 def debug_log(
     register_: "Register",
     label: Optional[str],
-    extra_iter_dimensions: Optional[
+    extra_iteration_dimensions: Optional[
         list[tuple["IndexSymbol", "IndexSymbol", int]]
     ] = None,
     mapping: Optional[IndexMapping] = None,
@@ -271,6 +290,9 @@ def powf(lhs: "Register", rhs: "Register") -> "Register": ...
 def mod(lhs: "Register", rhs: "Register") -> "Register": ...
 
 
+def remf(lhs: "Register", rhs: "Register") -> "Register": ...
+
+
 def cbrt(src: "Register") -> "Register": ...
 
 
@@ -325,6 +347,13 @@ def min(
 ) -> "Register": ...
 
 
+def topk(
+    src: "Register",
+    k_dim: IndexExpr,
+    dim: IndexExpr,
+) -> tuple["Register", "Register"]: ...
+
+
 def shuffle(src: "Register", offset: int, width: int) -> "Register": ...
 
 
@@ -373,6 +402,17 @@ def scatter_add(
     mapping: IndexMapping,
     elements_per_thread: Optional[int] = 1,
 ) -> "Register": ...
+
+
+def tensor_load_to_lds(
+    src: Memory,
+    dst: Memory,
+    element_type: DataType,
+    distributed_shape: list[IndexExpr],
+    shared_tile_index: int,
+    global_tile_index: dict[IndexSymbol, IndexSequence],
+    bounds: dict[IndexSymbol, IndexExpr],
+): ...
 
 
 def gather_to_lds(
@@ -557,6 +597,10 @@ class CustomOp(ABC):
         if value:
             setattr(self.fx_node, "location", value)
 
+    @property
+    def tag(self) -> Optional[str]:
+        return getattr(self.fx_node, "tag", None)
+
     @classmethod
     def from_fx_node(cls: Type[CustomOpT], node: fx.Node) -> CustomOpT:
         instance = cls(*node.args)
@@ -602,8 +646,12 @@ class CustomOp(ABC):
         region_graph: RegionGraph,
         type: Any = None,
         loc: Optional[CapturedLocation] = None,
+        tag: Optional[str] = None,
     ) -> fx.Node:
-        arg_list = tuple([value for _, value in vars(self).items()])
+        # Exclude tag from args since it's not part of the dataclass constructor
+        arg_list = tuple(
+            [value for key, value in vars(self).items() if key not in IGNORED_KEYWORDS]
+        )
         self.graph = region_graph
         self.fx_node = region_graph.create_node(
             "call_function",
@@ -620,10 +668,15 @@ class CustomOp(ABC):
             get_custom(self.fx_node).infer_type()
         else:
             self.fx_node.type = type
+        if tag is not None:
+            self.fx_node.tag = tag
         return self.fx_node
 
     def _add_proxy_to_graph(self, region_graph: RegionGraph):
-        arg_list = tuple([value for _, value in vars(self).items()])
+        # Exclude tag from args since it's not part of the dataclass constructor
+        arg_list = tuple(
+            [value for key, value in vars(self).items() if key not in IGNORED_KEYWORDS]
+        )
         self.graph = region_graph
         self.fx_node = region_graph.create_proxy(
             "call_function",
@@ -697,6 +750,7 @@ class CustomOp(ABC):
         new_node = graph.node_copy(self.fx_node, arg_transform=arg_transform)
         new_node.tkw_op = self
         new_node.tkw_op_name = self.tkw_op_name
+        new_node.tag = self.tag
         self.copy_core_attributes(new_node)
         if new_name:
             new_node.name = new_name
@@ -757,11 +811,15 @@ class CustomOp(ABC):
 
     @classmethod
     def handle(cls, graph: RegionGraph, *args, **kwargs) -> fx.Node:
+        # Extract tag from kwargs if present
+        tag = kwargs.pop("tag", None)
         node = cls(*args, **kwargs)
         node._add_proxy_to_graph(graph)
         node.fx_node.node.tkw_op = cls
         node.fx_node.node.tkw_op_name = cls.tkw_op_name
         node.fx_node.node.location = capture_location(graph.location_capture_config)
+        if tag is not None:
+            node.fx_node.node.tag = tag
         return node.fx_node
 
     @property
@@ -1005,6 +1063,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_interface_op("minimum")
 @define_interface_op("atan2")
 @define_interface_op("powf")
+@define_interface_op("remf")
 @dataclass
 class BinaryPyOp(BinaryOpBase, ABC):
     def infer_type(self, *args):
@@ -1353,7 +1412,11 @@ class Allocate(CustomOp):
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
-        return list(self.shape)
+        from ..wave.utils.general_utils import infer_dim
+
+        shape = list(self.shape)
+        dims = [infer_dim(expr) for expr in shape]
+        return dims
 
     @property
     def type(self) -> "Memory":
@@ -1370,7 +1433,7 @@ class Allocate(CustomOp):
         ) // 8
 
     @property
-    def get_unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
+    def unpadded_dims(self) -> dict[IndexSymbol, IndexExpr]:
         from ..wave.utils.general_utils import is_scaled_dim, infer_dim
 
         unpadded_dim = {}
@@ -1385,6 +1448,15 @@ class Allocate(CustomOp):
             sym_type = infer_dim(sym_type) if is_scaled_dim(sym_type) else sym_type
             unpadded_dim[sym_type] = self.distributed_shape[idx]
         return unpadded_dim
+
+    @property
+    def unpadded_shape(self) -> tuple[IndexExpr]:
+        unpadded_dims = self.unpadded_dims
+        return tuple(unpadded_dims[s] for s in self.shape)
+
+    def infer_type(self, *args):
+        type_expr = Memory[(*self.shape, self.address_space, self.dtype)]
+        self.fx_node.type = type_expr
 
 
 @define_op("self_index")
@@ -1427,6 +1499,49 @@ class SharedMemoryBarrier(CustomOp):
     """
 
     wait_async_ops: bool = False
+    tensor_wait: bool = False
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
+@define_op("shared_memory_barrier_signal")
+@dataclass
+class SharedMemoryBarrierSignal(CustomOp):
+    """
+    Represents a shared memory barrier signal in the graph. (gfx12)
+    Argument specifies which barrier to signal.
+    [1:16]:  named barriers
+     0:     NOOP
+    -1:     works as s_barrier
+    -2:     trap barrier
+    -3:     cluster barrier
+    """
+
+    barId: int = 0
+    tensor_wait: bool = False
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
+@define_op("shared_memory_barrier_wait")
+@dataclass
+class SharedMemoryBarrierWait(CustomOp):
+    """
+    Wait for all waves in a WG to signal the barrier before proceeding. (gfx12)
+    synchronize waves within a WG.
+    Argument specifies which barrier to wait on.
+    [1:16]:  named barriers
+     0:     NOOP
+    -1:     works as s_barrier
+    -2:     trap barrier
+    -3:     cluster barrier
+    """
+
+    barId: int = 0
 
     @property
     def has_side_effects(self) -> bool:
@@ -1470,7 +1585,7 @@ class AtomicOp(BinaryOpBase):
 
     @property
     def memory_type(self) -> "Memory":
-        return get_custom(self.lhs).type
+        return get_custom(self.rhs).type
 
 
 @define_op("atomic_add")
@@ -1491,6 +1606,24 @@ class SchedulingGroupBarrier(CustomOp):
 
     instructions: dict[Operation, int]
     sync_id: int
+
+
+@define_op("memory_counter_wait")
+@dataclass
+class MemoryCounterWait(CustomOp):
+    """
+    Wait for the specified counters to be less-than or equal-to
+    the provided values before continuing.
+    """
+
+    load: Optional[int] = None
+    store: Optional[int] = None
+    ds: Optional[int] = None
+    exp: Optional[int] = None
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("workgroup_barrier")
@@ -1888,11 +2021,11 @@ class Read(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
-        if read_meets_hw_transpose_requirements(self, constraints):
+        if read_meets_hw_transpose_requirements(self, constraints, target):
             return True
 
         if self.has_identity_mapping():
@@ -1978,6 +2111,69 @@ class NestedRegionOp(CustomOp):
         del subgraphs[self.subgraph_name]
         super().erase()
 
+    @classmethod
+    def handle(cls, graph: RegionGraph, *args, **kwargs):
+        """
+        Base handle method for nested region operations.
+        Extracts tag from kwargs and sets it on the node and underlying fx.Node.
+        """
+
+        def wrapper(f):
+            with graph.subtracer() as subtracer:
+                subgraph_name, implicit_captures = subtracer.trace(f)
+            # Extract tag from kwargs if present
+            tag = kwargs.pop("tag", None)
+
+            # For Iterate, we need to handle additional parameters
+            if cls.__name__ == "Iterate":
+                # Extract Iterate-specific parameters
+                step = kwargs.pop("step", 1)
+                start = kwargs.pop("start", None)
+                condition = kwargs.pop("condition", None)
+                node = cls(
+                    *args,
+                    **kwargs,
+                    step=step,
+                    start=start,
+                    condition=condition,
+                    subgraph_name=subgraph_name,
+                    implicit_captures=implicit_captures,
+                )
+            else:
+                # For other nested region ops like Conditional
+                node = cls(
+                    *args,
+                    **kwargs,
+                    subgraph_name=subgraph_name,
+                    implicit_captures=implicit_captures,
+                )
+
+            node._add_proxy_to_graph(graph)
+            node.fx_node.node.tkw_op = cls
+            node.fx_node.node.tkw_op_name = cls.tkw_op_name
+            node.fx_node.node.location = capture_location(graph.location_capture_config)
+            if tag is not None:
+                node.fx_node.node.tag = tag
+
+            # Iterate-specific logic
+            if cls.__name__ == "Iterate":
+                # Remember which placeholders are init args. This connection gets
+                # lost otherwise
+                for nested_node in graph.subgraphs[subgraph_name].nodes:
+                    if nested_node.op == "placeholder":
+                        if nested_node not in [
+                            var.node
+                            for var in graph.inner_freevars[
+                                graph.subgraphs[subgraph_name]
+                            ]
+                        ]:
+                            nested_node.tkw_op = IterArg
+
+            graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
+            return node.fx_node
+
+        return wrapper
+
 
 @define_op("conditional")
 @dataclass
@@ -1985,27 +2181,6 @@ class Conditional(NestedRegionOp):
     condition: fx.Proxy | IndexExpr
     subgraph_name: str
     implicit_captures: Sequence[fx.Proxy]
-
-    @classmethod
-    def handle(cls, graph, *args, **kwargs):
-        def wrapper(f):
-            with graph.subtracer() as subtracer:
-                subgraph_name, implicit_captures = subtracer.trace(f)
-            node = Conditional(
-                *args,
-                **kwargs,
-                subgraph_name=subgraph_name,
-                implicit_captures=implicit_captures,
-            )
-
-            node._add_proxy_to_graph(graph)
-            node.fx_node.node.tkw_op = cls
-            node.fx_node.node.tkw_op_name = cls.tkw_op_name
-            node.fx_node.node.location = capture_location(graph.location_capture_config)
-            graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
-            return node.fx_node
-
-        return wrapper
 
     @property
     def indexing_dims(self) -> list[IndexSymbol]:
@@ -2025,42 +2200,6 @@ class Iterate(NestedRegionOp):
     step: int = 1
     start: Optional[IndexExpr] = None
     condition: Optional[IndexExpr] = None
-
-    @classmethod
-    def handle(cls, graph: RegionGraph, *args, **kwargs):
-        if not isinstance(graph, RegionGraph):
-            raise TypeError(
-                f"handle expected {RegionGraph.__name__} but got {type(graph)}"
-            )
-
-        def wrapper(f):
-            with graph.subtracer() as subtracer:
-                subgraph_name, implicit_captures = subtracer.trace(f)
-            node = Iterate(
-                *args,
-                **kwargs,
-                step=1,
-                subgraph_name=subgraph_name,
-                implicit_captures=implicit_captures,
-            )
-            # Remember which placeholders are init args. This connection gets
-            # lost otherwise
-            for nested_node in graph.subgraphs[subgraph_name].nodes:
-                if nested_node.op == "placeholder":
-                    if nested_node not in [
-                        var.node
-                        for var in graph.inner_freevars[graph.subgraphs[subgraph_name]]
-                    ]:
-                        nested_node.tkw_op = IterArg
-
-            node._add_proxy_to_graph(graph)
-            node.fx_node.node.tkw_op = cls
-            node.fx_node.node.tkw_op_name = cls.tkw_op_name
-            node.fx_node.node.location = capture_location(graph.location_capture_config)
-            graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
-            return node.fx_node
-
-        return wrapper
 
     @property
     def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:
@@ -2244,7 +2383,7 @@ class Write(CustomOp):
 
         return False
 
-    def is_contiguous_vec(self, constraints) -> bool:
+    def is_contiguous_vec(self, constraints, target: str) -> bool:
         """Check if op can be lowered to contiguous vector ops
 
         If False we will have to lower it to gather"""
@@ -2302,7 +2441,7 @@ class DebugLog(CustomOp):
     The optional `handler` argument should be a function that accepts the whole `debug_logs` object (IE all logs, not just one).
     The handler function gives a way to specify something like a viewer for all logs, but specify it inline among print functions rather than separately.
 
-    The optional `extra_iter_dimensions` argument allows you to add extra dimensions to capture values from multiple iterations of a loop.
+    The optional `extra_iteration_dimensions` argument allows you to add extra dimensions to capture values from multiple iterations of a loop.
     It takes a list of tuples, where each tuple contains `(dimension_name, iteration_axis, max_iterations)`.
     The `dimension_name` must be a unique symbol, and will be the name of the dimension in the symbolic shape of the output.
     The `iteration_axis` must be the axis of an `Iterate` operation, IE the dimension being reduced in the iteration.
@@ -2737,6 +2876,75 @@ class ShuffleOp(CustomOp):
         self.type = get_custom(self.arg).type
 
 
+@define_op("topk")
+@dataclass
+class TopkOp(CustomOp):
+    """
+    Represents a TopK computation.
+
+    arg: Source tensor Register value to find top-k from
+    k_dim: Dimension symbol representing the K size (number of top elements to select)
+    dim: which symbolic dim to perform topk on.  This dimension will be replaced by k_dim in the output.
+    """
+
+    arg: fx.Node
+    k_dim: IndexSymbol
+    dim: IndexSymbol
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol]:
+        from ..wave.utils.general_utils import all_equal
+
+        if isinstance(self.arg, Sequence):
+            src_indexings = [get_custom(arg).indexing_dims for arg in self.arg]
+            if not all_equal(src_indexings):
+                raise NotImplementedError(
+                    "NYI: Only support case where all inputs to TopkOp to have same indexing dim."
+                )
+            src_indexing = src_indexings[0]
+        else:
+            src_indexing = get_custom(self.arg).indexing_dims
+
+        # TopK replaces the reduction dimension with the K dimension
+        if self.dim in src_indexing:
+            result_dims = []
+            for dim in src_indexing:
+                if dim == self.dim:
+                    result_dims.append(self.k_dim)
+                else:
+                    result_dims.append(dim)
+            return result_dims
+        return src_indexing
+
+    def infer_type(self, *args):
+        src_type = get_custom(self.arg).type
+        dtype = src_type.dtype
+        src_indexing = get_custom(self.arg).indexing_dims
+
+        new_symbolic_shape = []
+        for i, dim_size in enumerate(src_type.symbolic_shape):
+            if i < len(src_indexing) and src_indexing[i] == self.dim:
+                new_symbolic_shape.append(self.k_dim)
+            else:
+                new_symbolic_shape.append(dim_size)
+
+        # TopK returns tuple of (values, indices) with the new shape
+        # Values have the same dtype as input, indices are i32
+        values_type = Register[(*new_symbolic_shape, dtype)]
+        indices_type = Register[(*new_symbolic_shape, i32)]
+        self.type = [values_type, indices_type]
+
+    @property
+    def reduction_dim(self) -> IndexSymbol:
+        return self.dim
+
+    # Provide init field to be compatible with ReduceOp interface.
+    # This allows some code in the expand_graph pass to be generic over the two.
+    @property
+    def init(self):
+        return None
+
+
 @define_op("cast")
 @dataclass
 class CastOp(CustomOp, ABC):
@@ -2872,6 +3080,24 @@ class Reshape(CustomOp, ABC):
         self.type = get_custom(_to_sequence(self.args)[0]).type
 
 
+@define_op("tensor_load_to_lds")
+@dataclass
+class TensorLoadToLDS(CustomOp):
+    src: list[Memory]
+    dst: list[Memory]
+    element_type: DataType
+    distributed_shape: dict[IndexSymbol, IndexExpr]
+    shared_tile_index: dict[IndexSymbol, IndexSequence]
+    global_tile_index: dict[IndexSymbol, IndexSequence]
+    bounds: dict[IndexSymbol, IndexExpr]
+    multicast_mask: Optional[IndexExpr] = None
+    input_selector: IndexSymbol | int = 0
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
+
+
 @define_op("gather_to_lds")
 @dataclass
 class GatherToLDS(CustomOp):
@@ -2892,6 +3118,10 @@ class GatherToLDS(CustomOp):
     src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
     src_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     dst_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("scatter_add")

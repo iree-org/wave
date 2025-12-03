@@ -23,12 +23,22 @@ from pathlib import Path
 import dill
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+from wave_lang.kernel.wave.constraints import Constraint
 
 
-def emit_wave_dialect(trace: CapturedTrace, options: WaveCompileOptions) -> str:
+def emit_wave_dialect(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    test_diagnostic_emission: bool,
+    pipeline: str = "",
+) -> tuple[str, list[str]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
-    The `subs` field of options is the only option used during emission."""
+    The `subs` field of options is the only option used during emission.
+    If `pipeline` is provided, it must be a parsable MLIR transform module
+    containing a transform.named_sequence to be applied to the emitted module
+    via the Transform dialect interpreter."""
 
     child = Path(__file__).with_name("water_emitter.py")
     if not child.exists():
@@ -37,14 +47,43 @@ def emit_wave_dialect(trace: CapturedTrace, options: WaveCompileOptions) -> str:
     # Ensure additional node fields (like .type) are not lost during pickling
     trace.snapshot_node_state()
 
-    proc = subprocess.run(
-        [sys.executable, str(child)],
-        input=dill.dumps({"trace": trace, "options": options}),
-        text=False,
-        capture_output=True,
+    args = [sys.executable, str(child)]
+
+    if test_diagnostic_emission:
+        args.append("--test-diagnostic-emission")
+
+    proc = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
+
+    output, err = proc.communicate(
+        dill.dumps(
+            {
+                "trace": trace,
+                "constraints": constraints,
+                "options": options,
+                "pipeline": pipeline,
+            }
+        )
+    )
+
     if proc.returncode != 0:
         raise RuntimeError(
-            f"water_emitter failed (code {proc.returncode}):\n{proc.stderr}"
+            f"water_emitter failed (code {proc.returncode}):\n{err.decode('utf-8')}\n{output.decode('utf-8')}"
         )
-    return proc.stdout.decode("utf-8")
+
+    try:
+        unpickled = dill.loads(output)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to unpickle output from water_emitter (code {proc.returncode}):\n"
+            f"Output: {output!r}\n"
+            f"Exception: {e}"
+        ) from e
+    diagnostics = unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
+    module = unpickled.get("module") if isinstance(unpickled, dict) else None
+
+    return module, diagnostics

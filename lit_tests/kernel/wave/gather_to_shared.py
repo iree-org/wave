@@ -77,13 +77,13 @@ def test_gather_to_shared():
     # CHECK-LABEL:    test_gather_to_shared
     # CHECK:          func.func @gemm
     # CHECK-COUNT-1:    memref.alloc()
-    # CHECK:            %[[idx0:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx0:.*]] = rocdl.readfirstlane %{{.*}} : i32
     # CHECK:            %[[idx1:.*]] = arith.index_cast %[[idx0]] : i32 to index
-    # CHECK:            %[[idx2:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx2:.*]] = rocdl.readfirstlane %{{.*}} : i32
     # CHECK:            %[[idx3:.*]] = arith.index_cast %[[idx2]] : i32 to index
-    # CHECK:            %[[idx4:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx4:.*]] = rocdl.readfirstlane %{{.*}} : i32
     # CHECK:            %[[idx5:.*]] = arith.index_cast %[[idx4]] : i32 to index
-    # CHECK:            %[[idx6:.*]] = llvm.call_intrinsic "llvm.amdgcn.readfirstlane"(%{{.*}}) : (i32) -> i32
+    # CHECK:            %[[idx6:.*]] = rocdl.readfirstlane %{{.*}} : i32
     # CHECK:            %[[idx7:.*]] = arith.index_cast %[[idx6]] : i32 to index
     # CHECK:            scf.for
     # CHECK:              amdgpu.lds_barrier
@@ -357,10 +357,17 @@ def test_gather_to_shared_not_minimize_shared_allocs():
     # CHECK:          func.func @scaled_gemm
     # CHECK:            memref.alloc() : memref<1024xi8, #gpu.address_space<workgroup>>
     # CHECK:            memref.view {{.*}} : memref<1024xi8, #gpu.address_space<workgroup>> to memref<32x8xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.alloc() : memref<8192xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.view {{.*}} : memref<8192xi8, #gpu.address_space<workgroup>> to memref<32x128xi8, #gpu.address_space<workgroup>>
+    # CHECK:            memref.alloc() : memref<32x128xi8, #gpu.address_space<workgroup>>
     # CHECK:            memref.alloc() : memref<1024xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.view {{.*}} memref<1024xi8, #gpu.address_space<workgroup>> to memref<32x8xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.alloc() : memref<8192xi8, #gpu.address_space<workgroup>>
-    # CHECK:            memref.view {{.*}} memref<8192xi8, #gpu.address_space<workgroup>> to memref<32x128xi8, #gpu.address_space<workgroup>>
+    # CHECK:            memref.view {{.*}} : memref<1024xi8, #gpu.address_space<workgroup>> to memref<32x8xi8, #gpu.address_space<workgroup>>
+    # CHECK:            memref.alloc() : memref<32x128xi8, #gpu.address_space<workgroup>>
     # CHECK:            scf.for
+    # CHECK:              amdgpu.lds_barrier
+    # CHECK-COUNT-4:      amdgpu.gather_to_lds {{.*}}
+    # CHECK-NOT:          vector.load
+    # CHECK-NOT:          vector.store
+    # CHECK:              rocdl.s.waitcnt
+    # CHECK:              amdgpu.lds_barrier
+    # CHECK-COUNT-8:      vector.load
+    # CHECK-COUNT-2:      amdgpu.scaled_mfma
+    # CHECK-COUNT-4:    vector.store

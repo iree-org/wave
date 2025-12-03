@@ -224,16 +224,6 @@ class Interpreter:
                     value = self.symbol_table[op.dest].clone()
                     position = self.symbol_table[op.position]
                     value[int(position[0])] = source
-                case vector_d.SplatOp:
-                    mtype = op.result.type
-                    shape = mtype.shape
-                    dtype = mtype.element_type
-                    input = self.symbol_table[op.input][0]
-                    if isinstance(input, torch.Tensor):
-                        fill_value = input.item()
-                    else:
-                        fill_value = input
-                    value = torch.full(shape, fill_value, dtype=self.get_dtype(dtype))
                 case vector_d.BroadcastOp:
                     mtype = op.vector.type
                     shape = mtype.shape

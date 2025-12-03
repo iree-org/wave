@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import sys
 from dataclasses import dataclass
-from typing import List, Optional, Union, Callable
+from typing import List, Optional, TypeVar, Union, Callable
 
 from ...support.location_config import LocationCaptureConfig, LocationCaptureLevel
 
@@ -23,10 +23,12 @@ class FileLineColInfo:
     line: Union[int, tuple[int, int]]
     col: Union[int, tuple[int, int]]
 
-    def to_mlir(self):
-        # Lazy import to avoid IREE dependency on module import
-        from iree.compiler.ir import Context, Location
+    ContextImpl = TypeVar("ContextImpl")
+    LocationImpl = TypeVar("LocationImpl")
 
+    def _to_mlir_impl(
+        self, Context: ContextImpl, Location: LocationImpl
+    ) -> LocationImpl:
         assert Context.current is not None, "Must be called under MLIR context manager."
 
         line_is_range = isinstance(self.line, tuple)
@@ -38,6 +40,18 @@ class FileLineColInfo:
         col_start = self.col[0] if col_is_range else self.col
         col_end = self.col[1] if col_is_range else self.col
         return Location.file(self.filename, line_start, col_start, line_end, col_end)
+
+    def to_mlir(self) -> Location:
+        # Lazy import to avoid IREE dependency on module import
+        from iree.compiler.ir import Context, Location
+
+        return self._to_mlir_impl(Context, Location)
+
+    def to_water(self) -> Location:
+        # Lazy import to avoid IREE dependency on module import
+        from water_mlir.water_mlir.ir import Context, Location
+
+        return self._to_mlir_impl(Context, Location)
 
     @staticmethod
     def capture_current_location():
@@ -72,10 +86,12 @@ class StackTraceInfo:
 
     frames: List[FileLineColInfo]
 
-    def to_mlir(self) -> Location:
-        # Lazy import to avoid IREE dependency on module import
-        from iree.compiler.ir import Context, Location
+    ContextImpl = TypeVar("ContextImpl")
+    LocationImpl = TypeVar("LocationImpl")
 
+    def _to_mlir_impl(
+        self, Context: ContextImpl, Location: LocationImpl
+    ) -> LocationImpl:
         assert Context.current is not None, "Must be called under MLIR context manager."
         if not self.frames:
             return Location.unknown()
@@ -84,6 +100,18 @@ class StackTraceInfo:
         return Location.callsite(
             self.frames[0].to_mlir(), [f.to_mlir() for f in self.frames[1:]]
         )
+
+    def to_mlir(self) -> Location:
+        # Lazy import to avoid IREE dependency on module import
+        from iree.compiler.ir import Context, Location
+
+        return self._to_mlir_impl(Context, Location)
+
+    def to_water(self) -> Location:
+        # Lazy import to avoid IREE dependency on module import
+        from water_mlir.water_mlir.ir import Context, Location
+
+        return self._to_mlir_impl(Context, Location)
 
     @staticmethod
     def capture_current_location(*, preserve_system_frames=False) -> "StackTraceInfo":

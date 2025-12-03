@@ -44,3 +44,8 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "*.venv", "README.md"]
 
 html_theme = "shibuya"
 html_static_path = ["_static"]
+
+# Configure sidebar to prevent duplicate entries
+html_sidebars = {
+    "**": ["globaltoc.html", "sourcelink.html", "searchbox.html"],
+}
