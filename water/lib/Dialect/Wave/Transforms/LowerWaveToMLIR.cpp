@@ -71,7 +71,7 @@ struct LowerWaveToMLIRPass
         // clang-format on
         >();
     target.addIllegalOp<wave::AllocateOp, wave::RegisterOp, wave::Exp2Op,
-                        wave::CastOp>();
+                        wave::CastOp, wave::ExtractSliceOp>();
     ConversionConfig config;
     config.allowPatternRollback = false;
 
@@ -101,6 +101,8 @@ struct LowerWaveToMLIRPass
           wave::populateWaveMmaLoweringPatterns(typeConverter, patterns);
           wave::populateWaveReadWriteLoweringPatterns(typeConverter, patterns);
           wave::populateWaveUnaryFPOpLoweringPatterns(typeConverter, patterns);
+          wave::populateWaveExtractSliceLoweringPatterns(typeConverter,
+                                                         patterns);
 
           if (failed(applyPartialConversion(op, target, std::move(patterns),
                                             config))) {

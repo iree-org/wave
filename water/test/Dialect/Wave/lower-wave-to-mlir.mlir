@@ -623,3 +623,24 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     return
   }
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_extract_slice_constants
+  func.func @lower_extract_slice_constants() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<0.000000e+00> : vector<16xf32>
+    %cst = arith.constant 0.0 : f32
+    %input = wave.register %cst : vector<16xf32>
+
+    // CHECK-NOT: wave.extract_slice
+    // CHECK:     vector.extract_strided_slice %[[INPUT]] {offsets = [4], sizes = [8], strides = [1]} : vector<16xf32> to vector<8xf32>
+    %result = wave.extract_slice %input {
+      offset = #wave.expr_list<[] -> (4)>,
+      size = #wave.expr_list<[] -> (8)>,
+      stride = #wave.expr_list<[] -> (1)>
+    } : (vector<16xf32>) -> vector<8xf32>
+
+    return
+  }
+}

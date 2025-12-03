@@ -11,6 +11,7 @@
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
@@ -351,9 +352,131 @@ public:
   }
 };
 
+/// Evaluate a Wave expression list to constant integer values. This resolves
+/// symbols defined in hyperparameters but cannot handle index symbols (e.g.,
+/// thread IDs, dynamic indices) that would require dynamic evaluation.
+///
+/// Note: Currently wave.extract_slice only accepts constant expressions with
+/// no symbols, but this implementation is ready to support hyperparameter
+/// symbol resolution when the Wave dialect is enhanced.
+static FailureOr<SmallVector<int64_t>>
+evaluateWaveExprList(wave::WaveExprListAttr exprListAttr,
+                     wave::WaveHyperparameterAttr hyper) {
+  SmallVector<int64_t> results;
+  results.reserve(exprListAttr.getMap().getNumResults());
+
+  for (AffineExpr expr : exprListAttr.getMap().getResults()) {
+    // Create a single-result map for evaluation.
+    AffineMap singleResultMap =
+        AffineMap::get(exprListAttr.getMap().getNumDims(),
+                       exprListAttr.getMap().getNumSymbols(), expr);
+
+    // Substitute symbol values from hyperparameters.
+    SmallVector<int64_t> symbolValues;
+    symbolValues.reserve(singleResultMap.getNumSymbols());
+    for (Attribute attr : exprListAttr.getSymbols()) {
+      if (auto symbol = dyn_cast<wave::WaveSymbolAttr>(attr)) {
+        StringRef name = symbol.getName();
+        std::optional<int64_t> value = hyper.getSymbolValue(name);
+        if (!value)
+          return failure();
+        symbolValues.push_back(*value);
+        continue;
+      }
+      // For now, only support hyperparameter symbols in extract_slice.
+      // Index symbols (thread IDs, etc.) would require dynamic evaluation.
+      return failure();
+    }
+
+    // Evaluate the constant expression.
+    // For constant expressions, we can evaluate directly.
+    if (singleResultMap.getNumSymbols() == 0) {
+      // Pure constant expression.
+      AffineExpr expr = singleResultMap.getResult(0);
+      if (auto constExpr = dyn_cast<AffineConstantExpr>(expr)) {
+        results.push_back(constExpr.getValue());
+        continue;
+      }
+      return failure();
+    }
+
+    // Expression with symbols - need to substitute and simplify.
+    AffineExpr substituted = singleResultMap.getResult(0);
+    SmallVector<AffineExpr> symbolExprs;
+    symbolExprs.reserve(symbolValues.size());
+    for (int64_t val : symbolValues) {
+      symbolExprs.push_back(
+          getAffineConstantExpr(val, substituted.getContext()));
+    }
+    substituted = substituted.replaceSymbols(symbolExprs);
+    if (auto constExpr = dyn_cast<AffineConstantExpr>(substituted)) {
+      results.push_back(constExpr.getValue());
+    } else {
+      return failure();
+    }
+  }
+
+  return results;
+}
+
+class ExtractSliceOpLoweringPattern
+    : public OpConversionPattern<wave::ExtractSliceOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ExtractSliceOp op,
+                  wave::ExtractSliceOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    wave::WaveHyperparameterAttr hyper =
+        static_cast<const wave::WaveTypeConverter &>(*getTypeConverter())
+            .getHyperparameters();
+
+    // Evaluate offset, size, and stride expressions to constant values.
+    FailureOr<SmallVector<int64_t>> offsetValues =
+        evaluateWaveExprList(op.getOffset(), hyper);
+    if (failed(offsetValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate offset expression to constants");
+
+    FailureOr<SmallVector<int64_t>> sizeValues =
+        evaluateWaveExprList(op.getSize(), hyper);
+    if (failed(sizeValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate size expression to constants");
+
+    FailureOr<SmallVector<int64_t>> strideValues =
+        evaluateWaveExprList(op.getStride(), hyper);
+    if (failed(strideValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate stride expression to constants");
+
+    Type convertedResultType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Direct mapping from wave.extract_slice to vector.extract_strided_slice.
+    // The offset, size, and stride values are copied directly.
+    auto extractOp = vector::ExtractStridedSliceOp::create(
+        rewriter, op.getLoc(), adaptor.getMemory(),
+        ArrayRef<int64_t>(*offsetValues), ArrayRef<int64_t>(*sizeValues),
+        ArrayRef<int64_t>(*strideValues));
+    rewriter.replaceOp(op, extractOp);
+
+    return success();
+  }
+};
+
 } // namespace
 
 void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
                                            RewritePatternSet &patterns) {
   patterns.add<MmaOpLoweringPattern>(typeConverter, patterns.getContext());
+}
+
+void wave::populateWaveExtractSliceLoweringPatterns(
+    WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
+  patterns.add<ExtractSliceOpLoweringPattern>(typeConverter,
+                                              patterns.getContext());
 }
