@@ -113,4 +113,25 @@ def WaterGPUToGPURuntime : Pass<"water-gpu-to-gpu-runtime", "::mlir::ModuleOp"> 
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 
+def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
+  let summary = "Transforms GPU modules into binaries.";
+  let description = [{
+    This pass searches for all nested GPU modules with target attributes
+    and serializes them to binary format, producing a GPU binary operation.
+
+    This is a simplified version of the upstream gpu-module-to-binary pass,
+    tailored for the Water project. Currently supports ROCDL targets only.
+  }];
+  let options = [
+    Option<"toolkitPath", "toolkit", "std::string", [{""}],
+           "Toolkit path.">,
+    ListOption<"linkFiles", "l", "std::string",
+           "Extra bitcode files to link to.">,
+    Option<"cmdOptions", "opts", "std::string", [{""}],
+           "Command line options to pass to the compilation tools.">,
+    Option<"compilationTarget", "format", "std::string", [{"fatbin"}],
+           "The target representation (offloading, assembly, binary, fatbin).">,
+  ];
+}
+
 #endif // WATER_PASSES

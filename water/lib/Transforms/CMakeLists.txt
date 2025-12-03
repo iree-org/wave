@@ -1,6 +1,7 @@
 add_mlir_dialect_library(MLIRWaterTransforms
   AccessCheckers.cpp
   CheckStaticAssertions.cpp
+  GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   SLPVectorizer.cpp
 
