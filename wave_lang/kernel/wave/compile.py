@@ -513,7 +513,7 @@ def wave_compile(
             asm = _generate_asm_code(mb, options)
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
-        if options.use_water_pipeline:
+        elif options.use_water_pipeline:
             module = water_lowering_pipeline(mb.module_op, options)
             return WaveKernelExecutionEngine(options, module, asm)
 
