@@ -324,15 +324,6 @@ class WaveKernelExecutionEngine:
         # Signature: void func(void* stream, PyObject* arg0, PyObject* arg1, ...)
         self._cfunc(stream_ptr, *(py_object(arg) for arg in args))
 
-        return self.asm
-
-    # TODO: __del__ call order is not guaranteed, need a better way to clean up
-    # the loaded module when the kernel is destroyed.
-    # def __del__(self):
-    #     """Clean up the loaded module when the kernel is destroyed."""
-    #     if self._module_handle is not None and self._engine is not None:
-    #         self._engine.release_module(self._module_handle)
-
 
 def wave_compile(
     options: WaveCompileOptions,
