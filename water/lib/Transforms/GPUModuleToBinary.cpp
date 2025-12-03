@@ -50,13 +50,12 @@ private:
   LogicalResult
   linkBitcodeFiles(llvm::Module &mod,
                    SmallVector<std::unique_ptr<llvm::Module>> &&libs);
-  std::optional<llvm::TargetMachine *>
-  createTargetMachine(Attribute targetAttr);
+  FailureOr<llvm::TargetMachine *> createTargetMachine(Attribute targetAttr);
   LogicalResult optimizeModule(llvm::Module &mod,
                                llvm::TargetMachine *targetMachine);
-  std::optional<std::string> compileToISA(llvm::Module &mod,
-                                          llvm::TargetMachine &targetMachine);
-  std::optional<SmallVector<char, 0>>
+  FailureOr<std::string> compileToISA(llvm::Module &mod,
+                                      llvm::TargetMachine &targetMachine);
+  FailureOr<SmallVector<char, 0>>
   assembleToObject(StringRef isa, llvm::TargetMachine &targetMachine);
 };
 } // namespace
@@ -99,22 +98,23 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
     return module.emitError("Failed to link bitcode libraries");
 
   // Step 3: Optimize LLVM IR
-  auto targetMachine = createTargetMachine(targetAttr);
-  if (!targetMachine)
+  FailureOr<llvm::TargetMachine *> targetMachine =
+      createTargetMachine(targetAttr);
+  if (failed(targetMachine))
     return module.emitError("Failed to create target machine");
 
   if (failed(optimizeModule(*llvmModule, *targetMachine)))
     return module.emitError("Failed to optimize LLVM IR");
 
   // Step 4: Compile to ISA
-  std::optional<std::string> isa = compileToISA(*llvmModule, **targetMachine);
-  if (!isa)
+  FailureOr<std::string> isa = compileToISA(*llvmModule, **targetMachine);
+  if (failed(isa))
     return module.emitError("Failed to compile to ISA");
 
   // Step 5: Assemble to binary
-  std::optional<SmallVector<char, 0>> binary =
+  FailureOr<SmallVector<char, 0>> binary =
       assembleToObject(*isa, **targetMachine);
-  if (!binary)
+  if (failed(binary))
     return module.emitError("Failed to assemble to binary");
 
   SmallVector<char, 0> binaryData = std::move(*binary);
@@ -180,31 +180,29 @@ LogicalResult WaterGPUModuleToBinaryPass::linkBitcodeFiles(
   return success();
 }
 
-std::optional<llvm::TargetMachine *>
+FailureOr<llvm::TargetMachine *>
 WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
   // Check if this is a ROCDL target
   auto rocdlTarget = dyn_cast<ROCDL::ROCDLTargetAttr>(targetAttr);
-  if (!rocdlTarget) {
-    getOperation()->emitError() << "Only ROCDL targets are currently supported";
-    return std::nullopt;
-  }
+  if (!rocdlTarget)
+    return getOperation()->emitError(
+        "Only ROCDL targets are currently supported");
 
   std::string error;
   llvm::Triple triple(llvm::Triple::normalize(rocdlTarget.getTriple()));
   const llvm::Target *llvmTarget =
       llvm::TargetRegistry::lookupTarget(triple, error);
 
-  if (!llvmTarget) {
-    getOperation()->emitError() << "Failed to lookup target for triple '"
-                                << rocdlTarget.getTriple() << "': " << error;
-    return std::nullopt;
-  }
+  if (!llvmTarget)
+    return getOperation()->emitError()
+           << "Failed to lookup target for triple '" << rocdlTarget.getTriple()
+           << "': " << error;
 
   std::unique_ptr<llvm::TargetMachine> targetMachine(
       llvmTarget->createTargetMachine(triple, rocdlTarget.getChip(),
                                       rocdlTarget.getFeatures(), {}, {}));
   if (!targetMachine)
-    return std::nullopt;
+    return getOperation()->emitError("Failed to create target machine");
 
   // Set optimization level from target attribute
   targetMachine->setOptLevel(
@@ -233,7 +231,7 @@ WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &mod,
   return success();
 }
 
-std::optional<std::string>
+FailureOr<std::string>
 WaterGPUModuleToBinaryPass::compileToISA(llvm::Module &mod,
                                          llvm::TargetMachine &targetMachine) {
   SmallVector<char, 0> isaBuffer;
@@ -241,17 +239,14 @@ WaterGPUModuleToBinaryPass::compileToISA(llvm::Module &mod,
 
   llvm::legacy::PassManager codegen;
   if (targetMachine.addPassesToEmitFile(codegen, stream, nullptr,
-                                        llvm::CodeGenFileType::AssemblyFile)) {
-    getOperation()->emitError("Target machine cannot emit assembly");
-    return std::nullopt;
-  }
+                                        llvm::CodeGenFileType::AssemblyFile))
+    return getOperation()->emitError("Target machine cannot emit assembly");
 
   codegen.run(mod);
   return std::string(isaBuffer.begin(), isaBuffer.end());
 }
 
-std::optional<SmallVector<char, 0>>
-WaterGPUModuleToBinaryPass::assembleToObject(
+FailureOr<SmallVector<char, 0>> WaterGPUModuleToBinaryPass::assembleToObject(
     StringRef isa, llvm::TargetMachine &targetMachine) {
   // For now, just compile optimized module to object file
   // TODO: Parse ISA and assemble properly, then link with ld.lld to create
@@ -267,10 +262,8 @@ WaterGPUModuleToBinaryPass::assembleToObject(
   auto mod = std::make_unique<llvm::Module>("isa_module", context);
 
   if (targetMachine.addPassesToEmitFile(codegen, stream, nullptr,
-                                        llvm::CodeGenFileType::ObjectFile)) {
-    getOperation()->emitError("Target machine cannot emit object file");
-    return std::nullopt;
-  }
+                                        llvm::CodeGenFileType::ObjectFile))
+    return getOperation()->emitError("Target machine cannot emit object file");
 
   codegen.run(*mod);
 
