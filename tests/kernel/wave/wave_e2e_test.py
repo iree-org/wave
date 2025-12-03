@@ -248,6 +248,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench, use_water_pipeline):
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
+        dynamic_symbols=[M, N],
         use_water_pipeline=use_water_pipeline,
     )
     options = set_default_run_config(options)
