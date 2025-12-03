@@ -194,6 +194,8 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
   }
 }
 
+// Reads the entire contents of a binary file into a vector of characters.
+// Returns an empty vector if the file cannot be opened.
 static std::vector<char> readFileIntoVector(const std::string &filename) {
   std::ifstream file(filename, std::ios::binary | std::ios::ate);
 
@@ -215,7 +217,7 @@ static nb::tuple load_binary(const std::string &path,
                              const std::string &func_name) {
   hipModule_t module;
   hipFunction_t function;
-  std::vector<char> hsacoVec = readFileIntoVector(path.c_str());
+  std::vector<char> hsacoVec = readFileIntoVector(path);
   HIP_CHECK_EXC(hipModuleLoadData(&module, hsacoVec.data()));
   HIP_CHECK_EXC(hipModuleGetFunction(&function, module, func_name.c_str()));
   nb::capsule capsule(reinterpret_cast<void *>(module));
