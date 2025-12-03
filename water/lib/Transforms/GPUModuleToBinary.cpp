@@ -23,8 +23,11 @@
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/Internalize.h"
@@ -59,6 +62,12 @@ private:
                                llvm::TargetMachine *targetMachine);
   FailureOr<std::string> compileToISA(llvm::Module &mod,
                                       llvm::TargetMachine &targetMachine);
+
+  // Dump helpers
+  LogicalResult dumpLLVMModule(llvm::Module &mod, StringRef moduleName,
+                               StringRef suffix);
+  LogicalResult dumpText(StringRef text, StringRef moduleName,
+                         StringRef suffix);
 };
 } // namespace
 
@@ -87,6 +96,10 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   if (!llvmModule)
     return module.emitError("Failed to translate GPU module to LLVM IR");
 
+  // Dump original LLVM IR
+  if (failed(dumpLLVMModule(*llvmModule, module.getName(), "_original")))
+    return failure();
+
   // Step 2: Load and link device libraries
   SmallVector<std::unique_ptr<llvm::Module>> bitcodeLibs;
   for (const std::string &path : linkFiles) {
@@ -98,6 +111,10 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
 
   if (failed(linkBitcodeFiles(*llvmModule, std::move(bitcodeLibs))))
     return module.emitError("Failed to link bitcode libraries");
+
+  // Dump linked LLVM IR
+  if (failed(dumpLLVMModule(*llvmModule, module.getName(), "_linked")))
+    return failure();
 
   // Step 3: Create target machine and set data layout
   FailureOr<llvm::TargetMachine *> targetMachine =
@@ -113,10 +130,18 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   if (failed(optimizeModule(*llvmModule, *targetMachine)))
     return module.emitError("Failed to optimize LLVM IR");
 
+  // Dump optimized LLVM IR
+  if (failed(dumpLLVMModule(*llvmModule, module.getName(), "_optimized")))
+    return failure();
+
   // Step 5: Compile to ISA
   FailureOr<std::string> isa = compileToISA(*llvmModule, **targetMachine);
   if (failed(isa))
     return module.emitError("Failed to compile to ISA");
+
+  // Dump ISA
+  if (failed(dumpText(*isa, module.getName(), ".s")))
+    return failure();
 
   // Step 6: Assemble to binary
   // Use ROCM_PATH environment variable if toolkitPath is not provided
@@ -258,6 +283,48 @@ WaterGPUModuleToBinaryPass::compileToISA(llvm::Module &mod,
 
   codegen.run(mod);
   return std::string(isaBuffer.begin(), isaBuffer.end());
+}
+
+LogicalResult WaterGPUModuleToBinaryPass::dumpLLVMModule(llvm::Module &mod,
+                                                         StringRef moduleName,
+                                                         StringRef suffix) {
+  if (dumpIntermediates.empty())
+    return success();
+
+  SmallString<128> path(dumpIntermediates);
+  llvm::sys::path::append(path, moduleName + suffix + ".ll");
+
+  std::error_code ec;
+  llvm::ToolOutputFile outputFile(path, ec, llvm::sys::fs::OF_None);
+  if (ec)
+    return getOperation()->emitError()
+           << "Failed to open file for dumping: " << path << ": "
+           << ec.message();
+
+  mod.print(outputFile.os(), nullptr);
+  outputFile.keep();
+  return success();
+}
+
+LogicalResult WaterGPUModuleToBinaryPass::dumpText(StringRef text,
+                                                   StringRef moduleName,
+                                                   StringRef suffix) {
+  if (dumpIntermediates.empty())
+    return success();
+
+  SmallString<128> path(dumpIntermediates);
+  llvm::sys::path::append(path, moduleName + suffix);
+
+  std::error_code ec;
+  llvm::ToolOutputFile outputFile(path, ec, llvm::sys::fs::OF_None);
+  if (ec)
+    return getOperation()->emitError()
+           << "Failed to open file for dumping: " << path << ": "
+           << ec.message();
+
+  outputFile.os() << text;
+  outputFile.keep();
+  return success();
 }
 
 void WaterGPUModuleToBinaryPass::runOnOperation() {
