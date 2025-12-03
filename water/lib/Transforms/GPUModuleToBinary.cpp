@@ -46,11 +46,11 @@ private:
   std::unique_ptr<llvm::Module> loadBitcodeFile(llvm::LLVMContext &context,
                                                 StringRef path);
   LogicalResult
-  linkBitcodeFiles(llvm::Module &module,
+  linkBitcodeFiles(llvm::Module &mod,
                    SmallVector<std::unique_ptr<llvm::Module>> &&libs);
   std::optional<llvm::TargetMachine *>
   createTargetMachine(Attribute targetAttr);
-  LogicalResult optimizeModule(llvm::Module &module,
+  LogicalResult optimizeModule(llvm::Module &mod,
                                llvm::TargetMachine *targetMachine);
 };
 } // namespace
@@ -144,11 +144,11 @@ WaterGPUModuleToBinaryPass::loadBitcodeFile(llvm::LLVMContext &context,
 }
 
 LogicalResult WaterGPUModuleToBinaryPass::linkBitcodeFiles(
-    llvm::Module &module, SmallVector<std::unique_ptr<llvm::Module>> &&libs) {
+    llvm::Module &mod, SmallVector<std::unique_ptr<llvm::Module>> &&libs) {
   if (libs.empty())
     return success();
 
-  llvm::Linker linker(module);
+  llvm::Linker linker(mod);
   for (std::unique_ptr<llvm::Module> &libModule : libs) {
     // Link the library, importing only needed symbols
     bool err = linker.linkInModule(
@@ -201,14 +201,14 @@ WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
 }
 
 LogicalResult
-WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &module,
+WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &mod,
                                            llvm::TargetMachine *targetMachine) {
   // Get optimization level from target machine
   int optLevel = static_cast<int>(targetMachine->getOptLevel());
 
   auto transformer =
       makeOptimizingTransformer(optLevel, /*sizeLevel=*/0, targetMachine);
-  auto error = transformer(&module);
+  auto error = transformer(&mod);
   if (error) {
     InFlightDiagnostic mlirError = getOperation()->emitError();
     llvm::handleAllErrors(
