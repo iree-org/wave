@@ -667,6 +667,17 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
+def _flush_output(module_str: str, diagnostics: list[str]) -> None:
+    output = dill.dumps(
+        {
+            "diagnostics": [d.encode("utf-8") for d in diagnostics],
+            "module": module_str.encode("utf-8"),
+        }
+    )
+    sys.stdout.buffer.write(output)
+    sys.stdout.flush()
+
+
 def _emit_from_captured_trace(
     trace: "CapturedTrace",
     constraints: list[Constraint],
@@ -783,6 +794,13 @@ def _emit_from_captured_trace(
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(str(e))
+            _flush_output(
+                module.operation.get_asm(
+                    enable_debug_info=enable_debug_info, print_generic_op_form=True
+                ),
+                diagnostics,
+            )
+            return 1
 
         # If a transform script was provided, parse and apply it to the module.
         # This expects a transform module with a named sequence as first operation.
@@ -807,10 +825,7 @@ def _emit_from_captured_trace(
                 diagnostics.append(f"Failed to apply transform script: {e}")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
-
-        output = dill.dumps({"diagnostics": diagnostics, "module": module_str})
-        sys.stdout.buffer.write(output)
-        sys.stdout.flush()
+        _flush_output(module_str, diagnostics)
     return 0
 
 
