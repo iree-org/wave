@@ -22,6 +22,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   MLIRLLVMDialect
   MLIRMemRefDialect
   MLIRPass
+  MLIRROCDLTarget
   MLIRRewrite
   MLIRTransformUtils
   MLIRVectorDialect
