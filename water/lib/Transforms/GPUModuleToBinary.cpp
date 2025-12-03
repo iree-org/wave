@@ -41,25 +41,22 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   OpBuilder builder(module->getContext());
 
   // Check if module has target attributes
-  if (!module.getTargetsAttr() || module.getTargetsAttr().empty()) {
+  if (!module.getTargetsAttr() || module.getTargetsAttr().empty())
     return module.emitError("GPU module has no target attributes");
-  }
 
   // For now, we only support ROCDL targets
   auto rocdlTarget =
       dyn_cast_or_null<ROCDL::ROCDLTargetAttr>(module.getTargetsAttr()[0]);
-  if (!rocdlTarget) {
+  if (!rocdlTarget)
     return module.emitError("Only ROCDL targets are currently supported");
-  }
 
   // Step 1: Translate GPU module to LLVM IR
   llvm::LLVMContext llvmContext;
   std::unique_ptr<llvm::Module> llvmModule =
       translateModuleToLLVMIR(module, llvmContext);
 
-  if (!llvmModule) {
+  if (!llvmModule)
     return module.emitError("Failed to translate GPU module to LLVM IR");
-  }
 
   // TODO: Step 2: Link device libraries
   // TODO: Step 3: Optimize LLVM IR
@@ -99,9 +96,8 @@ void WaterGPUModuleToBinaryPass::runOnOperation() {
       // Use early_inc_range since we're erasing modules during iteration
       for (auto module :
            llvm::make_early_inc_range(block.getOps<GPUModuleOp>())) {
-        if (failed(serializeModule(module))) {
+        if (failed(serializeModule(module)))
           return signalPassFailure();
-        }
       }
     }
   }
