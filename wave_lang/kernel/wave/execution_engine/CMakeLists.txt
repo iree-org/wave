@@ -94,6 +94,8 @@ if(UNIX AND NOT APPLE)
     # Use linker script to hide all symbols except Python module entry point
     -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/wave_execution_engine.lds
   )
+# TODO: If we want to support OSX we will need a sligthly different incantation
+# https://github.com/numba/numba-mlir/blob/fd9609d81dab96b0658392886ebc470ea2fa4eeb/numba_mlir/numba_mlir/mlir_compiler/CMakeLists.txt#L71
 endif()
 
 install(TARGETS wave_execution_engine wave_runtime_helpers wave_hip_runtime LIBRARY DESTINATION .)
