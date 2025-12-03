@@ -149,22 +149,6 @@ Returns:
 Raises:
     RuntimeError: If parsing, compilation or loading fails)")
       .def(
-          "load_module_from_text",
-          [](wave::ExecutionEngine &self, const std::string &mlirText) {
-            auto handle = unwrapExpected(
-                self.loadModuleFromText(llvm::StringRef(mlirText)),
-                "Failed to load module from text");
-            return reinterpret_cast<uintptr_t>(handle);
-          },
-          nb::arg("mlir_text"),
-          "Parse MLIR text and load it into the execution engine.\n\n"
-          "Args:\n"
-          "    mlir_text: MLIR module as text string\n\n"
-          "Returns:\n"
-          "    Module handle as integer\n\n"
-          "Raises:\n"
-          "    RuntimeError: If parsing, compilation or loading fails")
-      .def(
           "release_module",
           [](wave::ExecutionEngine &self, uintptr_t handle) {
             self.releaseModule(reinterpret_cast<void *>(handle));
