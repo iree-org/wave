@@ -77,6 +77,8 @@ private:
                       StringRef suffix);
   FailureOr<std::optional<std::string>> tryLoadOverrideText(StringRef modName,
                                                             StringRef suffix);
+  FailureOr<std::optional<SmallVector<char, 0>>>
+  tryLoadOverrideBinary(StringRef modName, StringRef suffix);
 };
 } // namespace
 
@@ -196,8 +198,23 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
 
   SmallVector<char, 0> binaryData = std::move(*binary);
 
-  // Dump HSACO binary.
-  if (failed(dumpBinary(binaryData, mod.getName(), ".hsaco")))
+  auto dumpAndOverrideBinary = [&](StringRef suffix) -> LogicalResult {
+    StringRef modName = mod.getName();
+    if (failed(dumpBinary(binaryData, modName, suffix)))
+      return failure();
+
+    auto overrideBinary = tryLoadOverrideBinary(modName, suffix);
+    if (failed(overrideBinary))
+      return failure();
+
+    if (*overrideBinary)
+      binaryData = std::move(**overrideBinary);
+
+    return success();
+  };
+
+  // Dump/override HSACO binary.
+  if (failed(dumpAndOverrideBinary(".hsaco")))
     return failure();
 
   // Create object attribute.
@@ -435,6 +452,29 @@ WaterGPUModuleToBinaryPass::tryLoadOverrideText(StringRef modName,
            << bufferOrError.getError().message();
 
   return std::optional<std::string>(bufferOrError.get()->getBuffer().str());
+}
+
+FailureOr<std::optional<SmallVector<char, 0>>>
+WaterGPUModuleToBinaryPass::tryLoadOverrideBinary(StringRef modName,
+                                                  StringRef suffix) {
+  if (overrideIntermediates.empty())
+    return std::optional<SmallVector<char, 0>>(std::nullopt);
+
+  SmallString<128> path(overrideIntermediates);
+  llvm::sys::path::append(path, modName + suffix);
+
+  if (!llvm::sys::fs::exists(path))
+    return std::optional<SmallVector<char, 0>>(std::nullopt);
+
+  auto bufferOrError = llvm::MemoryBuffer::getFile(path);
+  if (!bufferOrError)
+    return getOperation()->emitError()
+           << "Failed to load override binary from " << path << ": "
+           << bufferOrError.getError().message();
+
+  StringRef data = bufferOrError.get()->getBuffer();
+  SmallVector<char, 0> result(data.begin(), data.end());
+  return std::optional<SmallVector<char, 0>>(std::move(result));
 }
 
 void WaterGPUModuleToBinaryPass::runOnOperation() {
