@@ -49,10 +49,9 @@ private:
   linkBitcodeFiles(llvm::Module &module,
                    SmallVector<std::unique_ptr<llvm::Module>> &&libs);
   std::optional<llvm::TargetMachine *>
-  createTargetMachine(ROCDL::ROCDLTargetAttr target);
+  createTargetMachine(Attribute targetAttr);
   LogicalResult optimizeModule(llvm::Module &module,
-                               llvm::TargetMachine *targetMachine,
-                               int optLevel);
+                               llvm::TargetMachine *targetMachine);
 };
 } // namespace
 
@@ -63,11 +62,15 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   if (!module.getTargetsAttr() || module.getTargetsAttr().empty())
     return module.emitError("GPU module has no target attributes");
 
-  // For now, we only support ROCDL targets
-  auto rocdlTarget =
-      dyn_cast_or_null<ROCDL::ROCDLTargetAttr>(module.getTargetsAttr()[0]);
-  if (!rocdlTarget)
-    return module.emitError("Only ROCDL targets are currently supported");
+  // Check that there is exactly one target
+  if (module.getTargetsAttr().size() != 1)
+    return module.emitError(
+        "GPU module must have exactly one target attribute");
+
+  // Get the target attribute
+  Attribute targetAttr = module.getTargetsAttr()[0];
+  if (!targetAttr)
+    return module.emitError("Target attribute cannot be null");
 
   // Step 1: Translate GPU module to LLVM IR
   llvm::LLVMContext llvmContext;
@@ -90,11 +93,11 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
     return module.emitError("Failed to link bitcode libraries");
 
   // Step 3: Optimize LLVM IR
-  auto targetMachine = createTargetMachine(rocdlTarget);
+  auto targetMachine = createTargetMachine(targetAttr);
   if (!targetMachine)
     return module.emitError("Failed to create target machine");
 
-  if (failed(optimizeModule(*llvmModule, *targetMachine, rocdlTarget.getO())))
+  if (failed(optimizeModule(*llvmModule, *targetMachine)))
     return module.emitError("Failed to optimize LLVM IR");
 
   // TODO: Step 4: Compile to ISA
@@ -112,7 +115,7 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   gpu::KernelTableAttr kernels;
 
   Attribute objectAttr = attrBuilder.getAttr<gpu::ObjectAttr>(
-      rocdlTarget, gpu::CompilationTarget::Binary, binaryAttr, properties,
+      targetAttr, gpu::CompilationTarget::Binary, binaryAttr, properties,
       kernels);
 
   // Create gpu.binary op
@@ -165,35 +168,43 @@ LogicalResult WaterGPUModuleToBinaryPass::linkBitcodeFiles(
 }
 
 std::optional<llvm::TargetMachine *>
-WaterGPUModuleToBinaryPass::createTargetMachine(ROCDL::ROCDLTargetAttr target) {
+WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
+  // Check if this is a ROCDL target
+  auto rocdlTarget = dyn_cast<ROCDL::ROCDLTargetAttr>(targetAttr);
+  if (!rocdlTarget) {
+    getOperation()->emitError() << "Only ROCDL targets are currently supported";
+    return std::nullopt;
+  }
+
   std::string error;
-  llvm::Triple triple(llvm::Triple::normalize(target.getTriple()));
+  llvm::Triple triple(llvm::Triple::normalize(rocdlTarget.getTriple()));
   const llvm::Target *llvmTarget =
       llvm::TargetRegistry::lookupTarget(triple, error);
 
   if (!llvmTarget) {
     getOperation()->emitError() << "Failed to lookup target for triple '"
-                                << target.getTriple() << "': " << error;
+                                << rocdlTarget.getTriple() << "': " << error;
     return std::nullopt;
   }
 
   std::unique_ptr<llvm::TargetMachine> targetMachine(
-      llvmTarget->createTargetMachine(triple, target.getChip(),
-                                      target.getFeatures(), {}, {}));
+      llvmTarget->createTargetMachine(triple, rocdlTarget.getChip(),
+                                      rocdlTarget.getFeatures(), {}, {}));
   if (!targetMachine)
     return std::nullopt;
+
+  // Set optimization level from target attribute
+  targetMachine->setOptLevel(
+      static_cast<llvm::CodeGenOptLevel>(rocdlTarget.getO()));
 
   return targetMachine.release();
 }
 
-LogicalResult WaterGPUModuleToBinaryPass::optimizeModule(
-    llvm::Module &module, llvm::TargetMachine *targetMachine, int optLevel) {
-  if (optLevel < 0 || optLevel > 3) {
-    getOperation()->emitError() << "Invalid optimization level: " << optLevel;
-    return failure();
-  }
-
-  targetMachine->setOptLevel(static_cast<llvm::CodeGenOptLevel>(optLevel));
+LogicalResult
+WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &module,
+                                           llvm::TargetMachine *targetMachine) {
+  // Get optimization level from target machine
+  int optLevel = static_cast<int>(targetMachine->getOptLevel());
 
   auto transformer =
       makeOptimizingTransformer(optLevel, /*sizeLevel=*/0, targetMachine);
