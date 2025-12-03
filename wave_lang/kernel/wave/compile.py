@@ -516,7 +516,6 @@ def wave_compile(
         elif options.use_water_pipeline:
             module = water_lowering_pipeline(mb.module_op, options)
             return WaveKernelExecutionEngine(options, module, asm)
-
         elif not options.compile_to_mlir:
             # LLVM flow: only compile to VMFB when not in MLIR-only mode
             compiled_wave_vmfb = compile_to_vmfb(asm, options)
