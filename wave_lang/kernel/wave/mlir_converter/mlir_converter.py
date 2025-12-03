@@ -30,15 +30,21 @@ def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    test_diagnostic_emission: bool,
+    *,
+    test_diagnostic_emission: bool = False,
     pipeline: str = "",
 ) -> tuple[str, list[str]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
-    The `subs` field of options is the only option used during emission.
-    If `pipeline` is provided, it must be a parsable MLIR transform module
+    The `subs` field of options is the only option used during emission. If
+    `pipeline` is provided, it must be a parsable MLIR transform module
     containing a transform.named_sequence to be applied to the emitted module
-    via the Transform dialect interpreter."""
+    via the Transform dialect interpreter.
+
+    Returns the string representation of the MLIR module if all stages succeeded
+    and a list of diagnostic messages, including parsing and pass pipeline
+    errors produced by MLIR.
+    """
 
     child = Path(__file__).with_name("water_emitter.py")
     if not child.exists():
@@ -72,7 +78,9 @@ def emit_wave_dialect(
 
     if proc.returncode != 0:
         raise RuntimeError(
-            f"water_emitter failed (code {proc.returncode}):\n{err.decode('utf-8')}\n{output.decode('utf-8')}"
+            f"water_emitter failed (code {proc.returncode}):\n"
+            f"{err.decode('utf-8', errors='replace')}\n"
+            f"{output.decode('utf-8', errors='replace')}"
         )
 
     try:
@@ -86,4 +94,8 @@ def emit_wave_dialect(
     diagnostics = unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
     module = unpickled.get("module") if isinstance(unpickled, dict) else None
 
-    return module, diagnostics
+    # Preserve stderr messages.
+    if err:
+        print(err.decode("utf-8", errors="replace"), file=sys.stderr)
+
+    return module.decode("utf-8"), [d.decode("utf-8") for d in diagnostics]
