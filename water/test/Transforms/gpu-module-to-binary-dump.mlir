@@ -1,4 +1,4 @@
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: rm -rf %t
 // RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t" | FileCheck %s
 // RUN: test -f %t/kernel_module_original.ll
 // RUN: test -f %t/kernel_module_linked.ll
