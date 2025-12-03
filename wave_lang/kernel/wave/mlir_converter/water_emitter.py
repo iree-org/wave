@@ -525,7 +525,7 @@ def _emit_ops_from_graph(
                     stride = _convert_to_wave_expr_list_tuple(node.stride)
                     offset = _convert_to_wave_expr_list_tuple(node.offset)
                     mlir_op = op_builder(
-                        result_type, *mlir_operands, size, stride, offset
+                        result_type, *mlir_operands, offset, size, stride
                     )
                 else:
                     try:

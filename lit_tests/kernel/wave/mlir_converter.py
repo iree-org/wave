@@ -326,36 +326,36 @@ def mlir_converter_matmul():
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     wave.yield %[[MMA_3]] : !wave.tensor<[@M, @N] of f32, <register>>
     # CHECK-NEXT: }
-    # CHECK-NEXT: %[[SLICE_0:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_0:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (0)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_0]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_1:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_1:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (1)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_1]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_2:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_2:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (2)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_2]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_3:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_3:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (3)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_3]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_4:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_4:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (4)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_4]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_5:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_5:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (5)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_5]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_6:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_6:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (6)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_6]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_7:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_7:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (7)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_7]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_8:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_8:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (8)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_8]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_9:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_9:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (9)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_9]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_10:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_10:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (10)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_10]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_11:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_11:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (11)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_11]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_12:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_12:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (12)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_12]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_13:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_13:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (13)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_13]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_14:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_14:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (14)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_14]], %[[ARG2]]
-    # CHECK-NEXT: %[[SLICE_15:.*]] = wave.extract_slice %[[ITERATE]]
+    # CHECK-NEXT: %[[SLICE_15:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (15)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_15]], %[[ARG2]]
     # CHECK-NEXT: return
