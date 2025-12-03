@@ -68,6 +68,8 @@ private:
                                StringRef suffix);
   LogicalResult dumpText(StringRef text, StringRef moduleName,
                          StringRef suffix);
+  LogicalResult dumpBinary(ArrayRef<char> data, StringRef moduleName,
+                           StringRef suffix);
 };
 } // namespace
 
@@ -155,6 +157,10 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
     return module.emitError("Failed to assemble to binary");
 
   SmallVector<char, 0> binaryData = std::move(*binary);
+
+  // Dump HSACO binary
+  if (failed(dumpBinary(binaryData, module.getName(), ".hsaco")))
+    return failure();
 
   // Create object attribute
   Builder attrBuilder(module.getContext());
@@ -323,6 +329,27 @@ LogicalResult WaterGPUModuleToBinaryPass::dumpText(StringRef text,
            << ec.message();
 
   outputFile.os() << text;
+  outputFile.keep();
+  return success();
+}
+
+LogicalResult WaterGPUModuleToBinaryPass::dumpBinary(ArrayRef<char> data,
+                                                     StringRef moduleName,
+                                                     StringRef suffix) {
+  if (dumpIntermediates.empty())
+    return success();
+
+  SmallString<128> path(dumpIntermediates);
+  llvm::sys::path::append(path, moduleName + suffix);
+
+  std::error_code ec;
+  llvm::ToolOutputFile outputFile(path, ec, llvm::sys::fs::OF_None);
+  if (ec)
+    return getOperation()->emitError()
+           << "Failed to open file for dumping: " << path << ": "
+           << ec.message();
+
+  outputFile.os().write(data.data(), data.size());
   outputFile.keep();
   return success();
 }

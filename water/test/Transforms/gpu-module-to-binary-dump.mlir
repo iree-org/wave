@@ -4,6 +4,7 @@
 // RUN: test -f %t/kernel_module_linked.ll
 // RUN: test -f %t/kernel_module_optimized.ll
 // RUN: test -f %t/kernel_module.s
+// RUN: test -f %t/kernel_module.hsaco
 
 // Test that the pass dumps intermediate compilation files when dump-intermediates is specified
 
