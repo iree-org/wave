@@ -483,7 +483,7 @@ def _emit_ops_from_graph(
                             else ir.Location.current
                         )
 
-                    mlir_op = op_builder(result_types, axis, carried_values)
+                    mlir_op = op_builder(result_types, axis, carried_values, [])
                     body = ir.Block.create_at_start(
                         mlir_op.regions[0], result_types, result_locs
                     )
