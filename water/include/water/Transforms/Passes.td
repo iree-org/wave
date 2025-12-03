@@ -129,8 +129,6 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
            "Extra bitcode files to link to.">,
     Option<"cmdOptions", "opts", "std::string", [{""}],
            "Command line options to pass to the compilation tools.">,
-    Option<"compilationTarget", "format", "std::string", [{"fatbin"}],
-           "The target representation (offloading, assembly, binary, fatbin).">,
   ];
 }
 
