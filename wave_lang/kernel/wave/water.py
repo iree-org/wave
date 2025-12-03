@@ -211,8 +211,8 @@ def make_linear_pass_pipeline(
             - For the pass with arguments, pass a tuple with the name and a dictionary of arguments.
             - For the pass with a root op, pass a tuple with the name, a dictionary of arguments, and the root op name.
               Arguments dict can be empty.
-        Returns:
-            A string representing the pass pipeline command line argument.
+    Returns:
+        A string representing the pass pipeline command line argument.
     """
 
     def make_pass_arguments(
@@ -426,6 +426,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
             args,
             input=mlir_asm,
             text=True,
+            stderr=subprocess.PIPE,
         )
     except subprocess.CalledProcessError as e:
         error_msg = f"Subprocess failed with return code {e.returncode}.\nStderr output:\n{e.stderr}"
