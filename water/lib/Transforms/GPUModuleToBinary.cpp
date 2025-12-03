@@ -7,9 +7,14 @@
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Target/LLVMIR/Export.h"
+
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 
 using namespace mlir;
 using namespace mlir::gpu;
@@ -40,65 +45,47 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
     return module.emitError("GPU module has no target attributes");
   }
 
-  // Collect serialized objects for each target
-  SmallVector<Attribute> objects;
-
-  for (auto targetAttr : module.getTargetsAttr()) {
-    if (!targetAttr) {
-      return module.emitError("Target attribute cannot be null");
-    }
-
-    auto target = dyn_cast<gpu::TargetAttrInterface>(targetAttr);
-    if (!target) {
-      return module.emitError(
-          "Target attribute doesn't implement TargetAttrInterface");
-    }
-
-    // Build target options
-    SmallVector<Attribute> librariesToLink;
-    for (const std::string &path : linkFiles) {
-      librariesToLink.push_back(StringAttr::get(&getContext(), path));
-    }
-
-    // Create lazy symbol table builder
-    std::optional<SymbolTable> parentTable;
-    auto lazyTableBuilder = [&]() -> SymbolTable * {
-      if (!parentTable) {
-        Operation *table = SymbolTable::getNearestSymbolTable(module);
-        if (!table)
-          return nullptr;
-        parentTable = SymbolTable(table);
-      }
-      return &parentTable.value();
-    };
-
-    TargetOptions targetOptions(toolkitPath, librariesToLink, cmdOptions,
-                                /*elfSection=*/"", CompilationTarget::Binary,
-                                lazyTableBuilder);
-
-    // Serialize the module to binary
-    std::optional<SmallVector<char, 0>> serializedModule =
-        target.serializeToObject(module, targetOptions);
-
-    if (!serializedModule) {
-      return module.emitError("Failed to serialize module to object");
-    }
-
-    // Create object attribute
-    Attribute object =
-        target.createObject(module, *serializedModule, targetOptions);
-    if (!object) {
-      return module.emitError("Failed to create object attribute");
-    }
-
-    objects.push_back(object);
+  // For now, we only support ROCDL targets
+  auto rocdlTarget =
+      dyn_cast_or_null<ROCDL::ROCDLTargetAttr>(module.getTargetsAttr()[0]);
+  if (!rocdlTarget) {
+    return module.emitError("Only ROCDL targets are currently supported");
   }
+
+  // Step 1: Translate GPU module to LLVM IR
+  llvm::LLVMContext llvmContext;
+  std::unique_ptr<llvm::Module> llvmModule =
+      translateModuleToLLVMIR(module, llvmContext);
+
+  if (!llvmModule) {
+    return module.emitError("Failed to translate GPU module to LLVM IR");
+  }
+
+  // TODO: Step 2: Link device libraries
+  // TODO: Step 3: Optimize LLVM IR
+  // TODO: Step 4: Compile to ISA
+  // TODO: Step 5: Assemble to binary
+
+  // For now, just create a placeholder binary
+  SmallVector<char, 0> binaryData;
+
+  // Create object attribute
+  Builder attrBuilder(module.getContext());
+  StringAttr binaryAttr = attrBuilder.getStringAttr(
+      StringRef(binaryData.data(), binaryData.size()));
+
+  DictionaryAttr properties{};
+  gpu::KernelTableAttr kernels;
+
+  Attribute objectAttr = attrBuilder.getAttr<gpu::ObjectAttr>(
+      rocdlTarget, gpu::CompilationTarget::Binary, binaryAttr, properties,
+      kernels);
 
   // Create gpu.binary op
   builder.setInsertionPointAfter(module);
   gpu::BinaryOp::create(builder, module.getLoc(), module.getName(),
                         /*offloadingHandler=*/nullptr,
-                        builder.getArrayAttr(objects));
+                        builder.getArrayAttr({objectAttr}));
 
   // Erase the original module
   module->erase();
