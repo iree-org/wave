@@ -24,6 +24,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
@@ -69,6 +70,13 @@ private:
   LogicalResult dumpText(StringRef text, StringRef modName, StringRef suffix);
   LogicalResult dumpBinary(ArrayRef<char> data, StringRef modName,
                            StringRef suffix);
+
+  // Override helpers
+  FailureOr<std::unique_ptr<llvm::Module>>
+  tryLoadOverrideLLVM(llvm::LLVMContext &context, StringRef modName,
+                      StringRef suffix);
+  FailureOr<std::optional<std::string>> tryLoadOverrideText(StringRef modName,
+                                                            StringRef suffix);
 };
 } // namespace
 
@@ -96,8 +104,22 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   if (!llvmModule)
     return mod.emitError("Failed to translate GPU module to LLVM IR");
 
-  // Dump original LLVM IR
-  if (failed(dumpLLVMModule(*llvmModule, mod.getName(), "_original")))
+  auto dumpAndOverrideLLVM = [&](StringRef suffix) -> LogicalResult {
+    StringRef modName = mod.getName();
+    if (failed(dumpLLVMModule(*llvmModule, modName, suffix)))
+      return failure();
+
+    auto overrideLLVM = tryLoadOverrideLLVM(llvmContext, modName, suffix);
+    if (failed(overrideLLVM))
+      return failure();
+
+    if (*overrideLLVM)
+      llvmModule = std::move(*overrideLLVM);
+
+    return success();
+  };
+  // Dump/override original LLVM IR
+  if (failed(dumpAndOverrideLLVM("_original")))
     return failure();
 
   // Step 2: Load and link device libraries
@@ -112,8 +134,8 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   if (failed(linkBitcodeFiles(*llvmModule, std::move(bitcodeLibs))))
     return mod.emitError("Failed to link bitcode libraries");
 
-  // Dump linked LLVM IR
-  if (failed(dumpLLVMModule(*llvmModule, mod.getName(), "_linked")))
+  // Dump/override linked LLVM IR
+  if (failed(dumpAndOverrideLLVM("_linked")))
     return failure();
 
   // Step 3: Create target machine and set data layout
@@ -131,7 +153,7 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
     return mod.emitError("Failed to optimize LLVM IR");
 
   // Dump optimized LLVM IR
-  if (failed(dumpLLVMModule(*llvmModule, mod.getName(), "_optimized")))
+  if (failed(dumpAndOverrideLLVM("_optimized")))
     return failure();
 
   // Step 5: Compile to ISA
@@ -139,8 +161,23 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   if (failed(isa))
     return mod.emitError("Failed to compile to ISA");
 
-  // Dump ISA
-  if (failed(dumpText(*isa, mod.getName(), ".s")))
+  auto dumpAndOverrideISA = [&](StringRef suffix) -> LogicalResult {
+    StringRef modName = mod.getName();
+    if (failed(dumpText(*isa, modName, suffix)))
+      return failure();
+
+    auto overrideISA = tryLoadOverrideText(modName, suffix);
+    if (failed(overrideISA))
+      return failure();
+
+    if (*overrideISA)
+      isa = std::move(**overrideISA);
+
+    return success();
+  };
+
+  // Dump/override ISA
+  if (failed(dumpAndOverrideISA(".s")))
     return failure();
 
   // Step 6: Assemble to binary
@@ -350,6 +387,51 @@ LogicalResult WaterGPUModuleToBinaryPass::dumpBinary(ArrayRef<char> data,
   outputFile.os().write(data.data(), data.size());
   outputFile.keep();
   return success();
+}
+
+FailureOr<std::unique_ptr<llvm::Module>>
+WaterGPUModuleToBinaryPass::tryLoadOverrideLLVM(llvm::LLVMContext &context,
+                                                StringRef modName,
+                                                StringRef suffix) {
+  if (overrideIntermediates.empty())
+    return std::unique_ptr<llvm::Module>(nullptr);
+
+  SmallString<128> path(overrideIntermediates);
+  llvm::sys::path::append(path, modName + suffix + ".ll");
+
+  if (!llvm::sys::fs::exists(path))
+    return std::unique_ptr<llvm::Module>(nullptr);
+
+  llvm::SMDiagnostic error;
+  std::unique_ptr<llvm::Module> module =
+      llvm::parseIRFile(path, error, context);
+  if (!module)
+    return getOperation()->emitError()
+           << "Failed to load override LLVM IR from " << path << ": "
+           << error.getMessage();
+
+  return module;
+}
+
+FailureOr<std::optional<std::string>>
+WaterGPUModuleToBinaryPass::tryLoadOverrideText(StringRef modName,
+                                                StringRef suffix) {
+  if (overrideIntermediates.empty())
+    return std::optional<std::string>(std::nullopt);
+
+  SmallString<128> path(overrideIntermediates);
+  llvm::sys::path::append(path, modName + suffix);
+
+  if (!llvm::sys::fs::exists(path))
+    return std::optional<std::string>(std::nullopt);
+
+  auto bufferOrError = llvm::MemoryBuffer::getFile(path);
+  if (!bufferOrError)
+    return getOperation()->emitError()
+           << "Failed to load override file from " << path << ": "
+           << bufferOrError.getError().message();
+
+  return std::optional<std::string>(bufferOrError.get()->getBuffer().str());
 }
 
 void WaterGPUModuleToBinaryPass::runOnOperation() {

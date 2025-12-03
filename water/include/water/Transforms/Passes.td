@@ -131,6 +131,8 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
            "Command line options to pass to the compilation tools.">,
     Option<"dumpIntermediates", "dump-intermediates", "std::string", [{""}],
            "Directory to dump intermediate compilation files (LLVM IR, ISA).">,
+    Option<"overrideIntermediates", "override-intermediates", "std::string", [{""}],
+           "Directory containing intermediate files to use instead of generating them.">,
   ];
 }
 
