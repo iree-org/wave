@@ -131,11 +131,11 @@ class GemmScheduler(BaseScheduler):
         local_writes = dict()
         for local_load in local_loads:
             custom = get_custom(local_load)
-            cur_writes = {
-                w: None
+            cur_writes = dict.fromkeys(
+                w
                 for w in custom.memory.users
                 if isinstance(get_custom(w), Write) and w.graph == custom.graph
-            }
+            )
             local_writes.update(cur_writes)
         return local_writes.keys()
 
@@ -144,13 +144,13 @@ class GemmScheduler(BaseScheduler):
         for local_load in local_loads:
             custom = get_custom(local_load)
             # Get direct users and users from rotated registers.
-            memory_users = {g: None for g in custom.memory.users}
+            memory_users = dict.fromkeys(g for g in custom.memory.users)
             # Filter users for GatherToLDS
-            cur_gathers = {
-                g: None
+            cur_gathers = dict.fromkeys(
+                g
                 for g in memory_users
                 if isinstance(get_custom(g), GatherToLDS) and g.graph == custom.graph
-            }
+            )
             lds_gathers.update(cur_gathers)
         return lds_gathers.keys()
 
