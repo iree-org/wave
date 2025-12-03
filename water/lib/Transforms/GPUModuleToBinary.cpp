@@ -104,6 +104,15 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   if (!llvmModule)
     return mod.emitError("Failed to translate GPU module to LLVM IR");
 
+  // Create dump directory if specified
+  if (!dumpIntermediates.empty()) {
+    std::error_code ec = llvm::sys::fs::create_directories(dumpIntermediates);
+    if (ec)
+      return mod.emitError()
+             << "Failed to create dump directory: " << dumpIntermediates << ": "
+             << ec.message();
+  }
+
   auto dumpAndOverrideLLVM = [&](StringRef suffix) -> LogicalResult {
     StringRef modName = mod.getName();
     if (failed(dumpLLVMModule(*llvmModule, modName, suffix)))
