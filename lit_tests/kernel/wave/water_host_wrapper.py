@@ -122,13 +122,13 @@ def test_scalars():
 
     @tkw.wave(constraints)
     def scalars(
-        b: tkl.f16,
+        b: tkl.f32,  # TODO: cannot pass tkl.f16 yet as we need to link compiler-rt into execution engine
         c: tkl.i32,
         d: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
     ):
         b = tkw.broadcast(b, target_shape=[M, N])
         c = tkw.broadcast(c, target_shape=[M, N])
-        res = b + tkw.cast(c, tkl.f16)
+        res = tkw.cast(b, tkl.f16) + tkw.cast(c, tkl.f16)
         tkw.write(res, d)
 
     scalars = wave_compile(get_wave_compile_options(canonicalize=True), scalars)
@@ -143,10 +143,10 @@ def test_scalars():
     # CHECK:            %[[BUF:.*]] = call @wave_get_buffer(%[[ARG3]]) : (!llvm.ptr) -> memref<?xi8>
     # CHECK:            %[[VIEW:.*]] = memref.view %[[BUF]][%[[C0]]][] : memref<?xi8> to memref<f16>
     # CHECK:            %[[F64:.*]] = call @wave_get_float64(%[[ARG1]]) : (!llvm.ptr) -> f64
-    # CHECK:            %[[F16:.*]] = arith.truncf %[[F64]] : f64 to f16
+    # CHECK:            %[[F32:.*]] = arith.truncf %[[F64]] : f64 to f32
     # CHECK:            %[[I64:.*]] = call @wave_get_int64(%[[ARG2]]) : (!llvm.ptr) -> i64
     # CHECK:            %[[I32:.*]] = arith.trunci %[[I64]] : i64 to i32
-    # CHECK:            gpu.launch_func @gpu_module::@scalars blocks in (%[[C1]], %[[C1]], %[[C1]]) threads in (%[[C64]], %[[C1]], %[[C1]]) args(%[[VIEW]] : memref<f16>, %[[F16]] : f16, %[[I32]] : i32)
+    # CHECK:            gpu.launch_func @gpu_module::@scalars blocks in (%[[C1]], %[[C1]], %[[C1]]) threads in (%[[C64]], %[[C1]], %[[C1]]) args(%[[VIEW]] : memref<f16>, %[[F32]] : f32, %[[I32]] : i32)
     # CHECK:            return
 
 
