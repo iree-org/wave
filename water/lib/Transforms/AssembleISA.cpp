@@ -50,7 +50,7 @@ assembleISAToHSACO(Operation *op, StringRef isa,
                    llvm::TargetMachine &targetMachine, StringRef toolkitPath) {
   initializeAMDGPUTarget();
 
-  // Step 1: Assemble ISA to object file using MC infrastructure
+  // Step 1: Assemble ISA to object file using MC infrastructure.
   llvm::Triple triple = targetMachine.getTargetTriple();
   std::string error;
   const llvm::Target *target =
@@ -58,7 +58,7 @@ assembleISAToHSACO(Operation *op, StringRef isa,
   if (!target)
     return op->emitError() << "Failed to lookup target: " << error;
 
-  // Set up MC infrastructure
+  // Set up MC infrastructure.
   llvm::SourceMgr srcMgr;
   srcMgr.AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(isa),
                             llvm::SMLoc());
@@ -99,8 +99,8 @@ assembleISAToHSACO(Operation *op, StringRef isa,
   parser->setTargetParser(*tap);
   parser->Run(false);
 
-  // Step 2: Link object file to create HSACO
-  // Write object to temporary file
+  // Step 2: Link object file to create HSACO.
+  // Write object to temporary file.
   int tempObjFd = -1;
   SmallString<128> tempObjFilename;
   if (llvm::sys::fs::createTemporaryFile("kernel%%", "o", tempObjFd,
@@ -114,14 +114,14 @@ assembleISAToHSACO(Operation *op, StringRef isa,
     tempObjOs.flush();
   }
 
-  // Create temporary file for HSACO
+  // Create temporary file for HSACO.
   SmallString<128> tempHsacoFilename;
   if (llvm::sys::fs::createTemporaryFile("kernel", "hsaco", tempHsacoFilename))
     return op->emitError("Failed to create temporary file for HSACO");
 
   llvm::FileRemover cleanupHsaco(tempHsacoFilename);
 
-  // Link using ld.lld
+  // Link using ld.lld.
   SmallString<128> lldPath(toolkitPath);
   llvm::sys::path::append(lldPath, "llvm", "bin", "ld.lld");
   int lldResult = llvm::sys::ExecuteAndWait(
@@ -129,7 +129,7 @@ assembleISAToHSACO(Operation *op, StringRef isa,
   if (lldResult != 0)
     return op->emitError("ld.lld invocation failed");
 
-  // Read HSACO file
+  // Read HSACO file.
   auto hsacoFile =
       llvm::MemoryBuffer::getFile(tempHsacoFilename, /*IsText=*/false);
   if (!hsacoFile)

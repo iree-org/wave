@@ -81,22 +81,20 @@ private:
 } // namespace
 
 LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
-  OpBuilder builder(mod->getContext());
-
-  // Check if module has target attributes
+  // Check if module has target attributes.
   if (!mod.getTargetsAttr() || mod.getTargetsAttr().empty())
     return mod.emitError("GPU module has no target attributes");
 
-  // Check that there is exactly one target
+  // Check that there is exactly one target.
   if (mod.getTargetsAttr().size() != 1)
     return mod.emitError("GPU module must have exactly one target attribute");
 
-  // Get the target attribute
+  // Get the target attribute.
   Attribute targetAttr = mod.getTargetsAttr()[0];
   if (!targetAttr)
     return mod.emitError("Target attribute cannot be null");
 
-  // Step 1: Translate GPU module to LLVM IR
+  // Step 1: Translate GPU module to LLVM IR.
   llvm::LLVMContext llvmContext;
   std::unique_ptr<llvm::Module> llvmModule =
       translateModuleToLLVMIR(mod, llvmContext);
@@ -104,7 +102,7 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   if (!llvmModule)
     return mod.emitError("Failed to translate GPU module to LLVM IR");
 
-  // Create dump directory if specified
+  // Create dump directory if specified.
   if (!dumpIntermediates.empty()) {
     std::error_code ec = llvm::sys::fs::create_directories(dumpIntermediates);
     if (ec)
@@ -127,11 +125,11 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
 
     return success();
   };
-  // Dump/override original LLVM IR
+  // Dump/override original LLVM IR.
   if (failed(dumpAndOverrideLLVM("_original")))
     return failure();
 
-  // Step 2: Load and link device libraries
+  // Step 2: Load and link device libraries.
   SmallVector<std::unique_ptr<llvm::Module>> bitcodeLibs;
   for (const std::string &path : linkFiles) {
     auto lib = loadBitcodeFile(llvmContext, path);
@@ -143,29 +141,29 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   if (failed(linkBitcodeFiles(*llvmModule, std::move(bitcodeLibs))))
     return mod.emitError("Failed to link bitcode libraries");
 
-  // Dump/override linked LLVM IR
+  // Dump/override linked LLVM IR.
   if (failed(dumpAndOverrideLLVM("_linked")))
     return failure();
 
-  // Step 3: Create target machine and set data layout
+  // Step 3: Create target machine and set data layout.
   FailureOr<llvm::TargetMachine *> targetMachine =
       createTargetMachine(targetAttr);
   if (failed(targetMachine))
     return mod.emitError("Failed to create target machine");
 
-  // Set the data layout and target triple to match the target machine
+  // Set the data layout and target triple to match the target machine.
   llvmModule->setDataLayout((*targetMachine)->createDataLayout());
   llvmModule->setTargetTriple((*targetMachine)->getTargetTriple());
 
-  // Step 4: Optimize LLVM IR
+  // Step 4: Optimize LLVM IR.
   if (failed(optimizeModule(*llvmModule, *targetMachine)))
     return mod.emitError("Failed to optimize LLVM IR");
 
-  // Dump optimized LLVM IR
+  // Dump optimized LLVM IR.
   if (failed(dumpAndOverrideLLVM("_optimized")))
     return failure();
 
-  // Step 5: Compile to ISA
+  // Step 5: Compile to ISA.
   FailureOr<std::string> isa = compileToISA(*llvmModule, **targetMachine);
   if (failed(isa))
     return mod.emitError("Failed to compile to ISA");
@@ -185,12 +183,12 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
     return success();
   };
 
-  // Dump/override ISA
+  // Dump/override ISA.
   if (failed(dumpAndOverrideISA(".s")))
     return failure();
 
-  // Step 6: Assemble to binary
-  // Use ROCM_PATH environment variable if toolkitPath is not provided
+  // Step 6: Assemble to binary.
+  // Use ROCM_PATH environment variable if toolkitPath is not provided.
   StringRef actualToolkitPath = toolkitPath;
   if (actualToolkitPath.empty())
     actualToolkitPath = ROCDL::getROCMPath();
@@ -202,11 +200,11 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
 
   SmallVector<char, 0> binaryData = std::move(*binary);
 
-  // Dump HSACO binary
+  // Dump HSACO binary.
   if (failed(dumpBinary(binaryData, mod.getName(), ".hsaco")))
     return failure();
 
-  // Create object attribute
+  // Create object attribute.
   Builder attrBuilder(mod.getContext());
   StringAttr binaryAttr = attrBuilder.getStringAttr(
       StringRef(binaryData.data(), binaryData.size()));
@@ -218,13 +216,14 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
       targetAttr, gpu::CompilationTarget::Binary, binaryAttr, properties,
       kernels);
 
-  // Create gpu.binary op
+  // Create gpu.binary op.
+  OpBuilder builder(mod.getContext());
   builder.setInsertionPointAfter(mod);
   gpu::BinaryOp::create(builder, mod.getLoc(), mod.getName(),
                         /*offloadingHandler=*/nullptr,
                         builder.getArrayAttr({objectAttr}));
 
-  // Erase the original module
+  // Erase the original module.
   mod->erase();
   return success();
 }
@@ -250,7 +249,7 @@ LogicalResult WaterGPUModuleToBinaryPass::linkBitcodeFiles(
 
   llvm::Linker linker(mod);
   for (std::unique_ptr<llvm::Module> &libModule : libs) {
-    // Link the library, importing only needed symbols
+    // Link the library, importing only needed symbols.
     bool err = linker.linkInModule(
         std::move(libModule), llvm::Linker::Flags::LinkOnlyNeeded,
         [](llvm::Module &m, const StringSet<> &gvs) {
@@ -271,7 +270,6 @@ FailureOr<llvm::TargetMachine *>
 WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
   water::initializeAMDGPUTarget();
 
-  // Check if this is a ROCDL target
   auto rocdlTarget = dyn_cast<ROCDL::ROCDLTargetAttr>(targetAttr);
   if (!rocdlTarget)
     return getOperation()->emitError(
@@ -293,7 +291,7 @@ WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
   if (!targetMachine)
     return getOperation()->emitError("Failed to create target machine");
 
-  // Set optimization level from target attribute
+  // Set optimization level from target attribute.
   targetMachine->setOptLevel(
       static_cast<llvm::CodeGenOptLevel>(rocdlTarget.getO()));
 
@@ -303,7 +301,7 @@ WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
 LogicalResult
 WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &mod,
                                            llvm::TargetMachine *targetMachine) {
-  // Get optimization level from target machine
+  // Get optimization level from target machine.
   int optLevel = static_cast<int>(targetMachine->getOptLevel());
 
   auto transformer =
@@ -444,10 +442,10 @@ WaterGPUModuleToBinaryPass::tryLoadOverrideText(StringRef modName,
 }
 
 void WaterGPUModuleToBinaryPass::runOnOperation() {
-  // Walk all regions and blocks looking for GPUModuleOp instances
+  // Walk all regions and blocks looking for GPUModuleOp instances.
   for (Region &region : getOperation()->getRegions()) {
     for (Block &block : region.getBlocks()) {
-      // Use early_inc_range since we're erasing modules during iteration
+      // Use early_inc_range since we're erasing modules during iteration.
       for (auto module :
            llvm::make_early_inc_range(block.getOps<GPUModuleOp>())) {
         if (failed(serializeModule(module)))
