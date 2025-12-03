@@ -57,6 +57,24 @@ NB_MODULE(wave_execution_engine, m) {
               &wave::ExecutionEngineOptions::enablePerfNotificationListener,
               "Enable Perf notification listener")
       .def(
+          "set_jit_code_gen_opt_level",
+          [](wave::ExecutionEngineOptions &self, int level) {
+            if (level < 0 || level > 3) {
+              throw std::invalid_argument(
+                  "Optimization level must be 0-3 (0=None, 1=Less, 2=Default, "
+                  "3=Aggressive)");
+            }
+            self.jitCodeGenOptLevel = static_cast<llvm::CodeGenOptLevel>(level);
+          },
+          nb::arg("level"),
+          R"(Set JIT code generation optimization level.
+
+Args:
+    level: Optimization level (0=None/O0, 1=Less/O1, 2=Default/O2, 3=Aggressive/O3)
+
+Raises:
+    ValueError: If level is not in range 0-3)")
+      .def(
           "set_symbol_map",
           [](wave::ExecutionEngineOptions &self,
              const std::map<std::string, uintptr_t> &symbols) {
