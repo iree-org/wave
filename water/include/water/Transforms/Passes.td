@@ -127,8 +127,6 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
            "Toolkit path.">,
     ListOption<"linkFiles", "l", "std::string",
            "Extra bitcode files to link to.">,
-    Option<"cmdOptions", "opts", "std::string", [{""}],
-           "Command line options to pass to the compilation tools.">,
     Option<"dumpIntermediates", "dump-intermediates", "std::string", [{""}],
            "Directory to dump intermediate compilation files (LLVM IR, ISA).">,
     Option<"overrideIntermediates", "override-intermediates", "std::string", [{""}],
