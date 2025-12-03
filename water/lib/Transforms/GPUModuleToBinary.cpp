@@ -15,11 +15,13 @@
 #include "mlir/Target/LLVMIR/Export.h"
 
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 
@@ -52,6 +54,10 @@ private:
   createTargetMachine(Attribute targetAttr);
   LogicalResult optimizeModule(llvm::Module &mod,
                                llvm::TargetMachine *targetMachine);
+  std::optional<std::string> compileToISA(llvm::Module &mod,
+                                          llvm::TargetMachine &targetMachine);
+  std::optional<SmallVector<char, 0>>
+  assembleToObject(StringRef isa, llvm::TargetMachine &targetMachine);
 };
 } // namespace
 
@@ -100,11 +106,18 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   if (failed(optimizeModule(*llvmModule, *targetMachine)))
     return module.emitError("Failed to optimize LLVM IR");
 
-  // TODO: Step 4: Compile to ISA
-  // TODO: Step 5: Assemble to binary
+  // Step 4: Compile to ISA
+  std::optional<std::string> isa = compileToISA(*llvmModule, **targetMachine);
+  if (!isa)
+    return module.emitError("Failed to compile to ISA");
 
-  // For now, just create a placeholder binary
-  SmallVector<char, 0> binaryData;
+  // Step 5: Assemble to binary
+  std::optional<SmallVector<char, 0>> binary =
+      assembleToObject(*isa, **targetMachine);
+  if (!binary)
+    return module.emitError("Failed to assemble to binary");
+
+  SmallVector<char, 0> binaryData = std::move(*binary);
 
   // Create object attribute
   Builder attrBuilder(module.getContext());
@@ -218,6 +231,50 @@ WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &mod,
     return failure();
   }
   return success();
+}
+
+std::optional<std::string>
+WaterGPUModuleToBinaryPass::compileToISA(llvm::Module &mod,
+                                         llvm::TargetMachine &targetMachine) {
+  SmallVector<char, 0> isaBuffer;
+  llvm::raw_svector_ostream stream(isaBuffer);
+
+  llvm::legacy::PassManager codegen;
+  if (targetMachine.addPassesToEmitFile(codegen, stream, nullptr,
+                                        llvm::CodeGenFileType::AssemblyFile)) {
+    getOperation()->emitError("Target machine cannot emit assembly");
+    return std::nullopt;
+  }
+
+  codegen.run(mod);
+  return std::string(isaBuffer.begin(), isaBuffer.end());
+}
+
+std::optional<SmallVector<char, 0>>
+WaterGPUModuleToBinaryPass::assembleToObject(
+    StringRef isa, llvm::TargetMachine &targetMachine) {
+  // For now, just compile optimized module to object file
+  // TODO: Parse ISA and assemble properly, then link with ld.lld to create
+  // HSACO
+
+  SmallVector<char, 0> objectBuffer;
+  llvm::raw_svector_ostream stream(objectBuffer);
+
+  llvm::legacy::PassManager codegen;
+
+  // Create a temporary module to compile
+  llvm::LLVMContext context;
+  auto mod = std::make_unique<llvm::Module>("isa_module", context);
+
+  if (targetMachine.addPassesToEmitFile(codegen, stream, nullptr,
+                                        llvm::CodeGenFileType::ObjectFile)) {
+    getOperation()->emitError("Target machine cannot emit object file");
+    return std::nullopt;
+  }
+
+  codegen.run(*mod);
+
+  return objectBuffer;
 }
 
 void WaterGPUModuleToBinaryPass::runOnOperation() {
