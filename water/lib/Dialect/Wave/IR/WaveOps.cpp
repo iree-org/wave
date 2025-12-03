@@ -138,9 +138,8 @@ void wave::IterateOp::makeIsolated(mlir::RewriterBase &rewriter) {
   });
 
   // Capture values defined above.
-  llvm::SmallVector<mlir::Location> newCaptureLocs =
-      llvm::map_to_vector(captures.getArrayRef(),
-                          [&](mlir::Value value) { return value.getLoc(); });
+  llvm::SmallVector<mlir::Location> newCaptureLocs = llvm::map_to_vector(
+      captures, [&](mlir::Value value) { return value.getLoc(); });
   rewriter.modifyOpInPlace(
       *this, [&] { getCapturesMutable().append(captures.getArrayRef()); });
 
@@ -163,10 +162,9 @@ void wave::IterateOp::makeIsolated(mlir::RewriterBase &rewriter) {
   // values.
   for (mlir::OpOperand *opOperand : captureOperands) {
     rewriter.modifyOpInPlace(opOperand->getOwner(), [&] {
-      auto capturesRef = captures.getArrayRef();
-      auto it = llvm::find(capturesRef, opOperand->get());
-      assert(it != capturesRef.end() && "expected capture to be found");
-      size_t position = std::distance(capturesRef.begin(), it);
+      auto it = llvm::find(captures, opOperand->get());
+      assert(it != captures.end() && "expected capture to be found");
+      size_t position = std::distance(captures.begin(), it);
       opOperand->set(innerValues[position]);
     });
   }
@@ -189,7 +187,7 @@ void wave::IterateOp::makeNonIsolated(mlir::RewriterBase &rewriter) {
   mlir::Block *originalBlock = getLoopBody();
   auto types =
       mlir::TypeRange(originalBlock->getArgumentTypes()).drop_back(numCaptures);
-  auto locations =
+  llvm::SmallVector<mlir::Location> locations =
       llvm::map_to_vector(originalBlock->getArguments().drop_back(numCaptures),
                           [](mlir::Value value) { return value.getLoc(); });
   mlir::Block *newBlock = rewriter.createBlock(getLoopBody(), types, locations);
