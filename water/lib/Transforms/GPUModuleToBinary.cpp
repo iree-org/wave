@@ -81,12 +81,8 @@ private:
 } // namespace
 
 LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
-  // Check if module has target attributes.
-  if (!mod.getTargetsAttr() || mod.getTargetsAttr().empty())
-    return mod.emitError("GPU module has no target attributes");
-
   // Check that there is exactly one target.
-  if (mod.getTargetsAttr().size() != 1)
+  if (!mod.getTargetsAttr() || mod.getTargetsAttr().size() != 1)
     return mod.emitError("GPU module must have exactly one target attribute");
 
   // Get the target attribute.

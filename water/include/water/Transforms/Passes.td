@@ -120,7 +120,7 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
     and serializes them to binary format, producing a GPU binary operation.
 
     This is a simplified version of the upstream gpu-module-to-binary pass,
-    tailored for the Water project. Currently supports ROCDL targets only.
+    tailored for the Wave project. Currently supports ROCDL targets only.
   }];
   let options = [
     Option<"toolkitPath", "toolkit", "std::string", [{""}],
