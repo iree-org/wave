@@ -313,7 +313,7 @@ class WaveKernelExecutionEngine:
     def __call__(self, *args):
         return self.invoke(*args)
 
-    def invoke(self, *args):
+    def invoke(self, *args) -> None:
         """
         Invokes the wave kernel with the given arguments using the ExecutionEngine.
         """
