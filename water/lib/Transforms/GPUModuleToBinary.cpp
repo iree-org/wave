@@ -49,7 +49,7 @@ public:
   void runOnOperation() final;
 
 private:
-  LogicalResult serializeModule(GPUModuleOp module);
+  LogicalResult serializeModule(GPUModuleOp mod);
 
   // Helper methods
   std::unique_ptr<llvm::Module> loadBitcodeFile(llvm::LLVMContext &context,
@@ -64,42 +64,40 @@ private:
                                       llvm::TargetMachine &targetMachine);
 
   // Dump helpers
-  LogicalResult dumpLLVMModule(llvm::Module &mod, StringRef moduleName,
+  LogicalResult dumpLLVMModule(llvm::Module &mod, StringRef modName,
                                StringRef suffix);
-  LogicalResult dumpText(StringRef text, StringRef moduleName,
-                         StringRef suffix);
-  LogicalResult dumpBinary(ArrayRef<char> data, StringRef moduleName,
+  LogicalResult dumpText(StringRef text, StringRef modName, StringRef suffix);
+  LogicalResult dumpBinary(ArrayRef<char> data, StringRef modName,
                            StringRef suffix);
 };
 } // namespace
 
-LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
-  OpBuilder builder(module->getContext());
+LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
+  OpBuilder builder(mod->getContext());
 
   // Check if module has target attributes
-  if (!module.getTargetsAttr() || module.getTargetsAttr().empty())
-    return module.emitError("GPU module has no target attributes");
+  if (!mod.getTargetsAttr() || mod.getTargetsAttr().empty())
+    return mod.emitError("GPU module has no target attributes");
 
   // Check that there is exactly one target
-  if (module.getTargetsAttr().size() != 1)
-    return module.emitError(
-        "GPU module must have exactly one target attribute");
+  if (mod.getTargetsAttr().size() != 1)
+    return mod.emitError("GPU module must have exactly one target attribute");
 
   // Get the target attribute
-  Attribute targetAttr = module.getTargetsAttr()[0];
+  Attribute targetAttr = mod.getTargetsAttr()[0];
   if (!targetAttr)
-    return module.emitError("Target attribute cannot be null");
+    return mod.emitError("Target attribute cannot be null");
 
   // Step 1: Translate GPU module to LLVM IR
   llvm::LLVMContext llvmContext;
   std::unique_ptr<llvm::Module> llvmModule =
-      translateModuleToLLVMIR(module, llvmContext);
+      translateModuleToLLVMIR(mod, llvmContext);
 
   if (!llvmModule)
-    return module.emitError("Failed to translate GPU module to LLVM IR");
+    return mod.emitError("Failed to translate GPU module to LLVM IR");
 
   // Dump original LLVM IR
-  if (failed(dumpLLVMModule(*llvmModule, module.getName(), "_original")))
+  if (failed(dumpLLVMModule(*llvmModule, mod.getName(), "_original")))
     return failure();
 
   // Step 2: Load and link device libraries
@@ -107,22 +105,22 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   for (const std::string &path : linkFiles) {
     auto lib = loadBitcodeFile(llvmContext, path);
     if (!lib)
-      return module.emitError("Failed to load bitcode file: " + path);
+      return mod.emitError("Failed to load bitcode file: " + path);
     bitcodeLibs.push_back(std::move(lib));
   }
 
   if (failed(linkBitcodeFiles(*llvmModule, std::move(bitcodeLibs))))
-    return module.emitError("Failed to link bitcode libraries");
+    return mod.emitError("Failed to link bitcode libraries");
 
   // Dump linked LLVM IR
-  if (failed(dumpLLVMModule(*llvmModule, module.getName(), "_linked")))
+  if (failed(dumpLLVMModule(*llvmModule, mod.getName(), "_linked")))
     return failure();
 
   // Step 3: Create target machine and set data layout
   FailureOr<llvm::TargetMachine *> targetMachine =
       createTargetMachine(targetAttr);
   if (failed(targetMachine))
-    return module.emitError("Failed to create target machine");
+    return mod.emitError("Failed to create target machine");
 
   // Set the data layout and target triple to match the target machine
   llvmModule->setDataLayout((*targetMachine)->createDataLayout());
@@ -130,19 +128,19 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
 
   // Step 4: Optimize LLVM IR
   if (failed(optimizeModule(*llvmModule, *targetMachine)))
-    return module.emitError("Failed to optimize LLVM IR");
+    return mod.emitError("Failed to optimize LLVM IR");
 
   // Dump optimized LLVM IR
-  if (failed(dumpLLVMModule(*llvmModule, module.getName(), "_optimized")))
+  if (failed(dumpLLVMModule(*llvmModule, mod.getName(), "_optimized")))
     return failure();
 
   // Step 5: Compile to ISA
   FailureOr<std::string> isa = compileToISA(*llvmModule, **targetMachine);
   if (failed(isa))
-    return module.emitError("Failed to compile to ISA");
+    return mod.emitError("Failed to compile to ISA");
 
   // Dump ISA
-  if (failed(dumpText(*isa, module.getName(), ".s")))
+  if (failed(dumpText(*isa, mod.getName(), ".s")))
     return failure();
 
   // Step 6: Assemble to binary
@@ -151,19 +149,19 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   if (actualToolkitPath.empty())
     actualToolkitPath = ROCDL::getROCMPath();
 
-  FailureOr<SmallVector<char, 0>> binary = water::assembleISAToHSACO(
-      module, *isa, **targetMachine, actualToolkitPath);
+  FailureOr<SmallVector<char, 0>> binary =
+      water::assembleISAToHSACO(mod, *isa, **targetMachine, actualToolkitPath);
   if (failed(binary))
-    return module.emitError("Failed to assemble to binary");
+    return mod.emitError("Failed to assemble to binary");
 
   SmallVector<char, 0> binaryData = std::move(*binary);
 
   // Dump HSACO binary
-  if (failed(dumpBinary(binaryData, module.getName(), ".hsaco")))
+  if (failed(dumpBinary(binaryData, mod.getName(), ".hsaco")))
     return failure();
 
   // Create object attribute
-  Builder attrBuilder(module.getContext());
+  Builder attrBuilder(mod.getContext());
   StringAttr binaryAttr = attrBuilder.getStringAttr(
       StringRef(binaryData.data(), binaryData.size()));
 
@@ -175,13 +173,13 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
       kernels);
 
   // Create gpu.binary op
-  builder.setInsertionPointAfter(module);
-  gpu::BinaryOp::create(builder, module.getLoc(), module.getName(),
+  builder.setInsertionPointAfter(mod);
+  gpu::BinaryOp::create(builder, mod.getLoc(), mod.getName(),
                         /*offloadingHandler=*/nullptr,
                         builder.getArrayAttr({objectAttr}));
 
   // Erase the original module
-  module->erase();
+  mod->erase();
   return success();
 }
 
@@ -292,13 +290,13 @@ WaterGPUModuleToBinaryPass::compileToISA(llvm::Module &mod,
 }
 
 LogicalResult WaterGPUModuleToBinaryPass::dumpLLVMModule(llvm::Module &mod,
-                                                         StringRef moduleName,
+                                                         StringRef modName,
                                                          StringRef suffix) {
   if (dumpIntermediates.empty())
     return success();
 
   SmallString<128> path(dumpIntermediates);
-  llvm::sys::path::append(path, moduleName + suffix + ".ll");
+  llvm::sys::path::append(path, modName + suffix + ".ll");
 
   std::error_code ec;
   llvm::ToolOutputFile outputFile(path, ec, llvm::sys::fs::OF_None);
@@ -313,13 +311,13 @@ LogicalResult WaterGPUModuleToBinaryPass::dumpLLVMModule(llvm::Module &mod,
 }
 
 LogicalResult WaterGPUModuleToBinaryPass::dumpText(StringRef text,
-                                                   StringRef moduleName,
+                                                   StringRef modName,
                                                    StringRef suffix) {
   if (dumpIntermediates.empty())
     return success();
 
   SmallString<128> path(dumpIntermediates);
-  llvm::sys::path::append(path, moduleName + suffix);
+  llvm::sys::path::append(path, modName + suffix);
 
   std::error_code ec;
   llvm::ToolOutputFile outputFile(path, ec, llvm::sys::fs::OF_None);
@@ -334,13 +332,13 @@ LogicalResult WaterGPUModuleToBinaryPass::dumpText(StringRef text,
 }
 
 LogicalResult WaterGPUModuleToBinaryPass::dumpBinary(ArrayRef<char> data,
-                                                     StringRef moduleName,
+                                                     StringRef modName,
                                                      StringRef suffix) {
   if (dumpIntermediates.empty())
     return success();
 
   SmallString<128> path(dumpIntermediates);
-  llvm::sys::path::append(path, moduleName + suffix);
+  llvm::sys::path::append(path, modName + suffix);
 
   std::error_code ec;
   llvm::ToolOutputFile outputFile(path, ec, llvm::sys::fs::OF_None);
