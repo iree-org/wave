@@ -5,6 +5,8 @@ set(LIBS
         ${conversion_libs}
         MLIRArithDialect
         MLIRGPUDialect
+        MLIRGPUToLLVMIRTranslation
+        MLIRLLVMToLLVMIRTranslation
         MLIROptLib
         MLIRROCDLDialect
         MLIRWaterTransforms
@@ -12,11 +14,6 @@ set(LIBS
 
         MLIRWaterTestTransforms
         MLIRWaterTestDialect
-
-        MLIRRegisterAllDialects
-        MLIRRegisterAllExtensions
-        MLIRRegisterAllPasses
-        MLIRToLLVMIRTranslationRegistration
 )
 
 add_llvm_executable(water-opt
