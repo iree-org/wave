@@ -120,9 +120,9 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
 
   // Step 6: Assemble to binary
   // Use ROCM_PATH environment variable if toolkitPath is not provided
-  std::string actualToolkitPath = toolkitPath;
+  StringRef actualToolkitPath = toolkitPath;
   if (actualToolkitPath.empty())
-    actualToolkitPath = ROCDL::getROCMPath().str();
+    actualToolkitPath = ROCDL::getROCMPath();
 
   FailureOr<SmallVector<char, 0>> binary = water::assembleISAToHSACO(
       module, *isa, **targetMachine, actualToolkitPath);
