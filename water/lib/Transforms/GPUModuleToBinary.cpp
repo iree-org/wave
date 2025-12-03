@@ -14,6 +14,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Target/LLVM/ROCDL/Utils.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
 #include "llvm/IR/LLVMContext.h"
@@ -23,6 +24,7 @@
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/Internalize.h"
@@ -97,23 +99,33 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp module) {
   if (failed(linkBitcodeFiles(*llvmModule, std::move(bitcodeLibs))))
     return module.emitError("Failed to link bitcode libraries");
 
-  // Step 3: Optimize LLVM IR
+  // Step 3: Create target machine and set data layout
   FailureOr<llvm::TargetMachine *> targetMachine =
       createTargetMachine(targetAttr);
   if (failed(targetMachine))
     return module.emitError("Failed to create target machine");
 
+  // Set the data layout and target triple to match the target machine
+  llvmModule->setDataLayout((*targetMachine)->createDataLayout());
+  llvmModule->setTargetTriple((*targetMachine)->getTargetTriple());
+
+  // Step 4: Optimize LLVM IR
   if (failed(optimizeModule(*llvmModule, *targetMachine)))
     return module.emitError("Failed to optimize LLVM IR");
 
-  // Step 4: Compile to ISA
+  // Step 5: Compile to ISA
   FailureOr<std::string> isa = compileToISA(*llvmModule, **targetMachine);
   if (failed(isa))
     return module.emitError("Failed to compile to ISA");
 
-  // Step 5: Assemble to binary
-  FailureOr<SmallVector<char, 0>> binary =
-      water::assembleISAToHSACO(module, *isa, **targetMachine, toolkitPath);
+  // Step 6: Assemble to binary
+  // Use ROCM_PATH environment variable if toolkitPath is not provided
+  std::string actualToolkitPath = toolkitPath;
+  if (actualToolkitPath.empty())
+    actualToolkitPath = ROCDL::getROCMPath().str();
+
+  FailureOr<SmallVector<char, 0>> binary = water::assembleISAToHSACO(
+      module, *isa, **targetMachine, actualToolkitPath);
   if (failed(binary))
     return module.emitError("Failed to assemble to binary");
 
@@ -182,6 +194,8 @@ LogicalResult WaterGPUModuleToBinaryPass::linkBitcodeFiles(
 
 FailureOr<llvm::TargetMachine *>
 WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
+  water::initializeAMDGPUTarget();
+
   // Check if this is a ROCDL target
   auto rocdlTarget = dyn_cast<ROCDL::ROCDLTargetAttr>(targetAttr);
   if (!rocdlTarget)

@@ -25,6 +25,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -32,9 +33,23 @@ using namespace mlir;
 
 namespace mlir::water {
 
+void initializeAMDGPUTarget() {
+  static bool initialized = []() {
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUAsmParser();
+    LLVMInitializeAMDGPUAsmPrinter();
+    return true;
+  }();
+  (void)initialized;
+}
+
 FailureOr<SmallVector<char, 0>>
 assembleISAToHSACO(Operation *op, StringRef isa,
                    llvm::TargetMachine &targetMachine, StringRef toolkitPath) {
+  initializeAMDGPUTarget();
+
   // Step 1: Assemble ISA to object file using MC infrastructure
   llvm::Triple triple = targetMachine.getTargetTriple();
   std::string error;

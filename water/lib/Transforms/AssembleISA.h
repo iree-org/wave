@@ -18,6 +18,9 @@ class TargetMachine;
 
 namespace mlir::water {
 
+/// Initializes the LLVM AMDGPU target. Safe to call multiple times.
+void initializeAMDGPUTarget();
+
 /// Assembles ISA (assembly code) to HSACO (HSA Code Object) binary.
 ///
 /// This function:
