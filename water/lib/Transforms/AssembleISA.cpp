@@ -97,7 +97,8 @@ assembleISAToHSACO(Operation *op, StringRef isa,
     return op->emitError("Assembler initialization error");
 
   parser->setTargetParser(*tap);
-  parser->Run(false);
+  if (parser->Run(false))
+    return op->emitError("Assembly parsing failed");
 
   // Step 2: Link object file to create HSACO.
   // Write object to temporary file.

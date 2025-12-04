@@ -17,6 +17,7 @@
 #include "mlir/Target/LLVM/ROCDL/Utils.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -58,9 +59,10 @@ private:
   LogicalResult
   linkBitcodeFiles(llvm::Module &mod,
                    SmallVector<std::unique_ptr<llvm::Module>> &&libs);
-  FailureOr<llvm::TargetMachine *> createTargetMachine(Attribute targetAttr);
+  FailureOr<std::unique_ptr<llvm::TargetMachine>>
+  createTargetMachine(Attribute targetAttr);
   LogicalResult optimizeModule(llvm::Module &mod,
-                               llvm::TargetMachine *targetMachine);
+                               llvm::TargetMachine &targetMachine);
   FailureOr<std::string> compileToISA(llvm::Module &mod,
                                       llvm::TargetMachine &targetMachine);
 
@@ -144,7 +146,7 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
     return failure();
 
   // Step 3: Create target machine and set data layout.
-  FailureOr<llvm::TargetMachine *> targetMachine =
+  FailureOr<std::unique_ptr<llvm::TargetMachine>> targetMachine =
       createTargetMachine(targetAttr);
   if (failed(targetMachine))
     return mod.emitError("Failed to create target machine");
@@ -154,7 +156,7 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   llvmModule->setTargetTriple((*targetMachine)->getTargetTriple());
 
   // Step 4: Optimize LLVM IR.
-  if (failed(optimizeModule(*llvmModule, *targetMachine)))
+  if (failed(optimizeModule(*llvmModule, **targetMachine)))
     return mod.emitError("Failed to optimize LLVM IR");
 
   // Dump optimized LLVM IR.
@@ -279,7 +281,7 @@ LogicalResult WaterGPUModuleToBinaryPass::linkBitcodeFiles(
   return success();
 }
 
-FailureOr<llvm::TargetMachine *>
+FailureOr<std::unique_ptr<llvm::TargetMachine>>
 WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
   water::initializeAMDGPUTarget();
 
@@ -308,17 +310,17 @@ WaterGPUModuleToBinaryPass::createTargetMachine(Attribute targetAttr) {
   targetMachine->setOptLevel(
       static_cast<llvm::CodeGenOptLevel>(rocdlTarget.getO()));
 
-  return targetMachine.release();
+  return targetMachine;
 }
 
 LogicalResult
 WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &mod,
-                                           llvm::TargetMachine *targetMachine) {
+                                           llvm::TargetMachine &targetMachine) {
   // Get optimization level from target machine.
-  int optLevel = static_cast<int>(targetMachine->getOptLevel());
+  int optLevel = static_cast<int>(targetMachine.getOptLevel());
 
   auto transformer =
-      makeOptimizingTransformer(optLevel, /*sizeLevel=*/0, targetMachine);
+      makeOptimizingTransformer(optLevel, /*sizeLevel=*/0, &targetMachine);
   auto error = transformer(&mod);
   if (error) {
     InFlightDiagnostic mlirError = getOperation()->emitError();
