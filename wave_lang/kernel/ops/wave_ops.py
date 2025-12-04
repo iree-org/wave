@@ -781,6 +781,9 @@ class CustomOp(ABC):
         self, new_node: CustomOp | fx.Node, except_nodes: list[CustomOp]
     ):
         """Replace all uses of the current node with the new node except for the nodes in except_nodes."""
+        if isinstance(new_node, fx.Node):
+            new_node = get_custom(new_node)
+
         self.replacement_location_propagate(new_node)
         for user in self.users:
             if user in except_nodes:

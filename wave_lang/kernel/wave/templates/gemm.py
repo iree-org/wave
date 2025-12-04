@@ -59,7 +59,9 @@ def get_gemm_kernel(
     constraints += [tkw.WaveConstraint(N, BLOCK_N / waves_per_block[1])]
 
     constraints += [
-        tkw.HardwareConstraint(threads_per_wave=threads_per_wave, mma_type=mfma_variant)
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave, mma_type=mfma_variant, n_service_waves=1
+        )
     ]
 
     # With dynamic dimensions, we need to add an assumption on how big
