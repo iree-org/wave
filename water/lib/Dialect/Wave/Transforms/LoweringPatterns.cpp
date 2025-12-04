@@ -6,6 +6,7 @@
 
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
@@ -360,70 +361,9 @@ public:
   }
 };
 
-} // namespace
-
-void wave::populateWaveMiscellaneousOpsLoweringPatterns(
-    WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<CastOpLoweringPattern, ExtractSliceOpLoweringPattern,
-               IterateOpLoweringPattern, RegisterOpLoweringPattern>(
-      typeConverter, patterns.getContext());
-}
-
-//===----------------------------------------------------------------------===//
-// MmaOp
-//===----------------------------------------------------------------------===//
-
-namespace {
-
-class MmaOpLoweringPattern : public OpConversionPattern<wave::MmaOp> {
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(wave::MmaOp op, wave::MmaOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-
-    Value lhs = adaptor.getLhs();
-    Value rhs = adaptor.getRhs();
-    Value acc = adaptor.getAccumulator();
-
-    auto lhsType = cast<VectorType>(lhs.getType());
-    auto rhsType = cast<VectorType>(rhs.getType());
-    auto accType = cast<VectorType>(acc.getType());
-    assert(lhsType.getRank() == 1 && rhsType.getRank() == 1 &&
-           accType.getRank() == 1 &&
-           "only 1-D vectors supported for mma lowering");
-
-    wave::WaveMmaKind kind = op.getKind();
-    auto [M, N, K] =
-        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), kind);
-
-    // TODO: Extend lowering for ops beyond MFMA, e.g. WMMA
-    auto mfma = mlir::amdgpu::MFMAOp::create(rewriter, loc, acc.getType(),
-                                             /*m=*/M,
-                                             /*n=*/N,
-                                             /*k=*/K,
-                                             /*blocks=*/1,
-                                             /*sourceA=*/lhs, /*sourceB=*/rhs,
-                                             /*destC=*/acc);
-    rewriter.replaceOp(op, mfma.getResult());
-    return success();
-  }
-};
-
-} // namespace
-
-void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
-                                           RewritePatternSet &patterns) {
-  patterns.add<MmaOpLoweringPattern>(typeConverter, patterns.getContext());
-}
-
 //===----------------------------------------------------------------------===//
 // IterateOp
 //===----------------------------------------------------------------------===//
-
-namespace {
 
 /// Lower `wave.iterate` to `scf.for`.
 class IterateOpLoweringPattern : public OpConversionPattern<wave::IterateOp> {
@@ -452,8 +392,8 @@ public:
     }
 
     // Look for tiling constraints in function attributes.
-    ArrayAttr constraints =
-        parentFunc->getAttrOfType<ArrayAttr>("wave.constraints");
+    ArrayAttr constraints = parentFunc->getAttrOfType<ArrayAttr>(
+        wave::WaveDialect::kWaveConstraintsAttrName);
     if (!constraints) {
       return rewriter.notifyMatchFailure(
           op, "no wave constraints found in function");
@@ -535,7 +475,7 @@ public:
 
     // Map iter_args.
     // Note: wave.iterate doesn't expose the induction variable, so we skip it.
-    for (auto [oldArg, newArg] : llvm::zip(
+    for (auto [oldArg, newArg] : llvm::zip_equal(
              waveBody.getArguments(), scfBody.getArguments().drop_front())) {
       mapping.map(oldArg, newArg);
     }
@@ -548,6 +488,7 @@ public:
     // Convert wave.yield to scf.yield.
     auto yieldOp = cast<wave::YieldOp>(waveBody.getTerminator());
     SmallVector<Value> yieldValues;
+    yieldValues.reserve(yieldOp.getValues().size());
     for (Value value : yieldOp.getValues()) {
       yieldValues.push_back(mapping.lookup(value));
     }
@@ -561,3 +502,60 @@ public:
 };
 
 } // namespace
+
+void wave::populateWaveMiscellaneousOpsLoweringPatterns(
+    WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
+  patterns.add<CastOpLoweringPattern, ExtractSliceOpLoweringPattern,
+               IterateOpLoweringPattern, RegisterOpLoweringPattern>(
+      typeConverter, patterns.getContext());
+}
+
+//===----------------------------------------------------------------------===//
+// MmaOp
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+class MmaOpLoweringPattern : public OpConversionPattern<wave::MmaOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::MmaOp op, wave::MmaOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    Value lhs = adaptor.getLhs();
+    Value rhs = adaptor.getRhs();
+    Value acc = adaptor.getAccumulator();
+
+    auto lhsType = cast<VectorType>(lhs.getType());
+    auto rhsType = cast<VectorType>(rhs.getType());
+    auto accType = cast<VectorType>(acc.getType());
+    assert(lhsType.getRank() == 1 && rhsType.getRank() == 1 &&
+           accType.getRank() == 1 &&
+           "only 1-D vectors supported for mma lowering");
+
+    wave::WaveMmaKind kind = op.getKind();
+    auto [M, N, K] =
+        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), kind);
+
+    // TODO: Extend lowering for ops beyond MFMA, e.g. WMMA
+    auto mfma = mlir::amdgpu::MFMAOp::create(rewriter, loc, acc.getType(),
+                                             /*m=*/M,
+                                             /*n=*/N,
+                                             /*k=*/K,
+                                             /*blocks=*/1,
+                                             /*sourceA=*/lhs, /*sourceB=*/rhs,
+                                             /*destC=*/acc);
+    rewriter.replaceOp(op, mfma.getResult());
+    return success();
+  }
+};
+
+} // namespace
+
+void wave::populateWaveMmaLoweringPatterns(WaveTypeConverter &typeConverter,
+                                           RewritePatternSet &patterns) {
+  patterns.add<MmaOpLoweringPattern>(typeConverter, patterns.getContext());
+}
