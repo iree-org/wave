@@ -468,7 +468,7 @@ class HardwareConstraint(Constraint):
     def wave_id(self) -> tuple[int]:
         # threads_per_block is set in initialize_wave_constraints method
         return self.linearized_thread_id // self.threads_per_wave
-    
+
     @property
     def lane_id(self) -> tuple[int]:
         # threads_per_block is set in initialize_wave_constraints method
