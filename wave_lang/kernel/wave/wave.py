@@ -872,11 +872,11 @@ class LaunchableWave(Launchable):
                 partial(tensor_load_to_shared, trace, self.constraints, options),
                 partial(multicast, trace, self.constraints, options),
                 partial(fuse_tensor_loads, trace, self.constraints),
-                # Wave specialization
-                partial(specialize_kernel, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),
+                # Wave specialization
+                partial(specialize_kernel, trace, self.constraints, options),
                 partial(gather_to_shared, trace, self.constraints, options),
                 partial(gather_to_shared_swizzling, trace, self.constraints, options),
                 partial(
