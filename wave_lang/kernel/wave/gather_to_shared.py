@@ -105,12 +105,105 @@ class GatherToSharedConfig:
     elements_per_thread: int
     expected_number_of_loads: int
 
+
+"""
+CoalescingType.LINEAR:
+
+Most Naive and straightforward coalescing type/access pattern.
+In this mode, we simply flatten our N-d data, and flatten our M-d workers
+and simply distribute len(flatten_data) / flatten(flatten_worker) amount of data
+to each worker. Then we delinearize to get back N-d shape.
+
+CoalescingType.Linear is pretty good to minimize # of global loads, however it is
+not aware of wave data ownership.  This means every load only reads data for certain
+waves and not all waves/threads; hence stalling the process until data for all the
+wave is ready, as waves typically move together.
+To optimize that we introduce another strategy below.
+
+CoalescingType.WAVE_TILE_ALIGNED:
+
+More Wave data ownership aware coalescing strategy. We further divide data into
+different "wave tiles" which are based on data owned by each waves. Now that we have
+tiles, where each tile owns some set of waves, we can do something similar to
+linear distribution to maximize number of data each thread will load.
+Concrete examples will follow below.
+
+
+Example:
+
+Imagine you are working on a matmul of BLOCK_M=128, BLOCK_N=128, BLOCK_K=64.
+wave0-3 will load A[0:128, 0:64] @ [0:64, 0:64]
+wave4-7 will load A[0:128, 0:64] @ [0:64, 64:128]
+
+Wave0-3 and Wave4-7 will need to load same data for A.
+
+Assumptions:
+
+data to load: A matrix
+workgroup_shape = [BLOCK_M, BLOCK_N] = 128x64xf16
+wave_shape = 32x64xf16
+threads_per_wave = 64
+max_width_read = 128 bitwidth = 8 f16 elems
+num_waves = 8
+workgroup_threads = (64, 8)
+
+wave0 data ownership: data[0:32, :64]
+wave1 data ownership: data[32:64, :64]
+wave2 data ownership: data[64:96, :64]
+wave3 data ownership: data[96:128, :64]
+
+wave4 data ownership: data[0:32, :64]
+wave5 data ownership: data[32:64, :64]
+wave6 data ownership: data[64:96, :64]
+wave7 data ownership: data[96:128, :64]
+
+LINEAR distribution:
+flatten_data = 128*64 = 8192
+flatten_workers = 64*8 = 512
+data_per_worker =  flatten_data // flatten_workers = 16
+num_loads =  data_per_worker // max_width_read = 2
+
+Here we have two 128 bitwidth/8(f16) elems read. Where each thread/worker will own
+16 contiguous data, where neighboring threads will own contiguous data to each other.
+-> first load = read(data[0:64,:64]) -> useful only for wave0, wave1, wave4, wave5
+-> second load = read(data[64:128,:64]) -> useful only for wave2, wave3, wave6, wave7
+
+Things to note, Linear distribution does not take into account wave ownership of data
+and first loads data for only wave0 and wave1. Second load, loads only for wave2 and wave3.
+This means, we need to wait for all the loads to finish before we can proceed with further computations.
+
+
+WAVE_TILE_ALIGNED distribution:
+flatten_data = 128*64 = 8192
+flatten_wave_data = 32*64 = 2048
+flatten_workers = 64*8 = 512
+num_tiles = flatten_data // flatten_tile_data = 4
+waves_per_tile = num_waves / num_tile = 2
+tile_id = wave_id // waves_per_tile => tile0 owns wave0/wave1, tile1 owns wave2/wave3, ...
+
+Iff threads_per_wave * waves_per_tile * num_loads * max_width_read  == flatten_wave_data,
+then we can use WAVE_TILE_ALIGNED, since it is proven that with this access pattern we can also have minimal
+number of loads. In this case, since it is true, we can then have:
+
+-> first load = read(data[0:32, 0:32], data[32:64, 0:32], data[64:96, 0:32], data[96:128, 0:32])
+-> second load = read(data[0:32, 64:128], data[32:64, 64:128], data[64:96, 64:128], data[96:128, 64:128])
+
+As you can see, first load now loads half of the data owned by all the waves. and second load loads the remaining half.
+Since all the waves now have half their data ready, they can start processing doing computation/matmul as they wait on the
+second half.
+
+
+"""
+
+
 class CoalescingType(Enum):
     LINEAR = 0x00
     WAVE_TILE_ALIGNED = 0x10
 
 
-def compute_tail_and_drop_padding(materialized_shape, elements_per_thread, total_number_of_threads):
+def compute_tail_and_drop_padding(
+    materialized_shape, elements_per_thread, total_number_of_threads
+):
     elements_per_block = elements_per_thread * total_number_of_threads
     logger.info(f"elements_per_block={elements_per_block}")
 
@@ -123,23 +216,36 @@ def compute_tail_and_drop_padding(materialized_shape, elements_per_thread, total
     logger.info(f"tail_padding={tail_padding}")
     return tail_padding, drop_padding
 
-def select_coalescing_strategy(materialized_shape, linearized_wave_tile, hardware_constraint, expected_number_of_loads, elements_per_thread):
+
+def select_coalescing_strategy(
+    materialized_shape,
+    linearized_wave_tile,
+    hardware_constraint,
+    expected_number_of_loads,
+    elements_per_thread,
+):
     num_tiles = prod(materialized_shape) // linearized_wave_tile
     num_waves = prod(hardware_constraint.waves_per_block)
     threads_per_wave = hardware_constraint.threads_per_wave
-    wave_per_tile = num_waves // num_tiles
+    waves_per_tile = num_waves // num_tiles
 
     if prod(materialized_shape) % linearized_wave_tile != 0:
         return CoalescingType.LINEAR
-    
+
     if num_waves % num_tiles != 0:
         return CoalescingType.LINEAR
-    
-    expected_wave_aligned_load = threads_per_wave * wave_per_tile * expected_number_of_loads * elements_per_thread
+
+    expected_wave_aligned_load = (
+        threads_per_wave
+        * waves_per_tile
+        * expected_number_of_loads
+        * elements_per_thread
+    )
     if expected_wave_aligned_load != linearized_wave_tile:
         return CoalescingType.LINEAR
 
     return CoalescingType.WAVE_TILE_ALIGNED
+
 
 def get_gather_to_shared_config(
     read: Read,
@@ -238,23 +344,31 @@ def get_gather_to_shared_config(
         return None
 
     # Compute Drop/Tail Padding
-    tail_padding, drop_padding = compute_tail_and_drop_padding(materialized_shape, elements_per_thread, total_number_of_threads)
+    tail_padding, drop_padding = compute_tail_and_drop_padding(
+        materialized_shape, elements_per_thread, total_number_of_threads
+    )
 
     # Selecting optimal load pattern
     linearized_wave_tile = prod(materialized_wave_shape)
-    coalescing_strategy = select_coalescing_strategy(materialized_shape, linearized_wave_tile, hardware_constraint, expected_number_of_loads, elements_per_thread)
+    coalescing_strategy = select_coalescing_strategy(
+        materialized_shape,
+        linearized_wave_tile,
+        hardware_constraint,
+        expected_number_of_loads,
+        elements_per_thread,
+    )
     if coalescing_strategy == CoalescingType.LINEAR:
         base_offset = hardware_constraint.linearized_thread_id * elements_per_thread
-        update_offset = (total_number_of_threads * elements_per_thread)
+        update_offset = total_number_of_threads * elements_per_thread
     elif coalescing_strategy == CoalescingType.WAVE_TILE_ALIGNED:
         num_tiles = prod(materialized_shape) // linearized_wave_tile
         num_waves = prod(hardware_constraint.waves_per_block)
 
-        wave_per_tile = num_waves // num_tiles
+        waves_per_tile = num_waves // num_tiles
         threads_per_wave = hardware_constraint.threads_per_wave
 
-        tile_id = hardware_constraint.wave_id // wave_per_tile
-        intra_tile_wave_id = hardware_constraint.wave_id % wave_per_tile
+        tile_id = hardware_constraint.wave_id // waves_per_tile
+        intra_tile_wave_id = hardware_constraint.wave_id % waves_per_tile
         elements_per_wave = elements_per_thread * threads_per_wave
 
         base_offset = (
@@ -262,10 +376,14 @@ def get_gather_to_shared_config(
             + intra_tile_wave_id * elements_per_wave
             + hardware_constraint.lane_id * elements_per_thread
         )
-        update_offset = (wave_per_tile * elements_per_wave)
+        update_offset = waves_per_tile * elements_per_wave
     else:
-        raise ValueError("Only expect Linear or WAVE_TILE_ALIGNED for coalescing strategy.")
-    get_offset = lambda iter: delinearize_index(base_offset + iter * update_offset, materialized_shape)
+        raise ValueError(
+            "Only expect Linear or WAVE_TILE_ALIGNED for coalescing strategy."
+        )
+    get_offset = lambda iter: delinearize_index(
+        base_offset + iter * update_offset, materialized_shape
+    )
     return GatherToSharedConfig(
         tail_padding,
         drop_padding,
