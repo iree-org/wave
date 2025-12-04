@@ -1743,7 +1743,7 @@ def handle_shared_memory_barrier_wait(emitter: WaveEmitter, node: fx.Node):
         barVal = arith_d.index_cast(i32_type, barIdx)
         barId = barVal.owner
 
-    rocdl_d.s_barrier_wait(barVal)
+    rocdl_d.s_barrier_wait(barId)
 
 
 @handle_op(scheduling_barrier)
