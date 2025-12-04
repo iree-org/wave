@@ -12,7 +12,7 @@ import os
 import subprocess
 import sys
 import math
-from typing import Any, Sequence, Optional
+from typing import Any, Sequence
 from functools import lru_cache
 
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
@@ -174,11 +174,12 @@ def _deiree(module: Module) -> str:
     return local_module.get_asm(binary=False, print_generic_op_form=True)
 
 
-def find_binary(name: str) -> Optional[str]:
+def find_binary(name: str) -> str | None:
     this_path = Path(__file__).parent
     tool_path = this_path / "water_mlir" / "bin" / name
     if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
         return None
+
     return str(tool_path)
 
 
@@ -216,7 +217,7 @@ def make_linear_pass_pipeline(
     """
 
     def make_pass_arguments(
-        name: str, args: dict[str, Any], root_op: Optional[str] = None
+        name: str, args: dict[str, Any], root_op: str | None = None
     ) -> str:
         ret = (
             name
@@ -397,26 +398,35 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     binary = get_water_opt()
     mlir_asm = module.operation.get_asm()
     target_chip = options.target
-    opt_pass = "composite-fixed-point-pass", {
-        "name": "CompositePass",
+
+    def add_opt(pipeline):
+        if options.optimization_level:
+            return [pipeline]
+
+        return []
+
+    canonicalize_cse = "composite-fixed-point-pass", {
+        "name": "canonicalize_cse",
         "pipeline": "any(canonicalize,cse)",
     }
+
     pipeline = [
         "lower-affine",
-        opt_pass,
-        "loop-invariant-code-motion",
-        "int-range-optimizations",
+        *add_opt(canonicalize_cse),
+        *add_opt("loop-invariant-code-motion"),
+        *add_opt("int-range-optimizations"),
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
         ("rocdl-attach-target", {"chip": target_chip}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "reconcile-unrealized-casts",
-        opt_pass,
+        *add_opt(canonicalize_cse),
         "gpu-module-to-binary",
         "water-gpu-to-gpu-runtime",
         "symbol-dce",
-        opt_pass,
+        *add_opt(canonicalize_cse),
     ]
+
     args = [binary, make_linear_pass_pipeline(pipeline)]
     if options.mlir_print_ir_after_all:
         args.append("--mlir-print-ir-after-all")
