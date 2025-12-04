@@ -22,8 +22,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/InitAllDialects.h"
-#include "mlir/InitAllPasses.h"
 #include "mlir/Target/LLVM/ROCDL/Target.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
