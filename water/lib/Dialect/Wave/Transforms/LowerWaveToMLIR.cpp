@@ -15,6 +15,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -42,6 +43,7 @@ struct LowerWaveToMLIRPass
       gpu::GPUDialect,
       amdgpu::AMDGPUDialect,
       memref::MemRefDialect,
+      scf::SCFDialect,
       vector::VectorDialect
         // clang-format on
         >();
@@ -67,11 +69,13 @@ struct LowerWaveToMLIRPass
       gpu::GPUDialect,
       amdgpu::AMDGPUDialect,
       memref::MemRefDialect,
+      scf::SCFDialect,
       vector::VectorDialect
         // clang-format on
         >();
     target.addIllegalOp<wave::AllocateOp, wave::RegisterOp, wave::Exp2Op,
-                        wave::CastOp, wave::ExtractSliceOp>();
+                        wave::CastOp, wave::ExtractSliceOp, wave::IterateOp,
+                        wave::YieldOp>();
     ConversionConfig config;
     config.allowPatternRollback = false;
 
@@ -109,6 +113,7 @@ struct LowerWaveToMLIRPass
           }
 
           op->removeAttr(wave::WaveDialect::kHyperparameterAttrName);
+          op->removeAttr(wave::WaveDialect::kWaveConstraintsAttrName);
           return WalkResult::skip();
         });
     if (walkResult.wasInterrupted())
