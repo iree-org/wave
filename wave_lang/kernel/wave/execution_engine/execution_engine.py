@@ -21,11 +21,16 @@ import platform
 from pathlib import Path
 
 try:
-    from .wave_execution_engine import ExecutionEngine, ExecutionEngineOptions
+    from .wave_execution_engine import (
+        ExecutionEngine,
+        ExecutionEngineOptions,
+        CodeGenOptLevel,
+    )
 except ImportError:
     # Allow import to succeed even if C++ module not built yet
     ExecutionEngine = None
     ExecutionEngineOptions = None
+    CodeGenOptLevel = None
 
 
 def is_execution_engine_available() -> bool:
@@ -159,9 +164,15 @@ def _create_options_from_env() -> "ExecutionEngineOptions":
         "WAVE_ENABLE_PERF_LISTENER"
     )
 
-    # Set JIT optimization level (default: 3/Aggressive/O3)
-    jit_opt_level = os.environ.get("WAVE_JIT_OPT_LEVEL", "3")
-    options.set_jit_code_gen_opt_level(int(jit_opt_level))
+    # Set JIT optimization level (default: O3/Aggressive)
+    jit_opt_level = int(os.environ.get("WAVE_JIT_OPT_LEVEL", "3"))
+    opt_level_map = {
+        0: CodeGenOptLevel.O0,
+        1: CodeGenOptLevel.O1,
+        2: CodeGenOptLevel.O2,
+        3: CodeGenOptLevel.O3,
+    }
+    options.jit_code_gen_opt_level = opt_level_map[jit_opt_level]
 
     return options
 

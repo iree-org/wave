@@ -44,6 +44,14 @@ static void unwrapError(llvm::Error error, const char *context) {
 NB_MODULE(wave_execution_engine, m) {
   m.doc() = "LLVM ExecutionEngine bindings for Wave JIT compilation";
 
+  // Bind CodeGenOptLevel enum
+  nb::enum_<llvm::CodeGenOptLevel>(m, "CodeGenOptLevel")
+      .value("O0", llvm::CodeGenOptLevel::None)
+      .value("O1", llvm::CodeGenOptLevel::Less)
+      .value("O2", llvm::CodeGenOptLevel::Default)
+      .value("O3", llvm::CodeGenOptLevel::Aggressive)
+      .export_values();
+
   // Bind ExecutionEngineOptions
   nb::class_<wave::ExecutionEngineOptions>(m, "ExecutionEngineOptions")
       .def(nb::init<>(), "Create default ExecutionEngineOptions")
@@ -56,24 +64,10 @@ NB_MODULE(wave_execution_engine, m) {
       .def_rw("enable_perf_notification_listener",
               &wave::ExecutionEngineOptions::enablePerfNotificationListener,
               "Enable Perf notification listener")
-      .def(
-          "set_jit_code_gen_opt_level",
-          [](wave::ExecutionEngineOptions &self, int level) {
-            if (level < 0 || level > 3) {
-              throw std::invalid_argument(
-                  "Optimization level must be 0-3 (0=None, 1=Less, 2=Default, "
-                  "3=Aggressive)");
-            }
-            self.jitCodeGenOptLevel = static_cast<llvm::CodeGenOptLevel>(level);
-          },
-          nb::arg("level"),
-          R"(Set JIT code generation optimization level.
-
-Args:
-    level: Optimization level (0=None/O0, 1=Less/O1, 2=Default/O2, 3=Aggressive/O3)
-
-Raises:
-    ValueError: If level is not in range 0-3)")
+      .def_rw("jit_code_gen_opt_level",
+              &wave::ExecutionEngineOptions::jitCodeGenOptLevel,
+              "JIT code generation optimization level (O0, O1, O2, O3, or None "
+              "for unset)")
       .def(
           "set_symbol_map",
           [](wave::ExecutionEngineOptions &self,
