@@ -410,6 +410,8 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         "pipeline": "any(canonicalize,cse)",
     }
 
+    llvm_opt_level = 3 if options.optimization_level else 0
+
     pipeline = [
         "lower-affine",
         *add_opt(canonicalize_cse),
@@ -417,7 +419,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         *add_opt("int-range-optimizations"),
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
-        ("rocdl-attach-target", {"chip": target_chip}),
+        ("rocdl-attach-target", {"chip": target_chip, "O": llvm_opt_level}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "reconcile-unrealized-casts",
         *add_opt(canonicalize_cse),
