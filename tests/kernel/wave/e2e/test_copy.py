@@ -16,15 +16,23 @@ from wave_lang.kernel.wave.utils.general_utils import check_leaks
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
-from ..common.utils import param_bool, require_e2e
+from ..common.utils import param_bool, require_e2e, require_water_and_ee
 from ._test_util import get_test_shapes
+
+_water_enable = [False, pytest.param(True, marks=require_water_and_ee)]
 
 
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
+@param_bool("use_water_pipeline", "water", values=_water_enable)
 @check_leaks
-def test_copy(shape, use_buffer_ops, run_bench):
+def test_copy(
+    shape: tuple[int, int],
+    use_buffer_ops: bool,
+    run_bench: bool,
+    use_water_pipeline: bool,
+) -> None:
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -68,6 +76,7 @@ def test_copy(shape, use_buffer_ops, run_bench):
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
+        use_water_pipeline=use_water_pipeline,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -79,7 +88,13 @@ def test_copy(shape, use_buffer_ops, run_bench):
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-def test_dynamic_copy(shape, use_buffer_ops, run_bench):
+@param_bool("use_water_pipeline", "water", values=_water_enable)
+def test_dynamic_copy(
+    shape: tuple[int, int],
+    use_buffer_ops: bool,
+    run_bench: bool,
+    use_water_pipeline: bool,
+) -> None:
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -122,6 +137,7 @@ def test_dynamic_copy(shape, use_buffer_ops, run_bench):
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
         dynamic_symbols=[M, N],
+        use_water_pipeline=use_water_pipeline,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
