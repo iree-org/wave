@@ -64,6 +64,7 @@ from ..ops.wave_ops import (
     Iterate,
     Lt,
     NewScalar,
+    Read,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
     Write,
@@ -85,7 +86,6 @@ from .scheduling.scheduler_utils import (
     GemmScheduler,
 )
 from .scheduling.graph_utils import Edge
-from .scheduling.resources import annotate_resource_usage
 
 from .minimize_global_loads import update_write_dependencies
 
@@ -122,7 +122,7 @@ def set_specialied_conditions(
     hardware_constraint,
     wave_constraints,
 ) -> (fx.Node, fx.Node):
-    # calculate service wid
+    # calculate total waves launch
     physical_wid = (
         math.prod(hardware_constraint.waves_per_block)
         + hardware_constraint.n_service_waves
@@ -156,15 +156,6 @@ def set_specialied_conditions(
         )
 
     return (is_load_wave, is_compute_wave, wave_id)
-
-
-def get_ops_of_type(graph, operation_type):
-    op_type_key = "specialize"
-    return [
-        node
-        for node in graph.nodes
-        if op_type_key in node.meta and node.meta[op_type_key] == operation_type
-    ]
 
 
 def specialize_kernel(
@@ -213,7 +204,6 @@ def specialize_kernel(
         iterate_op.implicit_captures = caller_args
 
         graph = trace.get_subgraph(iterate_op.subgraph_name)
-        ignore_nodes, iter_args, output = annotate_resource_usage(graph)
 
         update_sort_keys(trace, graph)
 
@@ -286,7 +276,7 @@ class Specialist(GemmScheduler):
         self.graph = graph
         self.wave_id = wave_id
         self.hw = hw
-        self.barUB = math.prod(self.hw.waves_per_block)
+        self.barUB = math.prod(self.hw.waves_per_block) + 1
 
     def add_nodes_to_graph(self, graph, nodes, subs, new_writes, write_record):
         def new_index(index, shift_subs):
@@ -306,31 +296,31 @@ class Specialist(GemmScheduler):
                 new_writes[custom.memory].append(new_node.fx_node)
                 write_record.append(new_node.fx_node)
 
+    def get_ops_of_type(self, operation_type):
+        return [
+            node
+            for node in self.graph.nodes
+            if self.meta_name in node.meta
+            and node.meta[self.meta_name] == operation_type
+        ]
+
     def partition(self, iterate_op):
         # Global load to lds will be handle by service_waves
 
         # 0) Get all local write and global read.
         load_partition = []
         load_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_TO_LDS_LHS)
+            self.get_ops_of_type(GemmOperationType.GLOBAL_LOAD_TO_LDS_LHS)
         )
         load_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_TO_LDS_RHS)
+            self.get_ops_of_type(GemmOperationType.GLOBAL_LOAD_TO_LDS_RHS)
         )
 
-        load_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.LOCAL_WRITE_LHS)
-        )
-        load_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.LOCAL_WRITE_RHS)
-        )
+        load_partition.extend(self.get_ops_of_type(GemmOperationType.LOCAL_WRITE_LHS))
+        load_partition.extend(self.get_ops_of_type(GemmOperationType.LOCAL_WRITE_RHS))
 
-        load_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_LHS)
-        )
-        load_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_RHS)
-        )
+        load_partition.extend(self.get_ops_of_type(GemmOperationType.GLOBAL_LOAD_LHS))
+        load_partition.extend(self.get_ops_of_type(GemmOperationType.GLOBAL_LOAD_RHS))
 
         # Local load and mma will be handle by compute waves
         compute_partition = []
@@ -344,12 +334,8 @@ class Specialist(GemmScheduler):
         )
 
         compute_partition.extend(mma_nodes)
-        compute_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.LOCAL_LOAD_LHS)
-        )
-        compute_partition.extend(
-            get_ops_of_type(self.graph, GemmOperationType.LOCAL_LOAD_RHS)
-        )
+        compute_partition.extend(self.get_ops_of_type(GemmOperationType.LOCAL_LOAD_LHS))
+        compute_partition.extend(self.get_ops_of_type(GemmOperationType.LOCAL_LOAD_RHS))
 
         return load_partition, compute_partition
 
@@ -391,12 +377,12 @@ class Specialist(GemmScheduler):
         compute_graph_name = f"compute_graph_{cond_reg.name}"
 
         # add nodes to compute graph
-        last_mma = None
+        last_shared_read = None
         for node in nodes:
             op = get_custom(node)
-            if isinstance(op, MMA):
-                last_mma = node
             new_op = op.copy(new_graph=compute_graph)
+            if isinstance(op, Read):
+                last_shared_read = new_op.fx_node
             op.replace_all_uses_with(new_op)
             op.erase()
 
@@ -424,7 +410,7 @@ class Specialist(GemmScheduler):
         )
 
         # add wait before compute
-        self.add_compute_split_barrier(compute_graph, last_mma)
+        self.add_compute_split_barrier(compute_graph, last_shared_read)
 
         # update trace
         self.trace.add_subgraph(compute_graph_name, compute_graph)
@@ -441,22 +427,6 @@ class Specialist(GemmScheduler):
         service_graph = fx.Graph()
         service_graph_name = f"service_graph_{cond_reg.name}"
 
-        # duplicate nodes
-        new_writes = defaultdict(list)
-        for w in range(self.hw.waves_per_block[0], 0, -1):
-            write_record = []
-            shift_subs = {THREAD_0: THREAD_0 - 32 * w}
-
-            self.add_nodes_to_graph(
-                service_graph, nodes, shift_subs, new_writes, write_record
-            )
-
-            # add signal after load
-            dup_times = self.hw.waves_per_block[0] - w + 1
-            self.add_load_split_barrier(
-                service_graph, iterate_op, dup_times, write_record[0], write_record[-1]
-            )
-
         # add conditional at parent graph
         pgraph = self.graph
 
@@ -469,6 +439,24 @@ class Specialist(GemmScheduler):
 
         is_service_cond.location = location
         service_graph.parent_op = is_service_cond
+
+        # duplicate nodes
+        new_writes = defaultdict(list)
+        for w in range(self.hw.waves_per_block[0], 0, -1):
+            write_record = []
+
+            # TODO(megan.kuo)
+            shift_subs = {THREAD_0: THREAD_0 - self.hw.threads_per_wave * w}
+
+            self.add_nodes_to_graph(
+                service_graph, nodes, shift_subs, new_writes, write_record
+            )
+
+            # add signal after load
+            dup_times = self.hw.waves_per_block[0] - w
+            self.add_load_split_barrier(
+                service_graph, iterate_op, dup_times, write_record[0], write_record[-1]
+            )
 
         # close the graph with empty output
         service_graph.output(None)
@@ -483,7 +471,7 @@ class Specialist(GemmScheduler):
 
         return new_writes
 
-    def add_compute_split_barrier(self, subgraph, last_mma_node):
+    def add_compute_split_barrier(self, subgraph, last_shared_read):
         """
         add split barriers for compute partition
         ---- Example ----
@@ -542,8 +530,8 @@ class Specialist(GemmScheduler):
                     wid_wait_graph_name
                 ] = wid_wait_graph
 
-        signal_location = get_custom(last_mma_node).location
-        with subgraph.inserting_before(last_mma_node):
+        signal_location = get_custom(last_shared_read).location
+        with subgraph.inserting_before(last_shared_read):
             for i in range(1, self.barUB):
                 # declare graph
                 wid_signal_graph = fx.Graph()
@@ -633,7 +621,7 @@ class Specialist(GemmScheduler):
                     region_graph=wid_wait_graph, loc=location
                 )
 
-                # calculate which compute wid this load is helping with
+                # calculate which compute wid this load wid is helping with
                 compute_wid = (self.wave_id % start_load_wid) * self.hw.waves_per_block[
                     0
                 ] + dup_times % self.hw.waves_per_block[0]
