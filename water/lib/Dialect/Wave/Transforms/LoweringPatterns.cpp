@@ -411,30 +411,33 @@ public:
     // Find tiling constraint for this dimension to get tile_size.
     std::optional<int64_t> tileSize;
     for (Attribute constraintAttr : constraints) {
-      if (auto tilingConstraint =
-              dyn_cast<wave::TilingConstraintAttr>(constraintAttr)) {
-        wave::WaveSymbolAttr constraintDim = tilingConstraint.getDim();
-        if (constraintDim.getName() == symbolName) {
-          wave::WaveExprListAttr tileSizeAttr = tilingConstraint.getTileSize();
-          AffineMap tileSizeMap = tileSizeAttr.getMap();
-          ArrayRef<Attribute> tileSizeSymbols = tileSizeAttr.getSymbols();
+      auto tilingConstraint =
+          dyn_cast<wave::TilingConstraintAttr>(constraintAttr);
+      if (!tilingConstraint)
+        continue;
 
-          // Evaluate the tile size using hyperparameters.
-          std::optional<SmallVector<int64_t>> evaluatedTileSize =
-              wave::evaluateMapWithHyperparams(tileSizeMap, tileSizeSymbols,
-                                               hyperparams);
-          if (!evaluatedTileSize) {
-            return rewriter.notifyMatchFailure(
-                op, "failed to evaluate tile size from tiling constraint");
-          }
-          if (evaluatedTileSize->size() != 1) {
-            return rewriter.notifyMatchFailure(
-                op, "tile size must be single value");
-          }
-          tileSize = (*evaluatedTileSize)[0];
-          break;
-        }
+      wave::WaveSymbolAttr constraintDim = tilingConstraint.getDim();
+      if (constraintDim.getName() != symbolName)
+        continue;
+
+      wave::WaveExprListAttr tileSizeAttr = tilingConstraint.getTileSize();
+      AffineMap tileSizeMap = tileSizeAttr.getMap();
+      ArrayRef<Attribute> tileSizeSymbols = tileSizeAttr.getSymbols();
+
+      // Evaluate the tile size using hyperparameters.
+      std::optional<SmallVector<int64_t>> evaluatedTileSize =
+          wave::evaluateMapWithHyperparams(tileSizeMap, tileSizeSymbols,
+                                           hyperparams);
+      if (!evaluatedTileSize) {
+        return rewriter.notifyMatchFailure(
+            op, "failed to evaluate tile size from tiling constraint");
       }
+      if (evaluatedTileSize->size() != 1) {
+        return rewriter.notifyMatchFailure(op,
+                                           "tile size must be single value");
+      }
+      tileSize = (*evaluatedTileSize)[0];
+      break;
     }
 
     if (!tileSize) {
@@ -444,6 +447,7 @@ public:
 
     // TODO(tyb): we reject non-exact division for now, which should require
     // peeling or padding to be correct.
+    // TODO(tyb): make these errors better visible to the caller from python.
     if (*tileSize == 0) {
       return rewriter.notifyMatchFailure(op, "tile size cannot be zero");
     }
