@@ -42,7 +42,8 @@ Behavior:
 """
 
 import math
-from typing import Optional
+from typing import Optional, List
+from collections import defaultdict
 
 import torch.fx as fx
 from torch.utils import _pytree as pytree
@@ -57,10 +58,15 @@ from ..ops.wave_ops import (
     MMA,
     Conditional,
     CustomOp,
+    Output,
     Ge,
+    GetResult,
     Iterate,
     Lt,
     NewScalar,
+    SharedMemoryBarrierSignal,
+    SharedMemoryBarrierWait,
+    Write,
     get_custom,
 )
 from .compile_options import WaveCompileOptions
@@ -73,107 +79,49 @@ from .utils.general_utils import (
 )
 from .utils.classes import GemmOperationType
 from .utils.graph_utils import update_sort_keys
+from .utils.symbol_utils import get_induction_symbol
 
 from .scheduling.scheduler_utils import (
     GemmScheduler,
 )
+from .scheduling.graph_utils import Edge
 from .scheduling.resources import annotate_resource_usage
+
+from .minimize_global_loads import update_write_dependencies
 
 ##############################################################
 # General graph helper functions
 ##############################################################
 
 
-def get_graph_node(
-    custom: CustomOp, graph: fx.Graph, location: Optional[CapturedLocation]
-) -> fx.Node:
-    custom.add_to_graph(graph)
-    custom.location = location
-    custom = custom.fx_node
-    return custom
-
-
-def insert_service_cond(
-    cond_reg, trace, iterate_op, location: Optional[CapturedLocation], nodes
+def add_output_to_cond(
+    op: CustomOp, return_vals: List, subgraph, parent_graph, parent_loc
 ):
-    # service subgraph
-    service_graph = fx.Graph()
-    service_graph_name = f"service_graph_{cond_reg.name}"
+    assert isinstance(
+        op, Conditional
+    ), "Expect to add output node only on condition ops"
+    if any(isinstance(get_custom(node), Output) for node in subgraph.nodes):
+        return
 
-    for node in nodes:
-        op = get_custom(node)
-        new_op = op.copy(new_graph=service_graph)
-        op.replace_all_uses_with(new_op)
-        op.erase()
+    # add arguments to condition yield
+    output_op = Output(return_vals).add_to_graph(subgraph, loc=op.location)
+    output_node = get_custom(output_op)
 
-    # add conditional at parent graph
-    pgraph = trace.get_subgraph(iterate_op.subgraph_name)
-    is_service_cond = Conditional(
-        cond_reg,
-        subgraph_name=service_graph_name,
-        implicit_captures=iterate_op.implicit_captures,
-    ).add_to_graph(pgraph)
-
-    is_service_cond.location = location
-    service_graph.parent_op = is_service_cond
-
-    # update trace
-    trace.add_subgraph(service_graph_name, service_graph)
-
-    # update root graph
-    get_custom(is_service_cond).get_root_graph().subgraphs[
-        service_graph_name
-    ] = service_graph
-
-    return is_service_cond
+    # replace uses of compute result by conditional returns
+    with parent_graph.inserting_after(op.fx_node):
+        for i, return_val in enumerate(return_vals):
+            gr_node = GetResult(op.fx_node, i).add_to_graph(
+                parent_graph, loc=parent_loc
+            )
+            gr_node.index = return_val.index
+            get_custom(return_val).replace_all_uses_with_except(gr_node, [output_node])
 
 
-def insert_compute_cond(
-    cond_reg, trace, iterate_op, location: Optional[CapturedLocation], nodes
-):
-    # compute subgraph
-    compute_graph = fx.Graph()
-    compute_graph_name = f"compute_graph_{cond_reg.name}"
-
-    for node in nodes:
-        op = get_custom(node)
-        new_op = op.copy(new_graph=compute_graph)
-        op.replace_all_uses_with(new_op)
-        op.erase()
-
-    # add conditional at parent graph
-    pgraph = trace.get_subgraph(iterate_op.subgraph_name)
-    is_compute_cond = Conditional(
-        cond_reg,
-        subgraph_name=compute_graph_name,
-        implicit_captures=[],
-    ).add_to_graph(pgraph)
-
-    is_compute_cond.location = location
-    compute_graph.parent_op = is_compute_cond
-
-    # update trace
-    trace.add_subgraph(compute_graph_name, compute_graph)
-
-    # update root graph
-    get_custom(is_compute_cond).get_root_graph().subgraphs[
-        compute_graph_name
-    ] = compute_graph
-
-    return is_compute_cond
-
-
-def add_specialized_conditions(
-    custom_iterate,
-    trace,
+def set_specialied_conditions(
+    graph,
     hardware_constraint,
     wave_constraints,
-    load_partition,
-    compute_partition,
-):
-    """ """
-    graph = trace.get_subgraph(custom_iterate.subgraph_name)
-
+) -> (fx.Node, fx.Node):
     # calculate service wid
     physical_wid = (
         math.prod(hardware_constraint.waves_per_block)
@@ -192,38 +140,22 @@ def add_specialized_conditions(
     #       is_load_wave = physical_wid >= compute_wid
     # - get `is_compute_wave` condition:
     #       is_compute_wave = physical_wid < compute_wid
-    with graph.inserting_before(list(graph.nodes)[0]):
-        compute_wid_reg = get_graph_node(
-            NewScalar(compute_wid, tkl.i32), graph, custom_iterate.location
+    anchor = next(iter(graph.nodes))
+    with graph.inserting_before(anchor):
+        compute_wid_reg = NewScalar(compute_wid, tkl.i32).add_to_graph(
+            graph, loc=anchor.location
         )
-        wave_id_reg = get_graph_node(
-            NewScalar(wave_id, tkl.i32), graph, custom_iterate.location
+        wave_id_reg = NewScalar(wave_id, tkl.i32).add_to_graph(
+            graph, loc=anchor.location
         )
-        is_load_wave = get_graph_node(
-            Ge(wave_id_reg, compute_wid_reg), graph, custom_iterate.location
+        is_load_wave = Ge(wave_id_reg, compute_wid_reg).add_to_graph(
+            graph, loc=anchor.location
         )
-        is_compute_wave = get_graph_node(
-            Lt(wave_id_reg, compute_wid_reg), graph, custom_iterate.location
+        is_compute_wave = Lt(wave_id_reg, compute_wid_reg).add_to_graph(
+            graph, loc=anchor.location
         )
 
-    # get insertion point
-    load_flattened, _ = pytree.tree_flatten(load_partition)
-    load_flattened.reverse()
-    compute_flattened, _ = pytree.tree_flatten(compute_partition)
-    compute_flattened.reverse()
-
-    # Generating and inserting cond_barriers to correct place in graph.
-    insert_compute_cond(
-        is_compute_wave,
-        trace,
-        custom_iterate,
-        compute_flattened[0].location,
-        compute_flattened,
-    )
-    insert_service_cond(
-        is_load_wave, trace, custom_iterate, load_flattened[0].location, load_flattened
-    )
-    return
+    return (is_load_wave, is_compute_wave, wave_id)
 
 
 def get_ops_of_type(graph, operation_type):
@@ -261,80 +193,51 @@ def specialize_kernel(
         return
 
     hardware_constraint = get_hardware_constraint(constraints)
-    wave_constraints = get_wave_constraints(constraints)
-    physical_wid = hardware_constraint.waves_per_block
-    tpw = hardware_constraint.threads_per_wave
+    if hardware_constraint.n_service_waves == 0:
+        return
 
-    # uniform shared memory write base address by aligning thread indexing position.
-    # $T0 // wave size -> wave id
-    wave_subs = {
-        THREAD_0: ((THREAD_0 // tpw) * tpw if physical_wid[0] > 1 else 0),
-        THREAD_1: THREAD_1 if physical_wid[1] > 1 else 0,
-        THREAD_2: THREAD_2 if physical_wid[2] > 1 else 0,
-    }
+    wave_constraints = get_wave_constraints(constraints)
+
+    is_load_wave, is_compute_wave, wave_id = set_specialied_conditions(
+        trace.get_root_graph(), hardware_constraint, wave_constraints
+    )
 
     iterate_nodes = trace.walk(lambda node: isinstance(get_custom(node), Iterate))
     if not iterate_nodes:
         return
-    for iterate_node in iterate_nodes:
-        custom_iterate = get_custom(iterate_node)
 
-        graph = trace.get_subgraph(custom_iterate.subgraph_name)
+    for iterate_node in iterate_nodes:
+        iterate_op = get_custom(iterate_node)
+        caller_args = list(iterate_op.implicit_captures)
+        caller_args.extend([is_load_wave, is_compute_wave])
+        iterate_op.implicit_captures = caller_args
+
+        graph = trace.get_subgraph(iterate_op.subgraph_name)
         ignore_nodes, iter_args, output = annotate_resource_usage(graph)
 
         update_sort_keys(trace, graph)
 
         specialist = Specialist(
-            graph=graph, edges=None, meta_name="specialize", resources=None
+            trace=trace,
+            graph=graph,
+            edges=None,
+            resources=None,
+            wave_id=wave_id,
+            hw=hardware_constraint,
         )
 
-        # Global load to lds will be handle by service_waves
-
-        # 0) Get all local write and global read.
-        load_partition = []
-        load_partition.extend(
-            get_ops_of_type(graph, GemmOperationType.GLOBAL_LOAD_TO_LDS_LHS)
-        )
-        load_partition.extend(
-            get_ops_of_type(graph, GemmOperationType.GLOBAL_LOAD_TO_LDS_RHS)
-        )
-
-        load_partition.extend(get_ops_of_type(graph, GemmOperationType.LOCAL_WRITE_LHS))
-        load_partition.extend(get_ops_of_type(graph, GemmOperationType.LOCAL_WRITE_RHS))
-
-        load_partition.extend(get_ops_of_type(graph, GemmOperationType.GLOBAL_LOAD_LHS))
-        load_partition.extend(get_ops_of_type(graph, GemmOperationType.GLOBAL_LOAD_RHS))
-
-        # Local load and mma will be handle by compute waves
-        compute_partition = []
-
-        # 0) Get all local read and wmma
-        # Get MMA nodes inside a for op, who's reduction dim is being tiled in the for op.
-        mma_nodes = filter_fx_graph(
-            graph,
-            lambda node: isinstance(get_custom(node), MMA)
-            and get_custom(node).reduction_dim == custom_iterate.axis,
-        )
-
-        compute_partition.extend(mma_nodes)
-        compute_partition.extend(
-            get_ops_of_type(graph, GemmOperationType.LOCAL_LOAD_LHS)
-        )
-        compute_partition.extend(
-            get_ops_of_type(graph, GemmOperationType.LOCAL_LOAD_RHS)
-        )
+        load_partition, compute_partition = specialist.partition(iterate_op)
 
         # 1) Early exit if cannot find either operand's local write or global loads.
         if not load_partition or not compute_partition:
             continue
 
         # 2) Encapsulate the load with condition
-        add_specialized_conditions(
-            custom_iterate,
-            trace,
-            hardware_constraint,
-            wave_constraints,
+        specialist.transform(
+            iterate_op,
+            is_load_wave,
             load_partition,
+            is_compute_wave,
             compute_partition,
         )
 
@@ -366,5 +269,423 @@ class Specialist(GemmScheduler):
                 COMPUTE b
     """
 
-    def partition(self):
+    def __init__(
+        self,
+        trace: CapturedTrace,
+        graph: fx.Graph,
+        edges: list[Edge],
+        resources: list[int],
+        meta_name: str = "specialize",
+        wave_id=None,
+        hw=None,
+    ) -> None:
+        super().__init__(graph, edges, resources, meta_name)
+        assert wave_id is not None, "Wave ID should be provided to specilist"
+
+        self.trace = trace
+        self.graph = graph
+        self.wave_id = wave_id
+        self.hw = hw
+        self.barUB = math.prod(self.hw.waves_per_block)
+
+    def add_nodes_to_graph(self, graph, nodes, subs, new_writes, write_record):
+        def new_index(index, shift_subs):
+            return {k: v.subs(shift_subs) for k, v in index.items()}
+
+        node_map = dict()
+        for node in nodes:
+            custom = get_custom(node)
+            new_node = custom.copy(
+                new_graph=graph,
+                arg_transform=lambda x: node_map[x] if x in node_map else x,
+            )
+            new_node.index = new_index(node.index, subs)
+            node_map[node] = new_node.fx_node
+
+            if isinstance(custom, Write):
+                new_writes[custom.memory].append(new_node.fx_node)
+                write_record.append(new_node.fx_node)
+
+    def partition(self, iterate_op):
+        # Global load to lds will be handle by service_waves
+
+        # 0) Get all local write and global read.
+        load_partition = []
+        load_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_TO_LDS_LHS)
+        )
+        load_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_TO_LDS_RHS)
+        )
+
+        load_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.LOCAL_WRITE_LHS)
+        )
+        load_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.LOCAL_WRITE_RHS)
+        )
+
+        load_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_LHS)
+        )
+        load_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.GLOBAL_LOAD_RHS)
+        )
+
+        # Local load and mma will be handle by compute waves
+        compute_partition = []
+
+        # 0) Get all local read and wmma
+        # Get MMA nodes inside a for op, who's reduction dim is being tiled in the for op.
+        mma_nodes = filter_fx_graph(
+            self.graph,
+            lambda node: isinstance(get_custom(node), MMA)
+            and get_custom(node).reduction_dim == iterate_op.axis,
+        )
+
+        compute_partition.extend(mma_nodes)
+        compute_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.LOCAL_LOAD_LHS)
+        )
+        compute_partition.extend(
+            get_ops_of_type(self.graph, GemmOperationType.LOCAL_LOAD_RHS)
+        )
+
+        return load_partition, compute_partition
+
+    def transform(
+        self,
+        iterate_op,
+        is_load_wave,
+        load_partition,
+        is_compute_wave,
+        compute_partition,
+    ):
+        """ """
+        # get insertion point
+        load_flattened, _ = pytree.tree_flatten(load_partition)
+        load_flattened.reverse()
+        compute_flattened, _ = pytree.tree_flatten(compute_partition)
+        compute_flattened.reverse()
+
+        # Generating and inserting cond_barriers to correct place in graph.
+        new_writes = self.insert_service_cond(
+            is_load_wave, iterate_op, load_flattened[0].location, load_flattened
+        )
+
+        self.insert_compute_cond(
+            is_compute_wave,
+            iterate_op,
+            compute_flattened[-1].location,
+            compute_flattened,
+        )
+
+        update_write_dependencies(new_writes, self.trace)
         return
+
+    def insert_compute_cond(
+        self, cond_reg, iterate_op, location: Optional[CapturedLocation], nodes
+    ):
+        # declare new subgraph
+        compute_graph = fx.Graph()
+        compute_graph_name = f"compute_graph_{cond_reg.name}"
+
+        # add nodes to compute graph
+        last_mma = None
+        for node in nodes:
+            op = get_custom(node)
+            if isinstance(op, MMA):
+                last_mma = node
+            new_op = op.copy(new_graph=compute_graph)
+            op.replace_all_uses_with(new_op)
+            op.erase()
+
+        # get parent graph
+        pgraph = self.graph
+
+        # add conditional nodes to parent graph
+        with pgraph.inserting_before(pgraph.output_node()):
+            is_compute_cond = Conditional(
+                cond_reg,
+                subgraph_name=compute_graph_name,
+                implicit_captures=[],
+                else_return=iterate_op.init_args,
+            ).add_to_graph(pgraph, loc=location)
+
+        compute_graph.parent_op = is_compute_cond
+
+        # add return node in compute graph and get result in parent graph
+        add_output_to_cond(
+            get_custom(is_compute_cond),
+            iterate_op.outputs(),
+            compute_graph,
+            pgraph,
+            location,
+        )
+
+        # add wait before compute
+        self.add_compute_split_barrier(compute_graph, last_mma)
+
+        # update trace
+        self.trace.add_subgraph(compute_graph_name, compute_graph)
+
+        # update root graph
+        get_custom(is_compute_cond).get_root_graph().subgraphs[
+            compute_graph_name
+        ] = compute_graph
+
+    def insert_service_cond(
+        self, cond_reg, iterate_op, location: Optional[CapturedLocation], nodes
+    ):
+        # service subgraph
+        service_graph = fx.Graph()
+        service_graph_name = f"service_graph_{cond_reg.name}"
+
+        # duplicate nodes
+        new_writes = defaultdict(list)
+        for w in range(self.hw.waves_per_block[0], 0, -1):
+            write_record = []
+            shift_subs = {THREAD_0: THREAD_0 - 32 * w}
+
+            self.add_nodes_to_graph(
+                service_graph, nodes, shift_subs, new_writes, write_record
+            )
+
+            # add signal after load
+            dup_times = self.hw.waves_per_block[0] - w + 1
+            self.add_load_split_barrier(
+                service_graph, iterate_op, dup_times, write_record[0], write_record[-1]
+            )
+
+        # add conditional at parent graph
+        pgraph = self.graph
+
+        with pgraph.inserting_before(pgraph.output_node()):
+            is_service_cond = Conditional(
+                cond_reg,
+                subgraph_name=service_graph_name,
+                implicit_captures=iterate_op.implicit_captures,
+            ).add_to_graph(pgraph)
+
+        is_service_cond.location = location
+        service_graph.parent_op = is_service_cond
+
+        # close the graph with empty output
+        service_graph.output(None)
+
+        # update trace
+        self.trace.add_subgraph(service_graph_name, service_graph)
+
+        # update root graph
+        get_custom(is_service_cond).get_root_graph().subgraphs[
+            service_graph_name
+        ] = service_graph
+
+        return new_writes
+
+    def add_compute_split_barrier(self, subgraph, last_mma_node):
+        """
+        add split barriers for compute partition
+        ---- Example ----
+        Before:
+            if is compute partition:
+                LOCAL_READ
+                LOCAL_READ
+                MMA
+        After:
+            if is compute partition:
+                if wave id == 0:
+                    wait 0
+                if wave id == 1:
+                    wait 1
+                ...
+
+                LOCAL_READ
+                LOCAL_READ
+                MMA
+
+                if wave id == 0:
+                    signal 0
+                if wave id == 1:
+                    signal 1
+                ...
+        """
+        first_node = next(iter(subgraph.nodes))
+        location = get_custom(first_node).location
+
+        with subgraph.inserting_before(first_node):
+            for i in range(1, self.barUB):
+                # declare graph
+                wid_wait_graph = fx.Graph()
+                wid_wait_graph_name = f"compute_wait_{i}_graph"
+
+                # update trace
+                self.trace.add_subgraph(wid_wait_graph_name, wid_wait_graph)
+
+                # add wait node to wid_wait_graph
+                SharedMemoryBarrierWait(barId=i).add_to_graph(
+                    region_graph=wid_wait_graph, loc=location
+                )
+
+                # add condition entry to parent graph
+                cond_expr = sympy.Eq(self.wave_id, i)
+                wait_cond_op = Conditional(
+                    cond_expr,
+                    subgraph_name=wid_wait_graph_name,
+                    implicit_captures=[],
+                ).add_to_graph(subgraph, loc=location)
+
+                wid_wait_graph.parent_op = wait_cond_op
+
+                # update root graph
+                get_custom(wait_cond_op).get_root_graph().subgraphs[
+                    wid_wait_graph_name
+                ] = wid_wait_graph
+
+        signal_location = get_custom(last_mma_node).location
+        with subgraph.inserting_before(last_mma_node):
+            for i in range(1, self.barUB):
+                # declare graph
+                wid_signal_graph = fx.Graph()
+                wid_signal_graph_name = f"compute_signal_{i}_graph"
+
+                # update trace
+                self.trace.add_subgraph(wid_signal_graph_name, wid_signal_graph)
+
+                # add signal node to wid_signal_graph
+                SharedMemoryBarrierSignal(barId=i).add_to_graph(
+                    region_graph=wid_signal_graph, loc=signal_location
+                )
+
+                # add condition entry to parent graph
+                cond_expr = sympy.Eq(self.wave_id, i)
+                signal_cond_op = Conditional(
+                    cond_expr,
+                    subgraph_name=wid_signal_graph_name,
+                    implicit_captures=[],
+                ).add_to_graph(subgraph, loc=signal_location)
+
+                wid_signal_graph.parent_op = signal_cond_op
+
+                # update root graph
+                get_custom(signal_cond_op).get_root_graph().subgraphs[
+                    wid_signal_graph_name
+                ] = wid_signal_graph
+
+    def add_load_split_barrier(
+        self, subgraph, iterate_op, dup_times, first_lw, last_lw
+    ):
+        """
+        add split barriers for load partition
+        ---- Example ----
+        Before:
+            if is load partition:
+                GLOBAL_READ
+                GLOBAL_READ
+                LOCAL_WRITE     <- first_lw
+                LOCAL_WRITE     <- last_lw
+        After:
+            if is load partition:
+                GLOBAL_READ
+                GLOBAL_READ
+
+                if not first round and wave id == 0:
+                    wait 0
+
+                LOCAL_WRITE
+                LOCAL_WRITE
+
+                if wave id == 0:
+                    signal 0
+
+                GLOBAL_READ
+                GLOBAL_READ
+
+                if not first round and wave id == 1:
+                    wait 1
+
+                LOCAL_WRITE
+                LOCAL_WRITE
+
+                if wave id == 1:
+                    signal 1
+                ...
+        """
+
+        # first load wave id
+        start_load_wid = math.prod(self.hw.waves_per_block) + self.hw.n_service_waves
+
+        # induction symbol
+        iv = get_induction_symbol(iterate_op.axis)
+
+        with subgraph.inserting_before(first_lw):
+            location = get_custom(first_lw).location
+            for i in range(1, self.barUB):
+                # declare graph
+                wid_wait_graph = fx.Graph()
+                wid_wait_graph_name = f"load_wait_{i}_graph"
+
+                # update trace
+                self.trace.add_subgraph(wid_wait_graph_name, wid_wait_graph)
+
+                # add wait node to wid_wait_graph
+                SharedMemoryBarrierWait(barId=i).add_to_graph(
+                    region_graph=wid_wait_graph, loc=location
+                )
+
+                # calculate which compute wid this load is helping with
+                compute_wid = (self.wave_id % start_load_wid) * self.hw.waves_per_block[
+                    0
+                ] + dup_times % self.hw.waves_per_block[0]
+
+                # add condition entry to parent graph
+                cond_expr = sympy.And(sympy.Eq(compute_wid, i), sympy.Eq(iv, 0))
+
+                wait_cond_op = Conditional(
+                    cond_expr,
+                    subgraph_name=wid_wait_graph_name,
+                    implicit_captures=[],
+                ).add_to_graph(subgraph, loc=location)
+
+                wid_wait_graph.parent_op = wait_cond_op
+
+                # update root graph
+                get_custom(wait_cond_op).get_root_graph().subgraphs[
+                    wid_wait_graph_name
+                ] = wid_wait_graph
+
+        with subgraph.inserting_after(last_lw):
+            location = get_custom(last_lw).location
+            for i in range(1, self.barUB):
+                # declare graph
+                wid_signal_graph = fx.Graph()
+                wid_signal_graph_name = f"load_signal_{i}_graph"
+
+                # update trace
+                self.trace.add_subgraph(wid_signal_graph_name, wid_signal_graph)
+
+                # add signal node to wid_signal_graph
+                SharedMemoryBarrierSignal(barId=i).add_to_graph(
+                    region_graph=wid_signal_graph, loc=location
+                )
+
+                # calculate which compute wid this load is helping with
+                compute_wid = (self.wave_id % start_load_wid) * self.hw.waves_per_block[
+                    0
+                ] + dup_times % self.hw.waves_per_block[0]
+
+                # add condition entry to parent graph
+                cond_expr = sympy.Eq(compute_wid, i)
+
+                signal_cond_op = Conditional(
+                    cond_expr,
+                    subgraph_name=wid_signal_graph_name,
+                    implicit_captures=[],
+                ).add_to_graph(subgraph, loc=location)
+
+                wid_signal_graph.parent_op = signal_cond_op
+
+                # update root graph
+                get_custom(signal_cond_op).get_root_graph().subgraphs[
+                    wid_signal_graph_name
+                ] = wid_signal_graph

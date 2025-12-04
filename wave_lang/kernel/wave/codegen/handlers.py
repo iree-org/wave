@@ -1718,6 +1718,15 @@ def handle_shared_memory_barrier_signal(emitter: WaveEmitter, node: fx.Node):
             rocdl_d.s_barrier_signal(barId)
             scf_d.YieldOp([])
     else:
+        if isinstance(barId, fx.Node):
+            cond, if_t, if_f = barId.args
+            unwrap = lambda x: cast_py_value(emitter, x).ir_value
+            cond_expr = unwrap(cond)
+            if_t_expr = unwrap(if_t)
+            if_f_expr = unwrap(if_f)
+            selected = arith_d.select(cond_expr, if_t_expr, if_f_expr)
+            emitter.bind_node_proxy(barId, IRProxyValue(selected))
+
         rocdl_d.s_barrier_signal(barId)
 
 
@@ -1728,7 +1737,13 @@ def handle_shared_memory_barrier_wait(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    rocdl_d.s_barrier_wait(barId)
+    if isinstance(barId, IndexExpr):
+        i32_type = IntegerType.get_signless(32)
+        barIdx = gen_sympy_index(add_emitter_subs(emitter), barId)
+        barVal = arith_d.index_cast(i32_type, barIdx)
+        barId = barVal.owner
+
+    rocdl_d.s_barrier_wait(barVal)
 
 
 @handle_op(scheduling_barrier)
