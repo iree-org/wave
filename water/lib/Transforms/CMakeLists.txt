@@ -1,6 +1,8 @@
 add_mlir_dialect_library(MLIRWaterTransforms
   AccessCheckers.cpp
+  AssembleISA.cpp
   CheckStaticAssertions.cpp
+  GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   SLPVectorizer.cpp
 
@@ -20,6 +22,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   MLIRLLVMDialect
   MLIRMemRefDialect
   MLIRPass
+  MLIRROCDLTarget
   MLIRRewrite
   MLIRTransformUtils
   MLIRVectorDialect
