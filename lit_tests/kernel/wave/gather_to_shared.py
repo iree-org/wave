@@ -75,7 +75,9 @@ def test_gather_to_shared():
     print(gemm.asm)
 
     # CHECK-LABEL:    test_gather_to_shared
+    # CHECK-DAG:      #[[MAP1:.+]] = affine_map<()[s0, s1] -> (s0 * 16 + s1 * 2 - (s1 floordiv 8) * 16)>
     # CHECK:          func.func @gemm
+    # CHECK:            %[[TIDX:.+]] = gpu.thread_id  x
     # CHECK-COUNT-1:    memref.alloc()
     # CHECK:            %[[idx0:.*]] = rocdl.readfirstlane %{{.*}} : i32
     # CHECK:            %[[idx1:.*]] = arith.index_cast %[[idx0]] : i32 to index
@@ -85,9 +87,12 @@ def test_gather_to_shared():
     # CHECK:            %[[idx5:.*]] = arith.index_cast %[[idx4]] : i32 to index
     # CHECK:            %[[idx6:.*]] = rocdl.readfirstlane %{{.*}} : i32
     # CHECK:            %[[idx7:.*]] = arith.index_cast %[[idx6]] : i32 to index
-    # CHECK:            scf.for
+    # CHECK:            scf.for %[[IND_VAR:.+]] = %c0
     # CHECK:              amdgpu.lds_barrier
+    # CHECK:              %[[UPDATE_OFFSET:.+]] = affine.apply #[[MAP1]]()[%[[IND_VAR]], %[[TIDX]]]
+    # CHECK:              %[[LHS:.+]] = arith.addi %{{.*}}, %[[UPDATE_OFFSET]]
     # CHECK:              amdgpu.gather_to_lds {{.*}}, %{{.*}}[%[[idx1]], %[[idx3]]] : vector<2xf16>
+    # CHECK:              %[[RHS:.+]] = arith.addi %{{.*}}, %[[UPDATE_OFFSET]]
     # CHECK:              amdgpu.gather_to_lds {{.*}}, %{{.*}}[%[[idx5]], %[[idx7]]] : vector<2xf16>
     # CHECK:              rocdl.s.waitcnt
     # CHECK:              amdgpu.lds_barrier
@@ -266,7 +271,7 @@ def test_gather_to_shared_scaled_dims():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL:    test_gather_to_shared_scaled_dims
-    # CHECK:          #[[map1:.*]] = affine_map<()[s0] -> ((s0 floordiv 8) mod 8)>
+    # CHECK:          #[[map1:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 8)>
     # CHECK:          #[[map2:.*]] = affine_map<()[s0] -> (s0 mod 8)>
     # CHECK:          #[[map6:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
     # CHECK:          #[[map7:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16 + 4)>

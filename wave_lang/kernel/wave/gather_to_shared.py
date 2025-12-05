@@ -8,8 +8,9 @@ import logging
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum
 from math import prod
-from typing import Optional
+from typing import Optional, Callable
 
 import sympy
 import torch.fx as fx
@@ -28,6 +29,7 @@ from ..ops.wave_ops import (
 from ..wave.constraints import (
     Constraint,
     TilingConstraint,
+    WaveConstraint,
     WorkgroupConstraint,
 )
 from ..wave.utils.graph_utils import DCE
@@ -97,14 +99,158 @@ def combine_index(
 
 @dataclass
 class GatherToSharedConfig:
-    materialized_shape: list[IndexSymbol]
+    tail_padding: IndexExpr
+    drop_padding: IndexExpr
+    get_offset: Callable
     elements_per_thread: int
     expected_number_of_loads: int
+
+
+"""
+CoalescingType.LINEAR:
+
+Most Naive and straightforward coalescing type/access pattern.
+In this mode, we simply flatten our N-d data, and flatten our M-d workers
+and simply distribute len(flatten_data) / flatten(flatten_worker) amount of data
+to each worker. Then we delinearize to get back N-d shape.
+
+CoalescingType.Linear is pretty good to minimize # of global loads, however it is
+not aware of wave data ownership.  This means every load only reads data for certain
+waves and not all waves/threads; hence stalling the process until data for all the
+wave is ready, as waves typically move together.
+To optimize that we introduce another strategy below.
+
+CoalescingType.WAVE_TILE_ALIGNED:
+
+More Wave data ownership aware coalescing strategy. We further divide data into
+different "wave tiles" which are based on data owned by each waves. Now that we have
+tiles, where each tile owns some set of waves, we can do something similar to
+linear distribution to maximize number of data each thread will load.
+Concrete examples will follow below.
+
+
+Example:
+
+Imagine you are working on a matmul of BLOCK_M=128, BLOCK_N=128, BLOCK_K=64.
+wave0-3 will load A[0:128, 0:64] @ [0:64, 0:64]
+wave4-7 will load A[0:128, 0:64] @ [0:64, 64:128]
+
+Wave0-3 and Wave4-7 will need to load same data for A.
+
+Assumptions:
+
+data to load: A matrix
+workgroup_shape = [BLOCK_M, BLOCK_N] = 128x64xf16
+wave_shape = 32x64xf16
+threads_per_wave = 64
+max_width_read = 128 bitwidth = 8 f16 elems
+num_waves = 8
+workgroup_threads = (64, 8)
+
+wave0 data ownership: data[0:32, :64]
+wave1 data ownership: data[32:64, :64]
+wave2 data ownership: data[64:96, :64]
+wave3 data ownership: data[96:128, :64]
+
+wave4 data ownership: data[0:32, :64]
+wave5 data ownership: data[32:64, :64]
+wave6 data ownership: data[64:96, :64]
+wave7 data ownership: data[96:128, :64]
+
+LINEAR distribution:
+flatten_data = 128*64 = 8192
+flatten_workers = 64*8 = 512
+data_per_worker =  flatten_data // flatten_workers = 16
+num_loads =  data_per_worker // max_width_read = 2
+
+Here we have two 128 bitwidth/8(f16) elems read. Where each thread/worker will own
+16 contiguous data, where neighboring threads will own contiguous data to each other.
+-> first load = read(data[0:64,:64]) -> useful only for wave0, wave1, wave4, wave5
+-> second load = read(data[64:128,:64]) -> useful only for wave2, wave3, wave6, wave7
+
+Things to note, Linear distribution does not take into account wave ownership of data
+and first loads data for only wave0 and wave1. Second load, loads only for wave2 and wave3.
+This means, we need to wait for all the loads to finish before we can proceed with further computations.
+
+
+WAVE_TILE_ALIGNED distribution:
+flatten_data = 128*64 = 8192
+flatten_wave_data = 32*64 = 2048
+flatten_workers = 64*8 = 512
+num_tiles = flatten_data // flatten_tile_data = 4
+waves_per_tile = num_waves / num_tile = 2
+tile_id = wave_id // waves_per_tile => tile0 owns wave0/wave1, tile1 owns wave2/wave3, ...
+
+Iff threads_per_wave * waves_per_tile * num_loads * max_width_read  == flatten_wave_data,
+then we can use WAVE_TILE_ALIGNED, since it is proven that with this access pattern we can also have minimal
+number of loads. In this case, since it is true, we can then have:
+
+-> first load = read(data[0:32, 0:32], data[32:64, 0:32], data[64:96, 0:32], data[96:128, 0:32])
+-> second load = read(data[0:32, 64:128], data[32:64, 64:128], data[64:96, 64:128], data[96:128, 64:128])
+
+As you can see, first load now loads half of the data owned by all the waves. and second load loads the remaining half.
+Since all the waves now have half their data ready, they can start processing doing computation/matmul as they wait on the
+second half.
+
+
+"""
+
+
+class CoalescingType(Enum):
+    LINEAR = 0x00
+    WAVE_TILE_ALIGNED = 0x10
+
+
+def compute_tail_and_drop_padding(
+    materialized_shape, elements_per_thread, total_number_of_threads
+):
+    elements_per_block = elements_per_thread * total_number_of_threads
+    logger.info(f"elements_per_block={elements_per_block}")
+
+    # GatherToLDS writes `elements_per_block` elements contiguously to LDS, so we
+    # cannot have any padding if it crosses a array row boundary.
+    drop_padding = materialized_shape[-1] % elements_per_block != 0
+    tail_padding = sympy.ceiling(
+        prod(materialized_shape) / elements_per_block
+    ) * elements_per_block - prod(materialized_shape)
+    logger.info(f"tail_padding={tail_padding}")
+    return tail_padding, drop_padding
+
+
+def select_coalescing_strategy(
+    materialized_shape,
+    linearized_wave_tile,
+    hardware_constraint,
+    expected_number_of_loads,
+    elements_per_thread,
+):
+    num_tiles = prod(materialized_shape) // linearized_wave_tile
+    num_waves = prod(hardware_constraint.waves_per_block)
+    threads_per_wave = hardware_constraint.threads_per_wave
+    waves_per_tile = num_waves // num_tiles
+
+    if prod(materialized_shape) % linearized_wave_tile != 0:
+        return CoalescingType.LINEAR
+
+    if num_waves % num_tiles != 0:
+        return CoalescingType.LINEAR
+
+    expected_wave_aligned_load = (
+        threads_per_wave
+        * waves_per_tile
+        * expected_number_of_loads
+        * elements_per_thread
+    )
+    if expected_wave_aligned_load != linearized_wave_tile:
+        return CoalescingType.LINEAR
+
+    return CoalescingType.WAVE_TILE_ALIGNED
 
 
 def get_gather_to_shared_config(
     read: Read,
     constraint_tile_size: dict[IndexSymbol, int],
+    wave_tile_size: dict[IndexSymbol, int],
     total_number_of_threads,
     element_type: "DataType",
     supported_load_widths: list[int],
@@ -135,6 +281,13 @@ def get_gather_to_shared_config(
         constraint_tile_size, ordered_shape, vector_shapes
     )
     logger.info(f"materialized_shape={materialized_shape}")
+
+    materialized_wave_shape = materialize_shape(
+        wave_tile_size, ordered_shape, vector_shapes
+    )
+    # vector_shapes can have 0 values to show we dont want a leading dim. but in effect is 1.
+    materialized_wave_shape = [dim_size or 1 for dim_size in materialized_wave_shape]
+    logger.info(f"materialized_wave_shape={materialized_wave_shape}")
 
     total_number_of_elements = prod(materialized_shape)
     logger.info(f"total_number_of_elements={total_number_of_elements}")
@@ -190,8 +343,51 @@ def get_gather_to_shared_config(
         )
         return None
 
-    return GatherToSharedConfig(
+    # Compute Drop/Tail Padding
+    tail_padding, drop_padding = compute_tail_and_drop_padding(
+        materialized_shape, elements_per_thread, total_number_of_threads
+    )
+
+    # Selecting optimal load pattern
+    linearized_wave_tile = prod(materialized_wave_shape)
+    coalescing_strategy = select_coalescing_strategy(
         materialized_shape,
+        linearized_wave_tile,
+        hardware_constraint,
+        expected_number_of_loads,
+        elements_per_thread,
+    )
+    if coalescing_strategy == CoalescingType.LINEAR:
+        base_offset = hardware_constraint.linearized_thread_id * elements_per_thread
+        update_offset = total_number_of_threads * elements_per_thread
+    elif coalescing_strategy == CoalescingType.WAVE_TILE_ALIGNED:
+        num_tiles = prod(materialized_shape) // linearized_wave_tile
+        num_waves = prod(hardware_constraint.waves_per_block)
+
+        waves_per_tile = num_waves // num_tiles
+        threads_per_wave = hardware_constraint.threads_per_wave
+
+        tile_id = hardware_constraint.wave_id // waves_per_tile
+        intra_tile_wave_id = hardware_constraint.wave_id % waves_per_tile
+        elements_per_wave = elements_per_thread * threads_per_wave
+
+        base_offset = (
+            tile_id * linearized_wave_tile
+            + intra_tile_wave_id * elements_per_wave
+            + hardware_constraint.lane_id * elements_per_thread
+        )
+        update_offset = waves_per_tile * elements_per_wave
+    else:
+        raise ValueError(
+            "Only expect Linear or WAVE_TILE_ALIGNED for coalescing strategy."
+        )
+    get_offset = lambda iter: delinearize_index(
+        base_offset + iter * update_offset, materialized_shape
+    )
+    return GatherToSharedConfig(
+        tail_padding,
+        drop_padding,
+        get_offset,
         elements_per_thread,
         expected_number_of_loads,
     )
@@ -200,11 +396,7 @@ def get_gather_to_shared_config(
 def emit_global_to_lds(
     read: Read,
     write: Write,
-    materialized_shape: list[IndexSymbol],
-    elements_per_thread: int,
-    expected_number_of_loads: int,
-    total_number_of_threads: int,
-    thread_id: IndexExpr,
+    config: GatherToSharedConfig,
     bounds: dict[IndexSymbol, IndexExpr],
     element_type: "DataType",
     waves_per_block: tuple[int, int, int],
@@ -213,41 +405,24 @@ def emit_global_to_lds(
     """
     Emit `GatherToLDS` for the given read and write.
     """
-    elements_per_block = elements_per_thread * total_number_of_threads
-    logger.info(f"elements_per_block={elements_per_block}")
 
-    # For index delinearization, assume our shape in `elements_per_thread` chunks.
-    materialized_shape_adjusted = list(materialized_shape)
-    materialized_shape_adjusted[-1] = materialized_shape[-1] // elements_per_thread
-
-    logger.info(f"materialized_shape_adjusted={materialized_shape_adjusted}")
-
-    # GatherToLDS writes `elements_per_block` elements contiguously to LDS, so we
-    # cannot have any padding if it crosses a array row boundary.
-    drop_padding = materialized_shape[-1] % elements_per_block != 0
-    tail_padding = sympy.ceiling(
-        prod(materialized_shape) / elements_per_block
-    ) * elements_per_block - prod(materialized_shape)
-    logger.info(f"tail_padding={tail_padding}")
-
+    elements_per_thread = config.elements_per_thread
+    expected_number_of_loads = config.expected_number_of_loads
     global_index = remove_thread_indexing(read.index)
     logger.info(f"global_index={global_index}")
 
     new_writes = defaultdict(list)
 
     common_id = None
+    # Check that wave_tile % (num_wave * element_per_wave) == 0
     for i in range(expected_number_of_loads):
-        # As we adjusted our shape to be in `elements_per_thread` chunks, each
-        # subsequent load will be `total_number_of_threads` elements apart.
-        thread_id_adjusted = thread_id + i * total_number_of_threads
-        nd_index = delinearize_index(thread_id_adjusted, materialized_shape_adjusted)
+        nd_index = config.get_offset(i)
         logger.info(f"nd_index={nd_index}")
         write_index = {}
         for bound_expr, idx in zip(read.indexing_dims, nd_index):
             last = bound_expr == read.indexing_dims[-1]
             dim = infer_dim(bound_expr)
 
-            idx = idx * elements_per_thread if last else idx
             size = elements_per_thread if last else 1
             stride = 1
             write_index[dim] = IndexSequence(idx, size, stride)
@@ -310,7 +485,7 @@ def emit_global_to_lds(
             new_write.tag = read.tag
 
         new_writes[write.memory].append(new_write)
-        if drop_padding:
+        if config.drop_padding:
             custom_memory = get_custom(write.memory)
             padding = custom_memory.padding
             if padding != 0:
@@ -321,9 +496,9 @@ def emit_global_to_lds(
                     "distributed_shape", tuple(new_distributed_shape)
                 )
 
-        if tail_padding != 0:
+        if config.tail_padding != 0:
             custom_memory = get_custom(write.memory)
-            custom_memory.update_arg("tail_padding", tail_padding)
+            custom_memory.update_arg("tail_padding", config.tail_padding)
 
     return new_writes
 
@@ -403,8 +578,6 @@ def gather_to_shared(
     total_number_of_threads = prod(threads_per_block)
     logger.info(f"total_number_of_threads={total_number_of_threads}")
 
-    thread_id = hardware_constraint.linearized_thread_id
-
     supported_load_widths = [32]
 
     if "gfx95" in options.target:
@@ -414,6 +587,12 @@ def gather_to_shared(
         c.dim: c.tile_size
         for c in constraints
         if isinstance(c, TilingConstraint) or isinstance(c, WorkgroupConstraint)
+    }
+
+    wave_tile_size = {
+        c.dim: c.tile_size
+        for c in constraints
+        if isinstance(c, TilingConstraint) or isinstance(c, WaveConstraint)
     }
 
     for reads_writes in id_to_read_write.values():
@@ -443,6 +622,7 @@ def gather_to_shared(
         config = get_gather_to_shared_config(
             read,
             constraint_tile_size,
+            wave_tile_size,
             total_number_of_threads,
             element_type,
             supported_load_widths,
@@ -454,18 +634,10 @@ def gather_to_shared(
             logger.info("no gather to shared config found")
             continue
 
-        materialized_shape = config.materialized_shape
-        elements_per_thread = config.elements_per_thread
-        expected_number_of_loads = config.expected_number_of_loads
-
         new_writes = emit_global_to_lds(
             read,
             write,
-            materialized_shape,
-            elements_per_thread,
-            expected_number_of_loads,
-            total_number_of_threads,
-            thread_id,
+            config,
             bounds,
             element_type,
             waves_per_block,
