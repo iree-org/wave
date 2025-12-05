@@ -72,7 +72,7 @@ def test_debug_dwarf():
             BLOCK_M: 32,
             BLOCK_N: 32,
             BLOCK_K: 16,
-            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY.value,
+            ADDRESS_SPACE: tkl.AddressSpace.SHARED_MEMORY,
         },
         canonicalize=True,
         compile_to_mlir=False,
