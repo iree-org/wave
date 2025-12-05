@@ -226,6 +226,8 @@ def specialize_kernel(
             compute_partition,
         )
 
+    # TODO(megan.kuo) assume one iterate per graph
+    specialist.add_epilog_guard(iterate_op, is_compute_wave)
     print("done")
     return
 
@@ -437,7 +439,7 @@ class Specialist(GemmScheduler):
 
         # duplicate nodes
         new_writes = defaultdict(list)
-        for w in range(self.hw.waves_per_block[1], 0, -1):
+        for w in range(self.hw.waves_per_block[0], 0, -1):
             write_record = []
 
             # TODO(megan.kuo)
@@ -510,8 +512,8 @@ class Specialist(GemmScheduler):
                     region_graph=wid_wait_graph, loc=location
                 )
 
-                # add condition entry to parent graph
-                cond_expr = sympy.Eq(self.wave_id, i)
+                # add condition entry to parent graph (wave id is 0-based)
+                cond_expr = sympy.Eq(self.wave_id, i - 1)
                 wait_cond_op = Conditional(
                     cond_expr,
                     subgraph_name=wid_wait_graph_name,
@@ -526,7 +528,7 @@ class Specialist(GemmScheduler):
                 ] = wid_wait_graph
 
         signal_location = get_custom(last_shared_read).location
-        with subgraph.inserting_before(last_shared_read):
+        with subgraph.inserting_after(last_shared_read):
             for i in range(1, self.barUB):
                 # declare graph
                 wid_signal_graph = fx.Graph()
@@ -541,7 +543,7 @@ class Specialist(GemmScheduler):
                 )
 
                 # add condition entry to parent graph
-                cond_expr = sympy.Eq(self.wave_id, i)
+                cond_expr = sympy.Eq(self.wave_id, i - 1)
                 signal_cond_op = Conditional(
                     cond_expr,
                     subgraph_name=wid_signal_graph_name,
@@ -622,7 +624,7 @@ class Specialist(GemmScheduler):
                 ) + dup_times * self.hw.waves_per_block[0]
 
                 # add condition entry to parent graph
-                cond_expr = sympy.And(sympy.Eq(compute_wid, i), sympy.Ne(iv, 0))
+                cond_expr = sympy.And(sympy.Eq(compute_wid, i - 1), sympy.Ne(iv, 0))
 
                 wait_cond_op = Conditional(
                     cond_expr,
@@ -652,13 +654,13 @@ class Specialist(GemmScheduler):
                     region_graph=wid_signal_graph, loc=location
                 )
 
-                # calculate which compute wid this load is helping with
-                compute_wid = (self.wave_id % start_load_wid) * self.hw.waves_per_block[
-                    0
-                ] + dup_times % self.hw.waves_per_block[0]
+                # calculate which compute wid this load wid is helping with
+                compute_wid = (
+                    self.wave_id % start_load_wid
+                ) + dup_times * self.hw.waves_per_block[0]
 
                 # add condition entry to parent graph
-                cond_expr = sympy.Eq(compute_wid, i)
+                cond_expr = sympy.Eq(compute_wid, i - 1)
 
                 signal_cond_op = Conditional(
                     cond_expr,
@@ -672,3 +674,37 @@ class Specialist(GemmScheduler):
                 get_custom(signal_cond_op).get_root_graph().subgraphs[
                     wid_signal_graph_name
                 ] = wid_signal_graph
+
+    def add_epilog_guard(self, iterate_op, cond_reg):
+        # declare new subgraph
+        store_graph = fx.Graph()
+        store_graph_name = f"store_graph_{cond_reg.name}"
+
+        # add nodes to store graph
+        post_iterate_node = iterate_op.graph.output_node().prev
+        with store_graph.inserting_before():
+            while post_iterate_node != iterate_op.fx_node:
+                op = get_custom(post_iterate_node)
+                new_op = op.copy(new_graph=store_graph)
+                op.replace_all_uses_with(new_op)
+                op.erase()
+                post_iterate_node = post_iterate_node.prev
+
+        # get parent graph
+        pgraph = iterate_op.graph
+
+        # add conditional nodes to parent graph
+        with pgraph.inserting_before(pgraph.output_node()):
+            is_compute_cond = Conditional(
+                cond_reg,
+                subgraph_name=store_graph_name,
+                implicit_captures=[],
+            ).add_to_graph(pgraph, loc=get_custom(pgraph.output_node()).location)
+
+        store_graph.parent_op = is_compute_cond
+
+        # update trace
+        self.trace.add_subgraph(store_graph_name, store_graph)
+
+        # update root graph
+        iterate_op.get_root_graph().subgraphs[store_graph_name] = store_graph
