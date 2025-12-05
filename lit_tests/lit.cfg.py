@@ -43,7 +43,7 @@ config.substitutions.extend(
 if int(os.environ.get("WAVE_TEST_WATER", 0)):
     config.available_features.add("water")
 
-if shutil.which("dwarfdump"):
+if int(os.environ.get("WAVE_TEST_DWARFDUMP", 0)):
     config.available_features.add("dwarfdump")
 
 # Find a suitable filecheck.

@@ -218,7 +218,7 @@ jobs:
               export PYTHONPATH=${ROOT_VENV}
 
               echo "Lit tests"
-              lit lit_tests/ -v
+              WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
             '
 
       # 8. final cleanup container

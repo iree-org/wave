@@ -50,11 +50,6 @@ jobs:
           toolchain: stable
 
       - name: "Install dwarfdump"
-        # The dwarfdump command is necessary for end-to-end testing that
-        # dwarf debug info is available for debug builds.  The test that
-        # uses it will simply not run if dwarfdump is not available, so
-        # don't assume it's ok to remove this if there are no test
-        # failures without it.
         run: |
           sudo apt-get update
           sudo apt-get install -y dwarfdump
@@ -91,7 +86,7 @@ jobs:
       - name: Run LIT tests
         if: ${{ !cancelled() }}
         run: |
-          lit lit_tests/ -v
+          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
 
       - name: MyPy Type Checking
         if: ${{ !cancelled() }}
