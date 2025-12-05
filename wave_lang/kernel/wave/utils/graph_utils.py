@@ -145,21 +145,20 @@ def erase_graph(graph: fx.Graph):
 
 
 def get_users(
-    node: fx.Node, reduction: fx.Node = None
-) -> tuple[list[fx.Node], Optional[fx.Node], Optional[fx.Node]]:
+    node: fx.Node, region: fx.Node = None
+) -> tuple[list[fx.Node], Optional[fx.Node]]:
     """
     Return the users of a node, propagating through reductions and conditionals.
-    Returns (users, iterate_node, conditional_node).
+    Returns (users, region_node) where region_node is either an Iterate or Conditional node.
     """
     users = []
-    conditional = None
     for user in node.users:
         custom = user
         if not isinstance(custom, CustomOp):
             custom = get_custom(user)
         if isinstance(custom, Iterate):
             # Map init arg to iter arg
-            reduction = custom
+            region = custom
             graph = custom.get_root_graph().subgraphs[custom.subgraph_name]
             if node in custom.init_args:
                 init_arg_idx = custom.init_args.index(node)
@@ -174,15 +173,15 @@ def get_users(
         if isinstance(custom, Output):
             # Map output to get result
             return_vals = custom.return_vals[0]
-            parent_reduction = custom.graph.parent_op
+            parent_region = custom.graph.parent_op
             if not isinstance(return_vals, (list, tuple)):
-                if parent_reduction.users:
-                    users.append(next(iter(parent_reduction.users)))
+                if parent_region.users:
+                    users.append(next(iter(parent_region.users)))
             else:
                 # Handles case where DCE eliminate unused GetResult.
                 get_results = {
                     get_custom(x).res_idx: x
-                    for x in parent_reduction.users
+                    for x in parent_region.users
                     if isinstance(get_custom(x), GetResult)
                 }
                 output_idx = return_vals.index(node)
@@ -191,7 +190,7 @@ def get_users(
                     users.append(get_results[output_idx])
             continue
         if isinstance(custom, Conditional):
-            conditional = custom
+            region = custom
             if node == custom.condition:
                 users.append(user)
             elif custom.init_args is not None and node in custom.init_args:
@@ -216,7 +215,7 @@ def get_users(
             continue
 
         users.append(user)
-    return users, reduction, conditional
+    return users, region
 
 
 def propagate_placeholders(n: fx.Node) -> fx.Node:
@@ -273,54 +272,48 @@ def propagate_loop_carried_vars(n: fx.Node, depth: int = 0) -> fx.Node:
 
 
 def get_inputs(
-    node: fx.Node, iterate: fx.Node = None
-) -> tuple[list[fx.Node], Optional[fx.Node], Optional[fx.Node]]:
+    node: fx.Node, region: fx.Node = None
+) -> tuple[list[fx.Node], Optional[fx.Node]]:
     """
     Return the inputs of a node, propagating through reductions and conditionals.
-    Returns (inputs, iterate_node, conditional_node).
+    Returns (inputs, region_node) where region_node is either an Iterate or Conditional node.
     """
     inputs = []
-    conditional = None
     custom = get_custom(node)
     if isinstance(custom, IterArg):
         # Map iter args to init args
-        if iterate is None:
+        if region is None:
             parent_op = custom.parent_op()
-            if isinstance(parent_op, Iterate):
-                iterate = parent_op
-            elif isinstance(parent_op, Conditional):
-                conditional = parent_op
+            if isinstance(parent_op, (Iterate, Conditional)):
+                region = parent_op
         iter_arg_idx = custom.iter_idx
-        parent_op = iterate if iterate else conditional
-        if parent_op and parent_op.init_args:
-            inputs.append(parent_op.init_args[iter_arg_idx])
+        if region and region.init_args:
+            inputs.append(region.init_args[iter_arg_idx])
     elif isinstance(custom, GetResult):
         assert custom.value is not None, f"GetResult node {custom} has no value"
         parent_op = get_custom(custom.value)
         if isinstance(parent_op, TopkOp):
-            iterate = None
+            region = None
             inputs += node.all_input_nodes
         elif isinstance(parent_op, Iterate):
-            iterate = parent_op
+            region = parent_op
             # Map get result to output
-            iteration_subgraph = iterate.get_root_graph().subgraphs[
-                iterate.subgraph_name
-            ]
-            if len(iterate.init_args) == 1:
-                outputs = iterate.outputs(iteration_subgraph)
+            iteration_subgraph = region.get_root_graph().subgraphs[region.subgraph_name]
+            if len(region.init_args) == 1:
+                outputs = region.outputs(iteration_subgraph)
                 if isinstance(outputs, Sequence):
                     inputs += outputs
                 else:
                     inputs.append(outputs)
             else:
-                inputs.append(iterate.outputs(iteration_subgraph)[custom.res_idx])
+                inputs.append(region.outputs(iteration_subgraph)[custom.res_idx])
         elif isinstance(parent_op, Conditional):
-            conditional = parent_op
+            region = parent_op
             # Map get result to output
-            conditional_subgraph = conditional.get_root_graph().subgraphs[
-                conditional.subgraph_name
+            conditional_subgraph = region.get_root_graph().subgraphs[
+                region.subgraph_name
             ]
-            outputs = conditional.outputs(conditional_subgraph)
+            outputs = region.outputs(conditional_subgraph)
             if isinstance(outputs, Sequence):
                 if len(outputs) == 1:
                     inputs.append(outputs[0])
@@ -344,7 +337,7 @@ def get_inputs(
             inputs.append(input)
 
     inputs = [propagate_placeholders(i) for i in inputs if i is not None]
-    return inputs, iterate, conditional
+    return inputs, region
 
 
 def bfs(
@@ -360,10 +353,10 @@ def bfs(
     queue: list[fx.Node] = []
     visited.add(node)
     queue.append(node)
-    reduction = None
+    region = None
     while queue:
         s = queue.pop(0)
-        neighbors, reduction, conditional = get_neighbors(s, reduction)
+        neighbors, region = get_neighbors(s, region)
         for neighbor in neighbors:
             if neighbor not in visited and filter_fn(neighbor):
                 visited.add(neighbor)

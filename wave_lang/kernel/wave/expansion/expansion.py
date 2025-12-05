@@ -75,13 +75,13 @@ class ExpansionInfo:
         return f"ExpansionInfo({self.node.fx_node}, {self.indexed_dims})"
 
 
-class ItertionInfo:
+class RegionOpInfo:
     """
-    Contains fixup information for an Iterate node.
+    Contains fixup information for a region node (Iterate or Conditional).
     """
 
-    def __init__(self, reduction: Iterate):
-        self.reduction = reduction
+    def __init__(self, region: Iterate | Conditional):
+        self.region = region
         self.outputs: dict[int, ExpansionInfo] = {}
         self.init_args: dict[int, ExpansionInfo] = {}
         self.get_results: dict[int, CustomOp] = {}
@@ -89,35 +89,9 @@ class ItertionInfo:
     def __repr__(self):
         get_results = {i: c.fx_node for i, c in self.get_results.items()}
         return (
-            f"ReductionInfo({self.reduction.fx_node},"
+            f"RegionOpInfo({self.region.fx_node},"
             f"outputs={self.outputs},"
             f" init_args={self.init_args},"
-            f" get_results={get_results}"
-        )
-
-
-class ConditionalInfo:
-    """
-    Contains fixup information for a Conditional node.
-    """
-
-    def __init__(self, conditional: Conditional):
-        self.conditional = conditional
-        self.outputs: dict[int, ExpansionInfo] = {}
-        self.else_return: dict[int, ExpansionInfo] = {}
-        self.get_results: dict[int, CustomOp] = {}
-
-    @property
-    def init_args(self):
-        """Alias for else_return to match ItertionInfo interface."""
-        return self.else_return
-
-    def __repr__(self):
-        get_results = {i: c.fx_node for i, c in self.get_results.items()}
-        return (
-            f"ConditionalInfo({self.conditional.fx_node},"
-            f"outputs={self.outputs},"
-            f" else_return={self.else_return},"
             f" get_results={get_results}"
         )
 
@@ -130,8 +104,8 @@ class ExpansionContext:
     def __init__(self):
         self.expansion_context: dict[ExpansionInfo, CustomOp] = {}
         # Additional operator specific information.
-        self.iterate_context: dict[Iterate, ItertionInfo] = {}
-        self.conditional_context: dict[Conditional, ConditionalInfo] = {}
+        self.iterate_context: dict[Iterate, RegionOpInfo] = {}
+        self.conditional_context: dict[Conditional, RegionOpInfo] = {}
         self.mma_connections: list[tuple[MMA, MMA]] = []
         self.mma_nodes: list[tuple[MMA]] = []
 
@@ -282,10 +256,8 @@ def handle_region_entry(
     # Determine which context to use based on node type
     if isinstance(region_node, Iterate):
         region_context = expansion_context.iterate_context
-        info_class = ItertionInfo
     elif isinstance(region_node, Conditional):
         region_context = expansion_context.conditional_context
-        info_class = ConditionalInfo
     else:
         return
 
@@ -295,7 +267,7 @@ def handle_region_entry(
         if not isinstance(outputs, Sequence):
             outputs = [outputs]
         if region_node not in region_context:
-            region_context[region_node] = info_class(region_node)
+            region_context[region_node] = RegionOpInfo(region_node)
         result_index = compute_result_index(
             dim_query, dim_scaling, inputs[0], outputs, new_node.res_idx
         )
@@ -331,10 +303,8 @@ def handle_region_exit(
     # Determine which context to use based on parent node type
     if isinstance(parent_op, Iterate):
         region_context = expansion_context.iterate_context
-        info_class = ItertionInfo
     elif isinstance(parent_op, Conditional):
         region_context = expansion_context.conditional_context
-        info_class = ConditionalInfo
         # For Conditional, check if init_args (else_return) exists
         if parent_op.init_args is None:
             return
@@ -351,10 +321,7 @@ def handle_region_exit(
     new_node.iter_idx = result_index
     custom = get_custom(inputs[0])
     key = ExpansionInfo(custom, get_indexed_dims(dim_query, custom))
-    if isinstance(parent_op, Iterate):
-        region_context[region_node].init_args[result_index] = key
-    else:
-        region_context[region_node].else_return[result_index] = key
+    region_context[region_node].init_args[result_index] = key
 
 
 def concatenate_outputs(
@@ -397,7 +364,7 @@ def update_users(
     metadata: ExpansionMetadata,
     expansion_context: ExpansionContext,
 ):
-    users, _, _ = get_users(node.fx_node, None)
+    users, _ = get_users(node.fx_node, None)
     for user in users:
         user = get_custom(user)
         dim_query = metadata.dim_query
@@ -438,7 +405,7 @@ def add_to_outputs(node: CustomOp, new_node: CustomOp):
     if not output:
         return
     output = get_custom(output[0])
-    users, _, _ = get_users(new_node.fx_node, None)
+    users, _ = get_users(new_node.fx_node, None)
     get_result = [x for x in users if isinstance(get_custom(x), GetResult)]
     assert len(get_result) == 1, f"Expected one GetResult, got {get_result}"
     result_index = get_result[0].result_index
@@ -489,7 +456,7 @@ def add_get_results(trace: CapturedTrace):
 
             for subgraph in trace.region_graph.subgraphs.values():
                 for node in subgraph.nodes:
-                    if node.meta.get("lifted", None) == iterate.fx_node:
+                    if node.meta.get("lifted", None) == region_op.fx_node:
                         node.meta["lifted"] = get_result.fx_node
 
 
@@ -664,19 +631,10 @@ def expand_node(
     update_users(node, new_node, metadata, expansion_context)
 
     # Add expandable inputs to the list of nodes to expand.
-    inputs, iterate_node, conditional_node = get_inputs(node.fx_node, None)
+    inputs, region_node = get_inputs(node.fx_node, None)
 
     handle_region_entry(
-        iterate_node,
-        inputs,
-        new_node,
-        node,
-        metadata.dim_query,
-        dim_scaling,
-        expansion_context,
-    )
-    handle_region_entry(
-        conditional_node,
+        region_node,
         inputs,
         new_node,
         node,
@@ -782,7 +740,7 @@ def _fixup_build_new_args_from_sorted_dict(
 
 def _fixup_region_node_common(
     region_node: Iterate | Conditional,
-    region_info: ItertionInfo | ConditionalInfo,
+    region_info: RegionOpInfo,
     trace: CapturedTrace,
     expansion_context: ExpansionContext,
     handle_mma: bool,

@@ -51,11 +51,11 @@ def test_conditional_with_return():
 
         @tkw.conditional(threshold > threshold_scalar, else_return=[result_reg])
         def process_data(
-            acc: tkl.Register[M, N, tkl.f32],
+            arg: tkl.Register[M, N, tkl.f32],
         ) -> tkl.Register[M, N, tkl.f32]:
             a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
             a_f32 = tkw.cast(a_reg, tkl.f32)
-            result = acc + a_f32
+            result = arg + a_f32
             return result
 
         tkw.write(process_data, b, elements_per_thread=STORE_ELEMS_PER_THREAD)

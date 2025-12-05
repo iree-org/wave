@@ -1407,12 +1407,13 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
         flat_else_return = [cast_py_value(emitter, arg) for arg in flat_else_return]
         result_types = [a.ir_value.type for a in flat_else_return]
 
-    if_op = scf_d.IfOp(condition, result_types, hasElse=bool(else_return))
+    has_return_values = bool(result_types)
+    if_op = scf_d.IfOp(condition, result_types, hasElse=has_return_values)
     with InsertionPoint(if_op.then_block) as ip:
         subgraph = emitter.trace.get_subgraph(subgraph_name)
 
         # Bind iter_args if present
-        if else_return is not None:
+        if has_return_values:
             iter_args: list[fx.Node] = get_custom(node).iter_args(subgraph)
             for i, iter_arg in enumerate(iter_args):
                 emitter.bind_node_proxy(iter_arg, flat_else_return[i])
@@ -1424,7 +1425,7 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
         # Emit the subgraph.
         return_values = emitter._emit_graph(subgraph)
 
-        if else_return is None:
+        if not has_return_values:
             scf_d.YieldOp([])
         else:
             if return_values and not all(x is None for x in return_values):
@@ -1438,7 +1439,7 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
                 # No return values from subgraph, yield else_return
                 scf_d.YieldOp([a.ir_value for a in flat_else_return])
 
-    if else_return is not None:
+    if has_return_values:
         with InsertionPoint(if_op.else_block):
             # Yield the else_return unchanged
             scf_d.YieldOp([a.ir_value for a in flat_else_return])
