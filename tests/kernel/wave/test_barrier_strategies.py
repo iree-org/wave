@@ -36,7 +36,9 @@ def make_dependency(p: int, c: int, g: DummyGraph):
     req = DummySyncRequirement(
         cross_iter=p > c,
         producer=p1,
+        producers=[p1],
         consumer=c1,
+        consumers=[c1],
         prod_location=p,
         cons_location=c,
         graph_start=g.nodes[0],
@@ -50,7 +52,9 @@ class DummySyncRequirement:
     # Only fields actually read by the two strategies
     cross_iter: bool
     producer: DummyNode
+    producers: list[DummyNode]
     consumer: DummyNode
+    consumers: list[DummyNode]
     prod_location: int
     cons_location: int
     graph_start: Optional[DummyNode] = None
@@ -77,14 +81,18 @@ def test_minimize_placement_overlapping_forward_intervals():
     req1 = DummySyncRequirement(
         cross_iter=False,
         producer=p1,
+        producers=[p1],
         consumer=c1,
+        consumers=[c1],
         prod_location=1,
         cons_location=3,
     )
     req2 = DummySyncRequirement(
         cross_iter=False,
         producer=p2,
+        producers=[p2],
         consumer=c2,
+        consumers=[c2],
         prod_location=2,
         cons_location=4,
     )

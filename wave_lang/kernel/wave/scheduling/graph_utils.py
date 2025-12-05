@@ -363,7 +363,7 @@ def get_scheduling_weight(node: fx.Node) -> EdgeWeight:
                 weight = EdgeWeight(0, delay_table[Operation.WRITE_GLOBAL])
             else:
                 weight = EdgeWeight(0, delay_table[Operation.WRITE_SHARED])
-        case GatherToLDS():
+        case GatherToLDS() | TensorLoadToLDS():
             weight = EdgeWeight(0, delay_table[Operation.GLOBAL_TO_SHARED])
         case MMABase():
             weight = EdgeWeight(0, delay_table[Operation.MMA])
@@ -396,9 +396,7 @@ def erase_placeholder_nodes(graph: fx.Graph, ignore_nodes: set[fx.Node]) -> None
     of the node with None.
     """
     for node in ignore_nodes:
-        for user in list(node.users):
-            idx = user.args.index(node)
-            user.update_arg(idx, None)
+        node.replace_all_uses_with(None)
         graph.erase_node(node)
 
 
