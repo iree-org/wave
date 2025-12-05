@@ -1,3 +1,4 @@
+# REQUIRES: dwarfdump
 # RUN: rm -rf %t && mkdir -p %t
 # RUN: python %s %t
 # RUN: dwarfdump --print-lines %t/*.hsaco | FileCheck %s
