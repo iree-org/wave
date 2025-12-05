@@ -122,11 +122,6 @@ def set_specialied_conditions(
     hardware_constraint,
     wave_constraints,
 ) -> (fx.Node, fx.Node):
-    # calculate total waves launch
-    physical_wid = (
-        math.prod(hardware_constraint.waves_per_block)
-        + hardware_constraint.n_service_waves
-    )
     compute_wid = math.prod(map(lambda c: c.waves_per_block, wave_constraints))
 
     # calculate physical wid
@@ -442,11 +437,11 @@ class Specialist(GemmScheduler):
 
         # duplicate nodes
         new_writes = defaultdict(list)
-        for w in range(self.hw.waves_per_block[0], 0, -1):
+        for w in range(self.hw.waves_per_block[1], 0, -1):
             write_record = []
 
             # TODO(megan.kuo)
-            shift_subs = {THREAD_0: THREAD_0 - self.hw.threads_per_wave * w}
+            shift_subs = {THREAD_1: THREAD_1 - w}
 
             self.add_nodes_to_graph(
                 service_graph, nodes, shift_subs, new_writes, write_record
@@ -601,7 +596,7 @@ class Specialist(GemmScheduler):
         """
 
         # first load wave id
-        start_load_wid = math.prod(self.hw.waves_per_block) + self.hw.n_service_waves
+        start_load_wid = math.prod(self.hw.waves_per_block)
 
         # induction symbol
         iv = get_induction_symbol(iterate_op.axis)
@@ -622,12 +617,12 @@ class Specialist(GemmScheduler):
                 )
 
                 # calculate which compute wid this load wid is helping with
-                compute_wid = (self.wave_id % start_load_wid) * self.hw.waves_per_block[
-                    0
-                ] + dup_times % self.hw.waves_per_block[0]
+                compute_wid = (
+                    self.wave_id % start_load_wid
+                ) + dup_times * self.hw.waves_per_block[0]
 
                 # add condition entry to parent graph
-                cond_expr = sympy.And(sympy.Eq(compute_wid, i), sympy.Eq(iv, 0))
+                cond_expr = sympy.And(sympy.Eq(compute_wid, i), sympy.Ne(iv, 0))
 
                 wait_cond_op = Conditional(
                     cond_expr,
