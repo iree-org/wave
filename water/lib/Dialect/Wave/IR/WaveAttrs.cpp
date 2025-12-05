@@ -665,9 +665,11 @@ llvm::LogicalResult wave::detail::verifyNormalFormAttr(
                 form, wave::WaveNormalForm::IndexExprsSpecified)) {
           if (op->hasTrait<wave::HasWaveIndexMapping>() &&
               !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
-            op->emitError()
-                << "normal form requires index expressions to be "
-                   "provided for all supported wave dialect operations";
+            if (emitDiagnostics) {
+              op->emitError()
+                  << "normal form requires index expressions to be "
+                     "provided for all supported wave dialect operations";
+            }
             return mlir::WalkResult::interrupt();
           }
         }
