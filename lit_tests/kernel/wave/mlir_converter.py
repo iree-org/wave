@@ -2,18 +2,20 @@
 # RUN: python %s | FileCheck %s
 
 
+import sys
 import sympy
 from typing import Any
 
 
 from wave_lang.kernel._support.indexing import IndexSymbol
+from wave_lang.kernel._support.tracing import CapturedTrace
 import wave_lang.kernel.wave as wave
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.lang.wave_types import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.constraints import MMAType
+from wave_lang.kernel.wave.constraints import Constraint, MMAType
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.general_utils import run_test
@@ -46,6 +48,120 @@ constraints = [
     tkw.WaveConstraint(N, sympy.floor(BLOCK_N / 2)),
     tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: BLOCK_M, N: BLOCK_N}),
 ]
+
+
+def _get_dummy_trace_options_and_constraints() -> (
+    tuple[CapturedTrace, WaveCompileOptions, list[Constraint]]
+):
+    options = WaveCompileOptions(
+        subs={M: 128, N: 128, BLOCK_M: 64, BLOCK_N: 64},
+        compile_to_mlir=True,
+    )
+
+    global constraints
+
+    @wave.wave(constraints)
+    def dummy_kernel(a: Memory[M, GLOBAL_ADDRESS_SPACE, tkl.f32]):
+        r = wave.read(a)
+        wave.write(r, a)
+
+    compiled_kernel = wave_compile(options, dummy_kernel)
+    trace = compiled_kernel.get_compiled_graph()
+    constraints = dummy_kernel.constraints
+
+    return trace, options, constraints
+
+
+# CHECK-LABEL: failure_to_parse_override_mlir
+@run_test
+def failure_to_parse_override_mlir():
+    trace, options, constraints = _get_dummy_trace_options_and_constraints()
+
+    # Override the MLIR module after `wave_compile` so it doesn't attempt to parse it.
+    options.override_mlir = "module {"
+    _, diagnostics = emit_wave_dialect(trace, constraints, options)
+
+    assert len(diagnostics) == 1
+    # CHECK: Unable to parse module assembly
+    print(diagnostics[0])
+
+
+# CHECK-LABEL: failure_to_parse_pipeline
+@run_test
+def failure_to_parse_pipeline():
+    trace, options, constraints = _get_dummy_trace_options_and_constraints()
+    _, diagnostics = emit_wave_dialect(trace, constraints, options, pipeline="module {")
+
+    assert len(diagnostics) == 1
+    # CHECK: Failed to apply transform script: Unable to parse module assembly
+    print(diagnostics[0])
+
+
+# CHECK-LABEL: pipeline_is_empty
+@run_test
+def pipeline_is_empty():
+    trace, options, constraints = _get_dummy_trace_options_and_constraints()
+    _, diagnostics = emit_wave_dialect(
+        trace, constraints, options, pipeline="module {}"
+    )
+
+    assert len(diagnostics) == 1
+    # CHECK: Failed to apply transform script: Transform module is empty
+    print(diagnostics[0])
+
+
+# CHECK-LABEL: pipeline_is_not_a_named_sequence
+@run_test
+def pipeline_is_not_a_named_sequence():
+    trace, options, constraints = _get_dummy_trace_options_and_constraints()
+    _, diagnostics = emit_wave_dialect(
+        trace, constraints, options, pipeline="module { module {}}"
+    )
+
+    assert len(diagnostics) == 1
+    # CHECK: Failed to apply transform script: Expected first op to be "transform.named_sequence", got "builtin.module"
+    print(diagnostics[0])
+
+
+# This script is guaranteed to fail unless we somehow have a root op called
+# "foo.bar", which is extremely unlikely.
+GUARANTEED_FAIL_TRANSFORM_SCRIPT = """
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%arg0: !transform.any_op) {
+    transform.cast %arg0 : !transform.any_op to !transform.op<"foo.bar">
+    transform.yield
+  }
+}
+"""
+
+
+# CHECK-LABEL: failure_in_pipeline
+@run_test
+def failure_in_pipeline():
+    trace, options, constraints = _get_dummy_trace_options_and_constraints()
+    options.override_mlir = "module {}"
+    _, diagnostics = emit_wave_dialect(
+        trace, constraints, options, pipeline=GUARANTEED_FAIL_TRANSFORM_SCRIPT
+    )
+    assert len(diagnostics) == 1
+    # CHECK: Failed to apply transform script:
+    # CHECK: incompatible payload operation name expected foo.bar vs builtin.module
+    print(diagnostics[0])
+
+
+# CHECK-LABEL: override_mlir
+@run_test
+def override_mlir():
+    trace, options, constraints = _get_dummy_trace_options_and_constraints()
+    options.override_mlir = """
+module {
+  func.func private @overridden_mlir()
+}"""
+    emitted, diagnostics = emit_wave_dialect(trace, constraints, options)
+    assert len(diagnostics) == 0, "Did not expect errors in overridden IR."
+
+    # CHECK: func.func private @overridden_mlir()
+    print(emitted)
 
 
 @wave.wave(constraints)
@@ -101,10 +217,11 @@ def mlir_converter_matrix_add():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False)
+    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
-        print(diagnostics)
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -257,11 +374,12 @@ def mlir_converter_matmul():
     # Use the mlir_converter to emit wave MLIR dialect and apply the empty
     # pipeline.
     mlir_output, diagnostics = emit_wave_dialect(
-        trace, constraints, options, False, pipeline_asm
+        trace, constraints, options, pipeline=pipeline_asm
     )
 
     if diagnostics:
-        print(diagnostics)
+        for diagnostic in diagnostics:
+            print(diagnostic, file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"

@@ -612,18 +612,140 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
+def _flush_output(module_str: str, diagnostics: list[str]) -> None:
+    output = dill.dumps(
+        {
+            "diagnostics": [d.encode("utf-8") for d in diagnostics],
+            "module": module_str.encode("utf-8"),
+        }
+    )
+    sys.stdout.buffer.write(output)
+    sys.stdout.flush()
+
+
+def _create_kernel_module(
+    ctx: ir.Context,
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    test_diagnostics: bool = False,
+) -> tuple[ir.Module | None, list[str]]:
+    """Creates an MLIR module containing the kernel function from the captured trace.
+
+    Args:
+        ctx: MLIR context set up with correct dialects.
+        trace: Captured Wave trace to convert.
+        constraints: List of Wave constraints to attach to the function.
+        options: Compilation options including hyperparameters.
+        test_diagnostics: Whether to emit a test diagnostic
+
+    Returns:
+        - The created MLIR module, or None if creation failed.
+        - List of diagnostic messages.
+    """
+    from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
+
+    diagnostics: list[str] = []
+
+    def diagnostics_handler(d):
+        diagnostics.append(f"{d.location}: {d.message}")
+        return True
+
+    ctx.attach_diagnostic_handler(diagnostics_handler)
+
+    if options.override_mlir:
+        try:
+            module = ir.Module.parse(options.override_mlir, context=ctx)
+        except ir.MLIRError as e:
+            diagnostics.append(str(e))
+            return None, diagnostics
+        else:
+            return module, diagnostics
+
+    # Keep track of which emitted value stems from what node to wire
+    # arguments correctly.
+    value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
+
+    module = ir.Module.create()
+
+    if test_diagnostics:
+        loc = ir.Location.current
+        loc.emit_error("test error")
+
+    # Collect placeholders from graph
+    placeholders = [n for n in trace.walk() if getattr(n, "op", "") == "placeholder"]
+    top_level_placeholders = [
+        p for p in placeholders if getattr(p, "graph", None) is trace.get_root_graph()
+    ]
+    top_level_names = [p.name for p in top_level_placeholders]
+
+    # Build function argument types from top-level placeholders
+    arg_types = []
+    arg_locs = []
+    for p in top_level_placeholders:
+        c = get_custom(p)
+        t = getattr(c, "_type", None) or getattr(c, "type", None)
+        arg_types.append(_type_to_wave_mlir(ctx, t))
+        arg_locs.append(c.location.to_water() if c.location else ir.Location.current)
+
+    # Return type of the function is always empty
+    func_type = ir.FunctionType.get(arg_types, [])
+    with ir.InsertionPoint(module.body):
+        func_op = func.FuncOp("kernel", func_type)
+        # TODO: WaveHyperparameterAttr only supports int currently, so we
+        #       lose mappings like ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE
+        # Convert the symbols in subs to strings and attach as
+        # WaveHyperparameterAttr to func_op
+        func_op.operation.attributes["wave.hyperparameters"] = (
+            wave.WaveHyperparameterAttr.get(
+                {str(k): v for k, v in options.subs.items() if isinstance(v, int)}
+            )
+        )
+
+        wave_constraints = list(map(_emit_wave_constraints, constraints))
+        array_attr = ir.ArrayAttr.get(wave_constraints)
+        func_op.operation.attributes[wave.WAVE_CONSTRAINTS_ATTR_NAME] = array_attr
+
+        entry_block = ir.Block.create_at_start(func_op.regions[0], arg_types, arg_locs)
+
+        # Map placeholders to function arguments
+        for i, fx_node in enumerate(top_level_placeholders):
+            value_map[fx_node] = entry_block.arguments[i]
+
+        # Subgraphs duplicate the placeholders of surrounding graphs so there
+        # are multiple placeholders representing the same values.
+        # Add mapping for these repeated placeholders as well
+        for nested_placeholder in placeholders:
+            if nested_placeholder in top_level_placeholders:
+                continue
+            if isinstance(get_custom(nested_placeholder), IterArg):
+                continue
+            # With top-level placeholders and iterargs filtered out the remaining
+            # placeholders are duplicates. Find the original one by name
+            if not nested_placeholder.name in top_level_names:
+                raise RuntimeError(
+                    f"Incorrectly structured placeholders in trace: "
+                    f"placeholder '{nested_placeholder.name}' not found in top-level names {top_level_names}."
+                )
+            value_map[nested_placeholder] = value_map[
+                top_level_placeholders[top_level_names.index(nested_placeholder.name)]
+            ]
+
+        with ir.InsertionPoint(entry_block):
+            _emit_ops_from_graph(trace.get_root_graph(), trace, value_map, ctx)
+            func.ReturnOp(operands_=[])
+
+    return module, diagnostics
+
+
 def _emit_from_captured_trace(
-    trace: "CapturedTrace",
+    trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
     pipeline: str,
     test_diagnostics=False,
 ) -> int:
-    from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
 
-    # keep track of which emitted value stems from what node to wire
-    # arguments correctly
-    value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
     diagnostics = []
 
     enable_debug_info = (
@@ -638,96 +760,29 @@ def _emit_from_captured_trace(
     ):
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
-        module = ir.Module.create()
 
-        def diagnostics_handler(d):
-            diagnostics.append(f"{d.location}: {d.message}")
-            return True
+        module, creation_diagnostics = _create_kernel_module(
+            ctx, trace, constraints, options, test_diagnostics
+        )
+        diagnostics.extend(creation_diagnostics)
+        if module is None:
+            _flush_output("", diagnostics)
+            return 0
 
-        ctx.attach_diagnostic_handler(diagnostics_handler)
-
-        if test_diagnostics:
-            loc = ir.Location.current
-            loc.emit_error("test error")
-
-        # Collect placeholders from graph
-        placeholders = [
-            n for n in trace.walk() if getattr(n, "op", "") == "placeholder"
-        ]
-        top_level_placeholders = [
-            p
-            for p in placeholders
-            if getattr(p, "graph", None) is trace.get_root_graph()
-        ]
-        top_level_names = [p.name for p in top_level_placeholders]
-
-        # Build function argument types from top-level placeholders
-        arg_types = []
-        arg_locs = []
-        for p in top_level_placeholders:
-            c = get_custom(p)
-            t = getattr(c, "_type", None) or getattr(c, "type", None)
-            arg_types.append(_type_to_wave_mlir(ctx, t))
-            arg_locs.append(
-                c.location.to_water() if c.location else ir.Location.current
-            )
-
-        # Return type of the function is always empty
-        func_type = ir.FunctionType.get(arg_types, [])
-        with ir.InsertionPoint(module.body):
-            func_op = func.FuncOp("kernel", func_type)
-            # TODO: WaveHyperparameterAttr only supports int currently, so we
-            #       lose mappings like ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE
-            # Convert the symbols in subs to strings and attach as
-            # WaveHyperparameterAttr to func_op
-            func_op.operation.attributes["wave.hyperparameters"] = (
-                wave.WaveHyperparameterAttr.get(
-                    {str(k): v for k, v in options.subs.items() if isinstance(v, int)}
-                )
-            )
-
-            wave_constraints = list(map(_emit_wave_constraints, constraints))
-            array_attr = ir.ArrayAttr.get(wave_constraints)
-            func_op.operation.attributes[wave.WAVE_CONSTRAINTS_ATTR_NAME] = array_attr
-
-            entry_block = ir.Block.create_at_start(
-                func_op.regions[0], arg_types, arg_locs
-            )
-
-            # Map placeholders to function arguments
-            for i, fx_node in enumerate(top_level_placeholders):
-                value_map[fx_node] = entry_block.arguments[i]
-
-            # Subgraphs duplicate the placeholders of surrounding graphs so there
-            # are multiple placeholders representing the same values.
-            # Add mapping for these repeated placeholders as well
-            for nested_placeholder in placeholders:
-                if nested_placeholder in top_level_placeholders:
-                    continue
-                if isinstance(get_custom(nested_placeholder), IterArg):
-                    continue
-                # With top-level placeholders and iterargs filtered out the remaining
-                # placeholders are duplicates. Find the original one by name
-                if not nested_placeholder.name in top_level_names:
-                    raise RuntimeError(
-                        f"Incorrectly structured placeholders in trace: "
-                        f"placeholder '{nested_placeholder.name}' not found in top-level names {top_level_names}."
-                    )
-                value_map[nested_placeholder] = value_map[
-                    top_level_placeholders[
-                        top_level_names.index(nested_placeholder.name)
-                    ]
-                ]
-
-            with ir.InsertionPoint(entry_block):
-                _emit_ops_from_graph(trace.get_root_graph(), trace, value_map, ctx)
-                func.ReturnOp(operands_=[])
-
-        # Verify the module before printing
+        # Verify the module before transforming or printing.
         try:
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(str(e))
+            # Print in generic form if verification fails, this form should be
+            # robust to that.
+            _flush_output(
+                module.operation.get_asm(
+                    enable_debug_info=enable_debug_info, print_generic_op_form=True
+                ),
+                diagnostics,
+            )
+            return 0
 
         # If a transform script was provided, parse and apply it to the module.
         # This expects a transform module with a named sequence as first operation.
@@ -752,10 +807,7 @@ def _emit_from_captured_trace(
                 diagnostics.append(f"Failed to apply transform script: {e}")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
-
-        output = dill.dumps({"diagnostics": diagnostics, "module": module_str})
-        sys.stdout.buffer.write(output)
-        sys.stdout.flush()
+        _flush_output(module_str, diagnostics)
     return 0
 
 
