@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from typing import Optional
 import pytest
 import torch
 import wave_lang.kernel.lang as tkl
@@ -242,10 +241,10 @@ global_to_lds_shapes += [
 @pytest.mark.parametrize(
     "enable_scheduling",
     [
-        SchedulingType.NONE,
-        SchedulingType.PREFETCH,
-        SchedulingType.FOUR_STAGE,
-        SchedulingType.MODULO,
+        pytest.param(SchedulingType.NONE),
+        pytest.param(SchedulingType.PREFETCH, marks=require_cdna_3_or_4),
+        pytest.param(SchedulingType.FOUR_STAGE, marks=require_cdna_3_or_4),
+        pytest.param(SchedulingType.MODULO, marks=require_cdna_3_or_4),
     ],
 )
 @pytest.mark.parametrize(
