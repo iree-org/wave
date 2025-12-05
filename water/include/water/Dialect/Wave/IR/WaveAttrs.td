@@ -98,8 +98,6 @@ def NORMAL_FORM_INDEX_EXPRS : I32BitEnumAttrCaseBit<
     "IndexExprsSpecified",       2, "index_exprs">;
 def NORMAL_FORM_MEMORY_ONLY_TYPES : I32BitEnumAttrCaseBit<
     "MemoryOnlyTypes",           3, "memory_only_types">;
-// When adding a bit, update the value below!
-defvar NormalFormLastValue = 3;
 
 def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
     "AllTypesSpecified", [
@@ -128,7 +126,7 @@ def WaveNormalFormAttr
   let assemblyFormat = "`<` $value `>`";
   let extraClassDeclaration = [{
     static unsigned getLastSetBit() {
-      return }] # !cast<string>(NormalFormLastValue) # [{;
+      return ::llvm::bit_width_constexpr<unsigned>(}] # !cast<BitEnumBase>(WaveNormalFormEnum).validBits # [{) - 1;
     }
   }];
 }
