@@ -857,6 +857,62 @@ def test_dynamic_copy():
 
 
 @run_test
+def test_int_to_float_handler_conversion():
+    shape = [256, 64]
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
+    STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
+
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        zero_reg = tkl.Register[M, N, tkl.f32](0.0)
+        a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+        # The important part of this test is that this scalar is 2 and
+        # NOT 2.0, which can trigger a segfault in canonicalization,
+        # or at best an error message saying that you need to write
+        # 2.0 instead, without the compiler converting it.
+        process_data = a_reg * tkw.scalar(2, tkl.f16)
+        tkw.write(process_data, b, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+    )
+    options = set_default_compile_config(options)
+    test = wave_compile(options, test)
+    print(test.asm)
+    # CHECK-LABEL: test_int_to_float_handler_conversion
+    # CHECK: %[[CONST:.*]] = arith.constant dense<2.000000e+00>
+    # CHECK: = arith.mulf {{.*}}%[[CONST]]{{.*}}
+
+
+@run_test
 def test_add_float():
     constraints: list[tkw.Constraint] = [
         tkw.HardwareConstraint(threads_per_wave=64, vector_shapes={M: 16, N: 16})
