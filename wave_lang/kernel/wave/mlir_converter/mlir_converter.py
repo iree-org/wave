@@ -72,7 +72,9 @@ def emit_wave_dialect(
 
     if proc.returncode != 0:
         raise RuntimeError(
-            f"water_emitter failed (code {proc.returncode}):\n{err.decode('utf-8')}\n{output.decode('utf-8')}"
+            f"water_emitter failed (code {proc.returncode}):\n"
+            f"{err.decode('utf-8', errors='replace')}\n"
+            f"{output.decode('utf-8', errors='replace')}"
         )
 
     try:
@@ -86,4 +88,8 @@ def emit_wave_dialect(
     diagnostics = unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
     module = unpickled.get("module") if isinstance(unpickled, dict) else None
 
-    return module, diagnostics
+    # Preserve stderr messages.
+    if err:
+        print(err.decode("utf-8", errors="replace"), file=sys.stderr)
+
+    return module.decode("utf-8"), [d.decode("utf-8") for d in diagnostics]

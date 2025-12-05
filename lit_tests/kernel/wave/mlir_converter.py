@@ -2,6 +2,7 @@
 # RUN: python %s | FileCheck %s
 
 
+import sys
 import sympy
 from typing import Any
 
@@ -104,13 +105,14 @@ def mlir_converter_matrix_add():
     mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False)
 
     if diagnostics:
-        print(diagnostics)
+        for diagnostic in diagnostics:
+            print(diagnostic.decode("utf-8"), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
 
     # Print to stdout for FileCheck
-    print(mlir_output)
+    print(mlir_output.decode("utf-8"))
 
     # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
@@ -261,7 +263,8 @@ def mlir_converter_matmul():
     )
 
     if diagnostics:
-        print(diagnostics)
+        for diagnostic in diagnostics:
+            print(diagnostic.decode("utf-8"), file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"
@@ -273,7 +276,7 @@ def mlir_converter_matmul():
     # CHECK-NEXT: transform.named_sequence @__transform_main
     # CHECK-NEXT:   transform.yield
 
-    print(mlir_output)
+    print(mlir_output.decode("utf-8"))
     # CHECK: module
     # CHECK-NEXT: func.func @kernel(
     # CHECK-SAME: %[[ARG0:.*]]: !wave.tensor<[@M, @K] of f16, <global>>
