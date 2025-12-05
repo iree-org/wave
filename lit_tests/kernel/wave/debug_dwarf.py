@@ -94,12 +94,12 @@ def test_debug_dwarf():
 # CHECK-NEXT: uri: "{{.*}}/debug_dwarf.py"
 
 # Verify that the line table contains entries for the key operations in our Wave kernel.
-# Line 60: a_reg = tkw.read(a)
-# Line 61: b_reg = tkw.read(b)
-# Line 62: acc = tkw.mma(a_reg, b_reg, acc)
-# Line 65: tkw.write(repeat, c)
+# Line 61: a_reg = tkw.read(a)
+# Line 62: b_reg = tkw.read(b)
+# Line 63: acc = tkw.mma(a_reg, b_reg, acc)
+# Line 66: tkw.write(repeat, c)
 #####        Address           Line,Column Info
-# CHECK-DAG: {{0x[0-9a-f]+}} [ 60,{{.*}}] NS
 # CHECK-DAG: {{0x[0-9a-f]+}} [ 61,{{.*}}] NS
 # CHECK-DAG: {{0x[0-9a-f]+}} [ 62,{{.*}}] NS
-# CHECK-DAG: {{0x[0-9a-f]+}} [ 65,{{.*}}] NS
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 63,{{.*}}] NS
+# CHECK-DAG: {{0x[0-9a-f]+}} [ 66,{{.*}}] NS
