@@ -149,6 +149,21 @@ def failure_in_pipeline():
     print(diagnostics[0])
 
 
+# CHECK-LABEL: override_mlir
+@run_test
+def override_mlir():
+    trace, options, constraints = _get_dummy_trace_options_and_constraints()
+    options.override_mlir = """
+module {
+  func.func private @overridden_mlir()
+}"""
+    emitted, diagnostics = emit_wave_dialect(trace, constraints, options)
+    assert len(diagnostics) == 0, "Did not expect errors in overridden IR."
+
+    # CHECK: func.func private @overridden_mlir()
+    print(emitted)
+
+
 @wave.wave(constraints)
 def matrix_add(
     # defines matrix in memory of req dimension with specific data types
@@ -206,7 +221,7 @@ def mlir_converter_matrix_add():
 
     if diagnostics:
         for diagnostic in diagnostics:
-            print(diagnostic.decode("utf-8"), file=sys.stderr)
+            print(diagnostic, file=sys.stderr)
     assert (
         len(diagnostics) == 0
     ), "dialect emission should create valid IR, therefore diagnostics should be empty"

@@ -637,7 +637,6 @@ def _create_kernel_module(
         trace: Captured Wave trace to convert.
         constraints: List of Wave constraints to attach to the function.
         options: Compilation options including hyperparameters.
-        diagnostics: List to accumulate diagnostic messages (modified in place)
         test_diagnostics: Whether to emit a test diagnostic
 
     Returns:
@@ -660,6 +659,8 @@ def _create_kernel_module(
         except ir.MLIRError as e:
             diagnostics.append(str(e))
             return None, diagnostics
+        else:
+            return module, diagnostics
 
     # Keep track of which emitted value stems from what node to wire
     # arguments correctly.
