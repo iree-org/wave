@@ -272,8 +272,8 @@ class Specialist(GemmScheduler):
         self.trace = trace
         self.graph = graph
         self.wave_id = wave_id
-        self.hw = hw
-        self.barUB = int(math.prod(self.hw.waves_per_block)) + 1
+        self.waves_per_block = [int(wpb) for wpb in hw.waves_per_block]
+        self.barUB = math.prod(self.waves_per_block) + 1
 
     def add_nodes_to_graph(self, graph, nodes, subs, new_writes, write_record):
         def new_index(index, shift_subs):
@@ -439,7 +439,7 @@ class Specialist(GemmScheduler):
 
         # duplicate nodes
         new_writes = defaultdict(list)
-        for w in range(self.hw.waves_per_block[0], 0, -1):
+        for w in range(self.waves_per_block[0], 0, -1):
             write_record = []
 
             # TODO(megan.kuo)
@@ -450,7 +450,7 @@ class Specialist(GemmScheduler):
             )
 
             # add signal after load
-            dup_times = self.hw.waves_per_block[0] - w
+            dup_times = self.waves_per_block[0] - w
             self.add_load_split_barrier(
                 service_graph, iterate_op, dup_times, write_record[0], write_record[-1]
             )
@@ -598,14 +598,18 @@ class Specialist(GemmScheduler):
         """
 
         # first load wave id
-        start_load_wid = math.prod(self.hw.waves_per_block)
+        start_load_wid = self.barUB - 1
 
         # induction symbol
         iv = get_induction_symbol(iterate_op.axis)
 
         with subgraph.inserting_before(first_lw):
             location = get_custom(first_lw).location
-            for i in range(1, self.barUB):
+            for offset in range(1, self.waves_per_block[0] + 1):
+
+                # i is the range of possible barrier id this service wave is helping out
+                i = dup_times * self.waves_per_block[0] + offset
+
                 # declare graph
                 wid_wait_graph = fx.Graph()
                 wid_wait_graph_name = f"load_wait_{i}_graph"
@@ -621,7 +625,7 @@ class Specialist(GemmScheduler):
                 # calculate which compute wid this load wid is helping with
                 compute_wid = (
                     self.wave_id % start_load_wid
-                ) + dup_times * self.hw.waves_per_block[0]
+                ) + dup_times * self.waves_per_block[0]
 
                 # add condition entry to parent graph
                 cond_expr = sympy.And(sympy.Eq(compute_wid, i - 1), sympy.Ne(iv, 0))
@@ -641,7 +645,11 @@ class Specialist(GemmScheduler):
 
         with subgraph.inserting_after(last_lw):
             location = get_custom(last_lw).location
-            for i in range(1, self.barUB):
+            for offset in range(1, self.waves_per_block[0] + 1):
+
+                # i is the range of possible barrier id this service wave is helping out
+                i = dup_times * self.waves_per_block[0] + offset
+
                 # declare graph
                 wid_signal_graph = fx.Graph()
                 wid_signal_graph_name = f"load_signal_{i}_graph"
@@ -657,7 +665,7 @@ class Specialist(GemmScheduler):
                 # calculate which compute wid this load wid is helping with
                 compute_wid = (
                     self.wave_id % start_load_wid
-                ) + dup_times * self.hw.waves_per_block[0]
+                ) + dup_times * self.waves_per_block[0]
 
                 # add condition entry to parent graph
                 cond_expr = sympy.Eq(compute_wid, i - 1)
