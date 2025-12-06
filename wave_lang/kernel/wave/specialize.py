@@ -273,7 +273,7 @@ class Specialist(GemmScheduler):
         self.graph = graph
         self.wave_id = wave_id
         self.hw = hw
-        self.barUB = math.prod(self.hw.waves_per_block) + 1
+        self.barUB = int(math.prod(self.hw.waves_per_block)) + 1
 
     def add_nodes_to_graph(self, graph, nodes, subs, new_writes, write_record):
         def new_index(index, shift_subs):
@@ -480,9 +480,9 @@ class Specialist(GemmScheduler):
         After:
             if is compute partition:
                 if wave id == 0:
-                    wait 0
+                    wait 1 (buffer ready)
                 if wave id == 1:
-                    wait 1
+                    wait 2 (buffer ready)
                 ...
 
                 LOCAL_READ
@@ -490,9 +490,9 @@ class Specialist(GemmScheduler):
                 MMA
 
                 if wave id == 0:
-                    signal 0
+                    signal 1+4 (buffer empty)
                 if wave id == 1:
-                    signal 1
+                    signal 2+4 (buffer empty)
                 ...
         """
         first_node = next(iter(subgraph.nodes))
@@ -538,7 +538,7 @@ class Specialist(GemmScheduler):
                 self.trace.add_subgraph(wid_signal_graph_name, wid_signal_graph)
 
                 # add signal node to wid_signal_graph
-                SharedMemoryBarrierSignal(barId=i).add_to_graph(
+                SharedMemoryBarrierSignal(barId=i + self.barUB).add_to_graph(
                     region_graph=wid_signal_graph, loc=signal_location
                 )
 
@@ -575,25 +575,25 @@ class Specialist(GemmScheduler):
                 GLOBAL_READ
 
                 if not first round and wave id == 0:
-                    wait 0
+                    wait 1+4 (wait buffer empty)
 
                 LOCAL_WRITE
                 LOCAL_WRITE
 
                 if wave id == 0:
-                    signal 0
+                    signal 1 (signal buffer ready)
 
                 GLOBAL_READ
                 GLOBAL_READ
 
                 if not first round and wave id == 1:
-                    wait 1
+                    wait 2+4 (wait buffer empty)
 
                 LOCAL_WRITE
                 LOCAL_WRITE
 
                 if wave id == 1:
-                    signal 1
+                    signal 2 (signal buffer ready)
                 ...
         """
 
@@ -614,7 +614,7 @@ class Specialist(GemmScheduler):
                 self.trace.add_subgraph(wid_wait_graph_name, wid_wait_graph)
 
                 # add wait node to wid_wait_graph
-                SharedMemoryBarrierWait(barId=i).add_to_graph(
+                SharedMemoryBarrierWait(barId=i + self.barUB).add_to_graph(
                     region_graph=wid_wait_graph, loc=location
                 )
 
