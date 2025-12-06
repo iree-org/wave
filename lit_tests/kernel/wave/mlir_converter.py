@@ -291,6 +291,14 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[CST_0:.*]] = arith.constant 0.000000e+00 : f32
     # CHECK-NEXT: %[[REG:.*]] = wave.register %[[CST_0]]
     # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate
+    #
+    # Symbols related to induction variables must be dropped from the mapping. This is a bug in the
+    # Python propagation algorithm that is immediately caught by the verifier on construction.
+    #
+    # CHECK-SAME:   index =
+    # CHECK-SAME:     K = #wave<index_mapping
+    # CHECK-NOT:      ARGK
+    #
     # CHECK-NEXT: %[[ALLOCATE_2:.*]] = wave.allocate
     # CHECK-NEXT: %[[ITERATE:.*]] = wave.iterate @K iter_args(%[[REG]]) {
     # CHECK-NEXT:   ^{{.*}}(%[[ARG3:.*]]: !wave.tensor<[@M, @N] of f32, <register>>):

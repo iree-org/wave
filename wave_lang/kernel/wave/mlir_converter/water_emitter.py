@@ -285,24 +285,53 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
         return wave.WaveSymbolAttr.get(name)
 
 
-def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
+# Cannot specify better types here because it would require importing from
+# wave_lang and bringing in the IREE dependency we can't have at the top level.
+def _build_index_mapping_dict(
+    index: dict, allowed_induction_symbols: set
+) -> ir.DictAttr:
     """
-    Convert a Wave index dictionary into a DictionaryAttr of WaveIndexMappingAttr.
+    Convert a Wave index dictionary into a DictionaryAttr of
+    WaveIndexMappingAttr.
 
-    For MMA, multiple DictAttr objects are assembled into an ArrayAttr
-    (one per operand). For all other nodes a single-element ArrayAttr is used.
+    For MMA, multiple DictAttr objects are assembled into an ArrayAttr (one per
+    operand). For all other nodes a single-element ArrayAttr is used.
+
+    The `allowed_induction_symbols` argument lists induction variable-related
+    symbols that are allowed to be present in the expressions. Other symbols
+    will be removed and a warning will be generated if it is the case.
     """
+    from wave_lang.kernel._support.indexing import safe_subs
+
     index_mappings: dict[str, ir.Attribute] = {}
     for dim, exprs in index.items():
-        all_symbols = list(
-            set().union(
-                *[
-                    expr.free_symbols
-                    for expr in [exprs.start, exprs.size, exprs.stride]
-                    if isinstance(expr, sympy.Expr)
-                ]
-            )
+        all_symbols_set = set().union(
+            *[
+                expr.free_symbols
+                for expr in [exprs.start, exprs.size, exprs.stride]
+                if isinstance(expr, sympy.Expr)
+            ]
         )
+        induction_symbols = set(
+            symbol for symbol in all_symbols_set if symbol.name.startswith("$ARG")
+        )
+        induction_symbols_to_remove = induction_symbols.difference(
+            allowed_induction_symbols
+        )
+        induction_symbols_subs = {
+            symbol: sympy.Integer(0) for symbol in induction_symbols_to_remove
+        }
+        if induction_symbols_subs:
+            # TODO: can we wrap this into a diagnostic?
+            print(
+                f"WARNING: Removing invalid induction symbols {induction_symbols_to_remove} from {index}",
+                file=sys.stderr,
+            )
+            exprs.start = safe_subs(exprs.start, induction_symbols_subs)
+            exprs.size = safe_subs(exprs.size, induction_symbols_subs)
+            exprs.stride = safe_subs(exprs.stride, induction_symbols_subs)
+
+        all_symbols = list(all_symbols_set - induction_symbols_to_remove)
         symbol_mapping = _preprocess_symbols(all_symbols)
         start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
         size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
@@ -317,20 +346,44 @@ def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
 
 
 def _attach_attributes(node: CustomOp, op: ir.Operation):
-    from wave_lang.kernel.ops.wave_ops import MMA
+    from wave_lang.kernel.ops.wave_ops import Iterate, MMA, get_custom
+    from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
+
+    if TYPE_CHECKING:
+        from wave_lang.kernel.lang.wave_types import IndexSymbol
 
     if getattr(node, "index", None) and isinstance(node.index, dict):
         dict_attrs: list[ir.DictAttr] = []
+
+        # XXX: Collect induction-related symbols that make sense in the current
+        # context; the frontend is buggy and may have these symbols outside of
+        # the respective loops.
+        parent_fx_node = node.fx_node
+        allowed_induction_symbols: set[IndexSymbol] = set()
+        while parent_fx_node := getattr(parent_fx_node.graph, "parent_op", None):
+            parent_custom = get_custom(parent_fx_node)
+            if isinstance(parent_custom, Iterate):
+                induction_symbol = get_induction_symbol(parent_custom.axis)
+                allowed_induction_symbols.add(induction_symbol)
+
         if isinstance(node, MMA):
             # Build one index mapping dict per operand for MMA nodes
             if lhs_index := getattr(node, "lhs_index", None):
-                dict_attrs.append(_build_index_mapping_dict(lhs_index))
+                dict_attrs.append(
+                    _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
+                )
             if rhs_index := getattr(node, "rhs_index", None):
-                dict_attrs.append(_build_index_mapping_dict(rhs_index))
+                dict_attrs.append(
+                    _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
+                )
             if acc_index := getattr(node, "acc_index", None):
-                dict_attrs.append(_build_index_mapping_dict(acc_index))
+                dict_attrs.append(
+                    _build_index_mapping_dict(acc_index, allowed_induction_symbols)
+                )
         else:
-            dict_attrs.append(_build_index_mapping_dict(node.index))
+            dict_attrs.append(
+                _build_index_mapping_dict(node.index, allowed_induction_symbols)
+            )
 
         op.attributes["index"] = ir.ArrayAttr.get(dict_attrs)
 
