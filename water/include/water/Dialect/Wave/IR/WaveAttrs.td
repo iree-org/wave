@@ -124,6 +124,11 @@ def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
 def WaveNormalFormAttr
     : EnumAttr<WaveDialect, WaveNormalFormEnum, "normal_form"> {
   let assemblyFormat = "`<` $value `>`";
+  let extraClassDeclaration = [{
+    static unsigned getLastSetBit() {
+      return ::llvm::bit_width_constexpr<unsigned>(}] # !cast<BitEnumBase>(WaveNormalFormEnum).validBits # [{) - 1;
+    }
+  }];
 }
 
 //-----------------------------------------------------------------------------

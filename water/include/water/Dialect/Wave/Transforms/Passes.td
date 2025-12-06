@@ -23,6 +23,21 @@ def LowerWaveToMLIRPass : Pass<"lower-wave-to-mlir"> {
   ];
 }
 
+def WaterWaveDetectNormalFormsPass : Pass<"water-wave-detect-normal-forms"> {
+  let summary = "Detect the normal forms satisfied by the operation";
+  let description = [{
+    For all known Wave dialect normal forms, verifies if the operation the pass
+    is invoked on satisfies that normal form. If so, attaches the corresponding
+    attribute to the root operation. No diagnostics are emitted.
+  }];
+
+  // This may run on operations that have no Wave dialect and will attach an
+  // attribute from it.
+  let dependentDialects = [
+    "::wave::WaveDialect"
+  ];
+}
+
 def WaterWaveInferIndexExprsPass : Pass<"water-wave-infer-index-exprs"> {
   let summary = "Infer index expressions for Wave operations";
   let description = [{
