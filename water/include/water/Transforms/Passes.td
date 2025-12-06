@@ -169,4 +169,80 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
+def WaterInsertWaitcnt : Pass<"water-insert-waitcnt"> {
+  let summary = "Insert wait instructions for asynchronous memory operations";
+  let description = [{
+    This pass analyzes asynchronous memory operations and inserts appropriate
+    wait/synchronization instructions to ensure memory operations complete
+    before their results are used.
+
+    The pass tracks dependencies between memory operations and register uses,
+    maintaining scoreboards to determine when waits are necessary. It handles:
+    - Read-after-write (RAW) dependencies
+    - Write-after-write (WAW) dependencies
+    - Write-after-read (WAR) dependencies
+
+    This is analogous to LLVM's SIInsertWaitcnts pass but operates at the
+    MLIR level for AMDGPU dialect operations.
+  }];
+  let dependentDialects = [
+    "::mlir::amdgpu::AMDGPUDialect",
+  ];
+}
+
+def WaterLowerMemoryOps : InterfacePass<"water-lower-memory-ops", "::mlir::FunctionOpInterface"> {
+  let summary = "Lower high-level memory operations to AMDGPU dialect";
+  let description = [{
+    This pass lowers high-level memory operations (vector.load, vector.store,
+    memref operations) to AMDGPU-specific memory operations (buffer loads/stores,
+    LDS operations, etc.).
+
+    This lowering prepares the IR for subsequent waitcnt insertion and
+    final code generation.
+  }];
+  let dependentDialects = [
+    "::mlir::amdgpu::AMDGPUDialect",
+    "::mlir::gpu::GPUDialect",
+    "::mlir::LLVM::LLVMDialect",
+    "::mlir::memref::MemRefDialect",
+    "::mlir::ROCDL::ROCDLDialect",
+    "::mlir::vector::VectorDialect",
+  ];
+  let options = [
+    Option<"chipset", "chipset", "std::string", [{""}],
+           "Target chipset (e.g., gfx942, gfx1100)">
+  ];
+}
+
+def WaterMaterializeRegCopy : Pass<"water-materialize-reg-copy"> {
+  let summary = "Materialize register copies for loads";
+  let description = [{
+    This pass materializes explicit register copies by transforming load
+    operations to route through a temporary buffer in the virtual register
+    memory space (memspace 128). For each load:
+    1. Creates a subview of the source memref at the load indices
+    2. Allocates a temporary buffer in memory space 128 (virtual register space)
+    3. Copies from the subview to the temporary register buffer
+    4. Loads from the temporary register buffer
+
+    This transformation makes register traffic explicit in the IR, enabling
+    better analysis and optimization of register usage patterns.
+  }];
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::memref::MemRefDialect",
+  ];
+}
+
+def WaterNumberRegisters : InterfacePass<"water-number-registers", "::mlir::FunctionOpInterface"> {
+  let summary = "Assign physical registers to register space allocas";
+  let description = [{
+    This pass performs register allocation by assigning physical register numbers
+    to memref.alloca operations in memory space 128 (virtual register space).
+  }];
+  let dependentDialects = [
+    "::mlir::memref::MemRefDialect",
+  ];
+}
+
 #endif // WATER_PASSES

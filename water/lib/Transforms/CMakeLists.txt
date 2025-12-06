@@ -8,6 +8,10 @@ add_mlir_dialect_library(MLIRWaterTransforms
   GPUToGPURuntime.cpp
   MemrefDecomposition.cpp
   SLPVectorizer.cpp
+  WaterInsertWaitcnt.cpp
+  WaterLowerMemoryOps.cpp
+  WaterMaterializeRegCopy.cpp
+  WaterNumberRegisters.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/water
