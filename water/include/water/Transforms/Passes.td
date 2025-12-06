@@ -187,6 +187,8 @@ def WaterLowerMemoryOps : Pass<"water-lower-memory-ops"> {
   let dependentDialects = [
     "::mlir::amdgpu::AMDGPUDialect",
     "::mlir::LLVM::LLVMDialect",
+    "::mlir::memref::MemRefDialect",
+    "::mlir::vector::VectorDialect",
   ];
 }
 
