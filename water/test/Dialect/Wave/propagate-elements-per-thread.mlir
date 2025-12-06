@@ -23,7 +23,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 
 // -----
 
-// CHECK: #wave.normal_form<memory_only_types>
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // CHECK-LABEL: @propagate_register_write
 func.func @propagate_register_write(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
@@ -39,7 +39,7 @@ func.func @propagate_register_write(%mem: !wave.tensor<[@M] of f16, <global>>) a
 
 // -----
 
-// CHECK: #wave.normal_form<memory_only_types>
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // CHECK-LABEL: @propagate_backward_from_write
 func.func @propagate_backward_from_write(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
@@ -65,7 +65,7 @@ func.func @propagate_backward_from_write(%mem: !wave.tensor<[@M] of f16, <global
 
 // -----
 
-// CHECK: #wave.normal_form<memory_only_types>
+// CHECK: #wave.normal_form<full_types,memory_only_types>
 module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // CHECK-LABEL: @propagate_forward_from_read
 func.func @propagate_forward_from_read(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
