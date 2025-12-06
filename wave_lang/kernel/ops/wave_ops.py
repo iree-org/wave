@@ -155,6 +155,7 @@ def read(
 
 def conditional(
     condition: "Register" | IndexExpr,
+    else_return: Optional[Sequence["Register"]] = None,
 ) -> Callable[[Callable[[], None]], None]: ...
 
 
@@ -2111,6 +2112,33 @@ class NestedRegionOp(CustomOp):
         del subgraphs[self.subgraph_name]
         super().erase()
 
+    def iter_args(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
+        iter_args = []
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
+        for nested_node in graph.nodes:
+            custom = get_custom(nested_node)
+            if isinstance(custom, IterArg):
+                iter_args.append(nested_node)
+        # Sort by iter_idx.
+        iter_args = sorted(iter_args, key=lambda x: get_custom(x).iter_idx)
+        return iter_args
+
+    def outputs(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
+
+        output = get_custom(graph.output_node())
+        assert isinstance(output, Output), f"Expected Output, but got {output}"
+        return output.return_vals[0]
+
+    def infer_type(self, *args):
+        if self.init_args is not None:
+            res_types = [get_custom(x).type for x in self.init_args]
+            if len(res_types) == 1:
+                res_types = res_types[0]
+            self.type = res_types
+
     @classmethod
     def handle(cls, graph: RegionGraph, *args, **kwargs):
         """
@@ -2155,19 +2183,15 @@ class NestedRegionOp(CustomOp):
             if tag is not None:
                 node.fx_node.node.tag = tag
 
-            # Iterate-specific logic
-            if cls.__name__ == "Iterate":
-                # Remember which placeholders are init args. This connection gets
-                # lost otherwise
-                for nested_node in graph.subgraphs[subgraph_name].nodes:
-                    if nested_node.op == "placeholder":
-                        if nested_node not in [
-                            var.node
-                            for var in graph.inner_freevars[
-                                graph.subgraphs[subgraph_name]
-                            ]
-                        ]:
-                            nested_node.tkw_op = IterArg
+            # Remember which placeholders are init args. This connection gets
+            # lost otherwise
+            for nested_node in graph.subgraphs[subgraph_name].nodes:
+                if nested_node.op == "placeholder":
+                    if nested_node not in [
+                        var.node
+                        for var in graph.inner_freevars[graph.subgraphs[subgraph_name]]
+                    ]:
+                        nested_node.tkw_op = IterArg
 
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
@@ -2178,15 +2202,46 @@ class NestedRegionOp(CustomOp):
 @define_op("conditional")
 @dataclass
 class Conditional(NestedRegionOp):
+    """
+    The optional `else_return` argument must match the type of any `return` statements in the conditional body.
+    The `else_return` are the default return value for the `else` branch.
+    """
+
     condition: fx.Proxy | IndexExpr
     subgraph_name: str
     implicit_captures: Sequence[fx.Proxy]
+    else_return: Optional[Sequence["Register"]] = None
 
     @property
-    def indexing_dims(self) -> list[IndexSymbol]:
-        if isinstance(self.condition, fx.Node):
-            return get_custom(self.condition).indexing_dims
+    def init_args(self):
+        """Alias for else_return to match Iterate interface for shared processing code."""
+        return self.else_return
 
+    @init_args.setter
+    def init_args(self, value):
+        self.else_return = value
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:
+        # If we have else_return, the conditional returns values
+        # and we need to get indexing dims from the return values
+        if self.else_return:
+            expand_dims: list[IndexSymbol] = []
+            subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
+            return_node = get_custom(subgraph.output_node())
+            assert isinstance(return_node, Output)
+            return_vals = return_node.return_vals[0]
+            if not isinstance(return_vals, Sequence):
+                return_vals = [return_vals]
+            for return_val in return_vals:
+                return_dims = get_custom(return_val).indexing_dims
+                expand_dims.append(return_dims)
+            if len(expand_dims) == 1:
+                expand_dims = expand_dims[0]
+            return expand_dims
+        # Otherwise, get from condition
+        elif isinstance(self.condition, fx.Node):
+            return get_custom(self.condition).indexing_dims
         return []
 
 
@@ -2217,32 +2272,6 @@ class Iterate(NestedRegionOp):
         if len(expand_dims) == 1:
             expand_dims = expand_dims[0]
         return expand_dims
-
-    def iter_args(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
-        iter_args = []
-        if graph is None:
-            graph = self.get_root_graph().subgraphs[self.subgraph_name]
-        for nested_node in graph.nodes:
-            custom = get_custom(nested_node)
-            if isinstance(custom, IterArg):
-                iter_args.append(nested_node)
-        # Sort by iter_idx.
-        iter_args = sorted(iter_args, key=lambda x: get_custom(x).iter_idx)
-        return iter_args
-
-    def infer_type(self, *args):
-        res_types = [get_custom(x).type for x in self.init_args]
-        if len(res_types) == 1:
-            res_types = res_types[0]
-        self.type = res_types
-
-    def outputs(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
-        if graph is None:
-            graph = self.get_root_graph().subgraphs[self.subgraph_name]
-
-        output = get_custom(graph.output_node())
-        assert isinstance(output, Output), f"Expected Output, but got {output}"
-        return output.return_vals[0]
 
     @property
     def index(self) -> list[dict[IndexSymbol, IndexSequence]]:

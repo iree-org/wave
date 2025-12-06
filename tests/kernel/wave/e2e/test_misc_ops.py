@@ -315,3 +315,75 @@ def test_conditional(shape, run_bench):
 
     test(a, mask, b)
     assert_close(a * mask, b)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", get_test_shapes("test_copy")[:1])
+@pytest.mark.parametrize("threshold", [2, 50])
+def test_conditional_return(shape, threshold, run_bench):
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    LOAD_ELEMS_PER_THREAD = tkl.sym.LOAD_ELEMS_PER_THREAD
+    STORE_ELEMS_PER_THREAD = tkl.sym.STORE_ELEMS_PER_THREAD
+
+    wave_size = 64
+    BLOCK_M = 1
+    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        threshold: tkl.i32,
+    ):
+        zero_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        threshold_scalar = tkw.scalar(10, tkl.i32)
+
+        a_reg = tkw.read(a, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+
+        @tkw.conditional(threshold > threshold_scalar, else_return=[a_reg])
+        def process_data(
+            a: tkl.Register[M, N, tkl.f32],
+        ) -> tkl.Register[M, N, tkl.f32]:
+            return a * tkw.scalar(2.5, tkl.f16)
+
+        tkw.write(process_data, b, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
+
+    options = WaveCompileOptions(
+        subs={
+            M: shape[0],
+            N: shape[1],
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        },
+        canonicalize=True,
+        run_bench=run_bench,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    test(a, b, threshold)
+
+    if threshold > 10:
+        expected = a * 2.5
+    else:
+        expected = a
+
+    assert_close(expected, b)

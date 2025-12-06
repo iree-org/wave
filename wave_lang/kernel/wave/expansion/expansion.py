@@ -75,13 +75,13 @@ class ExpansionInfo:
         return f"ExpansionInfo({self.node.fx_node}, {self.indexed_dims})"
 
 
-class ItertionInfo:
+class RegionOpInfo:
     """
-    Contains fixup information for an Iterate node.
+    Contains fixup information for a region node (Iterate or Conditional).
     """
 
-    def __init__(self, reduction: Iterate):
-        self.reduction = reduction
+    def __init__(self, region: Iterate | Conditional):
+        self.region = region
         self.outputs: dict[int, ExpansionInfo] = {}
         self.init_args: dict[int, ExpansionInfo] = {}
         self.get_results: dict[int, CustomOp] = {}
@@ -89,7 +89,7 @@ class ItertionInfo:
     def __repr__(self):
         get_results = {i: c.fx_node for i, c in self.get_results.items()}
         return (
-            f"ReductionInfo({self.reduction.fx_node},"
+            f"RegionOpInfo({self.region.fx_node},"
             f"outputs={self.outputs},"
             f" init_args={self.init_args},"
             f" get_results={get_results}"
@@ -104,7 +104,8 @@ class ExpansionContext:
     def __init__(self):
         self.expansion_context: dict[ExpansionInfo, CustomOp] = {}
         # Additional operator specific information.
-        self.iterate_context: dict[Iterate, ItertionInfo] = {}
+        self.iterate_context: dict[Iterate, RegionOpInfo] = {}
+        self.conditional_context: dict[Conditional, RegionOpInfo] = {}
         self.mma_connections: list[tuple[MMA, MMA]] = []
         self.mma_nodes: list[tuple[MMA]] = []
 
@@ -237,8 +238,8 @@ def to_dict(t: tuple[int, ...]) -> dict[IndexSymbol, int]:
     return {k: v for k, v in t}
 
 
-def handle_iterate_entry(
-    iterate: Iterate,
+def handle_region_entry(
+    region_node: Iterate | Conditional | None,
     inputs: list[CustomOp],
     new_node: CustomOp,
     node: CustomOp,
@@ -246,30 +247,42 @@ def handle_iterate_entry(
     dim_scaling: dict[IndexSymbol, int],
     expansion_context: ExpansionContext,
 ):
-    iterate_context = expansion_context.iterate_context
-    if isinstance(new_node, GetResult) and iterate:
+    """
+    Unified handler for GetResult nodes at region entry (both Iterate and Conditional).
+    """
+    if not region_node:
+        return
+
+    # Determine which context to use based on node type
+    if isinstance(region_node, Iterate):
+        region_context = expansion_context.iterate_context
+    elif isinstance(region_node, Conditional):
+        region_context = expansion_context.conditional_context
+    else:
+        return
+
+    if isinstance(new_node, GetResult):
         assert len(inputs) == 1, f"Expected one input, got {inputs}"
-        outputs = iterate.outputs(inputs[0].graph)
+        outputs = region_node.outputs(inputs[0].graph)
         if not isinstance(outputs, Sequence):
             outputs = [outputs]
-        if iterate not in iterate_context:
-            iterate_context[iterate] = ItertionInfo(iterate)
+        if region_node not in region_context:
+            region_context[region_node] = RegionOpInfo(region_node)
         result_index = compute_result_index(
             dim_query, dim_scaling, inputs[0], outputs, new_node.res_idx
         )
         custom = get_custom(inputs[0])
         key = ExpansionInfo(custom, get_indexed_dims(dim_query, custom))
-        iterate_info = iterate_context[iterate]
+        region_info = region_context[region_node]
         assert (
-            result_index not in iterate_info.outputs
-            and result_index not in iterate_info.get_results
-        ), f"{result_index=} has already been computed for {iterate_info}"
-        iterate_info.outputs[result_index] = key
-        iterate_info.get_results[result_index] = new_node
+            result_index not in region_info.outputs
+            and result_index not in region_info.get_results
+        ), f"{result_index=} has already been computed for {region_info}"
+        region_info.outputs[result_index] = key
+        region_info.get_results[result_index] = new_node
 
 
-def handle_iterate_exit(
-    iterate: Iterate,
+def handle_region_exit(
     inputs: list[CustomOp],
     new_node: CustomOp,
     node: CustomOp,
@@ -277,19 +290,38 @@ def handle_iterate_exit(
     dim_scaling: dict[IndexSymbol, int],
     expansion_context: ExpansionContext,
 ):
-    # If we are an iter arg, then we are exiting a reduction.
-    iterate_context = expansion_context.iterate_context
-    if isinstance(new_node, IterArg):
-        assert len(inputs) == 1, f"Expected one input, got {inputs}"
-        iterate = new_node.parent_op()
-        result_index = compute_result_index(
-            dim_query, dim_scaling, inputs[0], iterate.init_args, new_node.iter_idx
-        )
-        assert iterate in iterate_context, f"Iterate not found: {iterate}"
-        new_node.iter_idx = result_index
-        custom = get_custom(inputs[0])
-        key = ExpansionInfo(custom, get_indexed_dims(dim_query, custom))
-        iterate_context[iterate].init_args[result_index] = key
+    """
+    Unified handler for IterArg nodes at region exit (both Iterate and Conditional).
+    """
+    # If we are an iter arg, then we are entering a region with init_args.
+    if not isinstance(new_node, IterArg):
+        return
+
+    assert len(inputs) == 1, f"Expected one input, got {inputs}"
+    parent_op = new_node.parent_op()
+
+    # Determine which context to use based on parent node type
+    if isinstance(parent_op, Iterate):
+        region_context = expansion_context.iterate_context
+    elif isinstance(parent_op, Conditional):
+        region_context = expansion_context.conditional_context
+        # For Conditional, check if init_args (else_return) exists
+        if parent_op.init_args is None:
+            return
+    else:
+        return
+
+    region_node = parent_op
+    result_index = compute_result_index(
+        dim_query, dim_scaling, inputs[0], region_node.init_args, new_node.iter_idx
+    )
+    assert (
+        region_node in region_context
+    ), f"{'Iterate' if isinstance(parent_op, Iterate) else 'Conditional'} not found: {region_node}"
+    new_node.iter_idx = result_index
+    custom = get_custom(inputs[0])
+    key = ExpansionInfo(custom, get_indexed_dims(dim_query, custom))
+    region_context[region_node].init_args[result_index] = key
 
 
 def concatenate_outputs(
@@ -410,20 +442,21 @@ def get_mma_reduction_count(arg: MMA, dim_scaling: dict[IndexSymbol, int]) -> in
 
 def add_get_results(trace: CapturedTrace):
     iterate_ops = trace.walk(lambda x: isinstance(get_custom(x), Iterate))
-    for iterate in iterate_ops:
-        iterate = get_custom(iterate)
-        if len(iterate.init_args) == 1:
-            iterate.graph.inserting_after(iterate.fx_node)
+    conditional_ops = trace.walk(lambda x: isinstance(get_custom(x), Conditional))
+    for region_op in iterate_ops + conditional_ops:
+        region_op = get_custom(region_op)
+        if region_op.init_args and len(region_op.init_args) == 1:
+            region_op.graph.inserting_after(region_op.fx_node)
             get_result = get_custom(
-                GetResult(iterate.fx_node, 0).add_to_graph(
-                    iterate.graph, loc=iterate.location
+                GetResult(region_op.fx_node, 0).add_to_graph(
+                    region_op.graph, loc=region_op.location
                 )
             )
-            iterate.replace_all_uses_with_except(get_result, [get_result])
+            region_op.replace_all_uses_with_except(get_result, [get_result])
 
             for subgraph in trace.region_graph.subgraphs.values():
                 for node in subgraph.nodes:
-                    if node.meta.get("lifted", None) == iterate.fx_node:
+                    if node.meta.get("lifted", None) == region_op.fx_node:
                         node.meta["lifted"] = get_result.fx_node
 
 
@@ -598,10 +631,10 @@ def expand_node(
     update_users(node, new_node, metadata, expansion_context)
 
     # Add expandable inputs to the list of nodes to expand.
-    inputs, iterate_node = get_inputs(node.fx_node, None)
+    inputs, region_node = get_inputs(node.fx_node, None)
 
-    handle_iterate_entry(
-        iterate_node,
+    handle_region_entry(
+        region_node,
         inputs,
         new_node,
         node,
@@ -609,8 +642,8 @@ def expand_node(
         dim_scaling,
         expansion_context,
     )
-    handle_iterate_exit(
-        iterate_node,
+
+    handle_region_exit(
         inputs,
         new_node,
         node,
@@ -687,6 +720,74 @@ def get_mma_indexed_dims(
     return indexed_dims
 
 
+def _fixup_build_new_args_from_sorted_dict(
+    args_dict: dict[int, ExpansionInfo],
+    expansion_context: ExpansionContext,
+    handle_mma: bool = False,
+) -> list[fx.Node]:
+    sorted_keys = dict(sorted(args_dict.items(), key=lambda x: x[0]))
+    new_args = []
+    for key in sorted_keys.values():
+        if handle_mma and key not in expansion_context and isinstance(key.node, MMA):
+            key = ExpansionInfo(
+                key.node,
+                get_mma_indexed_dims(key.node, key.indexed_dims, expansion_context),
+            )
+            assert key in expansion_context, f"Key not found: {key}"
+        new_args.append(expansion_context[key].fx_node)
+    return new_args
+
+
+def _fixup_region_node_common(
+    region_node: Iterate | Conditional,
+    region_info: RegionOpInfo,
+    trace: CapturedTrace,
+    expansion_context: ExpansionContext,
+    handle_mma: bool,
+    init_args_field: str,
+):
+    """
+    Common logic for fixing up region nodes (Iterate or Conditional).
+    Updates outputs, init_args, and get_results.
+
+    Args:
+        init_args_field: The field name to update on region_node ("init_args" or "else_return")
+    """
+    subgraph = trace.get_subgraph(region_node.subgraph_name)
+    output = get_custom(get_last(subgraph.nodes))
+    if all(x is None for x in output.return_vals):
+        return
+
+    return_vals = output.return_vals[0]
+    if isinstance(return_vals, Sequence):
+        return_vals = [get_custom(x) for x in return_vals]
+    else:
+        return_vals = [get_custom(return_vals)]
+
+    new_outputs = _fixup_build_new_args_from_sorted_dict(
+        region_info.outputs, expansion_context, handle_mma=handle_mma
+    )
+    output.update_arg("return_vals", new_outputs)
+
+    new_init_args = _fixup_build_new_args_from_sorted_dict(
+        region_info.init_args, expansion_context
+    )
+    region_node.update_arg(init_args_field, new_init_args)
+
+    for result_index, get_item in region_info.get_results.items():
+        get_item.graph.inserting_before(get_item.fx_node)
+        get_result = GetResult(get_item.value, result_index).add_to_graph(
+            get_item.graph, get_item.type, loc=get_item.location
+        )
+        get_result.name = get_item.fx_node.name
+        get_result.index = get_item.index
+        get_result = get_custom(get_result)
+        get_item.replace_all_uses_with(get_result)
+        get_item.erase()
+
+    remove_original_nodes(return_vals)
+
+
 def fixup_iterate_nodes(
     trace: CapturedTrace,
     expansion_context: ExpansionContext,
@@ -709,54 +810,34 @@ def fixup_iterate_nodes(
 
     for iterate in reversed(iterate_nodes):
         iterate = get_custom(iterate)
-        reduction_subgraph = trace.get_subgraph(iterate.subgraph_name)
-        output = get_custom(get_last(reduction_subgraph.nodes))
-        if all(x is None for x in output.return_vals):
+        if iterate not in iterate_context:
             continue
-        return_vals = output.return_vals[0]
-        if isinstance(return_vals, Sequence):
-            return_vals = [get_custom(x) for x in output.return_vals[0]]
-        else:
-            return_vals = [get_custom(return_vals)]
-        iterate_info = iterate_context[iterate]
-        sorted_keys = dict(sorted(iterate_info.outputs.items(), key=lambda x: x[0]))
-        new_outputs = []
-        for key in sorted_keys.values():
-            if key not in expansion_context and isinstance(key.node, MMA):
-                key = ExpansionInfo(
-                    key.node,
-                    get_mma_indexed_dims(key.node, key.indexed_dims, expansion_context),
-                )
-                assert key in expansion_context, f"Key not found: {key}"
-            new_outputs.append(expansion_context[key].fx_node)
-        output.update_arg("return_vals", new_outputs)
+        _fixup_region_node_common(
+            iterate,
+            iterate_context[iterate],
+            trace,
+            expansion_context,
+            handle_mma=True,
+            init_args_field="init_args",
+        )
 
-        sorted_keys = dict(sorted(iterate_info.init_args.items(), key=lambda x: x[0]))
-        new_init_args = []
-        for key in sorted_keys.values():
-            new_init_args.append(expansion_context[key].fx_node)
-        iterate.update_arg("init_args", new_init_args)
 
-        for result_index, get_item in iterate_info.get_results.items():
-            get_item.graph.inserting_before(get_item.fx_node)
-            get_result = GetResult(get_item.value, result_index).add_to_graph(
-                get_item.graph, get_item.type, loc=get_item.location
-            )
-            get_result.name = get_item.fx_node.name
-            get_result.index = get_item.index
-            get_result = get_custom(get_result)
-            get_item.replace_all_uses_with(get_result)
-            nodes_to_erase.append(get_item)
+def fixup_conditional_nodes(
+    trace: CapturedTrace,
+    expansion_context: ExpansionContext,
+):
+    """
+    This function fixes up the conditional nodes by updating the outputs,
+    init_args (else_return) and get_results of the conditional nodes. It also removes the
+    original nodes from the graph and updates the condition to use expanded nodes.
+    """
+    conditional_context = expansion_context.conditional_context
+    conditional_nodes = trace.walk(lambda x: isinstance(get_custom(x), Conditional))
+    for conditional_node in reversed(conditional_nodes):
+        conditional = get_custom(conditional_node)
 
-        remove_original_nodes(return_vals)
-
-    for node in nodes_to_erase:
-        if not node.fx_node.users:
-            node.erase()
-
-    # For conditional nodes, update the condition to use the expanded nodes.
-    for conditional in trace.walk(lambda x: isinstance(get_custom(x), Conditional)):
-        condition = get_custom(conditional).condition
+        # Update condition if it was expanded
+        condition = conditional.condition
         new_condition = None
         for key, value in expansion_context.expansion_context.items():
             if key.node.fx_node == condition:
@@ -766,9 +847,26 @@ def fixup_iterate_nodes(
             logger.info(
                 f"Condition was not expanded: {condition}. Using the original condition."
             )
+        else:
+            conditional.update_arg("condition", new_condition.fx_node)
+            remove_original_nodes([get_custom(condition)])
+
+        if conditional not in conditional_context:
             continue
-        get_custom(conditional).update_arg("condition", new_condition.fx_node)
-        remove_original_nodes([get_custom(condition)])
+
+        conditional_info = conditional_context[conditional]
+
+        if not conditional_info.outputs:
+            continue
+
+        _fixup_region_node_common(
+            conditional,
+            conditional_info,
+            trace,
+            expansion_context,
+            handle_mma=False,
+            init_args_field="else_return",
+        )
 
 
 def is_leaf_node(node):
@@ -834,6 +932,8 @@ def expand_graph(
 
     # Fixup all iterate nodes.
     fixup_iterate_nodes(trace, expansion_context)
+    # Fixup all conditional nodes.
+    fixup_conditional_nodes(trace, expansion_context)
     # Fixup all mma nodes.
     fixup_mma_nodes(trace, expansion_context)
     # Remove original nodes in root graph.
