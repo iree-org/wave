@@ -12,9 +12,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 using namespace mlir;
 
@@ -46,106 +44,97 @@ static StringRef getGlobalStoreSuffix(unsigned bitWidth) {
   return getGlobalLoadSuffix(bitWidth);
 }
 
-/// Pattern to lower vector.load to LLVM inline assembly (global_load_*)
-struct VectorLoadToInlineAsmPattern : public OpRewritePattern<vector::LoadOp> {
-  using OpRewritePattern<vector::LoadOp>::OpRewritePattern;
+/// Lower vector.load to LLVM inline assembly (global_load_*)
+static void lowerVectorLoad(vector::LoadOp loadOp, IRRewriter &rewriter) {
+  auto vectorType = loadOp.getVectorType();
+  unsigned bitWidth =
+      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
 
-  LogicalResult matchAndRewrite(vector::LoadOp loadOp,
-                                PatternRewriter &rewriter) const override {
-    auto vectorType = loadOp.getVectorType();
-    unsigned bitWidth =
-        vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+  StringRef suffix = getGlobalLoadSuffix(bitWidth);
+  if (suffix.empty())
+    return;
 
-    StringRef suffix = getGlobalLoadSuffix(bitWidth);
-    if (suffix.empty())
-      return failure();
+  Location loc = loadOp.getLoc();
 
-    Location loc = loadOp.getLoc();
+  // Build the inline assembly string: "global_load_b64 $0, $1, off"
+  std::string asmStr = ("global_load_" + suffix + " $0, $1, off").str();
 
-    // Build the inline assembly string: "global_load_b64 $0, $1, off"
-    std::string asmStr = ("global_load_" + suffix + " $0, $1, off").str();
+  // Constraints: "=v" for output (VGPR), "v" for input address (VGPR)
+  std::string constraints = "=v,v";
 
-    // Constraints: "=v" for output (VGPR), "v" for input address (VGPR)
-    std::string constraints = "=v,v";
+  // Get the base pointer - need to convert memref to pointer
+  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto i64Type = rewriter.getI64Type();
 
-    // Get the base pointer - need to convert memref to pointer
-    auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto i64Type = rewriter.getI64Type();
+  rewriter.setInsertionPoint(loadOp);
 
-    // Extract pointer as index, cast to i64, then to ptr
-    Value basePtr = rewriter.create<memref::ExtractAlignedPointerAsIndexOp>(
-        loc, loadOp.getBase());
-    basePtr = rewriter.create<arith::IndexCastOp>(loc, i64Type, basePtr);
-    basePtr = rewriter.create<LLVM::IntToPtrOp>(loc, ptrType, basePtr);
+  // Extract pointer as index, cast to i64, then to ptr
+  Value basePtr = memref::ExtractAlignedPointerAsIndexOp::create(
+      rewriter, loc, loadOp.getBase());
+  basePtr = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtr);
+  basePtr = LLVM::IntToPtrOp::create(rewriter, loc, ptrType, basePtr);
 
-    // Create the inline assembly operation
-    auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
-        loc,
-        /*resultTypes=*/vectorType,
-        /*operands=*/ValueRange{basePtr},
-        /*asm_string=*/asmStr,
-        /*constraints=*/constraints,
-        /*has_side_effects=*/false,
-        /*is_align_stack=*/false,
-        /*tail_call_kind=*/LLVM::tailcallkind::TailCallKind::None,
-        /*asm_dialect=*/LLVM::AsmDialectAttr{},
-        /*operand_attrs=*/ArrayAttr{});
+  // Create the inline assembly operation
+  auto asmOp = LLVM::InlineAsmOp::create(
+      rewriter, loc,
+      /*resultTypes=*/vectorType,
+      /*operands=*/ValueRange{basePtr},
+      /*asm_string=*/asmStr,
+      /*constraints=*/constraints,
+      /*has_side_effects=*/false,
+      /*is_align_stack=*/false,
+      /*tail_call_kind=*/LLVM::tailcallkind::TailCallKind::None,
+      /*asm_dialect=*/LLVM::AsmDialectAttr{},
+      /*operand_attrs=*/ArrayAttr{});
 
-    rewriter.replaceOp(loadOp, asmOp.getResult(0));
-    return success();
-  }
-};
+  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+}
 
-/// Pattern to lower vector.store to LLVM inline assembly (global_store_*)
-struct VectorStoreToInlineAsmPattern
-    : public OpRewritePattern<vector::StoreOp> {
-  using OpRewritePattern<vector::StoreOp>::OpRewritePattern;
+/// Lower vector.store to LLVM inline assembly (global_store_*)
+static void lowerVectorStore(vector::StoreOp storeOp, IRRewriter &rewriter) {
+  auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
+  unsigned bitWidth =
+      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
 
-  LogicalResult matchAndRewrite(vector::StoreOp storeOp,
-                                PatternRewriter &rewriter) const override {
-    auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
-    unsigned bitWidth =
-        vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+  StringRef suffix = getGlobalStoreSuffix(bitWidth);
+  if (suffix.empty())
+    return;
 
-    StringRef suffix = getGlobalStoreSuffix(bitWidth);
-    if (suffix.empty())
-      return failure();
+  Location loc = storeOp.getLoc();
 
-    Location loc = storeOp.getLoc();
+  // Build the inline assembly string: "global_store_b64 $0, $1, off"
+  std::string asmStr = ("global_store_" + suffix + " $0, $1, off").str();
 
-    // Build the inline assembly string: "global_store_b64 $0, $1, off"
-    std::string asmStr = ("global_store_" + suffix + " $0, $1, off").str();
+  // Constraints: "v" for address (VGPR), "v" for data (VGPR)
+  std::string constraints = "v,v";
 
-    // Constraints: "v" for address (VGPR), "v" for data (VGPR)
-    std::string constraints = "v,v";
+  // Get the base pointer
+  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto i64Type = rewriter.getI64Type();
 
-    // Get the base pointer
-    auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto i64Type = rewriter.getI64Type();
+  rewriter.setInsertionPoint(storeOp);
 
-    // Extract pointer as index, cast to i64, then to ptr
-    Value basePtr = rewriter.create<memref::ExtractAlignedPointerAsIndexOp>(
-        loc, storeOp.getBase());
-    basePtr = rewriter.create<arith::IndexCastOp>(loc, i64Type, basePtr);
-    basePtr = rewriter.create<LLVM::IntToPtrOp>(loc, ptrType, basePtr);
+  // Extract pointer as index, cast to i64, then to ptr
+  Value basePtr = memref::ExtractAlignedPointerAsIndexOp::create(
+      rewriter, loc, storeOp.getBase());
+  basePtr = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtr);
+  basePtr = LLVM::IntToPtrOp::create(rewriter, loc, ptrType, basePtr);
 
-    // Create the inline assembly operation (no result for store)
-    rewriter.create<LLVM::InlineAsmOp>(
-        loc,
-        /*resultTypes=*/TypeRange{},
-        /*operands=*/ValueRange{basePtr, storeOp.getValueToStore()},
-        /*asm_string=*/asmStr,
-        /*constraints=*/constraints,
-        /*has_side_effects=*/true,
-        /*is_align_stack=*/false,
-        /*tail_call_kind=*/LLVM::tailcallkind::TailCallKind::None,
-        /*asm_dialect=*/LLVM::AsmDialectAttr{},
-        /*operand_attrs=*/ArrayAttr{});
+  // Create the inline assembly operation (no result for store)
+  LLVM::InlineAsmOp::create(
+      rewriter, loc,
+      /*resultTypes=*/TypeRange{},
+      /*operands=*/ValueRange{basePtr, storeOp.getValueToStore()},
+      /*asm_string=*/asmStr,
+      /*constraints=*/constraints,
+      /*has_side_effects=*/true,
+      /*is_align_stack=*/false,
+      /*tail_call_kind=*/LLVM::tailcallkind::TailCallKind::None,
+      /*asm_dialect=*/LLVM::AsmDialectAttr{},
+      /*operand_attrs=*/ArrayAttr{});
 
-    rewriter.eraseOp(storeOp);
-    return success();
-  }
-};
+  rewriter.eraseOp(storeOp);
+}
 
 /// Pass that lowers high-level memory operations to LLVM inline assembly
 /// for AMDGPU global memory instructions.
@@ -153,17 +142,15 @@ class WaterLowerMemoryOpsPass
     : public water::impl::WaterLowerMemoryOpsBase<WaterLowerMemoryOpsPass> {
 public:
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
-    RewritePatternSet patterns(context);
+    IRRewriter rewriter(&getContext());
 
-    // Add patterns for lowering vector.load/store to inline assembly
-    patterns.add<VectorLoadToInlineAsmPattern, VectorStoreToInlineAsmPattern>(
-        context);
-
-    if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                            std::move(patterns)))) {
-      signalPassFailure();
-    }
+    getOperation()->walk([&](Operation *op) {
+      if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
+        lowerVectorLoad(loadOp, rewriter);
+      } else if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
+        lowerVectorStore(storeOp, rewriter);
+      }
+    });
   }
 };
 
