@@ -153,4 +153,41 @@ def WaterDropTransformOpsPass : Pass<"water-drop-transform-ops"> {
   }];
 }
 
+def WaterInsertWaitcnt : Pass<"water-insert-waitcnt"> {
+  let summary = "Insert wait instructions for asynchronous memory operations";
+  let description = [{
+    This pass analyzes asynchronous memory operations and inserts appropriate
+    wait/synchronization instructions to ensure memory operations complete
+    before their results are used.
+
+    The pass tracks dependencies between memory operations and register uses,
+    maintaining scoreboards to determine when waits are necessary. It handles:
+    - Read-after-write (RAW) dependencies
+    - Write-after-write (WAW) dependencies
+    - Write-after-read (WAR) dependencies
+
+    This is analogous to LLVM's SIInsertWaitcnts pass but operates at the
+    MLIR level for AMDGPU dialect operations.
+  }];
+  let dependentDialects = [
+    "::mlir::amdgpu::AMDGPUDialect",
+  ];
+}
+
+def WaterLowerMemoryOps : Pass<"water-lower-memory-ops"> {
+  let summary = "Lower high-level memory operations to AMDGPU dialect";
+  let description = [{
+    This pass lowers high-level memory operations (vector.load, vector.store,
+    memref operations) to AMDGPU-specific memory operations (buffer loads/stores,
+    LDS operations, etc.).
+
+    This lowering prepares the IR for subsequent waitcnt insertion and
+    final code generation.
+  }];
+  let dependentDialects = [
+    "::mlir::amdgpu::AMDGPUDialect",
+    "::mlir::LLVM::LLVMDialect",
+  ];
+}
+
 #endif // WATER_PASSES
