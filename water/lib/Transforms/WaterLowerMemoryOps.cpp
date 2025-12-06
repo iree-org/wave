@@ -45,14 +45,15 @@ static StringRef getGlobalStoreSuffix(unsigned bitWidth) {
 }
 
 /// Lower vector.load to LLVM inline assembly (global_load_*)
-static void lowerVectorLoad(vector::LoadOp loadOp, IRRewriter &rewriter) {
+static LogicalResult lowerVectorLoad(vector::LoadOp loadOp,
+                                     IRRewriter &rewriter) {
   auto vectorType = loadOp.getVectorType();
   unsigned bitWidth =
       vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
 
   StringRef suffix = getGlobalLoadSuffix(bitWidth);
   if (suffix.empty())
-    return;
+    return loadOp.emitError("unsupported vector load bit width: ") << bitWidth;
 
   Location loc = loadOp.getLoc();
 
@@ -88,17 +89,20 @@ static void lowerVectorLoad(vector::LoadOp loadOp, IRRewriter &rewriter) {
       /*operand_attrs=*/ArrayAttr{});
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  return success();
 }
 
 /// Lower vector.store to LLVM inline assembly (global_store_*)
-static void lowerVectorStore(vector::StoreOp storeOp, IRRewriter &rewriter) {
+static LogicalResult lowerVectorStore(vector::StoreOp storeOp,
+                                      IRRewriter &rewriter) {
   auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
   unsigned bitWidth =
       vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
 
   StringRef suffix = getGlobalStoreSuffix(bitWidth);
   if (suffix.empty())
-    return;
+    return storeOp.emitError("unsupported vector store bit width: ")
+           << bitWidth;
 
   Location loc = storeOp.getLoc();
 
@@ -134,7 +138,29 @@ static void lowerVectorStore(vector::StoreOp storeOp, IRRewriter &rewriter) {
       /*operand_attrs=*/ArrayAttr{});
 
   rewriter.eraseOp(storeOp);
+  return success();
 }
+
+/// Wrapper functions for operation lowering
+static LogicalResult lowerLoadOp(Operation *op, IRRewriter &rewriter) {
+  return lowerVectorLoad(cast<vector::LoadOp>(op), rewriter);
+}
+
+static LogicalResult lowerStoreOp(Operation *op, IRRewriter &rewriter) {
+  return lowerVectorStore(cast<vector::StoreOp>(op), rewriter);
+}
+
+/// Operation lowering handler entry
+struct OpLoweringHandler {
+  TypeID typeID;
+  LogicalResult (*lowerFn)(Operation *, IRRewriter &);
+};
+
+/// Table of lowering handlers for different operation types
+static const OpLoweringHandler loweringHandlers[] = {
+    {TypeID::get<vector::LoadOp>(), lowerLoadOp},
+    {TypeID::get<vector::StoreOp>(), lowerStoreOp},
+};
 
 /// Pass that lowers high-level memory operations to LLVM inline assembly
 /// for AMDGPU global memory instructions.
@@ -144,13 +170,20 @@ public:
   void runOnOperation() override {
     IRRewriter rewriter(&getContext());
 
-    getOperation()->walk([&](Operation *op) {
-      if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
-        lowerVectorLoad(loadOp, rewriter);
-      } else if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
-        lowerVectorStore(storeOp, rewriter);
+    auto walkFn = [&](Operation *op) {
+      TypeID opTypeID = op->getName().getTypeID();
+      for (const auto &handler : loweringHandlers) {
+        if (handler.typeID == opTypeID) {
+          if (failed(handler.lowerFn(op, rewriter)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        }
       }
-    });
+      return WalkResult::advance();
+    };
+
+    if (getOperation()->walk(walkFn).wasInterrupted())
+      signalPassFailure();
   }
 };
 
