@@ -67,6 +67,7 @@ from .codegen import WaveEmitter
 from .compile_options import WaveCompileOptions
 from .constraints import (
     Constraint,
+    GridConstraint,
     HardwareConstraint,
     ReorderingConstraint,
     TilingConstraint,
@@ -520,18 +521,23 @@ class LaunchableWave(Launchable):
 
         self._validate_constraints()
         hardware_constraint = self.hardware_constraints[0]
+        use_linearized_dims = hardware_constraint.use_linearized_dims is True
+
         for wave_constraint in self.wave_constraints:
             for workgroup_constraint in self.workgroup_constraints:
                 if wave_constraint.dim == workgroup_constraint.dim:
                     wave_constraint.set_wave_id_from_hardware_and_workgroup_constraint(
-                        hardware_constraint, workgroup_constraint
+                        hardware_constraint,
+                        workgroup_constraint,
+                        use_linearized_dims,
                     )
 
         if hardware_constraint.waves_per_block is None:
             waves_per_block = [1, 1, 1]
-            for wave_constraint in self.wave_constraints:
+            for i, wave_constraint in enumerate(self.wave_constraints):
                 count = subs_idxc(wave_constraint.waves_per_block)
-                waves_per_block[wave_constraint.workgroup_dim] = count
+                dim = i if use_linearized_dims else wave_constraint.workgroup_dim
+                waves_per_block[dim] = count
 
             hardware_constraint.waves_per_block = tuple(waves_per_block)
 
@@ -633,6 +639,16 @@ class LaunchableWave(Launchable):
     def infer_grid_shape(self, idxc: IndexingContext):
         self.grid_type.dims = [1, 1, 1]
         max_workgroup_dim = 2
+
+        for constraint in self.constraints:
+            if isinstance(constraint, GridConstraint):
+                grid = []
+                for dim in constraint.grid_size:
+                    dim_val = safe_subs(dim, idxc.subs)
+                    grid.append(int(dim_val))
+                self.grid_type.dims = grid
+                return
+
         aliases = [x.source for x in self.constraints if isinstance(x, SymbolicAlias)]
         for constraint in self.workgroup_constraints:
             if constraint.dim in aliases:
@@ -985,8 +1001,9 @@ class LaunchableWave(Launchable):
         # Determine grid shape.
         self.infer_grid_shape(IndexingContext.current())
         self.infer_device_layout(IndexingContext.current())
+
         if options.print_grid:
-            print(f"Grid: {self.grid_type}")
+            print(f"Grid Dimensions: {self.grid_type.dims}")
             print(f"Device layout: {self.device_layout}")
 
         # Add grid and block dims to kernel launch info.

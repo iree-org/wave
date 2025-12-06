@@ -572,6 +572,51 @@ def _create_vec_read_write(
             return
 
 
+def _build_mask_with_mapping(
+    emitter: WaveEmitter,
+    mapping: IndexMapping,
+    index: dict[IndexSymbol, IndexSequence],
+    transformed_index: dict[IndexSymbol, IndexSequence],
+    memory_shape: tuple[IndexSymbol, ...],
+    elements_per_thread: int,
+    bounds: Optional[tuple[IndexSymbol, ...]],
+    dynamic_vals_map: dict[IndexExpr, Value],
+) -> Optional[Value]:
+    """
+    Build a mask for read/write operations, when a mapping is used
+
+    Either build the mask w/ the original index or transformed index
+    We want to build the mask w/ the transformed index when
+      - the transformed_index has the same dimensions in bounds for correct masking
+      - no dynamic_val_indices are used in the mapping
+      - memory dims are not dynamic values
+    This matches the case when the original index can be transformed within the mapping itself i.e.
+
+    tkw.IndexMapping(num_iterators=2, inputs={M: i + CTA_M_OFFSET, K: j}, outputs={M: i, K: j},)
+
+    So the transformed index: "i + OFFSET" must be passed into the masking first
+    else the original index is passed into the masking first if it is not changed within the mapping
+
+    """
+    static_memory_dims = not any(dim in emitter.dynamic_dims for dim in memory_shape)
+    use_transformed_index = (
+        bounds
+        and all(dim in transformed_index for dim in bounds)
+        and not mapping.dynamic_val_indices
+        and static_memory_dims
+    )
+    if use_transformed_index:
+        return _build_mask(
+            emitter,
+            transformed_index,
+            elements_per_thread,
+            bounds,
+            dynamic_vals_map,
+        )
+    else:
+        return _build_mask(emitter, index, elements_per_thread, bounds)
+
+
 @handle_op(read)
 def handle_read(emitter: WaveEmitter, node: fx.Node):
     # This is similar to tkl.store with fixed start indices for now.
@@ -598,9 +643,23 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     )
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
 
-    mask = _build_mask(emitter, index, elements_per_thread, bounds)
     if mapping:
-        index = transform_index_on_mapping(mapping, input_shape, index, is_read=True)
+        transformed_index = transform_index_on_mapping(
+            mapping, input_shape, index, is_read=True
+        )
+        mask = _build_mask_with_mapping(
+            emitter,
+            mapping,
+            index,
+            transformed_index,
+            input_shape,
+            elements_per_thread,
+            bounds,
+            dynamic_vals_map_start,
+        )
+        index = transformed_index
+    else:
+        mask = _build_mask(emitter, index, elements_per_thread, bounds)
 
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
@@ -660,7 +719,6 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     index = node.index
 
-    input_shape = _get_symbolic_shape(register)
     output_shape = _get_symbolic_shape(memory)
     elements_per_thread = cast_py_literal(emitter, elements_per_thread)
     dyn_vals = tuple(
@@ -668,9 +726,23 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     )
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
 
-    mask = _build_mask(emitter, index, elements_per_thread, bounds)
     if mapping:
-        index = transform_index_on_mapping(mapping, output_shape, index, is_read=False)
+        transformed_index = transform_index_on_mapping(
+            mapping, output_shape, index, is_read=False
+        )
+        mask = _build_mask_with_mapping(
+            emitter,
+            mapping,
+            index,
+            transformed_index,
+            output_shape,
+            elements_per_thread,
+            bounds,
+            dynamic_vals_map_start,
+        )
+        index = transformed_index
+    else:
+        mask = _build_mask(emitter, index, elements_per_thread, bounds)
 
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start

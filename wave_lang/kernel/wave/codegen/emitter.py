@@ -797,6 +797,11 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         return rem_expr(lhs, rhs)
 
+    def _floordiv(lhs, rhs):
+        assert not isinstance(lhs, _Rational) and not isinstance(rhs, _Rational)
+
+        return floordiv_expr(lhs, rhs)
+
     def _floor(value):
         if not isinstance(value, _Rational):
             return value

@@ -811,6 +811,18 @@ def handle_div(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     return result
 
 
+@handle_binary_op(operator.floordiv)
+def handle_floordiv(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
+    element_type = get_type_or_element_type(lhs.type)
+    if is_integer_like_type(element_type) and is_signed_or_signless_type(element_type):
+        result = arith_d.floordivsi(lhs, rhs)
+    else:
+        raise ValidationError(
+            f"Found unhandled operand type for floordiv: {element_type}"
+        )
+    return result
+
+
 @handle_binary_op(operator.mod)
 def handle_mod(lhs: Value, rhs: Value, options: WaveCompileOptions) -> OpResult:
     element_type = get_type_or_element_type(lhs.type)

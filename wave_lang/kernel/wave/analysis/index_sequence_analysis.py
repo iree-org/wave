@@ -51,6 +51,7 @@ from ...ops.wave_ops import (
 from ..constraints import (
     Constraint,
     DistributionConstraint,
+    GridConstraint,
     HardwareConstraint,
     TilingConstraint,
     WorkgroupConstraint,
@@ -362,6 +363,7 @@ def set_thread_independent_index(
     if isinstance(custom, (Iterate, Placeholder)) and not isinstance(custom, IterArg):
         return
 
+    has_grid_constraint = any(isinstance(c, GridConstraint) for c in constraints)
     constraints = [c for c in constraints if isinstance(c, DistributionConstraint)]
 
     index = {}
@@ -376,6 +378,9 @@ def set_thread_independent_index(
             if isinstance(constraint, TilingConstraint):
                 if not hasattr(custom.graph, "parent_op"):
                     continue
+
+            if isinstance(constraint, WorkgroupConstraint) and has_grid_constraint:
+                continue
 
             if index_seq is None:
                 index_seq = constraint.apply()

@@ -234,6 +234,7 @@ class HardwareConstraint(Constraint):
     mma_type: Optional[MMAType | ScaledMMAType] = MMAType.F32_16x16x16_F16
     vector_shapes: Optional[dict[IndexSymbol, int]] = None
     max_bits_per_load: int = 128
+    use_linearized_dims: Optional[bool] = None
 
     def max_elems_per_load(self, element_type: DataType) -> int:
         return self.max_bits_per_load // element_type.bitwidth()
@@ -450,6 +451,13 @@ class HardwareConstraint(Constraint):
     @property
     def threads_per_block(self) -> tuple[int]:
         # threads_per_block is set in initialize_wave_constraints method
+        if self.use_linearized_dims is True:
+            total_waves = (
+                self.waves_per_block[0]
+                * self.waves_per_block[1]
+                * self.waves_per_block[2]
+            )
+            return (total_waves * self.threads_per_wave, 1, 1)
         return (
             self.waves_per_block[0] * self.threads_per_wave,
         ) + self.waves_per_block[1:]
@@ -750,7 +758,7 @@ class TilingConstraint(DistributionConstraint):
     def apply(self) -> IndexSequence:
         if self.induction_var is None:
             raise ValueError(
-                "Index is being computed without setting induction variable"
+                f"Index is being computed without setting induction variable for dimension {self.dim}"
             )
         return IndexSequence(self.start + self.induction_var * self.tile_size, 1)
 
@@ -804,6 +812,9 @@ class WaveConstraint(DistributionConstraint):
     wave_id_0 = floor(thread_id_0 / threads_per_wave)
     wave_id_1 = thread_id_1
     wave_id_2 = thread_id_2
+
+    When linearized_cta_dims is True, the number of threads per block is
+    [wave_id * threads_per_wave, 1, 1]
     """
 
     dim: IndexExpr
@@ -820,21 +831,42 @@ class WaveConstraint(DistributionConstraint):
         self,
         hardware_constraint: HardwareConstraint,
         workgroup_constraint: WorkgroupConstraint,
+        use_linearized_dims: bool,
     ):
         """
         The wave_id is the same as the thread_id, with the exception of
-          wave_id[0] = thread_id[0] / threads_per_wave
+        wave_id[0] = thread_id[0] / threads_per_wave
         This is a convention that we adopt.
+
+        When linearized_wave_id is provided, it means all waves are linearized along THREAD_0 dim.
+        waves_per_block is used for how we want to distribute the waves along each dim
+
+        This is the convention:
+        The primary constraint gets wave_id = linearized_wave_id % waves_per_dim
+        The non-primary constraint gets wave_id = linearized_wave_id // waves_per_dim
         """
         old_wave_id = self.wave_id
         assert self.dim == workgroup_constraint.dim, "Dimension mismatch"
-        self.wave_id = hardware_constraint.get_thread_id_from_workgroup_dim(
-            workgroup_constraint.workgroup_dim
-        )
-        # Only handling the wg_dim_0 case because Wave assumes
-        # all threads in a wave are handled in wg_dim_0.
-        if workgroup_constraint.workgroup_dim == 0:
-            self.wave_id = floor(self.wave_id / hardware_constraint.threads_per_wave)
+
+        if use_linearized_dims:
+            self.wg_constraint = workgroup_constraint
+            waves_per_dim = self.waves_per_block
+            wave_id = floor(THREAD_0 / hardware_constraint.threads_per_wave)
+            if workgroup_constraint.primary:
+                self.wave_id = wave_id % waves_per_dim
+            else:
+                self.wave_id = floor(wave_id / waves_per_dim)
+        else:
+            self.wave_id = hardware_constraint.get_thread_id_from_workgroup_dim(
+                workgroup_constraint.workgroup_dim
+            )
+            # Only handling the wg_dim_0 case because Wave assumes
+            # all threads in a wave are handled in wg_dim_0.
+            if workgroup_constraint.workgroup_dim == 0:
+                self.wave_id = floor(
+                    self.wave_id / hardware_constraint.threads_per_wave
+                )
+
         assert (
             old_wave_id is None or self.wave_id == old_wave_id
         ), f"Conflicting preset wave_id old: {old_wave_id} new: {self.wave_id}"
@@ -919,6 +951,23 @@ def get_constrained_shape(
             if isinstance(x, TilingConstraint)
         ][0]
     return tuple(constrained_shape)
+
+
+@dataclass
+class GridConstraint:
+    """
+    Explicitly specify grid launch dimensions
+    """
+
+    grid_size: IndexExpr | tuple[IndexExpr, IndexExpr, IndexExpr]
+
+    def __post_init__(self):
+        if not isinstance(self.grid_size, tuple):
+            self.grid_size = (self.grid_size, 1, 1)
+        elif len(self.grid_size) == 1:
+            self.grid_size = (self.grid_size[0], 1, 1)
+        else:
+            raise ValueError(f"Grid size must be 1D, got {len(self.grid_size)}D")
 
 
 @dataclass

@@ -13,6 +13,7 @@ from wave_lang.kernel.wave.utils.general_utils import (
 from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
+    get_persistent_gemm_kernel,
 )
 
 M = tkl.sym.M
@@ -2322,3 +2323,46 @@ def test_explicit_shared_gemm():
     # CHECK:              amdgpu.mfma
     # Verify write to global memory (outside loop)
     # CHECK:            vector.store %{{.*}}, %[[GLOBAL_C]]
+
+
+@run_test
+def test_persistent_gemm():
+    persistent_gemm, hyperparams = get_persistent_gemm_kernel(
+        shape=(2048, 2048, 2048),
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+        threads_per_wave=64,
+        block_shape=(128, 256, 64),
+        waves_per_block=(4, 1),
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    persistent_gemm = wave_compile(options, persistent_gemm)
+    print(persistent_gemm.asm)
+
+    # CHECK-LABEL:    test_persistent_gemm
+    # CHECK:          #[[TRANSLATION:.+]] = #iree_codegen.translation_info<pipeline = None workgroup_size = [256, 1, 1] subgroup_size = 64>
+    # CHECK:          func.func @persistent_gemm
+    # CHECK-SAME:       (%[[ARG0:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG1:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION]]} {
+
+    # CHECK-DAG:       %[[C128_I32:.+]] = arith.constant 128 : i32
+    # CHECK-DAG:       %[[C128:.+]] = arith.constant 128 : index
+    # CHECK:           %[[BLOCK_ID_X:.+]] = gpu.block_id  x upper_bound 128
+
+    # Persistent loop
+    # CHECK:           %{{.*}} = scf.while (%[[ARG3:.+]] = %[[BLOCK_ID_X]]) : (index) -> index {
+    # CHECK:             %{{.*}} = arith.cmpi slt, %[[ARG3]], %[[C128]] : index
+    # CHECK:             scf.condition(%{{.*}}) %[[ARG3]] : index
+    # CHECK:           } do {
+    # CHECK:             %{{.*}} = arith.index_cast %[[ARG3]] : index to i32
+
+    # Advance to next tile
+    # CHECK:             %{{.*}} = arith.addi %{{.*}}, %[[C128_I32]] : i32
+    # CHECK:             %{{.*}} = arith.index_cast %{{.*}} : i32 to index
+    # CHECK:             scf.yield %{{.*}} : index
+    # CHECK:           }
+    # CHECK:           return
