@@ -187,6 +187,10 @@ def handle_scalar(emitter: WaveEmitter, node: fx.Node):
         )
         scalar = conversion_op(target_type, scalar_i32)
     elif isinstance(value, (int, float)):
+        # If target type is a float type and value is an int, convert
+        # to float to avoid canonicalization issues
+        if is_float_type(target_type) and isinstance(value, int):
+            value = float(value)
         scalar = arith_d.constant(target_type, value)
     emitter.bind_node_proxy(node, IRProxyValue(scalar))
 
