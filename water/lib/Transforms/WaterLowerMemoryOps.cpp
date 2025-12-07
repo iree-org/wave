@@ -68,7 +68,7 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
 
   // Compute linear index from multidimensional indices
   Value linearIndex = offset;
-  for (size_t i = 0; i < indices.size(); ++i) {
+  for (auto i : llvm::seq<size_t>(0, indices.size())) {
     Value stride = metadataOp.getStrides()[i];
     Value indexTimesStride = arith::MulIOp::create(
         rewriter, loc, indices[i], stride, arith::IntegerOverflowFlags::nsw);
