@@ -32,10 +32,9 @@ struct PendingOperations {
 struct WaitcntRequirement {
   std::optional<unsigned> vmcnt;   // Vector memory operations counter
   std::optional<unsigned> lgkmcnt; // LDS/GDS operations counter
-  std::optional<unsigned> vscnt;   // Vector store operations counter
 
   bool hasRequirement() const {
-    return vmcnt.has_value() || lgkmcnt.has_value() || vscnt.has_value();
+    return vmcnt.has_value() || lgkmcnt.has_value();
   }
 
   /// Merge with another requirement (take minimum for conservative join)
@@ -56,15 +55,13 @@ struct WaitcntRequirement {
         changed = true;
       }
     }
-    if (other.vscnt.has_value()) {
-      if (!vscnt.has_value() || *other.vscnt < *vscnt) {
-        vscnt = other.vscnt;
-        changed = true;
-      }
-    }
 
     return changed;
   }
+
+  std::optional<unsigned> getLoadCnt() const { return vmcnt; }
+  std::optional<unsigned> getStoreCnt() const { return vmcnt; }
+  std::optional<unsigned> getDsCnt() const { return lgkmcnt; }
 };
 
 /// Lattice state tracking pending asynchronous operations
@@ -239,8 +236,29 @@ public:
       return;
     }
 
-    // TODO: Use the analysis results to insert waitcnt instructions
-    // For now, just run the analysis to test the framework
+    // Insert waitcnt operations based on analysis results
+    IRRewriter rewriter(&getContext());
+    op->walk([&](Operation *operation) {
+      // Query the state before this operation
+      const WaitcntState *state = solver.lookupState<WaitcntState>(
+          solver.getProgramPointAfter(operation));
+      if (!state || !state->hasRequirement())
+        return;
+
+      const WaitcntRequirement &req = state->getRequirement();
+
+      auto getAttr = [&](std::optional<unsigned> cnt) -> IntegerAttr {
+        if (!cnt.has_value())
+          return nullptr;
+        return rewriter.getI32IntegerAttr(*cnt);
+      };
+
+      // Insert wait operation before this operation
+      rewriter.setInsertionPoint(operation);
+      amdgpu::MemoryCounterWaitOp::create(
+          rewriter, operation->getLoc(), getAttr(req.getLoadCnt()),
+          getAttr(req.getStoreCnt()), getAttr(req.getDsCnt()), nullptr);
+    });
   }
 };
 
