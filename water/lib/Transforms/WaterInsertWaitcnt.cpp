@@ -7,11 +7,15 @@
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
+#include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "water-insert-waitcnt"
 
 using namespace mlir;
 using namespace mlir::dataflow;
@@ -129,9 +133,12 @@ public:
   size_t size() const { return pendingOps ? pendingOps->ops.size() : 0; }
 
   /// Initialize to empty state
-  void clear() {
-    pendingOps = std::make_shared<PendingOperations>();
-    requirement = WaitcntRequirement();
+  ChangeResult reset() {
+    if (!pendingOps)
+      return ChangeResult::NoChange;
+
+    pendingOps.reset();
+    return ChangeResult::Change;
   }
 
   /// Set the required waitcnt values
@@ -183,17 +190,15 @@ public:
   using DenseForwardDataFlowAnalysis::DenseForwardDataFlowAnalysis;
 
   void setToEntryState(WaitcntState *lattice) override {
-    // Entry state: empty pending operations
-    lattice->clear();
+    propagateIfChanged(lattice, lattice->reset());
   }
 
   LogicalResult visitOperation(Operation *op, const WaitcntState &before,
                                WaitcntState *after) override {
-    // Start with the state before this operation
-    *after = before;
+    LDBG() << "Visiting: " << *op;
 
-    // Always reset requirement - it should not propagate from previous state
-    after->setRequirement(WaitcntRequirement());
+    // Start with the state before this operation
+    WaitcntState newState = before;
 
     // Check if any operands depend on pending operations
     WaitcntRequirement opRequirement;
@@ -206,14 +211,15 @@ public:
 
     // Set the requirement for this operation
     if (opRequirement.hasRequirement())
-      after->setRequirement(opRequirement);
+      newState.setRequirement(opRequirement);
 
     // Check if this is an async memory operation (vector load/store)
     if (isa<vector::LoadOp, vector::StoreOp>(op)) {
       // Add this operation to the pending list
-      after->addPendingOp(op);
+      newState.addPendingOp(op);
     }
 
+    propagateIfChanged(after, after->join(newState));
     return success();
   }
 };
@@ -228,6 +234,7 @@ public:
 
     // Set up the dataflow solver
     DataFlowSolver solver;
+    loadBaselineAnalyses(solver);
     solver.load<WaitcntAnalysis>();
 
     // Run the analysis
@@ -239,7 +246,7 @@ public:
     // Insert waitcnt operations based on analysis results
     IRRewriter rewriter(&getContext());
     op->walk([&](Operation *operation) {
-      // Query the state before this operation
+      // Query the state after this operation
       const WaitcntState *state = solver.lookupState<WaitcntState>(
           solver.getProgramPointAfter(operation));
       if (!state || !state->hasRequirement())
