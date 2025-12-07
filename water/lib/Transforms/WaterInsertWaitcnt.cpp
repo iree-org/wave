@@ -28,6 +28,45 @@ struct PendingOperations {
   SmallVector<Operation *> ops;
 };
 
+/// Waitcnt requirement for synchronization
+struct WaitcntRequirement {
+  std::optional<unsigned> vmcnt;   // Vector memory operations counter
+  std::optional<unsigned> lgkmcnt; // LDS/GDS operations counter
+  std::optional<unsigned> vscnt;   // Vector store operations counter
+
+  bool hasRequirement() const {
+    return vmcnt.has_value() || lgkmcnt.has_value() || vscnt.has_value();
+  }
+
+  /// Merge with another requirement (take minimum for conservative join)
+  /// Returns true if this requirement changed
+  bool merge(const WaitcntRequirement &other) {
+    bool changed = false;
+
+    // Take minimum of each counter (lower value = more restrictive)
+    if (other.vmcnt.has_value()) {
+      if (!vmcnt.has_value() || *other.vmcnt < *vmcnt) {
+        vmcnt = other.vmcnt;
+        changed = true;
+      }
+    }
+    if (other.lgkmcnt.has_value()) {
+      if (!lgkmcnt.has_value() || *other.lgkmcnt < *lgkmcnt) {
+        lgkmcnt = other.lgkmcnt;
+        changed = true;
+      }
+    }
+    if (other.vscnt.has_value()) {
+      if (!vscnt.has_value() || *other.vscnt < *vscnt) {
+        vscnt = other.vscnt;
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+};
+
 /// Lattice state tracking pending asynchronous operations
 class WaitcntState : public AbstractDenseLattice {
 public:
@@ -37,25 +76,27 @@ public:
 
   ChangeResult join(const AbstractDenseLattice &rhs) override {
     const auto &rhsState = static_cast<const WaitcntState &>(rhs);
-
-    // If rhs has no pending ops, no change needed
-    if (rhsState.isEmpty())
-      return ChangeResult::NoChange;
-
-    // If we have no pending ops, just share rhs's state
-    if (isEmpty()) {
-      pendingOps = rhsState.pendingOps;
-      return ChangeResult::Change;
-    }
-
-    // Conservative union: merge all pending operations
     bool changed = false;
-    for (Operation *op : rhsState.getPendingOps()) {
-      if (!contains(op)) {
-        addPendingOp(op);
+
+    // Merge pending operations
+    if (!rhsState.isEmpty()) {
+      if (isEmpty()) {
+        pendingOps = rhsState.pendingOps;
         changed = true;
+      } else {
+        // Conservative union: merge all pending operations
+        for (Operation *op : rhsState.getPendingOps()) {
+          if (!contains(op)) {
+            addPendingOp(op);
+            changed = true;
+          }
+        }
       }
     }
+
+    // Merge requirements (take minimum for conservative join)
+    if (requirement.merge(rhsState.requirement))
+      changed = true;
 
     return changed ? ChangeResult::Change : ChangeResult::NoChange;
   }
@@ -91,11 +132,26 @@ public:
   size_t size() const { return pendingOps ? pendingOps->ops.size() : 0; }
 
   /// Initialize to empty state
-  void clear() { pendingOps = std::make_shared<PendingOperations>(); }
+  void clear() {
+    pendingOps = std::make_shared<PendingOperations>();
+    requirement = WaitcntRequirement();
+  }
+
+  /// Set the required waitcnt values
+  void setRequirement(const WaitcntRequirement &req) { requirement = req; }
+
+  /// Get the required waitcnt values
+  const WaitcntRequirement &getRequirement() const { return requirement; }
+
+  /// Check if there's a waitcnt requirement
+  bool hasRequirement() const { return requirement.hasRequirement(); }
 
 private:
   /// Pending asynchronous operations (vector loads/stores)
   std::shared_ptr<PendingOperations> pendingOps;
+
+  /// Required waitcnt before this state (for inserting actual waitcnt ops)
+  WaitcntRequirement requirement;
 };
 
 /// Dense forward dataflow analysis for waitcnt insertion
