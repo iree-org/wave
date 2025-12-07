@@ -439,8 +439,8 @@ class Specialist(GemmScheduler):
 
         # duplicate nodes
         new_writes = defaultdict(list)
+        write_record = []
         for w in range(self.waves_per_block[0], 0, -1):
-            write_record = []
 
             # TODO(megan.kuo)
             shift_subs = {THREAD_1: THREAD_1 - w}
@@ -451,9 +451,10 @@ class Specialist(GemmScheduler):
 
             # add signal after load
             dup_times = self.waves_per_block[0] - w
-            self.add_load_split_barrier(
-                service_graph, iterate_op, dup_times, write_record[0], write_record[-1]
-            )
+
+        self.add_load_split_barrier(
+            service_graph, iterate_op, 0, write_record[0], write_record[-1]
+        )
 
         # close the graph with empty output
         service_graph.output(None)
@@ -605,10 +606,10 @@ class Specialist(GemmScheduler):
 
         with subgraph.inserting_before(first_lw):
             location = get_custom(first_lw).location
-            for offset in range(1, self.waves_per_block[0] + 1):
+            for offset in range(1, self.barUB):  # self.waves_per_block[0] + 1):
 
                 # i is the range of possible barrier id this service wave is helping out
-                i = dup_times * self.waves_per_block[0] + offset
+                i = offset  # dup_times * self.waves_per_block[0] + offset
 
                 # declare graph
                 wid_wait_graph = fx.Graph()
@@ -645,10 +646,10 @@ class Specialist(GemmScheduler):
 
         with subgraph.inserting_after(last_lw):
             location = get_custom(last_lw).location
-            for offset in range(1, self.waves_per_block[0] + 1):
+            for offset in range(1, self.barUB):  # self.waves_per_block[0] + 1):
 
                 # i is the range of possible barrier id this service wave is helping out
-                i = dup_times * self.waves_per_block[0] + offset
+                i = offset  # dup_times * self.waves_per_block[0] + offset
 
                 # declare graph
                 wid_signal_graph = fx.Graph()
