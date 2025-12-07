@@ -23,25 +23,34 @@ namespace mlir::water {
 
 namespace {
 
-/// Get the AMDGPU global_load instruction suffix based on bit width
-static StringRef getGlobalLoadSuffix(unsigned bitWidth) {
+/// Get the AMDGPU instruction suffix based on bit width
+static FailureOr<StringRef> getSizeSuffix(unsigned bitWidth) {
   switch (bitWidth) {
   case 32:
-    return "b32";
+    return StringRef("b32");
   case 64:
-    return "b64";
+    return StringRef("b64");
   case 96:
-    return "b96";
+    return StringRef("b96");
   case 128:
-    return "b128";
+    return StringRef("b128");
   default:
-    return "";
+    return failure();
   }
 }
 
-/// Get the AMDGPU global_store instruction suffix based on bit width
-static StringRef getGlobalStoreSuffix(unsigned bitWidth) {
-  return getGlobalLoadSuffix(bitWidth);
+/// Create an LLVM inline assembly operation with standard attributes
+static LLVM::InlineAsmOp createInlineAsm(IRRewriter &rewriter, Location loc,
+                                         TypeRange resultTypes,
+                                         ValueRange operands, StringRef asmStr,
+                                         StringRef constraints,
+                                         bool hasSideEffects) {
+  return LLVM::InlineAsmOp::create(
+      rewriter, loc, resultTypes, operands, asmStr, constraints, hasSideEffects,
+      /*is_align_stack=*/false,
+      /*tail_call_kind=*/LLVM::tailcallkind::TailCallKind::None,
+      /*asm_dialect=*/LLVM::AsmDialectAttr{},
+      /*operand_attrs=*/ArrayAttr{});
 }
 
 /// Lower vector.load to LLVM inline assembly (global_load_*)
@@ -51,17 +60,17 @@ static LogicalResult lowerVectorLoad(vector::LoadOp loadOp,
   unsigned bitWidth =
       vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
 
-  StringRef suffix = getGlobalLoadSuffix(bitWidth);
-  if (suffix.empty())
+  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  if (failed(suffix))
     return loadOp.emitError("unsupported vector load bit width: ") << bitWidth;
 
   Location loc = loadOp.getLoc();
 
   // Build the inline assembly string: "global_load_b64 $0, $1, off"
-  std::string asmStr = ("global_load_" + suffix + " $0, $1, off").str();
+  std::string asmStr = ("global_load_" + *suffix + " $0, $1, off").str();
 
   // Constraints: "=v" for output (VGPR), "v" for input address (VGPR)
-  std::string constraints = "=v,v";
+  StringRef constraints = "=v,v";
 
   // Get the base pointer - need to convert memref to pointer
   auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
@@ -76,17 +85,8 @@ static LogicalResult lowerVectorLoad(vector::LoadOp loadOp,
   basePtr = LLVM::IntToPtrOp::create(rewriter, loc, ptrType, basePtr);
 
   // Create the inline assembly operation
-  auto asmOp = LLVM::InlineAsmOp::create(
-      rewriter, loc,
-      /*resultTypes=*/vectorType,
-      /*operands=*/ValueRange{basePtr},
-      /*asm_string=*/asmStr,
-      /*constraints=*/constraints,
-      /*has_side_effects=*/false,
-      /*is_align_stack=*/false,
-      /*tail_call_kind=*/LLVM::tailcallkind::TailCallKind::None,
-      /*asm_dialect=*/LLVM::AsmDialectAttr{},
-      /*operand_attrs=*/ArrayAttr{});
+  auto asmOp = createInlineAsm(rewriter, loc, vectorType, ValueRange{basePtr},
+                               asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
   return success();
@@ -99,18 +99,18 @@ static LogicalResult lowerVectorStore(vector::StoreOp storeOp,
   unsigned bitWidth =
       vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
 
-  StringRef suffix = getGlobalStoreSuffix(bitWidth);
-  if (suffix.empty())
+  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  if (failed(suffix))
     return storeOp.emitError("unsupported vector store bit width: ")
            << bitWidth;
 
   Location loc = storeOp.getLoc();
 
   // Build the inline assembly string: "global_store_b64 $0, $1, off"
-  std::string asmStr = ("global_store_" + suffix + " $0, $1, off").str();
+  std::string asmStr = ("global_store_" + *suffix + " $0, $1, off").str();
 
   // Constraints: "v" for address (VGPR), "v" for data (VGPR)
-  std::string constraints = "v,v";
+  StringRef constraints = "v,v";
 
   // Get the base pointer
   auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
@@ -125,17 +125,9 @@ static LogicalResult lowerVectorStore(vector::StoreOp storeOp,
   basePtr = LLVM::IntToPtrOp::create(rewriter, loc, ptrType, basePtr);
 
   // Create the inline assembly operation (no result for store)
-  LLVM::InlineAsmOp::create(
-      rewriter, loc,
-      /*resultTypes=*/TypeRange{},
-      /*operands=*/ValueRange{basePtr, storeOp.getValueToStore()},
-      /*asm_string=*/asmStr,
-      /*constraints=*/constraints,
-      /*has_side_effects=*/true,
-      /*is_align_stack=*/false,
-      /*tail_call_kind=*/LLVM::tailcallkind::TailCallKind::None,
-      /*asm_dialect=*/LLVM::AsmDialectAttr{},
-      /*operand_attrs=*/ArrayAttr{});
+  createInlineAsm(rewriter, loc, TypeRange{},
+                  ValueRange{basePtr, storeOp.getValueToStore()}, asmStr,
+                  constraints, /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
   return success();
