@@ -146,6 +146,32 @@ public:
   /// Check if there's a waitcnt requirement
   bool hasRequirement() const { return requirement.hasRequirement(); }
 
+  /// Check if a value depends on pending operations and compute required wait
+  std::optional<WaitcntRequirement> checkRequirement(Value val) const {
+    if (!pendingOps || pendingOps->ops.empty())
+      return std::nullopt;
+
+    // Check if val is produced by any pending operation
+    Operation *defOp = val.getDefiningOp();
+    if (!defOp)
+      return std::nullopt;
+
+    // Find the operation in the pending list
+    auto it = llvm::find(pendingOps->ops, defOp);
+    if (it == pendingOps->ops.end())
+      return std::nullopt;
+
+    // Compute distance from the end of the list
+    size_t distanceFromEnd = std::distance(it, pendingOps->ops.end()) - 1;
+
+    WaitcntRequirement req;
+    // For vector loads/stores, use vmcnt
+    if (isa<vector::LoadOp, vector::StoreOp>(defOp))
+      req.vmcnt = distanceFromEnd;
+
+    return req;
+  }
+
 private:
   /// Pending asynchronous operations (vector loads/stores)
   std::shared_ptr<PendingOperations> pendingOps;
@@ -169,15 +195,27 @@ public:
     // Start with the state before this operation
     *after = before;
 
+    // Always reset requirement - it should not propagate from previous state
+    after->setRequirement(WaitcntRequirement());
+
+    // Check if any operands depend on pending operations
+    WaitcntRequirement opRequirement;
+    for (Value operand : op->getOperands()) {
+      if (auto req = before.checkRequirement(operand)) {
+        // Merge this requirement (take minimum for conservative wait)
+        opRequirement.merge(*req);
+      }
+    }
+
+    // Set the requirement for this operation
+    if (opRequirement.hasRequirement())
+      after->setRequirement(opRequirement);
+
     // Check if this is an async memory operation (vector load/store)
     if (isa<vector::LoadOp, vector::StoreOp>(op)) {
       // Add this operation to the pending list
       after->addPendingOp(op);
     }
-
-    // Check if this operation uses a value produced by a pending operation
-    // If so, we need to insert a waitcnt before this operation
-    // (We'll handle actual insertion in a separate pass over the IR)
 
     return success();
   }
