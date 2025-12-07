@@ -53,6 +53,52 @@ static LLVM::InlineAsmOp createInlineAsm(IRRewriter &rewriter, Location loc,
       /*operand_attrs=*/ArrayAttr{});
 }
 
+/// Compute the final address for a memref access with indices
+static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
+                                  Value memref, ValueRange indices,
+                                  unsigned elementBitWidth) {
+  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto i64Type = rewriter.getI64Type();
+
+  // Extract strided metadata to get base pointer, offset, sizes, and strides
+  auto metadataOp =
+      memref::ExtractStridedMetadataOp::create(rewriter, loc, memref);
+  Value basePtr = metadataOp.getBaseBuffer();
+  Value offset = metadataOp.getOffset();
+
+  // Compute linear index from multidimensional indices
+  Value linearIndex = offset;
+  for (size_t i = 0; i < indices.size(); ++i) {
+    Value stride = metadataOp.getStrides()[i];
+    Value indexTimesStride = arith::MulIOp::create(
+        rewriter, loc, indices[i], stride, arith::IntegerOverflowFlags::nsw);
+    linearIndex =
+        arith::AddIOp::create(rewriter, loc, linearIndex, indexTimesStride,
+                              arith::IntegerOverflowFlags::nsw);
+  }
+
+  // Convert base pointer to i64
+  Value basePtrInt =
+      memref::ExtractAlignedPointerAsIndexOp::create(rewriter, loc, basePtr);
+  basePtrInt = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtrInt);
+
+  // Convert linear index to i64 and scale by element size
+  unsigned elementBytes = elementBitWidth / 8;
+  Value elementSize =
+      arith::ConstantIndexOp::create(rewriter, loc, elementBytes);
+  Value byteOffset =
+      arith::MulIOp::create(rewriter, loc, linearIndex, elementSize,
+                            arith::IntegerOverflowFlags::nsw);
+  Value byteOffsetI64 =
+      arith::IndexCastOp::create(rewriter, loc, i64Type, byteOffset);
+
+  // Add byte offset to base pointer
+  Value finalAddr =
+      arith::AddIOp::create(rewriter, loc, basePtrInt, byteOffsetI64,
+                            arith::IntegerOverflowFlags::nsw);
+  return LLVM::IntToPtrOp::create(rewriter, loc, ptrType, finalAddr);
+}
+
 /// Lower vector.load to LLVM inline assembly (global_load_*)
 static LogicalResult lowerVectorLoad(vector::LoadOp loadOp,
                                      IRRewriter &rewriter) {
@@ -72,20 +118,15 @@ static LogicalResult lowerVectorLoad(vector::LoadOp loadOp,
   // Constraints: "=v" for output (VGPR), "v" for input address (VGPR)
   StringRef constraints = "=v,v";
 
-  // Get the base pointer - need to convert memref to pointer
-  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
-  auto i64Type = rewriter.getI64Type();
-
   rewriter.setInsertionPoint(loadOp);
 
-  // Extract pointer as index, cast to i64, then to ptr
-  Value basePtr = memref::ExtractAlignedPointerAsIndexOp::create(
-      rewriter, loc, loadOp.getBase());
-  basePtr = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtr);
-  basePtr = LLVM::IntToPtrOp::create(rewriter, loc, ptrType, basePtr);
+  // Compute the final address
+  Value addr =
+      computeMemrefAddress(rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
+                           vectorType.getElementTypeBitWidth());
 
   // Create the inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, vectorType, ValueRange{basePtr},
+  auto asmOp = createInlineAsm(rewriter, loc, vectorType, ValueRange{addr},
                                asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
@@ -112,21 +153,16 @@ static LogicalResult lowerVectorStore(vector::StoreOp storeOp,
   // Constraints: "v" for address (VGPR), "v" for data (VGPR)
   StringRef constraints = "v,v";
 
-  // Get the base pointer
-  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
-  auto i64Type = rewriter.getI64Type();
-
   rewriter.setInsertionPoint(storeOp);
 
-  // Extract pointer as index, cast to i64, then to ptr
-  Value basePtr = memref::ExtractAlignedPointerAsIndexOp::create(
-      rewriter, loc, storeOp.getBase());
-  basePtr = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtr);
-  basePtr = LLVM::IntToPtrOp::create(rewriter, loc, ptrType, basePtr);
+  // Compute the final address
+  Value addr = computeMemrefAddress(rewriter, loc, storeOp.getBase(),
+                                    storeOp.getIndices(),
+                                    vectorType.getElementTypeBitWidth());
 
   // Create the inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{basePtr, storeOp.getValueToStore()}, asmStr,
+                  ValueRange{addr, storeOp.getValueToStore()}, asmStr,
                   constraints, /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
