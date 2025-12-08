@@ -82,6 +82,15 @@ struct WaitcntRequirement {
   std::optional<unsigned> load_cnt;
   std::optional<unsigned> ds_cnt;
 
+  WaitcntRequirement() = default;
+
+  WaitcntRequirement(amdgpu::MemoryCounterWaitOp waitOp) {
+    if (auto loadCnt = waitOp.getLoadAttr())
+      load_cnt = loadCnt.getInt();
+    if (auto dsCnt = waitOp.getDsAttr())
+      ds_cnt = dsCnt.getInt();
+  }
+
   bool hasRequirement() const {
     return load_cnt.has_value() || ds_cnt.has_value();
   }
@@ -473,6 +482,12 @@ public:
       opRequirement.merge(memReq);
     }
 
+    // Check if this is an existing memory_counter_wait operation
+    if (auto waitOp = dyn_cast<amdgpu::MemoryCounterWaitOp>(op)) {
+      LDBG() << "  Existing waitcnt operation: " << *waitOp;
+      opRequirement.merge(WaitcntRequirement(waitOp));
+    }
+
     // Set the requirement for this operation
     if (opRequirement.hasRequirement()) {
       newState.setRequirement(opRequirement);
@@ -534,7 +549,9 @@ public:
         return rewriter.getI32IntegerAttr(*cnt);
       };
 
-      // Insert wait operation before this operation
+      // Insert wait operation before the current operation.
+      // If the current operation is already a memory_counter_wait operation
+      // they will be merged later.
       rewriter.setInsertionPoint(operation);
       amdgpu::MemoryCounterWaitOp::create(
           rewriter, operation->getLoc(), getAttr(req.getLoadCnt()),

@@ -149,6 +149,58 @@ func.func @mixed_global_and_workgroup(%global: memref<1024xf32>, %lds: memref<10
   return %result : vector<4xf32>
 }
 
+// CHECK-LABEL: func.func @existing_waitcnt
+func.func @existing_waitcnt(%memref: memref<1024xf32>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // Store to memory
+  // CHECK: vector.store
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Existing wait operation - should clear pending operations
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  amdgpu.memory_counter_wait load(0)
+
+  // Another store after the wait
+  // CHECK: vector.store
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Load requires wait for the second store only (first was already waited on)
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: %[[LOAD:.*]] = vector.load
+  %result = vector.load %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @existing_waitcnt_more_strict
+func.func @existing_waitcnt_more_strict(%data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  %memref1 = memref.alloc() : memref<1024xf32>
+  %memref2 = memref.alloc() : memref<1024xf32>
+
+  // Store to memory
+  // CHECK: vector.store
+  // CHECK: vector.store
+  vector.store %data, %memref1[%offset] : memref<1024xf32>, vector<4xf32>
+  vector.store %data, %memref2[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Existing wait operation - should clear pending operations
+  // Normally, the distance will be 1, but explicit amdgpu.memory_counter_wait
+  // overrides it.
+  // CHECK-NOT: amdgpu.memory_counter_wait load(1)
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NOT: amdgpu.memory_counter_wait load(1)
+  amdgpu.memory_counter_wait load(0)
+
+  // CHECK: %[[LOAD:.*]] = vector.load
+  %result = vector.load %memref1[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
+
+
 // CHECK-LABEL: func.func @control_flow_merge
 func.func @control_flow_merge(%cond: i1, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
   %memref1 = memref.alloc() : memref<1024xf32>
