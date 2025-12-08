@@ -29,6 +29,8 @@ namespace {
 
 /// Shared pending operations list for structural sharing
 struct PendingOperations {
+  PendingOperations() = default;
+  PendingOperations(SmallVector<Operation *> &&ops) : ops(std::move(ops)) {}
   SmallVector<Operation *> ops;
 };
 
@@ -66,7 +68,43 @@ struct WaitcntRequirement {
   std::optional<unsigned> getLoadCnt() const { return vmcnt; }
   std::optional<unsigned> getStoreCnt() const { return vmcnt; }
   std::optional<unsigned> getDsCnt() const { return lgkmcnt; }
+
+  bool isSameCounterType(const WaitcntRequirement &other) const {
+    return vmcnt.has_value() == other.vmcnt.has_value() ||
+           lgkmcnt.has_value() == other.lgkmcnt.has_value();
+  }
+
+  static WaitcntRequirement getOperationRequirement(Operation *op, bool zero) {
+    WaitcntRequirement req;
+    if (isa<vector::LoadOp, vector::StoreOp>(op))
+      req.vmcnt = zero ? 0 : 1;
+    return req;
+  }
+
+  WaitcntRequirement operator+(const WaitcntRequirement &other) const {
+    WaitcntRequirement result;
+    if (vmcnt || other.vmcnt)
+      result.vmcnt = vmcnt.value_or(0) + other.vmcnt.value_or(0);
+    if (lgkmcnt || other.lgkmcnt)
+      result.lgkmcnt = lgkmcnt.value_or(0) + other.lgkmcnt.value_or(0);
+    return result;
+  }
+
+  bool operator>(const WaitcntRequirement &other) const {
+    return vmcnt.value_or(0) > other.vmcnt.value_or(0) ||
+           lgkmcnt.value_or(0) > other.lgkmcnt.value_or(0);
+  }
+
+  void print(raw_ostream &os) const {
+    os << "WaitcntRequirement: vmcnt=" << vmcnt << " lgkmcnt=" << lgkmcnt;
+  }
 };
+
+inline raw_ostream &operator<<(raw_ostream &os,
+                               const WaitcntRequirement &result) {
+  result.print(os);
+  return os;
+}
 
 /// Lattice state tracking pending asynchronous operations
 class WaitcntState : public AbstractDenseLattice {
@@ -103,16 +141,14 @@ public:
   }
 
   void print(raw_ostream &os) const override {
-    os << "WaitcntState: " << size() << " pending ops";
+    os << "WaitcntState: " << size()
+       << " pending ops, requirement: " << requirement;
   }
 
   /// Add a pending operation (copy-on-write)
   void addPendingOp(Operation *op) {
-    auto newPending = std::make_shared<PendingOperations>();
-    if (pendingOps)
-      newPending->ops = pendingOps->ops;
-    newPending->ops.push_back(op);
-    pendingOps = newPending;
+    cow();
+    pendingOps->ops.push_back(op);
   }
 
   /// Get pending operations (read-only)
@@ -142,7 +178,27 @@ public:
   }
 
   /// Set the required waitcnt values
-  void setRequirement(const WaitcntRequirement &req) { requirement = req; }
+  void setRequirement(const WaitcntRequirement &req) {
+    requirement = req;
+    SmallVector<Operation *> newPending;
+    WaitcntRequirement runningRequirement;
+    for (Operation *op : llvm::reverse(pendingOps->ops)) {
+      WaitcntRequirement opReq =
+          WaitcntRequirement::getOperationRequirement(op, false);
+      runningRequirement = runningRequirement + opReq;
+      if (runningRequirement > requirement)
+        continue;
+
+      newPending.push_back(op);
+    }
+    if (newPending.size() == pendingOps->ops.size())
+      return;
+
+    std::reverse(newPending.begin(), newPending.end());
+    pendingOps = std::make_shared<PendingOperations>(std::move(newPending));
+  }
+
+  void resetRequirement() { requirement = {}; }
 
   /// Get the required waitcnt values
   const WaitcntRequirement &getRequirement() const { return requirement; }
@@ -162,16 +218,18 @@ public:
 
     // Find the operation in the pending list
     auto it = llvm::find(pendingOps->ops, defOp);
-    if (it == pendingOps->ops.end())
+    auto end = pendingOps->ops.end();
+    if (it == end)
       return std::nullopt;
 
-    // Compute distance from the end of the list
-    size_t distanceFromEnd = std::distance(it, pendingOps->ops.end()) - 1;
+    auto req = WaitcntRequirement::getOperationRequirement(defOp, true);
+    for (Operation *op : llvm::make_range(std::next(it), end)) {
+      auto opReq = WaitcntRequirement::getOperationRequirement(op, false);
+      if (!req.isSameCounterType(opReq))
+        continue;
 
-    WaitcntRequirement req;
-    // For vector loads/stores, use vmcnt
-    if (isa<vector::LoadOp, vector::StoreOp>(defOp))
-      req.vmcnt = distanceFromEnd;
+      req = req + opReq;
+    }
 
     return req;
   }
@@ -182,6 +240,16 @@ private:
 
   /// Required waitcnt before this state (for inserting actual waitcnt ops)
   WaitcntRequirement requirement;
+
+  void cow() {
+    if (!pendingOps || pendingOps.use_count() > 1) {
+      auto newPending = std::make_shared<PendingOperations>();
+      if (pendingOps)
+        newPending->ops = pendingOps->ops;
+
+      pendingOps = newPending;
+    }
+  }
 };
 
 /// Dense forward dataflow analysis for waitcnt insertion
@@ -210,15 +278,22 @@ public:
     }
 
     // Set the requirement for this operation
-    if (opRequirement.hasRequirement())
+    if (opRequirement.hasRequirement()) {
       newState.setRequirement(opRequirement);
+      LDBG() << "Operation requirement: " << opRequirement;
+    } else {
+      newState.resetRequirement();
+      LDBG() << "No operation requirement";
+    }
 
     // Check if this is an async memory operation (vector load/store)
-    if (isa<vector::LoadOp, vector::StoreOp>(op)) {
+    if (WaitcntRequirement::getOperationRequirement(op, false)
+            .hasRequirement()) {
       // Add this operation to the pending list
       newState.addPendingOp(op);
     }
 
+    LDBG() << "New state: " << newState;
     propagateIfChanged(after, after->join(newState));
     return success();
   }
@@ -230,6 +305,7 @@ class WaterInsertWaitcntPass
     : public water::impl::WaterInsertWaitcntBase<WaterInsertWaitcntPass> {
 public:
   void runOnOperation() override {
+    LDBG() << "Running WaterInsertWaitcntPass";
     Operation *op = getOperation();
 
     // Set up the dataflow solver
