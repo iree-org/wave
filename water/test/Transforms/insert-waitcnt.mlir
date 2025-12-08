@@ -270,3 +270,53 @@ func.func @control_flow_merge_same_lists(%cond: i1, %data: vector<4xf32>, %offse
   // CHECK-NEXT: return %[[LOAD]]
   return %result : vector<4xf32>
 }
+
+// CHECK-LABEL: func.func @loop_carried_dependency
+func.func @loop_carried_dependency(%lb: index, %ub: index, %step: index, %memref: memref<1024xf32>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // CHECK: scf.for
+  %result = scf.for %i = %lb to %ub step %step iter_args(%arg = %data) -> (vector<4xf32>) {
+    // Store in each iteration
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    // CHECK: vector.store
+    vector.store %arg, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // Load in the same iteration - RAW dependency with store from this iteration
+    // In steady state, the backedge brings pending operations from previous iteration
+    // CHECK: amdgpu.memory_counter_wait load(0)
+    // CHECK-NEXT: %[[LOADED:.*]] = vector.load
+    %loaded = vector.load %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // Yield uses the load result, which is async, so need to wait for it
+    // CHECK: amdgpu.memory_counter_wait load(0)
+    // CHECK-NEXT: scf.yield %[[LOADED]]
+    scf.yield %loaded : vector<4xf32>
+  }
+
+  // CHECK: return
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @loop_load_before_store
+func.func @loop_load_before_store(%lb: index, %ub: index, %step: index, %memref: memref<1024xf32>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // CHECK: scf.for
+  %result = scf.for %i = %lb to %ub step %step iter_args(%arg = %data) -> (vector<4xf32>) {
+    // Load first - in steady state, has RAW dependency with store from previous iteration
+    // CHECK: amdgpu.memory_counter_wait load(0)
+    // CHECK-NEXT: %[[LOADED:.*]] = vector.load
+    %loaded = vector.load %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // Store after load - WAR dependency with load in same iteration
+    // The wait for the load clears it from pending, so this wait is for the load
+    // CHECK: amdgpu.memory_counter_wait load(0)
+    // CHECK-NEXT: vector.store
+    vector.store %arg, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // Yield uses load result - load was already waited on by the store, no additional wait needed
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    // CHECK: scf.yield %[[LOADED]]
+    scf.yield %loaded : vector<4xf32>
+  }
+
+  // CHECK: return
+  return %result : vector<4xf32>
+}
