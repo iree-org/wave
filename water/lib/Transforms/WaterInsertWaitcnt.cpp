@@ -201,6 +201,9 @@ public:
       changed = true;
     }
 
+    if (changed)
+      resetPendingOpsSet();
+
     // Merge requirements (take minimum for conservative join)
     if (requirement.merge(rhsState.requirement))
       changed = true;
@@ -227,6 +230,8 @@ public:
     }
     for (auto &pendingOps : pendingOpsLists)
       pendingOps->ops.push_back(op);
+
+    pendingOpsSet.insert(op);
   }
 
   /// Initialize to empty state
@@ -236,6 +241,7 @@ public:
 
     pendingOpsLists.clear();
     requirement = {};
+    resetPendingOpsSet();
     return ChangeResult::Change;
   }
 
@@ -282,6 +288,8 @@ public:
         }
       }
     }
+
+    resetPendingOpsSet();
   }
 
   void resetRequirement() { requirement = {}; }
@@ -297,6 +305,9 @@ public:
     // Check if val is produced by any pending operation
     Operation *defOp = val.getDefiningOp();
     if (!defOp)
+      return {};
+
+    if (!isPendingOp(defOp))
       return {};
 
     WaitcntRequirement result;
@@ -392,6 +403,8 @@ private:
   /// Required waitcnt after this state
   WaitcntRequirement requirement;
 
+  mutable llvm::SmallDenseSet<Operation *> pendingOpsSet;
+
   void cow() {
     for (auto &pendingOps : pendingOpsLists) {
       if (pendingOps.use_count() > 1) {
@@ -402,6 +415,29 @@ private:
       }
     }
   }
+
+  bool isPendingOp(Operation *op) const {
+    if (pendingOpsLists.empty())
+      return false;
+
+    // Build the set of pending operations lazily
+    bool found = false;
+    if (pendingOpsSet.empty()) {
+      for (const auto &pendingOps : pendingOpsLists) {
+        for (Operation *pendingOp : pendingOps->ops) {
+          if (pendingOp == op)
+            found = true;
+
+          pendingOpsSet.insert(pendingOp);
+        }
+      }
+      return found;
+    }
+
+    return pendingOpsSet.contains(op);
+  }
+
+  void resetPendingOpsSet() { pendingOpsSet.clear(); }
 };
 
 /// Dense forward dataflow analysis for waitcnt insertion
