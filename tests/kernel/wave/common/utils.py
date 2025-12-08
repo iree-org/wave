@@ -83,4 +83,4 @@ require_water_and_ee = pytest.mark.skipif(
 
 
 def glob_asm_files(path: Path) -> list[Path]:
-    return list(filter(lambda x: str(x.suffix) in [".s", ".rocmasm"], path.glob("*")))
+    return list(filter(lambda x: x.suffix in [".s", ".rocmasm"], path.glob("*")))

@@ -411,10 +411,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     }
 
     llvm_opt_level = 3 if options.optimization_level else 0
-
-    dump_intermediates = (
-        options.dump_intermediates if options.dump_intermediates else ""
-    )
+    dump_intermediates = options.dump_intermediates or ""
 
     pipeline = [
         "lower-affine",
