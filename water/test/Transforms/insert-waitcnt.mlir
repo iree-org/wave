@@ -1,7 +1,5 @@
 // RUN: water-opt %s --water-insert-waitcnt | FileCheck %s
 
-// Test waitcnt insertion for vector memory operations
-
 // CHECK-LABEL: func.func @single_load_use
 func.func @single_load_use(%memref: memref<1024xf32>, %offset: index) -> vector<4xf32> {
   // CHECK: vector.load
@@ -61,6 +59,7 @@ func.func @war_dependency(%memref: memref<1024xf32>, %data: vector<4xf32>, %offs
   // CHECK-NEXT: vector.store %[[DATA]], %[[MEM]]
   vector.store %data, %memref[%offset] : memref<1024xf32>, vector<4xf32>
 
+  // CHECK-NOT: amdgpu.memory_counter_wait
   // CHECK: return %[[LOAD]]
   return %result : vector<4xf32>
 }
@@ -102,6 +101,7 @@ func.func @raw_dependency_non_zero_waitcnt(%data: vector<4xf32>, %offset: index)
   // CHECK-NEXT: %[[LOAD:.*]] = vector.load %[[MEM_A]]
   %result = vector.load %memrefA[%offset] : memref<1024xf32>, vector<4xf32>
 
+  // CHECK: amdgpu.memory_counter_wait load(0)
   // CHECK: return %[[LOAD]]
   return %result : vector<4xf32>
 }

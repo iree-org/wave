@@ -274,10 +274,13 @@ public:
         continue;
 
       // Search from the back to find the most recent dependency
+      bool found = false;
       auto req = WaitcntRequirement::getOperationRequirement(defOp, true);
       for (Operation *op : llvm::reverse(pendingOps->ops)) {
-        if (op == defOp)
+        if (op == defOp) {
+          found = true;
           break;
+        }
 
         auto opReq = WaitcntRequirement::getOperationRequirement(op, false);
         if (!req.isSameCounterType(opReq))
@@ -286,7 +289,8 @@ public:
         req = req + opReq;
       }
 
-      result.merge(req);
+      if (found)
+        result.merge(req);
     }
 
     if (!result.hasRequirement())
@@ -403,8 +407,10 @@ public:
     }
 
     // Check for memory dependencies (RAW, WAR, WAW)
-    if (auto memReq = before.checkMemoryDependency(op, aliasAnalysis))
+    if (auto memReq = before.checkMemoryDependency(op, aliasAnalysis)) {
+      LDBG() << "  Memory dependency: " << *memReq;
       opRequirement.merge(*memReq);
+    }
 
     // Set the requirement for this operation
     if (opRequirement.hasRequirement()) {
