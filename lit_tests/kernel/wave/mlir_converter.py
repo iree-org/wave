@@ -38,6 +38,7 @@ BLOCK_N = tkl.sym.BLOCK_N
 ADDRESS_SPACE_A = tkl.sym.ADDRESS_SPACE_A
 ADDRESS_SPACE_B = tkl.sym.ADDRESS_SPACE_B
 ADDRESS_SPACE_C = tkl.sym.ADDRESS_SPACE_C
+ADDRESS_SPACE_TEST = tkl.sym.ADDRESS_SPACE_TEST
 
 # Define constraints for the kernel
 constraints = [
@@ -488,3 +489,174 @@ def mlir_converter_matmul():
     # CHECK-NEXT: %[[SLICE_15:.*]] = wave.extract_slice %[[ITERATE]]{{.*}} offset = #wave.expr_list<[] -> (15)>, size = #wave.expr_list<[] -> (1)>, stride = #wave.expr_list<[] -> (1)>
     # CHECK-NEXT: wave.write %[[SLICE_15]], %[[ARG2]]
     # CHECK-NEXT: return
+
+
+@run_test
+def mlir_converter_mixed_memory_spaces():
+    @tkw.wave(constraints)
+    def mixed_memory_kernel(
+        global_direct: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        shared_direct: tkl.Memory[M, N, SHARED_ADDRESS_SPACE, tkl.f16],
+        symbolic_a: tkl.Memory[M, N, ADDRESS_SPACE_A, tkl.f32],
+        symbolic_b: tkl.Memory[M, N, ADDRESS_SPACE_B, tkl.f16],
+    ):
+        result = tkl.Register[M, N, tkl.f32](42.0)
+
+    subs = {
+        # Mix of symbolic address spaces resolving to different spaces
+        ADDRESS_SPACE_A: GLOBAL_ADDRESS_SPACE,  # Symbolic -> Global
+        ADDRESS_SPACE_B: SHARED_ADDRESS_SPACE,  # Symbolic -> Global (after `promote_placeholders`)
+        M: 128,
+        N: 128,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, mixed_memory_kernel)
+    trace = compiled_kernel.compiled_graph
+    constraints = mixed_memory_kernel.constraints
+
+    with Context(), Location.unknown():
+        mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+
+    assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
+
+    # CHECK-LABEL: mlir_converter_mixed_memory_spaces
+    print(mlir_output)
+    # All function arguments should be <global> due to Python transformations
+    # CHECK: func.func @kernel(
+    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <global>>
+    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f16, <global>>
+    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <global>>
+    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f16, <global>>
+
+
+@run_test
+def mlir_converter_register_only():
+    @tkw.wave(constraints)
+    def register_only_kernel(
+        input_reg: tkl.Register[M, N, tkl.f32],
+    ):
+        result = tkl.elementwise(input_reg * 2.0)
+
+    subs = {
+        M: 128,
+        N: 128,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, register_only_kernel)
+    trace = compiled_kernel.compiled_graph
+    constraints = register_only_kernel.constraints
+
+    with Context(), Location.unknown():
+        mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+
+    assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
+
+    # CHECK-LABEL: mlir_converter_register_only
+    print(mlir_output)
+    # CHECK: func.func @kernel(
+    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <register>>
+
+
+@run_test
+def mlir_converter_hyperparameter_filtering():
+    @tkw.wave(constraints)
+    def hyperparameter_test_kernel(
+        input_mem: tkl.Memory[M, N, ADDRESS_SPACE_TEST, tkl.f32],
+    ):
+        result = tkl.Register[M, N, tkl.f32](42.0)
+
+    subs = {
+        ADDRESS_SPACE_TEST: GLOBAL_ADDRESS_SPACE,  # This should be filtered out
+        M: 128,  # This should remain
+        N: 128,  # This should remain
+        BLOCK_M: 64,  # This should remain
+        BLOCK_N: 64,  # This should remain
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, hyperparameter_test_kernel)
+    trace = compiled_kernel.compiled_graph
+    constraints = hyperparameter_test_kernel.constraints
+
+    with Context(), Location.unknown():
+        mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+
+    assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
+
+    # Print to stdout for FileCheck
+    # CHECK-LABEL: mlir_converter_hyperparameter_filtering
+    print(mlir_output)
+    # CHECK: func.func @kernel(
+    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <global>>
+    # Verify that ADDRESS_SPACE_TEST is NOT in hyperparameters but others are
+    # CHECK-SAME: #wave.hyperparameters<{BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, M = 128 : i64, N = 128 : i64}>
+    # CHECK-NOT: ADDRESS_SPACE_TEST
+
+
+@run_test
+def mlir_converter_invalid_non_int_hyperparameter():
+    @tkw.wave(constraints)
+    def invalid_hyperparameter_kernel(
+        input_mem: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        result = tkl.Register[M, N, tkl.f32](42.0)
+
+    # Create an invalid non-int hyperparameter (not an address space)
+    INVALID_SYMBOL = tkl.sym.INVALID_SYMBOL
+    subs = {
+        INVALID_SYMBOL: "invalid_string_value",  # This should trigger validation error
+        M: 128,
+        N: 128,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        compile_to_mlir=True,
+        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
+        enforce_locations=False,
+    )
+    options = set_default_run_config(options)
+
+    compiled_kernel = wave_compile(options, invalid_hyperparameter_kernel)
+    trace = compiled_kernel.compiled_graph
+    constraints = invalid_hyperparameter_kernel.constraints
+
+    # This should raise a RuntimeError due to invalid non-int hyperparameter
+    try:
+        with Context(), Location.unknown():
+            mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+        assert False, "Expected RuntimeError for invalid non-int hyperparameter"
+    except RuntimeError as e:
+        # Verify the error message is what we expect
+        assert "Unexpected non-int mapping in hyperparameters" in str(e)
+        assert "INVALID_SYMBOL -> invalid_string_value" in str(e)
+        assert "Expected all non-int values to be GLOBAL_ADDRESS_SPACE" in str(e)
