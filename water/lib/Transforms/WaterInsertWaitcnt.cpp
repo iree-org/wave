@@ -170,10 +170,11 @@ public:
 
   /// Initialize to empty state
   ChangeResult reset() {
-    if (!pendingOps)
+    if (!pendingOps && !requirement.hasRequirement())
       return ChangeResult::NoChange;
 
     pendingOps.reset();
+    requirement = {};
     return ChangeResult::Change;
   }
 
