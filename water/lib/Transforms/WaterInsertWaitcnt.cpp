@@ -362,61 +362,68 @@ public:
     return result;
   }
 
-  /// Check for memory dependencies (RAW, WAR, WAW)
+  /// Check for memory dependencies (RAW, WAR, WAW)  and compute required wait
   WaitcntRequirement checkMemoryDependency(Operation *op,
                                            AliasAnalysis &aliasAnalysis) const {
-    // Check if this is a load or store operation
-    std::optional<Value> currentBase = isLoadOrStoreOp(op);
-    if (!currentBase)
-      return {};
 
-    bool isCurrentLoad = isLoadOp(op).has_value();
-    bool isCurrentStore = isStoreOp(op).has_value();
-
-    WaitcntRequirement result;
-    for (auto &pendingOps : pendingOpsLists) {
-      if (pendingOps->empty())
-        continue;
-
-      // Search from the back to find the most recent dependency
-      for (Operation *pendingOp : llvm::reverse(pendingOps->ops)) {
-        std::optional<Value> pendingBase = isLoadOrStoreOp(pendingOp);
-        if (!pendingBase)
+    // std::optional<Value> currentBase = isLoadOrStoreOp(op);
+    auto checkMemref = [&](Value memref, bool isCurrentLoad,
+                           bool isCurrentStore) -> WaitcntRequirement {
+      WaitcntRequirement result;
+      for (auto &pendingOps : pendingOpsLists) {
+        if (pendingOps->empty())
           continue;
 
-        if (!mayAlias(*currentBase, *pendingBase, aliasAnalysis))
-          continue;
+        // Search from the back to find the most recent dependency
+        for (Operation *pendingOp : llvm::reverse(pendingOps->ops)) {
+          auto checkPendingMemref =
+              [&](Value pendingMemref, bool isPendingLoad,
+                  bool isPendingStore) -> WaitcntRequirement {
+            WaitcntRequirement pendingResult;
+            if (!mayAlias(memref, pendingMemref, aliasAnalysis))
+              return pendingResult;
 
-        bool isPendingLoad = isLoadOp(pendingOp).has_value();
-        bool isPendingStore = isStoreOp(pendingOp).has_value();
+            // Check for dependencies:
+            // RAW: current load after pending store
+            // WAR: current store after pending load
+            // WAW: current store after pending store
+            bool hasRAW = isCurrentLoad && isPendingStore;
+            bool hasWAR = isCurrentStore && isPendingLoad;
+            bool hasWAW = isCurrentStore && isPendingStore;
 
-        // Check for dependencies:
-        // RAW: current load after pending store
-        // WAR: current store after pending load
-        // WAW: current store after pending store
-        bool hasRAW = isCurrentLoad && isPendingStore;
-        bool hasWAR = isCurrentStore && isPendingLoad;
-        bool hasWAW = isCurrentStore && isPendingStore;
-
-        if (hasRAW || hasWAR || hasWAW) {
-          // Found dependency - compute requirement by counting forward from
-          // here
-          auto it = llvm::find(pendingOps->ops, pendingOp);
-          auto req =
-              WaitcntRequirement::getOperationRequirement(pendingOp, true);
-          for (Operation *countOp :
-               llvm::make_range(std::next(it), pendingOps->ops.end())) {
-            auto opReq =
-                WaitcntRequirement::getOperationRequirement(countOp, false);
-            if (!req.isSameCounterType(opReq))
-              continue;
-            req = req + opReq;
-          }
-          result.merge(req);
+            if (hasRAW || hasWAR || hasWAW) {
+              // Found dependency - compute requirement by counting forward from
+              // here
+              auto it = llvm::find(pendingOps->ops, pendingOp);
+              auto req =
+                  WaitcntRequirement::getOperationRequirement(pendingOp, true);
+              for (Operation *countOp :
+                   llvm::make_range(std::next(it), pendingOps->ops.end())) {
+                auto opReq =
+                    WaitcntRequirement::getOperationRequirement(countOp, false);
+                if (!req.isSameCounterType(opReq))
+                  continue;
+                req = req + opReq;
+              }
+              pendingResult.merge(req);
+            }
+            return pendingResult;
+          };
+          if (auto loadBase = isLoadOp(pendingOp))
+            result.merge(checkPendingMemref(*loadBase, true, false));
+          if (auto storeBase = isStoreOp(pendingOp))
+            result.merge(checkPendingMemref(*storeBase, false, true));
         }
       }
-    }
 
+      return result;
+    };
+    // TODO: atomics will have both load and store flags set
+    WaitcntRequirement result;
+    if (auto loadBase = isLoadOp(op))
+      result.merge(checkMemref(*loadBase, true, false));
+    if (auto storeBase = isStoreOp(op))
+      result.merge(checkMemref(*storeBase, false, true));
     return result;
   }
 
