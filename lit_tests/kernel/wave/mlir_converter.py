@@ -250,7 +250,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
     # CHECK-SAME: N = #wave.expr_list
-    # CHECK-SAME: wave.elements_per_thread = 32
+    # CHECK-SAME: elements_per_thread = 32 : i64
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
@@ -261,7 +261,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
     # CHECK-SAME: N = #wave.expr_list
-    # CHECK-SAME: wave.elements_per_thread = 32
+    # CHECK-SAME: elements_per_thread = 32 : i64
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
@@ -278,7 +278,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: #wave.read_write_bounds
     # CHECK-SAME: M = #wave.expr_list
     # CHECK-SAME: N = #wave.expr_list
-    # CHECK-SAME: wave.elements_per_thread = 32
+    # CHECK-SAME: elements_per_thread = 32 : i64
     # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16>
 
     # CHECK: return

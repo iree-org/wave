@@ -335,8 +335,8 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
         op.attributes["index"] = ir.ArrayAttr.get(dict_attrs)
 
     if getattr(node, "elements_per_thread", None):
-        op.attributes["wave.elements_per_thread"] = ir.IntegerAttr.get(
-            ir.IntegerType.get_signless(32), node.elements_per_thread
+        op.attributes["elements_per_thread"] = ir.IntegerAttr.get(
+            ir.IntegerType.get_signless(64), node.elements_per_thread
         )
 
     if getattr(node, "bounds", None):
