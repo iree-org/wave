@@ -12,7 +12,7 @@ if ir2.Context is not ir.Context:
     raise RuntimeError("module import path for ir differs")
 if wave2.register_dialect is not wave.register_dialect:
     raise RuntimeError("module import path for wave differs")
-with ir.Context() as ctx:
+with ir.Context() as ctx, ir.Location.unknown():
     wave.register_dialect(ctx)
 
     # CHECK: wave.constraints
@@ -20,6 +20,33 @@ with ir.Context() as ctx:
 
     # CHECK: #wave.symbol<"test">
     print(wave.WaveSymbolAttr.get("test"))
+
+    try:
+        wave.HardwareConstraintAttr.get(
+            threads_per_wave=64, mma_type=ir.UnitAttr.get(), max_bits_per_load=128
+        )
+    except TypeError as e:
+        assert "Failed to construct HardwareConstraintAttr" in str(e)
+    else:
+        assert False, "Expected to fail with TypeError."
+
+    try:
+        wave.HardwareConstraintAttr.get(
+            threads_per_wave=64, vector_shapes=ir.UnitAttr.get(), max_bits_per_load=128
+        )
+    except TypeError as e:
+        assert "Failed to construct HardwareConstraintAttr" in str(e)
+    else:
+        assert False, "Expected to fail with TypeError."
+
+    try:
+        wave.HardwareConstraintAttr.get(
+            threads_per_wave=64, waves_per_block=[2, 2, 2, 2, 2], max_bits_per_load=128
+        )
+    except TypeError as e:
+        assert "Failed to construct HardwareConstraintAttr" in str(e)
+    else:
+        assert False, "Expected to fail with TypeError."
 
     # CHECK: #wave.index_symbol<WG0>
     index_symbol_attr = wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0)

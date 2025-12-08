@@ -43,15 +43,16 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, const std::string &symbolName,
-             // MlirContext should always come last to allow for being
-             // automatically deduced from context.
-             MlirContext context) {
+             MlirLocation loc) {
             MlirStringRef symbolNameStrRef =
                 mlirStringRefCreate(symbolName.data(), symbolName.size());
-            return cls(mlirWaveSymbolAttrGet(context, symbolNameStrRef));
+            MlirAttribute constructed =
+                mlirWaveSymbolAttrGetChecked(loc, symbolNameStrRef);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error("Failed to construct WaveSymbolAttr");
+            return cls(constructed);
           },
-          nb::arg("cls"), nb::arg("symbolName"),
-          nb::arg("context") = nb::none(),
+          nb::arg("cls"), nb::arg("symbolName"), nb::arg("loc") = nb::none(),
           "Gets a wave.WaveSymbolAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
@@ -101,9 +102,7 @@ NB_MODULE(_waterDialects, m) {
           "get",
           [](const nb::object &cls, std::vector<MlirAttribute> &symbols,
              MlirAffineMap start, MlirAffineMap step, MlirAffineMap stride,
-             // MlirContext should always come last to allow for being
-             // automatically deduced from context.
-             MlirContext context) {
+             MlirLocation loc) {
             intptr_t numSymbols = symbols.size();
             intptr_t numResults = mlirAffineMapGetNumResults(start);
             for (MlirAffineMap map : {start, step, stride}) {
@@ -119,11 +118,14 @@ NB_MODULE(_waterDialects, m) {
                     "Maps should have the same number of results.");
               }
             }
-            return cls(mlirWaveIndexMappingAttrGet(context, symbols.data(),
-                                                   start, step, stride));
+            MlirAttribute constructed = mlirWaveIndexMappingAttrGetChecked(
+                loc, symbols.data(), start, step, stride);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error("Failed to construct WaveIndexMappingAttr");
+            return cls(constructed);
           },
           nb::arg("cls"), nb::arg("symbols"), nb::arg("start"), nb::arg("step"),
-          nb::arg("stride"), nb::arg("context") = nb::none(),
+          nb::arg("stride"), nb::arg("loc") = nb::none(),
           "Gets a wave.WaveIndexMappingAttr from a list of symbol attributes.");
 
   //===---------------------------------------------------------------------===//
@@ -136,8 +138,6 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, const nb::dict &symbolDict,
-             // MlirContext should always come last to allow for being
-             // automatically deduced from context.
              MlirContext context) {
             std::vector<MlirNamedAttribute> namedAttrs;
             namedAttrs.reserve(symbolDict.size());
@@ -324,7 +324,7 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, std::vector<MlirAttribute> &symbols,
-             MlirAffineMap map) {
+             MlirAffineMap map, MlirLocation loc) {
             for (MlirAttribute attr : symbols) {
               if (!mlirAttributeIsAWaveSymbolAttr(attr) &&
                   !mlirAttributeIsAWaveIndexSymbolAttr(attr)) {
@@ -342,9 +342,14 @@ NB_MODULE(_waterDialects, m) {
             if (mlirAffineMapGetNumDims(map) != 0) {
               throw nb::value_error("Maps should not involve dimensions.");
             }
-            return cls(mlirWaveExprListAttrGet(symbols.data(), map));
+            MlirAttribute constructed =
+                mlirWaveExprListAttrGetChecked(loc, symbols.data(), map);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error("Failed to construct WaveExprListAttr");
+            return cls(constructed);
           },
           nb::arg("cls"), nb::arg("symbols"), nb::arg("map"),
+          nb::arg("loc") = nb::none(),
           "Gets a wave.WaveExprListAttr from a list of symbol attributes.");
 
   //===---------------------------------------------------------------------===//
@@ -357,8 +362,6 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, const nb::dict &symDimDict,
-             // MlirContext should always come last to allow for being
-             // automatically deduced from context.
              MlirContext context) {
             std::vector<MlirNamedAttribute> namedAttrs;
             namedAttrs.reserve(symDimDict.size());
@@ -412,7 +415,7 @@ NB_MODULE(_waterDialects, m) {
              const std::optional<std::vector<unsigned>> &wavesPerBlock,
              std::optional<MlirAttribute> mmaType,
              std::optional<MlirAttribute> vectorShapes, unsigned maxBitsPerLoad,
-             MlirContext context) {
+             MlirLocation loc) {
             unsigned *wavesPerBlockPtr = nullptr;
             size_t wavesPerBlockSize = 0;
             if (wavesPerBlock.has_value()) {
@@ -420,16 +423,20 @@ NB_MODULE(_waterDialects, m) {
               wavesPerBlockSize = wavesPerBlock->size();
             }
 
-            return cls(mlirHardwareConstraintAttrGet(
-                context, threadsPerWave, wavesPerBlockSize, wavesPerBlockPtr,
+            MlirAttribute constructed = mlirHardwareConstraintAttrGetChecked(
+                loc, threadsPerWave, wavesPerBlockSize, wavesPerBlockPtr,
                 mmaType.value_or(MlirAttribute()),
-                vectorShapes.value_or(MlirAttribute()), maxBitsPerLoad));
+                vectorShapes.value_or(MlirAttribute()), maxBitsPerLoad);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error(
+                  "Failed to construct HardwareConstraintAttr");
+            return cls(constructed);
           },
           nb::arg("cls"), nb::arg("threads_per_wave"),
           nb::arg("waves_per_block") = nb::none(),
           nb::arg("mma_type") = nb::none(),
           nb::arg("vector_shapes") = nb::none(),
-          nb::arg("max_bits_per_load") = 128, nb::arg("context") = nb::none(),
+          nb::arg("max_bits_per_load") = 128, nb::arg("loc") = nb::none(),
           "Gets a wave.HardwareConstraintAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
@@ -442,15 +449,22 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, const std::string &dim,
-             MlirAttribute tileSize, unsigned deviceDim, MlirContext context) {
+             MlirAttribute tileSize, unsigned deviceDim, MlirLocation loc) {
             MlirStringRef dimStrRef =
                 mlirStringRefCreate(dim.c_str(), dim.size());
-            MlirAttribute dimAttr = mlirWaveSymbolAttrGet(context, dimStrRef);
-            return cls(mlirDeviceConstraintAttrGet(context, dimAttr, tileSize,
-                                                   deviceDim));
+            MlirAttribute dimAttr =
+                mlirWaveSymbolAttrGetChecked(loc, dimStrRef);
+            if (mlirAttributeIsNull(dimAttr))
+              throw nb::type_error(
+                  "Failed to construct WaveSymbolAttr for dim");
+            MlirAttribute constructed = mlirDeviceConstraintAttrGetChecked(
+                loc, dimAttr, tileSize, deviceDim);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error("Failed to construct DeviceConstraintAttr");
+            return cls(constructed);
           },
           nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
-          nb::arg("device_dim"), nb::arg("context") = nb::none(),
+          nb::arg("device_dim"), nb::arg("loc") = nb::none(),
           "Gets a wave.DeviceConstraintAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
@@ -464,16 +478,24 @@ NB_MODULE(_waterDialects, m) {
           "get",
           [](const nb::object &cls, const std::string &dim,
              MlirAttribute tileSize, MlirAttribute workgroupDim, bool primary,
-             MlirContext context) {
+             MlirLocation loc) {
             MlirStringRef dimStrRef =
                 mlirStringRefCreate(dim.c_str(), dim.size());
-            MlirAttribute dimAttr = mlirWaveSymbolAttrGet(context, dimStrRef);
-            return cls(mlirWorkgroupConstraintAttrGet(
-                context, dimAttr, tileSize, workgroupDim, primary));
+            MlirAttribute dimAttr =
+                mlirWaveSymbolAttrGetChecked(loc, dimStrRef);
+            if (mlirAttributeIsNull(dimAttr))
+              throw nb::type_error(
+                  "Failed to construct WaveSymbolAttr for dim");
+            MlirAttribute constructed = mlirWorkgroupConstraintAttrGetChecked(
+                loc, dimAttr, tileSize, workgroupDim, primary);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error(
+                  "Failed to construct WorkgroupConstraintAttr");
+            return cls(constructed);
           },
           nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
           nb::arg("workgroup_dim"), nb::arg("primary") = true,
-          nb::arg("context") = nb::none(),
+          nb::arg("loc") = nb::none(),
           "Gets a wave.WorkgroupConstraintAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
@@ -486,14 +508,22 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, const std::string &dim,
-             MlirAttribute tileSize, MlirContext context) {
+             MlirAttribute tileSize, MlirLocation loc) {
             MlirStringRef dimStrRef =
                 mlirStringRefCreate(dim.c_str(), dim.size());
-            MlirAttribute dimAttr = mlirWaveSymbolAttrGet(context, dimStrRef);
-            return cls(mlirWaveConstraintAttrGet(context, dimAttr, tileSize));
+            MlirAttribute dimAttr =
+                mlirWaveSymbolAttrGetChecked(loc, dimStrRef);
+            if (mlirAttributeIsNull(dimAttr))
+              throw nb::type_error(
+                  "Failed to construct WaveSymbolAttr for dim");
+            MlirAttribute constructed =
+                mlirWaveConstraintAttrGetChecked(loc, dimAttr, tileSize);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error("Failed to construct WaveConstraintAttr");
+            return cls(constructed);
           },
           nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
-          nb::arg("context") = nb::none(),
+          nb::arg("loc") = nb::none(),
           "Gets a wave.WaveConstraintAttr from parameters.");
 
   //===---------------------------------------------------------------------===//
@@ -506,13 +536,21 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, const std::string &dim,
-             MlirAttribute tileSize, MlirContext context) {
+             MlirAttribute tileSize, MlirLocation loc) {
             MlirStringRef dimStrRef =
                 mlirStringRefCreate(dim.c_str(), dim.size());
-            MlirAttribute dimAttr = mlirWaveSymbolAttrGet(context, dimStrRef);
-            return cls(mlirTilingConstraintAttrGet(context, dimAttr, tileSize));
+            MlirAttribute dimAttr =
+                mlirWaveSymbolAttrGetChecked(loc, dimStrRef);
+            if (mlirAttributeIsNull(dimAttr))
+              throw nb::type_error(
+                  "Failed to construct WaveSymbolAttr for dim");
+            MlirAttribute constructed =
+                mlirTilingConstraintAttrGetChecked(loc, dimAttr, tileSize);
+            if (mlirAttributeIsNull(constructed))
+              throw nb::type_error("Failed to construct TilingConstraintAttr");
+            return cls(constructed);
           },
           nb::arg("cls"), nb::arg("dim"), nb::arg("tile_size"),
-          nb::arg("context") = nb::none(),
+          nb::arg("loc") = nb::none(),
           "Gets a wave.TilingConstraintAttr from parameters.");
 }
