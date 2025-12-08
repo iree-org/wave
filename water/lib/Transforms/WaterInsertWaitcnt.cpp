@@ -36,11 +36,11 @@ struct PendingOperations {
 
 /// Waitcnt requirement for synchronization
 struct WaitcntRequirement {
-  std::optional<unsigned> vmcnt;   // Vector memory operations counter
-  std::optional<unsigned> lgkmcnt; // LDS/GDS operations counter
+  std::optional<unsigned> load_cnt;
+  std::optional<unsigned> ds_cnt;
 
   bool hasRequirement() const {
-    return vmcnt.has_value() || lgkmcnt.has_value();
+    return load_cnt.has_value() || ds_cnt.has_value();
   }
 
   /// Merge with another requirement (take minimum for conservative join)
@@ -49,15 +49,15 @@ struct WaitcntRequirement {
     bool changed = false;
 
     // Take minimum of each counter (lower value = more restrictive)
-    if (other.vmcnt.has_value()) {
-      if (!vmcnt.has_value() || *other.vmcnt < *vmcnt) {
-        vmcnt = other.vmcnt;
+    if (other.load_cnt.has_value()) {
+      if (!load_cnt.has_value() || *other.load_cnt < *load_cnt) {
+        load_cnt = other.load_cnt;
         changed = true;
       }
     }
-    if (other.lgkmcnt.has_value()) {
-      if (!lgkmcnt.has_value() || *other.lgkmcnt < *lgkmcnt) {
-        lgkmcnt = other.lgkmcnt;
+    if (other.ds_cnt.has_value()) {
+      if (!ds_cnt.has_value() || *other.ds_cnt < *ds_cnt) {
+        ds_cnt = other.ds_cnt;
         changed = true;
       }
     }
@@ -65,38 +65,38 @@ struct WaitcntRequirement {
     return changed;
   }
 
-  std::optional<unsigned> getLoadCnt() const { return vmcnt; }
-  std::optional<unsigned> getStoreCnt() const { return vmcnt; }
-  std::optional<unsigned> getDsCnt() const { return lgkmcnt; }
+  std::optional<unsigned> getLoadCnt() const { return load_cnt; }
+  std::optional<unsigned> getStoreCnt() const { return load_cnt; }
+  std::optional<unsigned> getDsCnt() const { return ds_cnt; }
 
   bool isSameCounterType(const WaitcntRequirement &other) const {
-    return vmcnt.has_value() == other.vmcnt.has_value() ||
-           lgkmcnt.has_value() == other.lgkmcnt.has_value();
+    return load_cnt.has_value() == other.load_cnt.has_value() ||
+           ds_cnt.has_value() == other.ds_cnt.has_value();
   }
 
   static WaitcntRequirement getOperationRequirement(Operation *op, bool zero) {
     WaitcntRequirement req;
     if (isa<vector::LoadOp, vector::StoreOp>(op))
-      req.vmcnt = zero ? 0 : 1;
+      req.load_cnt = zero ? 0 : 1;
     return req;
   }
 
   WaitcntRequirement operator+(const WaitcntRequirement &other) const {
     WaitcntRequirement result;
-    if (vmcnt || other.vmcnt)
-      result.vmcnt = vmcnt.value_or(0) + other.vmcnt.value_or(0);
-    if (lgkmcnt || other.lgkmcnt)
-      result.lgkmcnt = lgkmcnt.value_or(0) + other.lgkmcnt.value_or(0);
+    if (load_cnt || other.load_cnt)
+      result.load_cnt = load_cnt.value_or(0) + other.load_cnt.value_or(0);
+    if (ds_cnt || other.ds_cnt)
+      result.ds_cnt = ds_cnt.value_or(0) + other.ds_cnt.value_or(0);
     return result;
   }
 
   bool operator>(const WaitcntRequirement &other) const {
-    return vmcnt.value_or(0) > other.vmcnt.value_or(0) ||
-           lgkmcnt.value_or(0) > other.lgkmcnt.value_or(0);
+    return load_cnt.value_or(0) > other.load_cnt.value_or(0) ||
+           ds_cnt.value_or(0) > other.ds_cnt.value_or(0);
   }
 
   void print(raw_ostream &os) const {
-    os << "WaitcntRequirement: vmcnt=" << vmcnt << " lgkmcnt=" << lgkmcnt;
+    os << "WaitcntRequirement: load_cnt=" << load_cnt << " ds_cnt=" << ds_cnt;
   }
 };
 
