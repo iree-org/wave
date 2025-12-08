@@ -695,7 +695,10 @@ def _create_kernel_module(
         - List of diagnostic messages.
     """
     from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
-    from wave_lang.kernel.lang.global_symbols import GLOBAL_ADDRESS_SPACE
+    from wave_lang.kernel.lang.global_symbols import (
+        GLOBAL_ADDRESS_SPACE,
+        SHARED_ADDRESS_SPACE,
+    )
 
     diagnostics: list[str] = []
 
@@ -743,6 +746,7 @@ def _create_kernel_module(
         # Thus, resolve symbolic address spaces from hyperparameters.
         from wave_lang.kernel.lang.wave_types import Memory
 
+        # print(t, t.address_space)
         if issubclass(t, Memory) and t.address_space in options.subs:
             # Create a new type with resolved address space
             resolved_address_space = options.subs[t.address_space]
@@ -758,15 +762,15 @@ def _create_kernel_module(
     func_type = ir.FunctionType.get(arg_types, [])
     with ir.InsertionPoint(module.body):
         func_op = func.FuncOp("kernel", func_type)
-        # Validate that all non-int mappings are address spaces mapping to GLOBAL_ADDRESS_SPACE.
-        # This is expected because `promote_placeholders` has converted all SHARED_ADDRESS_SPACE
-        # function arguments to GLOBAL_ADDRESS_SPACE, so we can safely drop these mappings.
+        # Validate that all non-int mappings are address spaces (either SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE).
+        # These mappings can be dropped safely because the information has been encoded in either `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
+        # print([(str(k), v) for k, v in options.subs.items()])
         for k, v in options.subs.items():
             if not isinstance(v, int):
-                if v != GLOBAL_ADDRESS_SPACE:
+                if v not in (SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE):
                     raise RuntimeError(
                         f"Unexpected non-int mapping in hyperparameters: {k} -> {v}. "
-                        f"Expected all non-int values to be GLOBAL_ADDRESS_SPACE"
+                        f"Expected all non-int values to be address spaces"
                     )
         # Convert the symbols in subs to strings and attach as
         # WaveHyperparameterAttr to func_op

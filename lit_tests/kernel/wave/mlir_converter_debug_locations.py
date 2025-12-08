@@ -109,7 +109,7 @@ def mlir_converter_location():
     # CHECK-LABEL: mlir_converter_location
     # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":44
     # CHECK: module
-    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg1: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg2: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44
+    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg1: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg2: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":44
 
     # CHECK: wave.read
     # CHECK-SAME: loc(#loc1)

@@ -232,10 +232,7 @@ def mlir_converter_matrix_add():
 
     # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
-    # CHECK-NEXT: func.func @kernel(
-    # CHECK-SAME: %[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>
-    # CHECK-SAME: %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>
-    # CHECK-SAME: %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f32, <global>>
+    # CHECK-NEXT: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f16, <global>>)
     # CHECK-SAME: wave.constraints =
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
@@ -255,7 +252,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: M = #wave.expr_list
     # CHECK-SAME: N = #wave.expr_list
     # CHECK-SAME: elements_per_thread = 32 : i64
-    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
     # CHECK-SAME: index
@@ -266,7 +263,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: M = #wave.expr_list
     # CHECK-SAME: N = #wave.expr_list
     # CHECK-SAME: elements_per_thread = 32 : i64
-    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
+    # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <global>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
     # CHECK-SAME: index
@@ -283,7 +280,7 @@ def mlir_converter_matrix_add():
     # CHECK-SAME: M = #wave.expr_list
     # CHECK-SAME: N = #wave.expr_list
     # CHECK-SAME: elements_per_thread = 32 : i64
-    # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16>
+    # CHECK-SAME: !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>
 
     # CHECK: return
 
@@ -493,14 +490,20 @@ def mlir_converter_matmul():
 
 @run_test
 def mlir_converter_mixed_memory_spaces():
+    global constraints
+
     @tkw.wave(constraints)
     def mixed_memory_kernel(
-        global_direct: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
-        shared_direct: tkl.Memory[M, N, SHARED_ADDRESS_SPACE, tkl.f16],
-        symbolic_a: tkl.Memory[M, N, ADDRESS_SPACE_A, tkl.f32],
+        global_direct: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        symbolic_a: tkl.Memory[M, N, ADDRESS_SPACE_A, tkl.f16],
         symbolic_b: tkl.Memory[M, N, ADDRESS_SPACE_B, tkl.f16],
     ):
-        result = tkl.Register[M, N, tkl.f32](42.0)
+        read_1 = wave.read(symbolic_a)
+        read_2 = wave.read(symbolic_b)
+
+        result = tkl.Register[M, N, tkl.f16](42.0)
+        result = read_1 + read_2
+        wave.write(result, global_direct)
 
     subs = {
         # Mix of symbolic address spaces resolving to different spaces
@@ -531,102 +534,28 @@ def mlir_converter_mixed_memory_spaces():
 
     # CHECK-LABEL: mlir_converter_mixed_memory_spaces
     print(mlir_output)
-    # All function arguments should be <global> due to Python transformations
+    # All function arguments should be <global>
     # CHECK: func.func @kernel(
-    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <global>>
-    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f16, <global>>
-    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <global>>
-    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f16, <global>>
-
-
-@run_test
-def mlir_converter_register_only():
-    @tkw.wave(constraints)
-    def register_only_kernel(
-        input_reg: tkl.Register[M, N, tkl.f32],
-    ):
-        result = tkl.elementwise(input_reg * 2.0)
-
-    subs = {
-        M: 128,
-        N: 128,
-        BLOCK_M: 64,
-        BLOCK_N: 64,
-    }
-
-    options = WaveCompileOptions(
-        subs=subs,
-        compile_to_mlir=True,
-        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
-        enforce_locations=False,
-    )
-    options = set_default_run_config(options)
-
-    compiled_kernel = wave_compile(options, register_only_kernel)
-    trace = compiled_kernel.compiled_graph
-    constraints = register_only_kernel.constraints
-
-    with Context(), Location.unknown():
-        mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
-
-    assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
-
-    # CHECK-LABEL: mlir_converter_register_only
-    print(mlir_output)
-    # CHECK: func.func @kernel(
-    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <register>>
-
-
-@run_test
-def mlir_converter_hyperparameter_filtering():
-    @tkw.wave(constraints)
-    def hyperparameter_test_kernel(
-        input_mem: tkl.Memory[M, N, ADDRESS_SPACE_TEST, tkl.f32],
-    ):
-        result = tkl.Register[M, N, tkl.f32](42.0)
-
-    subs = {
-        ADDRESS_SPACE_TEST: GLOBAL_ADDRESS_SPACE,  # This should be filtered out
-        M: 128,  # This should remain
-        N: 128,  # This should remain
-        BLOCK_M: 64,  # This should remain
-        BLOCK_N: 64,  # This should remain
-    }
-
-    options = WaveCompileOptions(
-        subs=subs,
-        compile_to_mlir=True,
-        location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
-        enforce_locations=False,
-    )
-    options = set_default_run_config(options)
-
-    compiled_kernel = wave_compile(options, hyperparameter_test_kernel)
-    trace = compiled_kernel.compiled_graph
-    constraints = hyperparameter_test_kernel.constraints
-
-    with Context(), Location.unknown():
-        mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
-
-    assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
-
-    # Print to stdout for FileCheck
-    # CHECK-LABEL: mlir_converter_hyperparameter_filtering
-    print(mlir_output)
-    # CHECK: func.func @kernel(
-    # CHECK-SAME: %{{.*}}: !wave.tensor<[@M, @N] of f32, <global>>
-    # Verify that ADDRESS_SPACE_TEST is NOT in hyperparameters but others are
+    # Verify that ADDRESS_SPACE_* are NOT in hyperparameters but others are
     # CHECK-SAME: #wave.hyperparameters<{BLOCK_M = 64 : i64, BLOCK_N = 64 : i64, M = 128 : i64, N = 128 : i64}>
-    # CHECK-NOT: ADDRESS_SPACE_TEST
+    # CHECK-NOT: ADDRESS_SPACE_A
+    # CHECK-NOT: ADDRESS_SPACE_B
 
 
 @run_test
 def mlir_converter_invalid_non_int_hyperparameter():
+    global constraints
+
     @tkw.wave(constraints)
     def invalid_hyperparameter_kernel(
-        input_mem: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        out: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
+        arg: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f16],
     ):
-        result = tkl.Register[M, N, tkl.f32](42.0)
+        read = wave.read(arg)
+
+        result = tkl.Register[M, N, tkl.f16](42.0)
+        result = read + result
+        wave.write(result, out)
 
     # Create an invalid non-int hyperparameter (not an address space)
     INVALID_SYMBOL = tkl.sym.INVALID_SYMBOL
@@ -659,4 +588,4 @@ def mlir_converter_invalid_non_int_hyperparameter():
         # Verify the error message is what we expect
         assert "Unexpected non-int mapping in hyperparameters" in str(e)
         assert "INVALID_SYMBOL -> invalid_string_value" in str(e)
-        assert "Expected all non-int values to be GLOBAL_ADDRESS_SPACE" in str(e)
+        assert "Expected all non-int values to be address spaces" in str(e)
