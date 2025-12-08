@@ -105,3 +105,51 @@ func.func @raw_dependency_non_zero_waitcnt(%data: vector<4xf32>, %offset: index)
   // CHECK: return %[[LOAD]]
   return %result : vector<4xf32>
 }
+
+// CHECK-LABEL: func.func @workgroup_memory_raw
+func.func @workgroup_memory_raw(%data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // Allocate workgroup (LDS) memory
+  // CHECK: %[[LDS:.*]] = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %lds = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // Store to LDS
+  // CHECK: vector.store %{{.*}}, %[[LDS]]
+  vector.store %data, %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  // Load from LDS - RAW dependency, should use dsCnt not loadCnt
+  // CHECK: amdgpu.memory_counter_wait ds(0)
+  // CHECK-NEXT: %[[LOAD:.*]] = vector.load %[[LDS]]
+  %result = vector.load %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait ds(0)
+  // CHECK-NEXT: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @mixed_global_and_workgroup
+func.func @mixed_global_and_workgroup(%data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // Allocate global and workgroup memory
+  // CHECK: %[[GLOBAL:.*]] = memref.alloc() : memref<1024xf32>
+  %global = memref.alloc() : memref<1024xf32>
+  // CHECK: %[[LDS:.*]] = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %lds = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // Store to global memory
+  // CHECK: vector.store %{{.*}}, %[[GLOBAL]]
+  vector.store %data, %global[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Store to LDS (different counter, no dependency)
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  // CHECK: vector.store %{{.*}}, %[[LDS]]
+  vector.store %data, %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  // Load from global - RAW dependency with global store at distance 0
+  // (LDS store doesn't count because it's a different counter type)
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: %[[LOAD:.*]] = vector.load %[[GLOBAL]]
+  %result = vector.load %global[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
