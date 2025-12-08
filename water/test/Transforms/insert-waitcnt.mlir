@@ -127,13 +127,8 @@ func.func @workgroup_memory_raw(%data: vector<4xf32>, %offset: index) -> vector<
 }
 
 // CHECK-LABEL: func.func @mixed_global_and_workgroup
-func.func @mixed_global_and_workgroup(%data: vector<4xf32>, %offset: index) -> vector<4xf32> {
-  // Allocate global and workgroup memory
-  // CHECK: %[[GLOBAL:.*]] = memref.alloc() : memref<1024xf32>
-  %global = memref.alloc() : memref<1024xf32>
-  // CHECK: %[[LDS:.*]] = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
-  %lds = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
-
+//  CHECK-SAME: (%[[GLOBAL:.*]]: memref<1024xf32>, %[[LDS:.*]]: memref<1024xf32, #gpu.address_space<workgroup>>, %{{.*}}: vector<4xf32>, %{{.*}}: index)
+func.func @mixed_global_and_workgroup(%global: memref<1024xf32>, %lds: memref<1024xf32, #gpu.address_space<workgroup>>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
   // Store to global memory
   // CHECK: vector.store %{{.*}}, %[[GLOBAL]]
   vector.store %data, %global[%offset] : memref<1024xf32>, vector<4xf32>
@@ -148,6 +143,76 @@ func.func @mixed_global_and_workgroup(%data: vector<4xf32>, %offset: index) -> v
   // CHECK: amdgpu.memory_counter_wait load(0)
   // CHECK-NEXT: %[[LOAD:.*]] = vector.load %[[GLOBAL]]
   %result = vector.load %global[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @control_flow_merge
+func.func @control_flow_merge(%cond: i1, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  %memref1 = memref.alloc() : memref<1024xf32>
+  %memref2 = memref.alloc() : memref<1024xf32>
+
+  // Common operation before branching
+  // CHECK: vector.store
+  vector.store %data, %memref1[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: cf.cond_br
+  cf.cond_br %cond, ^bb1, ^bb2
+
+^bb1:
+  // Extra operation in this path
+  // CHECK: vector.store
+  vector.store %data, %memref2[%offset] : memref<1024xf32>, vector<4xf32>
+  // CHECK: cf.br
+  cf.br ^bb3
+
+^bb2:
+  // No extra operations, just branch to merge point
+  // CHECK: cf.br
+  cf.br ^bb3
+
+^bb3:
+  // bb1 branch has distance 1 but bb2 has distance 0, so we need to conservatively
+  // take 0
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: %[[LOAD:.*]] = vector.load
+  %result = vector.load %memref1[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @control_flow_merge_same_lists
+func.func @control_flow_merge_same_lists(%cond: i1, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  %memref1 = memref.alloc() : memref<1024xf32>
+  %memref2 = memref.alloc() : memref<1024xf32>
+
+  // Common operation before branching
+  // CHECK: vector.store
+  vector.store %data, %memref1[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: cf.cond_br
+  cf.cond_br %cond, ^bb1, ^bb2
+
+^bb1:
+  // CHECK: vector.store
+  vector.store %data, %memref2[%offset] : memref<1024xf32>, vector<4xf32>
+  // CHECK: cf.br
+  cf.br ^bb3
+
+^bb2:
+  vector.store %data, %memref2[%offset] : memref<1024xf32>, vector<4xf32>
+  // CHECK: cf.br
+  cf.br ^bb3
+
+^bb3:
+  // both branches has the same distance 1
+  // CHECK: amdgpu.memory_counter_wait load(1)
+  // CHECK-NEXT: %[[LOAD:.*]] = vector.load
+  %result = vector.load %memref1[%offset] : memref<1024xf32>, vector<4xf32>
 
   // CHECK: amdgpu.memory_counter_wait load(0)
   // CHECK-NEXT: return %[[LOAD]]

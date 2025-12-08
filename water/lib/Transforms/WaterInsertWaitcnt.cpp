@@ -156,6 +156,14 @@ inline raw_ostream &operator<<(raw_ostream &os,
   return os;
 }
 
+static bool mayAlias(Value lhs, Value rhs, AliasAnalysis &aliasAnalysis) {
+  if (isWorkgroupAddressSpace(cast<MemRefType>(lhs.getType())) !=
+      isWorkgroupAddressSpace(cast<MemRefType>(rhs.getType())))
+    return false;
+
+  return !aliasAnalysis.alias(lhs, rhs).isNo();
+}
+
 /// Lattice state tracking pending asynchronous operations
 class WaitcntState : public AbstractDenseLattice {
 public:
@@ -319,7 +327,7 @@ public:
         if (!pendingBase)
           continue;
 
-        if (aliasAnalysis.alias(*currentBase, *pendingBase).isNo())
+        if (!mayAlias(*currentBase, *pendingBase, aliasAnalysis))
           continue;
 
         bool isPendingLoad = isLoadOp(pendingOp).has_value();
