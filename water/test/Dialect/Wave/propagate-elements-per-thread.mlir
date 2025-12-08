@@ -146,3 +146,15 @@ func.func @unsupported_op() attributes {wave.hyperparameters = #wave.hyperparame
   return
 }
 }
+
+// -----
+
+// CHECK: #wave.normal_form<memory_only_types>
+module {
+  func.func @test_no_existing_normal_form_attr(%mem: !wave.tensor<[@M] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
+    %0 = arith.constant 0.0 : f32
+    %reg = wave.register %0 : !wave.tensor<[@M] of f32, <register>>
+    wave.write %reg, %mem { elements_per_thread = 8 } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+    return
+  }
+}

@@ -705,3 +705,13 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     return
   }
 }
+
+// -----
+
+// CHECK: module attributes {wave.normal_form = #wave.normal_form<none>}
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @test_normal_form_cleared
+  func.func @test_normal_form_cleared() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    return
+  }
+}

@@ -837,18 +837,8 @@ public:
     if (llvm::failed(updateValueTypes(getOperation(), updateType)))
       return signalPassFailure();
 
-    // Get current normal form and add MemoryOnlyTypes to it
-    wave::WaveNormalForm currentForm = wave::WaveNormalForm::None;
-    if (auto attr = getOperation()->getAttrOfType<wave::WaveNormalFormAttr>(
-            wave::WaveDialect::kNormalFormAttrName)) {
-      currentForm = attr.getValue();
-    }
-    wave::WaveNormalForm newForm = static_cast<wave::WaveNormalForm>(
-        static_cast<uint32_t>(currentForm) |
-        static_cast<uint32_t>(wave::WaveNormalForm::MemoryOnlyTypes));
-
-    if (llvm::failed(
-            wave::setNormalFormPassPostcondition(newForm, getOperation())))
+    if (llvm::failed(wave::setNormalFormPassPostcondition(
+            wave::WaveNormalForm::MemoryOnlyTypes, getOperation())))
       return signalPassFailure();
   }
 };

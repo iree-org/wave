@@ -119,8 +119,7 @@ struct LowerWaveToMLIRPass
     if (walkResult.wasInterrupted())
       return signalPassFailure();
 
-    if (failed(wave::setNormalFormPassPostcondition(wave::WaveNormalForm::None,
-                                                    op)))
+    if (failed(wave::clearNormalFormPassPostcondition(op)))
       return signalPassFailure();
   }
 };

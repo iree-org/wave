@@ -12,8 +12,16 @@ namespace wave {
 // forms. The presence of the attribute, in turn, performs verification of the
 // normal form every time a verifier runs on the operation, including by default
 // after every pass.
+//
+// By default, preserves existing normal forms and adds the new form. Set
+// preserve=false to replace all existing forms with the provided form.
 llvm::LogicalResult setNormalFormPassPostcondition(wave::WaveNormalForm form,
-                                                   mlir::Operation *root);
+                                                   mlir::Operation *root,
+                                                   bool preserve = true);
+
+// Clears all normal form attributes from the operation, effectively setting
+// the normal form to None.
+llvm::LogicalResult clearNormalFormPassPostcondition(mlir::Operation *root);
 
 // Verifies if the operation, typically the root operation about to be processed
 // by a pass, satisfies the required normal form by checking the presence of the
