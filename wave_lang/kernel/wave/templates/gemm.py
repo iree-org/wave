@@ -25,6 +25,7 @@ def get_gemm_kernel(
     threads_per_wave: int = 64,
     block_shape: Optional[tuple[int, int, int]] = None,
     waves_per_block: Optional[tuple[int, int]] = None,
+    n_service_waves: int = 0,
 ):
     if not isinstance(dynamic_dims, Sequence):
         dynamic_dims = (dynamic_dims,) * 3
@@ -60,7 +61,9 @@ def get_gemm_kernel(
 
     constraints += [
         tkw.HardwareConstraint(
-            threads_per_wave=threads_per_wave, mma_type=mfma_variant, n_service_waves=1
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            n_service_waves=n_service_waves,
         )
     ]
 
@@ -91,6 +94,7 @@ def get_gemm_kernel(
             a_reg = tkw.read(a)
             # b_reg: tkw.Register[N, K, dtype]
             b_reg = tkw.read(b)
+
             # acc: tkw.Register[M, N, tkl.f32]
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
