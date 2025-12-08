@@ -61,6 +61,19 @@ static bool isWorkgroupAddressSpace(MemRefType type) {
 struct PendingOperations {
   PendingOperations() = default;
   PendingOperations(SmallVector<Operation *> &&ops) : ops(std::move(ops)) {}
+
+  size_t size() const { return ops.size(); }
+  bool empty() const { return ops.empty(); }
+
+  bool hasSameTail(const PendingOperations &other) const {
+    for (const auto &[op1, op2] :
+         llvm::zip(llvm::reverse(ops), llvm::reverse(other.ops))) {
+      if (op1 != op2)
+        return false;
+    }
+    return true;
+  }
+
   SmallVector<Operation *> ops;
 };
 
@@ -153,20 +166,30 @@ public:
     const auto &rhsState = static_cast<const WaitcntState &>(rhs);
     bool changed = false;
 
-    // Merge pending operations
-    if (!rhsState.isEmpty()) {
-      if (isEmpty()) {
-        pendingOps = rhsState.pendingOps;
-        changed = true;
-      } else {
-        // Conservative union: merge all pending operations
-        for (Operation *op : rhsState.getPendingOps()) {
-          if (!contains(op)) {
-            addPendingOp(op);
+    SmallVector<std::shared_ptr<PendingOperations>, 4> toAppend;
+    // Check if any pending operations has the same subset of operations as the
+    // rhs and take the longer one.
+    for (auto &rhsPendingOps : rhsState.pendingOpsLists) {
+      bool found = false;
+      for (auto &pendingOps : pendingOpsLists) {
+        if (pendingOps->hasSameTail(*rhsPendingOps)) {
+          if (rhsPendingOps->size() > pendingOps->size()) {
+            pendingOps = rhsPendingOps;
             changed = true;
           }
+          found = true;
+          break;
         }
       }
+      if (!found)
+        toAppend.push_back(rhsPendingOps);
+    }
+
+    // If there are any pending operations that don't have the same subset of
+    // operations as the rhs, append them to the pending operations lists.
+    if (!toAppend.empty()) {
+      pendingOpsLists.append(toAppend);
+      changed = true;
     }
 
     // Merge requirements (take minimum for conservative join)
@@ -177,43 +200,32 @@ public:
   }
 
   void print(raw_ostream &os) const override {
-    os << "WaitcntState: " << size() << " pending ops [";
-    if (pendingOps) {
+    os << "WaitcntState: pending ops [";
+    for (auto &pendingOps : pendingOpsLists) {
+      os << "[";
       llvm::interleaveComma(pendingOps->ops, os,
                             [&](Operation *op) { os << *op; });
+      os << "]";
     }
     os << "], requirement: " << requirement;
   }
 
-  /// Add a pending operation (copy-on-write)
   void addPendingOp(Operation *op) {
-    cow();
-    pendingOps->ops.push_back(op);
+    if (pendingOpsLists.empty()) {
+      pendingOpsLists.push_back(std::make_shared<PendingOperations>());
+    } else {
+      cow();
+    }
+    for (auto &pendingOps : pendingOpsLists)
+      pendingOps->ops.push_back(op);
   }
-
-  /// Get pending operations (read-only)
-  ArrayRef<Operation *> getPendingOps() const {
-    return pendingOps ? ArrayRef<Operation *>(pendingOps->ops)
-                      : ArrayRef<Operation *>();
-  }
-
-  /// Check if this operation is in the pending list
-  bool contains(Operation *op) const {
-    return pendingOps && llvm::is_contained(pendingOps->ops, op);
-  }
-
-  /// Check if empty
-  bool isEmpty() const { return !pendingOps || pendingOps->ops.empty(); }
-
-  /// Get size
-  size_t size() const { return pendingOps ? pendingOps->ops.size() : 0; }
 
   /// Initialize to empty state
   ChangeResult reset() {
-    if (!pendingOps && !requirement.hasRequirement())
+    if (pendingOpsLists.empty() && !requirement.hasRequirement())
       return ChangeResult::NoChange;
 
-    pendingOps.reset();
+    pendingOpsLists.clear();
     requirement = {};
     return ChangeResult::Change;
   }
@@ -221,22 +233,24 @@ public:
   /// Set the required waitcnt values
   void setRequirement(const WaitcntRequirement &req) {
     requirement = req;
-    SmallVector<Operation *> newPending;
-    WaitcntRequirement runningRequirement;
-    for (Operation *op : llvm::reverse(pendingOps->ops)) {
-      WaitcntRequirement opReq =
-          WaitcntRequirement::getOperationRequirement(op, false);
-      runningRequirement = runningRequirement + opReq;
-      if (runningRequirement > requirement)
-        continue;
+    for (auto &pendingOps : pendingOpsLists) {
+      SmallVector<Operation *> newPending;
+      WaitcntRequirement runningRequirement;
+      for (Operation *op : llvm::reverse(pendingOps->ops)) {
+        WaitcntRequirement opReq =
+            WaitcntRequirement::getOperationRequirement(op, false);
+        runningRequirement = runningRequirement + opReq;
+        if (runningRequirement > requirement)
+          continue;
 
-      newPending.push_back(op);
+        newPending.push_back(op);
+      }
+      if (newPending.size() == pendingOps->ops.size())
+        return;
+
+      std::reverse(newPending.begin(), newPending.end());
+      pendingOps = std::make_shared<PendingOperations>(std::move(newPending));
     }
-    if (newPending.size() == pendingOps->ops.size())
-      return;
-
-    std::reverse(newPending.begin(), newPending.end());
-    pendingOps = std::make_shared<PendingOperations>(std::move(newPending));
   }
 
   void resetRequirement() { requirement = {}; }
@@ -249,41 +263,41 @@ public:
 
   /// Check if a value depends on pending operations and compute required wait
   std::optional<WaitcntRequirement> checkRequirement(Value val) const {
-    if (!pendingOps || pendingOps->ops.empty())
-      return std::nullopt;
-
     // Check if val is produced by any pending operation
     Operation *defOp = val.getDefiningOp();
     if (!defOp)
       return std::nullopt;
 
-    // Search from the back to find the most recent dependency
-    auto req = WaitcntRequirement::getOperationRequirement(defOp, true);
-    bool found = false;
-    for (Operation *op : llvm::reverse(pendingOps->ops)) {
-      if (op == defOp) {
-        found = true;
-        break;
-      }
-      auto opReq = WaitcntRequirement::getOperationRequirement(op, false);
-      if (!req.isSameCounterType(opReq))
+    WaitcntRequirement result;
+    for (auto &pendingOps : pendingOpsLists) {
+      if (pendingOps->empty())
         continue;
 
-      req = req + opReq;
+      // Search from the back to find the most recent dependency
+      auto req = WaitcntRequirement::getOperationRequirement(defOp, true);
+      for (Operation *op : llvm::reverse(pendingOps->ops)) {
+        if (op == defOp)
+          break;
+
+        auto opReq = WaitcntRequirement::getOperationRequirement(op, false);
+        if (!req.isSameCounterType(opReq))
+          continue;
+
+        req = req + opReq;
+      }
+
+      result.merge(req);
     }
 
-    if (!found)
+    if (!result.hasRequirement())
       return std::nullopt;
 
-    return req;
+    return result;
   }
 
   /// Check for memory dependencies (RAW, WAR, WAW)
   std::optional<WaitcntRequirement>
   checkMemoryDependency(Operation *op, AliasAnalysis &aliasAnalysis) const {
-    if (!pendingOps || pendingOps->ops.empty())
-      return std::nullopt;
-
     // Check if this is a load or store operation
     std::optional<Value> currentBase = isLoadOrStoreOp(op);
     if (!currentBase)
@@ -292,59 +306,71 @@ public:
     bool isCurrentLoad = isLoadOp(op).has_value();
     bool isCurrentStore = isStoreOp(op).has_value();
 
-    // Search from the back to find the most recent dependency
-    for (Operation *pendingOp : llvm::reverse(pendingOps->ops)) {
-      std::optional<Value> pendingBase = isLoadOrStoreOp(pendingOp);
-      if (!pendingBase)
+    WaitcntRequirement result;
+    for (auto &pendingOps : pendingOpsLists) {
+      if (pendingOps->empty())
         continue;
 
-      if (aliasAnalysis.alias(*currentBase, *pendingBase).isNo())
-        continue;
+      // Search from the back to find the most recent dependency
+      for (Operation *pendingOp : llvm::reverse(pendingOps->ops)) {
+        std::optional<Value> pendingBase = isLoadOrStoreOp(pendingOp);
+        if (!pendingBase)
+          continue;
 
-      bool isPendingLoad = isLoadOp(pendingOp).has_value();
-      bool isPendingStore = isStoreOp(pendingOp).has_value();
+        if (aliasAnalysis.alias(*currentBase, *pendingBase).isNo())
+          continue;
 
-      // Check for dependencies:
-      // RAW: current load after pending store
-      // WAR: current store after pending load
-      // WAW: current store after pending store
-      bool hasRAW = isCurrentLoad && isPendingStore;
-      bool hasWAR = isCurrentStore && isPendingLoad;
-      bool hasWAW = isCurrentStore && isPendingStore;
+        bool isPendingLoad = isLoadOp(pendingOp).has_value();
+        bool isPendingStore = isStoreOp(pendingOp).has_value();
 
-      if (hasRAW || hasWAR || hasWAW) {
-        // Found dependency - compute requirement by counting forward from here
-        auto it = llvm::find(pendingOps->ops, pendingOp);
-        auto req = WaitcntRequirement::getOperationRequirement(pendingOp, true);
-        for (Operation *countOp :
-             llvm::make_range(std::next(it), pendingOps->ops.end())) {
-          auto opReq =
-              WaitcntRequirement::getOperationRequirement(countOp, false);
-          if (!req.isSameCounterType(opReq))
-            continue;
-          req = req + opReq;
+        // Check for dependencies:
+        // RAW: current load after pending store
+        // WAR: current store after pending load
+        // WAW: current store after pending store
+        bool hasRAW = isCurrentLoad && isPendingStore;
+        bool hasWAR = isCurrentStore && isPendingLoad;
+        bool hasWAW = isCurrentStore && isPendingStore;
+
+        if (hasRAW || hasWAR || hasWAW) {
+          // Found dependency - compute requirement by counting forward from
+          // here
+          auto it = llvm::find(pendingOps->ops, pendingOp);
+          auto req =
+              WaitcntRequirement::getOperationRequirement(pendingOp, true);
+          for (Operation *countOp :
+               llvm::make_range(std::next(it), pendingOps->ops.end())) {
+            auto opReq =
+                WaitcntRequirement::getOperationRequirement(countOp, false);
+            if (!req.isSameCounterType(opReq))
+              continue;
+            req = req + opReq;
+          }
+          result.merge(req);
         }
-        return req;
       }
     }
 
-    return std::nullopt;
+    if (!result.hasRequirement())
+      return std::nullopt;
+
+    return result;
   }
 
 private:
-  /// Pending asynchronous operations (vector loads/stores)
-  std::shared_ptr<PendingOperations> pendingOps;
+  /// Pending asynchronous operations
+  SmallVector<std::shared_ptr<PendingOperations>, 4> pendingOpsLists;
 
-  /// Required waitcnt before this state (for inserting actual waitcnt ops)
+  /// Required waitcnt after this state
   WaitcntRequirement requirement;
 
   void cow() {
-    if (!pendingOps || pendingOps.use_count() > 1) {
-      auto newPending = std::make_shared<PendingOperations>();
-      if (pendingOps)
-        newPending->ops = pendingOps->ops;
-
-      pendingOps = newPending;
+    for (auto &pendingOps : pendingOpsLists) {
+      if (!pendingOps || pendingOps.use_count() > 1) {
+        auto newPending = std::make_shared<PendingOperations>();
+        if (pendingOps)
+          newPending->ops = pendingOps->ops;
+        pendingOps = newPending;
+      }
     }
   }
 };
@@ -362,6 +388,7 @@ public:
   LogicalResult visitOperation(Operation *op, const WaitcntState &before,
                                WaitcntState *after) override {
     LDBG() << "Visiting: " << *op;
+    LDBG() << "  Before: " << before;
 
     // Start with the state before this operation
     WaitcntState newState = before;
@@ -382,10 +409,10 @@ public:
     // Set the requirement for this operation
     if (opRequirement.hasRequirement()) {
       newState.setRequirement(opRequirement);
-      LDBG() << "Operation requirement: " << opRequirement;
+      LDBG() << "  Operation requirement: " << opRequirement;
     } else {
       newState.resetRequirement();
-      LDBG() << "No operation requirement";
+      LDBG() << "  No operation requirement";
     }
 
     // Check if this is an async memory operation (vector load/store)
@@ -395,7 +422,7 @@ public:
       newState.addPendingOp(op);
     }
 
-    LDBG() << "New state: " << newState;
+    LDBG() << "  New state: " << newState;
     propagateIfChanged(after, after->join(newState));
     return success();
   }
