@@ -231,7 +231,10 @@ def mlir_converter_matrix_add():
 
     # CHECK-LABEL: mlir_converter_matrix_add
     # CHECK: module
-    # CHECK: func.func @kernel(%[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16>, %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16>, %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f16>
+    # CHECK-NEXT: func.func @kernel(
+    # CHECK-SAME: %[[ARG0:.*]]: !wave.tensor<[@M, @N] of f16, <global>>
+    # CHECK-SAME: %[[ARG1:.*]]: !wave.tensor<[@M, @N] of f16, <global>>
+    # CHECK-SAME: %[[ARG2:.*]]: !wave.tensor<[@M, @N] of f32, <global>>
     # CHECK-SAME: wave.constraints =
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"M">, tile_size = <[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, workgroup_dim = <x>>
     # CHECK-SAME: #wave.workgroup_constraint<dim = <"N">, tile_size = <[#wave.symbol<"BLOCK_N">] -> (BLOCK_N)>, workgroup_dim = <y>>
