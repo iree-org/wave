@@ -6,6 +6,7 @@
 
 #include "water/Transforms/Passes.h"
 
+#include "mlir/Analysis/AliasAnalysis.h"
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
@@ -274,7 +275,8 @@ public:
   }
 
   /// Check for memory dependencies (RAW, WAR, WAW)
-  std::optional<WaitcntRequirement> checkMemoryDependency(Operation *op) const {
+  std::optional<WaitcntRequirement>
+  checkMemoryDependency(Operation *op, AliasAnalysis &aliasAnalysis) const {
     if (!pendingOps || pendingOps->ops.empty())
       return std::nullopt;
 
@@ -292,8 +294,7 @@ public:
       if (!pendingBase)
         continue;
 
-      // Conservative aliasing check: same base memref means potential alias
-      if (*currentBase != *pendingBase)
+      if (aliasAnalysis.alias(*currentBase, *pendingBase).isNo())
         continue;
 
       bool isPendingLoad = isLoadOp(pendingOp).has_value();
@@ -347,7 +348,8 @@ private:
 /// Dense forward dataflow analysis for waitcnt insertion
 class WaitcntAnalysis : public DenseForwardDataFlowAnalysis<WaitcntState> {
 public:
-  using DenseForwardDataFlowAnalysis::DenseForwardDataFlowAnalysis;
+  WaitcntAnalysis(DataFlowSolver &solver, AliasAnalysis &aliasAnalysis)
+      : DenseForwardDataFlowAnalysis(solver), aliasAnalysis(aliasAnalysis) {}
 
   void setToEntryState(WaitcntState *lattice) override {
     propagateIfChanged(lattice, lattice->reset());
@@ -370,7 +372,7 @@ public:
     }
 
     // Check for memory dependencies (RAW, WAR, WAW)
-    if (auto memReq = before.checkMemoryDependency(op))
+    if (auto memReq = before.checkMemoryDependency(op, aliasAnalysis))
       opRequirement.merge(*memReq);
 
     // Set the requirement for this operation
@@ -393,6 +395,9 @@ public:
     propagateIfChanged(after, after->join(newState));
     return success();
   }
+
+private:
+  AliasAnalysis &aliasAnalysis;
 };
 
 /// Pass that inserts wait/synchronization instructions for asynchronous
@@ -404,12 +409,12 @@ public:
     LDBG() << "Running WaterInsertWaitcntPass";
     Operation *op = getOperation();
 
-    // Set up the dataflow solver
+    auto &aliasAnalysis = getAnalysis<AliasAnalysis>();
+
     DataFlowSolver solver;
     loadBaselineAnalyses(solver);
-    solver.load<WaitcntAnalysis>();
+    solver.load<WaitcntAnalysis>(aliasAnalysis);
 
-    // Run the analysis
     if (failed(solver.initializeAndRun(op))) {
       signalPassFailure();
       return;
@@ -418,7 +423,6 @@ public:
     // Insert waitcnt operations based on analysis results
     IRRewriter rewriter(&getContext());
     op->walk([&](Operation *operation) {
-      // Query the state after this operation
       const WaitcntState *state = solver.lookupState<WaitcntState>(
           solver.getProgramPointAfter(operation));
       if (!state || !state->hasRequirement())
