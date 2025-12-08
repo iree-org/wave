@@ -33,6 +33,11 @@ MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveSymbolAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveSymbolAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
 
+/// Creates a new WaveSymbolAttr with the given symbol name, verifying
+/// construction invariants.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveSymbolAttrGetChecked(MlirLocation loc, MlirStringRef symbolName);
+
 /// Returns the typeID of a WaveSymbolAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveSymbolAttrGetTypeID();
 
@@ -81,6 +86,12 @@ mlirAttributeIsAWaveIndexMappingAttr(MlirAttribute attr);
 /// list is expected to only contain WaveSymbolAttr instances.
 MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGet(
     MlirContext mlirCtx, MlirAttribute *symbolNames, MlirAffineMap start,
+    MlirAffineMap step, MlirAffineMap stride);
+
+/// Creates a new WaveIndexMappingAttr with the given start, step and stride
+/// maps, verifying construction invariants.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGetChecked(
+    MlirLocation loc, MlirAttribute *symbolNames, MlirAffineMap start,
     MlirAffineMap step, MlirAffineMap stride);
 
 /// Returns the typeID of a WaveIndexMappingAttr.
@@ -236,6 +247,11 @@ MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveExprListAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirWaveExprListAttrGet(MlirAttribute *symbolNames, MlirAffineMap map);
 
+/// Creates a new WaveExprListAttr with the given map, verifying construction
+/// invariants.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveExprListAttrGetChecked(
+    MlirLocation loc, MlirAttribute *symbolNames, MlirAffineMap map);
+
 /// Returns the typeID of a WaveExprListAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveExprListAttrGetTypeID();
 
@@ -269,6 +285,12 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirHardwareConstraintAttrGet(
     unsigned *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
     unsigned maxBitsPerLoad);
 
+/// Creates a new HardwareConstraintAttr, verifying construction invariants.
+MLIR_CAPI_EXPORTED MlirAttribute mlirHardwareConstraintAttrGetChecked(
+    MlirLocation loc, unsigned threadsPerWave, size_t wavesPerBlockSize,
+    unsigned *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
+    unsigned maxBitsPerLoad);
+
 /// Returns the typeID of a HardwareConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWHardwareConstraintAttrGetTypeID();
 
@@ -284,6 +306,11 @@ mlirAttributeIsADeviceConstraintAttr(MlirAttribute attr);
 MLIR_CAPI_EXPORTED MlirAttribute
 mlirDeviceConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
                             MlirAttribute tileSize, unsigned deviceDim);
+
+/// Creates a new DeviceConstraintAttr, verifying construction invariants.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirDeviceConstraintAttrGetChecked(MlirLocation loc, MlirAttribute dim,
+                                   MlirAttribute tileSize, unsigned deviceDim);
 
 /// Returns the typeID of a DeviceConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirDeviceConstraintAttrGetTypeID();
@@ -301,6 +328,11 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirWorkgroupConstraintAttrGet(
     MlirContext mlirCtx, MlirAttribute dim, MlirAttribute tileSize,
     MlirAttribute workgroupDim, bool primary);
 
+/// Creates a new WorkgroupConstraintAttr, verifying construction invariants.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWorkgroupConstraintAttrGetChecked(
+    MlirLocation loc, MlirAttribute dim, MlirAttribute tileSize,
+    MlirAttribute workgroupDim, bool primary);
+
 /// Returns the typeID of a WorkgroupConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWorkgroupConstraintAttrGetTypeID();
 
@@ -314,6 +346,10 @@ MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveConstraintAttr(MlirAttribute attr);
 /// Creates a new WaveConstraintAttr
 MLIR_CAPI_EXPORTED MlirAttribute mlirWaveConstraintAttrGet(
     MlirContext mlirCtx, MlirAttribute dim, MlirAttribute tileSize);
+
+/// Creates a new WaveConstraintAttr, verifying construction invariants.
+MLIR_CAPI_EXPORTED MlirAttribute mlirWaveConstraintAttrGetChecked(
+    MlirLocation loc, MlirAttribute dim, MlirAttribute tileSize);
 
 /// Returns the typeID of a WaveConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveConstraintAttrGetTypeID();
@@ -329,6 +365,10 @@ mlirAttributeIsATilingConstraintAttr(MlirAttribute attr);
 /// Creates a new TilingConstraintAttr
 MLIR_CAPI_EXPORTED MlirAttribute mlirTilingConstraintAttrGet(
     MlirContext mlirCtx, MlirAttribute dim, MlirAttribute tileSize);
+
+/// Creates a new TilingConstraintAttr, verifying construction invariants.
+MLIR_CAPI_EXPORTED MlirAttribute mlirTilingConstraintAttrGetChecked(
+    MlirLocation loc, MlirAttribute dim, MlirAttribute tileSize);
 
 /// Returns the typeID of a TilingConstraintAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirTilingConstraintAttrGetTypeID();

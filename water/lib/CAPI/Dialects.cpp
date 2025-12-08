@@ -38,6 +38,15 @@ MlirAttribute mlirWaveSymbolAttrGet(MlirContext mlirCtx,
   return wrap(wave::WaveSymbolAttr::get(ctx, symbolName));
 }
 
+MlirAttribute mlirWaveSymbolAttrGetChecked(MlirLocation loc,
+                                           MlirStringRef symbolNameStrRef) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+  llvm::StringRef symbolName = unwrap(symbolNameStrRef);
+  return wrap(wave::WaveSymbolAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, symbolName));
+}
+
 MlirTypeID mlirWaveSymbolAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveSymbolAttr>());
 }
@@ -97,6 +106,30 @@ MlirAttribute mlirWaveIndexMappingAttrGet(MlirContext mlirCtx,
 
   return wrap(wave::WaveIndexMappingAttr::get(ctx, symbolAttrs, unwrap(start),
                                               unwrap(step), unwrap(stride)));
+}
+
+MlirAttribute mlirWaveIndexMappingAttrGetChecked(MlirLocation loc,
+                                                 MlirAttribute *symbolNames,
+                                                 MlirAffineMap start,
+                                                 MlirAffineMap step,
+                                                 MlirAffineMap stride) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+
+  // Convert C array of MlirAttribute to vector of WaveSymbolAttr.
+  unsigned numSymbols = mlirAffineMapGetNumSymbols(start);
+  llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
+      llvm::make_range(symbolNames, symbolNames + numSymbols),
+      [](MlirAttribute attr) { return unwrap(attr); });
+
+  // Needs explicit conversion to ArrayRef, otherwise we hit the
+  // Base::getChecked template that can be instantiated for a more specific
+  // type, but cannot be called from here.
+  auto attr = wave::WaveIndexMappingAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, llvm::ArrayRef(symbolAttrs),
+      unwrap(start), unwrap(step), unwrap(stride));
+
+  return wrap(attr);
 }
 
 MlirTypeID mlirWaveIndexMappingAttrGetTypeID() {
@@ -222,6 +255,25 @@ MlirAttribute mlirWaveExprListAttrGet(MlirAttribute *symbolNames,
   return wrap(wave::WaveExprListAttr::get(ctx, symbolAttrs, unwrap(map)));
 }
 
+MlirAttribute mlirWaveExprListAttrGetChecked(MlirLocation loc,
+                                             MlirAttribute *symbolNames,
+                                             MlirAffineMap map) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+
+  unsigned numSymbols = mlirAffineMapGetNumSymbols(map);
+  llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
+      llvm::make_range(symbolNames, symbolNames + numSymbols),
+      [](MlirAttribute attr) { return unwrap(attr); });
+
+  // Explicitly convert to ArrayRef, otherwise we hit the Base::getChecked
+  // template that can be instantiated for a more specific type, but cannot be
+  // called form here.
+  return wrap(wave::WaveExprListAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, llvm::ArrayRef(symbolAttrs),
+      unwrap(map)));
+}
+
 MlirTypeID mlirWaveExprListAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveExprListAttr>());
 }
@@ -277,6 +329,32 @@ mlirHardwareConstraintAttrGet(MlirContext mlirCtx, unsigned threadsPerWave,
       mmaTypeAttr, vectorShapesAttr, maxBitsPerLoad));
 }
 
+MlirAttribute mlirHardwareConstraintAttrGetChecked(
+    MlirLocation loc, unsigned threadsPerWave, size_t wavesPerBlockSize,
+    unsigned *wavesPerBlock, MlirAttribute mmaType, MlirAttribute vectorShapes,
+    unsigned maxBitsPerLoad) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+  auto mmaTypeAttr =
+      llvm::dyn_cast_or_null<wave::WaveMmaKindAttr>(unwrap(mmaType));
+  if (!mmaTypeAttr && !mlirAttributeIsNull(mmaType)) {
+    mlir::emitError(unwrap(loc)) << "expected a WaveMmaKindAttr for mmaType";
+    return wrap(mlir::Attribute());
+  }
+  auto vectorShapesAttr =
+      llvm::dyn_cast_or_null<mlir::DictionaryAttr>(unwrap(vectorShapes));
+  if (!vectorShapesAttr && !mlirAttributeIsNull(vectorShapes)) {
+    mlir::emitError(unwrap(loc))
+        << "expected a DictionaryAttr for vectorShapes";
+    return wrap(mlir::Attribute());
+  }
+
+  return wrap(wave::HardwareConstraintAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, threadsPerWave,
+      llvm::ArrayRef(wavesPerBlock, wavesPerBlockSize), mmaTypeAttr,
+      vectorShapesAttr, maxBitsPerLoad));
+}
+
 MlirTypeID mlirWHardwareConstraintAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::HardwareConstraintAttr>());
 }
@@ -299,6 +377,30 @@ MlirAttribute mlirDeviceConstraintAttrGet(MlirContext mlirCtx,
 
   return wrap(
       wave::DeviceConstraintAttr::get(ctx, dimAttr, tileSizeAttr, deviceDim));
+}
+
+MlirAttribute mlirDeviceConstraintAttrGetChecked(MlirLocation loc,
+                                                 MlirAttribute dim,
+                                                 MlirAttribute tileSize,
+                                                 unsigned deviceDim) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+
+  auto dimAttr = llvm::dyn_cast<wave::WaveSymbolAttr>(unwrap(dim));
+  if (!dimAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveSymbolAttr for dim";
+    return wrap(mlir::Attribute());
+  }
+
+  auto tileSizeAttr = llvm::dyn_cast<wave::WaveExprListAttr>(unwrap(tileSize));
+  if (!tileSizeAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveExprListAttr for tileSize";
+    return wrap(mlir::Attribute());
+  }
+
+  return wrap(wave::DeviceConstraintAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, dimAttr, tileSizeAttr,
+      deviceDim));
 }
 
 MlirTypeID mlirDeviceConstraintAttrGetTypeID() {
@@ -328,6 +430,39 @@ MlirAttribute mlirWorkgroupConstraintAttrGet(MlirContext mlirCtx,
                                                  workgroupDimAttr, primary));
 }
 
+MlirAttribute mlirWorkgroupConstraintAttrGetChecked(MlirLocation loc,
+                                                    MlirAttribute dim,
+                                                    MlirAttribute tileSize,
+                                                    MlirAttribute workgroupDim,
+                                                    bool primary) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+
+  auto dimAttr = llvm::dyn_cast<wave::WaveSymbolAttr>(unwrap(dim));
+  if (!dimAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveSymbolAttr for dim";
+    return wrap(mlir::Attribute());
+  }
+
+  auto tileSizeAttr = llvm::dyn_cast<wave::WaveExprListAttr>(unwrap(tileSize));
+  if (!tileSizeAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveExprListAttr for tileSize";
+    return wrap(mlir::Attribute());
+  }
+
+  auto workgroupDimAttr =
+      llvm::dyn_cast<wave::WaveWorkgroupDimAttr>(unwrap(workgroupDim));
+  if (!workgroupDimAttr) {
+    mlir::emitError(cppLoc)
+        << "expected a WaveWorkgroupDimAttr for workgroupDim";
+    return wrap(mlir::Attribute());
+  }
+
+  return wrap(wave::WorkgroupConstraintAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, dimAttr, tileSizeAttr,
+      workgroupDimAttr, primary));
+}
+
 MlirTypeID mlirWorkgroupConstraintAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WorkgroupConstraintAttr>());
 }
@@ -346,6 +481,28 @@ MlirAttribute mlirWaveConstraintAttrGet(MlirContext mlirCtx, MlirAttribute dim,
   auto dimAttr = llvm::cast<wave::WaveSymbolAttr>(unwrap(dim));
   auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
   return wrap(wave::WaveConstraintAttr::get(ctx, dimAttr, tileSizeAttr));
+}
+
+MlirAttribute mlirWaveConstraintAttrGetChecked(MlirLocation loc,
+                                               MlirAttribute dim,
+                                               MlirAttribute tileSize) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+
+  auto dimAttr = llvm::dyn_cast<wave::WaveSymbolAttr>(unwrap(dim));
+  if (!dimAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveSymbolAttr for dim";
+    return wrap(mlir::Attribute());
+  }
+
+  auto tileSizeAttr = llvm::dyn_cast<wave::WaveExprListAttr>(unwrap(tileSize));
+  if (!tileSizeAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveExprListAttr for tileSize";
+    return wrap(mlir::Attribute());
+  }
+
+  return wrap(wave::WaveConstraintAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, dimAttr, tileSizeAttr));
 }
 
 MlirTypeID mlirWaveConstraintAttrGetTypeID() {
@@ -368,6 +525,28 @@ MlirAttribute mlirTilingConstraintAttrGet(MlirContext mlirCtx,
   auto tileSizeAttr = llvm::cast<wave::WaveExprListAttr>(unwrap(tileSize));
 
   return wrap(wave::TilingConstraintAttr::get(ctx, dimAttr, tileSizeAttr));
+}
+
+MlirAttribute mlirTilingConstraintAttrGetChecked(MlirLocation loc,
+                                                 MlirAttribute dim,
+                                                 MlirAttribute tileSize) {
+  mlir::Location cppLoc = unwrap(loc);
+  mlir::MLIRContext *ctx = cppLoc.getContext();
+
+  auto dimAttr = llvm::dyn_cast<wave::WaveSymbolAttr>(unwrap(dim));
+  if (!dimAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveSymbolAttr for dim";
+    return wrap(mlir::Attribute());
+  }
+
+  auto tileSizeAttr = llvm::dyn_cast<wave::WaveExprListAttr>(unwrap(tileSize));
+  if (!tileSizeAttr) {
+    mlir::emitError(cppLoc) << "expected a WaveExprListAttr for tileSize";
+    return wrap(mlir::Attribute());
+  }
+
+  return wrap(wave::TilingConstraintAttr::getChecked(
+      [&] { return mlir::emitError(cppLoc); }, ctx, dimAttr, tileSizeAttr));
 }
 
 MlirTypeID mlirTilingConstraintAttrGetTypeID() {
