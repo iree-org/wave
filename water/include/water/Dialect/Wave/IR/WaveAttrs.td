@@ -104,6 +104,7 @@ def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
         NORMAL_FORM_FUNC_BOUNDARY, NORMAL_FORM_OP_TYPES
     ], "full_types">;
 
+// When anything changes below, also update the C and Python API.
 def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
   I32BitEnumAttrCaseNone<"None", "none">,
   // Bits.
@@ -364,6 +365,19 @@ def WaveSymbolAttr : AttrDef<WaveDialect, "WaveSymbol"> {
       os << "@" << getName();
     }
   }];
+}
+
+def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
+  let mnemonic = "iter";
+  let description = [{
+    Symbol referring to an induction variable that can be used in symbolic
+    expressions in the Wave dialect. Induction variables may have the same
+    name as other symbols without clashing with them.
+  }];
+
+  let parameters =
+      (ins StringRefParameter<"name of the induction variable">:$name);
+  let assemblyFormat = "`<` $name `>`";
 }
 
 def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {

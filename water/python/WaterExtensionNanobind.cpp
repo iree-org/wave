@@ -29,6 +29,9 @@ NB_MODULE(_waterDialects, m) {
           mlirDialectHandleLoadDialect(h, context);
       },
       nb::arg("context").none() = nb::none(), nb::arg("load") = true);
+  d.def(
+      "register_passes", []() { mlirWaveDialectRegisterPasses(); },
+      "Registers the wave dialect passes.");
 
   // Export dialect constants
   d.attr("WAVE_CONSTRAINTS_ATTR_NAME") = mlirWaveDialectConstraintsAttrName;
@@ -52,7 +55,32 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("symbolName"),
           nb::arg("context") = nb::none(),
-          "Gets a wave.WaveSymbolAttr from parameters.");
+          "Gets a wave.WaveSymbolAttr from parameters.")
+      .def_property_readonly("name", [](MlirAttribute self) {
+        return mlirWaveSymbolAttrGetName(self);
+      });
+
+  //===---------------------------------------------------------------------===//
+  // WaveIterSymbolAttr
+  //===---------------------------------------------------------------------===//
+
+  mlir::python::nanobind_adaptors::mlir_attribute_subclass(
+      d, "WaveIterSymbolAttr", mlirAttributeIsAWaveIterSymbolAttr,
+      mlirWaveIterSymbolAttrGetTypeID)
+      .def_classmethod(
+          "get",
+          [](const nb::object &cls, const std::string &symbolName,
+             MlirContext context) {
+            MlirStringRef symbolNameStrRef =
+                mlirStringRefCreate(symbolName.data(), symbolName.size());
+            return cls(mlirWaveIterSymbolAttrGet(context, symbolNameStrRef));
+          },
+          nb::arg("cls"), nb::arg("symbolName"),
+          nb::arg("context") = nb::none(),
+          "Gets a wave.WaveIterSymbolAttr from parameters.")
+      .def_property_readonly("name", [](MlirAttribute self) {
+        return mlirWaveIterSymbolAttrGetName(self);
+      });
 
   //===---------------------------------------------------------------------===//
   // WaveIndexSymbolAttr
@@ -124,7 +152,28 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("symbols"), nb::arg("start"), nb::arg("step"),
           nb::arg("stride"), nb::arg("context") = nb::none(),
-          "Gets a wave.WaveIndexMappingAttr from a list of symbol attributes.");
+          "Gets a wave.WaveIndexMappingAttr from a list of symbol attributes.")
+      .def_property_readonly("start",
+                             [](MlirAttribute self) {
+                               return mlirWaveIndexMappingAttrGetStart(self);
+                             })
+      .def_property_readonly("step",
+                             [](MlirAttribute self) {
+                               return mlirWaveIndexMappingAttrGetStep(self);
+                             })
+      .def_property_readonly("stride",
+                             [](MlirAttribute self) {
+                               return mlirWaveIndexMappingAttrGetStride(self);
+                             })
+      .def_property_readonly("symbols", [](MlirAttribute self) {
+        std::vector<MlirAttribute> symbols;
+        intptr_t numSymbols = mlirWaveIndexMappingAttrGetNumSymbols(self);
+        symbols.reserve(numSymbols);
+        for (intptr_t i = 0; i < numSymbols; i++) {
+          symbols.push_back(mlirWaveIndexMappingAttrGetSymbol(self, i));
+        }
+        return symbols;
+      });
 
   //===---------------------------------------------------------------------===//
   // WaveHyperparameterAttr

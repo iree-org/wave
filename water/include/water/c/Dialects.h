@@ -7,6 +7,7 @@
 #ifndef WATER_C_DIALECTS_H
 #define WATER_C_DIALECTS_H
 
+#include "mlir-c/AffineMap.h"
 #include "mlir-c/IR.h"
 
 #ifdef __cplusplus
@@ -14,6 +15,9 @@ extern "C" {
 #endif
 
 MLIR_DECLARE_CAPI_DIALECT_REGISTRATION(Wave, wave);
+
+/// Register the Wave dialect passes.
+MLIR_CAPI_EXPORTED void mlirWaveDialectRegisterPasses();
 
 //===---------------------------------------------------------------------===//
 // Wave Dialect Constants
@@ -35,6 +39,27 @@ mlirWaveSymbolAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
 
 /// Returns the typeID of a WaveSymbolAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveSymbolAttrGetTypeID();
+
+/// Gets the name of a WaveSymbolAttr.
+MLIR_CAPI_EXPORTED MlirStringRef mlirWaveSymbolAttrGetName(MlirAttribute attr);
+
+//===---------------------------------------------------------------------===//
+// WaveIterSymbolAttr
+//===---------------------------------------------------------------------===//
+
+/// Checks whether the given MLIR attribute is a WaveIterSymbolAttr.
+MLIR_CAPI_EXPORTED bool mlirAttributeIsAWaveIterSymbolAttr(MlirAttribute attr);
+
+/// Creates a new WaveIterSymbolAttr with the given induction variable name.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveIterSymbolAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
+
+/// Returns the typeID of a WaveIterSymbolAttr.
+MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIterSymbolAttrGetTypeID();
+
+/// Gets the induction variable name.
+MLIR_CAPI_EXPORTED MlirStringRef
+mlirWaveIterSymbolAttrGetName(MlirAttribute attr);
 
 //===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr
@@ -85,6 +110,26 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGet(
 
 /// Returns the typeID of a WaveIndexMappingAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIndexMappingAttrGetTypeID();
+
+/// Get the offset from a WaveIndexMappingAttr.
+MLIR_CAPI_EXPORTED MlirAffineMap
+mlirWaveIndexMappingAttrGetStart(MlirAttribute attr);
+
+/// Get the step from a WaveIndexMappingAttr.
+MLIR_CAPI_EXPORTED MlirAffineMap
+mlirWaveIndexMappingAttrGetStep(MlirAttribute attr);
+
+/// Get the stride from a WaveIndexMappingAttr.
+MLIR_CAPI_EXPORTED MlirAffineMap
+mlirWaveIndexMappingAttrGetStride(MlirAttribute attr);
+
+/// Get the number of (input) symbols.
+MLIR_CAPI_EXPORTED intptr_t
+mlirWaveIndexMappingAttrGetNumSymbols(MlirAttribute attr);
+
+/// Get the (input) symbol at the given index.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveIndexMappingAttrGetSymbol(MlirAttribute attr, intptr_t index);
 
 //===---------------------------------------------------------------------===//
 // WaveHyperparameterAttr
