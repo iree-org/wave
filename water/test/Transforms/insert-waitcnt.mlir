@@ -47,6 +47,22 @@ func.func @raw_dependency(%memref: memref<1024xf32>, %data: vector<4xf32>, %offs
   return %result : vector<4xf32>
 }
 
+// CHECK-LABEL: func.func @raw_dependency_memref
+//  CHECK-SAME: (%[[MEM:.*]]: memref<1024xf32>, %[[DATA:.*]]: f32, %{{.*}}: index)
+func.func @raw_dependency_memref(%memref: memref<1024xf32>, %data: f32, %offset: index) -> f32 {
+  // Store to memory
+  // CHECK: memref.store %[[DATA]], %[[MEM]]
+  memref.store %data, %memref[%offset] : memref<1024xf32>
+
+  // Load from same memory - RAW dependency, must wait for store
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: %[[LOAD:.*]] = memref.load %[[MEM]]
+  %result = memref.load %memref[%offset] : memref<1024xf32>
+
+  // CHECK: return %[[LOAD]]
+  return %result : f32
+}
+
 // CHECK-LABEL: func.func @war_dependency
 //  CHECK-SAME: (%[[MEM:.*]]: memref<1024xf32>, %[[DATA:.*]]: vector<4xf32>, %{{.*}}: index)
 func.func @war_dependency(%memref: memref<1024xf32>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {

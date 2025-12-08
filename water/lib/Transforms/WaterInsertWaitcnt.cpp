@@ -11,6 +11,7 @@
 #include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
@@ -32,6 +33,8 @@ namespace {
 static std::optional<Value> isLoadOp(Operation *op) {
   if (auto load = dyn_cast<vector::LoadOp>(op))
     return load.getBase();
+  if (auto load = dyn_cast<memref::LoadOp>(op))
+    return load.getMemRef();
 
   return std::nullopt;
 }
@@ -39,6 +42,8 @@ static std::optional<Value> isLoadOp(Operation *op) {
 static std::optional<Value> isStoreOp(Operation *op) {
   if (auto store = dyn_cast<vector::StoreOp>(op))
     return store.getBase();
+  if (auto store = dyn_cast<memref::StoreOp>(op))
+    return store.getMemRef();
 
   return std::nullopt;
 }
