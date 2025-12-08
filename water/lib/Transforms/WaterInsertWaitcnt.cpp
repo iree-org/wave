@@ -30,29 +30,39 @@ namespace mlir::water {
 
 namespace {
 
+/// Check if the operation is a load operation and return the base memref.
 static std::optional<Value> isLoadOp(Operation *op) {
+  // TODO: replace with the interface when available.
   if (auto load = dyn_cast<vector::LoadOp>(op))
     return load.getBase();
   if (auto load = dyn_cast<memref::LoadOp>(op))
     return load.getMemRef();
+  if (auto copy = dyn_cast<memref::CopyOp>(op))
+    return copy.getSource();
 
   return std::nullopt;
 }
 
+/// Check if the operation is a store operation and return the base memref.
 static std::optional<Value> isStoreOp(Operation *op) {
+  // TODO: replace with the interface when available.
   if (auto store = dyn_cast<vector::StoreOp>(op))
     return store.getBase();
   if (auto store = dyn_cast<memref::StoreOp>(op))
     return store.getMemRef();
+  if (auto copy = dyn_cast<memref::CopyOp>(op))
+    return copy.getTarget();
 
   return std::nullopt;
 }
 
+/// Check if the operation is a load or store operation and return the base
+/// memref.
 static std::optional<Value> isLoadOrStoreOp(Operation *op) {
-  if (auto load = isLoadOp(op))
-    return load;
   if (auto store = isStoreOp(op))
     return store;
+  if (auto load = isLoadOp(op))
+    return load;
 
   return std::nullopt;
 }
