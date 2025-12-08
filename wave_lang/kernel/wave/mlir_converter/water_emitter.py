@@ -28,7 +28,8 @@ if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
     from wave_lang.kernel.wave.compile_options import WaveCompileOptions
     from wave_lang.kernel.wave.constraints import Constraint
-    from wave_lang.kernel.lang.wave_types import Memory, Register
+    from wave_lang.kernel.lang.wave_types import Memory, Register, IndexSymbol
+    from wave_lang.kernel._support.indexing import IndexSequence
     from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
@@ -288,7 +289,7 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
 # Cannot specify better types here because it would require importing from
 # wave_lang and bringing in the IREE dependency we can't have at the top level.
 def _build_index_mapping_dict(
-    index: dict, allowed_induction_symbols: set
+    index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
 ) -> ir.DictAttr:
     """
     Convert a Wave index dictionary into a DictionaryAttr of
@@ -312,16 +313,16 @@ def _build_index_mapping_dict(
                 if isinstance(expr, sympy.Expr)
             ]
         )
-        induction_symbols = set(
-            symbol for symbol in all_symbols_set if symbol.name.startswith("$ARG")
-        )
-        induction_symbols_to_remove = induction_symbols.difference(
-            allowed_induction_symbols
-        )
-        induction_symbols_subs = {
-            symbol: sympy.Integer(0) for symbol in induction_symbols_to_remove
+        induction_symbols_to_remove = {
+            symbol
+            for symbol in all_symbols_set
+            if symbol.name.startswith("$ARG")
+            and symbol not in allowed_induction_symbols
         }
-        if induction_symbols_subs:
+        if induction_symbols_to_remove:
+            induction_symbols_subs = {
+                symbol: sympy.Integer(0) for symbol in induction_symbols_to_remove
+            }
             # TODO: can we wrap this into a diagnostic?
             print(
                 f"WARNING: Removing invalid induction symbols {induction_symbols_to_remove} from {index}",
@@ -348,9 +349,6 @@ def _build_index_mapping_dict(
 def _attach_attributes(node: CustomOp, op: ir.Operation):
     from wave_lang.kernel.ops.wave_ops import Iterate, MMA, get_custom
     from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
-
-    if TYPE_CHECKING:
-        from wave_lang.kernel.lang.wave_types import IndexSymbol
 
     if getattr(node, "index", None) and isinstance(node.index, dict):
         dict_attrs: list[ir.DictAttr] = []
