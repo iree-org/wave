@@ -18,7 +18,7 @@ from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
 )
-from ..wave.constraints import Constraint, WaveConstraint
+from ..wave.constraints import Constraint
 from ..wave.compile_options import WaveCompileOptions
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
