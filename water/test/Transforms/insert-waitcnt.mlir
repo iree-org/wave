@@ -336,3 +336,77 @@ func.func @loop_load_before_store(%lb: index, %ub: index, %step: index, %memref:
   // CHECK: return
   return %result : vector<4xf32>
 }
+
+// CHECK-LABEL: func.func @memref_copy_raw_source
+func.func @memref_copy_raw_source(%src: memref<1024xf32>, %dst: memref<1024xf32>, %data: vector<4xf32>, %offset: index) {
+  // Store to source
+  // CHECK: vector.store
+  vector.store %data, %src[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Copy from source - RAW dependency (reads from source that was just written)
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: memref.copy
+  memref.copy %src, %dst : memref<1024xf32> to memref<1024xf32>
+
+  // CHECK: return
+  return
+}
+
+// CHECK-LABEL: func.func @memref_copy_waw_target
+func.func @memref_copy_waw_target(%src: memref<1024xf32>, %dst: memref<1024xf32>, %data: vector<4xf32>, %offset: index) {
+  // Store to destination
+  // CHECK: vector.store
+  vector.store %data, %dst[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Copy to destination - WAW dependency (writes to target that was just written)
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: memref.copy
+  memref.copy %src, %dst : memref<1024xf32> to memref<1024xf32>
+
+  // CHECK: return
+  return
+}
+
+// CHECK-LABEL: func.func @memref_copy_war_target
+func.func @memref_copy_war_target(%src: memref<1024xf32>, %dst: memref<1024xf32>, %offset: index) -> vector<4xf32> {
+  // Load from destination
+  // CHECK: %[[RESULT:.*]] = vector.load
+  %result = vector.load %dst[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Copy to destination - WAR dependency (writes to target that was just read)
+  // The copy's wait also synchronizes the load, so return doesn't need another wait
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: memref.copy
+  memref.copy %src, %dst : memref<1024xf32> to memref<1024xf32>
+
+  // CHECK: return %[[RESULT]]
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @memref_copy_both_dependencies
+func.func @memref_copy_both_dependencies(%src: memref<1024xf32>, %dst: memref<1024xf32>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // Store to source
+  // CHECK: vector.store
+  vector.store %data, %src[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Store to destination
+  // CHECK: vector.store
+  vector.store %data, %dst[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Copy needs to wait for both stores:
+  // - RAW on source (copy reads from source)
+  // - WAW on target (copy writes to destination)
+  // Both stores alias with their respective memrefs, so we need wait(0)
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: memref.copy
+  memref.copy %src, %dst : memref<1024xf32> to memref<1024xf32>
+
+  // Load from destination after copy - RAW dependency with copy
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: %[[RESULT:.*]] = vector.load
+  %result = vector.load %dst[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: return %[[RESULT]]
+  return %result : vector<4xf32>
+}
