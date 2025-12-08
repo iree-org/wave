@@ -6,7 +6,7 @@
 func.func @single_load_use(%memref: memref<1024xf32>, %offset: index) -> vector<4xf32> {
   // CHECK: vector.load
   %result = vector.load %memref[%offset] : memref<1024xf32>, vector<4xf32>
-  // CHECK: amdgpu.memory_counter_wait load(0) store(0)
+  // CHECK: amdgpu.memory_counter_wait load(0)
   // CHECK-NEXT: return
   return %result : vector<4xf32>
 }
@@ -19,11 +19,11 @@ func.func @two_loads_use_in_reverse_order(%memrefA: memref<1024xf32>, %memrefB: 
   %loadA = vector.load %memrefA[%offset] : memref<1024xf32>, vector<4xf32>
   %loadB = vector.load %memrefB[%offset] : memref<1024xf32>, vector<4xf32>
 
-  // CHECK: amdgpu.memory_counter_wait load(1) store(1)
+  // CHECK: amdgpu.memory_counter_wait load(1)
   // CHECK-NEXT: %[[ADD_A:.*]] = arith.addf %[[LOAD_A]], %[[LOAD_A]]
   %addA = arith.addf %loadA, %loadA : vector<4xf32>
 
-  // CHECK: amdgpu.memory_counter_wait load(0) store(0)
+  // CHECK: amdgpu.memory_counter_wait load(0)
   // CHECK-NEXT: %[[ADD_B:.*]] = arith.addf %[[LOAD_B]], %[[ADD_A]]
   %addB = arith.addf %loadB, %addA : vector<4xf32>
 

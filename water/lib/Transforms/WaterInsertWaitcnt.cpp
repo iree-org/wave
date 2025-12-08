@@ -66,7 +66,7 @@ struct WaitcntRequirement {
   }
 
   std::optional<unsigned> getLoadCnt() const { return load_cnt; }
-  std::optional<unsigned> getStoreCnt() const { return load_cnt; }
+  std::optional<unsigned> getStoreCnt() const { return std::nullopt; }
   std::optional<unsigned> getDsCnt() const { return ds_cnt; }
 
   bool isSameCounterType(const WaitcntRequirement &other) const {
