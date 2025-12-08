@@ -73,9 +73,10 @@ struct LowerWaveToMLIRPass
       vector::VectorDialect
         // clang-format on
         >();
-    target.addIllegalOp<wave::AllocateOp, wave::RegisterOp, wave::Exp2Op,
-                        wave::CastOp, wave::ExtractSliceOp, wave::IterateOp,
-                        wave::YieldOp>();
+    target.addIllegalOp<wave::AddOp, wave::AllocateOp, wave::CastOp,
+                        wave::DivOp, wave::Exp2Op, wave::ExtractSliceOp,
+                        wave::IterateOp, wave::MmaOp, wave::MulOp, wave::ReadOp,
+                        wave::RegisterOp, wave::WriteOp, wave::YieldOp>();
     ConversionConfig config;
     config.allowPatternRollback = false;
 
