@@ -32,3 +32,51 @@ func.func @two_loads_use_in_reverse_order(%memrefA: memref<1024xf32>, %memrefB: 
   // CHECK: return %[[ADD_B]]
   return %addB : vector<4xf32>
 }
+
+// CHECK-LABEL: func.func @raw_dependency
+//  CHECK-SAME: (%[[MEM:.*]]: memref<1024xf32>, %[[DATA:.*]]: vector<4xf32>, %{{.*}}: index)
+func.func @raw_dependency(%memref: memref<1024xf32>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // Store to memory
+  // CHECK: vector.store %[[DATA]], %[[MEM]]
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Load from same memory - RAW dependency, must wait for store
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: %[[LOAD:.*]] = vector.load %[[MEM]]
+  %result = vector.load %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @war_dependency
+//  CHECK-SAME: (%[[MEM:.*]]: memref<1024xf32>, %[[DATA:.*]]: vector<4xf32>, %{{.*}}: index)
+func.func @war_dependency(%memref: memref<1024xf32>, %data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // Load from memory
+  // CHECK: %[[LOAD:.*]] = vector.load %[[MEM]]
+  %result = vector.load %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Store to same memory - WAR dependency, must wait for load
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: vector.store %[[DATA]], %[[MEM]]
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @waw_dependency
+//  CHECK-SAME: (%[[MEM:.*]]: memref<1024xf32>, %[[DATA1:.*]]: vector<4xf32>, %[[DATA2:.*]]: vector<4xf32>, %{{.*}}: index)
+func.func @waw_dependency(%memref: memref<1024xf32>, %data1: vector<4xf32>, %data2: vector<4xf32>, %offset: index) {
+  // First store
+  // CHECK: vector.store %[[DATA1]], %[[MEM]]
+  vector.store %data1, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Second store to same memory - WAW dependency, must wait for first store
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: vector.store %[[DATA2]], %[[MEM]]
+  vector.store %data2, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: return
+  return
+}

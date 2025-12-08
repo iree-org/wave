@@ -252,14 +252,14 @@ public:
     if (!defOp)
       return std::nullopt;
 
-    // Find the operation in the pending list
-    auto it = llvm::find(pendingOps->ops, defOp);
-    auto end = pendingOps->ops.end();
-    if (it == end)
-      return std::nullopt;
-
+    // Search from the back to find the most recent dependency
     auto req = WaitcntRequirement::getOperationRequirement(defOp, true);
-    for (Operation *op : llvm::make_range(std::next(it), end)) {
+    bool found = false;
+    for (Operation *op : llvm::reverse(pendingOps->ops)) {
+      if (op == defOp) {
+        found = true;
+        break;
+      }
       auto opReq = WaitcntRequirement::getOperationRequirement(op, false);
       if (!req.isSameCounterType(opReq))
         continue;
@@ -267,7 +267,63 @@ public:
       req = req + opReq;
     }
 
+    if (!found)
+      return std::nullopt;
+
     return req;
+  }
+
+  /// Check for memory dependencies (RAW, WAR, WAW)
+  std::optional<WaitcntRequirement> checkMemoryDependency(Operation *op) const {
+    if (!pendingOps || pendingOps->ops.empty())
+      return std::nullopt;
+
+    // Check if this is a load or store operation
+    std::optional<Value> currentBase = isLoadOrStoreOp(op);
+    if (!currentBase)
+      return std::nullopt;
+
+    bool isCurrentLoad = isLoadOp(op).has_value();
+    bool isCurrentStore = isStoreOp(op).has_value();
+
+    // Search from the back to find the most recent dependency
+    for (Operation *pendingOp : llvm::reverse(pendingOps->ops)) {
+      std::optional<Value> pendingBase = isLoadOrStoreOp(pendingOp);
+      if (!pendingBase)
+        continue;
+
+      // Conservative aliasing check: same base memref means potential alias
+      if (*currentBase != *pendingBase)
+        continue;
+
+      bool isPendingLoad = isLoadOp(pendingOp).has_value();
+      bool isPendingStore = isStoreOp(pendingOp).has_value();
+
+      // Check for dependencies:
+      // RAW: current load after pending store
+      // WAR: current store after pending load
+      // WAW: current store after pending store
+      bool hasRAW = isCurrentLoad && isPendingStore;
+      bool hasWAR = isCurrentStore && isPendingLoad;
+      bool hasWAW = isCurrentStore && isPendingStore;
+
+      if (hasRAW || hasWAR || hasWAW) {
+        // Found dependency - compute requirement by counting forward from here
+        auto it = llvm::find(pendingOps->ops, pendingOp);
+        auto req = WaitcntRequirement::getOperationRequirement(pendingOp, true);
+        for (Operation *countOp :
+             llvm::make_range(std::next(it), pendingOps->ops.end())) {
+          auto opReq =
+              WaitcntRequirement::getOperationRequirement(countOp, false);
+          if (!req.isSameCounterType(opReq))
+            continue;
+          req = req + opReq;
+        }
+        return req;
+      }
+    }
+
+    return std::nullopt;
   }
 
 private:
@@ -304,7 +360,7 @@ public:
     // Start with the state before this operation
     WaitcntState newState = before;
 
-    // Check if any operands depend on pending operations
+    // Check if any operands depend on pending operations (value dependency)
     WaitcntRequirement opRequirement;
     for (Value operand : op->getOperands()) {
       if (auto req = before.checkRequirement(operand)) {
@@ -312,6 +368,10 @@ public:
         opRequirement.merge(*req);
       }
     }
+
+    // Check for memory dependencies (RAW, WAR, WAW)
+    if (auto memReq = before.checkMemoryDependency(op))
+      opRequirement.merge(*memReq);
 
     // Set the requirement for this operation
     if (opRequirement.hasRequirement()) {
