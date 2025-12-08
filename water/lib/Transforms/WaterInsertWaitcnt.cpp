@@ -177,8 +177,12 @@ public:
   }
 
   void print(raw_ostream &os) const override {
-    os << "WaitcntState: " << size()
-       << " pending ops, requirement: " << requirement;
+    os << "WaitcntState: " << size() << " pending ops [";
+    if (pendingOps) {
+      llvm::interleaveComma(pendingOps->ops, os,
+                            [&](Operation *op) { os << *op; });
+    }
+    os << "], requirement: " << requirement;
   }
 
   /// Add a pending operation (copy-on-write)
