@@ -410,3 +410,26 @@ func.func @memref_copy_both_dependencies(%src: memref<1024xf32>, %dst: memref<10
   // CHECK-NEXT: return %[[RESULT]]
   return %result : vector<4xf32>
 }
+
+// CHECK-LABEL: func.func @gather_to_lds
+func.func @gather_to_lds(%global: memref<1024xf32>, %lds: memref<1024xf32, #gpu.address_space<workgroup>>, %data: vector<4xf32>, %src_offset: index, %dst_offset: index) -> vector<4xf32> {
+  // Store to global memory
+  // CHECK: vector.store
+  vector.store %data, %global[%src_offset] : memref<1024xf32>, vector<4xf32>
+
+  // Gather from global to LDS - has both RAW (reads from global) and acts as store to LDS
+  // Should wait for global store using load counter
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: amdgpu.gather_to_lds
+  amdgpu.gather_to_lds %global[%src_offset], %lds[%dst_offset] : f32, memref<1024xf32>, memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // Load from LDS - RAW dependency with gather writing to LDS
+  // Should wait for LDS operation using ds counter
+  // CHECK: amdgpu.memory_counter_wait ds(0)
+  // CHECK-NEXT: %[[RESULT:.*]] = vector.load
+  %result = vector.load %lds[%dst_offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait ds(0)
+  // CHECK-NEXT: return %[[RESULT]]
+  return %result : vector<4xf32>
+}

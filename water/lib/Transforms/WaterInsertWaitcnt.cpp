@@ -39,6 +39,8 @@ static std::optional<Value> isLoadOp(Operation *op) {
     return load.getMemRef();
   if (auto copy = dyn_cast<memref::CopyOp>(op))
     return copy.getSource();
+  if (auto gather = dyn_cast<amdgpu::GatherToLDSOp>(op))
+    return gather.getSrc();
 
   return std::nullopt;
 }
@@ -52,6 +54,8 @@ static std::optional<Value> isStoreOp(Operation *op) {
     return store.getMemRef();
   if (auto copy = dyn_cast<memref::CopyOp>(op))
     return copy.getTarget();
+  if (auto gather = dyn_cast<amdgpu::GatherToLDSOp>(op))
+    return gather.getDst();
 
   return std::nullopt;
 }
