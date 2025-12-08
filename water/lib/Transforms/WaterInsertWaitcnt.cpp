@@ -9,6 +9,7 @@
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
@@ -26,6 +27,34 @@ namespace mlir::water {
 } // namespace mlir::water
 
 namespace {
+
+static std::optional<Value> isLoadOp(Operation *op) {
+  if (auto load = dyn_cast<vector::LoadOp>(op))
+    return load.getBase();
+
+  return std::nullopt;
+}
+
+static std::optional<Value> isStoreOp(Operation *op) {
+  if (auto store = dyn_cast<vector::StoreOp>(op))
+    return store.getBase();
+
+  return std::nullopt;
+}
+
+static std::optional<Value> isLoadOrStoreOp(Operation *op) {
+  if (auto load = isLoadOp(op))
+    return load;
+  if (auto store = isStoreOp(op))
+    return store;
+
+  return std::nullopt;
+}
+
+static bool isWorkgroupAddressSpace(MemRefType type) {
+  auto attr = dyn_cast_or_null<gpu::AddressSpaceAttr>(type.getMemorySpace());
+  return attr && attr.getValue() == gpu::AddressSpace::Workgroup;
+}
 
 /// Shared pending operations list for structural sharing
 struct PendingOperations {
@@ -76,8 +105,14 @@ struct WaitcntRequirement {
 
   static WaitcntRequirement getOperationRequirement(Operation *op, bool zero) {
     WaitcntRequirement req;
-    if (isa<vector::LoadOp, vector::StoreOp>(op))
-      req.load_cnt = zero ? 0 : 1;
+    if (std::optional<Value> base = isLoadOrStoreOp(op)) {
+      auto memrefType = cast<MemRefType>(base->getType());
+      if (isWorkgroupAddressSpace(memrefType)) {
+        req.ds_cnt = zero ? 0 : 1;
+      } else {
+        req.load_cnt = zero ? 0 : 1;
+      }
+    }
     return req;
   }
 
