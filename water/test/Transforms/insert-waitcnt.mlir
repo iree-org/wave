@@ -80,3 +80,28 @@ func.func @waw_dependency(%memref: memref<1024xf32>, %data1: vector<4xf32>, %dat
   // CHECK: return
   return
 }
+
+// CHECK-LABEL: func.func @raw_dependency_non_zero_waitcnt
+func.func @raw_dependency_non_zero_waitcnt(%data: vector<4xf32>, %offset: index) -> vector<4xf32> {
+  // Allocate two distinct memrefs to guarantee no aliasing
+  // CHECK: %[[MEM_A:.*]] = memref.alloc()
+  %memrefA = memref.alloc() : memref<1024xf32>
+  // CHECK: %[[MEM_B:.*]] = memref.alloc()
+  %memrefB = memref.alloc() : memref<1024xf32>
+
+  // Store to memory A
+  // CHECK: vector.store %{{.*}}, %[[MEM_A]]
+  vector.store %data, %memrefA[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Store to memory B (intervening operation, different memref)
+  // CHECK: vector.store %{{.*}}, %[[MEM_B]]
+  vector.store %data, %memrefB[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Load from memory A - RAW dependency with store to A at distance 1
+  // CHECK: amdgpu.memory_counter_wait load(1)
+  // CHECK-NEXT: %[[LOAD:.*]] = vector.load %[[MEM_A]]
+  %result = vector.load %memrefA[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // CHECK: return %[[LOAD]]
+  return %result : vector<4xf32>
+}
