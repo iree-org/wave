@@ -68,7 +68,7 @@ class WaveCompileOptions:
     create_vmfb_file: str = None
     override_mlir: str = None
     dump_binaries: str = None
-    dump_intermediates: str = False
+    dump_intermediates: str | None = None
     compile_to_mlir: bool = False
     location_capture_config: LocationCaptureConfig = field(
         default_factory=_get_location_capture_config

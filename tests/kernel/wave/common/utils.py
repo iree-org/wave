@@ -6,6 +6,7 @@
 
 import pytest
 from wave_lang.kernel.wave.utils.run_utils import get_default_arch
+from pathlib import Path
 
 require_e2e = pytest.mark.require_e2e
 expensive_test = pytest.mark.expensive_test
@@ -79,3 +80,7 @@ require_water_and_ee = pytest.mark.skipif(
     not _is_water_and_ee_available(),
     reason="Water or execution engine are not available.",
 )
+
+
+def glob_asm_files(path: Path) -> list[Path]:
+    return list(filter(lambda x: str(x.suffix) in [".s", ".rocmasm"], path.glob("*")))

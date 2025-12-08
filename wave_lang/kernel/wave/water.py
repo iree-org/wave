@@ -412,6 +412,10 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     llvm_opt_level = 3 if options.optimization_level else 0
 
+    dump_intermediates = (
+        options.dump_intermediates if options.dump_intermediates else ""
+    )
+
     pipeline = [
         "lower-affine",
         *add_opt(canonicalize_cse),
@@ -423,7 +427,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "reconcile-unrealized-casts",
         *add_opt(canonicalize_cse),
-        "gpu-module-to-binary",
+        ("water-gpu-module-to-binary", {"dump-intermediates": dump_intermediates}),
         "water-gpu-to-gpu-runtime",
         "symbol-dce",
         *add_opt(canonicalize_cse),
