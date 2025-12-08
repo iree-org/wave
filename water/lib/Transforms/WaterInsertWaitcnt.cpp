@@ -143,6 +143,7 @@ struct WaitcntRequirement {
     return load_cnt.value_or(0) > other.load_cnt.value_or(0) ||
            ds_cnt.value_or(0) > other.ds_cnt.value_or(0);
   }
+  operator bool() const { return hasRequirement(); }
 
   void print(raw_ostream &os) const {
     os << "WaitcntRequirement: load_cnt=" << load_cnt << " ds_cnt=" << ds_cnt;
@@ -262,11 +263,11 @@ public:
   bool hasRequirement() const { return requirement.hasRequirement(); }
 
   /// Check if a value depends on pending operations and compute required wait
-  std::optional<WaitcntRequirement> checkRequirement(Value val) const {
+  WaitcntRequirement checkRequirement(Value val) const {
     // Check if val is produced by any pending operation
     Operation *defOp = val.getDefiningOp();
     if (!defOp)
-      return std::nullopt;
+      return {};
 
     WaitcntRequirement result;
     for (auto &pendingOps : pendingOpsLists) {
@@ -293,19 +294,16 @@ public:
         result.merge(req);
     }
 
-    if (!result.hasRequirement())
-      return std::nullopt;
-
     return result;
   }
 
   /// Check for memory dependencies (RAW, WAR, WAW)
-  std::optional<WaitcntRequirement>
-  checkMemoryDependency(Operation *op, AliasAnalysis &aliasAnalysis) const {
+  WaitcntRequirement checkMemoryDependency(Operation *op,
+                                           AliasAnalysis &aliasAnalysis) const {
     // Check if this is a load or store operation
     std::optional<Value> currentBase = isLoadOrStoreOp(op);
     if (!currentBase)
-      return std::nullopt;
+      return {};
 
     bool isCurrentLoad = isLoadOp(op).has_value();
     bool isCurrentStore = isStoreOp(op).has_value();
@@ -354,9 +352,6 @@ public:
       }
     }
 
-    if (!result.hasRequirement())
-      return std::nullopt;
-
     return result;
   }
 
@@ -402,14 +397,14 @@ public:
     for (Value operand : op->getOperands()) {
       if (auto req = before.checkRequirement(operand)) {
         // Merge this requirement (take minimum for conservative wait)
-        opRequirement.merge(*req);
+        opRequirement.merge(req);
       }
     }
 
     // Check for memory dependencies (RAW, WAR, WAW)
     if (auto memReq = before.checkMemoryDependency(op, aliasAnalysis)) {
-      LDBG() << "  Memory dependency: " << *memReq;
-      opRequirement.merge(*memReq);
+      LDBG() << "  Memory dependency: " << memReq;
+      opRequirement.merge(memReq);
     }
 
     // Set the requirement for this operation
