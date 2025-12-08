@@ -255,10 +255,32 @@ public:
         newPending.push_back(op);
       }
       if (newPending.size() == pendingOps->ops.size())
-        return;
+        continue;
 
       std::reverse(newPending.begin(), newPending.end());
       pendingOps = std::make_shared<PendingOperations>(std::move(newPending));
+    }
+
+    // Remove empty lists
+    pendingOpsLists.erase(std::remove_if(pendingOpsLists.begin(),
+                                         pendingOpsLists.end(),
+                                         [](const auto &pendingOps) {
+                                           return pendingOps->empty();
+                                         }),
+                          pendingOpsLists.end());
+
+    // Merge lists with the same tail (keep the longer one)
+    for (size_t i = 0; i < pendingOpsLists.size(); ++i) {
+      for (size_t j = i + 1; j < pendingOpsLists.size();) {
+        if (pendingOpsLists[i]->hasSameTail(*pendingOpsLists[j])) {
+          if (pendingOpsLists[j]->size() > pendingOpsLists[i]->size()) {
+            pendingOpsLists[i] = pendingOpsLists[j];
+          }
+          pendingOpsLists.erase(pendingOpsLists.begin() + j);
+        } else {
+          ++j;
+        }
+      }
     }
   }
 
@@ -372,7 +394,7 @@ private:
 
   void cow() {
     for (auto &pendingOps : pendingOpsLists) {
-      if (!pendingOps || pendingOps.use_count() > 1) {
+      if (pendingOps.use_count() > 1) {
         auto newPending = std::make_shared<PendingOperations>();
         if (pendingOps)
           newPending->ops = pendingOps->ops;
