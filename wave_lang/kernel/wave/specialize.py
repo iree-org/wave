@@ -239,7 +239,6 @@ def specialize_kernel(
         )
 
     specialist.add_epilog_guard(iterate_op, is_compute_wave)
-    print("done")
     return
 
 
