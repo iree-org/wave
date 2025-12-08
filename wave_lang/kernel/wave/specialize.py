@@ -10,35 +10,30 @@ Specialization in wave.
 note. tensor store is not supported yet.
 
 Analysis:
-- identify 2~3 partitions
+- identify 2 partitions
     - load partition
     - compute partition
     [- store partition]
 
 Workers:
-- 1 wave for load
-- 1 wave for store
-- other waves for compute
+- n_service_waves * waves_per_block[0] waves for load
+- waves_per_block[0] * waves_per_block[1] * waves_per_block[2] total waves for compute
 
-Shared resources:
-- i in {1, 16} staging buffer (global -> LDS)
-- 2^i memory barriers
-    e.g., i=1
-    - signal_empty:
-        - compute partition signals load parition [data is consumed]
-    - signal_ready:
+Synchronization:
+- wave_{i} has named barrier {i+1, i+1+total_waves}
+- barId i+1 represents data is ready in buffer
+- barId i+1+total_waves represent data is consumed from buffer
+
+- e.g., Assume {wave_0, i=0, total_waves=4}
+    - barId=1 is signal_ready:
         - load partition signals compute partition [data is ready]
-    - wait_empty:
-        - load partition waiting on compute to signal empty.
-    - wait_ready:
+    - barId=1 is wait_ready:
         - compute partition waiting on load to signal ready.
 
-Behavior:
-1. Analysis -> get list of nodes for load_partition and compute_partition
-2. Workers -> Wrap load_partition code in wave for load, compute_partition code for rest of the waves
-3. Adjust index
-4.
-
+    - barId=5 is signal_empty:
+        - compute partition signals load parition [data is consumed]
+    - barId=5 is wait_empty:
+        - load partition waiting on compute to signal empty.
 """
 
 import math
@@ -52,6 +47,8 @@ import wave_lang.kernel.lang as tkl
 
 from .._support.tracing import CapturedTrace
 from .._support.location import CapturedLocation
+from .._support.indexing import IndexSequence, IndexSymbol, IndexExpr
+
 from ..compiler.kernel_codegen import filter_fx_graph
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
@@ -71,15 +68,12 @@ from ..ops.wave_ops import (
     get_custom,
 )
 from .compile_options import WaveCompileOptions
-from .constraints import (
-    Constraint,
-)
+from .constraints import Constraint, HardwareConstraint, WaveConstraint
 from .utils.general_utils import (
     get_hardware_constraint,
     get_wave_constraints,
 )
 from .utils.classes import GemmOperationType
-from .utils.graph_utils import update_sort_keys
 from .utils.symbol_utils import get_induction_symbol
 
 from .scheduling.scheduler_utils import (
@@ -89,14 +83,29 @@ from .scheduling.graph_utils import Edge
 
 from .minimize_global_loads import update_write_dependencies
 
-##############################################################
-# General graph helper functions
-##############################################################
-
 
 def add_output_to_cond(
-    op: CustomOp, return_vals: List, subgraph, parent_graph, parent_loc
-):
+    op: CustomOp,
+    return_vals: List,
+    subgraph: fx.Graph,
+    parent_graph: fx.Graph,
+    parent_loc: CapturedLocation,
+) -> None:
+    """
+    Has side-effect to subgraph and parent graph.
+
+    Args:
+        op: A conditional custom op.
+        return_vals: A list of return values for the conditional subgraph.
+        subgraph: The conditional subgraph.
+        parent_graph: The parent graph of the subgraph.
+        parent_loc: The position to insert GetResult in parent graph.
+
+    Expect Behavior:
+        1. Add return to conditional subgraph.
+        2. Add GetResult to parent graph.
+        3. Replace all uses instead of the return op with the GetResult in step2.
+    """
     assert isinstance(
         op, Conditional
     ), "Expect to add output node only on condition ops"
@@ -118,23 +127,29 @@ def add_output_to_cond(
 
 
 def set_specialied_conditions(
-    graph,
-    hardware_constraint,
-    wave_constraints,
-) -> (fx.Node, fx.Node):
+    graph: fx.Graph,
+    hardware_constraint: HardwareConstraint,
+    wave_constraints: List[WaveConstraint],
+) -> (fx.Node, fx.Node, IndexExpr):
+    """
+    Has side-effect to the graph.
+
+    Add comparison operators for separating `load_waves` and `compute_waves` to graph.
+
+    Expect Behavior:
+        1. Compute total number of compute waves -> compute_wid (e.g., 4)
+        2. Get wave IDs from linearized thread IDs.
+        3. Load waves are waves with wave_id >= compute_wid (e.g., 4, 5)
+        4. Compute waves are waves with wave_id < compute_wid (e.g., 0, 1, 2, 3)
+        5. Add the comparison operators to the graph.
+    """
+
     compute_wid = math.prod(map(lambda c: c.waves_per_block, wave_constraints))
 
     # calculate physical wid
     flat_id = hardware_constraint.linearized_thread_id
     wave_id = flat_id // hardware_constraint.threads_per_wave
 
-    # Inserting wid is service_wid condition in graph
-    # - get condition: is physcial wid > compute wid?
-    # - get wid register
-    # - get `is_load_wave` condition:
-    #       is_load_wave = physical_wid >= compute_wid
-    # - get `is_compute_wave` condition:
-    #       is_compute_wave = physical_wid < compute_wid
     anchor = next(iter(graph.nodes))
     with graph.inserting_before(anchor):
         compute_wid_reg = NewScalar(compute_wid, tkl.i32).add_to_graph(
@@ -159,21 +174,20 @@ def specialize_kernel(
     options: WaveCompileOptions,
 ):
     """
-    n_service_waves: int, Number of service waves specified by user, this is the number of specialized waves only doing load workloads
+    This pass has assumptions.
+    * Assume SchedulingType.NONE *
+    * If specialize option is set: fuse_tensor_load, add_shared_memoy_barriers passes will not run. *
 
-    service wave index is calculated as:
-    - number of service waves \times
-    - number of threads per wave \times
-    - number of `compute waves` in a block
-    >>> n_service_waves * threads_per_wave * compute_wave_per_block (@M dimension)
+    n_service_waves: int, Specified in HardwareConstraint. This is the number of service waves specified by user, waves that will only do load workloads.
+    e.g., if waves_per_block = (1, 1), we launch (1, 2) waves per block, where (1, 0) is compute wave, (1, 1) is load wave.
+    e.g., if waves_per_block = (2, 2), we launch (2, 3) waves per block, where wave_{0,1,2,3} are compute waves, wave_{4,5} are load waves.
 
-    * assume graph is canonicalize such that all mma operations are after LW *
-    * assume SchedulingType.NONE *
-
-    0. walk the graph, get all shared memory write nodes -> this is the `load partition`
-    1. add condition around the cluster -> only if wave_id is identified as service waves
-    2. add condition around the rest of the graph -> else, these are compute waves' workload
-    3. add `signal empty` and
+    Expect Behavior:
+        0. Set specialized conditions to root graph.
+        1. For each iterate node, walk its subgraph, annotate ops.
+        2. Partition the graph using annotations from step 1. -> Get `load_partition` and `compute_partition`
+        3. Transform the graph with 2 partitions from step 2.
+        4. Add epilog guard: Store results only from compute waves.
     """
     if not options.specialize:
         return
@@ -200,8 +214,6 @@ def specialize_kernel(
 
         graph = trace.get_subgraph(iterate_op.subgraph_name)
 
-        update_sort_keys(trace, graph)
-
         specialist = Specialist(
             trace=trace,
             graph=graph,
@@ -226,7 +238,6 @@ def specialize_kernel(
             compute_partition,
         )
 
-    # TODO(megan.kuo) assume one iterate per graph
     specialist.add_epilog_guard(iterate_op, is_compute_wave)
     print("done")
     return
@@ -234,17 +245,16 @@ def specialize_kernel(
 
 class Specialist(GemmScheduler):
     """
-    Specialist is responsible for converting basic gemm form like:
+    Specialist is responsible for converting basic gemm form:
         for i = 0 to N:
             a = READ_GLOBAL i
             WRITE_SHARED a
-            barrier
             b = READ_SHARED
             COMPUTE b
 
     into specialize form:
         for i = 0 to N:
-            if wave_id == service_waves:
+            if wave_id == load_waves:
                 a = READ_GLOBAL i
                 wait empty
                 WRITE_SHARED a
@@ -269,13 +279,36 @@ class Specialist(GemmScheduler):
         super().__init__(graph, edges, resources, meta_name)
         assert wave_id is not None, "Wave ID should be provided to specilist"
 
-        self.trace = trace
-        self.graph = graph
-        self.wave_id = wave_id
-        self.waves_per_block = [int(wpb) for wpb in hw.waves_per_block]
-        self.barUB = math.prod(self.waves_per_block) + 1
+        self.trace: CapturedTrace = trace
+        self.graph: fx.Graph = graph
+        self.wave_id: IndexExpr = wave_id
+        self.waves_per_block: int = [int(wpb) for wpb in hw.waves_per_block]
+        self.barUB: int = math.prod(self.waves_per_block) + 1
 
-    def add_nodes_to_graph(self, graph, nodes, subs, new_writes, write_record):
+    def add_nodes_to_graph(
+        self,
+        graph: fx.Graph,
+        nodes: List[fx.Node],
+        subs: dict[IndexSymbol, IndexSequence],
+        new_writes,
+        write_record,
+    ):
+        """
+        Has side-effect to graph, new_writes and write_record.
+
+        Args:
+            graph: A graph to add nodes to.
+            nodes: A list of nodes to add to the graph.
+            subs: Index modifier when copying nodes to the graph.
+            new_writes: The newly copied write ops, where we later need to update_write_dependencies for.
+            write_record: A list of newly copied write nodes (ordered).
+
+        Expect Behavior:
+            0. Copy each node in nodes to the graph.
+            1. Adjust index by the provided subs.
+            2. Update new_writes and write_record if it is a Write node.
+        """
+
         def new_index(index, shift_subs):
             return {k: v.subs(shift_subs) for k, v in index.items()}
 
@@ -293,7 +326,10 @@ class Specialist(GemmScheduler):
                 new_writes[custom.memory].append(new_node.fx_node)
                 write_record.append(new_node.fx_node)
 
-    def get_ops_of_type(self, operation_type):
+    def get_ops_of_type(self, operation_type: GemmOperationType) -> List[fx.Node]:
+        """
+        Get nodes with annotation == operation_type in the graph.
+        """
         return [
             node
             for node in self.graph.nodes
@@ -301,10 +337,16 @@ class Specialist(GemmScheduler):
             and node.meta[self.meta_name] == operation_type
         ]
 
-    def partition(self, iterate_op):
-        # Global load to lds will be handle by service_waves
+    def partition(self, iterate_op: CustomOp) -> (List[fx.Node], List[fx.Node]):
+        """
+        Given an iterate op, return the `load_partition` and `compute_partition`
+        - Load partition includes (GLOBAL_LOAD_TO_LDS_*, GLOBAL_LOAD_*, LOCAL_WRITE_*)
+        - Compute partition includes (LOCAL_LOAD_*, MMAs)
+        """
+        if not isinstance(iterate_op, Iterate):
+            return [], []
 
-        # 0) Get all local write and global read.
+        # 0) Get all shared write and global read.
         load_partition = []
         load_partition.extend(
             self.get_ops_of_type(GemmOperationType.GLOBAL_LOAD_TO_LDS_LHS)
@@ -322,7 +364,7 @@ class Specialist(GemmScheduler):
         # Local load and mma will be handle by compute waves
         compute_partition = []
 
-        # 0) Get all local read and wmma
+        # 1) Get all local read and wmma
         # Get MMA nodes inside a for op, who's reduction dim is being tiled in the for op.
         mma_nodes = filter_fx_graph(
             self.graph,
@@ -338,21 +380,25 @@ class Specialist(GemmScheduler):
 
     def transform(
         self,
-        iterate_op,
-        is_load_wave,
-        load_partition,
-        is_compute_wave,
-        compute_partition,
-    ):
-        """ """
-        # get insertion point
+        iterate_op: CustomOp,
+        is_load_wave: fx.Node,
+        load_partition: List[fx.Node],
+        is_compute_wave: fx.Node,
+        compute_partition: List[fx.Node],
+    ) -> None:
+        """
+        Add a new conditional graph with `is_load_wave` as condition, load_partition as nodes.
+        Add a new conditional graph with `is_copmute_wave` as condition, compute_partition as nodes.
+        Add split barriers inside both conditional graphs.
+        """
+        # flatten all nodes
         load_flattened, _ = pytree.tree_flatten(load_partition)
         load_flattened.reverse()
         compute_flattened, _ = pytree.tree_flatten(compute_partition)
         compute_flattened.reverse()
 
         # Generating and inserting cond_barriers to correct place in graph.
-        new_writes = self.insert_service_cond(
+        self.insert_load_cond(
             is_load_wave, iterate_op, load_flattened[0].location, load_flattened
         )
 
@@ -363,17 +409,29 @@ class Specialist(GemmScheduler):
             compute_flattened,
         )
 
-        update_write_dependencies(new_writes, self.trace)
         return
 
     def insert_compute_cond(
-        self, cond_reg, iterate_op, location: Optional[CapturedLocation], nodes
+        self,
+        cond_reg: fx.Node,
+        iterate_op: CustomOp,
+        location: Optional[CapturedLocation],
+        nodes: List[fx.Node],
     ):
+        """
+        Expect Behavior:
+            0. Initialize a new fx graph: compute graph.
+            1. Copy the nodes to the compute graph.
+            2. Add `else_return` to the condition.
+            3. Add return node in the compute graph and GetResult in the parent graph.
+            4. Add split barriers to the compute graph.
+            5. Update trace and subgraphs in root_graph.
+        """
         # declare new subgraph
         compute_graph = fx.Graph()
         compute_graph_name = f"compute_graph_{cond_reg.name}"
 
-        # add nodes to compute graph
+        # add nodes to the compute graph
         last_shared_read = None
         for node in nodes:
             op = get_custom(node)
@@ -397,7 +455,7 @@ class Specialist(GemmScheduler):
 
         compute_graph.parent_op = is_compute_cond
 
-        # add return node in compute graph and get result in parent graph
+        # add return node in the compute graph and get result in parent graph
         add_output_to_cond(
             get_custom(is_compute_cond),
             iterate_op.outputs(),
@@ -406,72 +464,83 @@ class Specialist(GemmScheduler):
             location,
         )
 
-        # add wait before compute
+        # add split barriers
         self.add_compute_split_barrier(compute_graph, last_shared_read)
 
-        # update trace
+        # update trace and root graph
         self.trace.add_subgraph(compute_graph_name, compute_graph)
-
-        # update root graph
         get_custom(is_compute_cond).get_root_graph().subgraphs[
             compute_graph_name
         ] = compute_graph
 
-    def insert_service_cond(
+        return
+
+    def insert_load_cond(
         self, cond_reg, iterate_op, location: Optional[CapturedLocation], nodes
     ):
-        # service subgraph
-        service_graph = fx.Graph()
-        service_graph_name = f"service_graph_{cond_reg.name}"
+        """
+        Expect Behavior:
+            0. Initialize a new fx graph: load graph.
+            1. Copy the nodes to the load graph with `waves_per_block[0]` number of times.
+            2. Add split barriers to the load graph.
+            3. Update trace and subgraphs in root_graph.
+            4. Update write dependencies with newly copied nodes in the load graph.
+        """
+        # load subgraph
+        load_graph = fx.Graph()
+        load_graph_name = f"load_graph_{cond_reg.name}"
 
         # add conditional at parent graph
         pgraph = self.graph
 
         with pgraph.inserting_before(pgraph.output_node()):
-            is_service_cond = Conditional(
+            is_load_cond = Conditional(
                 cond_reg,
-                subgraph_name=service_graph_name,
+                subgraph_name=load_graph_name,
                 implicit_captures=iterate_op.implicit_captures,
             ).add_to_graph(pgraph)
 
-        is_service_cond.location = location
-        service_graph.parent_op = is_service_cond
+        is_load_cond.location = location
+        load_graph.parent_op = is_load_cond
 
         # duplicate nodes
         new_writes = defaultdict(list)
         write_record = []
-        for w in range(self.waves_per_block[0], 0, -1):
-
-            # TODO(megan.kuo)
-            shift_subs = {THREAD_1: THREAD_1 - w}
+        for i in range(self.waves_per_block[0], 0, -1):
+            shift_subs = {THREAD_1: THREAD_1 - i}
 
             self.add_nodes_to_graph(
-                service_graph, nodes, shift_subs, new_writes, write_record
+                load_graph, nodes, shift_subs, new_writes, write_record
             )
 
-            # add signal after load
-            dup_times = self.waves_per_block[0] - w
+            dup_times = self.waves_per_block[0] - i
 
+        # add split barriers to load subgraph
         self.add_load_split_barrier(
-            service_graph, iterate_op, 0, write_record[0], write_record[-1]
+            load_graph, iterate_op, 0, write_record[0], write_record[-1]
         )
 
         # close the graph with empty output
-        service_graph.output(None)
+        load_graph.output(None)
 
-        # update trace
-        self.trace.add_subgraph(service_graph_name, service_graph)
+        # update trace and root graph
+        self.trace.add_subgraph(load_graph_name, load_graph)
+        get_custom(is_load_cond).get_root_graph().subgraphs[
+            load_graph_name
+        ] = load_graph
 
-        # update root graph
-        get_custom(is_service_cond).get_root_graph().subgraphs[
-            service_graph_name
-        ] = service_graph
+        update_write_dependencies(new_writes, self.trace)
+        return
 
-        return new_writes
-
-    def add_compute_split_barrier(self, subgraph, last_shared_read):
+    def add_compute_split_barrier(
+        self, subgraph: fx.Graph, last_shared_read: fx.Node
+    ) -> None:
         """
-        add split barriers for compute partition
+        Has side-effect to subgraph.
+
+        Add split barriers to compute graph.
+        Signal right after last_shared_read to unblock load waves.
+
         ---- Example ----
         Before:
             if is compute partition:
@@ -488,12 +557,13 @@ class Specialist(GemmScheduler):
 
                 LOCAL_READ
                 LOCAL_READ
-                MMA
 
                 if wave id == 0:
                     signal 1+4 (buffer empty)
                 if wave id == 1:
                     signal 2+4 (buffer empty)
+
+                MMA
                 ...
         """
         first_node = next(iter(subgraph.nodes))
@@ -559,10 +629,20 @@ class Specialist(GemmScheduler):
                 ] = wid_signal_graph
 
     def add_load_split_barrier(
-        self, subgraph, iterate_op, dup_times, first_lw, last_lw
-    ):
+        self,
+        subgraph: fx.Graph,
+        iterate_op: CustomOp,
+        dup_times: int,
+        first_lw: fx.Node,
+        last_lw: fx.Node,
+    ) -> None:
         """
-        add split barriers for load partition
+        Has side-effect to subgraph.
+
+        Add split barriers to load graph.
+        Signal right after last_lw to unblock compute waves.
+        Wait right before first_lw for proper synchronization.
+
         ---- Example ----
         Before:
             if is load partition:
@@ -578,20 +658,20 @@ class Specialist(GemmScheduler):
                 if not first round and wave id == 0:
                     wait 1+4 (wait buffer empty)
 
-                LOCAL_WRITE
-                LOCAL_WRITE
-
-                if wave id == 0:
-                    signal 1 (signal buffer ready)
-
-                GLOBAL_READ
-                GLOBAL_READ
-
                 if not first round and wave id == 1:
                     wait 2+4 (wait buffer empty)
 
                 LOCAL_WRITE
                 LOCAL_WRITE
+
+                GLOBAL_READ
+                GLOBAL_READ
+
+                LOCAL_WRITE
+                LOCAL_WRITE
+
+                if wave id == 0:
+                    signal 1 (signal buffer ready)
 
                 if wave id == 1:
                     signal 2 (signal buffer ready)
@@ -608,7 +688,7 @@ class Specialist(GemmScheduler):
             location = get_custom(first_lw).location
             for offset in range(1, self.barUB):  # self.waves_per_block[0] + 1):
 
-                # i is the range of possible barrier id this service wave is helping out
+                # i is the range of possible barrier id this load wave is helping out
                 i = offset  # dup_times * self.waves_per_block[0] + offset
 
                 # declare graph
@@ -648,7 +728,7 @@ class Specialist(GemmScheduler):
             location = get_custom(last_lw).location
             for offset in range(1, self.barUB):  # self.waves_per_block[0] + 1):
 
-                # i is the range of possible barrier id this service wave is helping out
+                # i is the range of possible barrier id this load wave is helping out
                 i = offset  # dup_times * self.waves_per_block[0] + offset
 
                 # declare graph
@@ -684,7 +764,11 @@ class Specialist(GemmScheduler):
                     wid_signal_graph_name
                 ] = wid_signal_graph
 
-    def add_epilog_guard(self, iterate_op, cond_reg):
+    def add_epilog_guard(self, iterate_op: CustomOp, cond_reg: fx.Node) -> None:
+        """
+        Add guards to the rest of the parent graph.
+        Load waves does not produce results, so we store outputs only from the compute waves.
+        """
         # declare new subgraph
         store_graph = fx.Graph()
         store_graph_name = f"store_graph_{cond_reg.name}"
@@ -712,8 +796,6 @@ class Specialist(GemmScheduler):
 
         store_graph.parent_op = is_compute_cond
 
-        # update trace
+        # update trace and root graph
         self.trace.add_subgraph(store_graph_name, store_graph)
-
-        # update root graph
         iterate_op.get_root_graph().subgraphs[store_graph_name] = store_graph

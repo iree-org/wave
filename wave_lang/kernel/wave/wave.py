@@ -882,7 +882,7 @@ class LaunchableWave(Launchable):
                 partial(hoist_loop_invariant_ops, trace, self.constraints),
                 partial(tensor_load_to_shared, trace, self.constraints, options),
                 partial(multicast, trace, self.constraints, options),
-                partial(fuse_tensor_loads, trace, self.constraints),
+                partial(fuse_tensor_loads, trace, self.constraints, options),
                 partial(in_thread_transpose, trace, self.constraints, options),
                 partial(global_to_shared_gathers, trace, self.constraints),
                 partial(minimize_global_loads, trace, self.constraints),

@@ -18,7 +18,8 @@ from ..ops.wave_ops import (
     TensorLoadToLDS,
     get_custom,
 )
-from ..wave.constraints import Constraint
+from ..wave.constraints import Constraint, WaveConstraint
+from ..wave.compile_options import WaveCompileOptions
 from ..wave.utils.general_utils import get_hardware_constraint
 from ..wave.utils.graph_utils import DCE
 from ..wave.utils.symbol_utils import is_literal, subs_idxc
@@ -303,6 +304,7 @@ def find_adjacent_loads(
 def fuse_tensor_loads(
     trace: CapturedTrace,
     constraints: list[Constraint],
+    options: WaveCompileOptions,
 ) -> None:
     """
     Fuse adjacent TensorLoadToLDS operations to reduce the number of tensor loads.
@@ -332,6 +334,13 @@ def fuse_tensor_loads(
     threads_per_wave = hardware_constraint.threads_per_wave
     waves_per_block = hardware_constraint.waves_per_block
     wave_count = subs_idxc(math.prod(waves_per_block))
+
+    if options.specialize:
+        logger.info(
+            f"Skipping tensor load fusion: Specialization option is set. "
+            "Specialization with fused-tensor loads are not supported yet."
+        )
+        return
 
     # Check if we have an even number of waves (required for fusion)
     if (
