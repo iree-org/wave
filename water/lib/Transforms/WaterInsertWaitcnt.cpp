@@ -79,21 +79,38 @@ static bool isWorkgroupAddressSpace(MemRefType type) {
 /// Shared pending operations list for structural sharing
 struct PendingOperations {
   PendingOperations() = default;
-  PendingOperations(SmallVector<Operation *> &&ops) : ops(std::move(ops)) {}
+  PendingOperations(SmallVector<Operation *> &&ops,
+                    SmallVector<SmallVector<Value, 1>> &&opsTokens)
+      : ops(std::move(ops)), opsTokens(std::move(opsTokens)) {}
+
+  void addOp(Operation *op) {
+    ops.push_back(op);
+    if (auto memref = isStoreOp(op)) {
+      opsTokens.push_back({*memref});
+    } else if (isLoadOp(op)) {
+      opsTokens.push_back({op->getResult(0)});
+    } else {
+      assert(false && "Expected load or store operation");
+    }
+  }
 
   size_t size() const { return ops.size(); }
   bool empty() const { return ops.empty(); }
 
   bool hasSameTail(const PendingOperations &other) const {
-    for (const auto &[op1, op2] :
-         llvm::zip(llvm::reverse(ops), llvm::reverse(other.ops))) {
+    for (const auto &[op1, op2, tok1, tok2] :
+         llvm::zip(llvm::reverse(ops), llvm::reverse(other.ops),
+                   llvm::reverse(opsTokens), llvm::reverse(other.opsTokens))) {
       if (op1 != op2)
+        return false;
+      if (tok1 != tok2)
         return false;
     }
     return true;
   }
 
   SmallVector<Operation *> ops;
+  SmallVector<SmallVector<Value, 1>> opsTokens;
 };
 
 /// Waitcnt requirement for synchronization
@@ -257,7 +274,7 @@ public:
       cow();
     }
     for (auto &pendingOps : pendingOpsLists)
-      pendingOps->ops.push_back(op);
+      pendingOps->addOp(op);
 
     pendingOpsSet.insert(op);
   }
@@ -278,8 +295,10 @@ public:
     requirement = req;
     for (auto &pendingOps : pendingOpsLists) {
       SmallVector<Operation *> newPending;
+      SmallVector<SmallVector<Value, 1>> newPendingTokens;
       WaitcntRequirement runningRequirement;
-      for (Operation *op : llvm::reverse(pendingOps->ops)) {
+      for (auto [op, tok] : llvm::zip(llvm::reverse(pendingOps->ops),
+                                      llvm::reverse(pendingOps->opsTokens))) {
         WaitcntRequirement opReq =
             WaitcntRequirement::getOperationRequirement(op, false);
         runningRequirement = runningRequirement + opReq;
@@ -287,12 +306,15 @@ public:
           continue;
 
         newPending.push_back(op);
+        newPendingTokens.push_back(tok);
       }
       if (newPending.size() == pendingOps->ops.size())
         continue;
 
       std::reverse(newPending.begin(), newPending.end());
-      pendingOps = std::make_shared<PendingOperations>(std::move(newPending));
+      std::reverse(newPendingTokens.begin(), newPendingTokens.end());
+      pendingOps = std::make_shared<PendingOperations>(
+          std::move(newPending), std::move(newPendingTokens));
     }
 
     // Remove empty lists
