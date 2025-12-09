@@ -4,6 +4,7 @@
 
 from water_mlir import ir
 from water_mlir.dialects import wave
+from water_mlir.dialects.transform import interpreter
 import water_mlir.ir as ir2
 from water_mlir.dialects import wave as wave2
 
@@ -14,6 +15,7 @@ if wave2.register_dialect is not wave.register_dialect:
     raise RuntimeError("module import path for wave differs")
 with ir.Context() as ctx:
     wave.register_dialect(ctx)
+    wave.register_passes()
 
     # CHECK: wave.constraints
     print(wave.WAVE_CONSTRAINTS_ATTR_NAME)
@@ -272,6 +274,32 @@ with ir.Context() as ctx:
         assert "incompatible function arguments" in str(e)
     else:
         assert False, "Expected to fail with TypeError."
+
+    # Invoke a pass using transform dialect. This should not fail.
+    transform_module = ir.Module.parse(
+        """
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%arg0: !transform.any_op) {
+    transform.apply_registered_pass "water-wave-detect-normal-forms" to %arg0
+      : (!transform.any_op) -> !transform.any_op
+    transform.yield
+  }
+}"""
+    )
+    payload_module = ir.Module.parse("module {}")
+    ops = list(transform_module.body.operations)
+    entry_op = ops[0]
+    interpreter.apply_named_sequence(
+        payload_module,
+        entry_op,
+        transform_module,
+    )
+
+    # The pass must have applied and inferred normal forms. We don't care which
+    # ones here, this is tested separately, just checking the fact that the pass
+    # applied.
+    # CHECK: module attributes {wave.normal_form = #wave.normal_form<
+    print(payload_module)
 
 
 # CHECK: wave_ok

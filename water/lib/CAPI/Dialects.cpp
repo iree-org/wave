@@ -12,9 +12,16 @@
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
+#include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/c/Dialects.h"
 
 MLIR_DEFINE_CAPI_DIALECT_REGISTRATION(Wave, wave, ::wave::WaveDialect)
+
+//===---------------------------------------------------------------------===//
+// Wave Dialect Passes
+//===---------------------------------------------------------------------===//
+
+void mlirWaveDialectRegisterPasses() { wave::registerPasses(); }
 
 //===---------------------------------------------------------------------===//
 // Wave Dialect Constants
