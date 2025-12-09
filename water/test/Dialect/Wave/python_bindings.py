@@ -19,7 +19,11 @@ with ir.Context() as ctx:
     print(wave.WAVE_CONSTRAINTS_ATTR_NAME)
 
     # CHECK: #wave.symbol<"test">
-    print(wave.WaveSymbolAttr.get("test"))
+    symbol_attr = wave.WaveSymbolAttr.get("test")
+    print(symbol_attr)
+
+    # CHECK: test
+    print(symbol_attr.name)
 
     # CHECK: #wave.index_symbol<WG0>
     index_symbol_attr = wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0)
@@ -173,6 +177,9 @@ with ir.Context() as ctx:
     # CHECK: #wave.symbol<"M">
     M = wave.WaveSymbolAttr.get("M")
     print(M)
+
+    # CHECK: M
+    print(M.name)
 
     # CHECK: #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"BLOCK_M">] -> (M floordiv BLOCK_M)>
     symbol_attrs = [

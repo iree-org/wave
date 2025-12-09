@@ -52,7 +52,10 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("symbolName"),
           nb::arg("context") = nb::none(),
-          "Gets a wave.WaveSymbolAttr from parameters.");
+          "Gets a wave.WaveSymbolAttr from parameters.")
+      .def_property_readonly("name", [](MlirAttribute self) {
+        return mlirWaveSymbolAttrGetName(self);
+      });
 
   //===---------------------------------------------------------------------===//
   // WaveIndexSymbolAttr

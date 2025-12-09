@@ -36,6 +36,9 @@ mlirWaveSymbolAttrGet(MlirContext mlirCtx, MlirStringRef symbolName);
 /// Returns the typeID of a WaveSymbolAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveSymbolAttrGetTypeID();
 
+/// Gets the name of a WaveSymbolAttr.
+MLIR_CAPI_EXPORTED MlirStringRef mlirWaveSymbolAttrGetName(MlirAttribute attr);
+
 //===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr
 //===---------------------------------------------------------------------===//

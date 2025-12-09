@@ -42,6 +42,10 @@ MlirTypeID mlirWaveSymbolAttrGetTypeID() {
   return wrap(mlir::TypeID::get<wave::WaveSymbolAttr>());
 }
 
+MlirStringRef mlirWaveSymbolAttrGetName(MlirAttribute attr) {
+  return wrap(llvm::cast<wave::WaveSymbolAttr>(unwrap(attr)).getName());
+}
+
 //===---------------------------------------------------------------------===//
 // WaveIndexSymbolAttr
 //===---------------------------------------------------------------------===//
