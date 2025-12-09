@@ -13,12 +13,11 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 
-from ..common.utils import require_e2e, param_bool, require_water_and_ee, glob_asm_files
+from ..common.utils import param_bool, require_water_and_ee, glob_asm_files
 from ._test_util import get_test_shapes
 from pathlib import Path
 
 
-@require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy")[:1])
 def test_dump_vmfb(shape: tuple[int, int], tmp_path: Path):
     M = tkl.sym.M
@@ -64,9 +63,10 @@ def test_dump_vmfb(shape: tuple[int, int], tmp_path: Path):
         create_vmfb_file=vmfb_file,
     )
     options = set_default_run_config(options)
+    options.target = "gfx942"
 
     assert not os.path.exists(vmfb_file)
-    test = wave_compile(options, test)
+    wave_compile(options, test)
     assert os.path.exists(vmfb_file)
 
 
