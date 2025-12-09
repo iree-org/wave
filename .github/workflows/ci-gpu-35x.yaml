@@ -107,12 +107,12 @@ jobs:
       - name: Run e2e tests on AMD GPU
         if: ${{ (github.event_name == 'pull_request') && !cancelled() }}
         run: |
-          WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+          WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
 
       - name: Run expensive e2e tests on AMD GPU
         if: ${{ (github.event_name != 'pull_request') && !cancelled() }}
         run: |
-          WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
+          WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
 
       - name: Run LIT tests
         if: ${{ !cancelled() }}
