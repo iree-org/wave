@@ -81,7 +81,6 @@ def get_copy_template(
     )
     if use_dynamic_dims:
         options.dynamic_symbols = [M, N]
-    options = set_default_run_config(options)
     return options, test
 
 
@@ -102,6 +101,7 @@ def test_copy(
         use_buffer_ops=use_buffer_ops,
         use_water_pipeline=use_water_pipeline,
     )
+    options = set_default_run_config(options)
     test = wave_compile(options, test)
 
     a = device_randn(shape, dtype=torch.float16)
@@ -127,6 +127,7 @@ def test_dynamic_copy(
         use_water_pipeline=use_water_pipeline,
         use_dynamic_dims=True,
     )
+    options = set_default_run_config(options)
     test = wave_compile(options, test)
 
     a = device_randn(shape, dtype=torch.float16)

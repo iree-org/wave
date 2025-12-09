@@ -28,6 +28,7 @@ def test_bound_check(shape: tuple[int, int], use_buffer_ops: bool, run_bench: bo
     options, test = get_copy_template(
         shape, run_bench=run_bench, use_buffer_ops=use_buffer_ops
     )
+    options = set_default_run_config(options)
     options.use_bound_check = True
     test = wave_compile(options, test)
 

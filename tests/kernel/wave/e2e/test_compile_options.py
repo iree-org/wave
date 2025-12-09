@@ -7,14 +7,11 @@
 import os
 import pytest
 
-import wave_lang.kernel.lang as tkl
-import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from ..common.utils import param_bool, require_water_and_ee, glob_asm_files
+from wave_lang.kernel.wave.compile import wave_compile
 from ._test_util import get_test_shapes
-from pathlib import Path
 from .test_copy import get_copy_template
-
+from ..common.utils import param_bool, require_water_and_ee, glob_asm_files
+from pathlib import Path
 
 
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy")[:1])
@@ -39,6 +36,8 @@ def test_dump_intermediates(
 ) -> None:
     assert len(list(tmp_path.glob("*"))) == 0, "Directory is not empty"
     options, test = get_copy_template(shape)
+    options.dump_intermediates = tmp_path
+    options.use_water_pipeline = use_water_pipeline
     wave_compile(options, test)
     asm_files = glob_asm_files(tmp_path)
     assert len(asm_files) == 1, "Expected 1 ASM file"
