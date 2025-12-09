@@ -64,6 +64,7 @@ from ..ops.wave_ops import (
     Read,
     SharedMemoryBarrierSignal,
     SharedMemoryBarrierWait,
+    TensorLoadToLDS,
     Write,
     get_custom,
 )
@@ -314,16 +315,24 @@ class Specialist(GemmScheduler):
         node_map = dict()
         for node in nodes:
             custom = get_custom(node)
-            new_node = custom.copy(
+            new_op = custom.copy(
                 new_graph=graph,
                 arg_transform=lambda x: node_map[x] if x in node_map else x,
             )
-            new_node.index = new_index(node.index, subs)
-            node_map[node] = new_node.fx_node
+            if isinstance(custom, TensorLoadToLDS):
+                new_op.global_tile_index = new_index(custom.global_tile_index, subs)
+                new_op.shared_tile_index = new_index(custom.shared_tile_index, subs)
+            else:
+                new_op.index = new_index(node.index, subs)
+
+            node_map[node] = new_op.fx_node
 
             if isinstance(custom, Write):
-                new_writes[custom.memory].append(new_node.fx_node)
-                write_record.append(new_node.fx_node)
+                new_writes[custom.memory].append(new_op.fx_node)
+                write_record.append(new_op.fx_node)
+            if isinstance(custom, TensorLoadToLDS):
+                new_writes[custom.src[0]].append(new_op.fx_node)
+                write_record.append(new_op.fx_node)
 
     def get_ops_of_type(self, operation_type: GemmOperationType) -> List[fx.Node]:
         """
@@ -512,11 +521,16 @@ class Specialist(GemmScheduler):
                 load_graph, nodes, shift_subs, new_writes, write_record
             )
 
-            dup_times = self.waves_per_block[0] - i
-
         # add split barriers to load subgraph
+        has_tensor_load = any(
+            [isinstance(get_custom(node), TensorLoadToLDS) for node in write_record]
+        )
         self.add_load_split_barrier(
-            load_graph, iterate_op, 0, write_record[0], write_record[-1]
+            load_graph,
+            iterate_op,
+            write_record[0],
+            write_record[-1],
+            has_tdm=has_tensor_load,
         )
 
         # close the graph with empty output
@@ -529,6 +543,8 @@ class Specialist(GemmScheduler):
         ] = load_graph
 
         update_write_dependencies(new_writes, self.trace)
+        for node in nodes:
+            get_custom(node).erase()
         return
 
     def add_compute_split_barrier(
@@ -631,9 +647,9 @@ class Specialist(GemmScheduler):
         self,
         subgraph: fx.Graph,
         iterate_op: CustomOp,
-        dup_times: int,
         first_lw: fx.Node,
         last_lw: fx.Node,
+        has_tdm: bool = False,
     ) -> None:
         """
         Has side-effect to subgraph.
@@ -688,7 +704,7 @@ class Specialist(GemmScheduler):
             for offset in range(1, self.barUB):  # self.waves_per_block[0] + 1):
 
                 # i is the range of possible barrier id this load wave is helping out
-                i = offset  # dup_times * self.waves_per_block[0] + offset
+                i = offset
 
                 # declare graph
                 wid_wait_graph = fx.Graph()
@@ -703,9 +719,7 @@ class Specialist(GemmScheduler):
                 )
 
                 # calculate which compute wid this load wid is helping with
-                compute_wid = (
-                    self.wave_id % start_load_wid
-                ) + dup_times * self.waves_per_block[0]
+                compute_wid = self.wave_id % start_load_wid
 
                 # add condition entry to parent graph
                 cond_expr = sympy.And(sympy.Eq(compute_wid, i - 1), sympy.Ne(iv, 0))
@@ -725,10 +739,10 @@ class Specialist(GemmScheduler):
 
         with subgraph.inserting_after(last_lw):
             location = get_custom(last_lw).location
-            for offset in range(1, self.barUB):  # self.waves_per_block[0] + 1):
+            for offset in range(1, self.barUB):
 
                 # i is the range of possible barrier id this load wave is helping out
-                i = offset  # dup_times * self.waves_per_block[0] + offset
+                i = offset
 
                 # declare graph
                 wid_signal_graph = fx.Graph()
@@ -738,14 +752,12 @@ class Specialist(GemmScheduler):
                 self.trace.add_subgraph(wid_signal_graph_name, wid_signal_graph)
 
                 # add signal node to wid_signal_graph
-                SharedMemoryBarrierSignal(barId=i).add_to_graph(
+                SharedMemoryBarrierSignal(barId=i, tensor_wait=has_tdm).add_to_graph(
                     region_graph=wid_signal_graph, loc=location
                 )
 
                 # calculate which compute wid this load wid is helping with
-                compute_wid = (
-                    self.wave_id % start_load_wid
-                ) + dup_times * self.waves_per_block[0]
+                compute_wid = self.wave_id % start_load_wid
 
                 # add condition entry to parent graph
                 cond_expr = sympy.Eq(compute_wid, i - 1)

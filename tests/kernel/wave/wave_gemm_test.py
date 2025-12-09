@@ -2869,7 +2869,14 @@ def test_persistent_gemm(
 
 @require_e2e
 @require_gfx1250
-@pytest.mark.parametrize("shape", get_test_shapes("test_gemm"))
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (128, 128, 128),
+        (1024, 1024, 1024),
+        (4096, 4096, 4096),
+    ],
+)
 @pytest.mark.parametrize(
     "enable_scheduling",
     [
@@ -2877,10 +2884,12 @@ def test_persistent_gemm(
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
+@pytest.mark.parametrize("use_global_to_shared", [False])
 def testSpecializeGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
     datatype: torch.dtype,
+    use_global_to_shared: bool,
     run_bench,
     perf_filename_tk,
     perf_filename_iree,
@@ -2906,7 +2915,7 @@ def testSpecializeGemm(
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
         specialize=specialize,
-        use_global_to_shared=False,
+        use_global_to_shared=use_global_to_shared,
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
