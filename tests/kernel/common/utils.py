@@ -7,7 +7,7 @@
 import pytest
 from wave_lang.kernel.wave.utils.run_utils import get_default_arch
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 require_e2e = pytest.mark.require_e2e
 expensive_test = pytest.mark.expensive_test
@@ -102,11 +102,7 @@ class KernelMetadata:
     vgpr_spill_count: int | None = None
     sgpr_count: int | None = None
     sgpr_spill_count: int | None = None
-    waitcnt_ops: list[str] = None
-
-    def __post_init__(self):
-        if self.waitcnt_ops is None:
-            self.waitcnt_ops = []
+    waitcnt_ops: list[str] = field(default_factory=list)
 
 
 def extract_kernel_metadata(asm_text: str) -> KernelMetadata:
