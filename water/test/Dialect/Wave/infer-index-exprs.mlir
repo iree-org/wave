@@ -395,6 +395,9 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
     // CHECK:      wave.iterate
     // CHECK-SAME: iter_args
+    // CHECK-SAME: index
+    // CHECK-DAG:  M = #wave<index_mapping[#wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.index_symbol<T2>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  N = #wave<index_mapping[#wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.index_symbol<T2>, #wave.index_symbol<GPR_NUM>] -> (T0 mod 32, 1, 1)>
     %mma_result = wave.iterate @K iter_args(%c_reg) {
       ^bb0(%acc: !wave.tensor<[@M, @N] of f32>):
 

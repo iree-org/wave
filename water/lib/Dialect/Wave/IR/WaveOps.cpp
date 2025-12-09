@@ -218,6 +218,27 @@ void wave::IterateOp::getSuccessorRegions(
       getLoopBody()->getArguments().drop_back(getCaptures().size())));
 }
 
+llvm::FailureOr<mlir::ChangeResult> wave::IterateOp::propagateIndexExprsForward(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
+    wave::EmitErrorFn /*emitError*/) {
+  llvm_unreachable("IterateOp should be handled by control flow interfaces");
+}
+
+llvm::FailureOr<mlir::ChangeResult>
+wave::IterateOp::propagateIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
+    wave::EmitErrorFn /*emitError*/) {
+  llvm_unreachable("IterateOp should be handled by control flow interfaces");
+}
+
+llvm::LogicalResult wave::IterateOp::setIndexFromLattices(
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> operands,
+    llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
+  return detail::identitySetIndexFromLattices(*this, operands, resultExprs);
+}
+
 mlir::LogicalResult wave::IterateOp::verify() {
   mlir::TypeRange iterArgTypes = getIterArgs().getTypes();
   mlir::TypeRange resultTypes = getResultTypes();
