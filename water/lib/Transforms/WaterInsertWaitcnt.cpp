@@ -512,6 +512,15 @@ private:
   void resetPendingOpsSet() { pendingOpsSet.clear(); }
 };
 
+static ValueRange getRegionResults(ArrayRef<RegionSuccessor> successors,
+                                   Region *region) {
+  for (const auto &successor : successors) {
+    if (successor.getSuccessor() == region)
+      return successor.getSuccessorInputs();
+  }
+  assert(false && "Region not found, malfoemrf SCF op?");
+}
+
 /// Dense forward dataflow analysis for waitcnt insertion
 class WaitcntAnalysis : public DenseForwardDataFlowAnalysis<WaitcntState> {
 public:
@@ -570,6 +579,31 @@ public:
     LDBG() << "  New state: " << newState;
     propagateIfChanged(after, after->join(newState));
     return success();
+  }
+
+  void visitRegionBranchControlFlowTransfer(RegionBranchOpInterface branch,
+                                            std::optional<unsigned> regionFrom,
+                                            std::optional<unsigned> regionTo,
+                                            const WaitcntState &before,
+                                            WaitcntState *after) override {
+    LDBG() << "Visiting region branch control flow transfer: " << *branch;
+    LDBG() << "  Region from: " << regionFrom;
+    LDBG() << "  Region to: " << regionTo;
+    LDBG() << "  Before: " << before;
+    LDBG() << "  After: " << *after;
+
+    SmallVector<RegionSuccessor> successors;
+    branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
+
+    ValueRange newValues;
+    if (regionTo) {
+      Region &region = branch->getRegions()[*regionTo];
+      newValues = getRegionResults(successors, &region);
+    } else {
+      newValues = getRegionResults(successors, nullptr);
+    }
+
+    propagateIfChanged(after, after->join(before));
   }
 
 private:
