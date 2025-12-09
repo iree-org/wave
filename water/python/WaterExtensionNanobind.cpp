@@ -124,7 +124,28 @@ NB_MODULE(_waterDialects, m) {
           },
           nb::arg("cls"), nb::arg("symbols"), nb::arg("start"), nb::arg("step"),
           nb::arg("stride"), nb::arg("context") = nb::none(),
-          "Gets a wave.WaveIndexMappingAttr from a list of symbol attributes.");
+          "Gets a wave.WaveIndexMappingAttr from a list of symbol attributes.")
+      .def_property_readonly("start",
+                             [](MlirAttribute self) {
+                               return mlirWaveIndexMappingAttrGetStart(self);
+                             })
+      .def_property_readonly("step",
+                             [](MlirAttribute self) {
+                               return mlirWaveIndexMappingAttrGetStep(self);
+                             })
+      .def_property_readonly("stride",
+                             [](MlirAttribute self) {
+                               return mlirWaveIndexMappingAttrGetStride(self);
+                             })
+      .def_property_readonly("symbols", [](MlirAttribute self) {
+        std::vector<MlirAttribute> symbols;
+        intptr_t numSymbols = mlirWaveIndexMappingAttrGetNumSymbols(self);
+        symbols.reserve(numSymbols);
+        for (intptr_t i = 0; i < numSymbols; i++) {
+          symbols.push_back(mlirWaveIndexMappingAttrGetSymbol(self, i));
+        }
+        return symbols;
+      });
 
   //===---------------------------------------------------------------------===//
   // WaveHyperparameterAttr

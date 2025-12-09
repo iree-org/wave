@@ -50,7 +50,32 @@ with ir.Context() as ctx:
     start_map = ir.AffineMap.get(0, 3, [s0 * 3])
     step_map = ir.AffineMap.get(0, 3, [s0 + s1])
     stride_map = ir.AffineMap.get(0, 3, [s2 % s0])
-    print(wave.WaveIndexMappingAttr.get(symbols, start_map, step_map, stride_map))
+    index_mapping_attr = wave.WaveIndexMappingAttr.get(
+        symbols, start_map, step_map, stride_map
+    )
+    print(index_mapping_attr)
+
+    # CHECK: ()[s0, s1, s2] -> (s0 * 3)
+    print(index_mapping_attr.start)
+
+    # CHECK: ()[s0, s1, s2] -> (s0 + s1)
+    print(index_mapping_attr.step)
+
+    # CHECK: ()[s0, s1, s2] -> (s2 mod s0)
+    print(index_mapping_attr.stride)
+
+    # CHECK: 3
+    retrieved_symbols = index_mapping_attr.symbols
+    print(len(retrieved_symbols))
+
+    # CHECK: #wave.index_symbol<WG0>
+    print(retrieved_symbols[0])
+
+    # CHECK: #wave.symbol<"BLOCK_M">
+    print(retrieved_symbols[1])
+
+    # CHECK: #wave.index_symbol<T0>
+    print(retrieved_symbols[2])
 
     try:
         wave.WaveIndexMappingAttr.get([], start_map, step_map, stride_map)

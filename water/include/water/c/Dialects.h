@@ -7,6 +7,7 @@
 #ifndef WATER_C_DIALECTS_H
 #define WATER_C_DIALECTS_H
 
+#include "mlir-c/AffineMap.h"
 #include "mlir-c/IR.h"
 
 #ifdef __cplusplus
@@ -85,6 +86,26 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGet(
 
 /// Returns the typeID of a WaveIndexMappingAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIndexMappingAttrGetTypeID();
+
+/// Get the offset from a WaveIndexMappingAttr.
+MLIR_CAPI_EXPORTED MlirAffineMap
+mlirWaveIndexMappingAttrGetStart(MlirAttribute attr);
+
+/// Get the step from a WaveIndexMappingAttr.
+MLIR_CAPI_EXPORTED MlirAffineMap
+mlirWaveIndexMappingAttrGetStep(MlirAttribute attr);
+
+/// Get the stride from a WaveIndexMappingAttr.
+MLIR_CAPI_EXPORTED MlirAffineMap
+mlirWaveIndexMappingAttrGetStride(MlirAttribute attr);
+
+/// Get the number of (input) symbols.
+MLIR_CAPI_EXPORTED intptr_t
+mlirWaveIndexMappingAttrGetNumSymbols(MlirAttribute attr);
+
+/// Get the (input) symbol at the given index.
+MLIR_CAPI_EXPORTED MlirAttribute
+mlirWaveIndexMappingAttrGetSymbol(MlirAttribute attr, intptr_t index);
 
 //===---------------------------------------------------------------------===//
 // WaveHyperparameterAttr
