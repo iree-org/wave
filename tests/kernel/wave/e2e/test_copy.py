@@ -22,17 +22,13 @@ from ._test_util import get_test_shapes
 _water_enable = [False, pytest.param(True, marks=require_water_and_ee)]
 
 
-@require_e2e
-@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
-@param_bool("use_buffer_ops", "buf_ops")
-@param_bool("use_water_pipeline", "water", values=_water_enable)
-@check_leaks
-def test_copy(
+def get_copy_template(
     shape: tuple[int, int],
-    use_buffer_ops: bool,
-    run_bench: bool,
-    use_water_pipeline: bool,
-) -> None:
+    use_dynamic_dims: bool = False,
+    run_bench: bool = False,
+    use_buffer_ops: bool = False,
+    use_water_pipeline: bool = False,
+) -> tuple[WaveCompileOptions, tkw.Wave]:
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
@@ -65,22 +61,51 @@ def test_copy(
         res = tkw.read(a)
         tkw.write(res, b)
 
-    a = device_randn(shape, dtype=torch.float16)
-    b = device_zeros(shape, dtype=torch.float16)
-    options = WaveCompileOptions(
-        subs={
+    if use_dynamic_dims:
+        subs = {
+            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+        }
+    else:
+        subs = {
             M: shape[0],
             N: shape[1],
             ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-        },
+        }
+
+    options = WaveCompileOptions(
+        subs=subs,
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
         use_water_pipeline=use_water_pipeline,
     )
+    if use_dynamic_dims:
+        options.dynamic_symbols = [M, N]
     options = set_default_run_config(options)
+    return options, test
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
+@param_bool("use_buffer_ops", "buf_ops")
+@param_bool("use_water_pipeline", "water", values=_water_enable)
+@check_leaks
+def test_copy(
+    shape: tuple[int, int],
+    use_buffer_ops: bool,
+    run_bench: bool,
+    use_water_pipeline: bool,
+) -> None:
+    options, test = get_copy_template(
+        shape,
+        run_bench=run_bench,
+        use_buffer_ops=use_buffer_ops,
+        use_water_pipeline=use_water_pipeline,
+    )
     test = wave_compile(options, test)
 
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
     test(a, b)
     assert_close(a, b)
 
@@ -95,52 +120,16 @@ def test_dynamic_copy(
     run_bench: bool,
     use_water_pipeline: bool,
 ) -> None:
-    M = tkl.sym.M
-    N = tkl.sym.N
-    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
-
-    # Each workgroup works on single row of input data, and rows are further
-    # split into blocks of size up to 256. We have single wave per WG,
-    # and with default wave size of 64, each thread is operating on up to 4
-    # elements.
-    wave_size = 64
-    BLOCK_M = 1
-    # Tile size cannot be dynamic, so we use a fixed value here.
-    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
-
-    constraints: list[tkw.Constraint] = [
-        tkw.HardwareConstraint(
-            threads_per_wave=wave_size,
-            vector_shapes={M: BLOCK_M, N: BLOCK_N},
-        )
-    ]
-    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
-    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
-
-    @tkw.wave(constraints)
-    def test(
-        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
-    ):
-        res = tkw.read(a)
-        tkw.write(res, b)
+    options, test = get_copy_template(
+        shape,
+        run_bench=run_bench,
+        use_buffer_ops=use_buffer_ops,
+        use_water_pipeline=use_water_pipeline,
+        use_dynamic_dims=True,
+    )
+    test = wave_compile(options, test)
 
     a = device_randn(shape, dtype=torch.float16)
     b = device_zeros(shape, dtype=torch.float16)
-    options = WaveCompileOptions(
-        subs={
-            ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
-        },
-        canonicalize=True,
-        run_bench=run_bench,
-        use_buffer_ops=use_buffer_ops,
-        dynamic_symbols=[M, N],
-        use_water_pipeline=use_water_pipeline,
-    )
-    options = set_default_run_config(options)
-    test = wave_compile(options, test)
-
     test(a, b)
     assert_close(a, b)
