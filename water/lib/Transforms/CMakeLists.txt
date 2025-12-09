@@ -1,5 +1,6 @@
 add_mlir_dialect_library(MLIRWaterTransforms
   AccessCheckers.cpp
+  AllocToAlloca.cpp
   AssembleISA.cpp
   CheckStaticAssertions.cpp
   GPUModuleToBinary.cpp
