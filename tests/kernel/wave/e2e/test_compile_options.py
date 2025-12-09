@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy")[:1])
-def test_dump_vmfb(shape, tmp_path):
+def test_dump_vmfb(shape: tuple[int, int], tmp_path: Path):
     vmfb_file = tmp_path / "test.vmfb"
     assert not os.path.exists(vmfb_file)
     options, test = get_copy_template(shape)
