@@ -76,6 +76,10 @@ static bool isWorkgroupAddressSpace(MemRefType type) {
   return attr && attr.getValue() == gpu::AddressSpace::Workgroup;
 }
 
+template <typename T> static void print_range(raw_ostream &os, T &&range) {
+  llvm::interleaveComma(range, os, [&](const auto &item) { os << item; });
+}
+
 /// Shared pending operations list for structural sharing
 struct PendingOperations {
   PendingOperations() = default;
@@ -97,6 +101,8 @@ struct PendingOperations {
   size_t size() const { return ops.size(); }
   bool empty() const { return ops.empty(); }
 
+  auto opsAndTokens() const { return llvm::zip(ops, opsTokens); }
+
   bool hasSameTail(const PendingOperations &other) const {
     for (const auto &[op1, op2, tok1, tok2] :
          llvm::zip(llvm::reverse(ops), llvm::reverse(other.ops),
@@ -107,6 +113,15 @@ struct PendingOperations {
         return false;
     }
     return true;
+  }
+
+  void print(raw_ostream &os) const {
+    os << "PendingOperations: ops=[";
+    llvm::interleaveComma(opsAndTokens(), os, [&](const auto &opAndTok) {
+      os << std::get<0>(opAndTok) << "|";
+      print_range(os, std::get<1>(opAndTok));
+    });
+    os << "]";
   }
 
   SmallVector<Operation *> ops;
@@ -260,8 +275,7 @@ public:
     os << "WaitcntState: pending ops [";
     for (auto &pendingOps : pendingOpsLists) {
       os << "[";
-      llvm::interleaveComma(pendingOps->ops, os,
-                            [&](Operation *op) { os << *op; });
+      pendingOps->print(os);
       os << "]";
     }
     os << "], requirement: " << requirement;
@@ -297,8 +311,9 @@ public:
       SmallVector<Operation *> newPending;
       SmallVector<SmallVector<Value, 1>> newPendingTokens;
       WaitcntRequirement runningRequirement;
-      for (auto [op, tok] : llvm::zip(llvm::reverse(pendingOps->ops),
-                                      llvm::reverse(pendingOps->opsTokens))) {
+      for (const auto &[op, tok] :
+           llvm::zip(llvm::reverse(pendingOps->ops),
+                     llvm::reverse(pendingOps->opsTokens))) {
         WaitcntRequirement opReq =
             WaitcntRequirement::getOperationRequirement(op, false);
         runningRequirement = runningRequirement + opReq;
@@ -308,7 +323,7 @@ public:
         newPending.push_back(op);
         newPendingTokens.push_back(tok);
       }
-      if (newPending.size() == pendingOps->ops.size())
+      if (newPending.size() == pendingOps->size())
         continue;
 
       std::reverse(newPending.begin(), newPending.end());
