@@ -433,3 +433,45 @@ func.func @gather_to_lds(%global: memref<1024xf32>, %lds: memref<1024xf32, #gpu.
   // CHECK-NEXT: return %[[RESULT]]
   return %result : vector<4xf32>
 }
+
+// CHECK-LABEL: func.func @double_buffering
+func.func @double_buffering(%src: memref<1024xf32>, %lb: index, %ub: index, %step: index, %offset: index) {
+  // Allocate LDS buffers to guarantee no aliasing with global src
+  %dst0 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %dst1 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  // Allocate output buffer to guarantee no aliasing with src
+  %out = memref.alloc() : memref<1024xf32>
+
+  // Initial copy to buffer 0 before the loop
+  // CHECK: memref.copy
+  memref.copy %src, %dst0 : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // CHECK: scf.for
+  scf.for %i = %lb to %ub step %step iter_args(%current = %dst0, %next = %dst1) -> (memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>) {
+    // Use current buffer which was copied in the previous iteration
+    // RAW dependency with the copy that wrote to current buffer (LDS operation)
+    // Distance = 1 because there's 1 copy after it (the copy to next buffer)
+    // CHECK: amdgpu.memory_counter_wait ds(1)
+    // CHECK-NEXT: %[[DATA:.*]] = vector.load
+    %data = vector.load %current[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+    // Copy to next buffer for the next iteration (asynchronous, can overlap with computation)
+    // Reads from global (src), writes to LDS (next)
+    // No wait needed - src is read-only, no dependency with previous iteration
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    // CHECK: memref.copy
+    memref.copy %src, %next : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+    // Process the data - write to separate output buffer (no dependency with src)
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    // CHECK: vector.store
+    vector.store %data, %out[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // Swap buffers for next iteration
+    // CHECK: scf.yield
+    scf.yield %next, %current : memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>
+  }
+
+  // CHECK: return
+  return
+}
