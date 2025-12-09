@@ -28,7 +28,7 @@ def get_copy_template(
     run_bench: bool = False,
     use_buffer_ops: bool = False,
     use_water_pipeline: bool = False,
-) -> tuple[WaveCompileOptions, tkw.Wave]:
+) -> tuple[WaveCompileOptions, "LaunchableWave"]:
     M = tkl.sym.M
     N = tkl.sym.N
     ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
