@@ -87,7 +87,7 @@ MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGet(
 /// Returns the typeID of a WaveIndexMappingAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIndexMappingAttrGetTypeID();
 
-/// Get the offset from a WaveIndexMappingAttr.
+/// Get the start from a WaveIndexMappingAttr.
 MLIR_CAPI_EXPORTED MlirAffineMap
 mlirWaveIndexMappingAttrGetStart(MlirAttribute attr);
 
