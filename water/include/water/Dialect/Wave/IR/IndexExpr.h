@@ -8,6 +8,7 @@
 #define WATER_DIALECT_WAVE_IR_INDEXEXPR_H
 
 #include "mlir/IR/Attributes.h"
+#include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "llvm/ADT/SetVector.h"
 
 namespace mlir {
@@ -41,6 +42,26 @@ aggregateAllSymbols(RangeT &&symbolLists,
 mlir::AffineMap alignMapSymbols(mlir::AffineMap map,
                                 llvm::ArrayRef<mlir::Attribute> symbols,
                                 llvm::ArrayRef<mlir::Attribute> allSymbols);
+
+// Create an index mapping induced by the given workgroup constraint. Combine
+// it with the base index mapping if provided.
+WaveIndexMappingAttr
+applyConstraint(WorkgroupConstraintAttr constraint,
+                WaveIndexMappingAttr baseMapping = nullptr);
+
+// Create an index mapping induced by the given tiling constraint. Combine it
+// with the base index mapping if provided.
+WaveIndexMappingAttr
+applyConstraint(TilingConstraintAttr constraint,
+                WaveIndexMappingAttr baseMapping = nullptr);
+
+// Create an index mapping induced by the given constraint. Combine it with the
+// base index mapping if provided. Call `applyConstraint` if the specific kind
+// of constraint is already known.
+WaveIndexMappingAttr
+applyConstraintGeneric(mlir::Attribute constraint,
+                       WaveIndexMappingAttr baseMapping = nullptr);
+
 } // namespace wave
 
 #endif // WATER_DIALECT_WAVE_IR_INDEXEXPR_H
