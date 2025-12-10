@@ -6,7 +6,6 @@
 
 #include "water/Transforms/Passes.h"
 
-#include "mlir/Analysis/AliasAnalysis.h"
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
@@ -425,8 +424,7 @@ public:
   }
 
   /// Check for memory dependencies (RAW, WAR, WAW)  and compute required wait
-  WaitcntRequirement checkMemoryDependency(Operation *op,
-                                           AliasAnalysis &aliasAnalysis) const {
+  WaitcntRequirement checkMemoryDependency(Operation *op) const {
 
     // std::optional<Value> currentBase = isLoadOrStoreOp(op);
     auto checkMemref = [&](Value memref, bool isCurrentLoad,
@@ -547,8 +545,8 @@ static RegionSuccessor getRegionResults(ArrayRef<RegionSuccessor> successors,
 /// Dense forward dataflow analysis for waitcnt insertion
 class WaitcntAnalysis : public DenseForwardDataFlowAnalysis<WaitcntState> {
 public:
-  WaitcntAnalysis(DataFlowSolver &solver, AliasAnalysis &aliasAnalysis)
-      : DenseForwardDataFlowAnalysis(solver), aliasAnalysis(aliasAnalysis) {}
+  explicit WaitcntAnalysis(DataFlowSolver &solver)
+      : DenseForwardDataFlowAnalysis(solver) {}
 
   void setToEntryState(WaitcntState *lattice) override {
     propagateIfChanged(lattice, lattice->reset());
@@ -572,7 +570,7 @@ public:
     }
 
     // Check for memory dependencies (RAW, WAR, WAW)
-    if (auto memReq = before.checkMemoryDependency(op, aliasAnalysis)) {
+    if (auto memReq = before.checkMemoryDependency(op)) {
       LDBG() << "  Memory dependency: " << memReq;
       opRequirement.merge(memReq);
     } else {
@@ -671,9 +669,6 @@ public:
 
     propagateIfChanged(after, after->join(newState));
   }
-
-private:
-  AliasAnalysis &aliasAnalysis;
 };
 
 /// Pass that inserts wait/synchronization instructions for asynchronous
@@ -685,11 +680,9 @@ public:
     LDBG() << "Running WaterInsertWaitcntPass";
     Operation *op = getOperation();
 
-    auto &aliasAnalysis = getAnalysis<AliasAnalysis>();
-
     DataFlowSolver solver;
     loadBaselineAnalyses(solver);
-    solver.load<WaitcntAnalysis>(aliasAnalysis);
+    solver.load<WaitcntAnalysis>();
 
     if (failed(solver.initializeAndRun(op))) {
       signalPassFailure();
