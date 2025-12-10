@@ -91,7 +91,7 @@ struct PendingOperations {
                     SmallVector<TokenContainer> &&opsTokens)
       : ops(std::move(ops)), opsTokens(std::move(opsTokens)) {}
 
-  void addOp(Operation *op) {
+  TokenContainer &addOp(Operation *op) {
     ops.push_back(op);
     auto &back = opsTokens.emplace_back();
     if (auto memref = isStoreOp(op))
@@ -99,6 +99,8 @@ struct PendingOperations {
 
     if (auto memref = isLoadOp(op))
       back.push_back(*memref);
+
+    return back;
   }
 
   size_t size() const { return ops.size(); }
@@ -305,8 +307,11 @@ public:
     } else {
       cow();
     }
-    for (auto &pendingOps : pendingOpsLists)
-      pendingOps->addOp(op);
+    for (auto &pendingOps : pendingOpsLists) {
+      auto &tokens = pendingOps->addOp(op);
+      for (Value token : tokens)
+        pendingOpsTokens.insert(token);
+    }
 
     pendingOpsSet.insert(op);
   }
@@ -432,6 +437,9 @@ public:
     auto checkMemref = [&](Value memref, bool isCurrentLoad,
                            bool isCurrentStore) -> WaitcntRequirement {
       WaitcntRequirement result;
+      if (!isPendingOp(memref))
+        return result;
+
       for (auto &pendingOps : pendingOpsLists) {
         if (pendingOps->empty())
           continue;
@@ -499,6 +507,7 @@ private:
   WaitcntRequirement requirement;
 
   mutable llvm::SmallDenseSet<Operation *> pendingOpsSet;
+  mutable llvm::SmallDenseSet<Value> pendingOpsTokens;
 
   void cow() {
     for (auto &pendingOps : pendingOpsLists) {
@@ -511,28 +520,45 @@ private:
     }
   }
 
-  bool isPendingOp(Operation *op) const {
+  bool isPendingOp(llvm::PointerUnion<Operation *, Value> opOrVal) const {
     if (pendingOpsLists.empty())
       return false;
 
     // Build the set of pending operations lazily
     bool found = false;
     if (pendingOpsSet.empty()) {
+      assert(pendingOpsTokens.empty() && "pendingOpsTokens must be empty");
+      Operation *op = dyn_cast<Operation *>(opOrVal);
+      Value val = dyn_cast<Value>(opOrVal);
       for (const auto &pendingOps : pendingOpsLists) {
-        for (Operation *pendingOp : pendingOps->ops) {
+        for (const auto &[pendingOp, pendingTokens] :
+             pendingOps->opsAndTokens()) {
           if (pendingOp == op)
             found = true;
 
           pendingOpsSet.insert(pendingOp);
+          for (Value token : pendingTokens) {
+            if (token == val)
+              found = true;
+
+            pendingOpsTokens.insert(token);
+          }
         }
       }
-      return found;
     }
 
-    return pendingOpsSet.contains(op);
+    if (found)
+      return true;
+
+    return isa<Operation *>(opOrVal)
+               ? pendingOpsSet.contains(cast<Operation *>(opOrVal))
+               : pendingOpsTokens.contains(cast<Value>(opOrVal));
   }
 
-  void resetPendingOpsSet() { pendingOpsSet.clear(); }
+  void resetPendingOpsSet() {
+    pendingOpsSet.clear();
+    pendingOpsTokens.clear();
+  }
 };
 
 static RegionSuccessor getRegionResults(ArrayRef<RegionSuccessor> successors,
