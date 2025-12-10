@@ -9,8 +9,10 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "water/Dialect/Wave/IR/IndexExpr.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
@@ -19,6 +21,7 @@
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/Dialect/Wave/Transforms/Utils.h"
 #include "llvm/ADT/PointerIntPair.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -862,7 +865,6 @@ public:
 
   void print(llvm::raw_ostream &os) const {
     operation->print(os, mlir::OpPrintingFlags().skipRegions());
-    os << "\n";
   }
 
 private:
@@ -966,8 +968,37 @@ public:
                   if (!llvm::isa<wave::WaveTensorType>(value.getType()))
                     continue;
 
+                  LDBG() << "setting block argument lattice " << value
+                         << " from " << PrintNoRegions(op) << " to bottom";
                   unsafeSet(getLatticeElement(value),
                             IndexExprsLatticeStorage::bottom());
+                }
+              }
+            }
+
+            if (auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op)) {
+              // Set lattices of captured block arguments to the relevant tiling
+              // constraint, it will be then propagated by joining with
+              // expressions induced by other constraints.
+              wave::WaveSymbolAttr iterSymbolAttr = iterateOp.getIterator();
+              llvm::SmallVector<mlir::Attribute> symbolConstraints =
+                  initObject->symbolConstraints.lookup(iterSymbolAttr);
+              auto it = llvm::find_if(
+                  symbolConstraints, llvm::IsaPred<wave::TilingConstraintAttr>);
+              if (it != symbolConstraints.end()) {
+                wave::TilingConstraintAttr tilingConstraint =
+                    llvm::cast<wave::TilingConstraintAttr>(*it);
+                for (mlir::Value capture : iterateOp.getCaptureBlockArgs()) {
+                  if (!llvm::isa<wave::WaveTensorType>(capture.getType()))
+                    continue;
+                  auto dict = mlir::DictionaryAttr::get(
+                      iterSymbolAttr.getContext(),
+                      {{iterSymbolAttr.getName(),
+                        wave::applyConstraint(tilingConstraint)}});
+                  LDBG() << "setting iterate block argument lattice " << capture
+                         << " from " << PrintNoRegions(iterateOp) << " to "
+                         << dict;
+                  unsafeSet(getLatticeElement(capture), dict);
                 }
               }
             }
@@ -1003,6 +1034,8 @@ public:
                        lattice->join(initialized
                                          ? IndexExprsLatticeStorage::top()
                                          : IndexExprsLatticeStorage::bottom()));
+    if (initialized)
+      LDBG() << "top fixpoint for " << lattice->getAnchor();
   }
 
   llvm::LogicalResult
@@ -1011,20 +1044,24 @@ public:
                  llvm::ArrayRef<IndexExprsLattice *> results) override {
 
     LLVM_DEBUG({
-      LDBG() << "visiting operation " << PrintNoRegions(op);
-      LDBG() << "  Operands lattices:";
+      LDBG() << "visiting operation forward " << PrintNoRegions(op);
+      LDBG() << "  operand lattices:";
       for (auto [i, operand] : llvm::enumerate(operands)) {
-        LDBG() << "    operand #" << i << ": ";
-        operand->getValue().print(LDBG_STREAM);
-        LDBG() << ""; // This will generate a newline.
+        LDBG() << "    operand #" << i << ": " << *operand;
       }
       // Print all result lattices.
-      LDBG() << "  Results lattices:";
+      LDBG() << "  result lattices:";
       for (auto [i, result] : llvm::enumerate(results)) {
-        LDBG() << "    result #" << i << ": ";
-        result->getValue().print(LDBG_STREAM);
-        LDBG() << ""; // This will generate a newline.
+        LDBG() << "    result #" << i << ": " << *result;
       }
+    });
+    auto scope = llvm::make_scope_exit([&] {
+      LLVM_DEBUG({
+        LDBG() << "  updated result lattices:";
+        for (auto [i, result] : llvm::enumerate(results)) {
+          LDBG() << "    result #" << i << ": " << *result;
+        }
+      });
     });
 
     // Check if the operation implements the interface.
@@ -1061,9 +1098,40 @@ public:
 
     for (auto &&[resultLattice, lattice] :
          llvm::zip_equal(resultLattices, results)) {
+      // In release mode, just set the lattice value instead of calling join.
+      // The interface should have returned the correctly joined lattice and we
+      // don't want to re-join it and don't need the expensive check of the
+      // lattice direction.
+#ifndef NDEBUG
       propagateIfChanged(lattice, lattice->join(resultLattice));
+#else
+      unsafeSet(lattice, resultLattice);
+#endif
     }
     return llvm::success();
+  }
+
+  void
+  visitNonControlFlowArguments(mlir::Operation *op,
+                               const mlir::RegionSuccessor &successor,
+                               llvm::ArrayRef<IndexExprsLattice *> argLattices,
+                               unsigned firstIndex) override {
+    auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
+    if (!iterateOp)
+      return;
+
+    LDBG() << "visiting " << PrintNoRegions(iterateOp);
+
+    for (auto &&[capture, lattice] : llvm::zip_equal(
+             iterateOp.getCaptures(),
+             argLattices.take_back(iterateOp.getCaptures().size()))) {
+      const IndexExprsLattice *captureLattice =
+          getLatticeElementFor(getProgramPointBefore(iterateOp), capture);
+      LDBG() << "captured lattice: " << *captureLattice;
+      LDBG() << "block lattice: " << *lattice;
+      propagateIfChanged(lattice, lattice->join(captureLattice->getValue()));
+      LDBG() << "new block lattice: " << *lattice;
+    }
   }
 
 private:
@@ -1158,6 +1226,24 @@ public:
   void visitBranchOperand(mlir::OpOperand &opOperand) override {
     if (!llvm::isa<wave::WaveTensorType>(opOperand.get().getType()))
       return;
+
+    // Captures of the iterate need to be propagated from the corresponding
+    // block arguments manually without the tiling constraint.
+    if (auto iterateOp =
+            llvm::dyn_cast<wave::IterateOp>(opOperand.getOwner())) {
+      unsigned position = opOperand.getOperandNumber();
+      mlir::Value blockArgument =
+          iterateOp.getLoopBody()->getArgument(position);
+      const IndexExprsLattice *blockArgLattice =
+          getLatticeElement(blockArgument);
+      IndexExprsLattice *lattice = getLatticeElement(opOperand.get());
+      IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::join(
+          lattice->getValue(), blockArgLattice->getValue(),
+          iterateOp.getIterator());
+      unsafeSet(lattice, joined);
+      return;
+    }
+
     setToExitState(getLatticeElement(opOperand.get()));
   }
 
@@ -1178,6 +1264,8 @@ public:
                        lattice->join(initialized
                                          ? IndexExprsLatticeStorage::top()
                                          : IndexExprsLatticeStorage::bottom()));
+    if (initialized)
+      LDBG() << "top fixpoint (backward) for " << lattice->getAnchor();
   }
 
   llvm::LogicalResult
@@ -1185,19 +1273,23 @@ public:
                  llvm::ArrayRef<IndexExprsLattice *> operands,
                  llvm::ArrayRef<const IndexExprsLattice *> results) override {
     LLVM_DEBUG({
-      LDBG() << "visiting operation backward " << PrintNoRegions(op) << "\n";
-      LDBG() << "  Operands lattices:\n";
+      LDBG() << "visiting operation backward " << PrintNoRegions(op);
+      LDBG() << "  operand lattices:";
       for (auto [i, operand] : llvm::enumerate(operands)) {
-        LDBG() << "    operand #" << i << ": ";
-        operand->getValue().print(llvm::dbgs());
-        LDBG() << "\n";
+        LDBG() << "    operand #" << i << ": " << *operand;
       }
-      LDBG() << "  Results lattices:\n";
+      LDBG() << "  results lattices:";
       for (auto [i, result] : llvm::enumerate(results)) {
-        LDBG() << "    result #" << i << ": ";
-        result->getValue().print(llvm::dbgs());
-        LDBG() << "\n";
+        LDBG() << "    result #" << i << ": " << *result;
       }
+    });
+    auto scope = llvm::make_scope_exit([&] {
+      LLVM_DEBUG({
+        LDBG() << "  updated operand lattices:";
+        for (auto [i, operand] : llvm::enumerate(operands)) {
+          LDBG() << "    operand #" << i << ": " << *operand;
+        }
+      });
     });
 
     // Check if the operation implements the interface.
@@ -1234,7 +1326,15 @@ public:
 
     for (auto &&[operandLattice, lattice] :
          llvm::zip_equal(operandLattices, operands)) {
+      // In release mode, just set the lattice value instead of calling join.
+      // The interface should have returned the correctly joined lattice and we
+      // don't want to re-join it and don't need the expensive check of the
+      // lattice direction.
+#ifndef NDEBUG
       propagateIfChanged(lattice, lattice->join(operandLattice));
+#else
+      unsafeSet(lattice, operandLattice);
+#endif
     }
     return llvm::success();
   }
@@ -1256,6 +1356,10 @@ public:
             getArgument())))
       return signalPassFailure();
 
+    mlir::IRRewriter rewriter(&getContext());
+    getOperation()->walk(
+        [&](wave::IterateOp iterateOp) { iterateOp.makeIsolated(rewriter); });
+
     mlir::SymbolTableCollection symbolTable;
     mlir::DataFlowConfig config;
     config.setInterprocedural(false);
@@ -1272,6 +1376,10 @@ public:
     if (llvm::failed(
             wave::setWaveIndexExprAnalysisResults(getOperation(), solver)))
       return signalPassFailure();
+
+    getOperation()->walk([&](wave::IterateOp iterateOp) {
+      iterateOp.makeNonIsolated(rewriter);
+    });
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
             wave::WaveNormalForm::IndexExprsSpecified, getOperation())))
