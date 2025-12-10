@@ -108,11 +108,10 @@ def WaterAllocToAllocaPass : Pass<"water-alloc-to-alloca"> {
   let summary = "Convert memref.alloc to memref.alloca for GPU compatibility";
   let description = [{
     This pass converts memref.alloc to memref.alloca. This is needed because for
-     shared mem allocations, `gpu-to-llvm` pass will try to generate `malloc`
-     call from memref.alloc.
+    shared mem allocations, `gpu-to-llvm` pass will try to generate `malloc`
+    call from memref.alloc.
   }];
 }
-
 
 def WaterGPUToGPURuntime : Pass<"water-gpu-to-gpu-runtime", "::mlir::ModuleOp"> {
   let summary = "Lower GPU dialect ops to runtime calls";
