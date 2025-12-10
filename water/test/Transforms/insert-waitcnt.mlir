@@ -433,3 +433,39 @@ func.func @gather_to_lds(%global: memref<1024xf32>, %lds: memref<1024xf32, #gpu.
   // CHECK-NEXT: return %[[RESULT]]
   return %result : vector<4xf32>
 }
+
+// CHECK-LABEL: func.func @double_buffering
+func.func @double_buffering(%src: memref<1024xf32>, %lb: index, %ub: index, %step: index, %offset: index) {
+  %buff0 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %buff1 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+
+  %out = memref.alloc() : memref<1024xf32>
+
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  //     CHECK: memref.copy
+  memref.copy %src, %buff0 : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // CHECK: scf.for
+  scf.for %i = %lb to %ub step %step iter_args(%current = %buff0, %next = %buff1) -> (memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>) {
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: memref.copy
+    memref.copy %src, %next : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+    // Skip the second buffer copy
+    //     CHECK: amdgpu.memory_counter_wait ds(1)
+    //     CHECK: vector.load
+    %data = vector.load %current[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+    // Cannot skip unfortunately
+    //     CHECK: amdgpu.memory_counter_wait ds(0)
+    //     CHECK: vector.store
+    vector.store %data, %out[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: scf.yield
+    scf.yield %next, %current : memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>
+  }
+
+  // CHECK: return
+  return
+}
