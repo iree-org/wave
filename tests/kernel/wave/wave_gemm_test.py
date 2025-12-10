@@ -2938,8 +2938,8 @@ def testSpecializeGemm(
     assert_close(
         c,
         iree_ref,
-        rtol=1e-2,
-        atol=1e-2,
+        rtol=1e-5,
+        atol=1e-5,
         check_dtype=False,
         check_device=False,
         check_stride=False,
