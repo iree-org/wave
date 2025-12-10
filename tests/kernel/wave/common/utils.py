@@ -62,7 +62,7 @@ perf_test = lambda *a: pytest.param(*a, marks=pytest.mark.perf_only)
 expensive_test_param = lambda *a: pytest.param(*a, marks=pytest.mark.expensive_test)
 
 
-def param_bool(name, shortname=None, values=None):
+def param_bool(name, shortname=None, values=None) -> pytest.param:
     shortname = shortname or name
     values = values or [False, True]
     ids = [f"{shortname}" if v else f"no_{shortname}" for v in values]
@@ -80,6 +80,13 @@ require_water_and_ee = pytest.mark.skipif(
     not _is_water_and_ee_available(),
     reason="Water or execution engine are not available.",
 )
+
+
+_water_enable = [False, pytest.param(True, marks=require_water_and_ee)]
+
+
+def use_water_pipeline_bool(name: str) -> pytest.param:
+    return param_bool(name, "water", values=_water_enable)
 
 
 def glob_asm_files(path: Path) -> list[Path]:

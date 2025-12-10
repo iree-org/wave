@@ -58,6 +58,8 @@ int main(int argc, char **argv) {
   mlir::registerReconcileUnrealizedCastsPass();
   mlir::registerGpuModuleToBinaryPass();
   mlir::registerSymbolDCEPass();
+  mlir::registerSCFToControlFlowPass();
+  mlir::registerConvertVectorToLLVMPass();
 
   mlir::DialectRegistry registry;
   registry.insert<
@@ -83,6 +85,7 @@ int main(int argc, char **argv) {
   mlir::registerConvertMemRefToLLVMInterface(registry);
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::vector::registerConvertVectorToLLVMInterface(registry);
+  mlir::registerConvertComplexToLLVMInterface(registry);
 
   mlir::ROCDL::registerROCDLTargetInterfaceExternalModels(registry);
 

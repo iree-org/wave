@@ -6,6 +6,7 @@
 
 import pytest
 import torch
+from pathlib import Path
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
@@ -34,6 +35,7 @@ from .common.utils import (
     require_e2e,
     require_gfx1250,
     require_rdna4,
+    use_water_pipeline_bool,
 )
 from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
 from wave_lang.kernel.wave.templates.gemm import (
@@ -172,16 +174,18 @@ def testGemmBench(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
+@use_water_pipeline_bool("use_water_pipeline")
 def testPureGemm(
-    shape: tuple[int],
+    shape: tuple[int, int, int],
     enable_scheduling: SchedulingType,
     dynamic_dims: bool,
     mfma_variant: MMAType,
     threads_per_wave: int,
     datatype: torch.dtype,
-    run_bench,
-    perf_filename_tk,
-    perf_filename_iree,
+    use_water_pipeline: bool,
+    run_bench: bool,
+    perf_filename_tk: Path,
+    perf_filename_iree: Path,
 ):
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=threads_per_wave
@@ -203,6 +207,7 @@ def testPureGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
+        use_water_pipeline=use_water_pipeline,
     )
     options.postprocess = """
     module attributes {transform.with_named_sequence} {
