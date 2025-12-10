@@ -76,9 +76,9 @@ def test_wmma_specialize():
     # CHECK-DAG:                    scf.if %[[LOAD_COND]] {
     # CHECK-COUNT-4:                    vector.load
     # CHECK-DAG:                        %[[FIRST_ITER:.*]] = arith.cmpi ne, %[[K]], %c0 : index
-    # CHECK-DAG:                        %[[WAVE_MAP:.*]] = affine.apply #{{.*}}()[%[[TIDX]], %[[TIDY]]]
+    # CHECK-DAG:                        %[[WAVE_MAP:.*]] = affine.apply #{{.*}}()[%[[TIDX]]
 
-    # CHECK-COUNT-4:                    arith.cmpi eq, %[[WAVE_MAP]]
+    # CHECK-COUNT-2:                    arith.cmpi eq, %[[WAVE_MAP]]
     # CHECK-NEXT:                       arith.andi %[[FIRST_ITER]]
     # CHECK-NEXT:                       scf.if {{.*}} {
     # CHECK-NEXT:                           rocdl.s.barrier.wait
@@ -86,7 +86,7 @@ def test_wmma_specialize():
 
     # CHECK-COUNT-8:                    vector.store
 
-    # CHECK-COUNT-4:                    scf.if {{.*}} {
+    # CHECK-COUNT-2:                    scf.if {{.*}} {
     # CHECK-NEXT:                           rocdl.s.wait.dscnt 0
     # CHECK-NEXT:                           rocdl.s.barrier.signal
     # CHECK-NEXT:                       }

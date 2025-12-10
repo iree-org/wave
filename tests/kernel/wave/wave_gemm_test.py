@@ -2867,6 +2867,7 @@ def test_persistent_gemm(
         c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
     )
 
+
 @require_e2e
 @require_gfx1250
 @pytest.mark.parametrize(

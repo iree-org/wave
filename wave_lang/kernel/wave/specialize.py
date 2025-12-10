@@ -544,6 +544,7 @@ class Specialist(GemmScheduler):
 
         update_write_dependencies(new_writes, self.trace)
         for node in nodes:
+            node.replace_all_uses_with(None)
             get_custom(node).erase()
         return
 
@@ -594,7 +595,8 @@ class Specialist(GemmScheduler):
                 self.trace.add_subgraph(wid_wait_graph_name, wid_wait_graph)
 
                 # add wait node to wid_wait_graph
-                SharedMemoryBarrierWait(barId=i).add_to_graph(
+                barId = (i - 1) % self.waves_per_block[0] + 1
+                SharedMemoryBarrierWait(barId=barId).add_to_graph(
                     region_graph=wid_wait_graph, loc=location
                 )
 
@@ -624,7 +626,8 @@ class Specialist(GemmScheduler):
                 self.trace.add_subgraph(wid_signal_graph_name, wid_signal_graph)
 
                 # add signal node to wid_signal_graph
-                SharedMemoryBarrierSignal(barId=i + self.barUB).add_to_graph(
+                barId = (i - 1) % self.waves_per_block[0] + 1
+                SharedMemoryBarrierSignal(barId=barId + self.barUB).add_to_graph(
                     region_graph=wid_signal_graph, loc=signal_location
                 )
 
@@ -701,7 +704,7 @@ class Specialist(GemmScheduler):
 
         with subgraph.inserting_before(first_lw):
             location = get_custom(first_lw).location
-            for offset in range(1, self.barUB):  # self.waves_per_block[0] + 1):
+            for offset in range(1, self.waves_per_block[0] + 1):
 
                 # i is the range of possible barrier id this load wave is helping out
                 i = offset
@@ -719,10 +722,11 @@ class Specialist(GemmScheduler):
                 )
 
                 # calculate which compute wid this load wid is helping with
-                compute_wid = self.wave_id % start_load_wid
+                compute_wid = self.wave_id % self.waves_per_block[0]
+                target_id = (i - 1) % self.waves_per_block[0]
 
                 # add condition entry to parent graph
-                cond_expr = sympy.And(sympy.Eq(compute_wid, i - 1), sympy.Ne(iv, 0))
+                cond_expr = sympy.And(sympy.Eq(compute_wid, target_id), sympy.Ne(iv, 0))
 
                 wait_cond_op = Conditional(
                     cond_expr,
@@ -739,7 +743,7 @@ class Specialist(GemmScheduler):
 
         with subgraph.inserting_after(last_lw):
             location = get_custom(last_lw).location
-            for offset in range(1, self.barUB):
+            for offset in range(1, self.waves_per_block[0] + 1):
 
                 # i is the range of possible barrier id this load wave is helping out
                 i = offset
@@ -757,10 +761,11 @@ class Specialist(GemmScheduler):
                 )
 
                 # calculate which compute wid this load wid is helping with
-                compute_wid = self.wave_id % start_load_wid
+                compute_wid = self.wave_id % self.waves_per_block[0]
+                target_id = (i - 1) % self.waves_per_block[0]
 
                 # add condition entry to parent graph
-                cond_expr = sympy.Eq(compute_wid, i - 1)
+                cond_expr = sympy.Eq(compute_wid, target_id)
 
                 signal_cond_op = Conditional(
                     cond_expr,
