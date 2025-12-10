@@ -127,7 +127,7 @@ def add_output_to_cond(
             get_custom(return_val).replace_all_uses_with_except(gr_node, [output_node])
 
 
-def set_specialied_conditions(
+def set_specialized_conditions(
     graph: fx.Graph,
     hardware_constraint: HardwareConstraint,
     wave_constraints: List[WaveConstraint],
@@ -199,7 +199,7 @@ def specialize_kernel(
 
     wave_constraints = get_wave_constraints(constraints)
 
-    is_load_wave, is_compute_wave, wave_id = set_specialied_conditions(
+    is_load_wave, is_compute_wave, wave_id = set_specialized_conditions(
         trace.get_root_graph(), hardware_constraint, wave_constraints
     )
 
@@ -277,7 +277,7 @@ class Specialist(GemmScheduler):
         hw=None,
     ) -> None:
         super().__init__(graph, edges, resources, meta_name)
-        assert wave_id is not None, "Wave ID should be provided to specilist"
+        assert wave_id is not None, "Wave ID should be provided to specialist"
 
         self.trace: CapturedTrace = trace
         self.graph: fx.Graph = graph
