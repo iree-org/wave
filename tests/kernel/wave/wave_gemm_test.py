@@ -25,6 +25,7 @@ from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from .common.utils import (
+    glob_asm_files,
     param_bool,
     perf_test,
     require_cdna2,
@@ -150,6 +151,78 @@ def testGemmBench(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
     generate_iree_ref("mmt", [a, b], [iree_ref], options)
     assert perf_filename_iree.exists()
     assert "real_time" in perf_filename_iree.read_text()
+
+
+@pytest.mark.parametrize("shape", get_test_shapes("test_gemm")[:1])
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.NONE,
+        SchedulingType.PREFETCH,
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ],
+)
+@param_bool("dynamic_dims", "dyn")
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave, target",
+    [
+        (MMAType.F32_16x16x16_F16, 64, "gfx942"),
+        (MMAType.F32_32x32x8_F16, 64, "gfx942"),
+        (MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, "gfx1200"),
+        (MMAType.GFX1250_F32_16x16x32_F16, 32, "gfx1250"),
+    ],
+)
+@pytest.mark.parametrize("datatype", [torch.float16])
+@use_water_pipeline_bool("use_water_pipeline")
+def testGemmCodegen(
+    shape: tuple[int, int, int],
+    enable_scheduling: SchedulingType,
+    dynamic_dims: bool,
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+    target: str,
+    datatype: torch.dtype,
+    use_water_pipeline: bool,
+    tmp_path: Path,
+):
+    """
+    Test that the GEMM kernel is codegen'd successfully for the given target.
+    """
+    gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
+        shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=threads_per_wave
+    )
+
+    multibuffer = enable_scheduling in [
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
+    ]
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    hyperparams[UNROLL_FACTOR] = 2 if multibuffer else 1
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        schedule=enable_scheduling,
+        dynamic_symbols=dynamic_symbols,
+        use_water_pipeline=use_water_pipeline,
+        dump_intermediates=tmp_path,
+    )
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
+    options.target = target
+    wave_compile(options, gemm)
+    asm_files = glob_asm_files(tmp_path)
+    assert len(asm_files) == 1, "Expected 1 ASM file"
+    text = asm_files[0].read_text()
+    assert "mfma" in text or "wmma" in text, "Expected mfma or wmma instruction"
 
 
 @require_e2e
