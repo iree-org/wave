@@ -104,7 +104,11 @@ struct PendingOperations {
   size_t size() const { return ops.size(); }
   bool empty() const { return ops.empty(); }
 
-  auto opsAndTokens() const { return llvm::zip(ops, opsTokens); }
+  auto opsAndTokens() const {
+    assert(ops.size() == opsTokens.size() &&
+           "ops and opsTokens must have the same size");
+    return llvm::zip(ops, opsTokens);
+  }
 
   bool hasSameTail(const PendingOperations &other) const {
     for (const auto &[op1, op2, tok1, tok2] :
@@ -132,7 +136,7 @@ struct PendingOperations {
   void print(raw_ostream &os) const {
     os << "PendingOperations: ops=[";
     llvm::interleaveComma(opsAndTokens(), os, [&](const auto &opAndTok) {
-      os << std::get<0>(opAndTok) << "|";
+      os << *std::get<0>(opAndTok) << "|";
       print_range(os, std::get<1>(opAndTok));
     });
     os << "]";
@@ -288,11 +292,11 @@ public:
   void print(raw_ostream &os) const override {
     os << "WaitcntState: pending ops [";
     for (auto &pendingOps : pendingOpsLists) {
-      os << "[";
+      os << "\n   [";
       pendingOps->print(os);
       os << "]";
     }
-    os << "], requirement: " << requirement;
+    os << "\n   ], requirement: " << requirement;
   }
 
   void addPendingOp(Operation *op) {
@@ -325,9 +329,7 @@ public:
       SmallVector<Operation *> newPending;
       SmallVector<PendingOperations::TokenContainer> newPendingTokens;
       WaitcntRequirement runningRequirement;
-      for (const auto &[op, tok] :
-           llvm::zip(llvm::reverse(pendingOps->ops),
-                     llvm::reverse(pendingOps->opsTokens))) {
+      for (const auto &[op, tok] : llvm::reverse(pendingOps->opsAndTokens())) {
         WaitcntRequirement opReq =
             WaitcntRequirement::getOperationRequirement(op, false);
         runningRequirement = runningRequirement + opReq;
@@ -561,7 +563,7 @@ public:
     WaitcntState newState = before;
 
     // Check if any operands depend on pending operations (value dependency)
-    WaitcntRequirement opRequirement;
+    WaitcntRequirement opRequirement = after->getRequirement();
     for (Value operand : op->getOperands()) {
       if (auto req = before.checkRequirement(operand)) {
         // Merge this requirement (take minimum for conservative wait)

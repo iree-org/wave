@@ -469,3 +469,44 @@ func.func @double_buffering(%src: memref<1024xf32>, %lb: index, %ub: index, %ste
   // CHECK: return
   return
 }
+
+// CHECK-LABEL: func.func @triple_buffering
+func.func @triple_buffering(%src: memref<1024xf32>, %lb: index, %ub: index, %step: index, %offset: index) {
+  %buff0 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %buff1 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %buff2 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+
+  %out = memref.alloc() : memref<1024xf32>
+
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  //     CHECK: memref.copy
+  memref.copy %src, %buff0 : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  //     CHECK: memref.copy
+  memref.copy %src, %buff1 : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // CHECK: scf.for
+  scf.for %i = %lb to %ub step %step iter_args(%current = %buff0, %next = %buff1, %next_next = %buff2) -> (memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>) {
+    // Skip the second buffer copy
+    //     CHECK: amdgpu.memory_counter_wait ds(1)
+    //     CHECK: vector.load
+    %data = vector.load %current[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: memref.copy
+    memref.copy %src, %next_next : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+    // Skip the prev copy
+    //     CHECK: amdgpu.memory_counter_wait ds(1)
+    //     CHECK: vector.store
+    vector.store %data, %out[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: scf.yield
+    scf.yield %next, %next_next, %current : memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>
+  }
+
+  // CHECK: return
+  return
+}
