@@ -715,3 +715,54 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     return
   }
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_with_wave_input
+  // CHECK-SAME: (%[[ARG0:.*]]: memref<32x32xf16, #gpu.address_space<global>>)
+  func.func @func_with_wave_input(%arg0: !wave.tensor<[@M, @N] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32}>} {
+    func.return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_with_multiple_wave_inputs
+  // CHECK-SAME: (%[[ARG0:.*]]: memref<32x32xf16, #gpu.address_space<global>>, %[[ARG1:.*]]: memref<32x32xf16, #gpu.address_space<global>>, %[[ARG2:.*]]: memref<32x32xf16, #gpu.address_space<global>>)
+  func.func @func_with_multiple_wave_inputs(
+      %arg0: !wave.tensor<[@M, @N] of f16, <global>>,
+      %arg1: !wave.tensor<[@M, @N] of f16, <global>>,
+      %arg2: !wave.tensor<[@M, @N] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32}>} {
+    func.return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_with_mixed_input_types
+  // CHECK-SAME: (%[[ARG0:.*]]: memref<64x64xf32, #gpu.address_space<global>>, %[[ARG1:.*]]: i32, %[[ARG2:.*]]: memref<16x16xf16, #gpu.address_space<global>>)
+  func.func @func_with_mixed_input_types(
+      %arg0: !wave.tensor<[@M, @N] of f32, <global>>,
+      %arg1: i32,
+      %arg2: !wave.tensor<[@K, @L] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 64, K = 16, L = 16}>} {
+    func.return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_without_wave_tensors
+  // CHECK-SAME: (%[[ARG0:.*]]: f32, %[[ARG1:.*]]: i64) -> memref<32x32xf32>
+  func.func @func_without_wave_tensors(%arg0: f32, %arg1: i64) -> memref<32x32xf32>
+      attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %alloc = memref.alloc() : memref<32x32xf32>
+    func.return %alloc : memref<32x32xf32>
+  }
+}
