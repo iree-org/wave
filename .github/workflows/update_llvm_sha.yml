@@ -41,7 +41,7 @@ jobs:
           BRANCH_EXISTS=$(git ls-remote --exit-code --heads origin ${{ env.GIT_BRANCH_NAME }} | wc -l)
           echo branch-exists=${BRANCH_EXISTS} >> "${GITHUB_OUTPUT}"
           if [[ ${BRANCH_EXISTS} == 1 ]]; then
-            echo "Skipping update PR creation since the \`${{ env.GIT_BRANCH_NAME }}\` branch already exists." >> ${GITHUB_STEP_SUMMARY}
+            echo "Skipping update PR creation since the `${{ env.GIT_BRANCH_NAME }}` branch already exists." >> ${GITHUB_STEP_SUMMARY}
           fi
 
   update-llvm:
