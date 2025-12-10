@@ -13,6 +13,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
@@ -82,9 +83,11 @@ template <typename T> static void print_range(raw_ostream &os, T &&range) {
 
 /// Shared pending operations list for structural sharing
 struct PendingOperations {
+  using TokenContainer = SmallVector<Value, 2>;
+
   PendingOperations() = default;
   PendingOperations(SmallVector<Operation *> &&ops,
-                    SmallVector<SmallVector<Value, 1>> &&opsTokens)
+                    SmallVector<TokenContainer> &&opsTokens)
       : ops(std::move(ops)), opsTokens(std::move(opsTokens)) {}
 
   void addOp(Operation *op) {
@@ -115,6 +118,17 @@ struct PendingOperations {
     return true;
   }
 
+  void updateTokens(
+      llvm::function_ref<void(Value, SmallVectorImpl<Value> &)> updateFunc) {
+    for (TokenContainer &tokens : opsTokens) {
+      TokenContainer newTok;
+      for (Value tok : tokens)
+        updateFunc(tok, newTok);
+
+      tokens = std::move(newTok);
+    }
+  }
+
   void print(raw_ostream &os) const {
     os << "PendingOperations: ops=[";
     llvm::interleaveComma(opsAndTokens(), os, [&](const auto &opAndTok) {
@@ -125,7 +139,7 @@ struct PendingOperations {
   }
 
   SmallVector<Operation *> ops;
-  SmallVector<SmallVector<Value, 1>> opsTokens;
+  SmallVector<TokenContainer> opsTokens;
 };
 
 /// Waitcnt requirement for synchronization
@@ -309,7 +323,7 @@ public:
     requirement = req;
     for (auto &pendingOps : pendingOpsLists) {
       SmallVector<Operation *> newPending;
-      SmallVector<SmallVector<Value, 1>> newPendingTokens;
+      SmallVector<PendingOperations::TokenContainer> newPendingTokens;
       WaitcntRequirement runningRequirement;
       for (const auto &[op, tok] :
            llvm::zip(llvm::reverse(pendingOps->ops),
@@ -355,6 +369,12 @@ public:
     }
 
     resetPendingOpsSet();
+  }
+
+  void updateTokens(
+      llvm::function_ref<void(Value, SmallVectorImpl<Value> &)> updateFunc) {
+    for (auto &pendingOps : pendingOpsLists)
+      pendingOps->updateTokens(updateFunc);
   }
 
   void resetRequirement() { requirement = {}; }
@@ -512,13 +532,13 @@ private:
   void resetPendingOpsSet() { pendingOpsSet.clear(); }
 };
 
-static ValueRange getRegionResults(ArrayRef<RegionSuccessor> successors,
-                                   Region *region) {
+static RegionSuccessor getRegionResults(ArrayRef<RegionSuccessor> successors,
+                                        Region *region) {
   for (const auto &successor : successors) {
     if (successor.getSuccessor() == region)
-      return successor.getSuccessorInputs();
+      return successor;
   }
-  assert(false && "Region not found, malfoemrf SCF op?");
+  llvm_unreachable("Region not found, malformed SCF op?");
 }
 
 /// Dense forward dataflow analysis for waitcnt insertion
@@ -595,15 +615,56 @@ public:
     SmallVector<RegionSuccessor> successors;
     branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
 
-    ValueRange newValues;
-    if (regionTo) {
-      Region &region = branch->getRegions()[*regionTo];
-      newValues = getRegionResults(successors, &region);
+    auto destSuccessor = [&]() -> RegionSuccessor {
+      if (regionTo) {
+        Region &region = branch->getRegions()[*regionTo];
+        return getRegionResults(successors, &region);
+      } else {
+        return getRegionResults(successors, nullptr);
+      }
+    }();
+    // Dest values are either nested block args or branch op results.
+    ValueRange destValues = destSuccessor.getSuccessorInputs();
+
+    // Map from input values to dest values.
+    llvm::SmallDenseMap<Value, Value> valuesMapping;
+    if (regionFrom) {
+      Region &region = branch->getRegions()[*regionFrom];
+      for (Block &block : region) {
+        auto term =
+            dyn_cast<RegionBranchTerminatorOpInterface>(block.getTerminator());
+        if (!term)
+          continue;
+
+        ValueRange source =
+            term.getMutableSuccessorOperands(destSuccessor).getAsOperandRange();
+        for (auto [source, dest] : llvm::zip(source, destValues))
+          valuesMapping[source] = dest;
+      }
     } else {
-      newValues = getRegionResults(successors, nullptr);
+      ValueRange source = branch.getEntrySuccessorOperands(destSuccessor);
+      for (auto [source, dest] : llvm::zip(source, destValues))
+        valuesMapping[source] = dest;
     }
 
-    propagateIfChanged(after, after->join(before));
+    DominanceInfo dom;
+
+    WaitcntState newState = before;
+    auto tokenUpdateFunc = [&](Value value, SmallVectorImpl<Value> &newTokens) {
+      // Keep the token if it dominates current op as user can use it directly.
+      if (dom.properlyDominates(value, branch))
+        newTokens.push_back(value);
+
+      // Add token propagated through region control flow.
+      if (Value value = valuesMapping.lookup(value))
+        if (newTokens.empty() || newTokens.back() != value)
+          newTokens.push_back(value);
+    };
+    newState.updateTokens(tokenUpdateFunc);
+
+    LDBG() << "  New state: " << newState;
+
+    propagateIfChanged(after, after->join(newState));
   }
 
 private:
