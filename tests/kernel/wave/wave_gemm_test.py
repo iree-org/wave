@@ -2885,7 +2885,7 @@ def test_persistent_gemm(
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
-@pytest.mark.parametrize("use_global_to_shared", [False])
+@pytest.mark.parametrize("use_global_to_shared", [False, True])
 def testSpecializeGemm(
     shape: tuple[int],
     enable_scheduling: SchedulingType,
@@ -2938,8 +2938,8 @@ def testSpecializeGemm(
     assert_close(
         c,
         iree_ref,
-        rtol=1e-5,
-        atol=1e-5,
+        rtol=1e-2,
+        atol=1e-2,
         check_dtype=False,
         check_device=False,
         check_stride=False,

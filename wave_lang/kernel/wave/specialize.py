@@ -84,6 +84,8 @@ from .scheduling.graph_utils import Edge
 
 from .minimize_global_loads import update_write_dependencies
 
+from .fuse_tensor_loads import _scale_distributed_shape
+
 
 def add_output_to_cond(
     op: CustomOp,
@@ -320,8 +322,27 @@ class Specialist(GemmScheduler):
                 arg_transform=lambda x: node_map[x] if x in node_map else x,
             )
             if isinstance(custom, TensorLoadToLDS):
-                new_op.global_tile_index = new_index(custom.global_tile_index, subs)
-                new_op.shared_tile_index = new_index(custom.shared_tile_index, subs)
+                # redistribute across load waves
+                new_op.update_arg(
+                    "distributed_shape",
+                    _scale_distributed_shape(custom, self.waves_per_block[1]),
+                )
+                tensor_subs = {
+                    THREAD_0: (THREAD_0 // 32)
+                    // self.waves_per_block[0]
+                    * new_op.distributed_shape[
+                        get_custom(custom.dst[0]).type.symbolic_shape[0]
+                    ]
+                }
+                tensor_subs.update(subs)
+                new_op.update_arg(
+                    "global_tile_index",
+                    new_index(custom.global_tile_index, tensor_subs),
+                )
+                new_op.update_arg(
+                    "shared_tile_index",
+                    new_index(custom.shared_tile_index, tensor_subs),
+                )
             else:
                 new_op.index = new_index(node.index, subs)
 
@@ -331,7 +352,7 @@ class Specialist(GemmScheduler):
                 new_writes[custom.memory].append(new_op.fx_node)
                 write_record.append(new_op.fx_node)
             if isinstance(custom, TensorLoadToLDS):
-                new_writes[custom.src[0]].append(new_op.fx_node)
+                new_writes[custom.dst[0]].append(new_op.fx_node)
                 write_record.append(new_op.fx_node)
 
     def get_ops_of_type(self, operation_type: GemmOperationType) -> List[fx.Node]:
