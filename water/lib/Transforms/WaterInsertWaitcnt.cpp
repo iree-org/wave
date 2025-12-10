@@ -77,8 +77,10 @@ static bool isWorkgroupAddressSpace(MemRefType type) {
   return attr && attr.getValue() == gpu::AddressSpace::Workgroup;
 }
 
-template <typename T> static void print_range(raw_ostream &os, T &&range) {
+template <typename T>
+static raw_ostream &print_range(raw_ostream &os, T &&range) {
   llvm::interleaveComma(range, os, [&](const auto &item) { os << item; });
+  return os;
 }
 
 /// Shared pending operations list for structural sharing
@@ -92,13 +94,12 @@ struct PendingOperations {
 
   void addOp(Operation *op) {
     ops.push_back(op);
-    if (auto memref = isStoreOp(op)) {
-      opsTokens.push_back({*memref});
-    } else if (isLoadOp(op)) {
-      opsTokens.push_back({op->getResult(0)});
-    } else {
-      assert(false && "Expected load or store operation");
-    }
+    auto &back = opsTokens.emplace_back();
+    if (auto memref = isStoreOp(op))
+      back.push_back(*memref);
+
+    if (auto memref = isLoadOp(op))
+      back.push_back(*memref);
   }
 
   size_t size() const { return ops.size(); }
@@ -230,12 +231,12 @@ inline raw_ostream &operator<<(raw_ostream &os,
   return os;
 }
 
-static bool mayAlias(Value lhs, Value rhs, AliasAnalysis &aliasAnalysis) {
+static bool mayAlias(Value lhs, Value rhs, ArrayRef<Value> tokens) {
   if (isWorkgroupAddressSpace(cast<MemRefType>(lhs.getType())) !=
       isWorkgroupAddressSpace(cast<MemRefType>(rhs.getType())))
     return false;
 
-  return !aliasAnalysis.alias(lhs, rhs).isNo();
+  return llvm::is_contained(tokens, lhs);
 }
 
 /// Lattice state tracking pending asynchronous operations
@@ -436,12 +437,14 @@ public:
           continue;
 
         // Search from the back to find the most recent dependency
-        for (Operation *pendingOp : llvm::reverse(pendingOps->ops)) {
+        for (const auto &[pendingOp, pendingTokens] :
+             llvm::zip(llvm::reverse(pendingOps->ops),
+                       llvm::reverse(pendingOps->opsTokens))) {
           auto checkPendingMemref =
               [&](Value pendingMemref, bool isPendingLoad,
                   bool isPendingStore) -> WaitcntRequirement {
             WaitcntRequirement pendingResult;
-            if (!mayAlias(memref, pendingMemref, aliasAnalysis))
+            if (!mayAlias(memref, pendingMemref, pendingTokens))
               return pendingResult;
 
             // Check for dependencies:
@@ -502,8 +505,8 @@ private:
       if (pendingOps.use_count() > 1) {
         auto newPending = std::make_shared<PendingOperations>();
         if (pendingOps)
-          newPending->ops = pendingOps->ops;
-        pendingOps = newPending;
+          *newPending = *pendingOps;
+        pendingOps = std::move(newPending);
       }
     }
   }
@@ -572,6 +575,8 @@ public:
     if (auto memReq = before.checkMemoryDependency(op, aliasAnalysis)) {
       LDBG() << "  Memory dependency: " << memReq;
       opRequirement.merge(memReq);
+    } else {
+      LDBG() << "  No memory dependency";
     }
 
     // Check if this is an existing memory_counter_wait operation
@@ -656,9 +661,9 @@ public:
         newTokens.push_back(value);
 
       // Add token propagated through region control flow.
-      if (Value value = valuesMapping.lookup(value))
-        if (newTokens.empty() || newTokens.back() != value)
-          newTokens.push_back(value);
+      if (Value mappedValue = valuesMapping.lookup(value))
+        if (newTokens.empty() || newTokens.back() != mappedValue)
+          newTokens.push_back(mappedValue);
     };
     newState.updateTokens(tokenUpdateFunc);
 
