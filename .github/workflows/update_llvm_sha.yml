@@ -24,6 +24,7 @@ permissions:
 env:
   GIT_BRANCH_NAME: ${{ inputs.branch-name || 'integrates/llvm' }}
   LLVM_REPO: https://github.com/llvm/llvm-project.git
+  LLVM_SHA_FILE: water/llvm-sha.txt
 
 jobs:
   check-for-existing-branch:
@@ -54,7 +55,7 @@ jobs:
       - name: Get current LLVM SHA
         id: current-sha
         run: |
-          CURRENT_SHA=$(cat water/llvm-sha.txt | tr -d '[:space:]')
+          CURRENT_SHA=$(cat ${{ env.LLVM_SHA_FILE }} | tr -d '[:space:]')
           echo "current=${CURRENT_SHA}" >> "${GITHUB_OUTPUT}"
           echo "Current LLVM SHA: ${CURRENT_SHA}" >> ${GITHUB_STEP_SUMMARY}
 
@@ -68,8 +69,8 @@ jobs:
       - name: Update LLVM SHA file
         if: ${{ steps.current-sha.outputs.current != steps.latest-sha.outputs.latest }}
         run: |
-          echo "${{ steps.latest-sha.outputs.latest }}" > water/llvm-sha.txt
-          echo "Updated water/llvm-sha.txt to ${{ steps.latest-sha.outputs.latest }}" >> ${GITHUB_STEP_SUMMARY}
+          echo "${{ steps.latest-sha.outputs.latest }}" > ${{ env.LLVM_SHA_FILE }}
+          echo "Updated ${{ env.LLVM_SHA_FILE }} to ${{ steps.latest-sha.outputs.latest }}" >> ${GITHUB_STEP_SUMMARY}
 
       - uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94 # v2.2.0
         if: ${{ steps.current-sha.outputs.current != steps.latest-sha.outputs.latest && env.CREATE_PULL_REQUEST_TOKEN_APP_ID != '' && env.CREATE_PULL_REQUEST_TOKEN_APP_PRIVATE_KEY != '' }}
@@ -93,7 +94,7 @@ jobs:
           signoff: true
           title: "Bump LLVM to latest upstream commit"
           body: |
-            This PR updates the LLVM commit SHA in `water/llvm-sha.txt` to the latest upstream commit.
+            This PR updates the LLVM commit SHA in `${{ env.LLVM_SHA_FILE }}` to the latest upstream commit.
 
             **Current SHA:** `${{ steps.current-sha.outputs.current }}`
             **Latest SHA:** `${{ steps.latest-sha.outputs.latest }}`
