@@ -473,7 +473,13 @@ public:
 
   // Return a new lattice instance with only the provided symbols present.
   IndexExprsLatticeStorage
-  keepOnlySymbols(llvm::ArrayRef<class WaveSymbolAttr> symbols) const;
+  keepOnlySymbols(llvm::ArrayRef<wave::WaveSymbolAttr> symbols) const;
+
+  // Return a new lattice instance where all expressions no longer have
+  // references to the provided iterator symbols. Note that this doesn't remove
+  // elements from the mapping dictionary but updates the mapped expressions.
+  IndexExprsLatticeStorage
+  withoutIterSymbols(llvm::ArrayRef<wave::WaveSymbolAttr> iterSymbols) const;
 
   void print(llvm::raw_ostream &os) const;
 

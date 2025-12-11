@@ -183,7 +183,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types>, wave_test.
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
-    // expected-error @below {{incompatible operand when propagating from those to result}}
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
     // expected-note @below {{operand #0 lattice}}
     // expected-note @below {{operand #1 lattice}}
     %add = wave.add %a, %b {wave_test.override_operand_index = [{
@@ -216,5 +216,521 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
     %result = wave.add %a, %b {wave_test.override_result_index = ["<top>"]}
     : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return %result : !wave.tensor<[@M, @N] of f32>
+  }
+}
+
+// -----
+
+// Joining with the same expression results in that expression.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_with_same
+  func.func @join_with_same(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Joining with null (uninitialized) doesn't crash and gives the other expression.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_with_null
+  func.func @join_with_null(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (<NULL>, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Joining with bottom (denoted as unit) gives the other expression.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_with_bottom
+  func.func @join_with_bottom(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    },
+       unit  // will default-initialize to bottom.
+    ]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Joining with zero is gives the other expression.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_with_zero
+  func.func @join_with_zero(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-SAME: M : [#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (0, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Additional constant summand makes expressions join to top.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @simple_add(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+    // expected-note @below {{operand #0 lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40 + 1, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Different constant summands join to top.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @simple_add(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+    // expected-note @below {{operand #0 lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40 + 2, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40 + 1, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Different constant values other than zero join to top.
+// Also, difference may be in the step.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @simple_add(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+    // expected-note @below {{operand #0 lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 2, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Difference in stride joins to top.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @simple_add(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+    // expected-note @below {{operand #0 lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Different expressions involving threads join to top.
+// Note that here the underlying affine expression is the same, but symbols
+// are different, we should be able to catch that.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @simple_add(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+    // expected-note @below {{operand #0 lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1 * 40, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Different expressions involving workgroups join to top.
+// Note that there are unused symbols in mappings.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @simple_add(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+    // expected-note @below {{operand #0 lattice}}
+    // expected-note @below {{operand #1 lattice}}
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<WG1>] -> (WG0, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<WG1>] -> (WG1, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+
+// -----
+
+// Joining thread and block components is fine. Note that some symbols are unused in mappings.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_threads_workgroups
+  func.func @join_threads_workgroups(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-SAME: {M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Identical constant summands don't sum up when symbols do.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @same_constant_summands
+  func.func @same_constant_summands(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-SAME: {M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0 + 2, 1, 1)
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<WG0>] -> (WG0 + 2, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0 + 2 , 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Joining thread and block components is fine, this requires aligning symbols in mappings.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_threads_workgroups_align
+  func.func @join_threads_workgroups_align(
+    %a: !wave.tensor<[@M] of f32>,
+    %b: !wave.tensor<[@M] of f32>
+  ) -> !wave.tensor<[@M] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.add
+    // CHECK-SAME: index
+    // CHECK-SAME: {M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)
+    %result = wave.add %a, %b {wave_test.override_operand_index = [{
+       M = #wave<index_mapping[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>
+    }, {
+       M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0, 1, 1)>
+    }]}
+    : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
+    return %result : !wave.tensor<[@M] of f32>
+  }
+}
+
+// -----
+
+// Joining iter symbols and blocks is fine and results in an add.
+// TODO: Also check that iter symbols don't leak form the loop to results.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_iter_workgroups
+  func.func @join_iter_workgroups(
+    %a: !wave.tensor<[@M, @K] of f32>,
+    %b: !wave.tensor<[@M, @K] of f32>
+  ) -> !wave.tensor<[@M, @K] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    %result = wave.iterate @K iter_args(%a) {
+    ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
+      // CHECK: wave.add
+      // CHECK-SAME: index
+      // CHECK-SAME: M : [#wave.index_symbol<WG0>, #wave.iter<"K">] -> (WG0 + _Iter_K, 1, 1)
+      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [{
+        M = #wave<index_mapping[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>
+      }, {
+        M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K, 1, 1)>
+      }]}
+      : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+
+      wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
+    } : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+    return %result : !wave.tensor<[@M, @K] of f32>
+  }
+}
+
+// -----
+
+// Joining iter symbols with themselves is fine.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_iter_same
+  func.func @join_iter_same(
+    %a: !wave.tensor<[@M, @K] of f32>,
+    %b: !wave.tensor<[@M, @K] of f32>
+  ) -> !wave.tensor<[@M, @K] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    %result = wave.iterate @K iter_args(%a) {
+    ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
+      // CHECK: wave.add
+      // CHECK-SAME: index
+      // CHECK-SAME: M : [#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)
+      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [{
+        M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
+      }, {
+        M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
+      }]}
+      : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+
+      wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
+    } : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+    return %result : !wave.tensor<[@M, @K] of f32>
+  }
+}
+
+// -----
+
+// Joining different iter symbols with is fine and results in a sum.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @join_iters
+  func.func @join_iters(
+    %a: !wave.tensor<[@M, @K] of f32>,
+    %b: !wave.tensor<[@M, @K] of f32>
+  ) -> !wave.tensor<[@M, @K] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    %result = wave.iterate @M iter_args(%b) {
+    ^bb0(%b_arg: !wave.tensor<[@M, @K] of f32>):
+      %inner_result = wave.iterate @K iter_args(%a) {
+      ^bb1(%a_arg: !wave.tensor<[@M, @K] of f32>):
+        // CHECK: wave.add
+        // CHECK-SAME: index
+        // CHECK-SAME: M : [#wave.iter<"M">, #wave.iter<"K">] -> (_Iter_M + _Iter_K, 1, 1)
+        %partial_result = wave.add %a_arg, %b_arg {wave_test.override_operand_index = [{
+          M = #wave<index_mapping[#wave.iter<"M">] -> (_Iter_M, 1, 1)>
+        }, {
+          M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K, 1, 1)>
+        }]}
+        : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+
+        wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
+      } : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+
+      wave.yield %inner_result : !wave.tensor<[@M, @K] of f32>
+    } : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+    return %result : !wave.tensor<[@M, @K] of f32>
+  }
+}
+
+// -----
+
+// Otherwise iter symbols behave like any other component, e.g., different
+// expressions involving the same symbol join to top.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  func.func @join_iters(
+    %a: !wave.tensor<[@M, @K] of f32>,
+    %b: !wave.tensor<[@M, @K] of f32>
+  ) -> !wave.tensor<[@M, @K] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    %result = wave.iterate @K iter_args(%a) {
+    ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
+      // expected-error @below {{incompatible operand lattices when propagating from those to result}}
+      // expected-note @below {{operand #0 lattice}}
+      // expected-note @below {{operand #1 lattice}}
+      %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [{
+        M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
+      }, {
+        M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K * 2, 1, 1)>
+      }]}
+      : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+
+      wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
+    } : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+    return %result : !wave.tensor<[@M, @K] of f32>
+  }
+}
+
+// -----
+
+// Check that we don't leak iter symbols to values before the loop.
+
+module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+  // CHECK-LABEL: @do_not_leak_above
+  func.func @do_not_leak_above(
+    %a: !wave.tensor<[@M, @K] of f32>,
+    %b: !wave.tensor<[@M, @K] of f32>
+  ) -> !wave.tensor<[@M, @K] of f32> attributes {
+    wave.constraints = [
+      #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
+    ]
+  } {
+    // CHECK: wave.read
+    // CHECK-SAME: {M : [] -> (42, 1, 1)
+    %b_reg = wave.read %b : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+    %result = wave.iterate @K iter_args(%a) {
+    ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
+      %partial_result = wave.add %a_arg, %b_reg {wave_test.override_operand_index = [{
+        M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
+      }, {
+        M = #wave<index_mapping[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
+      }]}
+      : (!wave.tensor<[@M, @K] of f32>, !wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+
+      wave.yield %partial_result : !wave.tensor<[@M, @K] of f32>
+    } : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
+    return %result : !wave.tensor<[@M, @K] of f32>
   }
 }

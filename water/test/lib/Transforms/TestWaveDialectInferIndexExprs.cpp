@@ -7,11 +7,13 @@
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Support/WalkResult.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/Transforms/DataFlowAnalyses.h"
 
 using namespace mlir;
@@ -99,10 +101,18 @@ public:
     options.overrideInitialization = overrideInitialization;
     addWaveIndexExprsAnalyses(solver, symbolTable, options);
 
+    mlir::IRRewriter rewriter(&getContext());
+    getOperation()->walk(
+        [&](wave::IterateOp iterateOp) { iterateOp.makeIsolated(rewriter); });
+
     if (failed(wave::runSolverAndCaptureErrors(solver, getOperation(), false)))
       return signalPassFailure();
 
     if (failed(setWaveIndexExprAnalysisResults(getOperation(), solver)))
       return signalPassFailure();
+
+    getOperation()->walk([&](wave::IterateOp iterateOp) {
+      iterateOp.makeNonIsolated(rewriter);
+    });
   }
 };

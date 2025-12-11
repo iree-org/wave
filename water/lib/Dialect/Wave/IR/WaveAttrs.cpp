@@ -5,22 +5,23 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
-#include "mlir/IR/AffineExpr.h"
-#include "mlir/IR/Attributes.h"
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/Support/LLVM.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Support/LLVM.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLForwardCompat.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
@@ -234,6 +235,68 @@ WaveIndexMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   }
 
   return success();
+}
+
+WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
+  SmallVector<Attribute> symbols = llvm::to_vector(getSymbols());
+  auto it = llvm::find(symbols, input);
+  if (it == symbols.end())
+    return *this;
+
+  size_t position = std::distance(symbols.begin(), it);
+  MLIRContext *ctx = getContext();
+  DenseMap<AffineExpr, AffineExpr> replacement;
+  replacement.try_emplace(getAffineSymbolExpr(position, ctx),
+                          getAffineConstantExpr(0, ctx));
+  for (size_t i = position + 1, e = symbols.size(); i < e; ++i) {
+    replacement.try_emplace(getAffineSymbolExpr(i, ctx),
+                            getAffineSymbolExpr(i - 1, ctx));
+  }
+
+  symbols.erase(it);
+  return get(ctx, symbols,
+             getStart() ? getStart().replace(replacement) : AffineMap(),
+             getStep() ? getStep().replace(replacement) : AffineMap(),
+             getStride() ? getStride().replace(replacement) : AffineMap());
+}
+
+SmallVector<unsigned> WaveIndexMappingAttr::getUsedSymbolPositions() const {
+  llvm::SetVector<unsigned> usedSymbolPositions;
+  auto collect = [&](AffineMap map) {
+    map.walkExprs([&](AffineExpr expr) {
+      if (auto symbolExpr = dyn_cast<AffineSymbolExpr>(expr))
+        usedSymbolPositions.insert(symbolExpr.getPosition());
+    });
+  };
+  if (getStart())
+    collect(getStart());
+  if (getStep())
+    collect(getStep());
+  if (getStride())
+    collect(getStride());
+  return usedSymbolPositions.takeVector();
+}
+
+WaveIndexMappingAttr WaveIndexMappingAttr::removeUnusedInputs() const {
+  SmallVector<unsigned> usedSymbolPositions = getUsedSymbolPositions();
+  llvm::sort(usedSymbolPositions);
+  SmallVector<Attribute> newSymbols;
+  DenseMap<AffineExpr, AffineExpr> replacement;
+  for (auto [oldPosition, symbol] : llvm::enumerate(getSymbols())) {
+    if (!llvm::is_contained(usedSymbolPositions, oldPosition))
+      continue;
+
+    replacement.try_emplace(
+        getAffineSymbolExpr(oldPosition, getContext()),
+        getAffineSymbolExpr(newSymbols.size(), getContext()));
+    newSymbols.push_back(symbol);
+  }
+  assert(newSymbols.size() == usedSymbolPositions.size());
+  AffineMap start = getStart() ? getStart().replace(replacement) : AffineMap();
+  AffineMap step = getStep() ? getStep().replace(replacement) : AffineMap();
+  AffineMap stride =
+      getStride() ? getStride().replace(replacement) : AffineMap();
+  return get(getContext(), newSymbols, start, step, stride);
 }
 
 //===----------------------------------------------------------------------===//

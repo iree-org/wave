@@ -145,11 +145,12 @@ void wave::IterateOp::makeIsolated(mlir::RewriterBase &rewriter) {
 
   // Add trailing block arguments for captured values. The little dance with the
   // rewriter is a way to append block arguments.
-  llvm::SmallVector<mlir::Type> allTypes(getCaptureBlockArgs().getTypes());
+  llvm::SmallVector<mlir::Type> allTypes(getLoopBody()->getArgumentTypes());
   llvm::append_range(allTypes,
                      mlir::ValueRange(captures.getArrayRef()).getTypes());
-  llvm::SmallVector<mlir::Location> allLocs = llvm::map_to_vector(
-      getCaptureBlockArgs(), [](mlir::Value value) { return value.getLoc(); });
+  llvm::SmallVector<mlir::Location> allLocs =
+      llvm::map_to_vector(getLoopBody()->getArguments(),
+                          [](mlir::Value value) { return value.getLoc(); });
   llvm::append_range(allLocs, newCaptureLocs);
   mlir::Block *originalBlock = getLoopBody();
   mlir::Block *newBlock =

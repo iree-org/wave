@@ -756,27 +756,42 @@ static FailureOr<AffineMap> getIndexExprsJoinedMap(
     return failure();
   }
 
-  SmallVector<mlir::AffineExpr> symReplacements(allSymbols.size(),
-                                                getAffineConstantExpr(0, ctx));
+  // The symbolic part of the difference should not depend on any of the
+  // disallowed symbols (usually meaning symbols appearing in both).
   for (AffineExpr expr : difference.getResults()) {
-    // The symbolic part of the difference should not depend on any of the
-    // disallowed symbols.
     for (unsigned symbol : disallowedSymbols) {
       if (expr.isFunctionOfSymbol(symbol))
         return failure();
     }
+  }
 
-    // The numeric part of the difference should be zero.
-    AffineExpr differenceRemainder = expr.replaceSymbols(symReplacements);
-    if (auto constant = llvm::dyn_cast<AffineConstantExpr>(differenceRemainder);
-        !constant || constant.getValue() != 0)
+  // The constant parts of the expression must be equal.
+  // TODO: consider whether we want to allow one of the sides being 0 here. If
+  // we do, we will have to be more careful to construct a constant difference
+  // map here instead of taking the RHS constant in subtraction below.
+  auto zeroExpr = getAffineConstantExpr(0, ctx);
+  SmallVector<AffineExpr> symReplacements(allSymbols.size(), zeroExpr);
+  AffineMap lhsConstant =
+      lhs.replaceDimsAndSymbols(/*dimReplacements=*/{}, symReplacements,
+                                /*numResultDims=*/0, /*numResultSyms=*/0);
+  AffineMap rhsConstant =
+      rhs.replaceDimsAndSymbols(/*dimReplacements=*/{}, symReplacements,
+                                /*numResultDims=*/0, /*numResultSyms=*/0);
+  for (auto [lhsConstantExpr, rhsConstantExpr] :
+       llvm::zip_equal(lhsConstant.getResults(), rhsConstant.getResults())) {
+    auto lhsConstantExprCast = cast<AffineConstantExpr>(lhsConstantExpr);
+    auto rhsConstantExprCast = cast<AffineConstantExpr>(rhsConstantExpr);
+    if (lhsConstantExprCast.getValue() != rhsConstantExprCast.getValue())
       return failure();
   }
 
   // Obtain a part of the RHS map that is only a function of RHS-specific
   // symbols. For this, we replace all symbols appearing in the LHS map with
   // zero. Symbol replacements contain zeros at this point. Reuse that but set
-  // RHS-only symbols to be replaced with themselves.
+  // RHS-only symbols to be replaced with themselves. Don't forget to subtract
+  // the constant part of RHS, which is known to be identical to that of RHS, so
+  // we don't duplicate it. At this point, we expect the caller to have removed
+  // unused symbols from the symbol list.
   SmallVector<unsigned> lhsSymbolPositions =
       getPositionsOfSymbols(lhsSymbols, allSymbols);
   for (unsigned i = 0, e = symReplacements.size(); i < e; ++i) {
@@ -786,6 +801,7 @@ static FailureOr<AffineMap> getIndexExprsJoinedMap(
   }
   AffineMap rhsOnly = rhs.replaceDimsAndSymbols(
       {}, symReplacements, /*numResultDims=*/0, rhs.getNumSymbols());
+  rhsOnly = subtractMaps(rhsOnly, rhsConstant);
   return simplifyAffineMap(addMaps(lhs, rhsOnly));
 }
 
@@ -795,6 +811,10 @@ static FailureOr<AffineMap> getIndexExprsJoinedMap(
 static wave::WaveIndexMappingAttr
 getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
                           wave::WaveIndexMappingAttr rhs) {
+
+  lhs = lhs.removeUnusedInputs();
+  rhs = rhs.removeUnusedInputs();
+
   // Collect all unique symbol names from both index mappings in order.
   llvm::SmallVector<mlir::Attribute> allSymbols;
   llvm::SetVector<mlir::Attribute> lhsSymbols(llvm::from_range,
@@ -802,27 +822,28 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
   llvm::SetVector<mlir::Attribute> rhsSymbols(llvm::from_range,
                                               rhs.getSymbols());
   wave::aggregateAllSymbols(llvm::ArrayRef{lhsSymbols, rhsSymbols}, allSymbols);
-  llvm::SetVector<mlir::Attribute> disallowedSymbols =
+  llvm::SetVector<mlir::Attribute> commonSymbols =
       llvm::set_intersection(lhsSymbols, rhsSymbols);
-  SmallVector<unsigned> disallowedSymbolsPositions;
-  for (unsigned i = 0, e = allSymbols.size(); i < e; ++i) {
-    if (disallowedSymbols.contains(allSymbols[i]))
-      disallowedSymbolsPositions.push_back(i);
+  llvm::SmallVector<unsigned> commonSymbolPositions;
+  for (mlir::Attribute symbol : commonSymbols) {
+    auto it = llvm::find(lhsSymbols, symbol);
+    assert(it != lhsSymbols.end());
+    commonSymbolPositions.push_back(std::distance(lhsSymbols.begin(), it));
   }
 
   FailureOr<AffineMap> joinedStart = getIndexExprsJoinedMap(
       lhs.getStart(), rhs.getStart(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols, disallowedSymbolsPositions);
+      rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
   if (failed(joinedStart))
     return nullptr;
   FailureOr<AffineMap> joinedStep = getIndexExprsJoinedMap(
       lhs.getStep(), rhs.getStep(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols, disallowedSymbolsPositions);
+      rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
   if (failed(joinedStep))
     return nullptr;
   FailureOr<AffineMap> joinedStride = getIndexExprsJoinedMap(
       lhs.getStride(), rhs.getStride(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols, disallowedSymbolsPositions);
+      rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
   if (failed(joinedStride))
     return nullptr;
 
@@ -938,6 +959,26 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
       mlir::DictionaryAttr::get(getConcreteValue().getContext(), filtered));
 }
 
+wave::IndexExprsLatticeStorage
+wave::IndexExprsLatticeStorage::withoutIterSymbols(
+    llvm::ArrayRef<wave::WaveSymbolAttr> iterSymbols) const {
+  if (isBottom() || isTop())
+    return *this;
+
+  MLIRContext *ctx = getConcreteValue().getContext();
+  llvm::SmallVector<mlir::NamedAttribute> updated =
+      llvm::map_to_vector(getConcreteValue(), [&](mlir::NamedAttribute attr) {
+        auto value = llvm::cast<wave::WaveIndexMappingAttr>(attr.getValue());
+        for (wave::WaveSymbolAttr iterSymbol : iterSymbols) {
+          auto actualIterSymbol =
+              wave::WaveIterSymbolAttr::get(ctx, iterSymbol.getName());
+          value = value.removeInput(actualIterSymbol);
+        }
+        return mlir::NamedAttribute(attr.getName(), value);
+      });
+  return IndexExprsLatticeStorage(mlir::DictionaryAttr::get(ctx, updated));
+}
+
 void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
   if (isBottom()) {
     os << "<bottom>";
@@ -981,7 +1022,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
   // indicative of a "sideways" conflict.
   if (joined.isTop() && !fromTop) {
     mlir::InFlightDiagnostic diag =
-        emitError() << "incompatible " << fromName
+        emitError() << "incompatible " << fromName << " lattices"
                     << " when propagating from those to " << toName;
     for (auto &&[i, fromLattice] : llvm::enumerate(from)) {
       diag.attachNote() << fromName << " #" << i << " lattice: " << fromLattice;

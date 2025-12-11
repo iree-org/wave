@@ -864,6 +864,10 @@ public:
   PrintNoRegions(mlir::Operation *op) : operation(op) {}
 
   void print(llvm::raw_ostream &os) const {
+    if (!operation) {
+      os << "<null>";
+      return;
+    }
     operation->print(os, mlir::OpPrintingFlags().skipRegions());
   }
 
@@ -1024,6 +1028,16 @@ public:
   }
 
   void setToEntryState(IndexExprsLattice *lattice) override {
+    // Default logic will call this function on arguments of a callable
+    // operation since we are running in a non-interprocedural analysis. Setting
+    // them to top would propagate everywhere. Instead, just do nothing here and
+    // let them converge to whatever value needed by backward analysis.
+    auto arg = llvm::dyn_cast<mlir::BlockArgument>(lattice->getAnchor());
+    if (arg &&
+        llvm::isa<mlir::CallableOpInterface>(arg.getOwner()->getParentOp())) {
+      return;
+    }
+
     // Default initialization calls `setToEntryState` on block arguments, we
     // don't want to set it to the top state because it will propagate
     // everywhere. Set/join with bottom instead so it can be overridden. Once
@@ -1034,8 +1048,11 @@ public:
                        lattice->join(initialized
                                          ? IndexExprsLatticeStorage::top()
                                          : IndexExprsLatticeStorage::bottom()));
-    if (initialized)
-      LDBG() << "top fixpoint for " << lattice->getAnchor();
+    if (initialized) {
+      LDBG() << "top fixpoint for " << lattice->getAnchor() << " "
+             << (arg ? PrintNoRegions(arg.getOwner()->getParentOp())
+                     : PrintNoRegions(nullptr));
+    }
   }
 
   llvm::LogicalResult
@@ -1238,8 +1255,8 @@ public:
           getLatticeElement(blockArgument);
       IndexExprsLattice *lattice = getLatticeElement(opOperand.get());
       IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::join(
-          lattice->getValue(), blockArgLattice->getValue(),
-          iterateOp.getIterator());
+          lattice->getValue(), blockArgLattice->getValue().withoutIterSymbols(
+                                   iterateOp.getIterator()));
       unsafeSet(lattice, joined);
       return;
     }

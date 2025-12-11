@@ -26,7 +26,11 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                                 wave::WaveHyperparameterAttr hyper) {
   return llvm::map_to_vector(shape, [&](wave::WaveSymbolAttr symbol) {
     Attribute entry = indexDict.get(symbol.getName());
-    assert(entry && "expected dictionary to contain indices for the shape");
+    // The entry may be missing from the index and we shouldn't crash. Just
+    // treat it as dynamic meaning we cannot statically evaluate it to a
+    // constant.
+    if (!entry)
+      return ShapedType::kDynamic;
     auto mapAttr = cast<wave::WaveIndexMappingAttr>(entry);
     std::optional<SmallVector<int64_t>> folded =
         wave::evaluateMapWithHyperparams(mapAttr.getStep(),
