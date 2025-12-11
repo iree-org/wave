@@ -43,8 +43,16 @@ using namespace wave;
 /// Helper function to parse an affine wave expression with the wave
 /// symbol names passed in `names`.
 static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
-                                      AffineExpr &outExpr, AsmParser &parser) {
+                                      AffineExpr &outExpr, AsmParser &parser,
+                                      bool allowNull = false) {
   MLIRContext *context = parser.getContext();
+  if (allowNull && succeeded(parser.parseOptionalLess()) &&
+      succeeded(parser.parseKeyword("NULL")) &&
+      succeeded(parser.parseGreater())) {
+    outExpr = nullptr;
+    return success();
+  }
+
   SmallVector<std::pair<StringRef, AffineExpr>> symbolSet;
   symbolSet.reserve(names.size());
   for (auto [i, nm] : llvm::enumerate(names))
@@ -60,6 +68,8 @@ static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
 // It textually substitutes 's<i>' occurrences with the corresponding names from
 // the provided `names` array.
 std::string stringifyWithNames(AffineMap map, ArrayRef<StringRef> names) {
+  if (!map)
+    return "<NULL>";
   AffineExpr expr = map.getResult(0);
   std::string exprStr;
   llvm::raw_string_ostream os(exprStr);
@@ -149,11 +159,14 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   AffineExpr startExpr;
   AffineExpr stepExpr;
   AffineExpr strideExpr;
-  if (failed(parseExprWithNames(symbolNames, startExpr, parser)) ||
+  if (failed(parseExprWithNames(symbolNames, startExpr, parser,
+                                /*allowNull=*/true)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, stepExpr, parser)) ||
+      failed(parseExprWithNames(symbolNames, stepExpr, parser,
+                                /*allowNull=*/true)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, strideExpr, parser)) ||
+      failed(parseExprWithNames(symbolNames, strideExpr, parser,
+                                /*allowNull=*/true)) ||
       parser.parseRParen()) {
     parser.emitError(
         parser.getCurrentLocation(),
@@ -161,13 +174,21 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
     return {};
   }
 
-  // Build maps
-  auto startMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), startExpr, context);
-  auto stepMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), stepExpr, context);
-  auto strideMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), strideExpr, context);
+  auto startMap = startExpr
+                      ? AffineMap::get(
+                            /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
+                            startExpr, context)
+                      : AffineMap();
+  auto stepMap = stepExpr
+                     ? AffineMap::get(
+                           /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
+                           stepExpr, context)
+                     : AffineMap();
+  auto strideMap = strideExpr
+                       ? AffineMap::get(
+                             /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
+                             strideExpr, context)
+                       : AffineMap();
 
   return get(context, symbolNameAttrs, startMap, stepMap, strideMap);
 }
