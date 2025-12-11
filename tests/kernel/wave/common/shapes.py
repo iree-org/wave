@@ -25,7 +25,8 @@ _e2e_test_shapes["bhsd_attention"] = [
     (4, 32, 128, 128, 128, 128),
 ]
 _e2e_test_shapes["cdna4_bshd_attention"] = [
-    (64, 16384, 128, 128, 16384),
+    # (64, 16384, 128, 128, 16384), test tries to allocate 68GB of memory
+    (64, 4096, 128, 128, 4096),
 ]
 _e2e_test_shapes["chained_gemm"] = _e2e_test_shapes["attention"]
 _e2e_test_shapes["decode_attention"] = _e2e_test_shapes["attention"]
