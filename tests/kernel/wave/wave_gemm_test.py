@@ -36,7 +36,7 @@ from .common.utils import (
     require_e2e,
     require_gfx1250,
     require_rdna4,
-    use_water_pipeline_bool,
+    use_water_backend_bool,
 )
 from wave_lang.kernel.wave.constraints import MMAType, MMAOperand, GenericDot
 from wave_lang.kernel.wave.templates.gemm import (
@@ -174,7 +174,7 @@ def testGemmBench(tmp_path, mfma_variant: MMAType, threads_per_wave: int):
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
-@use_water_pipeline_bool("use_water_pipeline")
+@use_water_backend_bool("use_water_backend")
 def testGemmCodegen(
     shape: tuple[int, int, int],
     enable_scheduling: SchedulingType,
@@ -183,7 +183,7 @@ def testGemmCodegen(
     threads_per_wave: int,
     target: str,
     datatype: torch.dtype,
-    use_water_pipeline: bool,
+    use_water_backend: bool,
     tmp_path: Path,
 ):
     """
@@ -205,7 +205,7 @@ def testGemmCodegen(
         canonicalize=True,
         schedule=enable_scheduling,
         dynamic_symbols=dynamic_symbols,
-        use_water_pipeline=use_water_pipeline,
+        use_water_backend=use_water_backend,
         dump_intermediates=tmp_path,
     )
     options.postprocess = """
@@ -247,7 +247,7 @@ def testGemmCodegen(
     ],
 )
 @pytest.mark.parametrize("datatype", [torch.float16])
-@use_water_pipeline_bool("use_water_pipeline")
+@use_water_backend_bool("use_water_backend")
 def testPureGemm(
     shape: tuple[int, int, int],
     enable_scheduling: SchedulingType,
@@ -255,7 +255,7 @@ def testPureGemm(
     mfma_variant: MMAType,
     threads_per_wave: int,
     datatype: torch.dtype,
-    use_water_pipeline: bool,
+    use_water_backend: bool,
     run_bench: bool,
     perf_filename_tk: Path,
     perf_filename_iree: Path,
@@ -280,7 +280,7 @@ def testPureGemm(
         benchmark_batch_size=10,
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
-        use_water_pipeline=use_water_pipeline,
+        use_water_backend=use_water_backend,
     )
     options.postprocess = """
     module attributes {transform.with_named_sequence} {
