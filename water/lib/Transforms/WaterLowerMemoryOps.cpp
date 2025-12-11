@@ -54,17 +54,13 @@ static LLVM::InlineAsmOp createInlineAsm(IRRewriter &rewriter, Location loc,
       /*operand_attrs=*/ArrayAttr{});
 }
 
-/// Compute the final address for a memref access with indices
-static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
-                                  Value memref, ValueRange indices,
-                                  unsigned elementBitWidth) {
-  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
-  auto i64Type = rewriter.getI64Type();
-
-  // Extract strided metadata to get base pointer, offset, sizes, and strides
+/// Compute byte offset as i64 for a memref access with indices
+static Value computeMemrefByteOffsetI64(IRRewriter &rewriter, Location loc,
+                                        Value memref, ValueRange indices,
+                                        unsigned elementBitWidth) {
+  // Extract strided metadata to get offset and strides
   auto metadataOp =
       memref::ExtractStridedMetadataOp::create(rewriter, loc, memref);
-  Value basePtr = metadataOp.getBaseBuffer();
   Value offset = metadataOp.getOffset();
 
   // Compute linear index from multidimensional indices
@@ -78,20 +74,39 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
                               arith::IntegerOverflowFlags::nsw);
   }
 
-  // Convert base pointer to i64
-  Value basePtrInt =
-      memref::ExtractAlignedPointerAsIndexOp::create(rewriter, loc, basePtr);
-  basePtrInt = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtrInt);
-
-  // Convert linear index to i64 and scale by element size
+  // Convert linear index to byte offset
   unsigned elementBytes = elementBitWidth / 8;
   Value elementSize =
       arith::ConstantIndexOp::create(rewriter, loc, elementBytes);
   Value byteOffset =
       arith::MulIOp::create(rewriter, loc, linearIndex, elementSize,
                             arith::IntegerOverflowFlags::nsw);
-  Value byteOffsetI64 =
-      arith::IndexCastOp::create(rewriter, loc, i64Type, byteOffset);
+
+  return arith::IndexCastOp::create(rewriter, loc, rewriter.getI64Type(),
+                                    byteOffset);
+}
+
+/// Compute the final address for a memref access with indices (for global
+/// operations)
+static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
+                                  Value memref, ValueRange indices,
+                                  unsigned elementBitWidth) {
+  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto i64Type = rewriter.getI64Type();
+
+  // Extract base pointer
+  auto metadataOp =
+      memref::ExtractStridedMetadataOp::create(rewriter, loc, memref);
+  Value basePtr = metadataOp.getBaseBuffer();
+
+  // Convert base pointer to i64
+  Value basePtrInt =
+      memref::ExtractAlignedPointerAsIndexOp::create(rewriter, loc, basePtr);
+  basePtrInt = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtrInt);
+
+  // Compute byte offset
+  Value byteOffsetI64 = computeMemrefByteOffsetI64(rewriter, loc, memref,
+                                                   indices, elementBitWidth);
 
   // Add byte offset to base pointer
   Value finalAddr =
@@ -168,17 +183,18 @@ static LogicalResult lowerVectorLoadBuffer(vector::LoadOp loadOp,
   // descriptor (SGPR[4])
   StringRef constraints = "=v,v,s";
 
-  // Compute offset in bytes
-  Value addr =
-      computeMemrefAddress(rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
-                           vectorType.getElementTypeBitWidth());
+  // Compute byte offset as i64 (not full address, since buffer descriptor has
+  // base)
+  Value offset = computeMemrefByteOffsetI64(
+      rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
+      vectorType.getElementTypeBitWidth());
 
   // Extract buffer descriptor pointer from memref
   Value bufferDesc = extractBufferDescriptor(rewriter, loc, loadOp.getBase());
 
   // Create inline assembly operation
   auto asmOp =
-      createInlineAsm(rewriter, loc, vectorType, ValueRange{addr, bufferDesc},
+      createInlineAsm(rewriter, loc, vectorType, ValueRange{offset, bufferDesc},
                       asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
@@ -242,17 +258,18 @@ static LogicalResult lowerVectorStoreBuffer(vector::StoreOp storeOp,
   // (SGPR[4])
   StringRef constraints = "v,v,s";
 
-  // Compute offset in bytes
-  Value addr = computeMemrefAddress(rewriter, loc, storeOp.getBase(),
-                                    storeOp.getIndices(),
-                                    vectorType.getElementTypeBitWidth());
+  // Compute byte offset as i64 (not full address, since buffer descriptor has
+  // base)
+  Value offset = computeMemrefByteOffsetI64(
+      rewriter, loc, storeOp.getBase(), storeOp.getIndices(),
+      vectorType.getElementTypeBitWidth());
 
   // Extract buffer descriptor pointer from memref
   Value bufferDesc = extractBufferDescriptor(rewriter, loc, storeOp.getBase());
 
   // Create inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{storeOp.getValueToStore(), addr, bufferDesc},
+                  ValueRange{storeOp.getValueToStore(), offset, bufferDesc},
                   asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
