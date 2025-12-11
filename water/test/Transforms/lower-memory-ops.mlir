@@ -179,3 +179,92 @@ func.func @mixed_global_and_buffer(%global: memref<1024xf32>, %buffer: memref<10
 
   return
 }
+// -----
+// DS operations tests
+
+// CHECK-LABEL: func.func @ds_load_b32
+func.func @ds_load_b32(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index) -> vector<1xf32> {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_b32 $0, $1", "=v,v"
+  %result = vector.load %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<1xf32>
+  return %result : vector<1xf32>
+}
+
+// CHECK-LABEL: func.func @ds_load_b64
+func.func @ds_load_b64(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index) -> vector<2xf32> {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_b64 $0, $1", "=v,v"
+  %result = vector.load %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<2xf32>
+  return %result : vector<2xf32>
+}
+
+// CHECK-LABEL: func.func @ds_load_b96
+func.func @ds_load_b96(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index) -> vector<3xf32> {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_b96 $0, $1", "=v,v"
+  %result = vector.load %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<3xf32>
+  return %result : vector<3xf32>
+}
+
+// CHECK-LABEL: func.func @ds_load_b128
+func.func @ds_load_b128(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index) -> vector<4xf32> {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_b128 $0, $1", "=v,v"
+  %result = vector.load %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @ds_store_b32
+func.func @ds_store_b32(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index, %data: vector<1xf32>) {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_write_b32 $0, $1", "v,v"
+  vector.store %data, %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<1xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @ds_store_b64
+func.func @ds_store_b64(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index, %data: vector<2xf32>) {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_write_b64 $0, $1", "v,v"
+  vector.store %data, %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<2xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @ds_store_b96
+func.func @ds_store_b96(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index, %data: vector<3xf32>) {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_write_b96 $0, $1", "v,v"
+  vector.store %data, %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<3xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @ds_store_b128
+func.func @ds_store_b128(%lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index, %data: vector<4xf32>) {
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_write_b128 $0, $1", "v,v"
+  vector.store %data, %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @mixed_global_buffer_and_ds
+func.func @mixed_global_buffer_and_ds(%global: memref<1024xf32>, %buffer: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %lds: memref<1024xf32, #gpu.address_space<workgroup>>, %offset: index) {
+  // Load from global (should use global_load)
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b128 $0, $1, off", "=v,v"
+  %global_data = vector.load %global[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Store to LDS (should use ds_write)
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_write_b128 $0, $1", "v,v"
+  vector.store %global_data, %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  // Load from LDS (should use ds_read)
+  // CHECK: arith.trunci
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_b128 $0, $1", "=v,v"
+  %lds_data = vector.load %lds[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
+
+  // Store to buffer (should use buffer_store)
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_dwordx4 $0, $1, $2, 0 offen", "v,v,s"
+  vector.store %lds_data, %buffer[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<4xf32>
+
+  return
+}

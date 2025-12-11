@@ -9,6 +9,7 @@
 #include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -312,6 +313,83 @@ static LogicalResult lowerVectorStoreGlobal(vector::StoreOp storeOp,
   return success();
 }
 
+/// Lower vector.load to AMDGPU DS load inline assembly
+static LogicalResult lowerVectorLoadDS(vector::LoadOp loadOp,
+                                       IRRewriter &rewriter) {
+  auto vectorType = loadOp.getVectorType();
+  unsigned bitWidth =
+      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+
+  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  if (failed(suffix))
+    return loadOp.emitError("unsupported vector DS load bit width: ")
+           << bitWidth;
+
+  Location loc = loadOp.getLoc();
+  rewriter.setInsertionPoint(loadOp);
+
+  // Build inline assembly: "ds_read_b32 $0, $1"
+  std::string asmStr = ("ds_read_" + *suffix + " $0, $1").str();
+
+  // Constraints: "=v" for output (VGPR), "v" for address (VGPR)
+  StringRef constraints = "=v,v";
+
+  // Compute byte offset as i64
+  Value offset = computeMemrefByteOffsetI64(
+      rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
+      vectorType.getElementTypeBitWidth());
+
+  // DS operations use 32-bit addresses
+  Value offset32 =
+      arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
+
+  // Create inline assembly operation
+  auto asmOp = createInlineAsm(rewriter, loc, vectorType, ValueRange{offset32},
+                               asmStr, constraints, /*hasSideEffects=*/true);
+
+  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  return success();
+}
+
+/// Lower vector.store to AMDGPU DS store inline assembly
+static LogicalResult lowerVectorStoreDS(vector::StoreOp storeOp,
+                                        IRRewriter &rewriter) {
+  auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
+  unsigned bitWidth =
+      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+
+  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  if (failed(suffix))
+    return storeOp.emitError("unsupported vector DS store bit width: ")
+           << bitWidth;
+
+  Location loc = storeOp.getLoc();
+  rewriter.setInsertionPoint(storeOp);
+
+  // Build inline assembly: "ds_write_b32 $0, $1"
+  std::string asmStr = ("ds_write_" + *suffix + " $0, $1").str();
+
+  // Constraints: "v" for address (VGPR), "v" for data (VGPR)
+  StringRef constraints = "v,v";
+
+  // Compute byte offset as i64
+  Value offset = computeMemrefByteOffsetI64(
+      rewriter, loc, storeOp.getBase(), storeOp.getIndices(),
+      vectorType.getElementTypeBitWidth());
+
+  // DS operations use 32-bit addresses
+  Value offset32 =
+      arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
+
+  // Create inline assembly operation (no result for store)
+  createInlineAsm(rewriter, loc, TypeRange{},
+                  ValueRange{offset32, storeOp.getValueToStore()}, asmStr,
+                  constraints, /*hasSideEffects=*/true);
+
+  rewriter.eraseOp(storeOp);
+  return success();
+}
+
 /// Check if a memref uses AMDGPU fat_raw_buffer address space
 static bool usesBufferAddressSpace(Value memref) {
   auto memrefType = cast<MemRefType>(memref.getType());
@@ -321,17 +399,31 @@ static bool usesBufferAddressSpace(Value memref) {
     return false;
 
   // Check for #amdgpu.address_space<fat_raw_buffer> attribute
-  if (auto enumAttr = dyn_cast<amdgpu::AddressSpaceAttr>(memorySpace)) {
+  if (auto enumAttr = dyn_cast<amdgpu::AddressSpaceAttr>(memorySpace))
     return enumAttr.getValue() == amdgpu::AddressSpace::FatRawBuffer;
-  }
+
+  return false;
+}
+
+/// Check if a memref uses workgroup (LDS) address space
+static bool usesWorkgroupAddressSpace(Value memref) {
+  auto memrefType = cast<MemRefType>(memref.getType());
+  auto memorySpace = memrefType.getMemorySpace();
+
+  if (!memorySpace)
+    return false;
+
+  // Check for #gpu.address_space<workgroup> attribute
+  if (auto enumAttr = dyn_cast<gpu::AddressSpaceAttr>(memorySpace))
+    return enumAttr.getValue() == gpu::AddressSpace::Workgroup;
 
   return false;
 }
 
 /// Pass that lowers high-level memory operations to AMDGPU memory instructions.
 /// Uses buffer operations for memrefs with
-/// #amdgpu.address_space<fat_raw_buffer>, and global operations for all other
-/// memrefs.
+/// #amdgpu.address_space<fat_raw_buffer>, DS operations for memrefs with
+/// #gpu.address_space<workgroup>, and global operations for all other memrefs.
 class WaterLowerMemoryOpsPass
     : public water::impl::WaterLowerMemoryOpsBase<WaterLowerMemoryOpsPass> {
 public:
@@ -340,17 +432,27 @@ public:
 
     auto walkFn = [&](Operation *op) {
       if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
-        LogicalResult result = usesBufferAddressSpace(loadOp.getBase())
-                                   ? lowerVectorLoadBuffer(loadOp, rewriter)
-                                   : lowerVectorLoadGlobal(loadOp, rewriter);
+        LogicalResult result = success();
+        if (usesBufferAddressSpace(loadOp.getBase())) {
+          result = lowerVectorLoadBuffer(loadOp, rewriter);
+        } else if (usesWorkgroupAddressSpace(loadOp.getBase())) {
+          result = lowerVectorLoadDS(loadOp, rewriter);
+        } else {
+          result = lowerVectorLoadGlobal(loadOp, rewriter);
+        }
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
-        LogicalResult result = usesBufferAddressSpace(storeOp.getBase())
-                                   ? lowerVectorStoreBuffer(storeOp, rewriter)
-                                   : lowerVectorStoreGlobal(storeOp, rewriter);
+        LogicalResult result = success();
+        if (usesBufferAddressSpace(storeOp.getBase())) {
+          result = lowerVectorStoreBuffer(storeOp, rewriter);
+        } else if (usesWorkgroupAddressSpace(storeOp.getBase())) {
+          result = lowerVectorStoreDS(storeOp, rewriter);
+        } else {
+          result = lowerVectorStoreGlobal(storeOp, rewriter);
+        }
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
