@@ -22,7 +22,7 @@ class DropTransformOpsPass
     : public water::impl::WaterDropTransformOpsPassBase<DropTransformOpsPass> {
 public:
   void runOnOperation() override {
-    getOperation().walk<WalkOrder::PreOrder>([&](FunctionOpInterface funcOp) {
+    getOperation()->walk<WalkOrder::PreOrder>([&](FunctionOpInterface funcOp) {
       if (isa_and_nonnull<transform::TransformDialect>(funcOp->getDialect())) {
         funcOp->erase();
         return WalkResult::skip();
