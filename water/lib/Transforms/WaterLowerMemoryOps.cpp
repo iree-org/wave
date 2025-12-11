@@ -6,6 +6,7 @@
 
 #include "water/Transforms/Passes.h"
 
+#include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -99,9 +100,94 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
   return LLVM::IntToPtrOp::create(rewriter, loc, ptrType, finalAddr);
 }
 
+/// Get buffer instruction suffix based on bit width
+static FailureOr<StringRef> getBufferSuffix(unsigned bitWidth) {
+  switch (bitWidth) {
+  case 32:
+    return StringRef("dword");
+  case 64:
+    return StringRef("dwordx2");
+  case 96:
+    return StringRef("dwordx3");
+  case 128:
+    return StringRef("dwordx4");
+  default:
+    return failure();
+  }
+}
+
+/// Extract buffer descriptor pointer from a fat_raw_buffer memref
+static Value extractBufferDescriptor(IRRewriter &rewriter, Location loc,
+                                     Value memref) {
+  // Create proper memref descriptor struct type: {ptr, ptr, offset, sizes...,
+  // strides...}
+  auto memrefType = cast<MemRefType>(memref.getType());
+  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto i64Type = rewriter.getI64Type();
+  SmallVector<Type> descriptorFields{ptrType, ptrType,
+                                     i64Type}; // allocated, aligned, offset
+  // Add sizes and strides for each dimension
+  for (int64_t i = 0; i < memrefType.getRank(); ++i)
+    descriptorFields.push_back(i64Type); // size
+
+  for (int64_t i = 0; i < memrefType.getRank(); ++i)
+    descriptorFields.push_back(i64Type); // stride
+
+  auto memrefDescType =
+      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), descriptorFields);
+
+  Value memrefDescVal =
+      UnrealizedConversionCastOp::create(rewriter, loc, memrefDescType, memref)
+          .getResult(0);
+
+  // Use MemRefDescriptor to extract aligned pointer
+  MemRefDescriptor memrefDesc(memrefDescVal);
+  return memrefDesc.alignedPtr(rewriter, loc);
+}
+
+/// Lower vector.load to AMDGPU buffer load inline assembly
+static LogicalResult lowerVectorLoadBuffer(vector::LoadOp loadOp,
+                                           IRRewriter &rewriter) {
+  auto vectorType = loadOp.getVectorType();
+  unsigned bitWidth =
+      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+
+  FailureOr<StringRef> suffix = getBufferSuffix(bitWidth);
+  if (failed(suffix))
+    return loadOp.emitError("unsupported vector buffer load bit width: ")
+           << bitWidth;
+
+  Location loc = loadOp.getLoc();
+  rewriter.setInsertionPoint(loadOp);
+
+  // Build inline assembly: "buffer_load_dwordx4 $0, $1, $2, 0 offen"
+  std::string asmStr =
+      ("buffer_load_" + *suffix + " $0, $1, $2, 0 offen").str();
+
+  // Constraints: "=v" for output (VGPR), "v" for offset (VGPR), "s" for
+  // descriptor (SGPR[4])
+  StringRef constraints = "=v,v,s";
+
+  // Compute offset in bytes
+  Value addr =
+      computeMemrefAddress(rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
+                           vectorType.getElementTypeBitWidth());
+
+  // Extract buffer descriptor pointer from memref
+  Value bufferDesc = extractBufferDescriptor(rewriter, loc, loadOp.getBase());
+
+  // Create inline assembly operation
+  auto asmOp =
+      createInlineAsm(rewriter, loc, vectorType, ValueRange{addr, bufferDesc},
+                      asmStr, constraints, /*hasSideEffects=*/true);
+
+  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  return success();
+}
+
 /// Lower vector.load to LLVM inline assembly (global_load_*)
-static LogicalResult lowerVectorLoad(vector::LoadOp loadOp,
-                                     IRRewriter &rewriter) {
+static LogicalResult lowerVectorLoadGlobal(vector::LoadOp loadOp,
+                                           IRRewriter &rewriter) {
   auto vectorType = loadOp.getVectorType();
   unsigned bitWidth =
       vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
@@ -133,9 +219,49 @@ static LogicalResult lowerVectorLoad(vector::LoadOp loadOp,
   return success();
 }
 
+/// Lower vector.store to AMDGPU buffer store inline assembly
+static LogicalResult lowerVectorStoreBuffer(vector::StoreOp storeOp,
+                                            IRRewriter &rewriter) {
+  auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
+  unsigned bitWidth =
+      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+
+  FailureOr<StringRef> suffix = getBufferSuffix(bitWidth);
+  if (failed(suffix))
+    return storeOp.emitError("unsupported vector buffer store bit width: ")
+           << bitWidth;
+
+  Location loc = storeOp.getLoc();
+  rewriter.setInsertionPoint(storeOp);
+
+  // Build inline assembly: "buffer_store_dwordx4 $0, $1, $2, 0 offen"
+  std::string asmStr =
+      ("buffer_store_" + *suffix + " $0, $1, $2, 0 offen").str();
+
+  // Constraints: "v" for data (VGPR), "v" for offset (VGPR), "s" for descriptor
+  // (SGPR[4])
+  StringRef constraints = "v,v,s";
+
+  // Compute offset in bytes
+  Value addr = computeMemrefAddress(rewriter, loc, storeOp.getBase(),
+                                    storeOp.getIndices(),
+                                    vectorType.getElementTypeBitWidth());
+
+  // Extract buffer descriptor pointer from memref
+  Value bufferDesc = extractBufferDescriptor(rewriter, loc, storeOp.getBase());
+
+  // Create inline assembly operation (no result for store)
+  createInlineAsm(rewriter, loc, TypeRange{},
+                  ValueRange{storeOp.getValueToStore(), addr, bufferDesc},
+                  asmStr, constraints, /*hasSideEffects=*/true);
+
+  rewriter.eraseOp(storeOp);
+  return success();
+}
+
 /// Lower vector.store to LLVM inline assembly (global_store_*)
-static LogicalResult lowerVectorStore(vector::StoreOp storeOp,
-                                      IRRewriter &rewriter) {
+static LogicalResult lowerVectorStoreGlobal(vector::StoreOp storeOp,
+                                            IRRewriter &rewriter) {
   auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
   unsigned bitWidth =
       vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
@@ -169,29 +295,26 @@ static LogicalResult lowerVectorStore(vector::StoreOp storeOp,
   return success();
 }
 
-/// Wrapper functions for operation lowering
-static LogicalResult lowerLoadOp(Operation *op, IRRewriter &rewriter) {
-  return lowerVectorLoad(cast<vector::LoadOp>(op), rewriter);
+/// Check if a memref uses AMDGPU fat_raw_buffer address space
+static bool usesBufferAddressSpace(Value memref) {
+  auto memrefType = cast<MemRefType>(memref.getType());
+  auto memorySpace = memrefType.getMemorySpace();
+
+  if (!memorySpace)
+    return false;
+
+  // Check for #amdgpu.address_space<fat_raw_buffer> attribute
+  if (auto enumAttr = dyn_cast<amdgpu::AddressSpaceAttr>(memorySpace)) {
+    return enumAttr.getValue() == amdgpu::AddressSpace::FatRawBuffer;
+  }
+
+  return false;
 }
 
-static LogicalResult lowerStoreOp(Operation *op, IRRewriter &rewriter) {
-  return lowerVectorStore(cast<vector::StoreOp>(op), rewriter);
-}
-
-/// Operation lowering handler entry
-struct OpLoweringHandler {
-  TypeID typeID;
-  LogicalResult (*lowerFn)(Operation *, IRRewriter &);
-};
-
-/// Table of lowering handlers for different operation types
-static const OpLoweringHandler loweringHandlers[] = {
-    {TypeID::get<vector::LoadOp>(), lowerLoadOp},
-    {TypeID::get<vector::StoreOp>(), lowerStoreOp},
-};
-
-/// Pass that lowers high-level memory operations to LLVM inline assembly
-/// for AMDGPU global memory instructions.
+/// Pass that lowers high-level memory operations to AMDGPU memory instructions.
+/// Uses buffer operations for memrefs with
+/// #amdgpu.address_space<fat_raw_buffer>, and global operations for all other
+/// memrefs.
 class WaterLowerMemoryOpsPass
     : public water::impl::WaterLowerMemoryOpsBase<WaterLowerMemoryOpsPass> {
 public:
@@ -199,13 +322,21 @@ public:
     IRRewriter rewriter(&getContext());
 
     auto walkFn = [&](Operation *op) {
-      TypeID opTypeID = op->getName().getTypeID();
-      for (const auto &handler : loweringHandlers) {
-        if (handler.typeID == opTypeID) {
-          if (failed(handler.lowerFn(op, rewriter)))
-            return WalkResult::interrupt();
-          return WalkResult::advance();
-        }
+      if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
+        LogicalResult result = usesBufferAddressSpace(loadOp.getBase())
+                                   ? lowerVectorLoadBuffer(loadOp, rewriter)
+                                   : lowerVectorLoadGlobal(loadOp, rewriter);
+        if (failed(result))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
+        LogicalResult result = usesBufferAddressSpace(storeOp.getBase())
+                                   ? lowerVectorStoreBuffer(storeOp, rewriter)
+                                   : lowerVectorStoreGlobal(storeOp, rewriter);
+        if (failed(result))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
       }
       return WalkResult::advance();
     };

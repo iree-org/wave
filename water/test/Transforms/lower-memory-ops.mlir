@@ -99,3 +99,83 @@ func.func @load_store_sequence(%src: memref<1024xf32>, %dst: memref<1024xf32>, %
   // CHECK: return
   return
 }
+
+// -----
+// Buffer operations tests
+
+// CHECK-LABEL: func.func @buffer_load_b32
+func.func @buffer_load_b32(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index) -> vector<1xf32> {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_dword $0, $1, $2, 0 offen", "=v,v,s"
+  %result = vector.load %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf32>
+  return %result : vector<1xf32>
+}
+
+// CHECK-LABEL: func.func @buffer_load_b64
+func.func @buffer_load_b64(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index) -> vector<2xf32> {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_dwordx2 $0, $1, $2, 0 offen", "=v,v,s"
+  %result = vector.load %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<2xf32>
+  return %result : vector<2xf32>
+}
+
+// CHECK-LABEL: func.func @buffer_load_b96
+func.func @buffer_load_b96(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index) -> vector<3xf32> {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_dwordx3 $0, $1, $2, 0 offen", "=v,v,s"
+  %result = vector.load %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<3xf32>
+  return %result : vector<3xf32>
+}
+
+// CHECK-LABEL: func.func @buffer_load_b128
+func.func @buffer_load_b128(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index) -> vector<4xf32> {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_dwordx4 $0, $1, $2, 0 offen", "=v,v,s"
+  %result = vector.load %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<4xf32>
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @buffer_store_b32
+func.func @buffer_store_b32(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index, %data: vector<1xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_dword $0, $1, $2, 0 offen", "v,v,s"
+  vector.store %data, %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<1xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @buffer_store_b64
+func.func @buffer_store_b64(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index, %data: vector<2xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_dwordx2 $0, $1, $2, 0 offen", "v,v,s"
+  vector.store %data, %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<2xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @buffer_store_b96
+func.func @buffer_store_b96(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index, %data: vector<3xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_dwordx3 $0, $1, $2, 0 offen", "v,v,s"
+  vector.store %data, %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<3xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @buffer_store_b128
+func.func @buffer_store_b128(%memref: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index, %data: vector<4xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_dwordx4 $0, $1, $2, 0 offen", "v,v,s"
+  vector.store %data, %memref[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<4xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @mixed_global_and_buffer
+func.func @mixed_global_and_buffer(%global: memref<1024xf32>, %buffer: memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, %offset: index) {
+  // Load from global memory (should use global_load)
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b128 $0, $1, off", "=v,v"
+  %global_data = vector.load %global[%offset] : memref<1024xf32>, vector<4xf32>
+
+  // Store to buffer memory (should use buffer_store)
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_dwordx4 $0, $1, $2, 0 offen", "v,v,s"
+  vector.store %global_data, %buffer[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<4xf32>
+
+  // Load from buffer memory (should use buffer_load)
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_dwordx4 $0, $1, $2, 0 offen", "=v,v,s"
+  %buffer_data = vector.load %buffer[%offset] : memref<1024xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<4xf32>
+
+  // Store to global memory (should use global_store)
+  // CHECK: llvm.inline_asm has_side_effects "global_store_b128 $0, $1, off", "v,v"
+  vector.store %buffer_data, %global[%offset] : memref<1024xf32>, vector<4xf32>
+
+  return
+}
