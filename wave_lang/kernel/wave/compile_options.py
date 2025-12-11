@@ -5,7 +5,7 @@ from .._support.indexing import IndexSymbol
 from ...support.location_config import LocationCaptureConfig
 from ..compiler.kernel_codegen import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
-from .utils.classes import KernelLaunchInfo
+from .utils.classes import KernelLaunchInfo, CoalescingType
 
 
 def _get_location_capture_config():
@@ -89,6 +89,7 @@ class WaveCompileOptions:
     use_global_to_shared: bool = False
     linearize_shared_access: bool = False
     scalarize_packed_math: bool = False
+    coalescing_strategy_hint: CoalescingType = CoalescingType.LINEAR
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True

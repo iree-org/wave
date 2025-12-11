@@ -22,6 +22,7 @@ from wave_lang.kernel.wave.utils.torch_utils import (
 )
 from wave_lang.kernel.wave.iree_utils import generate_iree_ref
 from wave_lang.kernel.wave.scheduling.schedule import SchedulingType
+from wave_lang.kernel.wave.utils.classes import CoalescingType
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from .common.utils import (
     param_bool,
@@ -249,6 +250,13 @@ global_to_lds_shapes += [
     ],
 )
 @pytest.mark.parametrize(
+    "coalescing_strategy_hint",
+    [
+        pytest.param(CoalescingType.LINEAR),
+        pytest.param(CoalescingType.WAVE_TILE_ALIGNED, marks=require_cdna4),
+    ],
+)
+@pytest.mark.parametrize(
     "dynamic_dims",
     [
         pytest.param((False, False, False)),
@@ -267,6 +275,7 @@ global_to_lds_shapes += [
 def testGemmGlobalToLDS(
     shape: tuple[int, int, int],
     enable_scheduling: SchedulingType,
+    coalescing_strategy_hint: CoalescingType,
     dynamic_dims: tuple[bool, bool, bool],
     mfma_variant: MMAType,
     threads_per_wave: int,
@@ -296,6 +305,7 @@ def testGemmGlobalToLDS(
         benchmark_repetitions=3,
         benchmark_results_file=perf_filename_tk,
         use_global_to_shared=True,
+        coalescing_strategy_hint=coalescing_strategy_hint,
     )
     options = set_default_run_config(options)
     options.postprocess = """
