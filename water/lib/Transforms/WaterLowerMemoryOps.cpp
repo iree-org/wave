@@ -430,29 +430,34 @@ public:
   void runOnOperation() override {
     IRRewriter rewriter(&getContext());
 
+    // Helper to dispatch to the appropriate lowering function based on address
+    // space
+    auto lowerMemoryOp = [&](Value base, auto lowerBuffer, auto lowerWorkgroup,
+                             auto lowerGlobal) -> LogicalResult {
+      if (usesBufferAddressSpace(base))
+        return lowerBuffer();
+      if (usesWorkgroupAddressSpace(base))
+        return lowerWorkgroup();
+      return lowerGlobal();
+    };
+
     auto walkFn = [&](Operation *op) {
       if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
-        LogicalResult result = success();
-        if (usesBufferAddressSpace(loadOp.getBase())) {
-          result = lowerVectorLoadBuffer(loadOp, rewriter);
-        } else if (usesWorkgroupAddressSpace(loadOp.getBase())) {
-          result = lowerVectorLoadDS(loadOp, rewriter);
-        } else {
-          result = lowerVectorLoadGlobal(loadOp, rewriter);
-        }
+        LogicalResult result = lowerMemoryOp(
+            loadOp.getBase(),
+            [&]() { return lowerVectorLoadBuffer(loadOp, rewriter); },
+            [&]() { return lowerVectorLoadDS(loadOp, rewriter); },
+            [&]() { return lowerVectorLoadGlobal(loadOp, rewriter); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
-        LogicalResult result = success();
-        if (usesBufferAddressSpace(storeOp.getBase())) {
-          result = lowerVectorStoreBuffer(storeOp, rewriter);
-        } else if (usesWorkgroupAddressSpace(storeOp.getBase())) {
-          result = lowerVectorStoreDS(storeOp, rewriter);
-        } else {
-          result = lowerVectorStoreGlobal(storeOp, rewriter);
-        }
+        LogicalResult result = lowerMemoryOp(
+            storeOp.getBase(),
+            [&]() { return lowerVectorStoreBuffer(storeOp, rewriter); },
+            [&]() { return lowerVectorStoreDS(storeOp, rewriter); },
+            [&]() { return lowerVectorStoreGlobal(storeOp, rewriter); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
