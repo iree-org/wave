@@ -415,6 +415,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         mlir_asm += "}\n"
         return ("transform-interpreter", {"entry-point": entry_point})
 
+    # TODO: this transform refuses to work.
     alloc_to_alloca = """
   transform.named_sequence @__transform_alloc_to_alloca(%arg0: !transform.any_op {transform.readonly}) {
     %0 = transform.structured.match ops{["gpu.func"]} in %arg0 : (!transform.any_op) -> !transform.any_op
@@ -462,6 +463,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         *add_opt(canonicalize_cse),
         ("water-gpu-module-to-binary", {"dump-intermediates": dump_intermediates}),
         "water-gpu-to-gpu-runtime",
+        "water-drop-transform-ops",
         "symbol-dce",
         *add_opt(canonicalize_cse),
     ]
