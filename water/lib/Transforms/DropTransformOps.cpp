@@ -7,7 +7,6 @@
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 
