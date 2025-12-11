@@ -739,7 +739,8 @@ public:
       rewriter.setInsertionPoint(operation);
       amdgpu::MemoryCounterWaitOp::create(
           rewriter, operation->getLoc(), getAttr(req.getLoadCnt()),
-          getAttr(req.getStoreCnt()), getAttr(req.getDsCnt()), nullptr);
+          getAttr(req.getStoreCnt()), getAttr(req.getDsCnt()), nullptr,
+          nullptr);
     });
   }
 };
