@@ -30,11 +30,60 @@ func.func @vector_store(%memref: memref<1024xf32>, %offset: index, %data: vector
   return
 }
 
-// CHECK-LABEL: func.func @vector_load_2xf32
-func.func @vector_load_2xf32(%memref: memref<1024xf32>, %offset: index) -> vector<2xf32> {
+// CHECK-LABEL: func.func @vector_load_b32
+func.func @vector_load_b32(%memref: memref<1024xf32>, %offset: index) -> vector<1xf32> {
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b32 $0, $1, off", "=v,v"
+  %result = vector.load %memref[%offset] : memref<1024xf32>, vector<1xf32>
+  return %result : vector<1xf32>
+}
+
+// CHECK-LABEL: func.func @vector_load_b64
+func.func @vector_load_b64(%memref: memref<1024xf32>, %offset: index) -> vector<2xf32> {
   // CHECK: llvm.inline_asm has_side_effects "global_load_b64 $0, $1, off", "=v,v"
   %result = vector.load %memref[%offset] : memref<1024xf32>, vector<2xf32>
   return %result : vector<2xf32>
+}
+
+// CHECK-LABEL: func.func @vector_load_b96
+func.func @vector_load_b96(%memref: memref<1024xf32>, %offset: index) -> vector<3xf32> {
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b96 $0, $1, off", "=v,v"
+  %result = vector.load %memref[%offset] : memref<1024xf32>, vector<3xf32>
+  return %result : vector<3xf32>
+}
+
+// CHECK-LABEL: func.func @vector_load_b128
+func.func @vector_load_b128(%memref: memref<1024xf32>, %offset: index) -> vector<4xf32> {
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b128 $0, $1, off", "=v,v"
+  %result = vector.load %memref[%offset] : memref<1024xf32>, vector<4xf32>
+  return %result : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @vector_store_b32
+func.func @vector_store_b32(%memref: memref<1024xf32>, %offset: index, %data: vector<1xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "global_store_b32 $0, $1, off", "v,v"
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<1xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @vector_store_b64
+func.func @vector_store_b64(%memref: memref<1024xf32>, %offset: index, %data: vector<2xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "global_store_b64 $0, $1, off", "v,v"
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<2xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @vector_store_b96
+func.func @vector_store_b96(%memref: memref<1024xf32>, %offset: index, %data: vector<3xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "global_store_b96 $0, $1, off", "v,v"
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<3xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @vector_store_b128
+func.func @vector_store_b128(%memref: memref<1024xf32>, %offset: index, %data: vector<4xf32>) {
+  // CHECK: llvm.inline_asm has_side_effects "global_store_b128 $0, $1, off", "v,v"
+  vector.store %data, %memref[%offset] : memref<1024xf32>, vector<4xf32>
+  return
 }
 
 // CHECK-LABEL: func.func @load_store_sequence
