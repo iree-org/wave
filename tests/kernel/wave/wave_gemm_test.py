@@ -40,6 +40,8 @@ from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
     get_persistent_gemm_kernel,
+    get_streamk_gemm_kernel,
+    get_hybrid_streamk_gemm_kernel,
 )
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
@@ -2861,6 +2863,154 @@ def test_persistent_gemm(
     b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
     c = device_zeros(shape[0], shape[1], device="cuda", dtype=torch.float32)
     gemm(a, b, c)
+
+    torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
+    assert_close(
+        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
+    )
+
+
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (300, 300, 300),
+        (2048, 2048, 2048),
+        (1536, 3072, 19776),
+        (1792, 2895, 2048),
+    ],
+)
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+    ],
+)
+def test_streamk_gemm(
+    shape: tuple[int],
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+):
+    m, n, k = shape
+    block_m, block_n, block_k = 128, 256, 64
+
+    num_tiles_m = (m + block_m - 1) // block_m
+    num_tiles_n = (n + block_n - 1) // block_n
+    total_tiles = num_tiles_m * num_tiles_n
+    num_ctas = 304
+
+    iters_per_tile = (k + block_k - 1) // block_k
+    streamk_tiles = total_tiles
+
+    streamk_gemm, hyperparams = get_streamk_gemm_kernel(
+        shape=shape,
+        mfma_variant=mfma_variant,
+        threads_per_wave=threads_per_wave,
+        num_ctas=num_ctas,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, streamk_gemm)
+
+    a = device_randn(m, k, device="cuda", dtype=torch.float16)
+    b = device_randn(n, k, device="cuda", dtype=torch.float16)
+    c = device_zeros(m, n, device="cuda", dtype=torch.float32)
+    partial_buffer = device_zeros(
+        max(1, num_ctas * streamk_tiles),
+        block_m,
+        block_n,
+        device="cuda",
+        dtype=torch.float32,
+    )
+    lock_buffer = device_zeros(
+        max(1, num_ctas * streamk_tiles), 1, device="cuda", dtype=torch.float32
+    )
+
+    gemm(a, b, partial_buffer, lock_buffer, c)
+
+    torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
+    assert_close(
+        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
+    )
+
+
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (300, 300, 300),
+        (2048, 2048, 2048),
+        (1536, 3072, 19776),
+        (1792, 2895, 2048),
+    ],
+)
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+    ],
+)
+@pytest.mark.parametrize(
+    "streamk_tiles",
+    [
+        2,
+        4,
+        8,
+    ],
+)
+def test_hybrid_streamk_gemm(
+    shape: tuple[int],
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+    streamk_tiles: int,
+):
+    m, n, k = shape
+    block_m, block_n, block_k = 128, 256, 64
+
+    num_tiles_m = (m + block_m - 1) // block_m
+    num_tiles_n = (n + block_n - 1) // block_n
+    total_tiles = num_tiles_m * num_tiles_n
+    num_ctas = 304
+
+    # How many streamk tiles we want should be decided by a heuristic
+    actual_streamk_tiles = min(streamk_tiles, total_tiles)
+
+    hybrid_streamk_gemm, hyperparams = get_hybrid_streamk_gemm_kernel(
+        shape=shape,
+        mfma_variant=mfma_variant,
+        threads_per_wave=threads_per_wave,
+        num_ctas=num_ctas,
+        streamk_tiles=actual_streamk_tiles,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, hybrid_streamk_gemm)
+
+    a = device_randn(m, k, device="cuda", dtype=torch.float16)
+    b = device_randn(n, k, device="cuda", dtype=torch.float16)
+    c = device_zeros(m, n, device="cuda", dtype=torch.float32)
+    partial_buffer = device_zeros(
+        max(1, num_ctas * actual_streamk_tiles),
+        block_m,
+        block_n,
+        device="cuda",
+        dtype=torch.float32,
+    )
+    lock_buffer = device_zeros(
+        max(1, num_ctas * actual_streamk_tiles), 1, device="cuda", dtype=torch.float32
+    )
+
+    gemm(a, b, partial_buffer, lock_buffer, c)
 
     torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
     assert_close(

@@ -27,6 +27,7 @@ from wave_lang.support.ir_imports import (
     VectorType,
     amdgpu_d,
     arith_d,
+    llvm_d,
     memref_d,
     rocdl_d,
     vector_d,
@@ -58,6 +59,7 @@ from ...ops.wave_ops import (
     write,
     scatter_add,
     read_meets_hw_transpose_requirements,
+    MemoryAccessFlags,
 )
 from ..utils.general_utils import get_fastest_index, linearize_index
 from ..utils.mapping_utils import transform_index_on_mapping
@@ -407,6 +409,56 @@ def _cast_buffer_and_encode_stride(
     return ptr
 
 
+def _create_llvm_read_write(
+    kb_mem: Value,
+    kb_ir_type: MemRefType,
+    start_indices: tuple[Value],
+    vector_type: VectorType,
+    flags: MemoryAccessFlags,
+    value: Optional[Value] = None,
+) -> Optional[Value]:
+    is_read = value is None
+    element_type = vector_type.element_type
+
+    ptr = memref_d.extract_aligned_pointer_as_index(kb_mem)
+    strides, _ = kb_ir_type.get_strides_and_offset()
+    offset = arith_d.constant(IndexType.get(), 0)
+    elem_size_bytes = element_type.width // 8
+
+    for idx, stride in zip(start_indices, strides):
+        if not IndexType.isinstance(idx.type):
+            idx = arith_d.index_cast(IndexType.get(), idx)
+        stride_val = arith_d.constant(IndexType.get(), stride * elem_size_bytes)
+        stride_offset = arith_d.muli(idx, stride_val)
+        offset = arith_d.addi(offset, stride_offset)
+
+    final_ptr_index = arith_d.addi(ptr, offset)
+    i64 = IntegerType.get_signless(64)
+    final_ptr_i64 = arith_d.index_cast(i64, final_ptr_index)
+
+    llvm_ptr_type = llvm_d.PointerType.get()
+    llvm_ptr = llvm_d.IntToPtrOp(llvm_ptr_type, final_ptr_i64).result
+
+    volatile_ = bool(flags & MemoryAccessFlags.VOLATILE)
+    nontemporal = bool(flags & MemoryAccessFlags.NONTEMPORAL)
+
+    if is_read:
+        return llvm_d.LoadOp(
+            vector_type,
+            llvm_ptr,
+            volatile_=volatile_,
+            nontemporal=nontemporal,
+        ).result
+    else:
+        llvm_d.StoreOp(
+            value,
+            llvm_ptr,
+            volatile_=volatile_,
+            nontemporal=nontemporal,
+        )
+        return None
+
+
 def _create_vec_read_write(
     emitter: WaveEmitter,
     symbolic_shape: tuple[IndexExpr, ...],
@@ -622,7 +674,7 @@ def _build_mask_with_mapping(
 def handle_read(emitter: WaveEmitter, node: fx.Node):
     # This is similar to tkl.store with fixed start indices for now.
     try:
-        memory, elements_per_thread, mapping, dyn_vals, bounds, *rest = node.args
+        memory, elements_per_thread, mapping, dyn_vals, bounds, flags, *rest = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
@@ -665,7 +717,13 @@ def handle_read(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
-    if read_meets_hw_transpose_requirements(
+
+    use_llvm_load = flags != MemoryAccessFlags.NONE
+    if use_llvm_load:
+        result = _create_llvm_read_write(
+            kb_src, kb_ir_type, start_indices, vector_type, flags
+        )
+    elif read_meets_hw_transpose_requirements(
         get_custom(node), emitter.constraints, emitter.options.target
     ):
         result = amdgpu_d.transpose_load(vector_type, kb_src, start_indices)
@@ -698,6 +756,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             mapping,
             dyn_vals,
             bounds,
+            flags,
             *rest,
         ) = node.args
     except ValueError as e:
@@ -726,6 +785,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         cast_vector(emitter, reg, element_type=IndexType.get()) for reg in dyn_vals
     )
     dynamic_vals_map_start = _build_dyn_vals_map(mapping, dyn_vals)
+    element_type = kb_ir_type.element_type
 
     if mapping:
         transformed_index = transform_index_on_mapping(
@@ -748,20 +808,27 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     start_indices, start_indices_wg, start_indices_th = _build_start_indices(
         emitter, index, dynamic_vals_map_start
     )
-    _create_vec_read_write(
-        emitter,
-        output_shape,
-        kb_dest,
-        insert_vector,
-        None,
-        start_indices,
-        start_indices_wg,
-        start_indices_th,
-        elements_per_thread,
-        get_custom(memory),
-        mask,
-        node_index=index,
-    )
+
+    use_llvm_store = flags != MemoryAccessFlags.NONE
+    if use_llvm_store:
+        _create_llvm_read_write(
+            kb_dest, kb_ir_type, start_indices, insert_type, flags, insert_vector
+        )
+    else:
+        _create_vec_read_write(
+            emitter,
+            output_shape,
+            kb_dest,
+            insert_vector,
+            None,
+            start_indices,
+            start_indices_wg,
+            start_indices_th,
+            elements_per_thread,
+            get_custom(memory),
+            mask,
+            node_index=index,
+        )
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:

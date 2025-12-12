@@ -14,6 +14,7 @@ from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
     get_persistent_gemm_kernel,
+    get_streamk_gemm_kernel,
 )
 
 M = tkl.sym.M
@@ -2455,3 +2456,41 @@ def test_persistent_gemm():
     # CHECK:             scf.yield %{{.*}} : index
     # CHECK:           }
     # CHECK:           return
+
+
+@run_test
+def test_streamk_gemm():
+    shape = (1536, 3072, 19776)
+    streamk_gemm, hyperparams = get_streamk_gemm_kernel(
+        shape=shape,
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+        threads_per_wave=64,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    streamk_gemm = wave_compile(options, streamk_gemm)
+    print(streamk_gemm.asm)
+
+    # CHECK-LABEL:    test_streamk_gemm
+    # CHECK:          #[[TRANSLATION:.+]] = #iree_codegen.translation_info<pipeline = None workgroup_size = [128, 2, 1] subgroup_size = 64>
+    # CHECK:          func.func @streamk_gemm
+    # CHECK-SAME:       (%[[ARG0:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG1:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG3:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG4:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION]]} {
+
+    # Outer StreamK loop (scf.while)
+    # CHECK:           scf.while (%{{.+}} = %{{.+}}) : (index) -> index {
+    # CHECK:             arith.cmpi slt
+    # CHECK:             scf.condition
+
+    # Dynamic K loop (scf.for) with dynamic bounds for MMA
+    # CHECK:           } do {
+    # CHECK:             scf.for %{{.+}} = %{{.+}} to %{{.+}} step %{{.+}} iter_args({{.+}}) -> (vector<4xf32>
+
+    # CHECK:           llvm.store volatile %{{.+}}, %{{.+}} : vector<1xf32>, !llvm.ptr
+
+    # CHECK:           llvm.load volatile %{{.+}} : !llvm.ptr -> vector<1xf32>

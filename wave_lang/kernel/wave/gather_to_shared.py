@@ -274,6 +274,7 @@ def emit_global_to_lds(
                     1,
                     custom.mapping,
                     custom.mapping_dynamic_vals,
+                    flags=custom.flags,
                 ).add_to_graph(custom.graph, loc=custom.location)
                 new_dyn_vals.append(new_read)
 
