@@ -54,5 +54,4 @@ jobs:
           ./build_tools/build_release.py
 
       - name: Validate Release Build
-        if: ${{ !cancelled() }}
         run: ./build_tools/post_build_release_test.sh

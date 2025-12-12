@@ -115,6 +115,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     env:
       VENV_DIR: ${{ github.workspace }}/.wave-venv
+
     steps:
       - name: Set environment variables
         run: |
@@ -202,7 +203,6 @@ jobs:
           pip install -r requirements.txt -e .
 
       - name: Run unit tests
-        if: ${{ !cancelled() }}
         run: |
           pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
 

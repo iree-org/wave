@@ -79,17 +79,13 @@ jobs:
           pip install -r requirements.txt -e .
 
       - name: Run unit tests
-        if: ${{ !cancelled() }}
         run: |
           pytest -n 4 --capture=tee-sys -vv ./tests
-
       - name: Run LIT tests
-        if: ${{ !cancelled() }}
         run: |
           WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
 
       - name: MyPy Type Checking
-        if: ${{ !cancelled() }}
         run: |
           mypy
 

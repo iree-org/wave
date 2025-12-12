@@ -67,7 +67,6 @@ jobs:
           toolchain: stable
 
       - name: Install pip deps
-        if: ${{ !cancelled() }}
         run: |
           # Install TheRock
           sudo apt-get update
@@ -91,12 +90,10 @@ jobs:
           pip install -r requirements.txt -e .
 
       - name: Run unit tests
-        if: ${{ !cancelled() }}
         run: |
           pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
 
       - name: Test TKW runtime related stack on amdgpu
-        if: ${{ !cancelled() }}
         run: |
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
@@ -104,7 +101,7 @@ jobs:
           WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
 
       - name: Run e2e tests on AMD GPU
-        if: ${{ (github.event_name == 'pull_request') && !cancelled() }}
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
 
@@ -114,6 +111,5 @@ jobs:
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
 
       - name: Run LIT tests
-        if: ${{ !cancelled() }}
         run: |
           WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
