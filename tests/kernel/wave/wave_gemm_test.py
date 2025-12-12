@@ -229,11 +229,10 @@ def testPureGemm(
     assert_close(c, iree_ref, check_device=False)
 
 
+small_global_to_lds_shapes = [(17, 23, 32), (15, 13, 4)]
 global_to_lds_shapes = [pytest.param(s) for s in get_test_shapes("test_gemm")[:1]]
-
 global_to_lds_shapes += [
-    pytest.param((17, 23, 32), marks=require_cdna_3_or_4),
-    pytest.param((15, 13, 4), marks=require_cdna_3_or_4),
+    pytest.param(s, marks=require_cdna_3_or_4) for s in small_global_to_lds_shapes
 ]
 
 
@@ -242,17 +241,17 @@ global_to_lds_shapes += [
 @pytest.mark.parametrize(
     "enable_scheduling",
     [
-        pytest.param(SchedulingType.NONE),
-        pytest.param(SchedulingType.PREFETCH, marks=require_cdna_3_or_4),
-        pytest.param(SchedulingType.FOUR_STAGE, marks=require_cdna_3_or_4),
-        pytest.param(SchedulingType.MODULO, marks=require_cdna_3_or_4),
+        SchedulingType.NONE,
+        SchedulingType.PREFETCH,
+        SchedulingType.FOUR_STAGE,
+        SchedulingType.MODULO,
     ],
 )
 @pytest.mark.parametrize(
     "dynamic_dims",
     [
-        pytest.param((False, False, False)),
-        pytest.param((True, True, False), marks=require_cdna_3_or_4),
+        (False, False, False),
+        (True, True, False),
     ],
 )
 @pytest.mark.parametrize(
@@ -275,6 +274,9 @@ def testGemmGlobalToLDS(
     perf_filename_tk,
     perf_filename_iree,
 ):
+    if enable_scheduling != SchedulingType.NONE and shape in small_global_to_lds_shapes:
+        pytest.skip("scheduling is not supported for small shapes")
+
     gemm, hyperparams, dynamic_symbols = get_gemm_kernel(
         shape, dynamic_dims, mfma_variant, datatype, threads_per_wave=threads_per_wave
     )
