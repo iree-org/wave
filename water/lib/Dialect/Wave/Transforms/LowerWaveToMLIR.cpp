@@ -65,6 +65,7 @@ struct LowerWaveToMLIRPass
         // clang-format off
       affine::AffineDialect,
       arith::ArithDialect,
+      func::FuncDialect,
       math::MathDialect,
       gpu::GPUDialect,
       amdgpu::AMDGPUDialect,
@@ -77,6 +78,15 @@ struct LowerWaveToMLIRPass
                         wave::DivOp, wave::Exp2Op, wave::ExtractSliceOp,
                         wave::IterateOp, wave::MmaOp, wave::MulOp, wave::ReadOp,
                         wave::RegisterOp, wave::WriteOp, wave::YieldOp>();
+
+    // Mark functions as illegal if they have Wave tensor types in their
+    // signature.
+    target.addDynamicallyLegalOp<func::FuncOp>([](func::FuncOp op) {
+      return llvm::none_of(op.getFunctionType().getInputs(),
+                           llvm::IsaPred<wave::WaveTensorType>) &&
+             llvm::none_of(op.getFunctionType().getResults(),
+                           llvm::IsaPred<wave::WaveTensorType>);
+    });
     ConversionConfig config;
     config.allowPatternRollback = false;
 
@@ -99,6 +109,11 @@ struct LowerWaveToMLIRPass
 
           wave::WaveTypeConverter typeConverter(hyperparam);
           RewritePatternSet patterns(ctx);
+
+          // Add function signature conversion patterns.
+          mlir::populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(
+              patterns, typeConverter);
+
           wave::populateWaveMiscellaneousOpsLoweringPatterns(typeConverter,
                                                              patterns);
           wave::populateWaveBinaryOpLoweringPatterns(typeConverter, patterns);
