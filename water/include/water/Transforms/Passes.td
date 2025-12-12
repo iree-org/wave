@@ -143,4 +143,14 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
   ];
 }
 
+def WaterDropTransformOpsPass : Pass<"water-drop-transform-ops"> {
+  let summary = "Remove transform dialect operations from the module";
+  let description = [{
+    This pass removes all operations from the transform dialect, including
+    transform.named_sequence. This is useful after the transform-interpreter has
+    applied the transformations and the transform dialect operations are no
+    longer needed.
+  }];
+}
+
 #endif // WATER_PASSES

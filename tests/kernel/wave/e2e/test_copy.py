@@ -16,10 +16,8 @@ from wave_lang.kernel.wave.utils.general_utils import check_leaks
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
-from ..common.utils import param_bool, require_e2e, require_water_and_ee
+from ..common.utils import param_bool, require_e2e, use_water_backend_bool
 from ._test_util import get_test_shapes
-
-_water_enable = [False, pytest.param(True, marks=require_water_and_ee)]
 
 
 def get_copy_template(
@@ -27,7 +25,7 @@ def get_copy_template(
     use_dynamic_dims: bool = False,
     run_bench: bool = False,
     use_buffer_ops: bool = False,
-    use_water_pipeline: bool = False,
+    use_water_backend: bool = False,
 ) -> tuple[WaveCompileOptions, "LaunchableWave"]:
     M = tkl.sym.M
     N = tkl.sym.N
@@ -77,7 +75,7 @@ def get_copy_template(
         canonicalize=True,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
-        use_water_pipeline=use_water_pipeline,
+        use_water_backend=use_water_backend,
     )
     if use_dynamic_dims:
         options.dynamic_symbols = [M, N]
@@ -87,19 +85,19 @@ def get_copy_template(
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-@param_bool("use_water_pipeline", "water", values=_water_enable)
+@use_water_backend_bool("use_water_backend")
 @check_leaks
 def test_copy(
     shape: tuple[int, int],
     use_buffer_ops: bool,
     run_bench: bool,
-    use_water_pipeline: bool,
+    use_water_backend: bool,
 ) -> None:
     options, test = get_copy_template(
         shape,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
-        use_water_pipeline=use_water_pipeline,
+        use_water_backend=use_water_backend,
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
@@ -113,18 +111,18 @@ def test_copy(
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")
-@param_bool("use_water_pipeline", "water", values=_water_enable)
+@use_water_backend_bool("use_water_backend")
 def test_dynamic_copy(
     shape: tuple[int, int],
     use_buffer_ops: bool,
     run_bench: bool,
-    use_water_pipeline: bool,
+    use_water_backend: bool,
 ) -> None:
     options, test = get_copy_template(
         shape,
         run_bench=run_bench,
         use_buffer_ops=use_buffer_ops,
-        use_water_pipeline=use_water_pipeline,
+        use_water_backend=use_water_backend,
         use_dynamic_dims=True,
     )
     options = set_default_run_config(options)

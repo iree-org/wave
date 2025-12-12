@@ -3,6 +3,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   AllocToAlloca.cpp
   AssembleISA.cpp
   CheckStaticAssertions.cpp
+  DropTransformOps.cpp
   GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   SLPVectorizer.cpp
@@ -25,6 +26,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   MLIRPass
   MLIRROCDLTarget
   MLIRRewrite
+  MLIRTransformDialect
   MLIRTransformUtils
   MLIRVectorDialect
   MLIRWaterAnalysis

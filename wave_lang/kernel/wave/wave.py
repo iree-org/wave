@@ -731,7 +731,7 @@ class LaunchableWave(Launchable):
 
             with InsertionPoint(module_op.body), Location.unknown():
                 func = emitter.emit(trace.get_root_graph())
-                if options.use_water_pipeline:
+                if options.use_water_backend:
                     emitter.emit_host_func(func)
 
         # Otherwise, we need to iree-fy the existing module (that supposedly has
@@ -742,7 +742,7 @@ class LaunchableWave(Launchable):
         # Also we'll need to update the uses of the memref arguments (from the
         # existing module) to be compatible with the new stream.binding arguments.
 
-        if options.use_water_pipeline:
+        if options.use_water_backend:
             mb.module_op = module_op
         else:
             assert not any(

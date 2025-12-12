@@ -454,7 +454,7 @@ def wave_compile(
         # don't want to cache the kernel in that case.
         trace = kernel._trace()
 
-        if not options.use_water_pipeline:
+        if not options.use_water_backend:
             # Disable async dispatch for benchmarking.
             is_async = options.iree_launch_async and not options.run_bench
             host_codegen.isolated_test_call(
@@ -513,7 +513,7 @@ def wave_compile(
             asm = _generate_asm_code(mb, options)
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
-        elif options.use_water_pipeline:
+        elif options.use_water_backend:
             module = water_lowering_pipeline(mb.module_op, options)
             return WaveKernelExecutionEngine(options, module, asm)
         elif not options.compile_to_mlir:

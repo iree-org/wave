@@ -82,5 +82,12 @@ require_water_and_ee = pytest.mark.skipif(
 )
 
 
+_water_backend_enable = [False, pytest.param(True, marks=require_water_and_ee)]
+
+
+def use_water_backend_bool(name: str):
+    return param_bool(name, "water", values=_water_backend_enable)
+
+
 def glob_asm_files(path: Path) -> list[Path]:
     return list(filter(lambda x: x.suffix in [".s", ".rocmasm"], path.glob("*")))

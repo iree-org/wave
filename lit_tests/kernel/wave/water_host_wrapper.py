@@ -59,7 +59,7 @@ def get_wave_compile_options(
         compile_to_mlir=True,
         location_capture_config=location_capture_config,
         drop_debug_info_before_mlir=drop_debug_info_before_mlir,
-        use_water_pipeline=True,
+        use_water_backend=True,
     )
 
 

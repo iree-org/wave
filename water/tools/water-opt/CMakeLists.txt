@@ -7,8 +7,11 @@ set(LIBS
         MLIRGPUDialect
         MLIRGPUToLLVMIRTranslation
         MLIRLLVMToLLVMIRTranslation
+        MLIRLinalgTransformOps
+        MLIRMemRefTransformOps
         MLIROptLib
         MLIRROCDLDialect
+        MLIRTransformDialectTransforms
         MLIRWaterTransforms
         MLIRWaveTransforms
 

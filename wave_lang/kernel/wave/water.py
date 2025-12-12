@@ -405,6 +405,38 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
         return []
 
+    def add_transform(transform: str, entry_point: str) -> tuple[str, dict[str, Any]]:
+        nonlocal mlir_asm
+        # Erase the last occurrence of '}' from mlir_asm which closes the module operation
+        last_close = mlir_asm.rfind("}")
+        if last_close != -1:
+            mlir_asm = mlir_asm[:last_close]
+        mlir_asm += transform
+        mlir_asm += "}\n"
+        return ("transform-interpreter", {"entry-point": entry_point})
+
+    # TODO: this transform refuses to work.
+    alloc_to_alloca = """
+  transform.named_sequence @__transform_alloc_to_alloca(%arg0: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["gpu.func"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+    transform.apply_patterns to %0 {
+      transform.apply_patterns.memref.alloc_to_alloca
+    } : !transform.any_op
+    transform.yield
+  }
+"""
+
+    alloca_to_global = """
+  transform.named_sequence @__transform_alloca_to_global(%arg0: !transform.any_op {transform.readonly}) {
+    %alloca = transform.structured.match ops{["memref.alloca"]} in %arg0
+        : (!transform.any_op) -> !transform.op<"memref.alloca">
+    %get_global, %global = transform.memref.alloca_to_global %alloca
+          : (!transform.op<"memref.alloca">)
+            -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+"""
+
     canonicalize_cse = "composite-fixed-point-pass", {
         "name": "canonicalize_cse",
         "pipeline": "any(canonicalize,cse)",
@@ -418,14 +450,20 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         *add_opt(canonicalize_cse),
         *add_opt("loop-invariant-code-motion"),
         *add_opt("int-range-optimizations"),
+        "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
+        ("water-alloc-to-alloca", {}, "gpu.module"),
+        # add_transform(alloc_to_alloca, "__transform_alloc_to_alloca"),
+        add_transform(alloca_to_global, "__transform_alloca_to_global"),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
         ("rocdl-attach-target", {"chip": target_chip, "O": llvm_opt_level}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
+        "convert-vector-to-llvm",
         "reconcile-unrealized-casts",
         *add_opt(canonicalize_cse),
         ("water-gpu-module-to-binary", {"dump-intermediates": dump_intermediates}),
         "water-gpu-to-gpu-runtime",
+        "water-drop-transform-ops",
         "symbol-dce",
         *add_opt(canonicalize_cse),
     ]
