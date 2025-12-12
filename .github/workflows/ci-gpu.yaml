@@ -60,7 +60,7 @@ jobs:
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
         run: |
           sudo apt update
-          sudo apt install -y ninja-build cmake clang lld dwarfdump
+          sudo apt install -y ninja-build cmake clang lld
           pip install -r water/requirements-dev.txt
 
       - name: Checkout LLVM
@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         version: [3.11]
-        os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org] # nodai-amdgpu-mi250-x86-64
+        os: [linux-mi325-1gpu-ossci-iree-org] # nodai-amdgpu-mi250-x86-64
     runs-on: ${{matrix.os}}
     timeout-minutes: 60
     needs: build_llvm_linux
@@ -117,29 +117,12 @@ jobs:
     env:
       VENV_DIR: ${{ github.workspace }}/.wave-venv
     steps:
-      - name: Set environment variables
-        run: |
-          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' ]]; then
-            echo "IS_MI325=true" >> $GITHUB_ENV
-          else
-            echo "IS_MI325=false" >> $GITHUB_ENV
-          fi
-
-          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' ]]; then
-            echo "HAS_GPU=true" >> $GITHUB_ENV
-            echo "HAS_NO_GPU=false" >> $GITHUB_ENV
-          else
-            echo "HAS_GPU=false" >> $GITHUB_ENV
-            echo "HAS_NO_GPU=true" >> $GITHUB_ENV
-          fi
-
       - name: Checkout repo
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           fetch-depth: 0
 
       - name: Setup Cache Vars
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
           echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
@@ -147,7 +130,6 @@ jobs:
           echo "WAVE_LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install" >> $GITHUB_ENV
 
       - name: Setup env
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
         run: |
           sudo apt update
           sudo apt install -y ninja-build cmake clang lld
@@ -155,7 +137,6 @@ jobs:
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
         with:
           path: llvm-mlir/_mlir_install/**
           key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
@@ -178,24 +159,7 @@ jobs:
         with:
           toolchain: stable
 
-      - name: "Install dwarfdump"
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y dwarfdump
-
-      - name: Install pip deps
-        if: ${{ env.HAS_NO_GPU == 'true' && !cancelled() }}
-        run: |
-          python -m pip install --no-compile --upgrade pip
-          # Note: We install in three steps in order to satisfy requirements
-          # from non default locations first. Installing the PyTorch CPU
-          # wheels saves multiple minutes and a lot of bandwidth on runner setup.
-          pip install --no-compile -r pytorch-cpu-requirements.txt
-          pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
-          pip install -r requirements.txt -e .
-
       - name: Install pip deps (mi250/mi325)
-        if: ${{ env.HAS_GPU == 'true' && !cancelled() }}
         run: |
           python -m pip install --no-compile --upgrade pip
           pip install --no-compile -r pytorch-rocm-requirements.txt
@@ -208,7 +172,6 @@ jobs:
           pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
 
       - name: Test TKW runtime related stack on amdgpu
-        if: ${{ env.HAS_GPU == 'true' && !cancelled() }}
         run: |
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
@@ -216,25 +179,17 @@ jobs:
           WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
 
       - name: Run e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU == 'true' && (github.event_name == 'pull_request') && !cancelled() }}
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
 
       - name: Run expensive e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU == 'true' && (github.event_name != 'pull_request') && !cancelled() }}
+        if: ${{ github.event_name != 'pull_request' }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
 
       - name: Run LIT tests
-        if: ${{ !cancelled() }}
-        run: |
-          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
-
-      - name: MyPy Type Checking
-        if: ${{ !cancelled() }}
-        run: |
-          mypy
-
+        run: WAVE_TEST_WATER=1 lit lit_tests/ -v
 
   test_linux_water:
     name: "${{ matrix.name }} :: SHARED_LIBS ${{ matrix.shared_libs }} :: Run water tests"

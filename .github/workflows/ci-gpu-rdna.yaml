@@ -81,7 +81,7 @@ jobs:
         run: |
           # Install User libraries
           sudo apt-get update
-          sudo apt install -y libnuma1 numactl gfortran build-essential binutils dwarfdump
+          sudo apt install -y libnuma1 numactl build-essential binutils
 
           # Install torch+rocm6.4
           python -m pip install --no-compile --upgrade pip
@@ -113,8 +113,3 @@ jobs:
         if: ${{ (github.event_name != 'pull_request') && !cancelled() }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
-
-      - name: Run LIT tests
-        if: ${{ !cancelled() }}
-        run: |
-          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v

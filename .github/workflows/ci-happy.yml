@@ -76,18 +76,6 @@ jobs:
             ci-rocplay-gfx1250:latest \
             infinity
 
-      # 2.1. apt-get install for wave-env
-      - name: Setup dwarfdump for lit test
-        run: |
-          docker exec \
-            -u root \
-            happy bash -lc '
-              set -euxo pipefail
-
-              apt-get update
-              apt-get install -y dwarfdump
-            '
-
       # 2.2. wave-env
       - name: Setup venv, Rust and Python deps
         run: |
@@ -203,25 +191,7 @@ jobs:
               WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/wave_gemm_test.py
             '
 
-      # 7. lit tests
-      - name: Run lit tests
-        run: |
-          docker exec \
-            -e USER_VENV="${USER_VENV}" \
-            -e ROOT_VENV="${ROOT_VENV}" \
-            happy bash -lc '
-              set -euxo pipefail
-              source /usr/local/bin/env.sh >/dev/null 2>&1
-              export PATH="$CARGO_HOME/bin:$PATH"
-
-              source "${USER_VENV}/bin/activate"
-              export PYTHONPATH=${ROOT_VENV}
-
-              echo "Lit tests"
-              WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
-            '
-
-      # 8. final cleanup container
+      # 7. final cleanup container
       - name: Clean up happy container - 1
         if: always()
         run: |

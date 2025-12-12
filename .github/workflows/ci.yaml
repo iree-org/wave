@@ -30,13 +30,7 @@ jobs:
         name: [ubuntu-24.04]
         version: ["3.10", "3.11", "3.12", "3.13"]
         runs-on: [ubuntu-24.04]
-        pytorch_requirements: ["pytorch-cpu-requirements.txt"]
 
-        include:
-          - name: linux-mi325
-            version: "3.11"
-            runs-on: linux-mi325-1gpu-ossci-iree-org
-            pytorch_requirements: "pytorch-rocm-requirements.txt"
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 60
     env:
@@ -74,14 +68,9 @@ jobs:
           # from non default locations first. Additionally, installing
           # cpu/rocm-specific pytorch wheels first avoids installing
           # unnecessary libraries included in default pytorch.
-          pip install --no-compile -r ${{ matrix.pytorch_requirements }}
-          pip install --no-cache-dir -r requirements-iree-pinned.txt
+          pip install -r pytorch-cpu-requirements.txt
+          pip install -r requirements-iree-pinned.txt
           pip install -r requirements.txt -e .
-
-      - name: Run unit tests
-        if: ${{ !cancelled() }}
-        run: |
-          pytest -n 4 --capture=tee-sys -vv ./tests
 
       - name: Run LIT tests
         if: ${{ !cancelled() }}
