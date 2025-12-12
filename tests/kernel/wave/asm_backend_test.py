@@ -13,7 +13,10 @@ import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
+from wave_lang.kernel.wave.utils.run_utils import (
+    set_default_run_config,
+    get_default_arch,
+)
 from wave_lang.kernel.wave.utils.torch_utils import (
     device_randn,
     device_zeros,
@@ -24,6 +27,15 @@ from wave_lang.support.location_config import (
 )
 
 from .common.utils import require_e2e, require_cdna_3_or_4
+
+
+def _global_to_shared_params():
+    # global_to_shared (gather_to_lds) is currently only supported for
+    # single-wave configurations on gfx95+ in the ASM backend.
+    # Multi-wave configurations require more complex LDS offset handling.
+    if "gfx95" in get_default_arch():
+        return [pytest.param(True, id="g2s"), pytest.param(False, id="no_g2s")]
+    return [pytest.param(False, id="no_g2s")]
 
 
 @require_e2e
@@ -401,7 +413,8 @@ def test_mma_multi_wave_asm_backend(shape, config, run_bench):
         ((64, 128, 64), 16, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, BLOCK_K = 16
     ],
 )
-def test_gemm_asm_backend(shape, block_k, config, run_bench):
+@pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
+def test_gemm_asm_backend(shape, block_k, config, use_global_to_shared, run_bench):
     """End-to-end test for GEMM with K-loop using ASM backend.
 
     Tests both single-wave and multi-wave configurations with varying BLOCK_K values.
@@ -491,6 +504,7 @@ def test_gemm_asm_backend(shape, block_k, config, run_bench):
         compile_to_mlir=False,
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
+        use_global_to_shared=use_global_to_shared,
     )
     options = set_default_run_config(options)
 

@@ -435,3 +435,99 @@ def test_gemm_multi_wave_k_loop():
     # CHECK:          loop_0_exit:
     # CHECK:          buffer_store_dword
     # CHECK:          s_endpgm
+
+
+@run_test
+def test_gemm_gather_to_lds():
+    """
+    Test GEMM with gather_to_lds (global_to_shared) enabled.
+
+    When use_global_to_shared=True, the compiler generates buffer_load_dword...lds
+    instructions that load directly from global memory to LDS, bypassing VGPRs.
+
+    Verifies:
+    - buffer_load_dword ... lds instructions are emitted
+    - M0 register setup for LDS addressing
+    - Proper barrier synchronization (vmcnt + lgkmcnt + s_barrier)
+    """
+    constraints: list[tkw.Constraint] = [
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.WaveConstraint(M, BLOCK_M),
+        tkw.WaveConstraint(N, BLOCK_N),
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            mma_type=tkw.MMAType.F32_16x16x16_F16,
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def gemm_g2s(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg])
+        def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a)
+            b_reg = tkw.read(b)
+            acc = tkw.mma(a_reg, b_reg, acc)
+            return acc
+
+        tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    compile_options = WaveCompileOptions(
+        subs={
+            M: 32,
+            N: 32,
+            K: 32,
+            BLOCK_M: 16,
+            BLOCK_N: 16,
+            BLOCK_K: 16,
+            LOAD_ELEMS_PER_THREAD: 4,
+            STORE_ELEMS_PER_THREAD: 4,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+        },
+        canonicalize=True,
+        compile_to_mlir=True,
+        use_global_to_shared=True,  # Enable gather_to_lds
+    )
+    compile_options.compile_to_asm = True
+    gemm_g2s = wave_compile(compile_options, gemm_g2s)
+    print(gemm_g2s.asm)
+
+    # CHECK-LABEL:    test_gemm_gather_to_lds
+    # CHECK:          .protected gemm_g2s
+    # CHECK:          .amdhsa_kernel gemm_g2s
+    # CHECK:          gemm_g2s:
+
+    # Verify LDS SRD setup:
+    #   word2 = 2147483645 (0x7ffffffd) = max buffer size
+    #   word3 = 159744 (0x27000) = LDS addressing mode
+    # CHECK:          s_mov_b32 s{{[0-9]+}}, 2147483645
+    # CHECK:          s_mov_b32 s{{[0-9]+}}, 159744
+
+    # Verify M0 register setup for LDS destination address
+    # CHECK:          s_mov_b32 m0,
+
+    # Verify buffer_load_dword...lds instructions (gather from global to LDS)
+    # CHECK:          buffer_load_dword v{{[0-9]+}}, s[{{[0-9]+}}:{{[0-9]+}}], 0 offen lds
+
+    # Verify barrier synchronization after gather_to_lds:
+    #   vmcnt(0) waits for global memory loads to complete
+    #   lgkmcnt(0) waits for LDS writes to complete (from buffer_load...lds)
+    #   s_barrier synchronizes all threads
+    # CHECK:          s_waitcnt vmcnt(0)
+    # CHECK:          s_barrier
+
+    # Verify LDS reads after barrier (ds_read_b64 for MFMA inputs)
+    # CHECK:          ds_read_b64 v[{{[0-9]+}}:{{[0-9]+}}], v{{[0-9]+}}
+
+    # Verify MFMA instruction
+    # CHECK:          v_mfma_f32_16x16x16_f16
+
+    # CHECK:          s_endpgm

@@ -13,6 +13,7 @@ from typing import Dict, Optional
 # Similar to _Rational in emitter.py: tracks expr/const patterns
 _RationalReg = namedtuple("_RationalReg", ["numerator_reg", "denominator"])
 
+
 # Canonicalization helpers for CSE
 _TID_SYMBOL_NAMES = {"tid_x", "tid_y", "tid_z"}
 
@@ -170,25 +171,25 @@ class ExprEmitter:
             dst_hint: Optional destination register hint (e.g., "v2")
 
         Returns:
-            Register string (e.g., "v5") containing the expression result
+            Register string (e.g., "v5") containing the expression result.
+            Note: The actual register may differ from dst_hint if a fused
+            instruction path is used.
         """
         key = expr_key(expr)
         if key in self._cache:
             return self._cache[key]
 
-        # Materialize expression
+        # Materialize expression - emit returns the ACTUAL result register
+        # which may differ from dst_reg if fused patterns are used
         if dst_hint is not None:
-            dst_reg = dst_hint
-            self.emit(expr, dst_reg)
-            reg_str = dst_reg
+            actual_reg = self.emit(expr, dst_hint)
         else:
             v = self.emitter.vgpr_allocator.alloc_v()
             dst_reg = f"v{v}"
-            self.emit(expr, dst_reg)
-            reg_str = dst_reg
+            actual_reg = self.emit(expr, dst_reg)
 
-        self._cache[key] = reg_str
-        return reg_str
+        self._cache[key] = actual_reg
+        return actual_reg
 
     def clear_cache(self):
         """Clear the expression cache."""
@@ -198,8 +199,7 @@ class ExprEmitter:
         """
         Main entry point: emit ASM for expr into dst_reg.
 
-        Uses iterative postorder traversal of the SymPy expression tree,
-        similar to gen_sympy_index in emitter.py.
+        Uses iterative postorder traversal to emit instructions.
 
         Args:
             expr: SymPy expression to emit
@@ -214,10 +214,9 @@ class ExprEmitter:
         # Cache lane_id to avoid multiple calls
         lane_id_v = self.emitter.ensure_lane_id(self.kernel_info.subgroup_size)
 
-        # Stack holds register names (strings like "v2") during traversal
+        # Fall back to standard postorder traversal
         stack = []
 
-        # Iterate through expression in postorder (children before parents)
         for term in sympy.postorder_traversal(expr):
             if isinstance(term, sympy.Symbol):
                 self._handle_symbol(term, lane_id_v, stack)

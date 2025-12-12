@@ -11,12 +11,17 @@ This module contains handlers for various MLIR operations that are encountered
 during the IR traversal for assembly code generation.
 """
 
+import operator
+
+import sympy
+
 from wave_lang.support.ir_imports import (
     affine_d,
     amdgpu_d,
     arith_d,
     gpu_d,
     memref_d,
+    rocdl_d,
     scf_d,
     stream_d,
     vector_d,
@@ -30,6 +35,7 @@ from .utils import (
     split_const_dynamic,
 )
 from .expression_emitter import ExprEmitter
+from .gather_to_shared import G2SHandler
 
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
 
@@ -52,6 +58,8 @@ class OperationHandlers:
         self.walker = walker
         # Per-kernel expression emitters with CSE (one per kernel)
         self._expr_emitters_by_kernel = {}
+        # Gather-to-LDS handler (composition)
+        self.g2s = G2SHandler(self)
 
     def _get_expr_emitter(self, kernel_info: KernelInfo) -> ExprEmitter:
         """
@@ -106,6 +114,56 @@ class OperationHandlers:
             # Handle float-like types that represent exact integers
             kernel_info.index_env[str(operation.result)] = int(value)
 
+    def _handle_arith_binop(self, operation, kernel_info: KernelInfo, op_func):
+        """Handle binary arithmetic operations (addi, muli) in index_env.
+
+        Args:
+            operation: The MLIR operation (AddIOp or MulIOp)
+            kernel_info: Kernel info containing index_env
+            op_func: Binary function to apply (e.g., operator.add, operator.mul)
+        """
+        lhs = kernel_info.index_env.get(str(operation.operands[0]))
+        rhs = kernel_info.index_env.get(str(operation.operands[1]))
+
+        # Operands not tracked - can't compute result
+        if lhs is None or rhs is None:
+            return
+
+        # Convert symbolic strings (tid_x, wgid_x, etc.) to SymPy symbols
+        if isinstance(lhs, str):
+            lhs = sympy.Symbol(lhs)
+        if isinstance(rhs, str):
+            rhs = sympy.Symbol(rhs)
+
+        if isinstance(lhs, (int, sympy.Expr)) and isinstance(rhs, (int, sympy.Expr)):
+            kernel_info.index_env[str(operation.result)] = op_func(lhs, rhs)
+
+    def handle_arith_addi_op(self, operation: arith_d.AddIOp, kernel_info: KernelInfo):
+        """Handle arith.addi - track integer addition in index_env."""
+        self._handle_arith_binop(operation, kernel_info, operator.add)
+
+    def handle_arith_muli_op(self, operation: arith_d.MulIOp, kernel_info: KernelInfo):
+        """Handle arith.muli - track integer multiplication in index_env."""
+        self._handle_arith_binop(operation, kernel_info, operator.mul)
+
+    def handle_arith_index_cast_op(
+        self, operation: arith_d.IndexCastOp, kernel_info: KernelInfo
+    ):
+        """Handle arith.index_cast operations - propagate values through cast.
+
+        Propagates integers, SymPy expressions, and symbolic strings (tid_x, etc.).
+        """
+        result_ssa = str(operation.result)
+        src_ssa = str(operation.operands[0])
+
+        src_val = kernel_info.index_env.get(src_ssa)
+        if src_val is None:
+            return
+
+        # Propagate numeric values and symbolic strings
+        if isinstance(src_val, (int, sympy.Expr, str)):
+            kernel_info.index_env[result_ssa] = src_val
+
     def handle_gpu_thread_id_op(
         self, operation: gpu_d.ThreadIdOp, kernel_info: KernelInfo
     ):
@@ -156,6 +214,8 @@ class OperationHandlers:
         num_dimensions: int,
     ) -> list:
         """Extract dimension values from the first num_dimensions operands."""
+        import sympy
+
         dimension_values = []
 
         for i in range(num_dimensions):
@@ -164,6 +224,9 @@ class OperationHandlers:
                 operand_value = kernel_info.index_env.get(operand_ssa)
 
                 if isinstance(operand_value, int):
+                    dimension_values.append(operand_value)
+                elif isinstance(operand_value, sympy.Expr):
+                    # SymPy expressions from previous affine.apply results
                     dimension_values.append(operand_value)
                 elif operand_value in [
                     "tid_x",
@@ -192,6 +255,8 @@ class OperationHandlers:
         num_symbols: int,
     ) -> list:
         """Extract symbol values from the next num_symbols operands."""
+        import sympy
+
         symbol_values = []
 
         for i in range(num_symbols):
@@ -201,6 +266,9 @@ class OperationHandlers:
                 operand_value = kernel_info.index_env.get(operand_ssa)
 
                 if isinstance(operand_value, int):
+                    symbol_values.append(operand_value)
+                elif isinstance(operand_value, sympy.Expr):
+                    # SymPy expressions from previous affine.apply results
                     symbol_values.append(operand_value)
                 elif operand_value in [
                     "tid_x",
@@ -525,7 +593,7 @@ class OperationHandlers:
     def handle_lds_barrier_op(
         self, operation: amdgpu_d.LDSBarrierOp, kernel_info: KernelInfo
     ):
-        """Handle amdgpu.lds_barrier operations - emit LDS synchronization barrier."""
+        """Handle amdgpu.lds_barrier - emit lgkmcnt(0) + s_barrier."""
         self.walker.emitter.emit_barrier()
 
     def handle_view_op(self, operation: memref_d.ViewOp, kernel_info: KernelInfo):
@@ -578,12 +646,17 @@ class OperationHandlers:
         """Emit an LDS load operation using MLIR's 2D memref indices.
 
         Uses the byte_offset_expr computed from MLIR's actual indices rather than
-        forcing lane-linear addressing.
+        forcing lane-linear addressing. The MLIR indices already encode the correct
+        addressing for both single-wave and multi-wave modes, including any swizzle
+        patterns needed for cache efficiency.
         """
         import sympy
 
         # Add view base offset if present
         vbase_val = self.walker._lds_view_base_bytes.get(memref_ssa, 0)
+
+        # Use MLIR-derived expression for all cases (single-wave, multi-wave, g2s, non-g2s)
+        # The MLIR index expression already contains the correct addressing formula
         if vbase_val:
             byte_offset_expr = byte_offset_expr + sympy.Integer(vbase_val)
 
@@ -1073,3 +1146,93 @@ class OperationHandlers:
             result_ssa = str(result)
             if i < len(iter_arg_vgprs):
                 self.walker.ssa_to_vgpr[result_ssa] = iter_arg_vgprs[i]
+
+    # Note: gather_to_lds handlers moved to gather_to_shared.py (G2SMixin)
+
+    def handle_memref_cast_op(
+        self, operation: memref_d.CastOp, kernel_info: KernelInfo
+    ):
+        """Handle memref.cast operations - track source memref mapping.
+
+        MLIR format:
+            %result = memref.cast %src : memref<...> to memref<...>
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        # Track the cast chain for SRD lookup
+        if not hasattr(self.walker, "_memref_cast_sources"):
+            self.walker._memref_cast_sources = {}
+        self.walker._memref_cast_sources[result_ssa] = source_ssa
+
+    def handle_memref_reinterpret_cast_op(
+        self, operation: memref_d.ReinterpretCastOp, kernel_info: KernelInfo
+    ):
+        """Handle memref.reinterpret_cast operations - track source memref mapping.
+
+        MLIR format:
+            %result = memref.reinterpret_cast %src to offset: [...], sizes: [...], strides: [...]
+                : memref<...> to memref<...>
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        # Track the cast chain for SRD lookup
+        if not hasattr(self.walker, "_memref_cast_sources"):
+            self.walker._memref_cast_sources = {}
+        self.walker._memref_cast_sources[result_ssa] = source_ssa
+
+    def handle_fat_raw_buffer_cast_op(
+        self, operation: amdgpu_d.FatRawBufferCastOp, kernel_info: KernelInfo
+    ):
+        """Handle amdgpu.fat_raw_buffer_cast - track source memref and cache swizzle stride."""
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        # Extract cacheSwizzleStride from operand 2 if present
+        cache_swizzle_stride = None
+        if len(operation.operands) >= 3:
+            defining_op = operation.operands[2].owner.opview
+            if isinstance(defining_op, arith_d.ConstantOp) and hasattr(
+                defining_op.value, "value"
+            ):
+                cache_swizzle_stride = int(defining_op.value.value)
+
+        # Track for gather_to_lds SRD tracing
+        if not hasattr(self.walker, "_fat_buffer_sources"):
+            self.walker._fat_buffer_sources = {}
+        info = {"source_ssa": source_ssa}
+        if cache_swizzle_stride is not None:
+            info["cache_swizzle_stride"] = cache_swizzle_stride
+        self.walker._fat_buffer_sources[result_ssa] = info
+
+    def handle_readfirstlane_op(
+        self, operation: rocdl_d.ReadfirstlaneOp, kernel_info: KernelInfo
+    ):
+        """Handle rocdl.readfirstlane - propagate value for uniform broadcast.
+
+        The expression is preserved as-is (not evaluated) because each wavefront
+        has different tid values. v_readfirstlane is emitted during code generation.
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        if source_ssa in kernel_info.index_env:
+            kernel_info.index_env[result_ssa] = kernel_info.index_env[source_ssa]
+
+    def handle_s_waitcnt_op(
+        self, operation: rocdl_d.SWaitcntOp, kernel_info: KernelInfo
+    ):
+        """Handle rocdl.s.waitcnt - emit wait count instruction.
+
+        Encoding (gfx9+): bits 0-3 = vmcnt (0 = wait for all, 15 = no wait)
+        """
+        from .instructions import SWaitcnt
+
+        waitcnt_value = int(operation.bitfield.value)
+        vmcnt = waitcnt_value & 0xF  # 4-bit field: 0-15
+
+        # vmcnt=15 means "no wait" (max 4-bit value), so only emit if < 15
+        if vmcnt < 15:
+            self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({vmcnt})"))
+            self.walker.emitter.ticketing.observe_vmem_wait(vmcnt)

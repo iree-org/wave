@@ -258,6 +258,115 @@ class BufferStoreDword(StoreInstruction):
         return f"    {self.mnemonic} {formatted_operands}"
 
 
+class BufferLoadDwordLds(LoadInstruction):
+    """Load 1 dword (4 bytes) from buffer memory directly to LDS.
+
+    This instruction loads data from global memory and writes it directly
+    to LDS without going through VGPRs. The LDS destination offset is
+    specified by the M0 register (must be set before this instruction).
+
+    Format: buffer_load_dword vaddr, srd, soffset offen [offset:N] lds
+
+    Where:
+    - vaddr: VGPR containing per-thread offset into the buffer
+    - srd: 128-bit buffer resource descriptor (s[N:N+3])
+    - soffset: scalar offset (SGPR or 0)
+    - offen: offset enable (required when using vaddr as offset)
+    - offset: optional immediate offset
+    - lds: LDS modifier (writes to LDS at M0 offset)
+
+    Note: M0 must be set to the LDS destination offset before this instruction.
+    """
+
+    def __init__(
+        self,
+        vaddr_reg: Union[str, int],
+        srd_regs: Tuple[int, int, int, int],
+        soffset: Union[str, int] = 0,
+        offset: int = 0,
+        comment: str = None,
+    ):
+        # Format vaddr_reg as string if it's an integer
+        if isinstance(vaddr_reg, int):
+            vaddr_reg = f"v{vaddr_reg}"
+
+        # Format soffset
+        if isinstance(soffset, int):
+            soffset_str = str(soffset)
+        else:
+            soffset_str = soffset
+
+        operands = [
+            vaddr_reg,
+            f"s[{srd_regs[0]}:{srd_regs[3]}]",
+            soffset_str,
+            "offen",
+        ]
+        if offset != 0:
+            operands.append(f"offset:{offset}")
+        operands.append("lds")
+
+        super().__init__(
+            "buffer_load_dword",
+            operands,
+            comment,
+        )
+
+    def __str__(self) -> str:
+        if not self.mnemonic:
+            return f"    # {self.comment}" if self.comment else ""
+        # Format: buffer_load_dword vaddr, srd, soffset offen [offset:N] lds
+        # First 3 operands comma-separated, rest space-separated
+        if len(self.operands) >= 4:
+            formatted_operands = (
+                ", ".join(self.operands[:3]) + " " + " ".join(self.operands[3:])
+            )
+        else:
+            formatted_operands = ", ".join(self.operands)
+        return f"    {self.mnemonic} {formatted_operands}"
+
+
+## NOTE: buffer_load_dwordx2 and buffer_load_dwordx3 with 'lds' modifier do NOT exist on AMDGPU!
+# Only buffer_load_dword (4B) and buffer_load_dwordx4 (16B) support the lds modifier.
+
+
+class BufferLoadDwordx4Lds(LoadInstruction):
+    """Load 4 dwords (16 bytes) from buffer memory directly to LDS."""
+
+    def __init__(
+        self,
+        vaddr_reg: Union[str, int],
+        srd_regs: Tuple[int, int, int, int],
+        soffset: Union[str, int] = 0,
+        offset: int = 0,
+        comment: str = None,
+    ):
+        if isinstance(vaddr_reg, int):
+            vaddr_reg = f"v{vaddr_reg}"
+        if isinstance(soffset, int):
+            soffset_str = str(soffset)
+        else:
+            soffset_str = soffset
+
+        operands = [vaddr_reg, f"s[{srd_regs[0]}:{srd_regs[3]}]", soffset_str, "offen"]
+        if offset != 0:
+            operands.append(f"offset:{offset}")
+        operands.append("lds")
+
+        super().__init__("buffer_load_dwordx4", operands, comment)
+
+    def __str__(self) -> str:
+        if not self.mnemonic:
+            return f"    # {self.comment}" if self.comment else ""
+        if len(self.operands) >= 4:
+            formatted_operands = (
+                ", ".join(self.operands[:3]) + " " + " ".join(self.operands[3:])
+            )
+        else:
+            formatted_operands = ", ".join(self.operands)
+        return f"    {self.mnemonic} {formatted_operands}"
+
+
 # Arithmetic Instructions
 class SMovB32(ArithmeticInstruction):
     """Move 32-bit scalar value."""
@@ -271,6 +380,27 @@ class SMovB32(ArithmeticInstruction):
         super().__init__(
             "s_mov_b32", [f"s{destination_register}", str(source_value)], comment
         )
+
+
+class SMovB32M0(ArithmeticInstruction):
+    """Move 32-bit value to M0 register.
+
+    M0 is a special scalar register used for various purposes:
+    - LDS base address for buffer_load_dword ... lds instructions
+    - Indirect addressing
+    - Interpolation
+    """
+
+    def __init__(
+        self,
+        source_value: Union[int, str],
+        comment: str = None,
+    ):
+        if isinstance(source_value, int):
+            source_str = str(source_value)
+        else:
+            source_str = str(source_value)
+        super().__init__("s_mov_b32", ["m0", source_str], comment)
 
 
 class SMovkI32(ArithmeticInstruction):
@@ -592,6 +722,53 @@ class SAddU32(ArithmeticInstruction):
 
     def __init__(self, dst, src0, src1, comment: str = None):
         super().__init__("s_add_u32", [str(dst), str(src0), str(src1)], comment)
+
+
+class SAndB32(ArithmeticInstruction):
+    """Scalar 32-bit bitwise AND."""
+
+    def __init__(
+        self,
+        dst: int,
+        src0: Union[int, str],
+        src1: Union[int, str],
+        comment: str = None,
+    ):
+        dst_str = f"s{dst}" if isinstance(dst, int) else str(dst)
+        src0_str = f"s{src0}" if isinstance(src0, int) else str(src0)
+        src1_str = hex(src1) if isinstance(src1, int) else str(src1)
+        super().__init__("s_and_b32", [dst_str, src0_str, src1_str], comment)
+
+
+class SOrB32(ArithmeticInstruction):
+    """Scalar 32-bit bitwise OR."""
+
+    def __init__(
+        self,
+        dst: int,
+        src0: Union[int, str],
+        src1: Union[int, str],
+        comment: str = None,
+    ):
+        dst_str = f"s{dst}" if isinstance(dst, int) else str(dst)
+        src0_str = f"s{src0}" if isinstance(src0, int) else str(src0)
+        src1_str = hex(src1) if isinstance(src1, int) else str(src1)
+        super().__init__("s_or_b32", [dst_str, src0_str, src1_str], comment)
+
+
+class VReadfirstlaneB32(ArithmeticInstruction):
+    """Read value from first active lane of VGPR to SGPR.
+
+    This instruction reads the value from lane 0 of the source VGPR
+    and writes it to the destination SGPR. Commonly used for:
+    - Broadcasting uniform values computed in vector registers
+    - M0 computation for LDS operations
+    """
+
+    def __init__(self, dst_sgpr: int, src_vgpr: int, comment: str = None):
+        super().__init__(
+            "v_readfirstlane_b32", [f"s{dst_sgpr}", f"v{src_vgpr}"], comment
+        )
 
 
 # Instruction Builder Classes
