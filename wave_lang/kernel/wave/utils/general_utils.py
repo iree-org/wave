@@ -77,7 +77,7 @@ def get_default_scheduling_params() -> dict[IndexSymbol, Any]:
         WRITE_SHARED_DELAY: 1,
         READ_GLOBAL_DELAY: 2,
         WRITE_GLOBAL_DELAY: 2,
-        GLOBAL_TO_SHARED_DELAY: 3,
+        GLOBAL_TO_SHARED_DELAY: 1,
         MMA_DELAY: 1,
         VALU_DELAY: 1,
         SHUFFLE_DELAY: 1,
