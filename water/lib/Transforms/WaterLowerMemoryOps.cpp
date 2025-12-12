@@ -161,17 +161,44 @@ static Value extractBufferDescriptor(IRRewriter &rewriter, Location loc,
   return memrefDesc.alignedPtr(rewriter, loc);
 }
 
-/// Lower vector.load to AMDGPU buffer load inline assembly
-static LogicalResult lowerVectorLoadBuffer(vector::LoadOp loadOp,
-                                           IRRewriter &rewriter) {
-  auto vectorType = loadOp.getVectorType();
-  unsigned bitWidth =
-      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+/// Helper to get memref, result type, and bit width from load operation
+template <typename LoadOpTy>
+static std::tuple<Value, Type, unsigned> getLoadOpInfo(LoadOpTy loadOp) {
+  if constexpr (std::is_same_v<LoadOpTy, vector::LoadOp>) {
+    auto vectorType = loadOp.getVectorType();
+    unsigned bitWidth =
+        vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+    return {loadOp.getBase(), vectorType, bitWidth};
+  } else {
+    auto elementType = loadOp.getResult().getType();
+    unsigned bitWidth = elementType.getIntOrFloatBitWidth();
+    return {loadOp.getMemRef(), elementType, bitWidth};
+  }
+}
+
+/// Helper to get memref, value type, and bit width from store operation
+template <typename StoreOpTy>
+static std::tuple<Value, Type, unsigned> getStoreOpInfo(StoreOpTy storeOp) {
+  if constexpr (std::is_same_v<StoreOpTy, vector::StoreOp>) {
+    auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
+    unsigned bitWidth =
+        vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+    return {storeOp.getBase(), vectorType, bitWidth};
+  } else {
+    auto elementType = storeOp.getValueToStore().getType();
+    unsigned bitWidth = elementType.getIntOrFloatBitWidth();
+    return {storeOp.getMemRef(), elementType, bitWidth};
+  }
+}
+
+/// Lower vector/scalar load to AMDGPU buffer load inline assembly
+template <typename LoadOpTy>
+static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter) {
+  auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
   FailureOr<StringRef> suffix = getBufferSuffix(bitWidth);
   if (failed(suffix))
-    return loadOp.emitError("unsupported vector buffer load bit width: ")
-           << bitWidth;
+    return loadOp.emitError("unsupported buffer load bit width: ") << bitWidth;
 
   Location loc = loadOp.getLoc();
   rewriter.setInsertionPoint(loadOp);
@@ -186,32 +213,33 @@ static LogicalResult lowerVectorLoadBuffer(vector::LoadOp loadOp,
 
   // Compute byte offset as i64 (not full address, since buffer descriptor has
   // base)
+  unsigned elementBitWidth =
+      std::is_same_v<LoadOpTy, vector::LoadOp>
+          ? cast<VectorType>(resultType).getElementTypeBitWidth()
+          : bitWidth;
   Value offset = computeMemrefByteOffsetI64(
-      rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
-      vectorType.getElementTypeBitWidth());
+      rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
   // Extract buffer descriptor pointer from memref
-  Value bufferDesc = extractBufferDescriptor(rewriter, loc, loadOp.getBase());
+  Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
 
   // Create inline assembly operation
   auto asmOp =
-      createInlineAsm(rewriter, loc, vectorType, ValueRange{offset, bufferDesc},
+      createInlineAsm(rewriter, loc, resultType, ValueRange{offset, bufferDesc},
                       asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
   return success();
 }
 
-/// Lower vector.load to LLVM inline assembly (global_load_*)
-static LogicalResult lowerVectorLoadGlobal(vector::LoadOp loadOp,
-                                           IRRewriter &rewriter) {
-  auto vectorType = loadOp.getVectorType();
-  unsigned bitWidth =
-      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+/// Lower vector/scalar load to LLVM inline assembly (global_load_*)
+template <typename LoadOpTy>
+static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
+  auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
   FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
   if (failed(suffix))
-    return loadOp.emitError("unsupported vector load bit width: ") << bitWidth;
+    return loadOp.emitError("unsupported load bit width: ") << bitWidth;
 
   Location loc = loadOp.getLoc();
 
@@ -224,28 +252,29 @@ static LogicalResult lowerVectorLoadGlobal(vector::LoadOp loadOp,
   rewriter.setInsertionPoint(loadOp);
 
   // Compute the final address
-  Value addr =
-      computeMemrefAddress(rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
-                           vectorType.getElementTypeBitWidth());
+  unsigned elementBitWidth =
+      std::is_same_v<LoadOpTy, vector::LoadOp>
+          ? cast<VectorType>(resultType).getElementTypeBitWidth()
+          : bitWidth;
+  Value addr = computeMemrefAddress(rewriter, loc, memref, loadOp.getIndices(),
+                                    elementBitWidth);
 
   // Create the inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, vectorType, ValueRange{addr},
+  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{addr},
                                asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
   return success();
 }
 
-/// Lower vector.store to AMDGPU buffer store inline assembly
-static LogicalResult lowerVectorStoreBuffer(vector::StoreOp storeOp,
-                                            IRRewriter &rewriter) {
-  auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
-  unsigned bitWidth =
-      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+/// Lower vector/scalar store to AMDGPU buffer store inline assembly
+template <typename StoreOpTy>
+static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter) {
+  auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
   FailureOr<StringRef> suffix = getBufferSuffix(bitWidth);
   if (failed(suffix))
-    return storeOp.emitError("unsupported vector buffer store bit width: ")
+    return storeOp.emitError("unsupported buffer store bit width: ")
            << bitWidth;
 
   Location loc = storeOp.getLoc();
@@ -261,12 +290,15 @@ static LogicalResult lowerVectorStoreBuffer(vector::StoreOp storeOp,
 
   // Compute byte offset as i64 (not full address, since buffer descriptor has
   // base)
+  unsigned elementBitWidth =
+      std::is_same_v<StoreOpTy, vector::StoreOp>
+          ? cast<VectorType>(valueType).getElementTypeBitWidth()
+          : bitWidth;
   Value offset = computeMemrefByteOffsetI64(
-      rewriter, loc, storeOp.getBase(), storeOp.getIndices(),
-      vectorType.getElementTypeBitWidth());
+      rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
   // Extract buffer descriptor pointer from memref
-  Value bufferDesc = extractBufferDescriptor(rewriter, loc, storeOp.getBase());
+  Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
 
   // Create inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
@@ -277,17 +309,14 @@ static LogicalResult lowerVectorStoreBuffer(vector::StoreOp storeOp,
   return success();
 }
 
-/// Lower vector.store to LLVM inline assembly (global_store_*)
-static LogicalResult lowerVectorStoreGlobal(vector::StoreOp storeOp,
-                                            IRRewriter &rewriter) {
-  auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
-  unsigned bitWidth =
-      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+/// Lower vector/scalar store to LLVM inline assembly (global_store_*)
+template <typename StoreOpTy>
+static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
+  auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
   FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
   if (failed(suffix))
-    return storeOp.emitError("unsupported vector store bit width: ")
-           << bitWidth;
+    return storeOp.emitError("unsupported store bit width: ") << bitWidth;
 
   Location loc = storeOp.getLoc();
 
@@ -300,9 +329,12 @@ static LogicalResult lowerVectorStoreGlobal(vector::StoreOp storeOp,
   rewriter.setInsertionPoint(storeOp);
 
   // Compute the final address
-  Value addr = computeMemrefAddress(rewriter, loc, storeOp.getBase(),
-                                    storeOp.getIndices(),
-                                    vectorType.getElementTypeBitWidth());
+  unsigned elementBitWidth =
+      std::is_same_v<StoreOpTy, vector::StoreOp>
+          ? cast<VectorType>(valueType).getElementTypeBitWidth()
+          : bitWidth;
+  Value addr = computeMemrefAddress(rewriter, loc, memref, storeOp.getIndices(),
+                                    elementBitWidth);
 
   // Create the inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
@@ -313,17 +345,14 @@ static LogicalResult lowerVectorStoreGlobal(vector::StoreOp storeOp,
   return success();
 }
 
-/// Lower vector.load to AMDGPU DS load inline assembly
-static LogicalResult lowerVectorLoadDS(vector::LoadOp loadOp,
-                                       IRRewriter &rewriter) {
-  auto vectorType = loadOp.getVectorType();
-  unsigned bitWidth =
-      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+/// Lower vector/scalar load to AMDGPU DS load inline assembly
+template <typename LoadOpTy>
+static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
+  auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
   FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
   if (failed(suffix))
-    return loadOp.emitError("unsupported vector DS load bit width: ")
-           << bitWidth;
+    return loadOp.emitError("unsupported DS load bit width: ") << bitWidth;
 
   Location loc = loadOp.getLoc();
   rewriter.setInsertionPoint(loadOp);
@@ -335,33 +364,33 @@ static LogicalResult lowerVectorLoadDS(vector::LoadOp loadOp,
   StringRef constraints = "=v,v";
 
   // Compute byte offset as i64
+  unsigned elementBitWidth =
+      std::is_same_v<LoadOpTy, vector::LoadOp>
+          ? cast<VectorType>(resultType).getElementTypeBitWidth()
+          : bitWidth;
   Value offset = computeMemrefByteOffsetI64(
-      rewriter, loc, loadOp.getBase(), loadOp.getIndices(),
-      vectorType.getElementTypeBitWidth());
+      rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
   // DS operations use 32-bit addresses
   Value offset32 =
       arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
 
   // Create inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, vectorType, ValueRange{offset32},
+  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{offset32},
                                asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
   return success();
 }
 
-/// Lower vector.store to AMDGPU DS store inline assembly
-static LogicalResult lowerVectorStoreDS(vector::StoreOp storeOp,
-                                        IRRewriter &rewriter) {
-  auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
-  unsigned bitWidth =
-      vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+/// Lower vector/scalar store to AMDGPU DS store inline assembly
+template <typename StoreOpTy>
+static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
+  auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
   FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
   if (failed(suffix))
-    return storeOp.emitError("unsupported vector DS store bit width: ")
-           << bitWidth;
+    return storeOp.emitError("unsupported DS store bit width: ") << bitWidth;
 
   Location loc = storeOp.getLoc();
   rewriter.setInsertionPoint(storeOp);
@@ -373,9 +402,12 @@ static LogicalResult lowerVectorStoreDS(vector::StoreOp storeOp,
   StringRef constraints = "v,v";
 
   // Compute byte offset as i64
+  unsigned elementBitWidth =
+      std::is_same_v<StoreOpTy, vector::StoreOp>
+          ? cast<VectorType>(valueType).getElementTypeBitWidth()
+          : bitWidth;
   Value offset = computeMemrefByteOffsetI64(
-      rewriter, loc, storeOp.getBase(), storeOp.getIndices(),
-      vectorType.getElementTypeBitWidth());
+      rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
   // DS operations use 32-bit addresses
   Value offset32 =
@@ -445,9 +477,9 @@ public:
       if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getBase(),
-            [&]() { return lowerVectorLoadBuffer(loadOp, rewriter); },
-            [&]() { return lowerVectorLoadDS(loadOp, rewriter); },
-            [&]() { return lowerVectorLoadGlobal(loadOp, rewriter); });
+            [&]() { return lowerLoadBuffer(loadOp, rewriter); },
+            [&]() { return lowerLoadDS(loadOp, rewriter); },
+            [&]() { return lowerLoadGlobal(loadOp, rewriter); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -455,9 +487,29 @@ public:
       if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getBase(),
-            [&]() { return lowerVectorStoreBuffer(storeOp, rewriter); },
-            [&]() { return lowerVectorStoreDS(storeOp, rewriter); },
-            [&]() { return lowerVectorStoreGlobal(storeOp, rewriter); });
+            [&]() { return lowerStoreBuffer(storeOp, rewriter); },
+            [&]() { return lowerStoreDS(storeOp, rewriter); },
+            [&]() { return lowerStoreGlobal(storeOp, rewriter); });
+        if (failed(result))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+        LogicalResult result = lowerMemoryOp(
+            loadOp.getMemRef(),
+            [&]() { return lowerLoadBuffer(loadOp, rewriter); },
+            [&]() { return lowerLoadDS(loadOp, rewriter); },
+            [&]() { return lowerLoadGlobal(loadOp, rewriter); });
+        if (failed(result))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      }
+      if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+        LogicalResult result = lowerMemoryOp(
+            storeOp.getMemRef(),
+            [&]() { return lowerStoreBuffer(storeOp, rewriter); },
+            [&]() { return lowerStoreDS(storeOp, rewriter); },
+            [&]() { return lowerStoreGlobal(storeOp, rewriter); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
