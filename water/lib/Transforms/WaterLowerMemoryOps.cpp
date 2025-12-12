@@ -11,6 +11,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -79,10 +80,16 @@ static LLVM::InlineAsmOp createInlineAsm(IRRewriter &rewriter, Location loc,
       /*operand_attrs=*/ArrayAttr{});
 }
 
-/// Compute byte offset as i64 for a memref access with indices
-static Value computeMemrefByteOffsetI64(IRRewriter &rewriter, Location loc,
-                                        Value memref, ValueRange indices,
-                                        unsigned elementBitWidth) {
+/// Detect if chipset is RDNA architecture
+static bool isRDNA(StringRef chipset) {
+  return chipset.starts_with("gfx11") || chipset.starts_with("gfx12");
+}
+
+/// Compute byte offset as iX for a memref access with indices
+template <int Bits>
+static Value computeMemrefByteOffset(IRRewriter &rewriter, Location loc,
+                                     Value memref, ValueRange indices,
+                                     unsigned elementBitWidth) {
   // Extract strided metadata to get offset and strides
   auto metadataOp =
       memref::ExtractStridedMetadataOp::create(rewriter, loc, memref);
@@ -107,8 +114,8 @@ static Value computeMemrefByteOffsetI64(IRRewriter &rewriter, Location loc,
       arith::MulIOp::create(rewriter, loc, linearIndex, elementSize,
                             arith::IntegerOverflowFlags::nsw);
 
-  return arith::IndexCastOp::create(rewriter, loc, rewriter.getI64Type(),
-                                    byteOffset);
+  Type indexType = IntegerType::get(rewriter.getContext(), Bits);
+  return arith::IndexCastOp::create(rewriter, loc, indexType, byteOffset);
 }
 
 /// Compute the final address for a memref access with indices (for global
@@ -130,8 +137,8 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
   basePtrInt = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtrInt);
 
   // Compute byte offset
-  Value byteOffsetI64 = computeMemrefByteOffsetI64(rewriter, loc, memref,
-                                                   indices, elementBitWidth);
+  Value byteOffsetI64 = computeMemrefByteOffset<64>(rewriter, loc, memref,
+                                                    indices, elementBitWidth);
 
   // Add byte offset to base pointer
   Value finalAddr =
@@ -141,42 +148,78 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
 }
 
 /// Get buffer instruction suffix based on bit width (for loads - unsigned)
-static FailureOr<StringRef> getBufferSuffixLoad(unsigned bitWidth) {
-  switch (bitWidth) {
-  case 8:
-    return StringRef("ubyte");
-  case 16:
-    return StringRef("ushort");
-  case 32:
-    return StringRef("dword");
-  case 64:
-    return StringRef("dwordx2");
-  case 96:
-    return StringRef("dwordx3");
-  case 128:
-    return StringRef("dwordx4");
-  default:
-    return failure();
+static FailureOr<StringRef> getBufferSuffixLoad(unsigned bitWidth,
+                                                bool isRDNAArch) {
+  if (isRDNAArch) {
+    // RDNA uses b32, b64, etc.
+    switch (bitWidth) {
+    case 32:
+      return StringRef("b32");
+    case 64:
+      return StringRef("b64");
+    case 96:
+      return StringRef("b96");
+    case 128:
+      return StringRef("b128");
+    default:
+      return failure();
+    }
+  } else {
+    // CDNA uses dword, dwordx2, etc.
+    switch (bitWidth) {
+    case 8:
+      return StringRef("ubyte");
+    case 16:
+      return StringRef("ushort");
+    case 32:
+      return StringRef("dword");
+    case 64:
+      return StringRef("dwordx2");
+    case 96:
+      return StringRef("dwordx3");
+    case 128:
+      return StringRef("dwordx4");
+    default:
+      return failure();
+    }
   }
 }
 
 /// Get buffer instruction suffix based on bit width (for stores)
-static FailureOr<StringRef> getBufferSuffixStore(unsigned bitWidth) {
-  switch (bitWidth) {
-  case 8:
-    return StringRef("byte");
-  case 16:
-    return StringRef("short");
-  case 32:
-    return StringRef("dword");
-  case 64:
-    return StringRef("dwordx2");
-  case 96:
-    return StringRef("dwordx3");
-  case 128:
-    return StringRef("dwordx4");
-  default:
-    return failure();
+static FailureOr<StringRef> getBufferSuffixStore(unsigned bitWidth,
+                                                 bool isRDNAArch) {
+  if (isRDNAArch) {
+    // RDNA uses b32, b64, etc.
+    switch (bitWidth) {
+    case 32:
+      return StringRef("b32");
+    case 64:
+      return StringRef("b64");
+    case 96:
+      return StringRef("b96");
+    case 128:
+      return StringRef("b128");
+    default:
+      return failure();
+    }
+  } else {
+    // CDNA uses dword, dwordx2, etc.
+    switch (bitWidth) {
+    case 8:
+      return StringRef("byte");
+    case 16:
+      return StringRef("short");
+    case 32:
+      return StringRef("dword");
+    case 64:
+      return StringRef("dwordx2");
+    case 96:
+      return StringRef("dwordx3");
+    case 128:
+      return StringRef("dwordx4");
+    default:
+      return failure();
+    }
   }
 }
 
@@ -186,16 +229,10 @@ static Value extractBufferDescriptor(IRRewriter &rewriter, Location loc,
   // Create proper memref descriptor struct type: {ptr, ptr, offset, sizes...,
   // strides...}
   auto memrefType = cast<MemRefType>(memref.getType());
-  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext(), 7);
   auto i64Type = rewriter.getI64Type();
-  SmallVector<Type> descriptorFields{ptrType, ptrType,
-                                     i64Type}; // allocated, aligned, offset
-  // Add sizes and strides for each dimension
-  for (int64_t i = 0; i < memrefType.getRank(); ++i)
-    descriptorFields.push_back(i64Type); // size
-
-  for (int64_t i = 0; i < memrefType.getRank(); ++i)
-    descriptorFields.push_back(i64Type); // stride
+  auto arrayType = LLVM::LLVMArrayType::get(i64Type, memrefType.getRank());
+  Type descriptorFields[] = {ptrType, ptrType, i64Type, arrayType, arrayType};
 
   auto memrefDescType =
       LLVM::LLVMStructType::getLiteral(rewriter.getContext(), descriptorFields);
@@ -204,9 +241,20 @@ static Value extractBufferDescriptor(IRRewriter &rewriter, Location loc,
       UnrealizedConversionCastOp::create(rewriter, loc, memrefDescType, memref)
           .getResult(0);
 
-  // Use MemRefDescriptor to extract aligned pointer
   MemRefDescriptor memrefDesc(memrefDescVal);
-  return memrefDesc.alignedPtr(rewriter, loc);
+  Value result = memrefDesc.alignedPtr(rewriter, loc);
+
+  auto i128Type = IntegerType::get(rewriter.getContext(), 128);
+  result = LLVM::PtrToIntOp::create(rewriter, loc, i128Type, result);
+
+  // Bitcast to vector<4xi32> for buffer descriptor
+  auto vec4i32Type = VectorType::get({4}, rewriter.getI32Type());
+  result = LLVM::BitcastOp::create(rewriter, loc, vec4i32Type, result);
+
+  // Use readfirstlane to move buffer descriptor to SGPR
+  result =
+      ROCDL::ReadfirstlaneOp::create(rewriter, loc, result.getType(), result);
+  return result;
 }
 
 /// Helper to get memref, result type, and bit width from load operation
@@ -241,20 +289,21 @@ static std::tuple<Value, Type, unsigned> getStoreOpInfo(StoreOpTy storeOp) {
 
 /// Lower vector/scalar load to AMDGPU buffer load inline assembly
 template <typename LoadOpTy>
-static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter) {
+static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter,
+                                     bool isRDNAArch) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
   if (bitWidth < 32)
     return success();
 
-  FailureOr<StringRef> suffix = getBufferSuffixLoad(bitWidth);
+  FailureOr<StringRef> suffix = getBufferSuffixLoad(bitWidth, isRDNAArch);
   if (failed(suffix))
     return loadOp.emitError("unsupported buffer load bit width: ") << bitWidth;
 
   Location loc = loadOp.getLoc();
   rewriter.setInsertionPoint(loadOp);
 
-  // Build inline assembly: "buffer_load_dwordx4 $0, $1, $2, 0 offen"
+  // Build inline assembly: "buffer_load_<suffix> $0, $1, $2, 0 offen"
   std::string asmStr =
       ("buffer_load_" + *suffix + " $0, $1, $2, 0 offen").str();
 
@@ -268,7 +317,7 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter) {
       std::is_same_v<LoadOpTy, vector::LoadOp>
           ? cast<VectorType>(resultType).getElementTypeBitWidth()
           : bitWidth;
-  Value offset = computeMemrefByteOffsetI64(
+  Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
   // Extract buffer descriptor pointer from memref
@@ -323,13 +372,14 @@ static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
 
 /// Lower vector/scalar store to AMDGPU buffer store inline assembly
 template <typename StoreOpTy>
-static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter) {
+static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
+                                      bool isRDNAArch) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
   if (bitWidth < 32)
     return success();
 
-  FailureOr<StringRef> suffix = getBufferSuffixStore(bitWidth);
+  FailureOr<StringRef> suffix = getBufferSuffixStore(bitWidth, isRDNAArch);
   if (failed(suffix))
     return storeOp.emitError("unsupported buffer store bit width: ")
            << bitWidth;
@@ -337,7 +387,7 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter) {
   Location loc = storeOp.getLoc();
   rewriter.setInsertionPoint(storeOp);
 
-  // Build inline assembly: "buffer_store_dwordx4 $0, $1, $2, 0 offen"
+  // Build inline assembly: "buffer_store_<suffix> $0, $1, $2, 0 offen"
   std::string asmStr =
       ("buffer_store_" + *suffix + " $0, $1, $2, 0 offen").str();
 
@@ -351,7 +401,7 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter) {
       std::is_same_v<StoreOpTy, vector::StoreOp>
           ? cast<VectorType>(valueType).getElementTypeBitWidth()
           : bitWidth;
-  Value offset = computeMemrefByteOffsetI64(
+  Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
   // Extract buffer descriptor pointer from memref
@@ -435,7 +485,7 @@ static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
       std::is_same_v<LoadOpTy, vector::LoadOp>
           ? cast<VectorType>(resultType).getElementTypeBitWidth()
           : bitWidth;
-  Value offset = computeMemrefByteOffsetI64(
+  Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
   // DS operations use 32-bit addresses
@@ -476,7 +526,7 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
       std::is_same_v<StoreOpTy, vector::StoreOp>
           ? cast<VectorType>(valueType).getElementTypeBitWidth()
           : bitWidth;
-  Value offset = computeMemrefByteOffsetI64(
+  Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
   // DS operations use 32-bit addresses
@@ -536,6 +586,9 @@ public:
   void runOnOperation() override {
     IRRewriter rewriter(&getContext());
 
+    // Determine if we're targeting RDNA architecture
+    bool isRDNAArch = isRDNA(chipset);
+
     // Helper to dispatch to the appropriate lowering function based on address
     // space
     auto lowerMemoryOp = [&](Value base, auto lowerBuffer, auto lowerWorkgroup,
@@ -551,7 +604,7 @@ public:
       if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getBase(),
-            [&]() { return lowerLoadBuffer(loadOp, rewriter); },
+            [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter); });
         if (failed(result))
@@ -561,7 +614,7 @@ public:
       if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getBase(),
-            [&]() { return lowerStoreBuffer(storeOp, rewriter); },
+            [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter); });
         if (failed(result))
@@ -571,7 +624,7 @@ public:
       if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getMemRef(),
-            [&]() { return lowerLoadBuffer(loadOp, rewriter); },
+            [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter); });
         if (failed(result))
@@ -581,7 +634,7 @@ public:
       if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getMemRef(),
-            [&]() { return lowerStoreBuffer(storeOp, rewriter); },
+            [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter); });
         if (failed(result))

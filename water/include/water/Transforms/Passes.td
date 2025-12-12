@@ -189,6 +189,7 @@ def WaterLowerMemoryOps : Pass<"water-lower-memory-ops"> {
     "::mlir::gpu::GPUDialect",
     "::mlir::LLVM::LLVMDialect",
     "::mlir::memref::MemRefDialect",
+    "::mlir::ROCDL::ROCDLDialect",
     "::mlir::vector::VectorDialect",
   ];
   let options = [
