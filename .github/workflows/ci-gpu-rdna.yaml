@@ -71,11 +71,10 @@ jobs:
            echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
            echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
 
-      - name: Install Rust via rustup.sh
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "CARGO_HOME=$HOME/.cargo" >> $GITHUB_ENV
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: "Setting up Rust"
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
+        with:
+          toolchain: stable
 
       - name: Install pip deps
         if: ${{ !cancelled() }}
