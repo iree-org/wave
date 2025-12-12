@@ -488,12 +488,8 @@ static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
   Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
-  // DS operations use 32-bit addresses
-  Value offset32 =
-      arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
-
-  // Create inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{offset32},
+  // Create inline assembly operation (DS operations use 32-bit addresses)
+  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{offset},
                                asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
@@ -529,15 +525,12 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
-  // DS operations use 32-bit addresses
-  Value offset32 =
-      arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
-
   Value valueToStore = storeOp.getValueToStore();
 
-  // Create inline assembly operation (no result for store)
-  createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{offset32, valueToStore}, asmStr, constraints,
+  // Create inline assembly operation (no result for store, DS uses 32-bit
+  // addresses)
+  createInlineAsm(rewriter, loc, TypeRange{}, ValueRange{offset, valueToStore},
+                  asmStr, constraints,
                   /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
