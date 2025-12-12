@@ -42,8 +42,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          fetch-depth: 0
 
       - name: Setup Cache Vars
         run: |
@@ -70,7 +68,6 @@ jobs:
           repository: llvm/llvm-project
           ref: ${{ env.LLVM_SHA }}
           path: llvm-mlir/llvm-project
-          fetch-depth: 0
 
       - name: Build LLVM-MLIR
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
@@ -119,8 +116,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          fetch-depth: 0
 
       - name: Setup Cache Vars
         run: |
@@ -205,8 +200,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          fetch-depth: 0
 
       - name: Setup env
         run: |
