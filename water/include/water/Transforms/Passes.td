@@ -191,6 +191,10 @@ def WaterLowerMemoryOps : Pass<"water-lower-memory-ops"> {
     "::mlir::memref::MemRefDialect",
     "::mlir::vector::VectorDialect",
   ];
+  let options = [
+    Option<"chipset", "chipset", "std::string", [{""}],
+           "Target chipset (e.g., gfx942, gfx1100)">
+  ];
 }
 
 #endif // WATER_PASSES

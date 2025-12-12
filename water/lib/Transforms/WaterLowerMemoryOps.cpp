@@ -531,6 +531,8 @@ static bool usesWorkgroupAddressSpace(Value memref) {
 class WaterLowerMemoryOpsPass
     : public water::impl::WaterLowerMemoryOpsBase<WaterLowerMemoryOpsPass> {
 public:
+  using Base::Base;
+
   void runOnOperation() override {
     IRRewriter rewriter(&getContext());
 
