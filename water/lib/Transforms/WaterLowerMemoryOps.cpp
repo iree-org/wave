@@ -232,6 +232,7 @@ extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
   // strides...}
   auto memrefType = cast<MemRefType>(memref.getType());
   auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext(), 7);
+  auto i32Type = rewriter.getI32Type();
   auto i64Type = rewriter.getI64Type();
   auto arrayType = LLVM::LLVMArrayType::get(i64Type, memrefType.getRank());
   Type descriptorFields[] = {ptrType, ptrType, i64Type, arrayType, arrayType};
@@ -245,6 +246,8 @@ extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
 
   MemRefDescriptor memrefDesc(memrefDescVal);
   Value bufferPtr = memrefDesc.alignedPtr(rewriter, loc);
+  Value bufferOffset = memrefDesc.offset(rewriter, loc);
+  bufferOffset = arith::TruncIOp::create(rewriter, loc, i32Type, bufferOffset);
 
   // Convert to i160 to access full buffer descriptor {<4 x i32> rsrc, i32
   // offset}
@@ -252,8 +255,10 @@ extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
   Value fullDesc = LLVM::PtrToIntOp::create(rewriter, loc, i160Type, bufferPtr);
 
   // Extract lower 32 bits for base offset
-  Value baseOffset =
-      arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), fullDesc);
+  Value baseOffset = arith::TruncIOp::create(rewriter, loc, i32Type, fullDesc);
+
+  baseOffset = arith::AddIOp::create(rewriter, loc, baseOffset, bufferOffset,
+                                     arith::IntegerOverflowFlags::nsw);
 
   // Extract upper 128 bits for resource descriptor
   auto c32 = arith::ConstantIntOp::create(rewriter, loc, i160Type, 32);
@@ -262,14 +267,7 @@ extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
   Value rsrcBits =
       arith::TruncIOp::create(rewriter, loc, i128Type, rsrcBits160);
 
-  // Bitcast to vector<4xi32> for buffer resource descriptor
-  auto vec4i32Type = VectorType::get({4}, rewriter.getI32Type());
-  Value rsrc = LLVM::BitcastOp::create(rewriter, loc, vec4i32Type, rsrcBits);
-
-  // Use readfirstlane to move resource descriptor to SGPR
-  rsrc = ROCDL::ReadfirstlaneOp::create(rewriter, loc, rsrc.getType(), rsrc);
-
-  return {rsrc, baseOffset};
+  return {rsrcBits, baseOffset};
 }
 
 /// Helper to get memref, result type, and bit width from load operation
