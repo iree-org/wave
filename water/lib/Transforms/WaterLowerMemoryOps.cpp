@@ -272,20 +272,28 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter) {
   Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
 
   // For sub-32-bit loads, hardware loads into i32 and we need to truncate
-  Type asmResultType = resultType;
-  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
-    asmResultType = rewriter.getI32Type();
-  }
+  Value result;
+  if (bitWidth < 32) {
+    // Create inline asm returning i32
+    auto asmOp = createInlineAsm(rewriter, loc, rewriter.getI32Type(),
+                                 ValueRange{offset, bufferDesc}, asmStr,
+                                 constraints, /*hasSideEffects=*/true);
 
-  // Create inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, asmResultType,
-                               ValueRange{offset, bufferDesc}, asmStr,
-                               constraints, /*hasSideEffects=*/true);
+    // Truncate to appropriate integer width
+    Type intType = rewriter.getIntegerType(bitWidth);
+    result =
+        arith::TruncIOp::create(rewriter, loc, intType, asmOp.getResult(0));
 
-  Value result = asmOp.getResult(0);
-  // Truncate if needed for sub-32-bit scalar types
-  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
-    result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+    // Bitcast to actual result type (handles floats and vectors)
+    if (resultType != intType) {
+      result = LLVM::BitcastOp::create(rewriter, loc, resultType, result);
+    }
+  } else {
+    // Create inline assembly operation with result type directly
+    auto asmOp = createInlineAsm(rewriter, loc, resultType,
+                                 ValueRange{offset, bufferDesc}, asmStr,
+                                 constraints, /*hasSideEffects=*/true);
+    result = asmOp.getResult(0);
   }
 
   rewriter.replaceOp(loadOp, result);
@@ -320,19 +328,27 @@ static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
                                     elementBitWidth);
 
   // For sub-32-bit loads, hardware loads into i32 and we need to truncate
-  Type asmResultType = resultType;
-  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
-    asmResultType = rewriter.getI32Type();
-  }
+  Value result;
+  if (bitWidth < 32) {
+    // Create inline asm returning i32
+    auto asmOp = createInlineAsm(rewriter, loc, rewriter.getI32Type(),
+                                 ValueRange{addr}, asmStr, constraints,
+                                 /*hasSideEffects=*/true);
 
-  // Create the inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, asmResultType, ValueRange{addr},
-                               asmStr, constraints, /*hasSideEffects=*/true);
+    // Truncate to appropriate integer width
+    Type intType = rewriter.getIntegerType(bitWidth);
+    result =
+        arith::TruncIOp::create(rewriter, loc, intType, asmOp.getResult(0));
 
-  Value result = asmOp.getResult(0);
-  // Truncate if needed for sub-32-bit scalar types
-  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
-    result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+    // Bitcast to actual result type (handles floats and vectors)
+    if (resultType != intType) {
+      result = LLVM::BitcastOp::create(rewriter, loc, resultType, result);
+    }
+  } else {
+    // Create the inline assembly operation with result type directly
+    auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{addr},
+                                 asmStr, constraints, /*hasSideEffects=*/true);
+    result = asmOp.getResult(0);
   }
 
   rewriter.replaceOp(loadOp, result);
@@ -372,9 +388,16 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter) {
   // Extract buffer descriptor pointer from memref
   Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
 
-  // For sub-32-bit stores, extend to i32 first
+  // For sub-32-bit stores, bitcast to int and extend to i32
   Value valueToStore = storeOp.getValueToStore();
-  if (bitWidth < 32 && !isa<VectorType>(valueType)) {
+  if (bitWidth < 32) {
+    // Bitcast to integer type (handles floats and vectors)
+    Type intType = rewriter.getIntegerType(bitWidth);
+    if (valueType != intType) {
+      valueToStore =
+          LLVM::BitcastOp::create(rewriter, loc, intType, valueToStore);
+    }
+    // Extend to i32
     valueToStore = arith::ExtUIOp::create(rewriter, loc, rewriter.getI32Type(),
                                           valueToStore);
   }
@@ -415,9 +438,16 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value addr = computeMemrefAddress(rewriter, loc, memref, storeOp.getIndices(),
                                     elementBitWidth);
 
-  // For sub-32-bit stores, extend to i32 first
+  // For sub-32-bit stores, bitcast to int and extend to i32
   Value valueToStore = storeOp.getValueToStore();
-  if (bitWidth < 32 && !isa<VectorType>(valueType)) {
+  if (bitWidth < 32) {
+    // Bitcast to integer type (handles floats and vectors)
+    Type intType = rewriter.getIntegerType(bitWidth);
+    if (valueType != intType) {
+      valueToStore =
+          LLVM::BitcastOp::create(rewriter, loc, intType, valueToStore);
+    }
+    // Extend to i32
     valueToStore = arith::ExtUIOp::create(rewriter, loc, rewriter.getI32Type(),
                                           valueToStore);
   }
@@ -512,9 +542,16 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value offset32 =
       arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
 
-  // For sub-32-bit stores, extend to i32 first
+  // For sub-32-bit stores, bitcast to int and extend to i32
   Value valueToStore = storeOp.getValueToStore();
-  if (bitWidth < 32 && !isa<VectorType>(valueType)) {
+  if (bitWidth < 32) {
+    // Bitcast to integer type (handles floats and vectors)
+    Type intType = rewriter.getIntegerType(bitWidth);
+    if (valueType != intType) {
+      valueToStore =
+          LLVM::BitcastOp::create(rewriter, loc, intType, valueToStore);
+    }
+    // Extend to i32
     valueToStore = arith::ExtUIOp::create(rewriter, loc, rewriter.getI32Type(),
                                           valueToStore);
   }
