@@ -102,6 +102,24 @@ Key Components
   - LDS read/write operations (ds_read_b64, ds_write_b64)
   - Loop operations (scf.for) with induction variables and accumulators
   - Vector extraction (vector.extract_strided_slice) for register slicing
+  - Fat raw buffer cast (amdgpu.fat_raw_buffer_cast) for gather_to_lds
+
+**Gather-to-Shared Handler** (`gather_to_shared.py`)
+  Handles gather_to_lds operations for direct global-to-LDS transfers:
+
+  - ``G2SHandler`` class for buffer_load_dword...lds emission
+  - ``analyze_g2s_region`` for finding gather_to_lds operations
+  - ``precompute_m0_values`` for M0 pre-computation before barriers
+  - SRD tracing through memref cast chains
+  - VGPR offset computation for global memory addressing
+  - LDS destination address (M0) computation
+
+**Hazard Detector** (`hazards.py`)
+  Handles architecture-specific hardware hazards:
+
+  - ``HazardDetector`` class for hazard detection and mitigation
+  - gfx950 VALU hazard: v_add followed by v_readfirstlane requires s_nop
+  - Automatic s_nop 0 insertion after hazardous instruction sequences
 
 Features
 --------
@@ -160,6 +178,79 @@ Architecture Support
 The ASM backend supports multiple AMD GPU architectures with architecture-specific optimizations:
 
 - **CDNA3 (gfx942)**: MI300 series with VGPR granularity of 4, SGPR granularity of 8
+- **gfx950**: Support with VALU hazard mitigation (s_nop after v_add before v_readfirstlane)
+
+Gather-to-LDS Operations
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ASM backend supports direct global-to-LDS transfers using ``buffer_load_dword...lds`` instructions,
+which bypass VGPRs and load data directly into LDS (Local Data Share):
+
+**Key Features**
+
+- **Direct Transfer**: Data flows from global memory directly to LDS without VGPR intermediaries
+- **M0 Pre-computation**: M0 register (LDS destination address) is pre-computed before buffer loads
+- **Cache Swizzle Support**: Configurable cache swizzle stride for optimal LDS bank access
+- **SRD Management**: Automatic SRD (Shader Resource Descriptor) setup with LDS-specific word3 (0x27000)
+
+**Generated Assembly Pattern**
+
+.. code-block:: asm
+
+   # SRD setup for gather_to_lds (word3 = 0x27000 for LDS mode)
+   s_mov_b32 s32, s12                    # SRD word0 (addr low)
+   s_and_b32 s33, s13, 0xffff
+   s_or_b32 s33, s33, 0x40200000         # cache swizzle enabled
+   s_mov_b32 s34, 2147483645             # SRD word2 (max buffer)
+   s_mov_b32 s35, 159744                 # SRD word3 (0x27000 = LDS mode)
+
+   # M0 setup and buffer_load...lds
+   s_mov_b32 m0, 512                     # LDS destination offset
+   buffer_load_dword v4, s[32:35], 0 offen lds
+
+   # Barrier synchronization
+   s_waitcnt vmcnt(0)                    # Wait for global reads
+   s_waitcnt lgkmcnt(0)                  # Wait for LDS writes
+   s_barrier                             # Sync threads
+
+   # Now LDS contains the loaded data
+   ds_read_b64 v[60:61], v53             # Read from LDS for MFMA
+
+**Enabling Gather-to-LDS**
+
+Use the ``use_global_to_shared=True`` compile option:
+
+.. code-block:: python
+
+   options = WaveCompileOptions(
+       subs={...},
+       backend="asm",
+       use_global_to_shared=True,  # Enable gather_to_lds
+   )
+
+Hardware Hazard Mitigation
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ASM backend automatically detects and mitigates architecture-specific hardware hazards:
+
+**gfx950 VALU Hazard**
+
+On gfx950, a VALU instruction (like ``v_add_u32``) writing to a VGPR followed by
+``v_readfirstlane_b32`` reading that VGPR requires a 1-cycle wait:
+
+.. code-block:: asm
+
+   # Without mitigation (causes hazard on gfx950):
+   v_add_u32 v7, v5, v6
+   v_readfirstlane_b32 s10, v7    # HAZARD: reading v7 too soon
+
+   # With automatic mitigation:
+   v_add_u32 v7, v5, v6
+   s_nop 0                         # 1-cycle wait inserted automatically
+   v_readfirstlane_b32 s10, v7     # Safe: v7 is ready
+
+The ``HazardDetector`` class in ``hazards.py`` automatically inserts ``s_nop 0``
+after ``v_add_u32`` instructions to prevent this hazard.
 
 Dynamic Register Allocation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -212,6 +303,7 @@ The ASM backend supports several compilation options:
 - **``wave_runtime=True``**: Uses Wave's C++ runtime for execution
 - **``compile_to_mlir=False``**: Skips MLIR output, goes directly to assembly
 - **``compile_to_asm=True``**: Generates raw assembly text (for debugging)
+- **``use_global_to_shared=True``**: Enables gather_to_lds (buffer_load...lds) for direct global-to-LDS transfers
 
 Example: Simple Copy Kernel
 ---------------------------
@@ -963,6 +1055,7 @@ The ASM backend has some limitations:
 - **Power-of-2 Constraints**: Non-power-of-2 modulo and division operations are not supported
 - **Expression Complexity**: Some very complex affine expressions may not be supported
 - **CDNA for MFMA**: MFMA operations require CDNA2 or CDNA3 architecture (gfx90a, gfx940, gfx941, gfx942)
+- **Gather-to-LDS**: Requires gfx95x architecture with buffer_load...lds instruction support
 - **Dynamic Shapes**: Requires concrete shape values at compile time
 - **Loop Nesting**: While multiple loops are supported, deeply nested loops may increase register pressure
 

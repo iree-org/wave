@@ -235,7 +235,8 @@ def _create_substitutions(values: List, prefix: str) -> Dict[sympy.Symbol, sympy
     Create substitutions for affine map parameters.
 
     Args:
-        values: List of values (integers or ID strings like "tid_x", "wgid_x", or "s4")
+        values: List of values (integers, ID strings like "tid_x", "wgid_x", "s4",
+                or SymPy expressions from previous affine.apply results)
         prefix: Prefix for the symbols ("d" for dimensions, "s" for symbols)
 
     Returns:
@@ -245,7 +246,10 @@ def _create_substitutions(values: List, prefix: str) -> Dict[sympy.Symbol, sympy
 
     for i, value in enumerate(values):
         param_symbol = sympy.Symbol(f"{prefix}{i}")
-        if isinstance(value, int):
+        if isinstance(value, sympy.Expr):
+            # SymPy expression from previous affine.apply - use directly
+            substitutions[param_symbol] = value
+        elif isinstance(value, int):
             substitutions[param_symbol] = sympy.Integer(value)
         elif value in ["tid_x", "tid_y", "tid_z", "wgid_x", "wgid_y", "wgid_z"]:
             # Thread IDs and workgroup IDs are symbolic runtime values

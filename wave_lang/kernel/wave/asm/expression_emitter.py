@@ -7,11 +7,103 @@ and generates appropriate AMDGCN instructions for GPU execution.
 
 import sympy
 from collections import namedtuple
-from typing import Dict, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 # Marker for rational values during expression evaluation
 # Similar to _Rational in emitter.py: tracks expr/const patterns
 _RationalReg = namedtuple("_RationalReg", ["numerator_reg", "denominator"])
+
+
+# =============================================================================
+# Fused Instruction Pattern Matching (SymPy-level)
+# =============================================================================
+#
+# This system provides declarative pattern matching at the SymPy expression
+# level. It's used as an OPTIONAL fast-path optimization in the `emit` method.
+# The existing marker-based system remains as a fallback.
+#
+# Benefits of SymPy-level matching:
+# 1. Patterns are matched on expression tree structure
+# 2. Can detect patterns across expression boundaries
+# 3. More explicit and easier to reason about
+
+
+@dataclass
+class LshlAddMatch:
+    """Result of matching (base * power_of_2) + addend pattern."""
+
+    base: sympy.Expr  # Expression to shift
+    shift_amount: int  # log2(multiplier)
+    addend: sympy.Expr  # Expression to add
+    remaining: List[sympy.Expr]  # Other terms in the Add (if any)
+
+
+def _extract_power_of_2_mul(expr: sympy.Expr) -> Optional[Tuple[sympy.Expr, int]]:
+    """Check if expr is (base * power_of_2) and extract components.
+
+    Returns:
+        (base, shift_amount) if expr is base * 2^k, else None
+    """
+    if not isinstance(expr, sympy.Mul):
+        return None
+
+    # Separate numeric coefficient from symbolic parts
+    coeff = 1
+    base_parts = []
+    for arg in expr.args:
+        if isinstance(arg, (int, sympy.Integer)):
+            coeff *= int(arg)
+        else:
+            base_parts.append(arg)
+
+    # Check if coefficient is a power of 2 (and > 1)
+    if coeff <= 1 or (coeff & (coeff - 1)) != 0:
+        return None
+
+    shift = coeff.bit_length() - 1
+
+    # Reconstruct the base expression
+    if len(base_parts) == 0:
+        return None  # Pure constant, not useful for shift
+    elif len(base_parts) == 1:
+        base = base_parts[0]
+    else:
+        base = sympy.Mul(*base_parts)
+
+    return base, shift
+
+
+def match_lshl_add(expr: sympy.Expr) -> Optional[LshlAddMatch]:
+    """Match (base * power_of_2) + addend pattern in a SymPy Add.
+
+    Looks for Add nodes where one argument is a power-of-2 multiplication,
+    which can be fused into v_lshl_add_u32.
+
+    Returns:
+        LshlAddMatch if pattern found, None otherwise
+    """
+    if not isinstance(expr, sympy.Add):
+        return None
+
+    # Look for a power-of-2 multiplication among the Add arguments
+    for i, arg in enumerate(expr.args):
+        result = _extract_power_of_2_mul(arg)
+        if result:
+            base, shift = result
+            # Remaining args form the addend
+            other_args = [a for j, a in enumerate(expr.args) if j != i]
+            if len(other_args) == 1:
+                addend = other_args[0]
+                remaining = []
+            else:
+                # Multiple other args: first one is addend, rest are remaining
+                addend = other_args[0]
+                remaining = other_args[1:]
+            return LshlAddMatch(base, shift, addend, remaining)
+
+    return None
+
 
 # Canonicalization helpers for CSE
 _TID_SYMBOL_NAMES = {"tid_x", "tid_y", "tid_z"}
@@ -170,36 +262,75 @@ class ExprEmitter:
             dst_hint: Optional destination register hint (e.g., "v2")
 
         Returns:
-            Register string (e.g., "v5") containing the expression result
+            Register string (e.g., "v5") containing the expression result.
+            Note: The actual register may differ from dst_hint if a fused
+            instruction path is used.
         """
         key = expr_key(expr)
         if key in self._cache:
             return self._cache[key]
 
-        # Materialize expression
+        # Materialize expression - emit returns the ACTUAL result register
+        # which may differ from dst_reg if fused patterns are used
         if dst_hint is not None:
-            dst_reg = dst_hint
-            self.emit(expr, dst_reg)
-            reg_str = dst_reg
+            actual_reg = self.emit(expr, dst_hint)
         else:
             v = self.emitter.vgpr_allocator.alloc_v()
             dst_reg = f"v{v}"
-            self.emit(expr, dst_reg)
-            reg_str = dst_reg
+            actual_reg = self.emit(expr, dst_reg)
 
-        self._cache[key] = reg_str
-        return reg_str
+        self._cache[key] = actual_reg
+        return actual_reg
 
     def clear_cache(self):
         """Clear the expression cache."""
         self._cache.clear()
 
+    def _try_emit_fused(self, expr: sympy.Expr) -> Optional[str]:
+        """Try to emit a fused instruction for the expression.
+
+        This is an optimization that matches patterns at the SymPy level
+        and emits fused instructions (like v_lshl_add_u32) directly.
+
+        Args:
+            expr: SymPy expression to check for fused patterns
+
+        Returns:
+            Register containing result if pattern matched and emitted, None otherwise
+        """
+        from .instructions import VLshlAddU32, VAddU32
+
+        # Pattern: (base * 2^k) + addend  ->  v_lshl_add_u32
+        match = match_lshl_add(expr)
+        if match:
+            # Recursively emit the base and addend sub-expressions
+            base_reg = self.get_or_emit(match.base)
+            addend_reg = self.get_or_emit(match.addend)
+
+            # Emit the fused instruction
+            result_v = self.emitter.vgpr_allocator.alloc_v()
+            self.emitter.emit_instruction(
+                VLshlAddU32(result_v, base_reg, match.shift_amount, addend_reg)
+            )
+            self.emitter.register_file.v_used.add(result_v)
+            result_reg = f"v{result_v}"
+
+            # Handle any remaining terms with v_add
+            for remaining_expr in match.remaining:
+                remaining_reg = self.get_or_emit(remaining_expr)
+                remaining_v = int(remaining_reg[1:])
+                self.emitter.emit_instruction(VAddU32(result_v, result_v, remaining_v))
+
+            return result_reg
+
+        return None
+
     def emit(self, expr: sympy.Expr, dst_reg: str) -> str:
         """
         Main entry point: emit ASM for expr into dst_reg.
 
-        Uses iterative postorder traversal of the SymPy expression tree,
-        similar to gen_sympy_index in emitter.py.
+        First tries SymPy-level pattern matching for fused instructions,
+        then falls back to iterative postorder traversal.
 
         Args:
             expr: SymPy expression to emit
@@ -211,13 +342,23 @@ class ExprEmitter:
         assert dst_reg.startswith("v")
         dst_v = int(dst_reg[1:])
 
+        # SymPy-level fused pattern matching is available but disabled by default.
+        # The fused path changes evaluation order and register allocation, which
+        # can cause correctness issues. Enable with WAVE_FUSED_EMIT=1 for testing.
+        # TODO: Fix register allocation to make fused path safe.
+        import os
+
+        if os.environ.get("WAVE_FUSED_EMIT", "0") == "1":
+            fused_result = self._try_emit_fused(expr)
+            if fused_result is not None:
+                return fused_result
+
         # Cache lane_id to avoid multiple calls
         lane_id_v = self.emitter.ensure_lane_id(self.kernel_info.subgroup_size)
 
-        # Stack holds register names (strings like "v2") during traversal
+        # Fall back to standard postorder traversal
         stack = []
 
-        # Iterate through expression in postorder (children before parents)
         for term in sympy.postorder_traversal(expr):
             if isinstance(term, sympy.Symbol):
                 self._handle_symbol(term, lane_id_v, stack)
