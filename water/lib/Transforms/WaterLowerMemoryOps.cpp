@@ -223,9 +223,11 @@ static FailureOr<StringRef> getBufferSuffixStore(unsigned bitWidth,
   }
 }
 
-/// Extract buffer descriptor pointer from a fat_raw_buffer memref
-static Value extractBufferDescriptor(IRRewriter &rewriter, Location loc,
-                                     Value memref) {
+/// Extract buffer descriptor and base offset from a fat_raw_buffer memref
+/// addrspace(7) format: {<4 x i32> rsrc, i32 offset} (160 bits total)
+/// Returns: {resource descriptor (vec<4xi32> in SGPR), base offset (i32)}
+static std::pair<Value, Value>
+extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
   // Create proper memref descriptor struct type: {ptr, ptr, offset, sizes...,
   // strides...}
   auto memrefType = cast<MemRefType>(memref.getType());
@@ -242,19 +244,32 @@ static Value extractBufferDescriptor(IRRewriter &rewriter, Location loc,
           .getResult(0);
 
   MemRefDescriptor memrefDesc(memrefDescVal);
-  Value result = memrefDesc.alignedPtr(rewriter, loc);
+  Value bufferPtr = memrefDesc.alignedPtr(rewriter, loc);
 
+  // Convert to i160 to access full buffer descriptor {<4 x i32> rsrc, i32
+  // offset}
+  auto i160Type = IntegerType::get(rewriter.getContext(), 160);
+  Value fullDesc = LLVM::PtrToIntOp::create(rewriter, loc, i160Type, bufferPtr);
+
+  // Extract lower 32 bits for base offset
+  Value baseOffset =
+      arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), fullDesc);
+
+  // Extract upper 128 bits for resource descriptor
+  auto c32 = arith::ConstantIntOp::create(rewriter, loc, i160Type, 32);
+  Value rsrcBits160 = arith::ShRUIOp::create(rewriter, loc, fullDesc, c32);
   auto i128Type = IntegerType::get(rewriter.getContext(), 128);
-  result = LLVM::PtrToIntOp::create(rewriter, loc, i128Type, result);
+  Value rsrcBits =
+      arith::TruncIOp::create(rewriter, loc, i128Type, rsrcBits160);
 
-  // Bitcast to vector<4xi32> for buffer descriptor
+  // Bitcast to vector<4xi32> for buffer resource descriptor
   auto vec4i32Type = VectorType::get({4}, rewriter.getI32Type());
-  result = LLVM::BitcastOp::create(rewriter, loc, vec4i32Type, result);
+  Value rsrc = LLVM::BitcastOp::create(rewriter, loc, vec4i32Type, rsrcBits);
 
-  // Use readfirstlane to move buffer descriptor to SGPR
-  result =
-      ROCDL::ReadfirstlaneOp::create(rewriter, loc, result.getType(), result);
-  return result;
+  // Use readfirstlane to move resource descriptor to SGPR
+  rsrc = ROCDL::ReadfirstlaneOp::create(rewriter, loc, rsrc.getType(), rsrc);
+
+  return {rsrc, baseOffset};
 }
 
 /// Helper to get memref, result type, and bit width from load operation
@@ -311,8 +326,7 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter,
   // descriptor (SGPR[4])
   StringRef constraints = "=v,v,s";
 
-  // Compute byte offset as i64 (not full address, since buffer descriptor has
-  // base)
+  // Compute byte offset from indices
   unsigned elementBitWidth =
       std::is_same_v<LoadOpTy, vector::LoadOp>
           ? cast<VectorType>(resultType).getElementTypeBitWidth()
@@ -320,13 +334,18 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter,
   Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
-  // Extract buffer descriptor pointer from memref
-  Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
+  // Extract buffer descriptor and base offset from memref
+  auto [bufferDesc, baseOffset] =
+      extractBufferDescriptor(rewriter, loc, memref);
+
+  // Add base offset to computed offset
+  Value finalOffset = arith::AddIOp::create(rewriter, loc, offset, baseOffset,
+                                            arith::IntegerOverflowFlags::nsw);
 
   // Create inline assembly operation with result type directly
-  auto asmOp =
-      createInlineAsm(rewriter, loc, resultType, ValueRange{offset, bufferDesc},
-                      asmStr, constraints, /*hasSideEffects=*/true);
+  auto asmOp = createInlineAsm(rewriter, loc, resultType,
+                               ValueRange{finalOffset, bufferDesc}, asmStr,
+                               constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
   return success();
@@ -395,8 +414,7 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
   // (SGPR[4])
   StringRef constraints = "v,v,s";
 
-  // Compute byte offset as i64 (not full address, since buffer descriptor has
-  // base)
+  // Compute byte offset from indices
   unsigned elementBitWidth =
       std::is_same_v<StoreOpTy, vector::StoreOp>
           ? cast<VectorType>(valueType).getElementTypeBitWidth()
@@ -404,14 +422,19 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
   Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
-  // Extract buffer descriptor pointer from memref
-  Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
+  // Extract buffer descriptor and base offset from memref
+  auto [bufferDesc, baseOffset] =
+      extractBufferDescriptor(rewriter, loc, memref);
+
+  // Add base offset to computed offset
+  Value finalOffset = arith::AddIOp::create(rewriter, loc, offset, baseOffset,
+                                            arith::IntegerOverflowFlags::nsw);
 
   Value valueToStore = storeOp.getValueToStore();
 
   // Create inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{valueToStore, offset, bufferDesc}, asmStr,
+                  ValueRange{valueToStore, finalOffset, bufferDesc}, asmStr,
                   constraints, /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
