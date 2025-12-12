@@ -82,11 +82,10 @@ struct LowerWaveToMLIRPass
     // Mark functions as illegal if they have Wave tensor types in their
     // signature.
     target.addDynamicallyLegalOp<func::FuncOp>([](func::FuncOp op) {
-      return !llvm::any_of(op.getFunctionType().getInputs(), [](Type t) {
-        return isa<wave::WaveTensorType>(t);
-      }) && !llvm::any_of(op.getFunctionType().getResults(), [](Type t) {
-        return isa<wave::WaveTensorType>(t);
-      });
+      return llvm::none_of(op.getFunctionType().getInputs(),
+                           llvm::IsaPred<wave::WaveTensorType>) &&
+             llvm::none_of(op.getFunctionType().getResults(),
+                           llvm::IsaPred<wave::WaveTensorType>);
     });
     ConversionConfig config;
     config.allowPatternRollback = false;
