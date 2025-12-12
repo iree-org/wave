@@ -25,9 +25,33 @@ namespace mlir::water {
 
 namespace {
 
-/// Get the AMDGPU instruction suffix based on bit width
-static FailureOr<StringRef> getSizeSuffix(unsigned bitWidth) {
+/// Get the AMDGPU instruction suffix based on bit width (for loads - unsigned)
+static FailureOr<StringRef> getSizeSuffixLoad(unsigned bitWidth) {
   switch (bitWidth) {
+  case 8:
+    return StringRef("u8");
+  case 16:
+    return StringRef("u16");
+  case 32:
+    return StringRef("b32");
+  case 64:
+    return StringRef("b64");
+  case 96:
+    return StringRef("b96");
+  case 128:
+    return StringRef("b128");
+  default:
+    return failure();
+  }
+}
+
+/// Get the AMDGPU instruction suffix based on bit width (for stores)
+static FailureOr<StringRef> getSizeSuffixStore(unsigned bitWidth) {
+  switch (bitWidth) {
+  case 8:
+    return StringRef("b8");
+  case 16:
+    return StringRef("b16");
   case 32:
     return StringRef("b32");
   case 64:
@@ -116,9 +140,33 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
   return LLVM::IntToPtrOp::create(rewriter, loc, ptrType, finalAddr);
 }
 
-/// Get buffer instruction suffix based on bit width
-static FailureOr<StringRef> getBufferSuffix(unsigned bitWidth) {
+/// Get buffer instruction suffix based on bit width (for loads - unsigned)
+static FailureOr<StringRef> getBufferSuffixLoad(unsigned bitWidth) {
   switch (bitWidth) {
+  case 8:
+    return StringRef("ubyte");
+  case 16:
+    return StringRef("ushort");
+  case 32:
+    return StringRef("dword");
+  case 64:
+    return StringRef("dwordx2");
+  case 96:
+    return StringRef("dwordx3");
+  case 128:
+    return StringRef("dwordx4");
+  default:
+    return failure();
+  }
+}
+
+/// Get buffer instruction suffix based on bit width (for stores)
+static FailureOr<StringRef> getBufferSuffixStore(unsigned bitWidth) {
+  switch (bitWidth) {
+  case 8:
+    return StringRef("byte");
+  case 16:
+    return StringRef("short");
   case 32:
     return StringRef("dword");
   case 64:
@@ -196,7 +244,7 @@ template <typename LoadOpTy>
 static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
-  FailureOr<StringRef> suffix = getBufferSuffix(bitWidth);
+  FailureOr<StringRef> suffix = getBufferSuffixLoad(bitWidth);
   if (failed(suffix))
     return loadOp.emitError("unsupported buffer load bit width: ") << bitWidth;
 
@@ -223,12 +271,24 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter) {
   // Extract buffer descriptor pointer from memref
   Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
 
-  // Create inline assembly operation
-  auto asmOp =
-      createInlineAsm(rewriter, loc, resultType, ValueRange{offset, bufferDesc},
-                      asmStr, constraints, /*hasSideEffects=*/true);
+  // For sub-32-bit loads, hardware loads into i32 and we need to truncate
+  Type asmResultType = resultType;
+  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
+    asmResultType = rewriter.getI32Type();
+  }
 
-  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  // Create inline assembly operation
+  auto asmOp = createInlineAsm(rewriter, loc, asmResultType,
+                               ValueRange{offset, bufferDesc}, asmStr,
+                               constraints, /*hasSideEffects=*/true);
+
+  Value result = asmOp.getResult(0);
+  // Truncate if needed for sub-32-bit scalar types
+  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
+    result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+  }
+
+  rewriter.replaceOp(loadOp, result);
   return success();
 }
 
@@ -237,7 +297,7 @@ template <typename LoadOpTy>
 static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
-  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  FailureOr<StringRef> suffix = getSizeSuffixLoad(bitWidth);
   if (failed(suffix))
     return loadOp.emitError("unsupported load bit width: ") << bitWidth;
 
@@ -259,11 +319,23 @@ static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
   Value addr = computeMemrefAddress(rewriter, loc, memref, loadOp.getIndices(),
                                     elementBitWidth);
 
+  // For sub-32-bit loads, hardware loads into i32 and we need to truncate
+  Type asmResultType = resultType;
+  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
+    asmResultType = rewriter.getI32Type();
+  }
+
   // Create the inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{addr},
+  auto asmOp = createInlineAsm(rewriter, loc, asmResultType, ValueRange{addr},
                                asmStr, constraints, /*hasSideEffects=*/true);
 
-  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  Value result = asmOp.getResult(0);
+  // Truncate if needed for sub-32-bit scalar types
+  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
+    result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+  }
+
+  rewriter.replaceOp(loadOp, result);
   return success();
 }
 
@@ -272,7 +344,7 @@ template <typename StoreOpTy>
 static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
-  FailureOr<StringRef> suffix = getBufferSuffix(bitWidth);
+  FailureOr<StringRef> suffix = getBufferSuffixStore(bitWidth);
   if (failed(suffix))
     return storeOp.emitError("unsupported buffer store bit width: ")
            << bitWidth;
@@ -300,10 +372,17 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter) {
   // Extract buffer descriptor pointer from memref
   Value bufferDesc = extractBufferDescriptor(rewriter, loc, memref);
 
+  // For sub-32-bit stores, extend to i32 first
+  Value valueToStore = storeOp.getValueToStore();
+  if (bitWidth < 32 && !isa<VectorType>(valueType)) {
+    valueToStore = arith::ExtUIOp::create(rewriter, loc, rewriter.getI32Type(),
+                                          valueToStore);
+  }
+
   // Create inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{storeOp.getValueToStore(), offset, bufferDesc},
-                  asmStr, constraints, /*hasSideEffects=*/true);
+                  ValueRange{valueToStore, offset, bufferDesc}, asmStr,
+                  constraints, /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
   return success();
@@ -314,7 +393,7 @@ template <typename StoreOpTy>
 static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
-  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  FailureOr<StringRef> suffix = getSizeSuffixStore(bitWidth);
   if (failed(suffix))
     return storeOp.emitError("unsupported store bit width: ") << bitWidth;
 
@@ -336,10 +415,17 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value addr = computeMemrefAddress(rewriter, loc, memref, storeOp.getIndices(),
                                     elementBitWidth);
 
+  // For sub-32-bit stores, extend to i32 first
+  Value valueToStore = storeOp.getValueToStore();
+  if (bitWidth < 32 && !isa<VectorType>(valueType)) {
+    valueToStore = arith::ExtUIOp::create(rewriter, loc, rewriter.getI32Type(),
+                                          valueToStore);
+  }
+
   // Create the inline assembly operation (no result for store)
-  createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{addr, storeOp.getValueToStore()}, asmStr,
-                  constraints, /*hasSideEffects=*/true);
+  createInlineAsm(rewriter, loc, TypeRange{}, ValueRange{addr, valueToStore},
+                  asmStr, constraints,
+                  /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
   return success();
@@ -350,7 +436,7 @@ template <typename LoadOpTy>
 static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
-  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  FailureOr<StringRef> suffix = getSizeSuffixLoad(bitWidth);
   if (failed(suffix))
     return loadOp.emitError("unsupported DS load bit width: ") << bitWidth;
 
@@ -375,11 +461,24 @@ static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
   Value offset32 =
       arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
 
-  // Create inline assembly operation
-  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{offset32},
-                               asmStr, constraints, /*hasSideEffects=*/true);
+  // For sub-32-bit loads, hardware loads into i32 and we need to truncate
+  Type asmResultType = resultType;
+  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
+    asmResultType = rewriter.getI32Type();
+  }
 
-  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  // Create inline assembly operation
+  auto asmOp =
+      createInlineAsm(rewriter, loc, asmResultType, ValueRange{offset32},
+                      asmStr, constraints, /*hasSideEffects=*/true);
+
+  Value result = asmOp.getResult(0);
+  // Truncate if needed for sub-32-bit scalar types
+  if (bitWidth < 32 && !isa<VectorType>(resultType)) {
+    result = arith::TruncIOp::create(rewriter, loc, resultType, result);
+  }
+
+  rewriter.replaceOp(loadOp, result);
   return success();
 }
 
@@ -388,7 +487,7 @@ template <typename StoreOpTy>
 static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
-  FailureOr<StringRef> suffix = getSizeSuffix(bitWidth);
+  FailureOr<StringRef> suffix = getSizeSuffixStore(bitWidth);
   if (failed(suffix))
     return storeOp.emitError("unsupported DS store bit width: ") << bitWidth;
 
@@ -413,10 +512,17 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value offset32 =
       arith::TruncIOp::create(rewriter, loc, rewriter.getI32Type(), offset);
 
+  // For sub-32-bit stores, extend to i32 first
+  Value valueToStore = storeOp.getValueToStore();
+  if (bitWidth < 32 && !isa<VectorType>(valueType)) {
+    valueToStore = arith::ExtUIOp::create(rewriter, loc, rewriter.getI32Type(),
+                                          valueToStore);
+  }
+
   // Create inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{offset32, storeOp.getValueToStore()}, asmStr,
-                  constraints, /*hasSideEffects=*/true);
+                  ValueRange{offset32, valueToStore}, asmStr, constraints,
+                  /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
   return success();

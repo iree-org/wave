@@ -350,3 +350,102 @@ func.func @mixed_scalar_and_vector(%memref: memref<1024xf32>, %offset: index) {
 
   return
 }
+
+// -----
+// 8-bit and 16-bit operations tests
+
+// CHECK-LABEL: func.func @scalar_load_global_i8
+func.func @scalar_load_global_i8(%memref: memref<1024xi8>, %offset: index) -> i8 {
+  // CHECK: llvm.inline_asm has_side_effects "global_load_u8 $0, $1, off", "=v,v"
+  // CHECK: arith.trunci
+  %result = memref.load %memref[%offset] : memref<1024xi8>
+  return %result : i8
+}
+
+// CHECK-LABEL: func.func @scalar_load_global_i16
+func.func @scalar_load_global_i16(%memref: memref<1024xi16>, %offset: index) -> i16 {
+  // CHECK: llvm.inline_asm has_side_effects "global_load_u16 $0, $1, off", "=v,v"
+  // CHECK: arith.trunci
+  %result = memref.load %memref[%offset] : memref<1024xi16>
+  return %result : i16
+}
+
+// CHECK-LABEL: func.func @scalar_store_global_i8
+func.func @scalar_store_global_i8(%memref: memref<1024xi8>, %offset: index, %data: i8) {
+  // CHECK: arith.extui
+  // CHECK: llvm.inline_asm has_side_effects "global_store_b8 $0, $1, off", "v,v"
+  memref.store %data, %memref[%offset] : memref<1024xi8>
+  return
+}
+
+// CHECK-LABEL: func.func @scalar_store_global_i16
+func.func @scalar_store_global_i16(%memref: memref<1024xi16>, %offset: index, %data: i16) {
+  // CHECK: arith.extui
+  // CHECK: llvm.inline_asm has_side_effects "global_store_b16 $0, $1, off", "v,v"
+  memref.store %data, %memref[%offset] : memref<1024xi16>
+  return
+}
+
+// CHECK-LABEL: func.func @scalar_load_buffer_i8
+func.func @scalar_load_buffer_i8(%buffer: memref<1024xi8, #amdgpu.address_space<fat_raw_buffer>>, %offset: index) -> i8 {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_ubyte $0, $1, $2, 0 offen", "=v,v,s"
+  // CHECK: arith.trunci
+  %result = memref.load %buffer[%offset] : memref<1024xi8, #amdgpu.address_space<fat_raw_buffer>>
+  return %result : i8
+}
+
+// CHECK-LABEL: func.func @scalar_load_buffer_i16
+func.func @scalar_load_buffer_i16(%buffer: memref<1024xi16, #amdgpu.address_space<fat_raw_buffer>>, %offset: index) -> i16 {
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_ushort $0, $1, $2, 0 offen", "=v,v,s"
+  // CHECK: arith.trunci
+  %result = memref.load %buffer[%offset] : memref<1024xi16, #amdgpu.address_space<fat_raw_buffer>>
+  return %result : i16
+}
+
+// CHECK-LABEL: func.func @scalar_store_buffer_i8
+func.func @scalar_store_buffer_i8(%buffer: memref<1024xi8, #amdgpu.address_space<fat_raw_buffer>>, %offset: index, %data: i8) {
+  // CHECK: arith.extui
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_byte $0, $1, $2, 0 offen", "v,v,s"
+  memref.store %data, %buffer[%offset] : memref<1024xi8, #amdgpu.address_space<fat_raw_buffer>>
+  return
+}
+
+// CHECK-LABEL: func.func @scalar_store_buffer_i16
+func.func @scalar_store_buffer_i16(%buffer: memref<1024xi16, #amdgpu.address_space<fat_raw_buffer>>, %offset: index, %data: i16) {
+  // CHECK: arith.extui
+  // CHECK: llvm.inline_asm has_side_effects "buffer_store_short $0, $1, $2, 0 offen", "v,v,s"
+  memref.store %data, %buffer[%offset] : memref<1024xi16, #amdgpu.address_space<fat_raw_buffer>>
+  return
+}
+
+// CHECK-LABEL: func.func @scalar_load_ds_i8
+func.func @scalar_load_ds_i8(%lds: memref<1024xi8, #gpu.address_space<workgroup>>, %offset: index) -> i8 {
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_u8 $0, $1", "=v,v"
+  // CHECK: arith.trunci
+  %result = memref.load %lds[%offset] : memref<1024xi8, #gpu.address_space<workgroup>>
+  return %result : i8
+}
+
+// CHECK-LABEL: func.func @scalar_load_ds_i16
+func.func @scalar_load_ds_i16(%lds: memref<1024xi16, #gpu.address_space<workgroup>>, %offset: index) -> i16 {
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_u16 $0, $1", "=v,v"
+  // CHECK: arith.trunci
+  %result = memref.load %lds[%offset] : memref<1024xi16, #gpu.address_space<workgroup>>
+  return %result : i16
+}
+
+// CHECK-LABEL: func.func @scalar_store_ds_i8
+func.func @scalar_store_ds_i8(%lds: memref<1024xi8, #gpu.address_space<workgroup>>, %offset: index, %data: i8) {
+  // CHECK: arith.extui
+  // CHECK: llvm.inline_asm has_side_effects "ds_write_b8 $0, $1", "v,v"
+  memref.store %data, %lds[%offset] : memref<1024xi8, #gpu.address_space<workgroup>>
+  return
+}
+
+// CHECK-LABEL: func.func @scalar_store_ds_i16
+func.func @scalar_store_ds_i16(%lds: memref<1024xi16, #gpu.address_space<workgroup>>, %offset: index, %data: i16) {
+  // CHECK: arith.extui
+  // CHECK: llvm.inline_asm has_side_effects "ds_write_b16 $0, $1", "v,v"
+  memref.store %data, %lds[%offset] : memref<1024xi16, #gpu.address_space<workgroup>>
+  return
+}
