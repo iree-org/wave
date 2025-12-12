@@ -113,6 +113,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     env:
       VENV_DIR: ${{ github.workspace }}/.wave-venv
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
@@ -162,7 +163,6 @@ jobs:
           pip install -r requirements.txt -e .
 
       - name: Run unit tests
-        if: ${{ !cancelled() }}
         run: |
           pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
 
@@ -170,7 +170,6 @@ jobs:
         run: |
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
-          nproc
           WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
 
       - name: Run e2e tests on AMD GPU

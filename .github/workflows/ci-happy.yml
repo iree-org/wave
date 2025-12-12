@@ -194,5 +194,4 @@ jobs:
       # 7. final cleanup container
       - name: Clean up happy container - 1
         if: always()
-        run: |
-          docker stop happy && docker rm -f happy || true
+        run: docker stop happy && docker rm -f happy || true

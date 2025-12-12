@@ -73,11 +73,7 @@ jobs:
           pip install -r requirements.txt -e .
 
       - name: Run LIT tests
-        if: ${{ !cancelled() }}
-        run: |
-          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
+        run: WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
 
       - name: MyPy Type Checking
-        if: ${{ !cancelled() }}
-        run: |
-          mypy
+        run: mypy
