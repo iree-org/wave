@@ -199,9 +199,9 @@ def WaterLowerMemoryOps : Pass<"water-lower-memory-ops"> {
 }
 
 def WaterMaterializeRegCopy : Pass<"water-materialize-reg-copy"> {
-  let summary = "Materialize register copies for memref loads";
+  let summary = "Materialize register copies for loads";
   let description = [{
-    This pass materializes explicit register copies by transforming memref.load
+    This pass materializes explicit register copies by transforming load
     operations to route through a temporary buffer in the virtual register
     memory space (memspace 128). For each load:
     1. Creates a subview of the source memref at the load indices
