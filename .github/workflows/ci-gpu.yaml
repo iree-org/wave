@@ -59,8 +59,8 @@ jobs:
       - name: Setup env
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
         run: |
-          sudo apt update
-          sudo apt install -y ninja-build cmake clang lld dwarfdump
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang lld dwarfdump
           pip install -r water/requirements-dev.txt
 
       - name: Checkout LLVM
@@ -266,8 +266,8 @@ jobs:
 
       - name: Setup env
         run: |
-          sudo apt update
-          sudo apt install -y ninja-build cmake clang lld
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang lld
           pip install -r water/requirements-dev.txt
 
       - name: Setup Cache Vars
