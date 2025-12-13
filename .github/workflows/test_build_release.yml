@@ -41,7 +41,7 @@ jobs:
           python-version: ${{ matrix.version }}
 
       - name: "Setting up Rust"
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
         with:
           toolchain: stable
 
@@ -54,5 +54,4 @@ jobs:
           ./build_tools/build_release.py
 
       - name: Validate Release Build
-        if: ${{ !cancelled() }}
         run: ./build_tools/post_build_release_test.sh

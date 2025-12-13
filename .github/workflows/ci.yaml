@@ -30,13 +30,7 @@ jobs:
         name: [ubuntu-24.04]
         version: ["3.10", "3.11", "3.12", "3.13"]
         runs-on: [ubuntu-24.04]
-        pytorch_requirements: ["pytorch-cpu-requirements.txt"]
 
-        include:
-          - name: linux-mi325
-            version: "3.11"
-            runs-on: linux-mi325-1gpu-ossci-iree-org
-            pytorch_requirements: "pytorch-rocm-requirements.txt"
     runs-on: ${{matrix.runs-on}}
     timeout-minutes: 60
     env:
@@ -45,7 +39,7 @@ jobs:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
 
       - name: "Setting up Rust"
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
         with:
           toolchain: stable
 
@@ -59,6 +53,7 @@ jobs:
         uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
           python-version: ${{matrix.version}}
+          cache: 'pip'
 
       - name: Create Python venv
         run: |
@@ -69,46 +64,20 @@ jobs:
 
       - name: Install pip deps
         run: |
-          python -m pip install --no-compile --upgrade pip
+          python -m pip install --upgrade pip
           # Note: We install in three steps in order to satisfy requirements
           # from non default locations first. Additionally, installing
           # cpu/rocm-specific pytorch wheels first avoids installing
           # unnecessary libraries included in default pytorch.
-          pip install --no-compile -r ${{ matrix.pytorch_requirements }}
-          pip install --no-cache-dir -r requirements-iree-pinned.txt
+          pip install -r pytorch-cpu-requirements.txt
+          pip install -r requirements-iree-pinned.txt
           pip install -r requirements.txt -e .
 
       - name: Run unit tests
-        if: ${{ !cancelled() }}
-        run: |
-          pytest -n 4 --capture=tee-sys -vv ./tests
+        run: pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
 
       - name: Run LIT tests
-        if: ${{ !cancelled() }}
-        run: |
-          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
+        run: WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
 
       - name: MyPy Type Checking
-        if: ${{ !cancelled() }}
-        run: |
-          mypy
-
-  # Depends on all other jobs to provide an aggregate job status.
-  ci_summary:
-    if: always()
-    runs-on: ubuntu-24.04
-    needs:
-      - test
-    steps:
-      - name: Getting failed jobs
-        run: |
-          echo '${{ toJson(needs) }}'
-          FAILED_JOBS="$(echo '${{ toJson(needs) }}' \
-            | jq --raw-output \
-            'map_values(select(.result!="success" and .result!="skipped")) | keys | join(",")' \
-          )"
-          echo "failed-jobs=${FAILED_JOBS}" >> $GITHUB_OUTPUT
-          if [[ "${FAILED_JOBS}" != "" ]]; then
-            echo "The following jobs failed: ${FAILED_JOBS}"
-            exit 1
-          fi
+        run: mypy

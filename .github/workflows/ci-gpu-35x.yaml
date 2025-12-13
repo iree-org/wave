@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   test:
-    name: "${{ matrix.os }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
+    name: "${{ matrix.os }} :: ${{ matrix.version }} :: Integration Tests"
     strategy:
       fail-fast: false
       matrix:
@@ -56,29 +56,21 @@ jobs:
         uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
           python-version: ${{3.11}}
+          cache: 'pip'
       - name: Create Python venv
         run: |
            python -m venv ${VENV_DIR}
            source ${VENV_DIR}/bin/activate
 
-      - name: Install Rust via rustup.sh
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "CARGO_HOME=$HOME/.cargo" >> $GITHUB_ENV
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: "Setting up Rust"
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
+        with:
+          toolchain: stable
 
       - name: Install pip deps
-        if: ${{ !cancelled() }}
         run: |
           # Install TheRock
-          sudo apt-get update
-          sudo apt install -y gfortran build-essential binutils dwarfdump
-          python -m pip install \
-            --index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx950-dcgpu/ \
-            rocm[libraries,devel]
-          python -m pip install \
-            --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ \
-            torch torchaudio torchvision
+          python -m pip install --index-url https://repo.amd.com/rocm/whl/gfx950-dcgpu/ "rocm[libraries,devel]" "torch>=2.6,<2.9"
 
           # Set environment variables
           export ROCM_PATH=$(python -m rocm_sdk path --root)
@@ -87,34 +79,20 @@ jobs:
           echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
           # Install wave deps
-          python -m pip install --no-compile --upgrade pip
-          pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
+          python -m pip install --upgrade pip
+          pip install -r requirements-iree-pinned.txt --upgrade
           pip install -r requirements.txt -e .
 
-      - name: Run unit tests
-        if: ${{ !cancelled() }}
-        run: |
-          pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
-
       - name: Test TKW runtime related stack on amdgpu
-        if: ${{ !cancelled() }}
         run: |
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
-          nproc
-          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/runtime
 
       - name: Run e2e tests on AMD GPU
-        if: ${{ (github.event_name == 'pull_request') && !cancelled() }}
-        run: |
-          WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+        if: ${{ github.event_name == 'pull_request' }}
+        run: WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/
 
       - name: Run expensive e2e tests on AMD GPU
-        if: ${{ (github.event_name != 'pull_request') && !cancelled() }}
-        run: |
-          WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
-
-      - name: Run LIT tests
-        if: ${{ !cancelled() }}
-        run: |
-          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
+        if: ${{ github.event_name != 'pull_request' }}
+        run: WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
