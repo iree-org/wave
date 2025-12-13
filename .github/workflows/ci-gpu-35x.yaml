@@ -70,8 +70,7 @@ jobs:
       - name: Install pip deps
         run: |
           # Install TheRock
-          python -m pip install --index-url https://repo.amd.com/rocm/whl/gfx950-dcgpu/ "rocm[libraries,devel]"
-          python -m pip install --index-url https://repo.amd.com/rocm/whl/gfx950-dcgpu/ torch
+          python -m pip install --index-url https://repo.amd.com/rocm/whl/gfx950-dcgpu/ "rocm[libraries,devel]" "torch>=2.6,<2.9"
 
           # Set environment variables
           export ROCM_PATH=$(python -m rocm_sdk path --root)
