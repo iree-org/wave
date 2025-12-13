@@ -30,17 +30,25 @@ namespace mlir::water {
 
 namespace {
 
+/// Try to propagate view operations to the base memref.
+static Value propagateViewOps(Value value) {
+  while (auto view = value.getDefiningOp<ViewLikeOpInterface>())
+    value = view.getViewSource();
+
+  return value;
+}
+
 /// Check if the operation is a load operation and return the base memref.
 static std::optional<Value> isLoadOp(Operation *op) {
   // TODO: replace with the interface when available.
   if (auto load = dyn_cast<vector::LoadOp>(op))
-    return load.getBase();
+    return propagateViewOps(load.getBase());
   if (auto load = dyn_cast<memref::LoadOp>(op))
-    return load.getMemRef();
+    return propagateViewOps(load.getMemRef());
   if (auto copy = dyn_cast<memref::CopyOp>(op))
-    return copy.getSource();
+    return propagateViewOps(copy.getSource());
   if (auto gather = dyn_cast<amdgpu::GatherToLDSOp>(op))
-    return gather.getSrc();
+    return propagateViewOps(gather.getSrc());
 
   return std::nullopt;
 }
@@ -49,13 +57,13 @@ static std::optional<Value> isLoadOp(Operation *op) {
 static std::optional<Value> isStoreOp(Operation *op) {
   // TODO: replace with the interface when available.
   if (auto store = dyn_cast<vector::StoreOp>(op))
-    return store.getBase();
+    return propagateViewOps(store.getBase());
   if (auto store = dyn_cast<memref::StoreOp>(op))
-    return store.getMemRef();
+    return propagateViewOps(store.getMemRef());
   if (auto copy = dyn_cast<memref::CopyOp>(op))
-    return copy.getTarget();
+    return propagateViewOps(copy.getTarget());
   if (auto gather = dyn_cast<amdgpu::GatherToLDSOp>(op))
-    return gather.getDst();
+    return propagateViewOps(gather.getDst());
 
   return std::nullopt;
 }
