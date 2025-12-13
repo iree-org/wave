@@ -8,6 +8,7 @@ import os
 
 import torch.fx as fx
 
+from wave_lang.kernel.compiler.base import CodegenError
 from wave_lang.support.logging import get_logger
 
 from ..._support.tracing import CapturedTrace
@@ -215,10 +216,9 @@ def apply_pipelined_schedule(
         # is not dynamic.
         max_induction_variable = int(max_induction_variable)
         if max_induction_variable <= num_stages - 1:
-            logger.warning(
+            raise CodegenError(
                 "Not enough iterations to pipeline the loop. Skipping pipelining."
             )
-            return None
     else:
         # Otherwise, we need to rely on assumptions provided by the author.
         assumptions = get_assumptions(constraints)
@@ -232,10 +232,9 @@ def apply_pipelined_schedule(
             constraints, max_induction_variable > num_stages - 1
         )
         if not result:
-            logger.warning(
+            raise CodegenError(
                 "Not enough iterations to pipeline the loop. Skipping pipelining."
             )
-            return None
 
     new_reduction, node_mapping = construct_pipelined_loop(
         trace,
