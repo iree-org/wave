@@ -14,6 +14,20 @@ func.func @test_simple_load(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f
   return %0 : f32
 }
 
+// CHECK-LABEL: func @test_simple_vector_load
+func.func @test_simple_vector_load(%arg0: memref<10x20xf32>, %i: index, %j: index) -> vector<4xf32> {
+  // CHECK: %[[SUBVIEW:.*]] = memref.subview %arg0[%arg1, %arg2] [1, 4] [1, 1]
+  // CHECK-SAME: memref<10x20xf32> to memref<1x4xf32, strided<[20, 1], offset: ?>>
+  // CHECK: %[[TEMP:.*]] = memref.alloca() : memref<1x4xf32, 128 : i32>
+  // CHECK: memref.copy %[[SUBVIEW]], %[[TEMP]]
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
+  // CHECK: %[[RESULT:.*]] = vector.load %[[TEMP]][%[[C0]], %[[C0_1]]]
+  // CHECK: return %[[RESULT]]
+  %0 = vector.load %arg0[%i, %j] : memref<10x20xf32>, vector<4xf32>
+  return %0 : vector<4xf32>
+}
+
 // CHECK-LABEL: func @test_1d_load
 func.func @test_1d_load(%arg0: memref<100xf16>, %i: index) -> f16 {
   // CHECK: %[[SUBVIEW:.*]] = memref.subview %arg0[%arg1] [1] [1]

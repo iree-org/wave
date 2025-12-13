@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
@@ -30,43 +31,70 @@ public:
     IRRewriter rewriter(&getContext());
 
     // Collect all load operations to transform
-    SmallVector<memref::LoadOp> loadsToTransform;
-    getOperation()->walk([&](memref::LoadOp loadOp) {
-      auto memrefType = cast<MemRefType>(loadOp.getMemRef().getType());
-      // Skip loads already from virtual register space (memspace 128)
-      if (auto memSpace =
-              dyn_cast_or_null<IntegerAttr>(memrefType.getMemorySpace())) {
-        if (memSpace.getInt() == 128)
-          return;
+    SmallVector<Operation *> loadsToTransform;
+    getOperation()->walk([&](Operation *op) {
+      if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+        if (!isInRegisterSpace(cast<MemRefType>(loadOp.getMemRef().getType())))
+          loadsToTransform.push_back(op);
+      } else if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
+        if (!isInRegisterSpace(cast<MemRefType>(loadOp.getBase().getType())))
+          loadsToTransform.push_back(op);
       }
-      loadsToTransform.push_back(loadOp);
     });
 
-    for (memref::LoadOp loadOp : loadsToTransform) {
-      if (failed(materializeRegCopy(rewriter, loadOp)))
+    for (Operation *op : loadsToTransform) {
+      if (failed(materializeRegCopy(rewriter, op)))
         return signalPassFailure();
     }
   }
 
 private:
+  /// Check if a memref type is in virtual register space (memspace 128).
+  static bool isInRegisterSpace(MemRefType memrefType) {
+    if (auto memSpace =
+            dyn_cast_or_null<IntegerAttr>(memrefType.getMemorySpace()))
+      return memSpace.getInt() == 128;
+    return false;
+  }
+
   /// Transform a single load operation to use register space copy.
-  LogicalResult materializeRegCopy(IRRewriter &rewriter,
-                                   memref::LoadOp loadOp) {
-    Location loc = loadOp.getLoc();
-    rewriter.setInsertionPoint(loadOp);
+  LogicalResult materializeRegCopy(IRRewriter &rewriter, Operation *op) {
+    Location loc = op->getLoc();
+    rewriter.setInsertionPoint(op);
 
-    // Get the source memref and indices
-    Value memref = loadOp.getMemRef();
-    ValueRange indices = loadOp.getIndices();
+    // Extract memref, indices, and element type from either load type
+    Value memref, loadResult;
+    ValueRange indices;
+    Type elementType;
+    SmallVector<int64_t> loadShape;
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      memref = loadOp.getMemRef();
+      indices = loadOp.getIndices();
+      loadResult = loadOp.getResult();
+      elementType = loadOp.getType();
+      loadShape.resize(indices.size(), 1);
+    } else if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
+      memref = loadOp.getBase();
+      indices = loadOp.getIndices();
+      loadResult = loadOp.getResult();
+      VectorType vecType = loadOp.getVectorType();
+      elementType = vecType.getElementType();
+      loadShape.resize(indices.size() - vecType.getRank(), 1);
+      llvm::append_range(loadShape, vecType.getShape());
+    } else {
+      return op->emitError("unsupported load operation");
+    }
+
     auto memrefType = cast<MemRefType>(memref.getType());
-    Type elementType = memrefType.getElementType();
 
-    // Create constants for subview
+    // Create subview parameters
+    Attribute one = rewriter.getIndexAttr(1);
     SmallVector<OpFoldResult> offsets, sizes, strides;
-    for (Value index : indices) {
+    for (auto [index, shape] : llvm::zip(indices, loadShape)) {
       offsets.push_back(index);
-      sizes.push_back(rewriter.getIndexAttr(1));
-      strides.push_back(rewriter.getIndexAttr(1));
+      sizes.push_back(rewriter.getIndexAttr(shape));
+      strides.push_back(one);
     }
 
     // Create subview of size [1, 1, ..., 1] at the load indices
@@ -89,28 +117,30 @@ private:
     memref::CopyOp::create(rewriter, loc, subview, tempAlloca);
 
     // Group uses by block and find the first use in each block
-    Value loadResult = loadOp.getResult();
     DenseMap<Block *, Operation *> blockToFirstUse;
-
     for (OpOperand &use : loadResult.getUses()) {
       Operation *userOp = use.getOwner();
       Block *userBlock = userOp->getBlock();
-
       auto it = blockToFirstUse.find(userBlock);
       if (it == blockToFirstUse.end() || userOp->isBeforeInBlock(it->second))
         blockToFirstUse[userBlock] = userOp;
     }
 
-    // Create one load per block, right before the first use in that block
-    DenseMap<Block *, Value> blockToLoad;
+    // Create zero indices for loading from temp buffer
     SmallVector<Value> zeroIndices;
-    for (unsigned i = 0; i < indices.size(); ++i)
+    for (size_t i = 0; i < loadShape.size(); ++i)
       zeroIndices.push_back(arith::ConstantIndexOp::create(rewriter, loc, 0));
 
+    // Create one load per block, right before the first use in that block
+    DenseMap<Block *, Value> blockToLoad;
     for (auto &[block, firstUse] : blockToFirstUse) {
       rewriter.setInsertionPoint(firstUse);
-      Value load =
-          memref::LoadOp::create(rewriter, loc, tempAlloca, zeroIndices);
+      Value load;
+      if (isa<memref::LoadOp>(op))
+        load = memref::LoadOp::create(rewriter, loc, tempAlloca, zeroIndices);
+      else if (auto vecLoadOp = dyn_cast<vector::LoadOp>(op))
+        load = vector::LoadOp::create(rewriter, loc, vecLoadOp.getVectorType(),
+                                      tempAlloca, zeroIndices);
       blockToLoad[block] = load;
     }
 
@@ -121,8 +151,7 @@ private:
     }
 
     // Erase the original load
-    rewriter.eraseOp(loadOp);
-
+    rewriter.eraseOp(op);
     return success();
   }
 };
