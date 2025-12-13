@@ -79,10 +79,6 @@ jobs:
 
       - name: Install pip deps
         run: |
-          # Install User libraries
-          sudo apt-get update
-          sudo apt install -y libnuma1 numactl build-essential binutils
-
           # Install torch+rocm6.4
           python -m pip install --no-compile --upgrade pip
           pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/rocm6.4
