@@ -80,7 +80,7 @@ jobs:
       - name: Install pip deps
         run: |
           # Install torch+rocm6.4
-          python -m pip install --no-compile --upgrade pip
+          python -m pip install --upgrade pip
           pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/rocm6.4
 
           # Install wave deps
