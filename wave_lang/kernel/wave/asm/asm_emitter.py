@@ -42,6 +42,7 @@ from .instructions import (
 from .latency_provider import LatencyProvider
 from .scoreboard import Scoreboard
 from .ticketing import Ticketing
+from .hazards import HazardDetector
 
 
 def get_register_granularity(target: str) -> Tuple[int, int]:
@@ -173,6 +174,10 @@ class AsmEmitter:
         # Loop management for scf.for lowering
         self.loop_counter = 0  # Counter for generating unique loop labels
         self.loop_stack = []  # Stack of active loop contexts
+
+        # Hazard detector for gfx950 VALU hazards
+        # See hazards.py for details on the hazard types and mitigations
+        self.hazard_detector = HazardDetector()
 
     @staticmethod
     def _detect_needed_workgroup_ids(fn) -> tuple[bool, bool, bool]:
@@ -314,8 +319,9 @@ class AsmEmitter:
         instruction categorization. This ensures uniform, centralized ticketing
         for all emitted instructions.
         """
-        # Import here to avoid circular dependency
         from .instruction_categories import InstructionCategory, categorize_instruction
+
+        instr_str_lower = str(instr).strip().lower()
 
         # Issue tickets for memory operations based on instruction category
         if hasattr(instr, "mnemonic") and instr.mnemonic:
@@ -327,6 +333,31 @@ class AsmEmitter:
                 self.ticketing.next_lgkm_ticket()
 
         self.lines.append(str(instr))
+
+        # Hazard mitigation
+        mitigation = self.hazard_detector.get_mitigation(instr_str_lower)
+        if mitigation:
+            self.lines.append(mitigation)
+
+        # Debug mode: add barriers after every instruction for debugging race conditions
+        # Set WAVE_DEBUG_BARRIERS=1 to enable
+        import os
+
+        if os.environ.get("WAVE_DEBUG_BARRIERS", "0") == "1":
+            instr_str = str(instr).strip().lower()
+            skip_patterns = [
+                "s_barrier",
+                "s_waitcnt",
+                "s_endpgm",
+                ":",
+                ".",
+                "s_sleep",
+                "s_nop",
+            ]
+            if not any(p in instr_str for p in skip_patterns):
+                self.lines.append("    s_waitcnt vmcnt(0)")
+                self.lines.append("    s_waitcnt lgkmcnt(0)")
+                self.lines.append("    s_barrier")
 
     def _setup_workgroup_id_sgprs(self):
         """
@@ -657,8 +688,13 @@ amdhsa.kernels:
     .kernarg_segment_size:       {num_args*8}
     .max_flat_workgroup_size:    {wg_size_x * wg_size_y * wg_size_z}
     .private_segment_fixed_size: 0
+    .reqd_workgroup_size:
+      - {wg_size_x}
+      - {wg_size_y}
+      - {wg_size_z}
     .sgpr_count:                 {sgprs_used}
     .sgpr_spill_count:           0
+    .uniform_work_group_size:    1
     .vgpr_count:                 {vgprs_used}
     .vgpr_spill_count:           0
     .wavefront_size:             {subgroup_size}
