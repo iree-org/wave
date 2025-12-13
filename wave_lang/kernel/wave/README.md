@@ -27,4 +27,4 @@ This approach contrasts with traditional models like OpenCL and CUDA, which ofte
 
 ## Gemm example
 
-[wave_gemm_test.py](/tests/kernel/wave/wave_gemm_test.py)
+[wave_gemm_test.py](/tests/kernel/wave_gemm_test.py)
