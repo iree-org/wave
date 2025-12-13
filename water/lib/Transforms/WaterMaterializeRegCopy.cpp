@@ -31,8 +31,16 @@ public:
 
     // Collect all load operations to transform
     SmallVector<memref::LoadOp> loadsToTransform;
-    getOperation()->walk(
-        [&](memref::LoadOp loadOp) { loadsToTransform.push_back(loadOp); });
+    getOperation()->walk([&](memref::LoadOp loadOp) {
+      auto memrefType = cast<MemRefType>(loadOp.getMemRef().getType());
+      // Skip loads already from virtual register space (memspace 128)
+      if (auto memSpace =
+              dyn_cast_or_null<IntegerAttr>(memrefType.getMemorySpace())) {
+        if (memSpace.getInt() == 128)
+          return;
+      }
+      loadsToTransform.push_back(loadOp);
+    });
 
     for (memref::LoadOp loadOp : loadsToTransform) {
       if (failed(materializeRegCopy(rewriter, loadOp)))

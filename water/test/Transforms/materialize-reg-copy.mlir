@@ -59,3 +59,23 @@ func.func @test_multiple_loads(%arg0: memref<10x10xf32>, %i: index, %j: index) -
   %2 = arith.addf %0, %1 : f32
   return %2 : f32
 }
+
+// CHECK-LABEL: func @test_skip_memspace_128
+func.func @test_skip_memspace_128(%arg0: memref<10xf32>, %arg1: memref<5xf32, 128 : i32>, %i: index) -> f32 {
+  // This load should be transformed (from default memspace)
+  // CHECK: %[[SUBVIEW:.*]] = memref.subview %arg0[%arg2] [1] [1]
+  // CHECK: %[[TEMP:.*]] = memref.alloca() : memref<1xf32, 128 : i32>
+  // CHECK: memref.copy %[[SUBVIEW]], %[[TEMP]]
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[VAL0:.*]] = memref.load %[[TEMP]][%[[C0]]]
+  %0 = memref.load %arg0[%i] : memref<10xf32>
+
+  // This load should NOT be transformed (already from memspace 128)
+  // CHECK: %[[VAL1:.*]] = memref.load %arg1[%arg2] : memref<5xf32, 128 : i32>
+  %1 = memref.load %arg1[%i] : memref<5xf32, 128 : i32>
+
+  // CHECK: %[[RESULT:.*]] = arith.addf %[[VAL0]], %[[VAL1]]
+  %result = arith.addf %0, %1 : f32
+  // CHECK: return %[[RESULT]]
+  return %result : f32
+}
