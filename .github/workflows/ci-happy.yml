@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   happy-set-env:
+    name: "ubuntu-24.04 :: 3.12 :: Integration Tests"
     runs-on: ['self-hosted', 'Linux', 'X64', 'rdna4', 'shark41', 'gfx1250']
     env:
       ROOT_VENV: /home/user/.venvs/happy-test/lib/python3.12/site-packages
