@@ -85,7 +85,7 @@ jobs:
 
           # Install torch+rocm6.4
           python -m pip install --upgrade pip
-          pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
+          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/rocm6.4
 
           # Install wave deps
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade

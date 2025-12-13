@@ -77,7 +77,7 @@ jobs:
             rocm[libraries,devel]
           python -m pip install \
             --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ \
-            torch torchaudio torchvision
+            torch
 
           # Set environment variables
           export ROCM_PATH=$(python -m rocm_sdk path --root)
