@@ -78,12 +78,6 @@ def pytest_addoption(parser):
         "--run-e2e", action="store_true", default=False, help="run e2e tests"
     )
     parser.addoption(
-        "--run-e2e-only",
-        action="store_true",
-        default=False,
-        help="run e2e tests, skip all other tests",
-    )
-    parser.addoption(
         "--run-expensive-tests",
         action="store_true",
         default=False,
@@ -198,7 +192,6 @@ def pytest_collection_modifyitems(config, items):
     _disable_cache(config)
     _set_cache_dir(config)
     run_e2e = config.getoption("--run-e2e")
-    run_e2e_only = config.getoption("--run-e2e-only")
     run_expensive = config.getoption("--run-expensive-tests")
     run_perf = config.getoption("--runperf")
     for item in items:
@@ -215,11 +208,8 @@ def pytest_collection_modifyitems(config, items):
                     )
                 )
 
-        if _has_marker(item, "require_e2e") and not (run_e2e or run_e2e_only):
+        if _has_marker(item, "require_e2e") and not run_e2e:
             item.add_marker(pytest.mark.skip("e2e tests are disabled"))
-
-        if not _has_marker(item, "require_e2e") and run_e2e_only:
-            item.add_marker(pytest.mark.skip("skip non-e2e test"))
 
         if _has_marker(item, "expensive_test") and not run_expensive:
             item.add_marker(pytest.mark.skip("expensive tests are disabled"))
