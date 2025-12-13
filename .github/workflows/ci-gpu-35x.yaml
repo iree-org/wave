@@ -69,8 +69,6 @@ jobs:
       - name: Install pip deps
         run: |
           # Install TheRock
-          sudo apt-get update
-          sudo apt install -y build-essential binutils
           python -m pip install --index-url https://repo.amd.com/rocm/whl/gfx950-dcgpu/ "rocm[libraries,devel]"
           python -m pip install --index-url https://repo.amd.com/rocm/whl/gfx950-dcgpu/ torch
 
