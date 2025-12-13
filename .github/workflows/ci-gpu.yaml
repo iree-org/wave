@@ -101,7 +101,7 @@ jobs:
 
 
   test:
-    name: "${{ matrix.os }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
+    name: "${{ matrix.os }} :: ${{ matrix.version }} :: Integration Tests"
     strategy:
       fail-fast: false
       matrix:
@@ -179,11 +179,11 @@ jobs:
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
 
-      - name: Run LIT tests
+      - name: Run Water LIT tests
         run: WAVE_TEST_WATER=1 lit lit_tests/ -v
 
   test_linux_water:
-    name: "${{ matrix.name }} :: SHARED_LIBS ${{ matrix.shared_libs }} :: Run water tests"
+    name: "${{ matrix.name }} :: SHARED_LIBS ${{ matrix.shared_libs }} :: Water Tests"
     strategy:
       fail-fast: false
       matrix:
