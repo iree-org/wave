@@ -158,7 +158,7 @@ jobs:
               export PYTHONPATH=${ROOT_VENV}
 
               echo "Run unit tests"
-              WAVE_CACHE_ON=0 python3 -m pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+              WAVE_CACHE_ON=0 python3 -m pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
             '
 
       # 5. TKW runtime related e2e
@@ -178,7 +178,7 @@ jobs:
               echo "Test TKW runtime related stack on amdgpu"
               export WAVE_CACHE_DIR=$PWD/.wave
               rm -rf $WAVE_CACHE_DIR
-              WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+              WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/runtime
               '
 
       # 6. gemm e2e
@@ -200,7 +200,7 @@ jobs:
 
               export WAVE_CACHE_DIR=$PWD/.wave
               rm -rf $WAVE_CACHE_DIR
-              WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/wave_gemm_test.py
+              WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave_gemm_test.py
             '
 
       # 7. lit tests

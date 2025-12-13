@@ -80,7 +80,8 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest -n 4 --capture=tee-sys -vv ./tests
+          pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
+
       - name: Run LIT tests
         run: |
           WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v

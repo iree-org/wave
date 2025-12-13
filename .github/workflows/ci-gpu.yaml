@@ -221,7 +221,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+          pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
 
       - name: Test TKW runtime related stack on amdgpu
         if: ${{ env.HAS_GPU == 'true' && !cancelled() }}
@@ -230,17 +230,17 @@ jobs:
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
           nproc
-          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/runtime
 
       - name: Run e2e tests on AMD GPU
         if: ${{ env.HAS_GPU == 'true' && (github.event_name == 'pull_request') && !cancelled() }}
         run: |
-          WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+          WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/
 
       - name: Run expensive e2e tests on AMD GPU
         if: ${{ env.HAS_GPU == 'true' && (github.event_name != 'pull_request') && !cancelled() }}
         run: |
-          WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
+          WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
 
       - name: Run LIT tests
         if: ${{ !cancelled() }}
