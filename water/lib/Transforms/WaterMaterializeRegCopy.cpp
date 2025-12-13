@@ -88,17 +88,40 @@ private:
     // Copy from subview to temp register buffer
     memref::CopyOp::create(rewriter, loc, subview, tempAlloca);
 
-    // Create zero indices for loading from temp buffer
+    // Group uses by block and find the first use in each block
+    Value loadResult = loadOp.getResult();
+    DenseMap<Block *, Operation *> blockToFirstUse;
+
+    for (OpOperand &use : loadResult.getUses()) {
+      Operation *userOp = use.getOwner();
+      Block *userBlock = userOp->getBlock();
+
+      auto it = blockToFirstUse.find(userBlock);
+      if (it == blockToFirstUse.end() || userOp->isBeforeInBlock(it->second))
+        blockToFirstUse[userBlock] = userOp;
+    }
+
+    // Create one load per block, right before the first use in that block
+    DenseMap<Block *, Value> blockToLoad;
     SmallVector<Value> zeroIndices;
     for (unsigned i = 0; i < indices.size(); ++i)
       zeroIndices.push_back(arith::ConstantIndexOp::create(rewriter, loc, 0));
 
-    // Load from the temporary register buffer
-    Value result =
-        memref::LoadOp::create(rewriter, loc, tempAlloca, zeroIndices);
+    for (auto &[block, firstUse] : blockToFirstUse) {
+      rewriter.setInsertionPoint(firstUse);
+      Value load =
+          memref::LoadOp::create(rewriter, loc, tempAlloca, zeroIndices);
+      blockToLoad[block] = load;
+    }
 
-    // Replace the original load with the new one
-    rewriter.replaceOp(loadOp, result);
+    // Replace uses with the appropriate load for their block
+    for (OpOperand &use : llvm::make_early_inc_range(loadResult.getUses())) {
+      Block *userBlock = use.getOwner()->getBlock();
+      use.set(blockToLoad[userBlock]);
+    }
+
+    // Erase the original load
+    rewriter.eraseOp(loadOp);
 
     return success();
   }
