@@ -9,6 +9,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   SLPVectorizer.cpp
   WaterInsertWaitcnt.cpp
   WaterLowerMemoryOps.cpp
+  WaterMaterializeRegCopy.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/water
