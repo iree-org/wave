@@ -225,11 +225,11 @@ static FailureOr<StringRef> getBufferSuffixStore(unsigned bitWidth,
 
 /// Extract buffer descriptor and base offset from a fat_raw_buffer memref
 /// addrspace(7) format: {<4 x i32> rsrc, i32 offset} (160 bits total)
-/// Returns: {resource descriptor (vec<4xi32> in SGPR), base offset (i32)}
+/// Returns: {resource descriptor (i128), base offset (i32)}
 static std::pair<Value, Value>
 extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
-  // Create proper memref descriptor struct type: {ptr, ptr, offset, sizes...,
-  // strides...}
+  // Create proper memref descriptor struct type: {ptr, ptr, offset, sizes[rank],
+  // strides[rank]}
   auto memrefType = cast<MemRefType>(memref.getType());
   auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext(), 7);
   auto i32Type = rewriter.getI32Type();
