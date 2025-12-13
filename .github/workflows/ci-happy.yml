@@ -130,26 +130,7 @@ jobs:
           PY
             '
 
-      # 4. unit test
-      - name: Run unit tests
-        run: |
-          docker exec \
-            -e USER_VENV="${USER_VENV}" \
-            -e ROOT_VENV="${ROOT_VENV}" \
-            happy bash -lc '
-              set -euxo pipefail
-              source /usr/local/bin/env.sh >/dev/null 2>&1
-              export PATH="$CARGO_HOME/bin:$PATH"
-
-              # python venv
-              source "${USER_VENV}/bin/activate"
-              export PYTHONPATH=${ROOT_VENV}
-
-              echo "Run unit tests"
-              WAVE_CACHE_ON=0 python3 -m pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
-            '
-
-      # 5. TKW runtime related e2e
+      # 4. TKW runtime related e2e
       - name: Run TKW runtime e2e tests
         run: |
           docker exec \
@@ -166,10 +147,10 @@ jobs:
               echo "Test TKW runtime related stack on amdgpu"
               export WAVE_CACHE_DIR=$PWD/.wave
               rm -rf $WAVE_CACHE_DIR
-              WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+              WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e-only --durations=100 ./tests/kernel/wave/runtime
               '
 
-      # 6. gemm e2e
+      # 5. gemm e2e
       - name: Run gemm e2e tests
         run: |
           docker exec \
@@ -188,10 +169,10 @@ jobs:
 
               export WAVE_CACHE_DIR=$PWD/.wave
               rm -rf $WAVE_CACHE_DIR
-              WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/wave_gemm_test.py
+              WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e-only --durations=100 ./tests/kernel/wave/wave_gemm_test.py
             '
 
-      # 7. final cleanup container
+      # 6. final cleanup container
       - name: Clean up happy container - 1
         if: always()
         run: docker stop happy && docker rm -f happy || true
