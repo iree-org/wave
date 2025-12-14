@@ -75,11 +75,11 @@ public:
 
       // Assign starting register number.
       allocaOp->setAttr(
-          "water.register_number",
+          "water.vgpr_number",
           IntegerAttr::get(IntegerType::get(ctx, 32), nextRegister));
 
       // Track how many registers this alloca uses.
-      allocaOp->setAttr("water.register_count",
+      allocaOp->setAttr("water.vgpr_count",
                         IntegerAttr::get(IntegerType::get(ctx, 32), regCount));
 
       // Advance to next available register.
@@ -92,7 +92,7 @@ public:
       return signalPassFailure();
 
     // Attach metadata to function with total register count.
-    func->setAttr("water.total_registers",
+    func->setAttr("water.total_vgprs",
                   IntegerAttr::get(IntegerType::get(ctx, 32), nextRegister));
   }
 };
