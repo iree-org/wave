@@ -491,3 +491,271 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     with module.context:
         return Module.parse(result)
+
+
+def _find_water_python_path():
+    """Find the Water Python bindings path dynamically."""
+    import sys
+    from pathlib import Path
+
+    debug_info = []  # Collect debug info for troubleshooting
+
+    # Try to find Water build directory using the same logic as get_water_opt
+    try:
+        water_opt_path = Path(get_water_opt())
+        debug_info.append(f"Found water-opt at: {water_opt_path}")
+
+        # water-opt is typically in build/bin/water-opt, so python packages are in build/python_packages
+        build_dir = water_opt_path.parent.parent
+        python_packages_dir = build_dir / "python_packages"
+        water_mlir_dir = python_packages_dir / "water_mlir"
+
+        debug_info.append(f"Checking build dir: {build_dir}")
+        debug_info.append(f"Python packages dir exists: {python_packages_dir.exists()}")
+        debug_info.append(f"Water MLIR dir exists: {water_mlir_dir.exists()}")
+
+        if python_packages_dir.exists() and water_mlir_dir.exists():
+            return str(python_packages_dir)
+
+        # Alternative: check if water_mlir is directly in the same directory as water-opt
+        # This handles wheel installations where structure is different
+        water_mlir_direct = build_dir / "water_mlir"
+        debug_info.append(
+            f"Checking water_mlir direct path: {water_mlir_direct}, exists: {water_mlir_direct.exists()}"
+        )
+        if water_mlir_direct.exists():
+            debug_info.append(
+                f"Found water_mlir directly in build dir: {water_mlir_direct}"
+            )
+            return str(build_dir)
+
+        # Check if build_dir itself is the water_mlir directory (for wheel installations)
+        # In this case, water-opt is at .../water_mlir/bin/water-opt
+        if build_dir.name == "water_mlir":
+            # Check if this directory contains the Python package files
+            debug_info.append(
+                f"build_dir is water_mlir itself, checking for package files"
+            )
+            init_file = build_dir / "__init__.py"
+            ir_module = build_dir / "ir.py"
+            dialects_dir = build_dir / "dialects"
+            debug_info.append(f"  __init__.py exists: {init_file.exists()}")
+            debug_info.append(f"  ir.py exists: {ir_module.exists()}")
+            debug_info.append(f"  dialects dir exists: {dialects_dir.exists()}")
+            if init_file.exists() or ir_module.exists() or dialects_dir.exists():
+                # The water_mlir directory contains the package, return its parent
+                parent_path = str(build_dir.parent)
+                debug_info.append(
+                    f"Found water_mlir package at: {build_dir}, returning parent: {parent_path}"
+                )
+                return parent_path
+
+        # Check one level up (for cases like .../site-packages/water_mlir/bin/water-opt)
+        parent_dir = build_dir.parent
+        parent_water_mlir = parent_dir / "water_mlir"
+        debug_info.append(
+            f"Checking parent water_mlir path: {parent_water_mlir}, exists: {parent_water_mlir.exists()}"
+        )
+        if parent_water_mlir.exists():
+            debug_info.append(f"Found water_mlir in parent dir: {parent_dir}")
+            return str(parent_dir)
+
+    except Exception as e:
+        debug_info.append(f"get_water_opt() failed: {e}")
+
+    # Additional fallback: check if water_mlir is already in sys.path
+    try:
+        import water_mlir
+
+        # If we can import it, it's already available
+        water_mlir_path = Path(water_mlir.__file__).parent.parent
+        debug_info.append(f"water_mlir already importable from: {water_mlir_path}")
+        return str(water_mlir_path)
+    except ImportError:
+        debug_info.append("water_mlir not importable from current sys.path")
+
+    # Fallback: Try to find water_mlir by looking at the water-opt path more flexibly
+    try:
+        water_opt_path = Path(get_water_opt())
+        # Look for water_mlir in various positions relative to water-opt
+        search_dirs = [
+            water_opt_path.parent.parent,  # Standard build layout: build/bin/water-opt -> build/
+            water_opt_path.parent,  # In case water-opt is directly in water_mlir/bin/
+            water_opt_path.parent.parent.parent,  # In case it's nested deeper
+        ]
+
+        for search_dir in search_dirs:
+            debug_info.append(f"Searching for water_mlir from: {search_dir}")
+            # Check if this directory contains water_mlir or if it IS water_mlir
+            if (
+                search_dir.name == "water_mlir"
+                and (search_dir / "__init__.py").exists()
+            ):
+                debug_info.append(f"Found water_mlir package at: {search_dir}")
+                return str(search_dir.parent)
+            elif (search_dir / "water_mlir" / "__init__.py").exists():
+                debug_info.append(f"Found water_mlir package in: {search_dir}")
+                return str(search_dir)
+
+    except Exception as e:
+        debug_info.append(f"Flexible search failed: {e}")
+
+    # Fallback: look for common Water build locations relative to current file
+    current_file = Path(__file__)
+    potential_paths = [
+        current_file.parent.parent.parent.parent.parent
+        / "water"
+        / "build"
+        / "python_packages",
+        current_file.parent.parent.parent.parent
+        / "water"
+        / "build"
+        / "python_packages",
+        # Additional common build directory patterns
+        Path("/opt/water/python_packages"),  # System installation
+        Path("/usr/local/share/water/python_packages"),  # Local system installation
+        # Check build directories in common locations
+        Path.cwd() / "water" / "build" / "python_packages",  # From repo root
+        Path.cwd() / "build" / "python_packages",  # If we're in water dir
+    ]
+
+    debug_info.append("Checking fallback paths:")
+    for path in potential_paths:
+        water_mlir_path = path / "water_mlir"
+        debug_info.append(
+            f"  {path}: exists={path.exists()}, water_mlir={water_mlir_path.exists()}"
+        )
+        if path.exists() and water_mlir_path.exists():
+            return str(path.resolve())
+
+    # Final fallback: try to use the directory containing water-opt directly as a last resort
+    # Some installations might put everything in the same directory
+    try:
+        water_opt_path = Path(get_water_opt())
+        water_opt_dir = water_opt_path.parent
+        debug_info.append(
+            f"Final fallback: trying water-opt directory directly: {water_opt_dir}"
+        )
+
+        # Test if we can actually import from this path
+        import sys
+
+        original_path = sys.path.copy()
+
+        # Try a few candidate paths around water-opt
+        test_paths = [
+            water_opt_dir.parent,  # parent of bin directory
+            water_opt_dir.parent.parent,  # grandparent
+            water_opt_dir,  # bin directory itself
+        ]
+
+        for test_path in test_paths:
+            try:
+                debug_info.append(f"Testing import with path: {test_path}")
+                sys.path.insert(0, str(test_path))
+                import water_mlir
+                import water_mlir.ir
+
+                # If we get here, the import worked!
+                debug_info.append(f"✓ Import test successful with path: {test_path}")
+                return str(test_path)
+            except ImportError as e:
+                debug_info.append(f"  Import failed: {e}")
+                continue
+            finally:
+                sys.path[:] = original_path
+
+    except Exception as e:
+        debug_info.append(f"Final fallback failed: {e}")
+
+    # Print debug info if we can't find anything (for CI debugging)
+    debug_str = "\n".join(debug_info)
+    print(f"[DEBUG] Water Python path search failed. Debug info:\n{debug_str}")
+
+    return None
+
+
+def apply_water_passes_with_passmanager(mlir_text: str) -> str:
+    """Apply Water Wave passes using Python PassManager instead of subprocess.
+
+    This function applies the standard Wave lowering passes:
+    - water-wave-detect-normal-forms
+    - water-wave-propagate-elements-per-thread
+    - lower-wave-to-mlir
+    - canonicalize
+    - cse
+
+    Args:
+        mlir_text: Input Wave dialect MLIR as string
+
+    Returns:
+        Optimized MLIR as string after applying the passes
+
+    Raises:
+        RuntimeError: If Water Python bindings are not available or passes fail
+    """
+    import sys
+
+    # Find Water Python bindings path dynamically
+    water_python_path_str = _find_water_python_path()
+    if not water_python_path_str:
+        raise RuntimeError("Could not find Water Python bindings directory")
+
+    # Add to sys.path if not already present
+    if water_python_path_str not in sys.path:
+        sys.path.insert(0, water_python_path_str)
+
+    try:
+        # Lazy imports - only import when function is called
+        from water_mlir import ir as water_ir
+        from water_mlir import passmanager
+        from water_mlir.dialects import wave as wave_dialect
+    except ImportError as e:
+        # Remove the path we added to avoid polluting sys.path
+        if water_python_path_str in sys.path:
+            sys.path.remove(water_python_path_str)
+        raise RuntimeError(f"Water Python bindings not available: {e}")
+
+    try:
+        # Initialize MLIR context and register Wave dialect
+        with water_ir.Context() as ctx:
+            ctx.allow_unregistered_dialects = True
+            wave_dialect.register_dialect(ctx)
+
+            # Register Wave passes
+            wave_dialect.register_passes()
+
+            # Parse the input MLIR
+            module = water_ir.Module.parse(mlir_text, ctx)
+
+            # Apply the pass pipeline
+            pipeline_str = "builtin.module(water-wave-detect-normal-forms,water-wave-propagate-elements-per-thread,lower-wave-to-mlir,canonicalize,cse)"
+            pm = passmanager.PassManager.parse(pipeline_str, ctx)
+            pm.run(module.operation)
+
+            # Convert back to string and clean Wave-specific attributes
+            result_mlir = str(module)
+
+            # Clean Wave-specific attributes that cause issues in later pipelines
+            # TODO(tyb): do this in the very last pass of water pipeline instead
+            import re
+
+            result_mlir = re.sub(
+                r",\s*wave\.normal_form\s*=\s*#wave\.normal_form<[^>]*>",
+                "",
+                result_mlir,
+            )
+            result_mlir = re.sub(
+                r"wave\.normal_form\s*=\s*#wave\.normal_form<[^>]*>,?\s*",
+                "",
+                result_mlir,
+            )
+
+            return result_mlir
+
+    except Exception as e:
+        raise RuntimeError(f"PassManager execution failed: {e}")
+    finally:
+        # Clean up - remove the path we added
+        if water_python_path_str in sys.path:
+            sys.path.remove(water_python_path_str)
