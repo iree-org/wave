@@ -29,9 +29,17 @@ namespace mlir::water {
 } // namespace mlir::water
 
 namespace {
+static bool isRegisterAddressSpace(MemRefType type) {
+  auto attr = dyn_cast_or_null<IntegerAttr>(type.getMemorySpace());
+  return attr && attr.getInt() == 128;
+}
 
 /// Try to propagate view operations to the base memref.
-static Value propagateViewOps(Value value) {
+static std::optional<Value> propagateViewOps(Value value) {
+  auto memrefType = cast<MemRefType>(value.getType());
+  if (isRegisterAddressSpace(memrefType))
+    return {};
+
   while (auto view = value.getDefiningOp<ViewLikeOpInterface>())
     value = view.getViewSource();
 
