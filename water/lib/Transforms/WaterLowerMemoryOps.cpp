@@ -153,6 +153,10 @@ static FailureOr<StringRef> getBufferSuffixLoad(unsigned bitWidth,
   if (isRDNAArch) {
     // RDNA uses b32, b64, etc.
     switch (bitWidth) {
+    case 8:
+      return StringRef("u8");
+    case 16:
+      return StringRef("u16");
     case 32:
       return StringRef("b32");
     case 64:
@@ -602,10 +606,23 @@ static bool usesRegisterSpace(Value memref) {
   return false;
 }
 
+static std::string getVGPRConstraint(unsigned vgprOffset, unsigned vgprNum,
+                                     unsigned vgprCount, bool isOutput) {
+  std::string constraint;
+  if (vgprCount == 1)
+    constraint = "{v" + std::to_string(vgprOffset + vgprNum) + "}";
+  else
+    constraint = "{v[" + std::to_string(vgprOffset + vgprNum) + ":" +
+                 std::to_string(vgprOffset + vgprNum + vgprCount - 1) + "]}";
+  return isOutput ? "=" + constraint : constraint;
+}
+
 /// Lower memref.copy when destination is in register space - buffer variant
-static LogicalResult lowerCopyToRegisterSpaceBuffer(
-    memref::CopyOp copyOp, IRRewriter &rewriter, bool isRDNAArch,
-    unsigned vgprNum, unsigned vgprCount, unsigned totalBits, Type resultType) {
+static LogicalResult
+lowerCopyToRegisterSpaceBuffer(memref::CopyOp copyOp, IRRewriter &rewriter,
+                               bool isRDNAArch, unsigned vgprOffset,
+                               unsigned vgprNum, unsigned vgprCount,
+                               unsigned totalBits, Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
@@ -627,13 +644,8 @@ static LogicalResult lowerCopyToRegisterSpaceBuffer(
                                             arith::IntegerOverflowFlags::nsw);
 
   // Build constraint with specific VGPR
-  std::string outputConstraint;
-  if (vgprCount == 1)
-    outputConstraint = "={v" + std::to_string(vgprNum) + "}";
-  else
-    outputConstraint = "={v[" + std::to_string(vgprNum) + ":" +
-                       std::to_string(vgprNum + vgprCount - 1) + "]}";
-  std::string constraints = outputConstraint + ",v,s";
+  std::string constraints =
+      getVGPRConstraint(vgprOffset, vgprNum, vgprCount, true) + ",v,s";
 
   // Build inline assembly: "buffer_load_<suffix> $0, $1, $2, 0 offen"
   std::string asmStr =
@@ -648,10 +660,9 @@ static LogicalResult lowerCopyToRegisterSpaceBuffer(
 }
 
 /// Lower memref.copy when destination is in register space - DS variant
-static LogicalResult
-lowerCopyToRegisterSpaceDS(memref::CopyOp copyOp, IRRewriter &rewriter,
-                           unsigned vgprNum, unsigned vgprCount,
-                           unsigned totalBits, Type resultType) {
+static LogicalResult lowerCopyToRegisterSpaceDS(
+    memref::CopyOp copyOp, IRRewriter &rewriter, unsigned vgprOffset,
+    unsigned vgprNum, unsigned vgprCount, unsigned totalBits, Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
@@ -668,13 +679,8 @@ lowerCopyToRegisterSpaceDS(memref::CopyOp copyOp, IRRewriter &rewriter,
                                              elementBitWidth);
 
   // Build constraint with specific VGPR
-  std::string outputConstraint;
-  if (vgprCount == 1)
-    outputConstraint = "={v" + std::to_string(vgprNum) + "}";
-  else
-    outputConstraint = "={v[" + std::to_string(vgprNum) + ":" +
-                       std::to_string(vgprNum + vgprCount - 1) + "]}";
-  std::string constraints = outputConstraint + ",v";
+  std::string constraints =
+      getVGPRConstraint(vgprOffset, vgprNum, vgprCount, true) + ",v";
 
   // Build inline assembly: "ds_read_b32 $0, $1"
   std::string asmStr = ("ds_read_" + *suffix + " $0, $1").str();
@@ -687,10 +693,9 @@ lowerCopyToRegisterSpaceDS(memref::CopyOp copyOp, IRRewriter &rewriter,
 }
 
 /// Lower memref.copy when destination is in register space - global variant
-static LogicalResult
-lowerCopyToRegisterSpaceGlobal(memref::CopyOp copyOp, IRRewriter &rewriter,
-                               unsigned vgprNum, unsigned vgprCount,
-                               unsigned totalBits, Type resultType) {
+static LogicalResult lowerCopyToRegisterSpaceGlobal(
+    memref::CopyOp copyOp, IRRewriter &rewriter, unsigned vgprOffset,
+    unsigned vgprNum, unsigned vgprCount, unsigned totalBits, Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
@@ -707,13 +712,8 @@ lowerCopyToRegisterSpaceGlobal(memref::CopyOp copyOp, IRRewriter &rewriter,
       computeMemrefAddress(rewriter, loc, src, /*indices=*/{}, elementBitWidth);
 
   // Build constraint with specific VGPR
-  std::string outputConstraint;
-  if (vgprCount == 1)
-    outputConstraint = "={v" + std::to_string(vgprNum) + "}";
-  else
-    outputConstraint = "={v[" + std::to_string(vgprNum) + ":" +
-                       std::to_string(vgprNum + vgprCount - 1) + "]}";
-  std::string constraints = outputConstraint + ",v";
+  std::string constraints =
+      getVGPRConstraint(vgprOffset, vgprNum, vgprCount, true) + ",v";
 
   // Build inline assembly: "global_load_b128 $0, $1, off"
   std::string asmStr = ("global_load_" + *suffix + " $0, $1, off").str();
@@ -728,7 +728,8 @@ lowerCopyToRegisterSpaceGlobal(memref::CopyOp copyOp, IRRewriter &rewriter,
 /// Lower memref.copy when destination is in register space
 static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
                                               IRRewriter &rewriter,
-                                              bool isRDNAArch) {
+                                              bool isRDNAArch,
+                                              unsigned vgprOffset) {
   Value src = copyOp.getSource();
   Value dst = copyOp.getTarget();
 
@@ -762,19 +763,21 @@ static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
 
   // Dispatch based on source memory space
   if (usesBufferAddressSpace(src))
-    return lowerCopyToRegisterSpaceBuffer(copyOp, rewriter, isRDNAArch, vgprNum,
-                                          vgprCount, totalBits, resultType);
+    return lowerCopyToRegisterSpaceBuffer(copyOp, rewriter, isRDNAArch,
+                                          vgprOffset, vgprNum, vgprCount,
+                                          totalBits, resultType);
   if (usesWorkgroupAddressSpace(src))
-    return lowerCopyToRegisterSpaceDS(copyOp, rewriter, vgprNum, vgprCount,
-                                      totalBits, resultType);
-  return lowerCopyToRegisterSpaceGlobal(copyOp, rewriter, vgprNum, vgprCount,
-                                        totalBits, resultType);
+    return lowerCopyToRegisterSpaceDS(copyOp, rewriter, vgprOffset, vgprNum,
+                                      vgprCount, totalBits, resultType);
+  return lowerCopyToRegisterSpaceGlobal(copyOp, rewriter, vgprOffset, vgprNum,
+                                        vgprCount, totalBits, resultType);
 }
 
 /// Lower load from register space to inline assembly
 template <typename LoadOpTy>
 static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
-                                                IRRewriter &rewriter) {
+                                                IRRewriter &rewriter,
+                                                unsigned vgprOffset) {
   Value memref;
   if constexpr (std::is_same_v<LoadOpTy, vector::LoadOp>)
     memref = loadOp.getBase();
@@ -800,13 +803,8 @@ static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
   rewriter.setInsertionPoint(loadOp);
 
   // Build constraint for reading from specific VGPR(s)
-  std::string inputConstraint;
-  if (vgprCount == 1)
-    inputConstraint = "{v" + std::to_string(vgprNum) + "}";
-  else
-    inputConstraint = "{v[" + std::to_string(vgprNum) + ":" +
-                      std::to_string(vgprNum + vgprCount - 1) + "]}";
-  std::string constraints = "=" + inputConstraint;
+  std::string constraints =
+      getVGPRConstraint(vgprOffset, vgprNum, vgprCount, true);
 
   // Simple v_mov to read from VGPR (compiler will optimize this away)
   std::string asmStr = "; reg_load";
@@ -822,7 +820,8 @@ static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
 /// Lower store to register space to inline assembly
 template <typename StoreOpTy>
 static LogicalResult lowerStoreToRegisterSpace(StoreOpTy storeOp,
-                                               IRRewriter &rewriter) {
+                                               IRRewriter &rewriter,
+                                               unsigned vgprOffset) {
   Value memref;
   if constexpr (std::is_same_v<StoreOpTy, vector::StoreOp>)
     memref = storeOp.getBase();
@@ -848,13 +847,8 @@ static LogicalResult lowerStoreToRegisterSpace(StoreOpTy storeOp,
   rewriter.setInsertionPoint(storeOp);
 
   // Build constraint for writing to specific VGPR(s)
-  std::string outputConstraint;
-  if (vgprCount == 1)
-    outputConstraint = "={v" + std::to_string(vgprNum) + "}";
-  else
-    outputConstraint = "={v[" + std::to_string(vgprNum) + ":" +
-                       std::to_string(vgprNum + vgprCount - 1) + "]}";
-  std::string constraints = outputConstraint + ",0";
+  std::string constraints =
+      getVGPRConstraint(vgprOffset, vgprNum, vgprCount, true) + ",0";
 
   // v_mov to write to VGPR (input constraint 0 ties to output)
   std::string asmStr = "; reg_store";
@@ -884,26 +878,24 @@ public:
 
   void runOnOperation() override {
     auto func = getOperation();
-    IRRewriter rewriter(&getContext());
 
     // Check if function has VGPR allocation and insert inline asm directive.
-    if (auto vgprAttr = func->getAttrOfType<IntegerAttr>("water.total_vgprs")) {
-      unsigned vgprCount = vgprAttr.getInt();
-      if (vgprCount > 0) {
-        unsigned vgprStart = 256 - vgprCount;
+    auto vgprAttr = func->getAttrOfType<IntegerAttr>("water.total_vgprs");
+    unsigned vgprCount = vgprAttr ? vgprAttr.getInt() : 0;
+    unsigned vgprStart = 256 - vgprCount;
 
-        // Insert inline assembly at the beginning of the function.
-        Block &entryBlock = func.getFunctionBody().front();
-        rewriter.setInsertionPointToStart(&entryBlock);
+    // Insert inline assembly at the beginning of the function.
+    Block &entryBlock = func.getFunctionBody().front();
+    IRRewriter rewriter(&getContext());
+    rewriter.setInsertionPointToStart(&entryBlock);
 
-        std::string asmStr = "var vgprCount = " + std::to_string(vgprCount) +
-                             "\n" +
-                             "var vgprStart = " + std::to_string(vgprStart);
+    if (vgprCount > 0) {
+      std::string asmStr = "; vgprCount = " + std::to_string(vgprCount) +
+                           " vgprStart = " + std::to_string(vgprStart);
 
-        createInlineAsm(rewriter, func.getLoc(), /*resultTypes=*/{},
-                        /*operands=*/{}, asmStr, /*constraints=*/"",
-                        /*hasSideEffects=*/true);
-      }
+      createInlineAsm(rewriter, func.getLoc(), /*resultTypes=*/{},
+                      /*operands=*/{}, asmStr, /*constraints=*/"",
+                      /*hasSideEffects=*/true);
     }
 
     // Determine if we're targeting RDNA architecture.
@@ -927,7 +919,9 @@ public:
       if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getBase(),
-            [&]() { return lowerLoadFromRegisterSpace(loadOp, rewriter); },
+            [&]() {
+              return lowerLoadFromRegisterSpace(loadOp, rewriter, vgprStart);
+            },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter); });
@@ -938,7 +932,9 @@ public:
       if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getBase(),
-            [&]() { return lowerStoreToRegisterSpace(storeOp, rewriter); },
+            [&]() {
+              return lowerStoreToRegisterSpace(storeOp, rewriter, vgprStart);
+            },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter); });
@@ -949,7 +945,9 @@ public:
       if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getMemRef(),
-            [&]() { return lowerLoadFromRegisterSpace(loadOp, rewriter); },
+            [&]() {
+              return lowerLoadFromRegisterSpace(loadOp, rewriter, vgprStart);
+            },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter); });
@@ -960,7 +958,9 @@ public:
       if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getMemRef(),
-            [&]() { return lowerStoreToRegisterSpace(storeOp, rewriter); },
+            [&]() {
+              return lowerStoreToRegisterSpace(storeOp, rewriter, vgprStart);
+            },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter); });
@@ -971,7 +971,8 @@ public:
       if (auto copyOp = dyn_cast<memref::CopyOp>(op)) {
         // Only lower copy if destination is in register space
         if (usesRegisterSpace(copyOp.getTarget())) {
-          if (failed(lowerCopyToRegisterSpace(copyOp, rewriter, isRDNAArch)))
+          if (failed(lowerCopyToRegisterSpace(copyOp, rewriter, isRDNAArch,
+                                              vgprStart)))
             return WalkResult::interrupt();
           return WalkResult::advance();
         }
