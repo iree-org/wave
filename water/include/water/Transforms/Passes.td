@@ -218,4 +218,15 @@ def WaterMaterializeRegCopy : Pass<"water-materialize-reg-copy"> {
   ];
 }
 
+def WaterNumberRegisters : InterfacePass<"water-number-registers", "::mlir::FunctionOpInterface"> {
+  let summary = "Assign physical registers to register space allocas";
+  let description = [{
+    This pass performs register allocation by assigning physical register numbers
+    to memref.alloca operations in memory space 128 (virtual register space).
+  }];
+  let dependentDialects = [
+    "::mlir::memref::MemRefDialect",
+  ];
+}
+
 #endif // WATER_PASSES
