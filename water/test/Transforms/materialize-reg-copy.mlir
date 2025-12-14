@@ -137,3 +137,22 @@ func.func @test_control_flow(%arg0: memref<10xf32>, %cond: i1, %i: index) -> f32
   // CHECK: return %[[RESULT]]
   return %result : f32
 }
+
+// CHECK-LABEL: func @test_loop_hoist
+func.func @test_loop_hoist(%arg0: memref<100xf32>, %lb: index, %ub: index, %step: index, %init: f32) -> f32 {
+  %c0 = arith.constant 0 : index
+  // CHECK: %[[ALLOCA:.*]] = memref.alloca() : memref<1xf32, 128 : i32>
+  // CHECK: memref.store %arg4, %[[ALLOCA]][%c0]
+  // CHECK: scf.for
+  %result = scf.for %iv = %lb to %ub step %step iter_args(%arg = %init) -> (f32) {
+    memref.store %arg, %arg0[%c0] : memref<100xf32>
+    %alloca = memref.alloca() : memref<1xf32, 128 : i32>
+    %subview = memref.subview %arg0[%iv] [1] [1] : memref<100xf32> to memref<1xf32, strided<[1], offset: ?>>
+    memref.copy %subview, %alloca : memref<1xf32, strided<[1], offset: ?>> to memref<1xf32, 128 : i32>
+    %val = memref.load %alloca[%c0] : memref<1xf32, 128 : i32>
+    scf.yield %val : f32
+  }
+  // CHECK: %[[FINAL:.*]] = memref.load %[[ALLOCA]][%c0]
+  // CHECK: return %[[FINAL]]
+  return %result : f32
+}

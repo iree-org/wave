@@ -63,6 +63,45 @@ private:
     return false;
   }
 
+  static SmallVector<Value> getZeroIndices(IRRewriter &rewriter, Location loc,
+                                           unsigned rank) {
+    return {rank, arith::ConstantIndexOp::create(rewriter, loc, 0)};
+  }
+
+  static void createLoads(IRRewriter &rewriter, Location loc, Value value,
+                          unsigned rank, Value tempAlloca, Operation *op) {
+    // Group uses by block and find the first use in each block
+    DenseMap<Block *, Operation *> blockToFirstUse;
+    for (OpOperand &use : value.getUses()) {
+      Operation *userOp = use.getOwner();
+      Block *userBlock = userOp->getBlock();
+      auto it = blockToFirstUse.find(userBlock);
+      if (it == blockToFirstUse.end() || userOp->isBeforeInBlock(it->second))
+        blockToFirstUse[userBlock] = userOp;
+    }
+
+    SmallVector<Value> zeroIndices = getZeroIndices(rewriter, loc, rank);
+
+    // Create one load per block, right before the first use in that block
+    DenseMap<Block *, Value> blockToLoad;
+    for (auto &[block, firstUse] : blockToFirstUse) {
+      rewriter.setInsertionPoint(firstUse);
+      Value load;
+      if (isa<memref::LoadOp>(op))
+        load = memref::LoadOp::create(rewriter, loc, tempAlloca, zeroIndices);
+      else if (auto vecLoadOp = dyn_cast<vector::LoadOp>(op))
+        load = vector::LoadOp::create(rewriter, loc, vecLoadOp.getVectorType(),
+                                      tempAlloca, zeroIndices);
+      blockToLoad[block] = load;
+    }
+
+    // Replace uses with the appropriate load for their block
+    for (OpOperand &use : llvm::make_early_inc_range(value.getUses())) {
+      Block *userBlock = use.getOwner()->getBlock();
+      use.set(blockToLoad[userBlock]);
+    }
+  }
+
   /// Transform a single load operation to use register space copy.
   LogicalResult materializeRegCopy(IRRewriter &rewriter, Operation *op) {
     Location loc = op->getLoc();
@@ -122,38 +161,7 @@ private:
     // Copy from subview to temp register buffer
     memref::CopyOp::create(rewriter, loc, subview, tempAlloca);
 
-    // Group uses by block and find the first use in each block
-    DenseMap<Block *, Operation *> blockToFirstUse;
-    for (OpOperand &use : loadResult.getUses()) {
-      Operation *userOp = use.getOwner();
-      Block *userBlock = userOp->getBlock();
-      auto it = blockToFirstUse.find(userBlock);
-      if (it == blockToFirstUse.end() || userOp->isBeforeInBlock(it->second))
-        blockToFirstUse[userBlock] = userOp;
-    }
-
-    // Create zero indices for loading from temp buffer
-    SmallVector<Value> zeroIndices(
-        loadShape.size(), arith::ConstantIndexOp::create(rewriter, loc, 0));
-
-    // Create one load per block, right before the first use in that block
-    DenseMap<Block *, Value> blockToLoad;
-    for (auto &[block, firstUse] : blockToFirstUse) {
-      rewriter.setInsertionPoint(firstUse);
-      Value load;
-      if (isa<memref::LoadOp>(op))
-        load = memref::LoadOp::create(rewriter, loc, tempAlloca, zeroIndices);
-      else if (auto vecLoadOp = dyn_cast<vector::LoadOp>(op))
-        load = vector::LoadOp::create(rewriter, loc, vecLoadOp.getVectorType(),
-                                      tempAlloca, zeroIndices);
-      blockToLoad[block] = load;
-    }
-
-    // Replace uses with the appropriate load for their block
-    for (OpOperand &use : llvm::make_early_inc_range(loadResult.getUses())) {
-      Block *userBlock = use.getOwner()->getBlock();
-      use.set(blockToLoad[userBlock]);
-    }
+    createLoads(rewriter, loc, loadResult, loadShape.size(), tempAlloca, op);
 
     // Erase the original load
     rewriter.eraseOp(op);
@@ -198,7 +206,9 @@ private:
         continue;
       }
 
-      if (!loadIndices.empty())
+      // Check all indices are zero
+      if (llvm::any_of(loadIndices,
+                       [](Value idx) { return getConstantIntValue(idx) != 0; }))
         continue;
 
       // Check if loading from memspace 128 alloca defined in this loop
@@ -226,22 +236,29 @@ private:
       allocaOp->moveBefore(loop);
       rewriter.setInsertionPointAfter(allocaOp);
 
+      SmallVector<Value> zeroIndices =
+          getZeroIndices(rewriter, loc, loadIndices.size());
+
       // Store the iter arg into the alloca
       if (isa<memref::LoadOp>(defOp)) {
-        memref::StoreOp::create(rewriter, loc, init.get(), alloca, loadIndices);
+        memref::StoreOp::create(rewriter, loc, init.get(), alloca, zeroIndices);
       } else if (auto vectorLoad = dyn_cast<vector::LoadOp>(defOp)) {
-        vector::StoreOp::create(rewriter, loc, init.get(), alloca, loadIndices);
+        vector::StoreOp::create(rewriter, loc, init.get(), alloca, zeroIndices);
       }
+
+      // Create iter arg loads
+      createLoads(rewriter, loc, iterArg, loadIndices.size(), alloca, defOp);
 
       // Create a load after the loop
       rewriter.setInsertionPointAfter(loop);
+      zeroIndices = getZeroIndices(rewriter, loc, loadIndices.size());
       Value loadAfterLoop;
       if (isa<memref::LoadOp>(defOp)) {
         loadAfterLoop =
-            memref::LoadOp::create(rewriter, loc, alloca, loadIndices);
+            memref::LoadOp::create(rewriter, loc, alloca, zeroIndices);
       } else if (auto vectorLoad = dyn_cast<vector::LoadOp>(defOp)) {
         loadAfterLoop = vector::LoadOp::create(
-            rewriter, loc, vectorLoad.getVectorType(), alloca, loadIndices);
+            rewriter, loc, vectorLoad.getVectorType(), alloca, zeroIndices);
       }
 
       // Replace uses of the loop result with the new load
