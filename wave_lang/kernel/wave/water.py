@@ -217,7 +217,7 @@ def make_linear_pass_pipeline(
     """
 
     def make_pass_arguments(
-        name: str, args: dict[str, Any], root_op: str | None = None
+        name: str, args: dict[str, Any], root_op: str | Sequence[str] | None = None
     ) -> str:
         ret = (
             name
@@ -226,7 +226,12 @@ def make_linear_pass_pipeline(
             + "}"
         )
         if root_op:
-            ret = root_op + "(" + ret + ")"
+            if isinstance(root_op, str):
+                ret = root_op + "(" + ret + ")"
+            elif isinstance(root_op, Sequence):
+                ret = "(".join(root_op) + "(" + ret + ")" * len(root_op)
+            else:
+                raise ValueError(f"Invalid root op: {root_op}")
         return ret
 
     return (
