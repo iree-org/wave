@@ -108,6 +108,10 @@ struct PendingOperations {
       : ops(std::move(ops)), opsTokens(std::move(opsTokens)) {}
 
   TokenContainer &addOp(Operation *op) {
+    // Failsafe to prevent infinite list growth.
+    if (size() >= 256)
+      llvm::report_fatal_error("Pending operations list is too long");
+
     ops.push_back(op);
     auto &back = opsTokens.emplace_back();
     if (auto memref = isStoreOp(op))
