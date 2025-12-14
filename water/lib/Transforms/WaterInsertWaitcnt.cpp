@@ -34,12 +34,30 @@ static bool isRegisterAddressSpace(MemRefType type) {
   return attr && attr.getInt() == 128;
 }
 
+static bool isWorkgroupAddressSpace(MemRefType type) {
+  auto attr = dyn_cast_or_null<gpu::AddressSpaceAttr>(type.getMemorySpace());
+  return attr && attr.getValue() == gpu::AddressSpace::Workgroup;
+}
+
+static bool isWorkgroupAddressSpace(std::optional<Value> value) {
+  if (!value)
+    return false;
+
+  auto memrefType = cast<MemRefType>(value->getType());
+  return isWorkgroupAddressSpace(memrefType);
+}
+
+static bool isGlobalAddressSpace(std::optional<Value> value) {
+  if (!value)
+    return false;
+
+  auto memrefType = cast<MemRefType>(value->getType());
+  return !isWorkgroupAddressSpace(memrefType) &&
+         !isRegisterAddressSpace(memrefType);
+}
+
 /// Try to propagate view operations to the base memref.
 static std::optional<Value> propagateViewOps(Value value) {
-  auto memrefType = cast<MemRefType>(value.getType());
-  if (isRegisterAddressSpace(memrefType))
-    return {};
-
   while (auto view = value.getDefiningOp<ViewLikeOpInterface>())
     value = view.getViewSource();
 
@@ -74,22 +92,6 @@ static std::optional<Value> isStoreOp(Operation *op) {
     return propagateViewOps(gather.getDst());
 
   return std::nullopt;
-}
-
-/// Check if the operation is a load or store operation and return the base
-/// memref.
-static std::optional<Value> isLoadOrStoreOp(Operation *op) {
-  if (auto store = isStoreOp(op))
-    return store;
-  if (auto load = isLoadOp(op))
-    return load;
-
-  return std::nullopt;
-}
-
-static bool isWorkgroupAddressSpace(MemRefType type) {
-  auto attr = dyn_cast_or_null<gpu::AddressSpaceAttr>(type.getMemorySpace());
-  return attr && attr.getValue() == gpu::AddressSpace::Workgroup;
 }
 
 template <typename T>
@@ -219,13 +221,14 @@ struct WaitcntRequirement {
 
   static WaitcntRequirement getOperationRequirement(Operation *op, bool zero) {
     WaitcntRequirement req;
-    if (std::optional<Value> base = isLoadOrStoreOp(op)) {
-      auto memrefType = cast<MemRefType>(base->getType());
-      if (isWorkgroupAddressSpace(memrefType)) {
-        req.ds_cnt = zero ? 0 : 1;
-      } else {
-        req.load_cnt = zero ? 0 : 1;
-      }
+    std::optional<Value> loadBase = isLoadOp(op);
+    std::optional<Value> storeBase = isStoreOp(op);
+    if (isWorkgroupAddressSpace(loadBase) ||
+        isWorkgroupAddressSpace(storeBase)) {
+      req.ds_cnt = zero ? 0 : 1;
+    } else if (isGlobalAddressSpace(loadBase) ||
+               isGlobalAddressSpace(storeBase)) {
+      req.load_cnt = zero ? 0 : 1;
     }
     return req;
   }
@@ -452,8 +455,6 @@ public:
 
   /// Check for memory dependencies (RAW, WAR, WAW)  and compute required wait
   WaitcntRequirement checkMemoryDependency(Operation *op) const {
-
-    // std::optional<Value> currentBase = isLoadOrStoreOp(op);
     auto checkMemref = [&](Value memref, bool isCurrentLoad,
                            bool isCurrentStore) -> WaitcntRequirement {
       WaitcntRequirement result;

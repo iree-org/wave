@@ -510,3 +510,55 @@ func.func @triple_buffering(%src: memref<1024xf32>, %lb: index, %ub: index, %ste
   // CHECK: return
   return
 }
+
+
+// CHECK-LABEL: func.func @triple_buffering_reg_space
+func.func @triple_buffering_reg_space(%src: memref<1024xf32>, %lb: index, %ub: index, %step: index, %offset: index) {
+  %c0 = arith.constant 0 : index
+  %buff0 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %buff1 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %buff2 = memref.alloc() : memref<1024xf32, #gpu.address_space<workgroup>>
+  %reg = memref.alloca() : memref<4xf32, 128 : i32>
+
+  %out = memref.alloc() : memref<1024xf32>
+
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  //     CHECK: memref.copy
+  memref.copy %src, %buff0 : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // CHECK-NOT: amdgpu.memory_counter_wait
+  //     CHECK: memref.copy
+  memref.copy %src, %buff1 : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+  // CHECK: scf.for
+  scf.for %i = %lb to %ub step %step iter_args(%current = %buff0, %next = %buff1, %next_next = %buff2) -> (memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>) {
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: memref.copy
+    memref.copy %src, %next_next : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
+
+    // Skip the the prev copy
+    //     CHECK: amdgpu.memory_counter_wait ds(1)
+    //     CHECK: vector.load
+    %data = vector.load %reg[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: vector.store
+    vector.store %data, %out[%offset] : memref<1024xf32>, vector<4xf32>
+
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: memref.subview
+    %subview = memref.subview %current[%offset] [4] [1] : memref<1024xf32, #gpu.address_space<workgroup>> to memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>>
+
+    // This copy only depends on buffer 2 iterations ago
+    //     CHECK: amdgpu.memory_counter_wait ds(2)
+    //     CHECK: memref.copy
+    memref.copy %subview, %reg : memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>> to memref<4xf32, 128 : i32>
+
+    // CHECK-NOT: amdgpu.memory_counter_wait
+    //     CHECK: scf.yield
+    scf.yield %next, %next_next, %current : memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>, memref<1024xf32, #gpu.address_space<workgroup>>
+  }
+
+  // CHECK: return
+  return
+}
