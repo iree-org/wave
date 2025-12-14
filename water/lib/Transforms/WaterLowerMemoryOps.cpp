@@ -878,6 +878,23 @@ public:
 
     if (getOperation()->walk(walkFn).wasInterrupted())
       signalPassFailure();
+
+    // Clean up register space allocas - they should all be lowered by now
+    WalkResult cleanupResult =
+        getOperation()->walk([&](memref::AllocaOp allocaOp) {
+          if (usesRegisterSpace(allocaOp.getMemref())) {
+            if (!allocaOp->use_empty()) {
+              allocaOp->emitError("register space alloca still has uses after "
+                                  "lowering - not all operations were lowered");
+              return WalkResult::interrupt();
+            }
+            rewriter.eraseOp(allocaOp);
+          }
+          return WalkResult::advance();
+        });
+
+    if (cleanupResult.wasInterrupted())
+      signalPassFailure();
   }
 };
 
