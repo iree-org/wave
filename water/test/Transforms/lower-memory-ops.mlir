@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-lower-memory-ops | FileCheck %s
+// RUN: water-opt %s --pass-pipeline='builtin.module(func.func(water-lower-memory-ops))' | FileCheck %s
 
 // Test lowering of vector memory operations to AMDGPU global_load/store inline assembly
 

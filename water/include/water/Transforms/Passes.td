@@ -174,7 +174,7 @@ def WaterInsertWaitcnt : Pass<"water-insert-waitcnt"> {
   ];
 }
 
-def WaterLowerMemoryOps : Pass<"water-lower-memory-ops"> {
+def WaterLowerMemoryOps : InterfacePass<"water-lower-memory-ops", "::mlir::FunctionOpInterface"> {
   let summary = "Lower high-level memory operations to AMDGPU dialect";
   let description = [{
     This pass lowers high-level memory operations (vector.load, vector.store,
