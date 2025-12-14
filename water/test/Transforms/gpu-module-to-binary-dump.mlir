@@ -1,3 +1,4 @@
+// REQUIRES: rocdl
 // RUN: rm -rf %t
 // RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t" | FileCheck %s
 // RUN: test -f %t/kernel_module_original.ll

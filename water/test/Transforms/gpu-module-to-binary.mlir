@@ -1,3 +1,4 @@
+// REQUIRES: rocdl
 // RUN: water-opt %s --water-gpu-module-to-binary | FileCheck %s
 
 // Test that the pass converts a gpu.module with ROCDL target to a gpu.binary
