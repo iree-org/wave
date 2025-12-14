@@ -354,6 +354,9 @@ template <typename LoadOpTy>
 static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
+  // TODO: for bitwidths less than 32, we will need to truncate the value to 32
+  // immediately after the load, breaking the calculated dependencies.
+  // For now, just let llvm handle the loading
   if (bitWidth < 32)
     return success();
 
@@ -607,9 +610,6 @@ static LogicalResult lowerCopyToRegisterSpaceBuffer(
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
 
-  if (totalBits < 32)
-    return success();
-
   FailureOr<StringRef> suffix = getBufferSuffixLoad(totalBits, isRDNAArch);
   if (failed(suffix))
     return copyOp.emitError("unsupported buffer copy bit width: ") << totalBits;
@@ -656,9 +656,6 @@ lowerCopyToRegisterSpaceDS(memref::CopyOp copyOp, IRRewriter &rewriter,
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
 
-  if (totalBits < 32)
-    return success();
-
   FailureOr<StringRef> suffix = getSizeSuffixLoad(totalBits);
   if (failed(suffix))
     return copyOp.emitError("unsupported DS copy bit width: ") << totalBits;
@@ -697,9 +694,6 @@ lowerCopyToRegisterSpaceGlobal(memref::CopyOp copyOp, IRRewriter &rewriter,
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
-
-  if (totalBits < 32)
-    return success();
 
   FailureOr<StringRef> suffix = getSizeSuffixLoad(totalBits);
   if (failed(suffix))
@@ -777,6 +771,108 @@ static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
                                         totalBits, resultType);
 }
 
+/// Lower load from register space to inline assembly
+template <typename LoadOpTy>
+static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
+                                                IRRewriter &rewriter) {
+  Value memref;
+  if constexpr (std::is_same_v<LoadOpTy, vector::LoadOp>)
+    memref = loadOp.getBase();
+  else
+    memref = loadOp.getMemRef();
+
+  // Get source alloca to find VGPR assignment
+  auto srcAlloca = memref.getDefiningOp<memref::AllocaOp>();
+  if (!srcAlloca)
+    return loadOp.emitError("source must be a memref.alloca");
+
+  // Get VGPR number from source alloca
+  auto vgprNumAttr = srcAlloca->getAttrOfType<IntegerAttr>("water.vgpr_number");
+  auto vgprCountAttr =
+      srcAlloca->getAttrOfType<IntegerAttr>("water.vgpr_count");
+  if (!vgprNumAttr || !vgprCountAttr)
+    return loadOp.emitError("source alloca missing VGPR attributes");
+
+  unsigned vgprNum = vgprNumAttr.getInt();
+  unsigned vgprCount = vgprCountAttr.getInt();
+
+  Location loc = loadOp.getLoc();
+  rewriter.setInsertionPoint(loadOp);
+
+  // Build constraint for reading from specific VGPR(s)
+  std::string inputConstraint;
+  if (vgprCount == 1)
+    inputConstraint = "{v" + std::to_string(vgprNum) + "}";
+  else
+    inputConstraint = "{v[" + std::to_string(vgprNum) + ":" +
+                      std::to_string(vgprNum + vgprCount - 1) + "]}";
+  std::string constraints = "=" + inputConstraint;
+
+  // Simple v_mov to read from VGPR (compiler will optimize this away)
+  std::string asmStr = "; reg_load";
+
+  Type resultType = loadOp.getResult().getType();
+  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{}, asmStr,
+                               constraints, /*hasSideEffects=*/false);
+
+  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  return success();
+}
+
+/// Lower store to register space to inline assembly
+template <typename StoreOpTy>
+static LogicalResult lowerStoreToRegisterSpace(StoreOpTy storeOp,
+                                               IRRewriter &rewriter) {
+  Value memref;
+  if constexpr (std::is_same_v<StoreOpTy, vector::StoreOp>)
+    memref = storeOp.getBase();
+  else
+    memref = storeOp.getMemRef();
+
+  // Get destination alloca to find VGPR assignment
+  auto dstAlloca = memref.getDefiningOp<memref::AllocaOp>();
+  if (!dstAlloca)
+    return storeOp.emitError("destination must be a memref.alloca");
+
+  // Get VGPR number from destination alloca
+  auto vgprNumAttr = dstAlloca->getAttrOfType<IntegerAttr>("water.vgpr_number");
+  auto vgprCountAttr =
+      dstAlloca->getAttrOfType<IntegerAttr>("water.vgpr_count");
+  if (!vgprNumAttr || !vgprCountAttr)
+    return storeOp.emitError("destination alloca missing VGPR attributes");
+
+  unsigned vgprNum = vgprNumAttr.getInt();
+  unsigned vgprCount = vgprCountAttr.getInt();
+
+  Location loc = storeOp.getLoc();
+  rewriter.setInsertionPoint(storeOp);
+
+  // Build constraint for writing to specific VGPR(s)
+  std::string outputConstraint;
+  if (vgprCount == 1)
+    outputConstraint = "={v" + std::to_string(vgprNum) + "}";
+  else
+    outputConstraint = "={v[" + std::to_string(vgprNum) + ":" +
+                       std::to_string(vgprNum + vgprCount - 1) + "]}";
+  std::string constraints = outputConstraint + ",0";
+
+  // v_mov to write to VGPR (input constraint 0 ties to output)
+  std::string asmStr = "; reg_store";
+
+  Value valueToStore;
+  if constexpr (std::is_same_v<StoreOpTy, vector::StoreOp>)
+    valueToStore = storeOp.getValueToStore();
+  else
+    valueToStore = storeOp.getValueToStore();
+
+  createInlineAsm(rewriter, loc, valueToStore.getType(),
+                  ValueRange{valueToStore}, asmStr, constraints,
+                  /*hasSideEffects=*/true);
+
+  rewriter.eraseOp(storeOp);
+  return success();
+}
+
 /// Pass that lowers high-level memory operations to AMDGPU memory instructions.
 /// Uses buffer operations for memrefs with
 /// #amdgpu.address_space<fat_raw_buffer>, DS operations for memrefs with
@@ -815,8 +911,11 @@ public:
 
     // Helper to dispatch to the appropriate lowering function based on address
     // space
-    auto lowerMemoryOp = [&](Value base, auto lowerBuffer, auto lowerWorkgroup,
+    auto lowerMemoryOp = [&](Value base, auto lowerRegister, auto lowerBuffer,
+                             auto lowerWorkgroup,
                              auto lowerGlobal) -> LogicalResult {
+      if (usesRegisterSpace(base))
+        return lowerRegister();
       if (usesBufferAddressSpace(base))
         return lowerBuffer();
       if (usesWorkgroupAddressSpace(base))
@@ -828,6 +927,7 @@ public:
       if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getBase(),
+            [&]() { return lowerLoadFromRegisterSpace(loadOp, rewriter); },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter); });
@@ -838,6 +938,7 @@ public:
       if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getBase(),
+            [&]() { return lowerStoreToRegisterSpace(storeOp, rewriter); },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter); });
@@ -848,6 +949,7 @@ public:
       if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getMemRef(),
+            [&]() { return lowerLoadFromRegisterSpace(loadOp, rewriter); },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter); });
@@ -858,6 +960,7 @@ public:
       if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getMemRef(),
+            [&]() { return lowerStoreToRegisterSpace(storeOp, rewriter); },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter); });
@@ -876,22 +979,21 @@ public:
       return WalkResult::advance();
     };
 
-    if (getOperation()->walk(walkFn).wasInterrupted())
+    if (func.walk(walkFn).wasInterrupted())
       signalPassFailure();
 
     // Clean up register space allocas - they should all be lowered by now
-    WalkResult cleanupResult =
-        getOperation()->walk([&](memref::AllocaOp allocaOp) {
-          if (usesRegisterSpace(allocaOp.getMemref())) {
-            if (!allocaOp->use_empty()) {
-              allocaOp->emitError("register space alloca still has uses after "
-                                  "lowering - not all operations were lowered");
-              return WalkResult::interrupt();
-            }
-            rewriter.eraseOp(allocaOp);
-          }
-          return WalkResult::advance();
-        });
+    WalkResult cleanupResult = func.walk([&](memref::AllocaOp allocaOp) {
+      if (usesRegisterSpace(allocaOp.getMemref())) {
+        if (!allocaOp->use_empty()) {
+          allocaOp->emitError("register space alloca still has uses after "
+                              "lowering - not all operations were lowered");
+          return WalkResult::interrupt();
+        }
+        rewriter.eraseOp(allocaOp);
+      }
+      return WalkResult::advance();
+    });
 
     if (cleanupResult.wasInterrupted())
       signalPassFailure();
