@@ -7,8 +7,7 @@ func.func @test_simple_load(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f
   // CHECK: %[[TEMP:.*]] = memref.alloca() : memref<1x1xf32, 128 : i32>
   // CHECK: memref.copy %[[SUBVIEW]], %[[TEMP]]
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
-  // CHECK: %[[RESULT:.*]] = memref.load %[[TEMP]][%[[C0]], %[[C0_1]]]
+  // CHECK: %[[RESULT:.*]] = memref.load %[[TEMP]][%[[C0]], %[[C0]]]
   // CHECK: return %[[RESULT]]
   %0 = memref.load %arg0[%i, %j] : memref<10x20xf32>
   return %0 : f32
@@ -21,8 +20,7 @@ func.func @test_simple_vector_load(%arg0: memref<10x20xf32>, %i: index, %j: inde
   // CHECK: %[[TEMP:.*]] = memref.alloca() : memref<1x4xf32, 128 : i32>
   // CHECK: memref.copy %[[SUBVIEW]], %[[TEMP]]
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
-  // CHECK: %[[RESULT:.*]] = vector.load %[[TEMP]][%[[C0]], %[[C0_1]]]
+  // CHECK: %[[RESULT:.*]] = vector.load %[[TEMP]][%[[C0]], %[[C0]]]
   // CHECK: return %[[RESULT]]
   %0 = vector.load %arg0[%i, %j] : memref<10x20xf32>, vector<4xf32>
   return %0 : vector<4xf32>
@@ -48,9 +46,7 @@ func.func @test_3d_load(%arg0: memref<8x16x32xi32>, %i: index, %j: index, %k: in
   // CHECK: %[[TEMP:.*]] = memref.alloca() : memref<1x1x1xi32, 128 : i32>
   // CHECK: memref.copy %[[SUBVIEW]], %[[TEMP]]
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[C0_1:.*]] = arith.constant 0 : index
-  // CHECK: %[[C0_2:.*]] = arith.constant 0 : index
-  // CHECK: %[[RESULT:.*]] = memref.load %[[TEMP]][%[[C0]], %[[C0_1]], %[[C0_2]]]
+  // CHECK: %[[RESULT:.*]] = memref.load %[[TEMP]][%[[C0]], %[[C0]], %[[C0]]]
   // CHECK: return %[[RESULT]]
   %0 = memref.load %arg0[%i, %j, %k] : memref<8x16x32xi32>
   return %0 : i32
