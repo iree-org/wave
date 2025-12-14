@@ -33,8 +33,9 @@ wave::setNormalFormPassPostcondition(wave::WaveNormalForm form,
 
 llvm::LogicalResult
 wave::clearNormalFormPassPostcondition(mlir::Operation *root) {
-  return wave::setNormalFormPassPostcondition(wave::WaveNormalForm::None, root,
-                                              /*preserve=*/false);
+  // Actually remove the normal form attribute instead of setting it to None
+  root->removeAttr(wave::WaveDialect::kNormalFormAttrName);
+  return llvm::success();
 }
 
 llvm::LogicalResult

@@ -12,7 +12,6 @@ import os
 import subprocess
 import sys
 import math
-import re
 from typing import Any, Sequence
 from functools import lru_cache
 
@@ -539,19 +538,6 @@ def apply_water_middle_end_passes(mlir_text: str) -> str:
             ],
             input=mlir_text,
             text=True,
-        )
-
-        # Clean Wave-specific attributes that cause issues in later pipelines
-        # TODO(#595): do this in the very last pass of water pipeline instead
-        result = re.sub(
-            r",\s*wave\.normal_form\s*=\s*#wave\.normal_form<[^>]*>",
-            "",
-            result,
-        )
-        result = re.sub(
-            r"wave\.normal_form\s*=\s*#wave\.normal_form<[^>]*>,?\s*",
-            "",
-            result,
         )
 
         return result
