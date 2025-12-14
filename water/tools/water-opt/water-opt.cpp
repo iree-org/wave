@@ -23,6 +23,7 @@
 #include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/TransformOps/MemRefTransformOps.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Transform/IR/TransformOps.h"
 #include "mlir/Dialect/Transform/Transforms/Passes.h"
@@ -49,6 +50,7 @@ void registerWaterTestDialect(DialectRegistry &registry);
 
 int main(int argc, char **argv) {
   mlir::arith::registerArithIntRangeOptsPass();
+  mlir::memref::registerExpandStridedMetadataPass();
   mlir::registerCSEPass();
   mlir::registerCanonicalizerPass();
   mlir::registerCompositeFixedPointPass();
