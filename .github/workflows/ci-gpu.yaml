@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 240 # Building LLVM can take multiple hours on public GH runners
     steps:
       - name: Checkout repo
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
 
@@ -51,7 +51,7 @@ jobs:
 
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: llvm-mlir/_mlir_install/**
           key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
@@ -65,7 +65,7 @@ jobs:
 
       - name: Checkout LLVM
         if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           repository: llvm/llvm-project
           ref: ${{ env.LLVM_SHA }}
@@ -134,7 +134,7 @@ jobs:
           fi
 
       - name: Checkout repo
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
 
@@ -154,7 +154,7 @@ jobs:
 
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
         with:
           path: llvm-mlir/_mlir_install/**
@@ -249,7 +249,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
 
@@ -265,7 +265,7 @@ jobs:
 
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: |
             llvm-mlir/_mlir_install/**
