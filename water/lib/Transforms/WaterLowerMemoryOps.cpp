@@ -8,6 +8,7 @@
 
 #include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -92,9 +93,9 @@ static LLVM::InlineAsmOp createInlineAsm(IRRewriter &rewriter, Location loc,
       /*operand_attrs=*/ArrayAttr{});
 }
 
-/// Detect if chipset is RDNA architecture
-static bool isRDNA(StringRef chipset) {
-  return chipset.starts_with("gfx11") || chipset.starts_with("gfx12");
+/// Detect if chipset is RDNA vs CDNA architecture
+static bool isRDNA(const amdgpu::Chipset &chipset) {
+  return chipset.majorVersion != 9;
 }
 
 /// Compute byte offset as iX for a memref access with indices
@@ -892,10 +893,6 @@ static LogicalResult lowerStoreToRegisterSpace(StoreOpTy storeOp,
   return success();
 }
 
-/// Pass that lowers high-level memory operations to AMDGPU memory instructions.
-/// Uses buffer operations for memrefs with
-/// #amdgpu.address_space<fat_raw_buffer>, DS operations for memrefs with
-/// #gpu.address_space<workgroup>, and global operations for all other memrefs.
 class WaterLowerMemoryOpsPass
     : public water::impl::WaterLowerMemoryOpsBase<WaterLowerMemoryOpsPass> {
 public:
@@ -903,12 +900,21 @@ public:
 
   void runOnOperation() override {
     auto func = getOperation();
+    auto chip = amdgpu::Chipset::parse(chipset);
+    if (failed(chip)) {
+      func->emitError("invalid chipset: ") << chipset;
+      return signalPassFailure();
+    }
+
     MLIRContext *ctx = &getContext();
+
+    // Assume Wave32 for gfx12+ for now.
+    unsigned totalVGPRs = chip->majorVersion >= 12 ? 1024 : 256;
 
     // Check if function has VGPR allocation and insert inline asm directive.
     auto vgprAttr = func->getAttrOfType<IntegerAttr>("water.total_vgprs");
     unsigned vgprCount = vgprAttr ? vgprAttr.getInt() : 0;
-    unsigned vgprStart = 256 - vgprCount;
+    unsigned vgprStart = totalVGPRs - vgprCount;
 
     if (vgprCount > 0) {
       // Add amdgpu-num-vgpr to passthrough attribute list
@@ -944,8 +950,9 @@ public:
                       /*hasSideEffects=*/true);
     }
 
-    // Determine if we're targeting RDNA architecture.
-    bool isRDNAArch = isRDNA(chipset);
+    // Determine if we're targeting RDNA vs CDNA architecture, CDNA has
+    // different buffer ops format.
+    bool isRDNAArch = isRDNA(*chip);
 
     // Helper to dispatch to the appropriate lowering function based on address
     // space
