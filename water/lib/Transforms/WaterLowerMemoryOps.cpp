@@ -26,6 +26,18 @@ namespace mlir::water {
 
 namespace {
 
+static unsigned getBitwidth(ShapedType type) {
+  assert(type.hasStaticShape() && "Shaped type must have static shape");
+  return type.getNumElements() * type.getElementTypeBitWidth();
+}
+
+static unsigned getBitwidth(Type type) {
+  if (auto shaped = dyn_cast<ShapedType>(type))
+    return getBitwidth(shaped);
+
+  return type.getIntOrFloatBitWidth();
+}
+
 /// Get the AMDGPU instruction suffix based on bit width (for loads - unsigned)
 static FailureOr<StringRef> getSizeSuffixLoad(unsigned bitWidth) {
   switch (bitWidth) {
@@ -274,12 +286,11 @@ template <typename LoadOpTy>
 static std::tuple<Value, Type, unsigned> getLoadOpInfo(LoadOpTy loadOp) {
   if constexpr (std::is_same_v<LoadOpTy, vector::LoadOp>) {
     auto vectorType = loadOp.getVectorType();
-    unsigned bitWidth =
-        vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+    unsigned bitWidth = getBitwidth(vectorType);
     return {loadOp.getBase(), vectorType, bitWidth};
   } else {
     auto elementType = loadOp.getResult().getType();
-    unsigned bitWidth = elementType.getIntOrFloatBitWidth();
+    unsigned bitWidth = getBitwidth(elementType);
     return {loadOp.getMemRef(), elementType, bitWidth};
   }
 }
@@ -289,12 +300,11 @@ template <typename StoreOpTy>
 static std::tuple<Value, Type, unsigned> getStoreOpInfo(StoreOpTy storeOp) {
   if constexpr (std::is_same_v<StoreOpTy, vector::StoreOp>) {
     auto vectorType = cast<VectorType>(storeOp.getValueToStore().getType());
-    unsigned bitWidth =
-        vectorType.getNumElements() * vectorType.getElementTypeBitWidth();
+    unsigned bitWidth = getBitwidth(vectorType);
     return {storeOp.getBase(), vectorType, bitWidth};
   } else {
     auto elementType = storeOp.getValueToStore().getType();
-    unsigned bitWidth = elementType.getIntOrFloatBitWidth();
+    unsigned bitWidth = getBitwidth(elementType);
     return {storeOp.getMemRef(), elementType, bitWidth};
   }
 }
@@ -748,20 +758,17 @@ static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
   if (!srcType.hasStaticShape())
     return copyOp.emitError("source must have static shape");
 
-  unsigned elementBitWidth = srcType.getElementTypeBitWidth();
-  unsigned totalBits = srcType.getNumElements() * elementBitWidth;
+  unsigned totalBits = getBitwidth(srcType);
 
   // Get result type from destination
   auto dstType = cast<MemRefType>(dst.getType());
   if (!dstType.hasStaticShape())
     return copyOp.emitError("destination must have static shape");
 
-  Type resultType;
-  if (dstType.getNumElements() == 1)
-    resultType = dstType.getElementType();
-  else
-    resultType =
-        VectorType::get(dstType.getNumElements(), dstType.getElementType());
+  unsigned resultBitWidth = getBitwidth(dstType);
+  unsigned resultNumElements = (resultBitWidth + 31) / 32;
+  Type resultType =
+      VectorType::get(resultNumElements, rewriter.getIntegerType(32));
 
   // Dispatch based on source memory space
   if (usesBufferAddressSpace(src))
@@ -812,10 +819,22 @@ static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
   std::string asmStr = "; reg_load";
 
   Type resultType = loadOp.getResult().getType();
-  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{}, asmStr,
-                               constraints, /*hasSideEffects=*/false);
+  Type asmType = resultType;
+  unsigned bitWidth = getBitwidth(resultType);
+  if (bitWidth < 32)
+    asmType = rewriter.getIntegerType(32);
 
-  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  Value asmResult = createInlineAsm(rewriter, loc, asmType, {}, asmStr,
+                                    constraints, /*hasSideEffects=*/false)
+                        .getResult(0);
+
+  if (bitWidth < 32) {
+    auto narrowType = rewriter.getIntegerType(bitWidth);
+    asmResult = arith::TruncIOp::create(rewriter, loc, narrowType, asmResult);
+    asmResult = LLVM::BitcastOp::create(rewriter, loc, resultType, asmResult);
+  }
+
+  rewriter.replaceOp(loadOp, asmResult);
   return success();
 }
 
@@ -855,14 +874,18 @@ static LogicalResult lowerStoreToRegisterSpace(StoreOpTy storeOp,
   // v_mov to write to VGPR (input constraint 0 ties to output)
   std::string asmStr = "; reg_store";
 
-  Value valueToStore;
-  if constexpr (std::is_same_v<StoreOpTy, vector::StoreOp>)
-    valueToStore = storeOp.getValueToStore();
-  else
-    valueToStore = storeOp.getValueToStore();
+  Value valueToStore = storeOp.getValueToStore();
+  unsigned bitWidth = getBitwidth(valueToStore.getType());
+  if (bitWidth < 32) {
+    auto intType = rewriter.getIntegerType(bitWidth);
+    valueToStore =
+        LLVM::BitcastOp::create(rewriter, loc, intType, valueToStore);
+    auto i32Type = rewriter.getIntegerType(32);
+    valueToStore = arith::ExtUIOp::create(rewriter, loc, i32Type, valueToStore);
+  }
 
-  createInlineAsm(rewriter, loc, valueToStore.getType(),
-                  ValueRange{valueToStore}, asmStr, constraints,
+  createInlineAsm(rewriter, loc, valueToStore.getType(), valueToStore, asmStr,
+                  constraints,
                   /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
