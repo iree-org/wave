@@ -10,10 +10,9 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from wave_lang.kernel.wave.water import (
-    apply_water_passes_with_passmanager,
+    apply_water_lowering_passes,
     find_binary,
     is_water_available,
-    _find_water_python_path,
 )
 
 
@@ -24,105 +23,101 @@ def test_find_binary():
     subprocess.check_call([find_binary("water-opt"), "--version"])
 
 
-class TestWaterPassManager:
-    """Test suite for Water PassManager functionality."""
+class TestWaterLowering:
+    """Test suite for Water lowering functionality."""
 
-    def test_find_water_python_path(self):
-        """Test _find_water_python_path function."""
-        # Test with mock get_water_opt
-        with patch("wave_lang.kernel.wave.water.get_water_opt") as mock_get_water_opt:
-            mock_get_water_opt.return_value = "/test/water/build/bin/water-opt"
+    def test_is_water_available(self):
+        """Test is_water_available function."""
+        result = is_water_available()
+        assert isinstance(result, bool)
 
-            with patch.object(Path, "exists", return_value=True):
-                result = _find_water_python_path()
-                assert result == "/test/water/build/python_packages"
-
-        # Test when no path found
+    def test_apply_water_lowering_passes_unavailable(self):
+        """Test apply_water_lowering_passes when water-opt is not available."""
         with patch(
             "wave_lang.kernel.wave.water.get_water_opt",
-            side_effect=Exception("Not found"),
+            side_effect=RuntimeError("Not found"),
         ):
-            with patch.object(Path, "exists", return_value=False):
-                result = _find_water_python_path()
-                assert result is None
+            with pytest.raises(RuntimeError, match="Not found"):
+                apply_water_lowering_passes("module {}")
 
-    def test_apply_water_passes_with_passmanager_no_path(self):
-        """Test apply_water_passes_with_passmanager when no Water path found."""
-        with patch(
-            "wave_lang.kernel.wave.water._find_water_python_path", return_value=None
-        ):
-            with pytest.raises(
-                RuntimeError, match="Could not find Water Python bindings directory"
-            ):
-                apply_water_passes_with_passmanager("module {}")
-
-    def test_apply_water_passes_with_passmanager_import_error(self):
-        """Test apply_water_passes_with_passmanager when imports fail."""
-        with patch(
-            "wave_lang.kernel.wave.water._find_water_python_path",
-            return_value="/mock/path",
-        ):
-            with pytest.raises(
-                RuntimeError, match="Water Python bindings not available"
-            ):
-                apply_water_passes_with_passmanager("module {}")
-
-    @patch("wave_lang.kernel.wave.water._find_water_python_path")
-    def test_apply_water_passes_with_passmanager_success(self, mock_find_path):
-        """Test apply_water_passes_with_passmanager with mocked Water components."""
-        mock_find_path.return_value = "/mock/water/python_packages"
-
+    def test_apply_water_lowering_passes_success(self):
+        """Test apply_water_lowering_passes with mocked subprocess."""
         mlir_input = (
             "module attributes {wave.normal_form = #wave.normal_form<full_types>} {}"
         )
+        expected_output = "module {}"
 
-        # Mock Water components
-        mock_context = MagicMock()
-        mock_module = MagicMock()
-        mock_pass_manager = MagicMock()
-        mock_wave_dialect = MagicMock()
+        with patch("wave_lang.kernel.wave.water.get_water_opt") as mock_get_water_opt:
+            mock_get_water_opt.return_value = "/mock/water-opt"
 
-        # Setup context manager
-        mock_context.__enter__ = MagicMock(return_value=mock_context)
-        mock_context.__exit__ = MagicMock(return_value=False)
+            with patch("subprocess.check_output") as mock_subprocess:
+                mock_subprocess.return_value = expected_output
 
-        # Mock module output (after passes and cleaning)
-        mock_module.__str__ = MagicMock(return_value="module {}")
+                result = apply_water_lowering_passes(mlir_input)
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "water_mlir": MagicMock(),
-                "water_mlir.ir": MagicMock(
-                    Context=MagicMock(return_value=mock_context),
-                    Module=MagicMock(parse=MagicMock(return_value=mock_module)),
-                ),
-                "water_mlir.passmanager": MagicMock(
-                    PassManager=MagicMock(
-                        parse=MagicMock(return_value=mock_pass_manager)
-                    )
-                ),
-                "water_mlir.dialects": MagicMock(),
-                "water_mlir.dialects.wave": mock_wave_dialect,
-            },
-        ):
-            result = apply_water_passes_with_passmanager(mlir_input)
+                # Verify basic operation
+                assert result is not None
+                assert "wave.normal_form" not in result
 
-            # Verify basic operation
-            assert result is not None
-            assert "wave.normal_form" not in result
+                # Verify subprocess was called correctly
+                mock_subprocess.assert_called_once()
+                args, kwargs = mock_subprocess.call_args
+                assert args[0][0] == "/mock/water-opt"
+                assert "--allow-unregistered-dialect" in args[0]
+                assert "--pass-pipeline=builtin.module(" in args[0][2]
+                assert kwargs["input"] == mlir_input
+                assert kwargs["text"] is True
+
+    def test_apply_water_lowering_passes_subprocess_error(self):
+        """Test apply_water_lowering_passes when subprocess fails."""
+        with patch("wave_lang.kernel.wave.water.get_water_opt") as mock_get_water_opt:
+            mock_get_water_opt.return_value = "/mock/water-opt"
+
+            with patch("subprocess.check_output") as mock_subprocess:
+                mock_subprocess.side_effect = subprocess.CalledProcessError(
+                    1, "water-opt", stderr="Parse error"
+                )
+
+                with pytest.raises(
+                    RuntimeError, match="water-opt subprocess failed with return code 1"
+                ):
+                    apply_water_lowering_passes("module {}")
 
 
 @pytest.mark.skipif(
-    not is_water_available(), reason="Water MLIR package not installed."
+    not is_water_available(), reason="Water not available."
 )
-class TestWaterPassManagerIntegration:
-    """Integration tests that require actual Water infrastructure."""
+class TestWaterLoweringIntegration:
+    """Integration tests that require actual water-opt binary."""
 
-    def test_passmanager(self):
-        # Test with minimal MLIR
-        result = apply_water_passes_with_passmanager("module {}")
+    def test_lowering_passes(self):
+        # Test with simple Wave dialect operations - just register and add
+        wave_mlir = """
+        module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+          func.func @test_kernel() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+            %cst = arith.constant 0.0 : f32
+            %lhs = wave.register %cst : vector<4xf32>
+            %cst1 = arith.constant 1.0 : f32
+            %rhs = wave.register %cst1 : vector<4xf32>
+            %result = wave.add %lhs, %rhs : (vector<4xf32>, vector<4xf32>) -> vector<4xf32>
+            return
+          }
+        }
+        """
+
+        result = apply_water_lowering_passes(wave_mlir)
         assert result is not None
         assert "module" in result
+        assert "func.func" in result
+
+        # Verify Wave operations are lowered
+        assert "wave.register" not in result
+        assert "wave.add" not in result
+
         # Wave attributes should be cleaned
         assert "wave.normal_form" not in result
+
+        # Should have standard MLIR operations instead
+        assert "arith.constant" in result  # Original constants preserved
+        assert "arith.addf" in result      # wave.add becomes arith.addf
+        assert "vector<4xf32>" in result   # Vector types preserved
