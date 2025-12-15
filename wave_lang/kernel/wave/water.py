@@ -450,11 +450,18 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     llvm_opt_level = 3 if options.optimization_level else 0
     dump_intermediates = options.dump_intermediates or ""
 
+    gpu_func = ("gpu.module", "gpu.func")
+
     pipeline = [
+        ("water-materialize-reg-copy", {}, gpu_func),
+        ("water-insert-waitcnt", {}, gpu_func),
+        "expand-strided-metadata",
         "lower-affine",
         *add_opt(canonicalize_cse),
         *add_opt("loop-invariant-code-motion"),
         *add_opt("int-range-optimizations"),
+        ("water-number-registers", {}, gpu_func),
+        ("water-lower-memory-ops", {"chipset": target_chip}, gpu_func),
         "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("water-alloc-to-alloca", {}, "gpu.module"),
