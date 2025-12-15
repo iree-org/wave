@@ -250,8 +250,6 @@ extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
 
   MemRefDescriptor memrefDesc(memrefDescVal);
   Value bufferPtr = memrefDesc.alignedPtr(rewriter, loc);
-  Value bufferOffset = memrefDesc.offset(rewriter, loc);
-  bufferOffset = arith::TruncIOp::create(rewriter, loc, i32Type, bufferOffset);
 
   // Convert to i160 to access full buffer descriptor {<4 x i32> rsrc, i32
   // offset}
@@ -260,9 +258,6 @@ extractBufferDescriptor(IRRewriter &rewriter, Location loc, Value memref) {
 
   // Extract lower 32 bits for base offset
   Value baseOffset = arith::TruncIOp::create(rewriter, loc, i32Type, fullDesc);
-
-  baseOffset = arith::AddIOp::create(rewriter, loc, baseOffset, bufferOffset,
-                                     arith::IntegerOverflowFlags::nsw);
 
   // Extract upper 128 bits for resource descriptor
   auto c32 = arith::ConstantIntOp::create(rewriter, loc, i160Type, 32);
@@ -750,8 +745,11 @@ static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
 
   // Get source type info
   auto srcType = cast<MemRefType>(src.getType());
+  if (!srcType.hasStaticShape())
+    return copyOp.emitError("source must have static shape");
+
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
-  unsigned totalBits = elementBitWidth * vgprCount;
+  unsigned totalBits = srcType.getNumElements() * elementBitWidth;
 
   // Get result type from destination
   auto dstType = cast<MemRefType>(dst.getType());
