@@ -753,11 +753,15 @@ static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
 
   // Get result type from destination
   auto dstType = cast<MemRefType>(dst.getType());
+  if (!dstType.hasStaticShape())
+    return copyOp.emitError("destination must have static shape");
+
   Type resultType;
-  if (dstType.getShape().size() == 1 && dstType.getShape()[0] == 1)
+  if (dstType.getNumElements() == 1)
     resultType = dstType.getElementType();
   else
-    resultType = VectorType::get(dstType.getShape(), dstType.getElementType());
+    resultType =
+        VectorType::get(dstType.getNumElements(), dstType.getElementType());
 
   // Dispatch based on source memory space
   if (usesBufferAddressSpace(src))
