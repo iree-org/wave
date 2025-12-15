@@ -338,3 +338,100 @@ func.func @mixed_scalar_and_vector(%memref: memref<1024xf32>, %offset: index) {
 
   return
 }
+
+// Test copy to register space with pre-numbered allocas
+
+// CHECK-LABEL: func.func @copy_global_to_reg_scalar
+// CHECK-SAME{LITERAL}: passthrough = [["amdgpu-num-vgpr", "255"]]
+func.func @copy_global_to_reg_scalar(%arg0: memref<100xf32>) -> f32 attributes {water.total_vgprs = 1 : i32} {
+  %c0 = arith.constant 0 : index
+  %reg = memref.alloca() {water.vgpr_number = 0 : i32, water.vgpr_count = 1 : i32} : memref<1xf32, 128 : i32>
+  %subview = memref.subview %arg0[%c0] [1] [1] : memref<100xf32> to memref<1xf32, strided<[1], offset: ?>>
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b32 $0, $1, off", "={v255},v"
+  memref.copy %subview, %reg : memref<1xf32, strided<[1], offset: ?>> to memref<1xf32, 128 : i32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v255}"
+  %val = memref.load %reg[%c0] : memref<1xf32, 128 : i32>
+  // CHECK-NOT: memref.alloca
+  return %val : f32
+}
+
+// CHECK-LABEL: func.func @copy_global_to_reg_vector
+// CHECK-SAME{LITERAL}: passthrough = [["amdgpu-num-vgpr", "252"]]
+func.func @copy_global_to_reg_vector(%arg0: memref<100xf32>) -> vector<4xf32> attributes {water.total_vgprs = 4 : i32} {
+  %c0 = arith.constant 0 : index
+  %reg = memref.alloca() {water.vgpr_number = 0 : i32, water.vgpr_count = 4 : i32} : memref<4xf32, 128 : i32>
+  %subview = memref.subview %arg0[%c0] [4] [1] : memref<100xf32> to memref<4xf32, strided<[1], offset: ?>>
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b128 $0, $1, off", "={v[252:255]},v"
+  memref.copy %subview, %reg : memref<4xf32, strided<[1], offset: ?>> to memref<4xf32, 128 : i32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  %val = vector.load %reg[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+  // CHECK-NOT: memref.alloca
+  return %val : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @copy_buffer_to_reg
+// CHECK-SAME{LITERAL}: passthrough = [["amdgpu-num-vgpr", "252"]]
+func.func @copy_buffer_to_reg(%arg0: memref<100xf32, #amdgpu.address_space<fat_raw_buffer>>) -> vector<4xf32> attributes {water.total_vgprs = 4 : i32} {
+  %c0 = arith.constant 0 : index
+  %reg = memref.alloca() {water.vgpr_number = 0 : i32, water.vgpr_count = 4 : i32} : memref<4xf32, 128 : i32>
+  %subview = memref.subview %arg0[%c0] [4] [1] : memref<100xf32, #amdgpu.address_space<fat_raw_buffer>> to memref<4xf32, strided<[1], offset: ?>, #amdgpu.address_space<fat_raw_buffer>>
+  // CHECK: llvm.inline_asm has_side_effects "buffer_load_dwordx4 $0, $1, $2, 0 offen", "={v[252:255]},v,s"
+  memref.copy %subview, %reg : memref<4xf32, strided<[1], offset: ?>, #amdgpu.address_space<fat_raw_buffer>> to memref<4xf32, 128 : i32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  %val = vector.load %reg[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+  // CHECK-NOT: memref.alloca
+  return %val : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @copy_workgroup_to_reg
+// CHECK-SAME{LITERAL}: passthrough = [["amdgpu-num-vgpr", "252"]]
+func.func @copy_workgroup_to_reg(%arg0: memref<100xf32, #gpu.address_space<workgroup>>) -> vector<4xf32> attributes {water.total_vgprs = 4 : i32} {
+  %c0 = arith.constant 0 : index
+  %reg = memref.alloca() {water.vgpr_number = 0 : i32, water.vgpr_count = 4 : i32} : memref<4xf32, 128 : i32>
+  %subview = memref.subview %arg0[%c0] [4] [1] : memref<100xf32, #gpu.address_space<workgroup>> to memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>>
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_b128 $0, $1", "={v[252:255]},v"
+  memref.copy %subview, %reg : memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>> to memref<4xf32, 128 : i32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  %val = vector.load %reg[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+  // CHECK-NOT: memref.alloca
+  return %val : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @store_to_reg
+// CHECK-SAME{LITERAL}: passthrough = [["amdgpu-num-vgpr", "255"]]
+func.func @store_to_reg(%val: f32) -> f32 attributes {water.total_vgprs = 1 : i32} {
+  %c0 = arith.constant 0 : index
+  %reg = memref.alloca() {water.vgpr_number = 0 : i32, water.vgpr_count = 1 : i32} : memref<1xf32, 128 : i32>
+  // CHECK: llvm.inline_asm has_side_effects "; reg_store", "={v255},0"
+  memref.store %val, %reg[%c0] : memref<1xf32, 128 : i32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v255}"
+  %result = memref.load %reg[%c0] : memref<1xf32, 128 : i32>
+  // CHECK-NOT: memref.alloca
+  return %result : f32
+}
+
+// CHECK-LABEL: func.func @multiple_reg_allocas
+// CHECK-SAME{LITERAL}: passthrough = [["amdgpu-num-vgpr", "247"]]
+func.func @multiple_reg_allocas(%arg0: memref<100xf32>, %arg1: memref<100xf32, #gpu.address_space<workgroup>>) -> (f32, vector<4xf32>, vector<4xf32>) attributes {water.total_vgprs = 9 : i32} {
+  %c0 = arith.constant 0 : index
+  %reg0 = memref.alloca() {water.vgpr_number = 0 : i32, water.vgpr_count = 1 : i32} : memref<1xf32, 128 : i32>
+  %reg1 = memref.alloca() {water.vgpr_number = 1 : i32, water.vgpr_count = 4 : i32} : memref<4xf32, 128 : i32>
+  %reg2 = memref.alloca() {water.vgpr_number = 5 : i32, water.vgpr_count = 4 : i32} : memref<4xf32, 128 : i32>
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b32 $0, $1, off", "={v247},v"
+  %sv0 = memref.subview %arg0[%c0] [1] [1] : memref<100xf32> to memref<1xf32, strided<[1], offset: ?>>
+  memref.copy %sv0, %reg0 : memref<1xf32, strided<[1], offset: ?>> to memref<1xf32, 128 : i32>
+  // CHECK: llvm.inline_asm has_side_effects "global_load_b128 $0, $1, off", "={v[248:251]},v"
+  %sv1 = memref.subview %arg0[%c0] [4] [1] : memref<100xf32> to memref<4xf32, strided<[1], offset: ?>>
+  memref.copy %sv1, %reg1 : memref<4xf32, strided<[1], offset: ?>> to memref<4xf32, 128 : i32>
+  // CHECK: llvm.inline_asm has_side_effects "ds_read_b128 $0, $1", "={v[252:255]},v"
+  %sv2 = memref.subview %arg1[%c0] [4] [1] : memref<100xf32, #gpu.address_space<workgroup>> to memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>>
+  memref.copy %sv2, %reg2 : memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>> to memref<4xf32, 128 : i32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v247}"
+  %val0 = memref.load %reg0[%c0] : memref<1xf32, 128 : i32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v[248:251]}"
+  %val1 = vector.load %reg1[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+  // CHECK: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  %val2 = vector.load %reg2[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+  // CHECK-NOT: memref.alloca
+  return %val0, %val1, %val2 : f32, vector<4xf32>, vector<4xf32>
+}
