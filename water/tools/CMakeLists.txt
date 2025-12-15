@@ -8,7 +8,7 @@ find_program(LLD_BINARY NAMES lld
 )
 
 # `water-gpu-module-to-binary` and upstream `gpu-module-to-binary` pass need
-# ld.lld and they are very opionated about search paths, so install ld.lld
+# ld.lld and they are very opinionated about search paths, so install ld.lld
 # into llvm/bin
 if(LLD_BINARY)
   message(STATUS "Found lld: ${LLD_BINARY}")
