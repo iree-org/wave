@@ -174,9 +174,12 @@ def _deiree(module: Module) -> str:
     return local_module.get_asm(binary=False, print_generic_op_form=True)
 
 
+def get_water_mlir_dir() -> Path:
+    return Path(__file__).parent / "water_mlir"
+
+
 def find_binary(name: str) -> str | None:
-    this_path = Path(__file__).parent
-    tool_path = this_path / "water_mlir" / "bin" / name
+    tool_path = get_water_mlir_dir() / "bin" / name
     if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
         return None
 
@@ -412,6 +415,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     llvm_opt_level = 3 if options.optimization_level else 0
     dump_intermediates = options.dump_intermediates or ""
+    toolkit_path = get_water_mlir_dir()
 
     pipeline = [
         "lower-affine",
@@ -424,7 +428,10 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
         "reconcile-unrealized-casts",
         *add_opt(canonicalize_cse),
-        ("water-gpu-module-to-binary", {"dump-intermediates": dump_intermediates}),
+        (
+            "water-gpu-module-to-binary",
+            {"dump-intermediates": dump_intermediates, "toolkit": toolkit_path},
+        ),
         "water-gpu-to-gpu-runtime",
         "symbol-dce",
         *add_opt(canonicalize_cse),

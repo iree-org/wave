@@ -76,33 +76,3 @@ tools = [
 ]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)
-
-# Check for ROCm availability
-import shutil
-
-
-def check_rocm_available():
-    """Check if ROCm is available by looking for lld or checking environment variables."""
-    # Check for ROCM environment variables
-    rocm_env_vars = ["ROCM_PATH", "ROCM_ROOT", "ROCM_HOME"]
-    for var in rocm_env_vars:
-        if os.environ.get(var):
-            return True
-
-    # Check for lld in PATH (needed for ROCm compilation)
-    if shutil.which("lld") or shutil.which("ld.lld"):
-        return True
-
-    # Check for common ROCm installation paths
-    rocm_paths = ["/opt/rocm", "/usr/lib/rocm"]
-    for path in rocm_paths:
-        if os.path.isdir(path):
-            return True
-
-    return False
-
-
-# TODO:  alternatively, just build LLD as part of our llvm build and put it
-# into water/bin
-if check_rocm_available():
-    config.available_features.add("rocdl")

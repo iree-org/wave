@@ -24,7 +24,7 @@ concurrency:
 
 env:
   LLVM_SHA_FILE: llvm-sha.txt
-  LLVM_CACHE_NUMBER: 1  # Increase to reset cache
+  LLVM_CACHE_NUMBER: 2  # Increase to reset cache
 
 jobs:
   # Water uses its own LLVM version independent of the one used by IREE and
@@ -86,7 +86,7 @@ jobs:
           cmake ../llvm-project/llvm                                           \
             -GNinja                                                            \
             -DCMAKE_BUILD_TYPE=Release                                         \
-            -DLLVM_ENABLE_PROJECTS="mlir;llvm"                                 \
+            -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"                             \
             -DLLVM_ENABLE_ASSERTIONS=ON                                        \
             -DLLVM_INSTALL_UTILS=ON                                            \
             -DLLVM_TARGETS_TO_BUILD="X86;AMDGPU"                               \
@@ -94,7 +94,7 @@ jobs:
             -DLLVM_ENABLE_ZSTD=OFF                                             \
             -DMLIR_INCLUDE_TESTS=OFF                                           \
             -DLLVM_USE_LINKER=lld                                              \
-            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen;mlir-python-sources" \
+            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen;mlir-python-sources;lld" \
             -DMLIR_ENABLE_BINDINGS_PYTHON=ON                                   \
             -DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
           echo "INFO: working around a missing dependency on stubgen"

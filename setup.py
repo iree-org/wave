@@ -94,13 +94,16 @@ class CMakeBuild(build_ext):
 
             llvm_dir = wave_llvm_dir / "lib" / "cmake" / "llvm"
             mlir_dir = wave_llvm_dir / "lib" / "cmake" / "mlir"
+            lld_dir = wave_llvm_dir / "lib" / "cmake" / "lld"
             cmake_args += [
                 f"-DLLVM_DIR={llvm_dir}",
                 f"-DMLIR_DIR={mlir_dir}",
+                f"-DLLD_DIR={lld_dir}",
             ]
             print(f"Using built LLVM from: {wave_llvm_dir}")
             print(f"  LLVM_DIR: {llvm_dir}")
             print(f"  MLIR_DIR: {mlir_dir}")
+            print(f"  LLD_DIR:  {lld_dir}")
 
         # Clang is required on Windows, since Wave runtime uses variable-length
         # arrays (VLAs) which are not supported by MSVC
@@ -192,7 +195,7 @@ class CMakeBuild(build_ext):
             "-G",
             "Ninja",
             "-DLLVM_TARGETS_TO_BUILD=host;AMDGPU",
-            "-DLLVM_ENABLE_PROJECTS=mlir",
+            "-DLLVM_ENABLE_PROJECTS=llvm;mlir;lld",
             "-DMLIR_ENABLE_BINDINGS_PYTHON=ON",
             f"-DBUILD_SHARED_LIBS={BUILD_SHARED_LIBS}",
             "-DLLVM_ENABLE_ASSERTIONS=ON",

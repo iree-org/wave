@@ -1,4 +1,3 @@
-// REQUIRES: rocdl
 // RUN: rm -rf %t && mkdir -p %t/dump1 %t/dump2 %t/override
 // RUN: water-opt %s --water-gpu-module-to-binary="dump-intermediates=%t/dump1" | FileCheck %s
 // RUN: cp %t/dump1/kernel_module_linked.ll %t/override/kernel_module_linked.ll
