@@ -92,7 +92,7 @@ class WaveCompileOptions:
     coalescing_strategy_hint: CoalescingType = CoalescingType.LINEAR
 
     # === Compiler options ===
-    minimize_shared_allocs: bool = True
+    minimize_shared_allocs: bool = False
     reorder_allocs: bool = True
     override_schedule: Optional[str] = None
     dump_schedule: Optional[str] = None
