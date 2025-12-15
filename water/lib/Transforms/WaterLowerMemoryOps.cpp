@@ -903,15 +903,36 @@ public:
 
   void runOnOperation() override {
     auto func = getOperation();
+    MLIRContext *ctx = &getContext();
 
     // Check if function has VGPR allocation and insert inline asm directive.
     auto vgprAttr = func->getAttrOfType<IntegerAttr>("water.total_vgprs");
     unsigned vgprCount = vgprAttr ? vgprAttr.getInt() : 0;
     unsigned vgprStart = 256 - vgprCount;
 
+    if (vgprCount > 0) {
+      // Add amdgpu-num-vgpr to passthrough attribute list
+      auto vgprStartAttr = StringAttr::get(ctx, std::to_string(vgprStart));
+      auto nameAttr = StringAttr::get(ctx, "amdgpu-num-vgpr");
+
+      Attribute passthroughAttr;
+      // Get existing passthrough or create new one
+      if (auto existingPassthrough =
+              func->getAttrOfType<ArrayAttr>("passthrough")) {
+        SmallVector<Attribute> attrs(existingPassthrough.begin(),
+                                     existingPassthrough.end());
+        attrs.push_back(ArrayAttr::get(ctx, {nameAttr, vgprStartAttr}));
+        passthroughAttr = ArrayAttr::get(ctx, attrs);
+      } else {
+        passthroughAttr = ArrayAttr::get(
+            ctx, {ArrayAttr::get(ctx, {nameAttr, vgprStartAttr})});
+      }
+      func->setAttr("passthrough", passthroughAttr);
+    }
+
     // Insert inline assembly at the beginning of the function.
     Block &entryBlock = func.getFunctionBody().front();
-    IRRewriter rewriter(&getContext());
+    IRRewriter rewriter(ctx);
     rewriter.setInsertionPointToStart(&entryBlock);
 
     if (vgprCount > 0) {
