@@ -847,6 +847,8 @@ static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
   if (bitWidth < 32)
     asmType = rewriter.getIntegerType(32);
 
+  ROCDL::SchedBarrier::create(rewriter, loc, {}, 0);
+
   Value asmResult = createInlineAsm(rewriter, loc, asmType, {}, asmStr,
                                     constraints, /*hasSideEffects=*/false)
                         .getResult(0);
