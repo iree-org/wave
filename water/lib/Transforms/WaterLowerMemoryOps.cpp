@@ -640,11 +640,11 @@ static bool usesRegisterSpace(Value memref) {
 }
 
 /// Lower memref.copy when destination is in register space - buffer variant
-static LogicalResult
-lowerCopyToRegisterSpaceBuffer(memref::CopyOp copyOp, IRRewriter &rewriter,
-                               bool isRDNAArch, unsigned vgprOffset,
-                               unsigned vgprNum, unsigned vgprCount,
-                               unsigned totalBits, Type resultType) {
+static LogicalResult lowerCopyToRegBuffer(memref::CopyOp copyOp,
+                                          IRRewriter &rewriter, bool isRDNAArch,
+                                          unsigned vgprOffset, unsigned vgprNum,
+                                          unsigned vgprCount,
+                                          unsigned totalBits, Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
@@ -682,11 +682,11 @@ lowerCopyToRegisterSpaceBuffer(memref::CopyOp copyOp, IRRewriter &rewriter,
 }
 
 /// Lower memref.copy when destination is in register space - DS variant
-static LogicalResult
-lowerCopyToRegisterSpaceDS(memref::CopyOp copyOp, IRRewriter &rewriter,
-                           bool isRDNAArch, unsigned vgprOffset,
-                           unsigned vgprNum, unsigned vgprCount,
-                           unsigned totalBits, Type resultType) {
+static LogicalResult lowerCopyToRegDS(memref::CopyOp copyOp,
+                                      IRRewriter &rewriter, bool isRDNAArch,
+                                      unsigned vgprOffset, unsigned vgprNum,
+                                      unsigned vgprCount, unsigned totalBits,
+                                      Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
@@ -717,11 +717,11 @@ lowerCopyToRegisterSpaceDS(memref::CopyOp copyOp, IRRewriter &rewriter,
 }
 
 /// Lower memref.copy when destination is in register space - global variant
-static LogicalResult
-lowerCopyToRegisterSpaceGlobal(memref::CopyOp copyOp, IRRewriter &rewriter,
-                               bool isRDNAArch, unsigned vgprOffset,
-                               unsigned vgprNum, unsigned vgprCount,
-                               unsigned totalBits, Type resultType) {
+static LogicalResult lowerCopyToRegGlobal(memref::CopyOp copyOp,
+                                          IRRewriter &rewriter, bool isRDNAArch,
+                                          unsigned vgprOffset, unsigned vgprNum,
+                                          unsigned vgprCount,
+                                          unsigned totalBits, Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
@@ -752,10 +752,8 @@ lowerCopyToRegisterSpaceGlobal(memref::CopyOp copyOp, IRRewriter &rewriter,
 }
 
 /// Lower memref.copy when destination is in register space
-static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
-                                              IRRewriter &rewriter,
-                                              bool isRDNAArch,
-                                              unsigned vgprOffset) {
+static LogicalResult lowerCopyToReg(memref::CopyOp copyOp, IRRewriter &rewriter,
+                                    bool isRDNAArch, unsigned vgprOffset) {
   Value src = copyOp.getSource();
   Value dst = copyOp.getTarget();
 
@@ -793,23 +791,19 @@ static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
 
   // Dispatch based on source memory space
   if (usesBufferAddressSpace(src))
-    return lowerCopyToRegisterSpaceBuffer(copyOp, rewriter, isRDNAArch,
-                                          vgprOffset, vgprNum, vgprCount,
-                                          totalBits, resultType);
+    return lowerCopyToRegBuffer(copyOp, rewriter, isRDNAArch, vgprOffset,
+                                vgprNum, vgprCount, totalBits, resultType);
   if (usesWorkgroupAddressSpace(src))
-    return lowerCopyToRegisterSpaceDS(copyOp, rewriter, isRDNAArch, vgprOffset,
-                                      vgprNum, vgprCount, totalBits,
-                                      resultType);
-  return lowerCopyToRegisterSpaceGlobal(copyOp, rewriter, isRDNAArch,
-                                        vgprOffset, vgprNum, vgprCount,
-                                        totalBits, resultType);
+    return lowerCopyToRegDS(copyOp, rewriter, isRDNAArch, vgprOffset, vgprNum,
+                            vgprCount, totalBits, resultType);
+  return lowerCopyToRegGlobal(copyOp, rewriter, isRDNAArch, vgprOffset, vgprNum,
+                              vgprCount, totalBits, resultType);
 }
 
 /// Lower load from register space to inline assembly
 template <typename LoadOpTy>
-static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
-                                                IRRewriter &rewriter,
-                                                unsigned vgprOffset) {
+static LogicalResult lowerLoadFromReg(LoadOpTy loadOp, IRRewriter &rewriter,
+                                      unsigned vgprOffset) {
   Value memref;
   if constexpr (std::is_same_v<LoadOpTy, vector::LoadOp>)
     memref = loadOp.getBase();
@@ -865,9 +859,8 @@ static LogicalResult lowerLoadFromRegisterSpace(LoadOpTy loadOp,
 
 /// Lower store to register space to inline assembly
 template <typename StoreOpTy>
-static LogicalResult lowerStoreToRegisterSpace(StoreOpTy storeOp,
-                                               IRRewriter &rewriter,
-                                               unsigned vgprOffset) {
+static LogicalResult lowerStoreToReg(StoreOpTy storeOp, IRRewriter &rewriter,
+                                     unsigned vgprOffset) {
   Value memref;
   if constexpr (std::is_same_v<StoreOpTy, vector::StoreOp>)
     memref = storeOp.getBase();
@@ -996,9 +989,7 @@ public:
       if (auto loadOp = dyn_cast<vector::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getBase(),
-            [&]() {
-              return lowerLoadFromRegisterSpace(loadOp, rewriter, vgprStart);
-            },
+            [&]() { return lowerLoadFromReg(loadOp, rewriter, vgprStart); },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter, isRDNAArch); });
@@ -1009,9 +1000,7 @@ public:
       if (auto storeOp = dyn_cast<vector::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getBase(),
-            [&]() {
-              return lowerStoreToRegisterSpace(storeOp, rewriter, vgprStart);
-            },
+            [&]() { return lowerStoreToReg(storeOp, rewriter, vgprStart); },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter, isRDNAArch); });
@@ -1022,9 +1011,7 @@ public:
       if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             loadOp.getMemRef(),
-            [&]() {
-              return lowerLoadFromRegisterSpace(loadOp, rewriter, vgprStart);
-            },
+            [&]() { return lowerLoadFromReg(loadOp, rewriter, vgprStart); },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadDS(loadOp, rewriter, isRDNAArch); },
             [&]() { return lowerLoadGlobal(loadOp, rewriter, isRDNAArch); });
@@ -1035,9 +1022,7 @@ public:
       if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
         LogicalResult result = lowerMemoryOp(
             storeOp.getMemRef(),
-            [&]() {
-              return lowerStoreToRegisterSpace(storeOp, rewriter, vgprStart);
-            },
+            [&]() { return lowerStoreToReg(storeOp, rewriter, vgprStart); },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreDS(storeOp, rewriter, isRDNAArch); },
             [&]() { return lowerStoreGlobal(storeOp, rewriter, isRDNAArch); });
@@ -1048,8 +1033,7 @@ public:
       if (auto copyOp = dyn_cast<memref::CopyOp>(op)) {
         // Only lower copy if destination is in register space
         if (usesRegisterSpace(copyOp.getTarget())) {
-          if (failed(lowerCopyToRegisterSpace(copyOp, rewriter, isRDNAArch,
-                                              vgprStart)))
+          if (failed(lowerCopyToReg(copyOp, rewriter, isRDNAArch, vgprStart)))
             return WalkResult::interrupt();
           return WalkResult::advance();
         }
