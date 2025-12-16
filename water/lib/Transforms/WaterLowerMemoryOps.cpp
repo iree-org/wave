@@ -380,7 +380,6 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter,
 template <typename LoadOpTy>
 static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter,
                                      bool isRDNAArch) {
-  return success();
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
   if (bitWidth < 32)
