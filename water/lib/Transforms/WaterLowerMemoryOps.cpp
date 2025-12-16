@@ -208,6 +208,10 @@ static FailureOr<StringRef> getBufferSuffixStore(unsigned bitWidth,
   if (isRDNAArch) {
     // RDNA uses b32, b64, etc.
     switch (bitWidth) {
+    case 8:
+      return StringRef("b8");
+    case 16:
+      return StringRef("b16");
     case 32:
       return StringRef("b32");
     case 64:
@@ -400,14 +404,26 @@ static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
   return success();
 }
 
+static Value extendTo32(Value value, IRRewriter &rewriter, Location loc) {
+  unsigned bitWidth = getBitwidth(value.getType());
+  if (bitWidth >= 32)
+    return value;
+
+  // Sched barrier to prevent moving the expansion before the waitcnt.
+  ROCDL::SchedBarrier::create(rewriter, loc, {}, 0);
+
+  Type intType = rewriter.getIntegerType(bitWidth);
+  if (value.getType() != intType)
+    value = LLVM::BitcastOp::create(rewriter, loc, intType, value);
+
+  return arith::ExtSIOp::create(rewriter, loc, rewriter.getI32Type(), value);
+}
+
 /// Lower vector/scalar store to AMDGPU buffer store inline assembly
 template <typename StoreOpTy>
 static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
                                       bool isRDNAArch) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
-
-  if (bitWidth < 32)
-    return success();
 
   FailureOr<StringRef> suffix = getBufferSuffixStore(bitWidth, isRDNAArch);
   if (failed(suffix))
@@ -441,12 +457,12 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
   Value finalOffset = arith::AddIOp::create(rewriter, loc, offset, baseOffset,
                                             arith::IntegerOverflowFlags::nsw);
 
-  Value valueToStore = storeOp.getValueToStore();
+  Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
 
   // Create inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
-                  ValueRange{valueToStore, finalOffset, bufferDesc}, asmStr,
-                  constraints, /*hasSideEffects=*/true);
+                  {valueToStore, finalOffset, bufferDesc}, asmStr, constraints,
+                  /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
   return success();
@@ -456,9 +472,6 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
 template <typename StoreOpTy>
 static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
-
-  if (bitWidth < 32)
-    return success();
 
   FailureOr<StringRef> suffix = getSizeSuffixStore(bitWidth);
   if (failed(suffix))
@@ -482,11 +495,10 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value addr = computeMemrefAddress(rewriter, loc, memref, storeOp.getIndices(),
                                     elementBitWidth);
 
-  Value valueToStore = storeOp.getValueToStore();
+  Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
 
   // Create the inline assembly operation (no result for store)
-  createInlineAsm(rewriter, loc, TypeRange{}, ValueRange{addr, valueToStore},
-                  asmStr, constraints,
+  createInlineAsm(rewriter, loc, {}, {addr, valueToStore}, asmStr, constraints,
                   /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
@@ -535,9 +547,6 @@ template <typename StoreOpTy>
 static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
-  if (bitWidth < 32)
-    return success();
-
   FailureOr<StringRef> suffix = getSizeSuffixStore(bitWidth);
   if (failed(suffix))
     return storeOp.emitError("unsupported DS store bit width: ") << bitWidth;
@@ -559,12 +568,12 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value offset = computeMemrefByteOffset<32>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
-  Value valueToStore = storeOp.getValueToStore();
+  Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
 
   // Create inline assembly operation (no result for store, DS uses 32-bit
   // addresses)
-  createInlineAsm(rewriter, loc, TypeRange{}, ValueRange{offset, valueToStore},
-                  asmStr, constraints,
+  createInlineAsm(rewriter, loc, {}, {offset, valueToStore}, asmStr,
+                  constraints,
                   /*hasSideEffects=*/true);
 
   rewriter.eraseOp(storeOp);
