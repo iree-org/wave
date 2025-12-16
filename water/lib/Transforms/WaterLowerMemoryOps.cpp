@@ -50,8 +50,7 @@ static std::string getVGPRConstraint(unsigned vgprOffset, unsigned vgprNum,
   return isOutput ? "=" + constraint : constraint;
 }
 
-/// Get the AMDGPU instruction suffix based on bit width (for loads - unsigned)
-static FailureOr<StringRef> getSizeSuffixLoad(unsigned bitWidth) {
+static FailureOr<StringRef> getLoadSizeSuffixRDNA(unsigned bitWidth) {
   switch (bitWidth) {
   case 8:
     return StringRef("u8");
@@ -70,8 +69,7 @@ static FailureOr<StringRef> getSizeSuffixLoad(unsigned bitWidth) {
   }
 }
 
-/// Get the AMDGPU instruction suffix based on bit width (for stores)
-static FailureOr<StringRef> getSizeSuffixStore(unsigned bitWidth) {
+static FailureOr<StringRef> getStoreSizeSuffixRDNA(unsigned bitWidth) {
   switch (bitWidth) {
   case 8:
     return StringRef("b8");
@@ -88,6 +86,90 @@ static FailureOr<StringRef> getSizeSuffixStore(unsigned bitWidth) {
   default:
     return failure();
   }
+}
+
+static FailureOr<StringRef> getLoadSizeSuffixCDNA(unsigned bitWidth) {
+  switch (bitWidth) {
+  case 8:
+    return StringRef("ubyte");
+  case 16:
+    return StringRef("ushort");
+  case 32:
+    return StringRef("dword");
+  case 64:
+    return StringRef("dwordx2");
+  case 96:
+    return StringRef("dwordx3");
+  case 128:
+    return StringRef("dwordx4");
+  default:
+    return failure();
+  }
+}
+
+static FailureOr<StringRef> getStoreSizeSuffixCDNA(unsigned bitWidth) {
+  switch (bitWidth) {
+  case 8:
+    return StringRef("byte");
+  case 16:
+    return StringRef("short");
+  case 32:
+    return StringRef("dword");
+  case 64:
+    return StringRef("dwordx2");
+  case 96:
+    return StringRef("dwordx3");
+  case 128:
+    return StringRef("dwordx4");
+  default:
+    return failure();
+  }
+}
+
+static FailureOr<StringRef> getBufferLoadSuffix(unsigned bitWidth,
+                                                bool isRDNAArch) {
+  if (isRDNAArch) {
+    return getLoadSizeSuffixRDNA(bitWidth);
+  } else {
+    return getLoadSizeSuffixCDNA(bitWidth);
+  }
+}
+
+static FailureOr<StringRef> getBufferStoreSuffix(unsigned bitWidth,
+                                                 bool isRDNAArch) {
+  if (isRDNAArch) {
+    return getStoreSizeSuffixRDNA(bitWidth);
+  } else {
+    return getStoreSizeSuffixCDNA(bitWidth);
+  }
+}
+
+static FailureOr<StringRef> getGlobalLoadSuffix(unsigned bitWidth,
+                                                bool isRDNAArch) {
+  if (isRDNAArch) {
+    return getLoadSizeSuffixRDNA(bitWidth);
+  } else {
+    return getLoadSizeSuffixCDNA(bitWidth);
+  }
+}
+
+static FailureOr<StringRef> getGlobalStoreSuffix(unsigned bitWidth,
+                                                 bool isRDNAArch) {
+  if (isRDNAArch) {
+    return getStoreSizeSuffixRDNA(bitWidth);
+  } else {
+    return getStoreSizeSuffixCDNA(bitWidth);
+  }
+}
+
+static FailureOr<StringRef> getDSLoadSuffix(unsigned bitWidth,
+                                            bool /*isRDNAArch*/) {
+  return getLoadSizeSuffixRDNA(bitWidth);
+}
+
+static FailureOr<StringRef> getDSStoreSuffix(unsigned bitWidth,
+                                             bool /*isRDNAArch*/) {
+  return getStoreSizeSuffixRDNA(bitWidth);
 }
 
 /// Create an LLVM inline assembly operation with standard attributes
@@ -172,90 +254,6 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
   return LLVM::IntToPtrOp::create(rewriter, loc, ptrType, finalAddr);
 }
 
-/// Get buffer instruction suffix based on bit width (for loads - unsigned)
-static FailureOr<StringRef> getBufferSuffixLoad(unsigned bitWidth,
-                                                bool isRDNAArch) {
-  if (isRDNAArch) {
-    // RDNA uses b32, b64, etc.
-    switch (bitWidth) {
-    case 8:
-      return StringRef("u8");
-    case 16:
-      return StringRef("u16");
-    case 32:
-      return StringRef("b32");
-    case 64:
-      return StringRef("b64");
-    case 96:
-      return StringRef("b96");
-    case 128:
-      return StringRef("b128");
-    default:
-      return failure();
-    }
-  } else {
-    // CDNA uses dword, dwordx2, etc.
-    switch (bitWidth) {
-    case 8:
-      return StringRef("ubyte");
-    case 16:
-      return StringRef("ushort");
-    case 32:
-      return StringRef("dword");
-    case 64:
-      return StringRef("dwordx2");
-    case 96:
-      return StringRef("dwordx3");
-    case 128:
-      return StringRef("dwordx4");
-    default:
-      return failure();
-    }
-  }
-}
-
-/// Get buffer instruction suffix based on bit width (for stores)
-static FailureOr<StringRef> getBufferSuffixStore(unsigned bitWidth,
-                                                 bool isRDNAArch) {
-  if (isRDNAArch) {
-    // RDNA uses b32, b64, etc.
-    switch (bitWidth) {
-    case 8:
-      return StringRef("b8");
-    case 16:
-      return StringRef("b16");
-    case 32:
-      return StringRef("b32");
-    case 64:
-      return StringRef("b64");
-    case 96:
-      return StringRef("b96");
-    case 128:
-      return StringRef("b128");
-    default:
-      return failure();
-    }
-  } else {
-    // CDNA uses dword, dwordx2, etc.
-    switch (bitWidth) {
-    case 8:
-      return StringRef("byte");
-    case 16:
-      return StringRef("short");
-    case 32:
-      return StringRef("dword");
-    case 64:
-      return StringRef("dwordx2");
-    case 96:
-      return StringRef("dwordx3");
-    case 128:
-      return StringRef("dwordx4");
-    default:
-      return failure();
-    }
-  }
-}
-
 /// Extract buffer descriptor and base offset from a fat_raw_buffer memref
 /// addrspace(7) format: {<4 x i32> rsrc, i32 offset} (160 bits total)
 /// Returns: {resource descriptor (i128), base offset (i32)}
@@ -338,7 +336,7 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter,
   if (bitWidth < 32)
     return success();
 
-  FailureOr<StringRef> suffix = getBufferSuffixLoad(bitWidth, isRDNAArch);
+  FailureOr<StringRef> suffix = getBufferLoadSuffix(bitWidth, isRDNAArch);
   if (failed(suffix))
     return loadOp.emitError("unsupported buffer load bit width: ") << bitWidth;
 
@@ -380,13 +378,15 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter,
 
 /// Lower vector/scalar load to LLVM inline assembly (global_load_*)
 template <typename LoadOpTy>
-static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
+static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter,
+                                     bool isRDNAArch) {
+  return success();
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
   if (bitWidth < 32)
     return success();
 
-  FailureOr<StringRef> suffix = getSizeSuffixLoad(bitWidth);
+  FailureOr<StringRef> suffix = getGlobalLoadSuffix(bitWidth, isRDNAArch);
   if (failed(suffix))
     return loadOp.emitError("unsupported load bit width: ") << bitWidth;
 
@@ -418,13 +418,14 @@ static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
 
 /// Lower vector/scalar load to AMDGPU DS load inline assembly
 template <typename LoadOpTy>
-static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
+static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter,
+                                 bool isRDNAArch) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
   if (bitWidth < 32)
     return success();
 
-  FailureOr<StringRef> suffix = getSizeSuffixLoad(bitWidth);
+  FailureOr<StringRef> suffix = getDSLoadSuffix(bitWidth, isRDNAArch);
   if (failed(suffix))
     return loadOp.emitError("unsupported DS load bit width: ") << bitWidth;
 
@@ -453,10 +454,14 @@ static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
   return success();
 }
 
-static Value extendTo32(Value value, IRRewriter &rewriter, Location loc) {
+static Value extendToReg(Value value, IRRewriter &rewriter, Location loc) {
   unsigned bitWidth = getBitwidth(value.getType());
-  if (bitWidth >= 32)
+  if (bitWidth >= 32) {
+    Type intType = rewriter.getIntegerType(bitWidth);
+    if (value.getType() != intType)
+      value = LLVM::BitcastOp::create(rewriter, loc, intType, value);
     return value;
+  }
 
   // Sched barrier to prevent moving the expansion before the waitcnt.
   ROCDL::SchedBarrier::create(rewriter, loc, {}, 0);
@@ -474,7 +479,7 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
                                       bool isRDNAArch) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
-  FailureOr<StringRef> suffix = getBufferSuffixStore(bitWidth, isRDNAArch);
+  FailureOr<StringRef> suffix = getBufferStoreSuffix(bitWidth, isRDNAArch);
   if (failed(suffix))
     return storeOp.emitError("unsupported buffer store bit width: ")
            << bitWidth;
@@ -506,7 +511,7 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
   Value finalOffset = arith::AddIOp::create(rewriter, loc, offset, baseOffset,
                                             arith::IntegerOverflowFlags::nsw);
 
-  Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
+  Value valueToStore = extendToReg(storeOp.getValueToStore(), rewriter, loc);
 
   // Create inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, TypeRange{},
@@ -519,10 +524,11 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
 
 /// Lower vector/scalar store to LLVM inline assembly (global_store_*)
 template <typename StoreOpTy>
-static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
+static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter,
+                                      bool isRDNAArch) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
-  FailureOr<StringRef> suffix = getSizeSuffixStore(bitWidth);
+  FailureOr<StringRef> suffix = getGlobalStoreSuffix(bitWidth, isRDNAArch);
   if (failed(suffix))
     return storeOp.emitError("unsupported store bit width: ") << bitWidth;
 
@@ -544,7 +550,7 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value addr = computeMemrefAddress<64, 0>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
-  Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
+  Value valueToStore = extendToReg(storeOp.getValueToStore(), rewriter, loc);
 
   // Create the inline assembly operation (no result for store)
   createInlineAsm(rewriter, loc, {}, {addr, valueToStore}, asmStr, constraints,
@@ -556,10 +562,11 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
 
 /// Lower vector/scalar store to AMDGPU DS store inline assembly
 template <typename StoreOpTy>
-static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
+static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter,
+                                  bool isRDNAArch) {
   auto [memref, valueType, bitWidth] = getStoreOpInfo(storeOp);
 
-  FailureOr<StringRef> suffix = getSizeSuffixStore(bitWidth);
+  FailureOr<StringRef> suffix = getDSStoreSuffix(bitWidth, isRDNAArch);
   if (failed(suffix))
     return storeOp.emitError("unsupported DS store bit width: ") << bitWidth;
 
@@ -580,7 +587,7 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
   Value offset = computeMemrefAddress<32, 3>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
-  Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
+  Value valueToStore = extendToReg(storeOp.getValueToStore(), rewriter, loc);
 
   // Create inline assembly operation (no result for store, DS uses 32-bit
   // addresses)
@@ -643,7 +650,7 @@ lowerCopyToRegisterSpaceBuffer(memref::CopyOp copyOp, IRRewriter &rewriter,
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
 
-  FailureOr<StringRef> suffix = getBufferSuffixLoad(totalBits, isRDNAArch);
+  FailureOr<StringRef> suffix = getBufferLoadSuffix(totalBits, isRDNAArch);
   if (failed(suffix))
     return copyOp.emitError("unsupported buffer copy bit width: ") << totalBits;
 
@@ -676,14 +683,16 @@ lowerCopyToRegisterSpaceBuffer(memref::CopyOp copyOp, IRRewriter &rewriter,
 }
 
 /// Lower memref.copy when destination is in register space - DS variant
-static LogicalResult lowerCopyToRegisterSpaceDS(
-    memref::CopyOp copyOp, IRRewriter &rewriter, unsigned vgprOffset,
-    unsigned vgprNum, unsigned vgprCount, unsigned totalBits, Type resultType) {
+static LogicalResult
+lowerCopyToRegisterSpaceDS(memref::CopyOp copyOp, IRRewriter &rewriter,
+                           bool isRDNAArch, unsigned vgprOffset,
+                           unsigned vgprNum, unsigned vgprCount,
+                           unsigned totalBits, Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
 
-  FailureOr<StringRef> suffix = getSizeSuffixLoad(totalBits);
+  FailureOr<StringRef> suffix = getDSLoadSuffix(totalBits, isRDNAArch);
   if (failed(suffix))
     return copyOp.emitError("unsupported DS copy bit width: ") << totalBits;
 
@@ -709,14 +718,16 @@ static LogicalResult lowerCopyToRegisterSpaceDS(
 }
 
 /// Lower memref.copy when destination is in register space - global variant
-static LogicalResult lowerCopyToRegisterSpaceGlobal(
-    memref::CopyOp copyOp, IRRewriter &rewriter, unsigned vgprOffset,
-    unsigned vgprNum, unsigned vgprCount, unsigned totalBits, Type resultType) {
+static LogicalResult
+lowerCopyToRegisterSpaceGlobal(memref::CopyOp copyOp, IRRewriter &rewriter,
+                               bool isRDNAArch, unsigned vgprOffset,
+                               unsigned vgprNum, unsigned vgprCount,
+                               unsigned totalBits, Type resultType) {
   Value src = copyOp.getSource();
   auto srcType = cast<MemRefType>(src.getType());
   unsigned elementBitWidth = srcType.getElementTypeBitWidth();
 
-  FailureOr<StringRef> suffix = getSizeSuffixLoad(totalBits);
+  FailureOr<StringRef> suffix = getGlobalLoadSuffix(totalBits, isRDNAArch);
   if (failed(suffix))
     return copyOp.emitError("unsupported copy bit width: ") << totalBits;
 
@@ -787,10 +798,12 @@ static LogicalResult lowerCopyToRegisterSpace(memref::CopyOp copyOp,
                                           vgprOffset, vgprNum, vgprCount,
                                           totalBits, resultType);
   if (usesWorkgroupAddressSpace(src))
-    return lowerCopyToRegisterSpaceDS(copyOp, rewriter, vgprOffset, vgprNum,
-                                      vgprCount, totalBits, resultType);
-  return lowerCopyToRegisterSpaceGlobal(copyOp, rewriter, vgprOffset, vgprNum,
-                                        vgprCount, totalBits, resultType);
+    return lowerCopyToRegisterSpaceDS(copyOp, rewriter, isRDNAArch, vgprOffset,
+                                      vgprNum, vgprCount, totalBits,
+                                      resultType);
+  return lowerCopyToRegisterSpaceGlobal(copyOp, rewriter, isRDNAArch,
+                                        vgprOffset, vgprNum, vgprCount,
+                                        totalBits, resultType);
 }
 
 /// Lower load from register space to inline assembly
@@ -986,8 +999,8 @@ public:
               return lowerLoadFromRegisterSpace(loadOp, rewriter, vgprStart);
             },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
-            [&]() { return lowerLoadDS(loadOp, rewriter); },
-            [&]() { return lowerLoadGlobal(loadOp, rewriter); });
+            [&]() { return lowerLoadDS(loadOp, rewriter, isRDNAArch); },
+            [&]() { return lowerLoadGlobal(loadOp, rewriter, isRDNAArch); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -999,8 +1012,8 @@ public:
               return lowerStoreToRegisterSpace(storeOp, rewriter, vgprStart);
             },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
-            [&]() { return lowerStoreDS(storeOp, rewriter); },
-            [&]() { return lowerStoreGlobal(storeOp, rewriter); });
+            [&]() { return lowerStoreDS(storeOp, rewriter, isRDNAArch); },
+            [&]() { return lowerStoreGlobal(storeOp, rewriter, isRDNAArch); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1012,8 +1025,8 @@ public:
               return lowerLoadFromRegisterSpace(loadOp, rewriter, vgprStart);
             },
             [&]() { return lowerLoadBuffer(loadOp, rewriter, isRDNAArch); },
-            [&]() { return lowerLoadDS(loadOp, rewriter); },
-            [&]() { return lowerLoadGlobal(loadOp, rewriter); });
+            [&]() { return lowerLoadDS(loadOp, rewriter, isRDNAArch); },
+            [&]() { return lowerLoadGlobal(loadOp, rewriter, isRDNAArch); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1025,8 +1038,8 @@ public:
               return lowerStoreToRegisterSpace(storeOp, rewriter, vgprStart);
             },
             [&]() { return lowerStoreBuffer(storeOp, rewriter, isRDNAArch); },
-            [&]() { return lowerStoreDS(storeOp, rewriter); },
-            [&]() { return lowerStoreGlobal(storeOp, rewriter); });
+            [&]() { return lowerStoreDS(storeOp, rewriter, isRDNAArch); },
+            [&]() { return lowerStoreGlobal(storeOp, rewriter, isRDNAArch); });
         if (failed(result))
           return WalkResult::interrupt();
         return WalkResult::advance();
