@@ -86,12 +86,162 @@ func.func @iterate_mismatching_results(%arg0: !wave.tensor<any of f32>, %arg1: !
 
 // -----
 
-func.func @iterate_mismatching_results(%arg0: !wave.tensor<[@A] of f32>, %arg1: !wave.tensor<any of f32>) {
-  // expected-error @below {{along control flow edge from parent operands to Region #0: source type #0 '!wave.tensor<[@A] of f32>' should match input type #0 '!wave.tensor<[@B] of f32>'}}
+func.func @iterate_operands_block_args_mismatch(%arg0: !wave.tensor<any of f32>) {
+  // expected-error @below {{expects the same number of operands (1) and block arguments (2)}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<any of f32>, %arg2: !wave.tensor<any of f32>):
+    wave.yield %arg1 : !wave.tensor<any of f32>
+  } : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+}
+
+// -----
+
+func.func @iterate_iter_args_block_iter_args_mismatch(%arg0: !wave.tensor<any of f32>, %arg1: !wave.tensor<any of f32>) {
+  // expected-error @below {{expects the same number of operands (2) and block arguments (1)}}
   wave.iterate @I iter_args(%arg0, %arg1) {
-  ^bb0(%arg2: !wave.tensor<[@B] of f32>, %arg3: !wave.tensor<any of f32>):
-    wave.yield %arg2, %arg3 : !wave.tensor<[@B] of f32>, !wave.tensor<any of f32>
-  } : (!wave.tensor<[@A] of f32>, !wave.tensor<any of f32>) -> (!wave.tensor<any of f32>, !wave.tensor<any of f32>)
+  ^bb0(%arg2: !wave.tensor<any of f32>):
+    wave.yield %arg2 : !wave.tensor<any of f32>
+  } : (!wave.tensor<any of f32>, !wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+}
+
+// -----
+
+func.func @iterate_iter_arg_block_arg_element_type_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{expected operand iter_arg #0 and result #0 elemental types to match, got 'f32', 'bf16'}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@A] of bf16>):
+    wave.yield %arg1 : !wave.tensor<[@A] of bf16>
+  } : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of bf16>
+}
+
+// -----
+
+func.func @iterate_iter_arg_block_arg_rank_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{rank mismatch between operand iter_arg #0 and result #0}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@A, @B] of f32>):
+    wave.yield %arg1 : !wave.tensor<[@A, @B] of f32>
+  } : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A, @B] of f32>
+}
+
+// -----
+
+func.func @iterate_iter_arg_block_arg_shape_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{expected operand iter_arg #0 dimension #0 (#wave.symbol<"A">) to match result #0 dimension #0 (#wave.symbol<"B">)}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@B] of f32>):
+    wave.yield %arg1 : !wave.tensor<[@B] of f32>
+  } : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@B] of f32>
+}
+
+// -----
+
+func.func @iterate_iter_arg_block_arg_address_space_mismatch(%arg0: !wave.tensor<[@A] of f32, <register>>) {
+  // expected-error @below {{address space mismatch between operand iter_arg #0 and result #0}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@A] of f32, <shared>>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32, <shared>>
+  } : (!wave.tensor<[@A] of f32, <register>>) -> !wave.tensor<[@A] of f32, <shared>>
+}
+
+// -----
+
+func.func @iterate_iter_arg_result_element_type_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{expected operand iter_arg #0 and result #0 elemental types to match, got 'f32', 'bf16'}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@A] of f32>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32>
+  } : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A] of bf16>
+}
+
+// -----
+
+func.func @iterate_iter_arg_result_rank_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{rank mismatch between operand iter_arg #0 and result #0}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@A] of f32>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32>
+  } : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@A, @B] of f32>
+}
+
+// -----
+
+func.func @iterate_iter_arg_result_shape_mismatch(%arg0: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{expected operand iter_arg #0 dimension #0 (#wave.symbol<"A">) to match result #0 dimension #0 (#wave.symbol<"B">)}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@A] of f32>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32>
+  } : (!wave.tensor<[@A] of f32>) -> !wave.tensor<[@B] of f32>
+}
+
+// -----
+
+func.func @iterate_iter_arg_result_address_space_mismatch(%arg0: !wave.tensor<[@A] of f32, <register>>) {
+  // expected-error @below {{address space mismatch between operand iter_arg #0 and result #0}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg1: !wave.tensor<[@A] of f32, <register>>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32, <register>>
+  } : (!wave.tensor<[@A] of f32, <register>>) -> !wave.tensor<[@A] of f32, <shared>>
+}
+
+// -----
+
+func.func @iterate_capture_type_mismatch(%arg0: !wave.tensor<[@A] of f32>, %capture: !wave.tensor<[@B] of f32>) {
+  // expected-error @below {{expects the same type for capture #0 and block argument #1}}
+  wave.iterate @I iter_args(%arg0) captures(%capture) {
+  ^bb0(%arg1: !wave.tensor<[@A] of f32>, %arg2: !wave.tensor<[@B] of bf16>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32>
+  } : (!wave.tensor<[@A] of f32>, !wave.tensor<[@B] of f32>) -> !wave.tensor<[@A] of f32>
+}
+
+// -----
+
+func.func @iterate_results_terminator_operands_mismatch(%arg0: !wave.tensor<any of f32>, %arg1: !wave.tensor<any of f32>) {
+  // expected-error @below {{expects the same number of results (1) and terminator operands (2)}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg2: !wave.tensor<any of f32>):
+    wave.yield %arg2, %arg1 : !wave.tensor<any of f32>, !wave.tensor<any of f32>
+  } : (!wave.tensor<any of f32>) -> !wave.tensor<any of f32>
+}
+
+// -----
+
+func.func @iterate_result_terminator_element_type_mismatch(%arg0: !wave.tensor<[@A] of bf16>, %arg1: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{expected result #0 and terminator operand #0 elemental types to match, got 'bf16', 'f32'}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg2: !wave.tensor<[@A] of bf16>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32>
+  } : (!wave.tensor<[@A] of bf16>) -> !wave.tensor<[@A] of bf16>
+}
+
+// -----
+
+func.func @iterate_result_terminator_rank_mismatch(%arg0: !wave.tensor<[@A, @B] of f32>, %arg1: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{rank mismatch between result #0 and terminator operand #0}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg2: !wave.tensor<[@A, @B] of f32>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32>
+  } : (!wave.tensor<[@A, @B] of f32>) -> !wave.tensor<[@A, @B] of f32>
+}
+
+// -----
+
+func.func @iterate_result_terminator_shape_mismatch(%arg0: !wave.tensor<[@B] of f32>, %arg1: !wave.tensor<[@A] of f32>) {
+  // expected-error @below {{expected result #0 dimension #0 (#wave.symbol<"B">) to match terminator operand #0 dimension #0 (#wave.symbol<"A">)}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg2: !wave.tensor<[@B] of f32>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32>
+  } : (!wave.tensor<[@B] of f32>) -> !wave.tensor<[@B] of f32>
+}
+
+// -----
+
+func.func @iterate_result_terminator_address_space_mismatch(%arg0: !wave.tensor<[@A] of f32, <shared>>, %arg1: !wave.tensor<[@A] of f32, <register>>) {
+  // expected-error @below {{address space mismatch between result #0 and terminator operand #0}}
+  wave.iterate @I iter_args(%arg0) {
+  ^bb0(%arg2: !wave.tensor<[@A] of f32, <shared>>):
+    wave.yield %arg1 : !wave.tensor<[@A] of f32, <register>>
+  } : (!wave.tensor<[@A] of f32, <shared>>) -> !wave.tensor<[@A] of f32, <shared>>
 }
 
 // -----

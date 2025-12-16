@@ -206,17 +206,18 @@ bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
 
 mlir::OperandRange
 wave::IterateOp::getEntrySuccessorOperands(mlir::RegionSuccessor) {
-  return getIterArgs();
+  return getOperands().drop_back(getNumOperands());
 }
 
 void wave::IterateOp::getSuccessorRegions(
     mlir::RegionBranchPoint point,
     ::llvm::SmallVectorImpl<::mlir::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
-  regions.emplace_back(mlir::RegionSuccessor(getOperation(), getResults()));
   regions.emplace_back(mlir::RegionSuccessor(
-      &getBody(),
-      getLoopBody()->getArguments().drop_back(getCaptures().size())));
+      getOperation(), getResults().drop_back(getNumResults())));
+  regions.emplace_back(
+      mlir::RegionSuccessor(&getBody(), getLoopBody()->getArguments().drop_back(
+                                            getLoopBody()->getNumArguments())));
 }
 
 llvm::FailureOr<mlir::ChangeResult> wave::IterateOp::propagateIndexExprsForward(
@@ -241,31 +242,90 @@ llvm::LogicalResult wave::IterateOp::setIndexFromLattices(
 }
 
 mlir::LogicalResult wave::IterateOp::verify() {
-  mlir::TypeRange iterArgTypes = getIterArgs().getTypes();
+  if (getNumOperands() != getLoopBody()->getNumArguments()) {
+    return emitOpError() << "expects the same number of operands ("
+                         << getNumOperands() << ") and block arguments ("
+                         << getLoopBody()->getNumArguments() << ")";
+  }
+  mlir::TypeRange blockIterArgTypes = getIterArgs().getTypes();
+  mlir::TypeRange iterArgTypes =
+      getOperands().drop_back(getCaptures().size()).getTypes();
+  mlir::TypeRange captureTypes = getCaptures().getTypes();
+  mlir::TypeRange captureBlockArgTypes = getCaptureBlockArgs().getTypes();
   mlir::TypeRange resultTypes = getResultTypes();
-  if (iterArgTypes.size() != resultTypes.size()) {
+  if (iterArgTypes.size() != blockIterArgTypes.size()) {
+    return emitOpError() << "expects the same number if iter_args ("
+                         << iterArgTypes.size()
+                         << ") and corresponding block arguments ("
+                         << blockIterArgTypes.size() << ")";
+  }
+  if (blockIterArgTypes.size() != resultTypes.size()) {
     return emitOpError() << "expects the same number of iter_args ("
-                         << iterArgTypes.size() << ") and results ("
+                         << blockIterArgTypes.size() << ") and results ("
                          << resultTypes.size() << ")";
   }
-  for (auto &&[i, iterArg, result] :
-       llvm::enumerate(iterArgTypes, resultTypes)) {
+  for (auto &&[i, iterArg, blockIterArg, result] :
+       llvm::enumerate(iterArgTypes, blockIterArgTypes, resultTypes)) {
     auto iterArgTensor = llvm::cast<wave::WaveTensorType>(iterArg);
+    auto blockIterArgTensor = llvm::cast<wave::WaveTensorType>(blockIterArg);
     auto resultTensor = llvm::cast<wave::WaveTensorType>(result);
-    if (!iterArgTensor.getFullySpecified() || !resultTensor.getFullySpecified())
-      continue;
 
-    auto allDims =
-        llvm::to_vector(llvm::iota_range<int>(0, iterArgTensor.getRank(),
-                                              /*Inclusive=*/false));
     auto istr = std::to_string(i);
-    if (mlir::failed(detail::verifyTypesMatchingDimensions(
-            getLoc(), "iter_args #" + istr, iterArgTensor, allDims,
-            "result #" + istr, resultTensor, allDims)))
-      return mlir::failure();
+    if (llvm::failed(detail::verifyTypesCompatible(
+            iterArgTensor, blockIterArgTensor, /*includeAddressSpace=*/true,
+            getLoc(), "operand iter_arg #" + istr,
+            "block argument #" + istr))) {
+      return llvm::failure();
+    }
+    if (llvm::failed(detail::verifyTypesCompatible(
+            iterArgTensor, resultTensor, /*includeAddressSpace=*/true, getLoc(),
+            "operand iter_arg #" + istr, "result #" + istr))) {
+      return llvm::failure();
+    }
+  }
+  for (auto &&[i, capture, captureBlockArg] :
+       llvm::enumerate(captureTypes, captureBlockArgTypes)) {
+    auto captureTensor = llvm::cast<wave::WaveTensorType>(capture);
+    auto captureBlockArgTensor =
+        llvm::cast<wave::WaveTensorType>(captureBlockArg);
+    if (captureTensor != captureBlockArgTensor) {
+      return emitOpError() << "expects the same type for capture #" << i
+                           << " and block argument #"
+                           << (getIterArgs().size() + i);
+    }
   }
 
-  return mlir::success();
+  return llvm::success();
+}
+
+llvm::LogicalResult wave::IterateOp::verifyRegions() {
+  // Use the region hook since it runs after we verified the terminator itself
+  // and know it is well-formed.
+  mlir::TypeRange iterArgTypes = getIterArgs().getTypes();
+  mlir::TypeRange blockIterArgTypes =
+      mlir::TypeRange(getLoopBody()->getArgumentTypes())
+          .take_front(iterArgTypes.size());
+  mlir::TypeRange resultTypes = getResultTypes();
+  mlir::TypeRange terminatorOperandTypes =
+      getLoopBody()->getTerminator()->getOperands().getTypes();
+  if (resultTypes.size() != terminatorOperandTypes.size()) {
+    return emitOpError() << "expects the same number of results ("
+                         << resultTypes.size() << ") and terminator operands ("
+                         << terminatorOperandTypes.size() << ")";
+  }
+  for (auto &&[i, result, terminatorOperand, iterArg, blockIterArg] :
+       llvm::enumerate(resultTypes, terminatorOperandTypes, iterArgTypes,
+                       blockIterArgTypes)) {
+    auto istr = std::to_string(i);
+    if (llvm::failed(detail::verifyTypesCompatible(
+            llvm::cast<wave::WaveTensorType>(result),
+            llvm::cast<wave::WaveTensorType>(terminatorOperand),
+            /*includeAddressSpace=*/true, getLoc(), "result #" + istr,
+            "terminator operand #" + istr))) {
+      return llvm::failure();
+    }
+  }
+  return llvm::success();
 }
 
 //-----------------------------------------------------------------------------
@@ -1364,7 +1424,8 @@ llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
 
 mlir::MutableOperandRange
 wave::YieldOp::getMutableSuccessorOperands(mlir::RegionSuccessor) {
-  return getValuesMutable();
+  // Create an empty mutable operand range (it has no default constructor).
+  return getValuesMutable().slice(/*subStart=*/0, /*subLen=*/0);
 }
 
 //-----------------------------------------------------------------------------

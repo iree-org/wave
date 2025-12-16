@@ -178,6 +178,7 @@ def IterateOp : Op<WaveDialect, "iterate", [
     "(`captures` `(` $captures^ `)`)?"
     "attr-dict-with-keyword regions `:` functional-type(operands, results)";
   let hasVerifier = 1;
+  let hasRegionVerifier = 1;
 
   let extraClassDeclaration = [{
     // Get the body block.

@@ -295,6 +295,71 @@ public:
     return mlir::success();
   }
 
+  void visitNonControlFlowArguments(mlir::Operation *op,
+                                    const mlir::RegionSuccessor &successor,
+                                    llvm::ArrayRef<InferTypeLattice *> lattices,
+                                    unsigned firstIndex) override {
+    auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
+    if (!iterateOp)
+      return;
+
+    // Technically, the non-captured arguments can be seen as forwarded from
+    // operands or results, but they need special handling to remove
+    // loop-specific parts of the index.
+    assert(firstIndex == 0 &&
+           "expected all arguments to be marked as non-control flow");
+    assert((successor.isParent() ||
+            successor.getSuccessor()->getRegionNumber() == 0) &&
+           "unexpected control flow");
+
+    auto yieldOp =
+        llvm::cast<wave::YieldOp>(iterateOp.getLoopBody()->getTerminator());
+    if (successor.getSuccessor()) {
+      // When successor is the body region, propagate induction variable
+      // lattices from their initial and yielded values.
+      for (auto &&[terminatorOperand, iterArg, lattice] : llvm::zip_equal(
+               yieldOp.getOperands(), iterateOp.getIterArgs(),
+               lattices.take_front(iterateOp.getIterArgs().size()))) {
+        // Fetch the lattice and create a dependecy to re-visit the program
+        // point at the start of the loop body block when the lattice changes
+        // since we know we are processing a branch into the loop body. Taking
+        // the program point before the block / first operation will call
+        // `visitBlock` which may ultimately dispatch here.
+        // TODO: it's a shame we need to dig through implementation details of
+        // the analysis framework to understand what needs to be done.
+        const InferTypeLattice *iterArgLattice = getLatticeElementFor(
+            getProgramPointBefore(iterateOp.getLoopBody()), iterArg);
+        const InferTypeLattice *terminatorOperandLattice = getLatticeElementFor(
+            getProgramPointBefore(iterateOp.getLoopBody()), terminatorOperand);
+        mlir::ChangeResult changed = lattice->join(iterArgLattice->getValue());
+        changed |= lattice->join(terminatorOperandLattice->getValue());
+        propagateIfChanged(lattice, changed);
+      }
+    } else {
+      // When successor is the iterate op itself, propagate lattices from iter
+      // args and terminator operands to results while removing loop-specific
+      // parts of the index.
+      for (auto &&[terminatorOperand, iterArg, resultLattice] : llvm::zip_equal(
+               yieldOp.getOperands(), iterateOp.getIterArgs(), lattices)) {
+        // Fetch the lattice and create a dependency to re-visit the program
+        // point after the iterate op when the lattice changes since we know we
+        // are processing a branch back to the iterate op itself. Taking the
+        // program point after the operation will call `visitOperation` on the
+        // operation itself, which will ultimately dispatch here.
+        // TODO: same as above, we shouldn't need to care about such
+        // implementation details.
+        const InferTypeLattice *terminatorOperandLattice = getLatticeElementFor(
+            getProgramPointAfter(iterateOp), terminatorOperand);
+        const InferTypeLattice *iterArgLattice =
+            getLatticeElementFor(getProgramPointAfter(iterateOp), iterArg);
+        mlir::ChangeResult changed =
+            resultLattice->join(iterArgLattice->getValue());
+        changed |= resultLattice->join(terminatorOperandLattice->getValue());
+        propagateIfChanged(resultLattice, changed);
+      }
+    }
+  }
+
 private:
   // Initialize the lattice instance for the given value to its current type and
   // trigger dataflow propagation. Returns the lattice instance or null if the
@@ -417,14 +482,51 @@ public:
   }
 
   // Specialization of the dataflow transfer function for control flow branch
-  // operation that are not forwarded to the branching target, so they cannot be
-  // backpropagated from there. We do not expect this to happen so move the
-  // lattice instance to the top state, indicating a if this ever happens.
+  // operation that are not forwarded to the branching target. Wave::IterateOp
+  // doesn't use the interface's capability for 1:1 lattice forwarding because
+  // lattices of other analyses change along this dataflow path. Propagate
+  // lattices manually here. For other ops, we do not expect this to happen so
+  // move the lattice instance to the top state, which will result in a type
+  // conflict diagnostic if this ever happens.
   void visitBranchOperand(mlir::OpOperand &opOperand) override {
     auto tensorType =
         llvm::dyn_cast<wave::WaveTensorType>(opOperand.get().getType());
     if (!tensorType)
       return;
+
+    if (auto iterateOp =
+            llvm::dyn_cast<wave::IterateOp>(opOperand.getOwner())) {
+      unsigned position = opOperand.getOperandNumber();
+      mlir::Value blockArgument =
+          iterateOp.getLoopBody()->getArgument(position);
+      const InferTypeLattice *blockArgLattice =
+          getLatticeElement(blockArgument);
+      InferTypeLattice *lattice = getLatticeElement(opOperand.get());
+      // Manually add a dependency because `getLatticeElementFor` is not exposed
+      // upstream for backwards analyses. Using the `after` point because the
+      // logic of the analysis will re-visit the previous operation of the point
+      // (the point itself being between operations), and we want the iterateOp
+      // to be revisited since it is the one we are processing here.
+      // TODO: consider having a `getCurrentProgramPoint` upstream so we don't
+      // have to care about these arguably implementation detail.
+      addDependency(const_cast<InferTypeLattice *>(blockArgLattice),
+                    getProgramPointAfter(iterateOp));
+      propagateIfChanged(lattice, lattice->join(blockArgLattice->getValue()));
+      return;
+    }
+
+    if (auto yieldOp = llvm::dyn_cast<wave::YieldOp>(opOperand.getOwner())) {
+      unsigned position = opOperand.getOperandNumber();
+      mlir::Value result = yieldOp->getParentOp()->getResult(position);
+      const InferTypeLattice *resultLattice = getLatticeElement(result);
+      InferTypeLattice *lattice = getLatticeElement(opOperand.get());
+      // Same as for the `addDependency` above.
+      addDependency(const_cast<InferTypeLattice *>(resultLattice),
+                    getProgramPointAfter(yieldOp));
+      propagateIfChanged(lattice, lattice->join(resultLattice->getValue()));
+      return;
+    }
+
     InferTypeLattice *lattice = getLatticeElement(opOperand.get());
     propagateIfChanged(lattice, lattice->join(InferTypeLatticeStorage::top()));
   }
@@ -560,8 +662,11 @@ public:
 
     llvm::LogicalResult result = setNormalFormPassPostcondition(
         wave::WaveNormalForm::AllTypesSpecified, getOperation());
-    if (llvm::failed(result) && !force)
+    if (llvm::failed(result) && !force) {
+      emitError(getOperation()->getLoc())
+          << "failed to produce code with the expected normal form";
       return signalPassFailure();
+    }
   }
 };
 
@@ -679,6 +784,69 @@ public:
     }
     return mlir::success();
   }
+
+  void visitNonControlFlowArguments(
+      mlir::Operation *op, const mlir::RegionSuccessor &successor,
+      llvm::ArrayRef<ElementsPerThreadLattice *> lattices,
+      unsigned firstIndex) override {
+    auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
+    if (!iterateOp)
+      return;
+
+    // Technically, the non-captured arguments can be seen as forwarded from
+    // operands or results, but they need special handling to remove
+    // loop-specific parts of the index.
+    assert(firstIndex == 0 &&
+           "expected all arguments to be marked as non-control flow");
+    assert((successor.isParent() ||
+            successor.getSuccessor()->getRegionNumber() == 0) &&
+           "unexpected control flow");
+
+    auto yieldOp =
+        llvm::cast<wave::YieldOp>(iterateOp.getLoopBody()->getTerminator());
+    if (successor.getSuccessor()) {
+      // When successor is the body region, propagate induction variable
+      // lattices from their initial and yielded values.
+      for (auto &&[terminatorOperand, iterArg, lattice] : llvm::zip_equal(
+               yieldOp.getOperands(), iterateOp.getIterArgs(),
+               lattices.take_front(iterateOp.getIterArgs().size()))) {
+        // Fetch the lattice and create a dependency to re-visit the program
+        // point at the start of the loop body block when the lattice changes
+        // since we know we are processing a branch into the loop body. Taking
+        // the program point before the block / first operation will call
+        // `visitBlock` which may ultimately dispatch here.
+        const ElementsPerThreadLattice *iterArgLattice = getLatticeElementFor(
+            getProgramPointBefore(iterateOp.getLoopBody()), iterArg);
+        const ElementsPerThreadLattice *terminatorOperandLattice =
+            getLatticeElementFor(getProgramPointBefore(iterateOp.getLoopBody()),
+                                 terminatorOperand);
+        mlir::ChangeResult changed = lattice->join(iterArgLattice->getValue());
+        changed |= lattice->join(terminatorOperandLattice->getValue());
+        propagateIfChanged(lattice, changed);
+      }
+    } else {
+      // When successor is the iterate op itself, propagate lattices from iter
+      // args and terminator operands to results while removing loop-specific
+      // parts of the index.
+      for (auto &&[terminatorOperand, iterArg, resultLattice] : llvm::zip_equal(
+               yieldOp.getOperands(), iterateOp.getIterArgs(), lattices)) {
+        // Fetch the lattice and create a dependency to re-visit the program
+        // point after the iterate op when the lattice changes since we know we
+        // are processing a branch back to the iterate op itself. Taking the
+        // program point after the operation will call `visitOperation` on the
+        // operation itself, which will ultimately dispatch here.
+        const ElementsPerThreadLattice *terminatorOperandLattice =
+            getLatticeElementFor(getProgramPointAfter(iterateOp),
+                                 terminatorOperand);
+        const ElementsPerThreadLattice *iterArgLattice =
+            getLatticeElementFor(getProgramPointAfter(iterateOp), iterArg);
+        mlir::ChangeResult changed =
+            resultLattice->join(iterArgLattice->getValue());
+        changed |= resultLattice->join(terminatorOperandLattice->getValue());
+        propagateIfChanged(resultLattice, changed);
+      }
+    }
+  }
 };
 
 // Dataflow analysis propagating elements-per-thread information from results
@@ -721,13 +889,46 @@ public:
   }
 
   // Specialization of the dataflow transfer function for control flow branch
-  // operation that are not forwarded to the branching target, so they cannot be
-  // backpropagated from there. We do not expect this to happen so move the
-  // lattice instance to the top state, indicating a conflict if this ever
-  // happens.
+  // operation that are not forwarded to the branching target. Wave::IterateOp
+  // doesn't use the interface's capability for 1:1 lattice forwarding because
+  // lattices of other analyses change along this dataflow path. Propagate
+  // lattices manually here. For other ops, we do not expect this to happen so
+  // move the lattice instance to the top state, which will result in a
+  // conflict diagnostic if this ever happens.
   void visitBranchOperand(mlir::OpOperand &opOperand) override {
     if (!wave::isaTensorInRegister(opOperand.get().getType()))
       return;
+
+    if (auto iterateOp =
+            llvm::dyn_cast<wave::IterateOp>(opOperand.getOwner())) {
+      unsigned position = opOperand.getOperandNumber();
+      mlir::Value blockArgument =
+          iterateOp.getLoopBody()->getArgument(position);
+      const ElementsPerThreadLattice *blockArgLattice =
+          getLatticeElement(blockArgument);
+      ElementsPerThreadLattice *lattice = getLatticeElement(opOperand.get());
+      // Manually add a dependency because `getLatticeElementFor` is not exposed
+      // upstream for backwards analyses. Using the `after` point because the
+      // logic of the analysis will re-visit the previous operation of the point
+      // (the point itself being between operations), and we want the iterateOp
+      // to be revisited since it is the one we are processing here.
+      addDependency(const_cast<ElementsPerThreadLattice *>(blockArgLattice),
+                    getProgramPointAfter(iterateOp));
+      propagateIfChanged(lattice, lattice->join(blockArgLattice->getValue()));
+      return;
+    }
+
+    if (auto yieldOp = llvm::dyn_cast<wave::YieldOp>(opOperand.getOwner())) {
+      unsigned position = opOperand.getOperandNumber();
+      mlir::Value result = yieldOp->getParentOp()->getResult(position);
+      const ElementsPerThreadLattice *resultLattice = getLatticeElement(result);
+      ElementsPerThreadLattice *lattice = getLatticeElement(opOperand.get());
+      // Same as for the `addDependency` above.
+      addDependency(const_cast<ElementsPerThreadLattice *>(resultLattice),
+                    getProgramPointAfter(yieldOp));
+      propagateIfChanged(lattice, lattice->join(resultLattice->getValue()));
+      return;
+    }
 
     setToExitState(getLatticeElement(opOperand.get()));
   }
@@ -1131,23 +1332,91 @@ public:
   void
   visitNonControlFlowArguments(mlir::Operation *op,
                                const mlir::RegionSuccessor &successor,
-                               llvm::ArrayRef<IndexExprsLattice *> argLattices,
+                               llvm::ArrayRef<IndexExprsLattice *> lattices,
                                unsigned firstIndex) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
     if (!iterateOp)
       return;
 
-    LDBG() << "visiting " << PrintNoRegions(iterateOp);
+    // Technically, the non-captured arguments can be seen as forwarded from
+    // operands or results, but they need special handling to remove
+    // loop-specific parts of the index.
+    assert(firstIndex == 0 &&
+           "expected all arguments to be marked as non-control flow");
+    assert((successor.isParent() ||
+            successor.getSuccessor()->getRegionNumber() == 0) &&
+           "unexpected control flow");
 
-    for (auto &&[capture, lattice] : llvm::zip_equal(
-             iterateOp.getCaptures(),
-             argLattices.take_back(iterateOp.getCaptures().size()))) {
-      const IndexExprsLattice *captureLattice =
-          getLatticeElementFor(getProgramPointBefore(iterateOp), capture);
-      LDBG() << "captured lattice: " << *captureLattice;
-      LDBG() << "block lattice: " << *lattice;
-      propagateIfChanged(lattice, lattice->join(captureLattice->getValue()));
-      LDBG() << "new block lattice: " << *lattice;
+    auto yieldOp =
+        llvm::cast<wave::YieldOp>(iterateOp.getLoopBody()->getTerminator());
+
+    LDBG() << "visiting " << PrintNoRegions(iterateOp);
+    if (successor.getSuccessor()) {
+      LDBG() << " propagating to region #"
+             << successor.getSuccessor()->getRegionNumber();
+
+      // When successor is the body region, propagate induction variable
+      // lattices from their initial and yielded values.
+      for (auto &&[terminatorOperand, iterArg, lattice] : llvm::zip_equal(
+               yieldOp.getOperands(), iterateOp.getIterArgs(),
+               lattices.take_front(iterateOp.getIterArgs().size()))) {
+        // See comments in
+        // InferTypeForwardAnalysis::visitNonControlFlowArguments.
+        const IndexExprsLattice *iterArgLattice = getLatticeElementFor(
+            getProgramPointBefore(iterateOp.getLoopBody()), iterArg);
+        const IndexExprsLattice *terminatorOperandLattice =
+            getLatticeElementFor(getProgramPointBefore(iterateOp.getLoopBody()),
+                                 terminatorOperand);
+        LDBG() << "iter arg lattice: " << *iterArgLattice;
+        LDBG() << "terminator operand lattice: " << *terminatorOperandLattice;
+        LDBG() << "block lattice: " << *lattice;
+        mlir::ChangeResult changed = lattice->join(iterArgLattice->getValue());
+        changed |= lattice->join(terminatorOperandLattice->getValue());
+        propagateIfChanged(lattice, changed);
+        LDBG() << "new block lattice: " << *lattice;
+      }
+
+      // And also propagate lattices for captured values, which only need to be
+      // propagated from the initial values.
+      for (auto &&[capture, lattice] : llvm::zip_equal(
+               iterateOp.getCaptures(),
+               lattices.take_back(iterateOp.getCaptures().size()))) {
+        // See comments in
+        // InferTypeForwardAnalysis::visitNonControlFlowArguments.
+        const IndexExprsLattice *captureLattice = getLatticeElementFor(
+            getProgramPointBefore(iterateOp.getLoopBody()), capture);
+
+        LDBG() << "captured lattice: " << *captureLattice;
+        LDBG() << "block lattice: " << *lattice;
+        propagateIfChanged(lattice, lattice->join(captureLattice->getValue()));
+        LDBG() << "new block lattice: " << *lattice;
+      }
+    } else {
+      LDBG() << "propagating to parent";
+
+      // When successor is the iterate op itself, propagate lattices from iter
+      // args and terminator operands to results while removing loop-specific
+      // parts of the index.
+      for (auto &&[terminatorOperand, iterArg, resultLattice] : llvm::zip_equal(
+               yieldOp.getOperands(), iterateOp.getIterArgs(), lattices)) {
+        // See comments in
+        // InferTypeForwardAnalysis::visitNonControlFlowArguments.
+        const IndexExprsLattice *terminatorOperandLattice =
+            getLatticeElementFor(getProgramPointAfter(iterateOp),
+                                 terminatorOperand);
+        const IndexExprsLattice *iterArgLattice =
+            getLatticeElementFor(getProgramPointAfter(iterateOp), iterArg);
+        LDBG() << "iter arg lattice: " << *iterArgLattice;
+        LDBG() << "terminator operand lattice: " << *terminatorOperandLattice;
+        LDBG() << "result lattice: " << *resultLattice;
+        mlir::ChangeResult changed =
+            resultLattice->join(iterArgLattice->getValue());
+        changed |= resultLattice->join(
+            terminatorOperandLattice->getValue().withoutIterSymbols(
+                iterateOp.getIterator()));
+        propagateIfChanged(resultLattice, changed);
+        LDBG() << "new result lattice: " << *resultLattice;
+      }
     }
   }
 
@@ -1251,13 +1520,56 @@ public:
       unsigned position = opOperand.getOperandNumber();
       mlir::Value blockArgument =
           iterateOp.getLoopBody()->getArgument(position);
-      const IndexExprsLattice *blockArgLattice =
-          getLatticeElement(blockArgument);
+      IndexExprsLattice *blockArgLattice = getLatticeElement(blockArgument);
       IndexExprsLattice *lattice = getLatticeElement(opOperand.get());
+      // Explicitly add a dependency to update this analysis at the program
+      // point before the iterate if the block argument lattice changes. Using
+      // localized const cast here to avoid accidentally modifying this lattice
+      // in the function.
+      // TODO: expose it upstream and use.
+      addDependency(blockArgLattice, getProgramPointAfter(iterateOp));
+      LDBG() << "propagating backwards from block argument #" << position
+             << " to op operand " << PrintNoRegions(iterateOp);
+      LDBG() << "block argument lattice: " << *blockArgLattice;
+      LDBG() << "lattice: " << *lattice;
+#ifndef NDEBUG
+      propagateIfChanged(
+          lattice, lattice->join(blockArgLattice->getValue().withoutIterSymbols(
+                       iterateOp.getIterator())));
+#else
       IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::join(
           lattice->getValue(), blockArgLattice->getValue().withoutIterSymbols(
                                    iterateOp.getIterator()));
       unsafeSet(lattice, joined);
+#endif
+      LDBG() << "new lattice: " << *lattice;
+      return;
+    }
+
+    // Terminator operands are propagated from op results as is.
+    if (auto yieldOp = llvm::dyn_cast<wave::YieldOp>(opOperand.getOwner())) {
+      unsigned position = opOperand.getOperandNumber();
+      mlir::Value result = yieldOp->getParentOp()->getResult(position);
+      const IndexExprsLattice *resultLattice = getLatticeElement(result);
+      IndexExprsLattice *lattice = getLatticeElement(opOperand.get());
+      // Explicitly add a dependency to update this analysis at the program
+      // point before the terminator if the result lattice changes. Using
+      // localized const cast here to avoid accidentally modifying this lattice.
+      // TODO: expose it upstream and use.
+      addDependency(const_cast<IndexExprsLattice *>(resultLattice),
+                    getProgramPointAfter(yieldOp));
+      LDBG() << "propagating backwards from region-carrying op result #"
+             << position << " to terminator operand " << yieldOp;
+      LDBG() << "result lattice: " << *resultLattice;
+      LDBG() << "lattice: " << *lattice;
+#ifndef NDEBUG
+      propagateIfChanged(lattice, lattice->join(resultLattice->getValue()));
+#else
+      IndexExprsLatticeStorage joined = IndexExprsLatticeStorage::join(
+          lattice->getValue(), resultLattice->getValue());
+      unsafeSet(lattice, joined);
+#endif
+      LDBG() << "new lattice: " << *lattice;
       return;
     }
 

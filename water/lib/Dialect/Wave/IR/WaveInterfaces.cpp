@@ -424,8 +424,8 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
         lhs.getAddressSpaceValue() != wave::WaveAddressSpace::Unspecified &&
         rhs.getAddressSpaceValue() != wave::WaveAddressSpace::Unspecified) {
       if (errorLocation) {
-        emitError(*errorLocation) << "address space mismatch between" << lhsName
-                                  << " and " << rhsName;
+        emitError(*errorLocation) << "address space mismatch between "
+                                  << lhsName << " and " << rhsName;
       }
       return mlir::failure();
     }

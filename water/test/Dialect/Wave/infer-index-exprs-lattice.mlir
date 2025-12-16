@@ -715,6 +715,8 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // -----
 
 // Joining different iter symbols with is fine and results in a sum.
+// Also check that we are not leaking iter symbols to operations after the loop
+// by checking that they are not used in expressions for loop results.
 
 module attributes { wave.normal_form = #wave.normal_form<full_types> } {
   // CHECK-LABEL: @join_iters
@@ -726,8 +728,14 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
     ]
   } {
+    // CHECK: wave.iterate @M
+    // CHECK-SAME: index
+    // CHECK-SAME: M = #wave<index_mapping[] -> (0, 1, 1)>
     %result = wave.iterate @M iter_args(%b) {
     ^bb0(%b_arg: !wave.tensor<[@M, @K] of f32>):
+      // CHECK: wave.iterate @K
+      // CHECK-SAME: index
+      // CHECK-SAME: M = #wave<index_mapping[#wave.iter<"M">] -> (_Iter_M, 1, 1)>
       %inner_result = wave.iterate @K iter_args(%a) {
       ^bb1(%a_arg: !wave.tensor<[@M, @K] of f32>):
         // CHECK: wave.add
