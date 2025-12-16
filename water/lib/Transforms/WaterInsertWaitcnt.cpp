@@ -29,6 +29,10 @@ namespace mlir::water {
 } // namespace mlir::water
 
 namespace {
+static bool isBarrier(Operation *op) {
+  return isa<gpu::BarrierOp>(op) || isa<amdgpu::LDSBarrierOp>(op);
+}
+
 static bool isRegisterAddressSpace(MemRefType type) {
   auto attr = dyn_cast_or_null<IntegerAttr>(type.getMemorySpace());
   return attr && attr.getInt() == 128;
@@ -114,6 +118,9 @@ struct PendingOperations {
     if (size() >= 256)
       llvm::report_fatal_error("Pending operations list is too long");
 
+    if (!ops.empty() && isBarrier(op) && isBarrier(ops.back()))
+      return opsTokens.back();
+
     ops.push_back(op);
     auto &back = opsTokens.emplace_back();
     if (auto memref = isStoreOp(op))
@@ -164,6 +171,14 @@ struct PendingOperations {
       print_range(os, std::get<1>(opAndTok));
     });
     os << "]";
+  }
+
+  bool operator==(const PendingOperations &other) const {
+    return ops == other.ops && opsTokens == other.opsTokens;
+  }
+
+  bool operator!=(const PendingOperations &other) const {
+    return !(*this == other);
   }
 
   SmallVector<Operation *> ops;
@@ -314,6 +329,31 @@ public:
     return changed ? ChangeResult::Change : ChangeResult::NoChange;
   }
 
+  ChangeResult merge(const WaitcntState &rhs) {
+    bool changed = false;
+
+    if (pendingOpsLists.size() != rhs.pendingOpsLists.size()) {
+      changed = true;
+    } else {
+      for (auto [listSrc, listDst] :
+           llvm::zip(pendingOpsLists, rhs.pendingOpsLists)) {
+        if (*listSrc != *listDst) {
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    if (changed) {
+      pendingOpsLists = rhs.pendingOpsLists;
+      resetPendingOpsSet();
+    }
+
+    if (requirement.merge(rhs.requirement))
+      changed = true;
+    return changed ? ChangeResult::Change : ChangeResult::NoChange;
+  }
+
   void print(raw_ostream &os) const override {
     os << "WaitcntState: pending ops [";
     for (auto &pendingOps : pendingOpsLists) {
@@ -416,7 +456,9 @@ public:
   bool hasRequirement() const { return requirement.hasRequirement(); }
 
   /// Check if a value depends on pending operations and compute required wait
-  WaitcntRequirement checkRequirement(Value val) const {
+  WaitcntRequirement
+  checkSSADependency(Value val,
+                     llvm::SmallSetVector<Operation *, 4> &barriers) const {
     // Check if val is produced by any pending operation
     Operation *defOp = val.getDefiningOp();
     if (!defOp)
@@ -430,6 +472,8 @@ public:
       if (pendingOps->empty())
         continue;
 
+      Operation *barrier = nullptr;
+
       // Search from the back to find the most recent dependency
       bool found = false;
       auto req = WaitcntRequirement::getOperationRequirement(defOp, true);
@@ -439,6 +483,9 @@ public:
           break;
         }
 
+        if (!barrier && isBarrier(op))
+          barrier = op;
+
         auto opReq = WaitcntRequirement::getOperationRequirement(op, false);
         if (!req.isSameCounterType(opReq))
           continue;
@@ -446,15 +493,20 @@ public:
         req = req + opReq;
       }
 
-      if (found)
+      if (found) {
         result.merge(req);
+        if (barrier)
+          barriers.insert(barrier);
+      }
     }
 
     return result;
   }
 
   /// Check for memory dependencies (RAW, WAR, WAW)  and compute required wait
-  WaitcntRequirement checkMemoryDependency(Operation *op) const {
+  WaitcntRequirement
+  checkMemoryDependency(Operation *op,
+                        llvm::SmallSetVector<Operation *, 4> &barriers) const {
     auto checkMemref = [&](Value memref, bool isCurrentLoad,
                            bool isCurrentStore) -> WaitcntRequirement {
       WaitcntRequirement result;
@@ -465,10 +517,16 @@ public:
         if (pendingOps->empty())
           continue;
 
+        Operation *barrier = nullptr;
+
         // Search from the back to find the most recent dependency
         for (const auto &[pendingOp, pendingTokens] :
              llvm::zip(llvm::reverse(pendingOps->ops),
                        llvm::reverse(pendingOps->opsTokens))) {
+
+          if (!barrier && isBarrier(pendingOp))
+            barrier = pendingOp;
+
           auto checkPendingMemref =
               [&](Value pendingMemref, bool isPendingLoad,
                   bool isPendingStore) -> WaitcntRequirement {
@@ -500,6 +558,9 @@ public:
               }
               pendingResult.merge(req);
             }
+            if (pendingResult.hasRequirement() && barrier)
+              barriers.insert(barrier);
+
             return pendingResult;
           };
           if (auto loadBase = isLoadOp(pendingOp))
@@ -609,21 +670,47 @@ public:
     // Start with the state before this operation
     WaitcntState newState = before;
 
+    if (isBarrier(op)) {
+      LDBG() << "  Barrier: " << *op;
+      newState.addPendingOp(op);
+      LDBG() << "  New state: " << newState;
+      propagateIfChanged(after, after->join(newState));
+      return success();
+    }
+
+    llvm::SmallSetVector<Operation *, 4> barriers;
+
     // Check if any operands depend on pending operations (value dependency)
     WaitcntRequirement opRequirement = after->getRequirement();
     for (Value operand : op->getOperands()) {
-      if (auto req = before.checkRequirement(operand)) {
+      if (auto req = before.checkSSADependency(operand, barriers)) {
         // Merge this requirement (take minimum for conservative wait)
         opRequirement.merge(req);
       }
     }
 
     // Check for memory dependencies (RAW, WAR, WAW)
-    if (auto memReq = before.checkMemoryDependency(op)) {
+    if (auto memReq = before.checkMemoryDependency(op, barriers)) {
       LDBG() << "  Memory dependency: " << memReq;
       opRequirement.merge(memReq);
     } else {
       LDBG() << "  No memory dependency";
+    }
+
+    if (opRequirement.hasRequirement() && !barriers.empty()) {
+      // newState.setRequirement(opRequirement);
+      LDBG() << "  Barriers found, requirement: " << opRequirement;
+      for (Operation *barrier : barriers) {
+        LDBG() << "    " << *barrier;
+        WaitcntState *beforeState =
+            getOrCreate<WaitcntState>(getProgramPointBefore(barrier));
+        WaitcntState *afterState =
+            getOrCreate<WaitcntState>(getProgramPointAfter(barrier));
+        WaitcntState newBarrierState = *beforeState;
+        newBarrierState.setRequirement(opRequirement);
+        propagateIfChanged(afterState, afterState->merge(newBarrierState));
+      }
+      return success();
     }
 
     // Check if this is an existing memory_counter_wait operation
@@ -649,7 +736,7 @@ public:
     }
 
     LDBG() << "  New state: " << newState;
-    propagateIfChanged(after, after->join(newState));
+    propagateIfChanged(after, after->merge(newState));
     return success();
   }
 
