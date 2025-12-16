@@ -141,6 +141,12 @@ struct PendingOperations {
     return llvm::zip(ops, opsTokens);
   }
 
+  auto opsAndTokensReverse() const {
+    assert(ops.size() == opsTokens.size() &&
+           "ops and opsTokens must have the same size");
+    return llvm::zip(llvm::reverse(ops), llvm::reverse(opsTokens));
+  }
+
   bool hasSameTail(const PendingOperations &other) const {
     for (const auto &[op1, op2, tok1, tok2] :
          llvm::zip(llvm::reverse(ops), llvm::reverse(other.ops),
@@ -521,17 +527,18 @@ public:
 
         // Search from the back to find the most recent dependency
         for (const auto &[pendingOp, pendingTokens] :
-             llvm::zip(llvm::reverse(pendingOps->ops),
-                       llvm::reverse(pendingOps->opsTokens))) {
+             pendingOps->opsAndTokensReverse()) {
 
           if (!barrier && isBarrier(pendingOp))
             barrier = pendingOp;
 
+          // We canot capture structured bindings into lambda, thanks C++
+          auto &pendingTok = pendingTokens;
           auto checkPendingMemref =
               [&](Value pendingMemref, bool isPendingLoad,
                   bool isPendingStore) -> WaitcntRequirement {
             WaitcntRequirement pendingResult;
-            if (!mayAlias(memref, pendingMemref, pendingTokens))
+            if (!mayAlias(memref, pendingMemref, pendingTok))
               return pendingResult;
 
             // Check for dependencies:
