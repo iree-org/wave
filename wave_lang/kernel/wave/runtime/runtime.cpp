@@ -5,9 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <array>
+#include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <iostream>
+#include <filesystem>
+#include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/string.h>
@@ -194,22 +195,29 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
   }
 }
 
-// Reads the entire contents of a binary file into a vector of characters.
-// Returns an empty vector if the file cannot be opened.
-static std::vector<char> readFileIntoVector(const std::string &filename) {
-  std::ifstream file(filename, std::ios::binary | std::ios::ate);
-
-  if (!file.is_open()) {
-    std::cerr << "Unable to open file: " << filename << std::endl;
-    return std::vector<char>();
+// Reads the entire contents of a binary file into a unique_ptr to char array.
+// Throws std::runtime_error if the file cannot be read.
+static std::unique_ptr<char[]> readFileIntoVector(const std::string &filename) {
+  std::error_code ec;
+  auto size = std::filesystem::file_size(filename, ec);
+  if (ec) {
+    throw std::runtime_error("Unable to get file size: " + filename + " - " +
+                             ec.message());
   }
 
-  std::streamsize size = file.tellg();
-  file.seekg(0, std::ios::beg);
+  FILE *file = fopen(filename.c_str(), "rb");
+  if (!file) {
+    throw std::runtime_error("Unable to open file: " + filename);
+  }
 
-  std::vector<char> buffer(size);
-  file.read(buffer.data(), size);
-  file.close();
+  auto buffer = std::make_unique<char[]>(size);
+  size_t bytes_read = fread(buffer.get(), 1, size, file);
+  fclose(file);
+
+  if (bytes_read != size) {
+    throw std::runtime_error("Failed to read entire file: " + filename);
+  }
+
   return buffer;
 }
 
@@ -217,8 +225,8 @@ static nb::tuple load_binary(const std::string &path,
                              const std::string &func_name) {
   hipModule_t module;
   hipFunction_t function;
-  std::vector<char> hsacoVec = readFileIntoVector(path);
-  HIP_CHECK_EXC(hipModuleLoadData(&module, hsacoVec.data()));
+  auto hsacoVec = readFileIntoVector(path);
+  HIP_CHECK_EXC(hipModuleLoadData(&module, hsacoVec.get()));
   HIP_CHECK_EXC(hipModuleGetFunction(&function, module, func_name.c_str()));
   nb::capsule capsule(reinterpret_cast<void *>(module));
   return nb::make_tuple(capsule, reinterpret_cast<uintptr_t>(function));
