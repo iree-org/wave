@@ -930,8 +930,8 @@ public:
 
     MLIRContext *ctx = &getContext();
 
-    // Assume Wave32 for gfx12+ for now.
-    unsigned totalVGPRs = chip->majorVersion >= 12 ? 1024 : 256;
+    unsigned totalVGPRs =
+        chip->majorVersion >= 12 && chip->minorVersion >= 5 ? 1024 : 256;
 
     // Check if function has VGPR allocation and insert inline asm directive.
     auto vgprAttr = func->getAttrOfType<IntegerAttr>("water.total_vgprs");
