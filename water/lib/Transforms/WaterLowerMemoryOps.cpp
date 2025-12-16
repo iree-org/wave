@@ -39,6 +39,17 @@ static unsigned getBitwidth(Type type) {
   return type.getIntOrFloatBitWidth();
 }
 
+static std::string getVGPRConstraint(unsigned vgprOffset, unsigned vgprNum,
+                                     unsigned vgprCount, bool isOutput) {
+  std::string constraint;
+  if (vgprCount == 1)
+    constraint = "{v" + std::to_string(vgprOffset + vgprNum) + "}";
+  else
+    constraint = "{v[" + std::to_string(vgprOffset + vgprNum) + ":" +
+                 std::to_string(vgprOffset + vgprNum + vgprCount - 1) + "]}";
+  return isOutput ? "=" + constraint : constraint;
+}
+
 /// Get the AMDGPU instruction suffix based on bit width (for loads - unsigned)
 static FailureOr<StringRef> getSizeSuffixLoad(unsigned bitWidth) {
   switch (bitWidth) {
@@ -321,6 +332,9 @@ static LogicalResult lowerLoadBuffer(LoadOpTy loadOp, IRRewriter &rewriter,
                                      bool isRDNAArch) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
+  // TODO: for bitwidths less than 32, we will need to truncate the value to 32
+  // immediately after the load, breaking the calculated dependencies.
+  // For now, just let llvm handle the loading
   if (bitWidth < 32)
     return success();
 
@@ -369,9 +383,6 @@ template <typename LoadOpTy>
 static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
   auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
 
-  // TODO: for bitwidths less than 32, we will need to truncate the value to 32
-  // immediately after the load, breaking the calculated dependencies.
-  // For now, just let llvm handle the loading
   if (bitWidth < 32)
     return success();
 
@@ -399,6 +410,43 @@ static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
 
   // Create the inline assembly operation with result type directly
   auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{addr},
+                               asmStr, constraints, /*hasSideEffects=*/true);
+
+  rewriter.replaceOp(loadOp, asmOp.getResult(0));
+  return success();
+}
+
+/// Lower vector/scalar load to AMDGPU DS load inline assembly
+template <typename LoadOpTy>
+static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
+  auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
+
+  if (bitWidth < 32)
+    return success();
+
+  FailureOr<StringRef> suffix = getSizeSuffixLoad(bitWidth);
+  if (failed(suffix))
+    return loadOp.emitError("unsupported DS load bit width: ") << bitWidth;
+
+  Location loc = loadOp.getLoc();
+  rewriter.setInsertionPoint(loadOp);
+
+  // Build inline assembly: "ds_read_b32 $0, $1"
+  std::string asmStr = ("ds_read_" + *suffix + " $0, $1").str();
+
+  // Constraints: "=v" for output (VGPR), "v" for address (VGPR)
+  StringRef constraints = "=v,v";
+
+  // Compute byte offset as i64
+  unsigned elementBitWidth =
+      std::is_same_v<LoadOpTy, vector::LoadOp>
+          ? cast<VectorType>(resultType).getElementTypeBitWidth()
+          : bitWidth;
+  Value offset = computeMemrefAddress<32, 3>(
+      rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
+
+  // Create inline assembly operation (DS operations use 32-bit addresses)
+  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{offset},
                                asmStr, constraints, /*hasSideEffects=*/true);
 
   rewriter.replaceOp(loadOp, asmOp.getResult(0));
@@ -506,43 +554,6 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
   return success();
 }
 
-/// Lower vector/scalar load to AMDGPU DS load inline assembly
-template <typename LoadOpTy>
-static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
-  auto [memref, resultType, bitWidth] = getLoadOpInfo(loadOp);
-
-  if (bitWidth < 32)
-    return success();
-
-  FailureOr<StringRef> suffix = getSizeSuffixLoad(bitWidth);
-  if (failed(suffix))
-    return loadOp.emitError("unsupported DS load bit width: ") << bitWidth;
-
-  Location loc = loadOp.getLoc();
-  rewriter.setInsertionPoint(loadOp);
-
-  // Build inline assembly: "ds_read_b32 $0, $1"
-  std::string asmStr = ("ds_read_" + *suffix + " $0, $1").str();
-
-  // Constraints: "=v" for output (VGPR), "v" for address (VGPR)
-  StringRef constraints = "=v,v";
-
-  // Compute byte offset as i64
-  unsigned elementBitWidth =
-      std::is_same_v<LoadOpTy, vector::LoadOp>
-          ? cast<VectorType>(resultType).getElementTypeBitWidth()
-          : bitWidth;
-  Value offset = computeMemrefAddress<32, 3>(
-      rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
-
-  // Create inline assembly operation (DS operations use 32-bit addresses)
-  auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{offset},
-                               asmStr, constraints, /*hasSideEffects=*/true);
-
-  rewriter.replaceOp(loadOp, asmOp.getResult(0));
-  return success();
-}
-
 /// Lower vector/scalar store to AMDGPU DS store inline assembly
 template <typename StoreOpTy>
 static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
@@ -620,17 +631,6 @@ static bool usesRegisterSpace(Value memref) {
     return intAttr.getInt() == 128;
 
   return false;
-}
-
-static std::string getVGPRConstraint(unsigned vgprOffset, unsigned vgprNum,
-                                     unsigned vgprCount, bool isOutput) {
-  std::string constraint;
-  if (vgprCount == 1)
-    constraint = "{v" + std::to_string(vgprOffset + vgprNum) + "}";
-  else
-    constraint = "{v[" + std::to_string(vgprOffset + vgprNum) + ":" +
-                 std::to_string(vgprOffset + vgprNum + vgprCount - 1) + "]}";
-  return isOutput ? "=" + constraint : constraint;
 }
 
 /// Lower memref.copy when destination is in register space - buffer variant
