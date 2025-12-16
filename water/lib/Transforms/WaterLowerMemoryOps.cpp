@@ -133,11 +133,12 @@ static Value computeMemrefByteOffset(IRRewriter &rewriter, Location loc,
 
 /// Compute the final address for a memref access with indices (for global
 /// operations)
+template <int Bits, int MemSpace>
 static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
                                   Value memref, ValueRange indices,
                                   unsigned elementBitWidth) {
-  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext());
-  auto i64Type = rewriter.getI64Type();
+  auto ptrType = LLVM::LLVMPointerType::get(rewriter.getContext(), MemSpace);
+  auto intType = rewriter.getIntegerType(Bits);
 
   // Extract base pointer
   auto metadataOp =
@@ -147,11 +148,11 @@ static Value computeMemrefAddress(IRRewriter &rewriter, Location loc,
   // Convert base pointer to i64
   Value basePtrInt =
       memref::ExtractAlignedPointerAsIndexOp::create(rewriter, loc, basePtr);
-  basePtrInt = arith::IndexCastOp::create(rewriter, loc, i64Type, basePtrInt);
+  basePtrInt = arith::IndexCastOp::create(rewriter, loc, intType, basePtrInt);
 
   // Compute byte offset
-  Value byteOffsetI64 = computeMemrefByteOffset<64>(rewriter, loc, memref,
-                                                    indices, elementBitWidth);
+  Value byteOffsetI64 = computeMemrefByteOffset<Bits>(rewriter, loc, memref,
+                                                      indices, elementBitWidth);
 
   // Add byte offset to base pointer
   Value finalAddr =
@@ -393,8 +394,8 @@ static LogicalResult lowerLoadGlobal(LoadOpTy loadOp, IRRewriter &rewriter) {
       std::is_same_v<LoadOpTy, vector::LoadOp>
           ? cast<VectorType>(resultType).getElementTypeBitWidth()
           : bitWidth;
-  Value addr = computeMemrefAddress(rewriter, loc, memref, loadOp.getIndices(),
-                                    elementBitWidth);
+  Value addr = computeMemrefAddress<64, 0>(
+      rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
   // Create the inline assembly operation with result type directly
   auto asmOp = createInlineAsm(rewriter, loc, resultType, ValueRange{addr},
@@ -492,8 +493,8 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter) {
       std::is_same_v<StoreOpTy, vector::StoreOp>
           ? cast<VectorType>(valueType).getElementTypeBitWidth()
           : bitWidth;
-  Value addr = computeMemrefAddress(rewriter, loc, memref, storeOp.getIndices(),
-                                    elementBitWidth);
+  Value addr = computeMemrefAddress<64, 0>(
+      rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
   Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
 
@@ -531,7 +532,7 @@ static LogicalResult lowerLoadDS(LoadOpTy loadOp, IRRewriter &rewriter) {
       std::is_same_v<LoadOpTy, vector::LoadOp>
           ? cast<VectorType>(resultType).getElementTypeBitWidth()
           : bitWidth;
-  Value offset = computeMemrefByteOffset<32>(
+  Value offset = computeMemrefAddress<32, 3>(
       rewriter, loc, memref, loadOp.getIndices(), elementBitWidth);
 
   // Create inline assembly operation (DS operations use 32-bit addresses)
@@ -565,7 +566,7 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter) {
       std::is_same_v<StoreOpTy, vector::StoreOp>
           ? cast<VectorType>(valueType).getElementTypeBitWidth()
           : bitWidth;
-  Value offset = computeMemrefByteOffset<32>(
+  Value offset = computeMemrefAddress<32, 3>(
       rewriter, loc, memref, storeOp.getIndices(), elementBitWidth);
 
   Value valueToStore = extendTo32(storeOp.getValueToStore(), rewriter, loc);
@@ -690,7 +691,7 @@ static LogicalResult lowerCopyToRegisterSpaceDS(
   rewriter.setInsertionPoint(copyOp);
 
   // Compute byte offset
-  Value offset = computeMemrefByteOffset<32>(rewriter, loc, src, /*indices=*/{},
+  Value offset = computeMemrefAddress<32, 3>(rewriter, loc, src, /*indices=*/{},
                                              elementBitWidth);
 
   // Build constraint with specific VGPR
@@ -723,8 +724,8 @@ static LogicalResult lowerCopyToRegisterSpaceGlobal(
   rewriter.setInsertionPoint(copyOp);
 
   // Compute source address
-  Value addr =
-      computeMemrefAddress(rewriter, loc, src, /*indices=*/{}, elementBitWidth);
+  Value addr = computeMemrefAddress<64, 0>(rewriter, loc, src, /*indices=*/{},
+                                           elementBitWidth);
 
   // Build constraint with specific VGPR
   std::string constraints =

@@ -18,6 +18,7 @@ from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
 from ..common.utils import param_bool, require_e2e, use_water_backend_bool
 from ._test_util import get_test_shapes
+from wave_lang.kernel.lang.global_symbols import SHARED_ADDRESS_SPACE
 
 
 def get_copy_template(
@@ -124,6 +125,76 @@ def test_dynamic_copy(
         use_buffer_ops=use_buffer_ops,
         use_water_backend=use_water_backend,
         use_dynamic_dims=True,
+    )
+    options = set_default_run_config(options)
+    test = wave_compile(options, test)
+
+    a = device_randn(shape, dtype=torch.float16)
+    b = device_zeros(shape, dtype=torch.float16)
+    test(a, b)
+    assert_close(a, b)
+
+
+@require_e2e
+@pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
+@param_bool("use_buffer_ops", "buf_ops")
+@use_water_backend_bool("use_water_backend")
+@check_leaks
+def test_copy_shared_memory(
+    shape: tuple[int, int],
+    use_buffer_ops: bool,
+    run_bench: bool,
+    use_water_backend: bool,
+) -> None:
+    M = tkl.sym.M
+    N = tkl.sym.N
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+
+    # Each workgroup works on single row of input data, and rows are further
+    # split into blocks of size up to 256. We have single wave per WG,
+    # and with default wave size of 64, each thread is operating on up to 4
+    # elements.
+    wave_size = 64
+    BLOCK_M = 1
+    # Tile size cannot be dynamic, so we use a fixed value here.
+    BLOCK_N = sympy.Max(sympy.Min(shape[1], 256), wave_size)
+
+    constraints: list[tkw.Constraint] = [
+        tkw.HardwareConstraint(
+            threads_per_wave=wave_size,
+            vector_shapes={M: BLOCK_M, N: BLOCK_N},
+        )
+    ]
+    constraints += [tkw.WorkgroupConstraint(M, BLOCK_M, 1)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 0)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N)]
+
+    @tkw.wave(constraints)
+    def test(
+        a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        shared = tkw.allocate((M, N), (BLOCK_M, BLOCK_N), tkl.f16, SHARED_ADDRESS_SPACE)
+        res = tkw.read(a)
+        tkw.write(res, shared)
+        tkw.shared_memory_barrier()
+        res_shared = tkw.read(shared)
+        tkw.write(res_shared, b)
+
+    subs = {
+        M: shape[0],
+        N: shape[1],
+        ADDRESS_SPACE: tkl.AddressSpace.GLOBAL_MEMORY.value,
+    }
+
+    options = WaveCompileOptions(
+        subs=subs,
+        canonicalize=True,
+        run_bench=run_bench,
+        use_buffer_ops=use_buffer_ops,
+        use_water_backend=use_water_backend,
+        minimize_shared_allocs=False,  # TODO: minimize_shared_allocs=True is broken
     )
     options = set_default_run_config(options)
     test = wave_compile(options, test)
