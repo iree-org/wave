@@ -828,10 +828,8 @@ public:
     loadBaselineAnalyses(solver);
     solver.load<WaitcntAnalysis>();
 
-    if (failed(solver.initializeAndRun(op))) {
-      signalPassFailure();
-      return;
-    }
+    if (failed(solver.initializeAndRun(op)))
+      return signalPassFailure();
 
     // Insert waitcnt operations based on analysis results
     IRRewriter rewriter(&getContext());
