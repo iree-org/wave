@@ -530,7 +530,7 @@ public:
              pendingOps->opsAndTokensReverse()) {
 
           if (!barrier && isBarrier(pendingOpVar))
-            barrier = pendingOp;
+            barrier = pendingOpVar;
 
           // We canot capture structured bindings into lambda, thanks C++.
           auto &pendingTokens = pendingTokensVar;
@@ -539,7 +539,7 @@ public:
               [&](Value pendingMemref, bool isPendingLoad,
                   bool isPendingStore) -> WaitcntRequirement {
             WaitcntRequirement pendingResult;
-            if (!mayAlias(memref, pendingMemref, pendingTok))
+            if (!mayAlias(memref, pendingMemref, pendingTokens))
               return pendingResult;
 
             // Check for dependencies:
