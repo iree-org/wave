@@ -382,22 +382,34 @@ def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
 def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
   let mnemonic = "index_mapping";
   let description = [{
-    An affine map with named symbols for Wave indexing expressions.
+    An attribute capturing how symbols indexing a tensor are distributed
+    across concurrent threads, workgroups, devices, and loop tiles.
 
-    This attribute preserves meaningful symbol names (e.g., WG0, BLOCK_M, T0)
-    while storing affine maps internally for start, step, and stride. The
-    symbol_names array corresponds 1:1 to the symbols in the affine
-    expressions, where s0 maps to symbol_names[0], s1 to symbol_names[1], etc.
+    In this attribute, the start expression corresponds to the offset from
+    the start of the tensor dimension, the step corresponds to the number
+    of consecutive elements taken (i.e., corresponding to the `vector.step`
+    operation to index into them) and the stride corresponds to the number
+    of elements to step over in this dimension to get to the next block
+    of consecutive elements that are accessed by the current thread. The
+    start expression is an affine expression where positional affine symbols
+    are mapped to specific wave symbols. It will typically include thread and
+    workgroup index symbols (the absence thereof indicates that all threads or
+    all workgroups access the same element, i.e., a broadcast), as well as
+    loop iteration symbols for operations nested in loops. Start and stride
+    are constant values.
 
-    Custom syntax: [symbol_name attributes] -> (start_expr, step_expr, stride_expr)
-    Example: [wave.index_symbol<WG0>, wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + 42, 1, BLOCK_M)
+    The symbols array corresponds 1:1 to the symbols in the affine map, where
+    s0 maps to symbols[0], s1 to symbols[1], etc.
+
+    Custom syntax: `[symbol_name attributes] -> (start_expr, step, stride)`
+    Example: `[wave.index_symbol<WG0>, wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + 42, 1, 4)`
   }];
 
   let parameters = (ins
     ArrayRefParameter<"::mlir::Attribute">:$symbols,
     "::mlir::AffineMap":$start,
-    "::mlir::AffineMap":$step,
-    "::mlir::AffineMap":$stride
+    "uint64_t":$step,
+    "uint64_t":$stride
   );
 
   let hasCustomAssemblyFormat = 1;

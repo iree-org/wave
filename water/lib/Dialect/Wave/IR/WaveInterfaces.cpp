@@ -50,35 +50,20 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
                << val;
 
       auto mapping = cast<wave::WaveIndexMappingAttr>(val);
-      auto checkNoDims = [&](AffineMap map, StringRef which) -> LogicalResult {
-        if (map.getNumDims() != 0)
-          return op->emitError(
-                     "wave indexing " + which +
-                     " map should have no dimensions, only symbols, got ")
-                 << map.getNumDims() << " dimensions for symbol "
-                 << named.getName();
-        return success();
-      };
-
-      AffineMap startMap = mapping.getStart();
-      AffineMap stepMap = mapping.getStep();
-      AffineMap strideMap = mapping.getStride();
-      if (failed(checkNoDims(startMap, "start")) ||
-          failed(checkNoDims(stepMap, "step")) ||
-          failed(checkNoDims(strideMap, "stride")))
-        return failure();
+      if (mapping.getStart().getNumDims() != 0) {
+        return op->emitError("wave indexing start map should have no "
+                             "dimensions, only symbols, got ")
+               << mapping.getStart().getNumDims() << " dimensions for symbol "
+               << named.getName();
+      }
 
       unsigned declared = mapping.getSymbols().size();
-      if (startMap.getNumSymbols() != declared ||
-          stepMap.getNumSymbols() != declared ||
-          strideMap.getNumSymbols() != declared) {
+      if (mapping.getStart().getNumSymbols() != declared) {
         return op->emitError(
                    "inconsistent symbol count between symbol_names and "
                    "affine maps for index symbol '")
-               << named.getName() << "' (expected " << declared
-               << ", got start=" << startMap.getNumSymbols()
-               << ", step=" << stepMap.getNumSymbols()
-               << ", stride=" << strideMap.getNumSymbols() << ")";
+               << named.getName() << "' (expected " << declared << ", got "
+               << mapping.getStart().getNumSymbols() << ")";
       }
 
       for (auto symbol : mapping.getSymbols()) {
@@ -691,13 +676,9 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     auto isThreadDependent = [&](wave::WaveIndexMappingAttr val) -> bool {
       llvm::SmallVector<unsigned> threadLikeSymbolPositions;
       getThreadLikeSymbolPositions(val.getSymbols(), threadLikeSymbolPositions);
-      return llvm::any_of(
-          llvm::ArrayRef{val.getStart(), val.getStep(), val.getStride()},
-          [&](mlir::AffineMap map) {
-            return llvm::any_of(threadLikeSymbolPositions, [&](unsigned pos) {
-              return map.isFunctionOfSymbol(pos);
-            });
-          });
+      return llvm::any_of(threadLikeSymbolPositions, [&](unsigned pos) {
+        return val.getStart().isFunctionOfSymbol(pos);
+      });
     };
 
     // If both are thread-dependent or thread-independent, the only acceptable
@@ -728,18 +709,6 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
         alignMapSymbols(threadIndependentMapping.getStart(),
                         threadIndependentSymbols, allSymbols);
 
-    mlir::AffineMap threadDependentStep = alignMapSymbols(
-        threadDependentMapping.getStep(), threadDependentSymbols, allSymbols);
-    mlir::AffineMap threadIndependentStep =
-        alignMapSymbols(threadIndependentMapping.getStep(),
-                        threadIndependentSymbols, allSymbols);
-
-    mlir::AffineMap threadDependentStride = alignMapSymbols(
-        threadDependentMapping.getStride(), threadDependentSymbols, allSymbols);
-    mlir::AffineMap threadIndependentStride =
-        alignMapSymbols(threadIndependentMapping.getStride(),
-                        threadIndependentSymbols, allSymbols);
-
     // Subtract the thread-independent from thread-dependent for each.
     auto subtractMaps = [&](mlir::AffineMap a,
                             mlir::AffineMap b) -> mlir::AffineMap {
@@ -754,10 +723,6 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     };
     mlir::AffineMap newStart =
         subtractMaps(threadDependentStart, threadIndependentStart);
-    mlir::AffineMap newStep =
-        subtractMaps(threadDependentStep, threadIndependentStep);
-    mlir::AffineMap newStride =
-        subtractMaps(threadDependentStride, threadIndependentStride);
 
     llvm::SmallVector<unsigned> threadLikeSymbolPositions;
     getThreadLikeSymbolPositions(allSymbols, threadLikeSymbolPositions);
@@ -775,8 +740,7 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
       return !walkResult.wasInterrupted();
     };
 
-    if (!isOnlyThreadDependent(newStart) || !isOnlyThreadDependent(newStep) ||
-        !isOnlyThreadDependent(newStride))
+    if (!isOnlyThreadDependent(newStart))
       return top();
 
     result[namedAttr.getName()] = threadDependentMapping;
