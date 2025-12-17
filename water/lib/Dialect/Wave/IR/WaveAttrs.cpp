@@ -41,6 +41,8 @@ using namespace wave;
 // Helpers
 //===----------------------------------------------------------------------===//
 
+constexpr llvm::StringLiteral kNullExpr = "NULL";
+
 /// Helper function to parse an affine wave expression with the wave
 /// symbol names passed in `names`.
 static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
@@ -48,7 +50,7 @@ static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
                                       bool allowNull = false) {
   MLIRContext *context = parser.getContext();
   if (allowNull && succeeded(parser.parseOptionalLess()) &&
-      succeeded(parser.parseKeyword("NULL")) &&
+      succeeded(parser.parseKeyword(kNullExpr)) &&
       succeeded(parser.parseGreater())) {
     outExpr = nullptr;
     return success();
@@ -70,7 +72,7 @@ static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
 // the provided `names` array.
 std::string stringifyWithNames(AffineMap map, ArrayRef<StringRef> names) {
   if (!map)
-    return "<NULL>";
+    return "<" + kNullExpr.str() + ">";
   AffineExpr expr = map.getResult(0);
   std::string exprStr;
   llvm::raw_string_ostream os(exprStr);

@@ -769,7 +769,7 @@ static FailureOr<AffineMap> getIndexExprsJoinedMap(
   // TODO: consider whether we want to allow one of the sides being 0 here. If
   // we do, we will have to be more careful to construct a constant difference
   // map here instead of taking the RHS constant in subtraction below.
-  auto zeroExpr = getAffineConstantExpr(0, ctx);
+  AffineExpr zeroExpr = getAffineConstantExpr(0, ctx);
   SmallVector<AffineExpr> symReplacements(allSymbols.size(), zeroExpr);
   AffineMap lhsConstant =
       lhs.replaceDimsAndSymbols(/*dimReplacements=*/{}, symReplacements,
