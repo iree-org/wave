@@ -526,14 +526,15 @@ public:
         Operation *barrier = nullptr;
 
         // Search from the back to find the most recent dependency
-        for (const auto &[pendingOp, pendingTokens] :
+        for (const auto &[pendingOpVar, pendingTokensVar] :
              pendingOps->opsAndTokensReverse()) {
 
-          if (!barrier && isBarrier(pendingOp))
+          if (!barrier && isBarrier(pendingOpVar))
             barrier = pendingOp;
 
-          // We canot capture structured bindings into lambda, thanks C++
-          auto &pendingTok = pendingTokens;
+          // We canot capture structured bindings into lambda, thanks C++.
+          auto &pendingTokens = pendingTokensVar;
+          auto &pendingOp = pendingOpVar;
           auto checkPendingMemref =
               [&](Value pendingMemref, bool isPendingLoad,
                   bool isPendingStore) -> WaitcntRequirement {
