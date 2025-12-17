@@ -233,6 +233,10 @@ def emit_tensor_load_to_shared(
 
     tensor_write.pre_expansion_id = id(tensor_write)
 
+    # Copy the tag from the original read node to preserve it for scheduling
+    if hasattr(read, "tag") and read.tag:
+        tensor_write.tag = read.tag
+
     tensor_writes[write.memory].append(tensor_write)
 
     return tensor_writes
