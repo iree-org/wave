@@ -414,22 +414,22 @@ def test_bshd_attention_pipelined():
 
     # CHECK-DAG:      vector.store {{.*}} %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      rocdl.s.wait.dscnt 0
-    # CHECK-DAG:      rocdl.s.barrier.signal -1
+    # CHECK-DAG:      rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:      vector.extract
 
-    # CHECK-DAG:      rocdl.s.barrier.wait -1
+    # CHECK-DAG:      rocdl.s.barrier.wait id = -1
     # CHECK-DAG:      vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
 
     ### loads and stores are operating on differnt parts of shared buffers -> no barriers need to be inserted here.
 
     # CHECK-DAG:      vector.store {{.*}} %[[V0]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      rocdl.s.wait.dscnt 0
-    # CHECK-DAG:      rocdl.s.barrier.signal -1
+    # CHECK-DAG:      rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:      amdgpu.wmma
 
-    # CHECK-DAG:      rocdl.s.barrier.wait -1
+    # CHECK-DAG:      rocdl.s.barrier.wait id = -1
     # CHECK-DAG:      vector.load %[[V0]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      amdgpu.wmma
@@ -439,31 +439,31 @@ def test_bshd_attention_pipelined():
     # CHECK-DAG:        vector.load
 
     # CHECK-DAG:        rocdl.s.wait.dscnt 0
-    # CHECK-DAG:        rocdl.s.barrier.signal -1
-    # CHECK-DAG:        rocdl.s.barrier.wait -1
+    # CHECK-DAG:        rocdl.s.barrier.signal id = -1
+    # CHECK-DAG:        rocdl.s.barrier.wait id = -1
     # CHECK-DAG:        vector.store {{.*}} %[[V1]]{{.*}} #gpu.address_space<workgroup>>
 
     ### signal write to buffer 1 completes.
 
     # CHECK-DAG:        rocdl.s.wait.dscnt 0
-    # CHECK-DAG:        rocdl.s.barrier.signal -1
+    # CHECK-DAG:        rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:        vector.load
 
-    # CHECK-DAG:        rocdl.s.barrier.wait -1
+    # CHECK-DAG:        rocdl.s.barrier.wait id = -1
     # CHECK-DAG:        vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:        vector.store {{.*}} %[[V0]]{{.*}} #gpu.address_space<workgroup>>
 
     ### signal here represents 2 things: read from buffer 1 completes, write to buffer 0 completes.
 
     # CHECK-DAG:        rocdl.s.wait.dscnt 0
-    # CHECK-DAG:        rocdl.s.barrier.signal -1
+    # CHECK-DAG:        rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:        amdgpu.wmma
 
     ### wait here then waits for read from buffer 1 completes, write to buffer 0 completes.
 
-    # CHECK-DAG:        rocdl.s.barrier.wait -1
+    # CHECK-DAG:        rocdl.s.barrier.wait id = -1
     # CHECK-DAG:        vector.load %[[V0]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:        vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:        amdgpu.wmma

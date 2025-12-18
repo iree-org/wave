@@ -1422,8 +1422,8 @@ def test_gemm_four_stage_global_to_lds():
 
     # CHECK: rocdl.s.wait.tensorcnt 0
     # CHECK: rocdl.s.wait.dscnt 0
-    # CHECK: rocdl.s.barrier.signal -1
-    # CHECK: rocdl.s.barrier.wait -1
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
 
     # Verify prologue loads from shared memory
     # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%thread_id_x, %thread_id_y]
@@ -1441,15 +1441,15 @@ def test_gemm_four_stage_global_to_lds():
 
     # CHECK: rocdl.s.wait.tensorcnt 0
     # CHECK: rocdl.s.wait.dscnt 0
-    # CHECK: rocdl.s.barrier.signal -1
-    # CHECK: rocdl.s.barrier.wait -1
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
 
     # CHECK: vector.load %[[LVIEW0]]
     # CHECK: vector.load %[[LVIEW2]]
 
     # CHECK: rocdl.s.wait.dscnt 0
-    # CHECK: rocdl.s.barrier.signal -1
-    # CHECK: rocdl.s.barrier.wait -1
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
 
     # CHECK: rocdl.tensor.load.to.lds
 
@@ -1460,8 +1460,8 @@ def test_gemm_four_stage_global_to_lds():
 
     # CHECK: rocdl.s.wait.tensorcnt 0
     # CHECK: rocdl.s.wait.dscnt 0
-    # CHECK: rocdl.s.barrier.signal -1
-    # CHECK: rocdl.s.barrier.wait -1
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
 
     # CHECK: vector.load
     # CHECK: vector.load

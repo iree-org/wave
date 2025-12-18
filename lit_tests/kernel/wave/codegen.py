@@ -1178,8 +1178,8 @@ def test_tensor_waitcnt():
     # CHECK-LABEL:    func.func @schedule_ops
     # CHECK:            rocdl.s.wait.tensorcnt 0
     # CHECK:            rocdl.s.wait.dscnt 0
-    # CHECK:            rocdl.s.barrier.signal -1
-    # CHECK:            rocdl.s.barrier.wait -1
+    # CHECK:            rocdl.s.barrier.signal id = -1
+    # CHECK:            rocdl.s.barrier.wait id = -1
 
 
 @run_test

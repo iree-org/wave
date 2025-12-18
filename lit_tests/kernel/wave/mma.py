@@ -703,10 +703,10 @@ def test_wmma_with_tensor_load():
     # CHECK:        rocdl.tensor.load.to.lds %[[D_FUSED]], %[[DESC_FUSED]], {{.*}}, {{.*}} cachepolicy {{.*}} : vector<4xi32>, vector<8xi32>
     # CHECK:        rocdl.s.wait.tensorcnt 0
     # CHECK:        rocdl.s.wait.dscnt 0
-    # CHECK:        rocdl.s.barrier.signal -1
+    # CHECK:        rocdl.s.barrier.signal id = -1
 
     ### resource consumer
-    # CHECK-NEXT:   rocdl.s.barrier.wait -1
+    # CHECK-NEXT:   rocdl.s.barrier.wait id = -1
     # CHECK-NEXT:   affine.apply
     # CHECK-NEXT:   affine.apply
     # CHECK-NEXT:   vector.load %[[VIEW0]]
@@ -781,7 +781,7 @@ def test_wmma_with_tensor_load_delay():
     # CHECK:          %[[WAVE_ID:.*]] = affine.apply #[[MAP0]]()[%[[THREAD_ID_X]]]
     # CHECK:          %[[COND0:.*]] = arith.cmpi eq, %[[WAVE_ID]], %[[C0]] : index
     # CHECK:          scf.if %[[COND0]] {
-    # CHECK-NEXT:         rocdl.s.barrier.signal -3
+    # CHECK-NEXT:         rocdl.s.barrier.signal id = -3
     # CHECK-NEXT:     }
 
     # CHECK:          scf.for %[[ITER_ARG:.*]] = %[[C0]]
@@ -790,7 +790,7 @@ def test_wmma_with_tensor_load_delay():
     # CHECK:            %[[COND1:.*]] = arith.cmpi eq, %[[ITER_COND]], %[[C0]] : index
     # CHECK:            scf.if %[[COND1]] {
     # CHECK-NEXT:         scf.if %[[COND0]] {
-    # CHECK-NEXT:             rocdl.s.barrier.signal -3
+    # CHECK-NEXT:             rocdl.s.barrier.signal id = -3
     # CHECK-NEXT:         }
     # CHECK-NEXT:       }
 
@@ -798,7 +798,7 @@ def test_wmma_with_tensor_load_delay():
 
     # CHECK:            %[[COND2:.*]] = arith.cmpi eq, %[[ITER_COND]], %[[C1]] : index
     # CHECK:            scf.if %[[COND2]] {
-    # CHECK-NEXT:           rocdl.s.barrier.wait -3
+    # CHECK-NEXT:           rocdl.s.barrier.wait id = -3
     # CHECK-NEXT:       }
 
     # CHECK-NEXT:       scf.yield
