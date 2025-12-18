@@ -251,12 +251,12 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
             update_vector_shapes = [
                 dim for dim in custom.index if dim in hw_constraint.vector_shapes
             ]
-            if update_vector_shapes:
-                custom.vector_shapes = {}
-                for dim in update_vector_shapes:
-                    custom.vector_shapes[dim] = hw_constraint.vector_shapes[dim]
+            # Always initialize vector_shapes, even if empty (for scalar operations)
+            custom.vector_shapes = {}
+            for dim in update_vector_shapes:
+                custom.vector_shapes[dim] = hw_constraint.vector_shapes[dim]
         assert (
-            custom.vector_shapes
+            custom.vector_shapes is not None
         ), f"Vector shapes not set for node {custom.fx_node}: {custom}"
 
 
