@@ -39,15 +39,23 @@ static unsigned getBitwidth(Type type) {
   return type.getIntOrFloatBitWidth();
 }
 
+static std::string getVGPRRange(unsigned vgprOffset, unsigned vgprNum,
+                                unsigned vgprCount) {
+  assert(vgprCount > 0 && "VGPR count must be greater than 0");
+  unsigned start = vgprOffset + vgprNum;
+  if (vgprCount == 1) {
+    return ("v" + llvm::Twine(start)).str();
+  } else {
+    unsigned end = start + vgprCount - 1;
+    return ("v[" + llvm::Twine(start) + ":" + llvm::Twine(end) + "]").str();
+  }
+}
+
 static std::string getVGPRConstraint(unsigned vgprOffset, unsigned vgprNum,
                                      unsigned vgprCount, bool isOutput) {
-  std::string constraint;
-  if (vgprCount == 1)
-    constraint = "{v" + std::to_string(vgprOffset + vgprNum) + "}";
-  else
-    constraint = "{v[" + std::to_string(vgprOffset + vgprNum) + ":" +
-                 std::to_string(vgprOffset + vgprNum + vgprCount - 1) + "]}";
-  return isOutput ? "=" + constraint : constraint;
+  return (llvm::Twine(isOutput ? "=" : "") + "{" +
+          getVGPRRange(vgprOffset, vgprNum, vgprCount) + "}")
+      .str();
 }
 
 static FailureOr<StringRef> getLoadSizeSuffixRDNA(unsigned bitWidth) {
