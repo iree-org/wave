@@ -841,7 +841,8 @@ static LogicalResult lowerLoadFromReg(LoadOpTy loadOp, IRRewriter &rewriter,
       getVGPRConstraint(vgprOffset, vgprNum, vgprCount, true);
 
   // Simple v_mov to read from VGPR (compiler will optimize this away)
-  std::string asmStr = "; reg_load";
+  std::string asmStr =
+      "; reg_load " + getVGPRRange(vgprOffset, vgprNum, vgprCount);
 
   Type resultType = loadOp.getResult().getType();
   Type asmType = resultType;
@@ -898,7 +899,8 @@ static LogicalResult lowerStoreToReg(StoreOpTy storeOp, IRRewriter &rewriter,
       getVGPRConstraint(vgprOffset, vgprNum, vgprCount, true) + ",0";
 
   // v_mov to write to VGPR (input constraint 0 ties to output)
-  std::string asmStr = "; reg_store";
+  std::string asmStr =
+      "; reg_store " + getVGPRRange(vgprOffset, vgprNum, vgprCount);
 
   Value valueToStore = storeOp.getValueToStore();
   unsigned bitWidth = getBitwidth(valueToStore.getType());

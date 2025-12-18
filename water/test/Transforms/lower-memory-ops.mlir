@@ -388,8 +388,8 @@ func.func @copy_global_to_reg_scalar(%arg0: memref<100xf32>) -> f32 attributes {
   // GFX9: llvm.inline_asm has_side_effects "global_load_dword $0, $1, off", "={v255},v"
   // GFX12: llvm.inline_asm has_side_effects "global_load_b32 $0, $1, off", "={v255},v"
   memref.copy %subview, %reg : memref<1xf32, strided<[1], offset: ?>> to memref<1xf32, 128 : i32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v255}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v255}"
+  // GFX9: llvm.inline_asm "; reg_load v255", "={v255}"
+  // GFX12: llvm.inline_asm "; reg_load v255", "={v255}"
   %val = memref.load %reg[%c0] : memref<1xf32, 128 : i32>
   // CHECK-NOT: memref.alloca
   return %val : f32
@@ -405,8 +405,8 @@ func.func @copy_global_to_reg_vector(%arg0: memref<100xf32>) -> vector<4xf32> at
   // GFX9: llvm.inline_asm has_side_effects "global_load_dwordx4 $0, $1, off", "={v[252:255]},v"
   // GFX12: llvm.inline_asm has_side_effects "global_load_b128 $0, $1, off", "={v[252:255]},v"
   memref.copy %subview, %reg : memref<4xf32, strided<[1], offset: ?>> to memref<4xf32, 128 : i32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v[252:255]}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  // GFX9: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
+  // GFX12: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
   %val = vector.load %reg[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
   // CHECK-NOT: memref.alloca
   return %val : vector<4xf32>
@@ -422,8 +422,8 @@ func.func @copy_buffer_to_reg(%arg0: memref<100xf32, #amdgpu.address_space<fat_r
   // GFX9: llvm.inline_asm has_side_effects "buffer_load_dwordx4 $0, $1, $2, 0 offen", "={v[252:255]},v,s"
   // GFX12: llvm.inline_asm has_side_effects "buffer_load_b128 $0, $1, $2, 0 offen", "={v[252:255]},v,s"
   memref.copy %subview, %reg : memref<4xf32, strided<[1], offset: ?>, #amdgpu.address_space<fat_raw_buffer>> to memref<4xf32, 128 : i32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v[252:255]}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  // GFX9: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
+  // GFX12: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
   %val = vector.load %reg[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
   // CHECK-NOT: memref.alloca
   return %val : vector<4xf32>
@@ -439,8 +439,8 @@ func.func @copy_workgroup_to_reg(%arg0: memref<100xf32, #gpu.address_space<workg
   // GFX9: llvm.inline_asm has_side_effects "ds_read_b128 $0, $1", "={v[252:255]},v"
   // GFX12: llvm.inline_asm has_side_effects "ds_read_b128 $0, $1", "={v[252:255]},v"
   memref.copy %subview, %reg : memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>> to memref<4xf32, 128 : i32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v[252:255]}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  // GFX9: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
+  // GFX12: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
   %val = vector.load %reg[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
   // CHECK-NOT: memref.alloca
   return %val : vector<4xf32>
@@ -452,11 +452,11 @@ func.func @copy_workgroup_to_reg(%arg0: memref<100xf32, #gpu.address_space<workg
 func.func @store_to_reg(%val: f32) -> f32 attributes {water.total_vgprs = 1 : i32} {
   %c0 = arith.constant 0 : index
   %reg = memref.alloca() {water.vgpr_number = 0 : i32, water.vgpr_count = 1 : i32} : memref<1xf32, 128 : i32>
-  // GFX9: llvm.inline_asm has_side_effects "; reg_store", "={v255},0"
-  // GFX12: llvm.inline_asm has_side_effects "; reg_store", "={v255},0"
+  // GFX9: llvm.inline_asm has_side_effects "; reg_store v255", "={v255},0"
+  // GFX12: llvm.inline_asm has_side_effects "; reg_store v255", "={v255},0"
   memref.store %val, %reg[%c0] : memref<1xf32, 128 : i32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v255}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v255}"
+  // GFX9: llvm.inline_asm "; reg_load v255", "={v255}"
+  // GFX12: llvm.inline_asm "; reg_load v255", "={v255}"
   %result = memref.load %reg[%c0] : memref<1xf32, 128 : i32>
   // CHECK-NOT: memref.alloca
   return %result : f32
@@ -482,14 +482,14 @@ func.func @multiple_reg_allocas(%arg0: memref<100xf32>, %arg1: memref<100xf32, #
   // GFX12: llvm.inline_asm has_side_effects "ds_read_b128 $0, $1", "={v[252:255]},v"
   %sv2 = memref.subview %arg1[%c0] [4] [1] : memref<100xf32, #gpu.address_space<workgroup>> to memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>>
   memref.copy %sv2, %reg2 : memref<4xf32, strided<[1], offset: ?>, #gpu.address_space<workgroup>> to memref<4xf32, 128 : i32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v247}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v247}"
+  // GFX9: llvm.inline_asm "; reg_load v247", "={v247}"
+  // GFX12: llvm.inline_asm "; reg_load v247", "={v247}"
   %val0 = memref.load %reg0[%c0] : memref<1xf32, 128 : i32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v[248:251]}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v[248:251]}"
+  // GFX9: llvm.inline_asm "; reg_load v[248:251]", "={v[248:251]}"
+  // GFX12: llvm.inline_asm "; reg_load v[248:251]", "={v[248:251]}"
   %val1 = vector.load %reg1[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
-  // GFX9: llvm.inline_asm "; reg_load", "={v[252:255]}"
-  // GFX12: llvm.inline_asm "; reg_load", "={v[252:255]}"
+  // GFX9: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
+  // GFX12: llvm.inline_asm "; reg_load v[252:255]", "={v[252:255]}"
   %val2 = vector.load %reg2[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
   // CHECK-NOT: memref.alloca
   return %val0, %val1, %val2 : f32, vector<4xf32>, vector<4xf32>
