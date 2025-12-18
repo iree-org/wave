@@ -31,7 +31,6 @@ from wave_lang.support.ir_imports import (
     rocdl_d,
     vector_d,
     func_d,
-    Operation,
 )
 from .ir_utils import (
     is_float_type,
@@ -357,13 +356,9 @@ def _get_constant_value(candidate: Value):
     """
     returns constantOp's value if candidate is arith.constantOp. Else, returns None.
     """
-    if not isinstance(candidate.owner, Operation):
+    if not isinstance(candidate.owner, arith_d.ConstantOp):
         return None
-    if not hasattr(candidate.owner, "name"):
-        return None
-    if candidate.owner.name != "arith.constant":
-        return None
-    return candidate.owner.attributes["value"].value
+    return candidate.owner.value.value
 
 
 def _cast_buffer_and_encode_stride(
