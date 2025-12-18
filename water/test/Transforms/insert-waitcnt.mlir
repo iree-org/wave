@@ -483,7 +483,7 @@ func.func @double_buffering(%src: memref<1024xf32>, %lb: index, %ub: index, %ste
     %data = vector.load %current[%offset] : memref<1024xf32, #gpu.address_space<workgroup>>, vector<4xf32>
 
     // Cannot skip unfortunately
-    //     CHECK: amdgpu.memory_counter_wait ds(0)
+    //     CHECK: amdgpu.memory_counter_wait load(0) ds(0)
     //     CHECK: vector.store
     vector.store %data, %out[%offset] : memref<1024xf32>, vector<4xf32>
 
@@ -524,7 +524,7 @@ func.func @triple_buffering(%src: memref<1024xf32>, %lb: index, %ub: index, %ste
     memref.copy %src, %next_next : memref<1024xf32> to memref<1024xf32, #gpu.address_space<workgroup>>
 
     // Skip the prev copy
-    //     CHECK: amdgpu.memory_counter_wait ds(1)
+    //     CHECK: amdgpu.memory_counter_wait load(0) ds(1)
     //     CHECK: vector.store
     vector.store %data, %out[%offset] : memref<1024xf32>, vector<4xf32>
 
@@ -586,5 +586,39 @@ func.func @triple_buffering_reg_space(%src: memref<1024xf32>, %lb: index, %ub: i
   }
 
   // CHECK: return
+  return
+}
+
+// CHECK-LABEL: func.func @load_store_repeated
+func.func @load_store_repeated(%src0: memref<4xf32>, %src1: memref<4xf32>, %offset: index) {
+  %c0 = arith.constant 0 : index
+  %buff0 = memref.alloc() : memref<4xf32, #gpu.address_space<workgroup>>
+  %buff1 = memref.alloc() : memref<4xf32, #gpu.address_space<workgroup>>
+  %reg0 = memref.alloca() : memref<4xf32, 128 : i32>
+  %reg1 = memref.alloca() : memref<4xf32, 128 : i32>
+  %reg2 = memref.alloca() : memref<4xf32, 128 : i32>
+  %reg3 = memref.alloca() : memref<4xf32, 128 : i32>
+
+  // CHECK-COUNT-4: memref.copy
+  memref.copy %src0, %reg0 : memref<4xf32> to memref<4xf32, 128 : i32>
+  memref.copy %src1, %reg1 : memref<4xf32> to memref<4xf32, 128 : i32>
+
+  memref.copy %buff0, %reg2 : memref<4xf32, #gpu.address_space<workgroup>> to memref<4xf32, 128 : i32>
+  memref.copy %buff1, %reg3 : memref<4xf32, #gpu.address_space<workgroup>> to memref<4xf32, 128 : i32>
+
+  // CHECK: amdgpu.memory_counter_wait load(1)
+  // CHECK-NEXT: vector.load
+  %data0 = vector.load %reg0[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+  // CHECK: amdgpu.memory_counter_wait load(0)
+  // CHECK-NEXT: vector.load
+  %data1 = vector.load %reg1[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+
+  // CHECK: amdgpu.memory_counter_wait ds(1)
+  // CHECK-NEXT: vector.load
+  %data2 = vector.load %reg2[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+  // CHECK: amdgpu.memory_counter_wait ds(0)
+  // CHECK-NEXT: vector.load
+  %data3 = vector.load %reg3[%c0] : memref<4xf32, 128 : i32>, vector<4xf32>
+
   return
 }

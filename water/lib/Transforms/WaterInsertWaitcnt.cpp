@@ -264,8 +264,11 @@ struct WaitcntRequirement {
   }
 
   bool operator>(const WaitcntRequirement &other) const {
-    return load_cnt.value_or(0) > other.load_cnt.value_or(0) ||
-           ds_cnt.value_or(0) > other.ds_cnt.value_or(0);
+    if (load_cnt && other.load_cnt && *load_cnt > *other.load_cnt)
+      return true;
+    if (ds_cnt && other.ds_cnt && *ds_cnt > *other.ds_cnt)
+      return true;
+    return false;
   }
   operator bool() const { return hasRequirement(); }
 
@@ -743,8 +746,13 @@ public:
       newState.addPendingOp(op);
     }
 
-    LDBG() << "  New state: " << newState;
-    propagateIfChanged(after, after->merge(newState));
+    auto changed = after->merge(newState);
+    if (changed == ChangeResult::Change) {
+      LDBG() << "  New state: " << newState;
+    } else {
+      LDBG() << "  No change";
+    }
+    propagateIfChanged(after, changed);
     return success();
   }
 
