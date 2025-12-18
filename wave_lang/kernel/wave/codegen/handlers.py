@@ -177,21 +177,32 @@ def handle_scalar(emitter: WaveEmitter, node: fx.Node):
         value, dtype = node.args
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
+
     target_type = IrType.parse(dtype.ir_type_asm())
     i32_type = IntegerType.get_signless(32)
+
     if isinstance(value, IndexExpr):
-        scalar_src = gen_sympy_index(add_emitter_subs(emitter), value)
-        scalar_i32 = arith_d.index_cast(i32_type, scalar_src)
-        conversion_op = get_conversion_op(
-            i32_type, target_type, fastmath=get_fast_math_flags(emitter.options)
-        )
-        scalar = conversion_op(target_type, scalar_i32)
+        # Check if this IndexExpr is an active iteration dimension
+        if value in emitter.induction_vars:
+            scalar = emitter.induction_vars[value]
+            if scalar.type != target_type:
+                scalar = arith_d.index_cast(target_type, scalar)
+        else:
+            scalar_src = gen_sympy_index(add_emitter_subs(emitter), value)
+            scalar_i32 = arith_d.index_cast(i32_type, scalar_src)
+            conversion_op = get_conversion_op(
+                i32_type, target_type, fastmath=get_fast_math_flags(emitter.options)
+            )
+            scalar = conversion_op(target_type, scalar_i32)
     elif isinstance(value, (int, float)):
         # If target type is a float type and value is an int, convert
         # to float to avoid canonicalization issues
         if is_float_type(target_type) and isinstance(value, int):
             value = float(value)
         scalar = arith_d.constant(target_type, value)
+    else:
+        raise ValidationError(f"Unexpected value type: {type(value)}")
+
     emitter.bind_node_proxy(node, IRProxyValue(scalar))
 
 

@@ -306,7 +306,7 @@ def get_persistent_gemm_kernel(
 
         @tkw.iterate(TILE_IDX, start=init_tile_id, condition=condition, init_args=[])
         def persistent_loop():
-            tile_id = tkw.self_index(TILE_IDX, tkl.i32)
+            tile_id = tkw.scalar(TILE_IDX, tkl.i32)
             m_offset = (tile_id // tkw.scalar(N_TILES, tkl.i32)) * tkw.scalar(
                 BLOCK_M, tkl.i32
             )
@@ -583,7 +583,7 @@ def get_streamk_gemm_kernel(
             # i.e. if 3 output tiles with 10 iterations each
             # cta_k_start ranges from 0-29
             # while remainder ranges within 0-9
-            cta_k_start = tkw.self_index(WORK_UNIT_START, i32)
+            cta_k_start = tkw.scalar(WORK_UNIT_START, i32)
             remainder = (
                 cta_k_start % iters_per_output_tile
             )  # remainder is the relative index within the output tile itself
@@ -673,7 +673,7 @@ def get_streamk_gemm_kernel(
                     init_args=[new_cta_k_end, curr_acc],
                 )
                 def aggregate_partials_loop(new_cta_k_end, acc):
-                    curr_cta = tkw.self_index(CTA_ID_AXIS, i32)
+                    curr_cta = tkw.scalar(CTA_ID_AXIS, i32)
                     not_ready = tkw.scalar(0, i32)
                     condition = sympy.Eq(SPINLOCK_WAIT_FLAG, 0)
 
@@ -959,7 +959,7 @@ def get_hybrid_streamk_gemm_kernel(
             DP_TILE_ID_AXIS, start=init_tile_id, condition=condition, init_args=[]
         )
         def persistent_loop():
-            tile_id = tkw.self_index(DP_TILE_ID_AXIS, tkl.i32)
+            tile_id = tkw.scalar(DP_TILE_ID_AXIS, tkl.i32)
             m_offset = (tile_id // tkw.scalar(N_TILES, i32)) * tkw.scalar(BLOCK_M, i32)
             n_offset = (tile_id % tkw.scalar(N_TILES, i32)) * tkw.scalar(BLOCK_N, i32)
             tkw.set_symbol(CTA_M_OFFSET, m_offset)
@@ -1011,7 +1011,7 @@ def get_hybrid_streamk_gemm_kernel(
             WORK_UNIT_START, start=work_unit_start, condition=sk_condition, init_args=[]
         )
         def sk_loop():
-            cta_k_start = tkw.self_index(WORK_UNIT_START, i32)
+            cta_k_start = tkw.scalar(WORK_UNIT_START, i32)
             remainder = cta_k_start % iters_per_output_tile
             cta_k_end = tkw.minimum(
                 cta_k_start + (iters_per_output_tile - remainder), work_unit_end
@@ -1089,7 +1089,7 @@ def get_hybrid_streamk_gemm_kernel(
                     init_args=[new_cta_k_end_scalar, curr_acc],
                 )
                 def aggregate_partials_loop(loop_cta_k_end, acc):
-                    curr_cta = tkw.self_index(CTA_ID_AXIS, i32)
+                    curr_cta = tkw.scalar(CTA_ID_AXIS, i32)
                     not_ready = tkw.scalar(0, i32)
                     condition = sympy.Eq(SPINLOCK_WAIT_FLAG, 0)
 
