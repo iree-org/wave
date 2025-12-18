@@ -597,8 +597,8 @@ struct MmaSingleIndexExprBuilder {
   // Set the parameter of the index expression for the currently selected
   // dimension.
   MmaSingleIndexExprBuilder &offset(mlir::AffineExpr expr);
-  MmaSingleIndexExprBuilder &size(int64_t value);
-  MmaSingleIndexExprBuilder &stride(int64_t value);
+  MmaSingleIndexExprBuilder &size(uint64_t value);
+  MmaSingleIndexExprBuilder &stride(uint64_t value);
 
   // Select the dimension.
   MmaSingleIndexExprBuilder &m();
@@ -609,7 +609,9 @@ struct MmaSingleIndexExprBuilder {
   void populate(llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const;
 
   MmaIndexingExprBuilder &parent;
-  mlir::AffineExpr offsetExpr, sizeExpr, strideExpr;
+  mlir::AffineExpr offsetExpr;
+  std::optional<uint64_t> sizeValue;
+  std::optional<uint64_t> strideValue;
   bool enabled;
 };
 
@@ -657,16 +659,18 @@ struct MmaIndexingExprBuilder {
   void populate(llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const {
     mlir::MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
-    auto buildMap = [&](mlir::AffineExpr expr) {
-      assert(expr &&
-             "expected offset/size/stride to be set up for all symbols");
-      return mlir::AffineMap::get(/*dimCount=*/0,
-                                  /*symbolCount=*/symbols.size(), expr, ctx);
-    };
     auto buildOne = [&](const MmaSingleIndexExprBuilder &builder) {
+      assert(builder.offsetExpr &&
+             "expected offset to be set up for all symbols");
+      assert(builder.sizeValue && "expected size to be set up for all symbols");
+      assert(builder.strideValue &&
+             "expected stride to be set up for all symbols");
       return wave::WaveIndexMappingAttr::get(
-          ctx, symbols, buildMap(builder.offsetExpr),
-          buildMap(builder.sizeExpr), buildMap(builder.strideExpr));
+          ctx, symbols,
+          mlir::AffineMap::get(/*dimCount=*/0,
+                               /*symbolCount=*/symbols.size(),
+                               builder.offsetExpr, ctx),
+          *builder.sizeValue, *builder.strideValue);
     };
 
     if (mSymbol)
@@ -691,19 +695,19 @@ MmaSingleIndexExprBuilder::offset(mlir::AffineExpr expr) {
   return *this;
 }
 
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::size(int64_t value) {
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::size(uint64_t value) {
   if (!enabled)
     return *this;
-  assert(!sizeExpr && "expected size to be set only once");
-  sizeExpr = mlir::getAffineConstantExpr(value, offsetExpr.getContext());
+  assert(!sizeValue && "expected size to be set only once");
+  sizeValue = value;
   return *this;
 }
 
-MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(int64_t value) {
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(uint64_t value) {
   if (!enabled)
     return *this;
-  assert(!strideExpr && "expected stride to be set only once");
-  strideExpr = mlir::getAffineConstantExpr(value, offsetExpr.getContext());
+  assert(!strideValue && "expected stride to be set only once");
+  strideValue = value;
   return *this;
 }
 
@@ -922,9 +926,7 @@ applyConstraint(ConstraintAttrT constraint,
       /*dimCount=*/0, symbols.size(),
       symbolExpr * constraint.getTileSize().getMap().getResult(0));
   if (baseMapping == nullptr)
-    return wave::WaveIndexMappingAttr::get(
-        context, symbols, map, mlir::AffineMap::getConstantMap(1, context),
-        mlir::AffineMap::getConstantMap(1, context));
+    return wave::WaveIndexMappingAttr::get(context, symbols, map, 1, 1);
 
   llvm::SmallVector<mlir::Attribute> allSymbols;
   wave::aggregateAllSymbols(
@@ -934,15 +936,11 @@ applyConstraint(ConstraintAttrT constraint,
 
   mlir::AffineMap baseStart = alignMapSymbols(
       baseMapping.getStart(), baseMapping.getSymbols(), allSymbols);
-  mlir::AffineMap baseStep = alignMapSymbols(
-      baseMapping.getStep(), baseMapping.getSymbols(), allSymbols);
-  mlir::AffineMap baseStride = alignMapSymbols(
-      baseMapping.getStride(), baseMapping.getSymbols(), allSymbols);
   map = alignMapSymbols(map, symbols, allSymbols);
   map = mlir::AffineMap::get(/*dimCount=*/0, allSymbols.size(),
                              baseStart.getResult(0) + map.getResult(0));
-  return wave::WaveIndexMappingAttr::get(context, allSymbols, map, baseStep,
-                                         baseStride);
+  return wave::WaveIndexMappingAttr::get(
+      context, allSymbols, map, baseMapping.getStep(), baseMapping.getStride());
 }
 
 // Create an index mapping induced by the given constraint. Combine it with the

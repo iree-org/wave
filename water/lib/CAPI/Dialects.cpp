@@ -108,17 +108,12 @@ bool mlirAttributeIsAWaveIndexMappingAttr(MlirAttribute attr) {
 
 MlirAttribute mlirWaveIndexMappingAttrGet(MlirContext mlirCtx,
                                           MlirAttribute *symbolNames,
-                                          MlirAffineMap start,
-                                          MlirAffineMap step,
-                                          MlirAffineMap stride) {
+                                          intptr_t numSymbols,
+                                          MlirAffineMap start, uint64_t step,
+                                          uint64_t stride) {
   mlir::MLIRContext *ctx = unwrap(mlirCtx);
 
   // Convert C array of MlirAttribute to vector of WaveSymbolAttr.
-  unsigned numSymbols = mlirAffineMapGetNumSymbols(start);
-  assert(mlirAffineMapGetNumSymbols(step) == numSymbols &&
-         "expected start and step to have the same number of dimensions");
-  assert(mlirAffineMapGetNumSymbols(stride) == numSymbols &&
-         "expected start and stride to have the same number of dimensions");
   llvm::SmallVector<mlir::Attribute> symbolAttrs = llvm::map_to_vector(
       llvm::make_range(symbolNames, symbolNames + numSymbols),
       [](MlirAttribute attr) { return unwrap(attr); });
@@ -131,7 +126,7 @@ MlirAttribute mlirWaveIndexMappingAttrGet(MlirContext mlirCtx,
          "WaveIndexSymbolAttr attributes");
 
   return wrap(wave::WaveIndexMappingAttr::get(ctx, symbolAttrs, unwrap(start),
-                                              unwrap(step), unwrap(stride)));
+                                              step, stride));
 }
 
 MlirTypeID mlirWaveIndexMappingAttrGetTypeID() {
@@ -142,12 +137,12 @@ MlirAffineMap mlirWaveIndexMappingAttrGetStart(MlirAttribute attr) {
   return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStart());
 }
 
-MlirAffineMap mlirWaveIndexMappingAttrGetStep(MlirAttribute attr) {
-  return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStep());
+uint64_t mlirWaveIndexMappingAttrGetStep(MlirAttribute attr) {
+  return llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStep();
 }
 
-MlirAffineMap mlirWaveIndexMappingAttrGetStride(MlirAttribute attr) {
-  return wrap(llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStride());
+uint64_t mlirWaveIndexMappingAttrGetStride(MlirAttribute attr) {
+  return llvm::cast<wave::WaveIndexMappingAttr>(unwrap(attr)).getStride();
 }
 
 intptr_t mlirWaveIndexMappingAttrGetNumSymbols(MlirAttribute attr) {

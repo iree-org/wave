@@ -28,13 +28,7 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
     Attribute entry = indexDict.get(symbol.getName());
     assert(entry && "expected dictionary to contain indices for the shape");
     auto mapAttr = cast<wave::WaveIndexMappingAttr>(entry);
-    std::optional<SmallVector<int64_t>> folded =
-        wave::evaluateMapWithHyperparams(mapAttr.getStep(),
-                                         mapAttr.getSymbols(), hyper);
-    if (!folded)
-      return ShapedType::kDynamic;
-    assert(folded->size() == 1 && "expected single-result map");
-    return (*folded)[0];
+    return static_cast<int64_t>(mapAttr.getStep());
   });
 }
 

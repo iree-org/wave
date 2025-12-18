@@ -147,29 +147,25 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   }
 
   AffineExpr startExpr;
-  AffineExpr stepExpr;
-  AffineExpr strideExpr;
-  if (failed(parseExprWithNames(symbolNames, startExpr, parser)) ||
-      parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, stepExpr, parser)) ||
-      parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, strideExpr, parser)) ||
-      parser.parseRParen()) {
-    parser.emitError(
-        parser.getCurrentLocation(),
-        "expected three affine expressions for '(start, step, stride)'");
+  uint64_t step, stride;
+  llvm::SMLoc currentLocation = parser.getCurrentLocation();
+  if (failed(parseExprWithNames(symbolNames, startExpr, parser))) {
+    parser.emitError(currentLocation, "expected affine expression");
+    return {};
+  }
+  if (failed(parser.parseComma()) || failed(parser.parseInteger(step)) ||
+      failed(parser.parseComma()) || failed(parser.parseInteger(stride)) ||
+      failed(parser.parseRParen())) {
     return {};
   }
 
-  // Build maps
-  auto startMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), startExpr, context);
-  auto stepMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), stepExpr, context);
-  auto strideMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), strideExpr, context);
+  auto startMap = startExpr
+                      ? AffineMap::get(
+                            /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
+                            startExpr, context)
+                      : AffineMap();
 
-  return get(context, symbolNameAttrs, startMap, stepMap, strideMap);
+  return get(context, symbolNameAttrs, startMap, step, stride);
 }
 
 void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
@@ -196,16 +192,14 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
   }
   // All three maps share the same symbol set and order.
   std::string startStr = stringifyWithNames(getStart(), names);
-  std::string stepStr = stringifyWithNames(getStep(), names);
-  std::string strideStr = stringifyWithNames(getStride(), names);
 
-  printer << "(" << startStr << ", " << stepStr << ", " << strideStr << ")";
+  printer << "(" << startStr << ", " << getStep() << ", " << getStride() << ")";
 }
 
 LogicalResult
 WaveIndexMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                              ArrayRef<Attribute> symbols, AffineMap start,
-                             AffineMap step, AffineMap stride) {
+                             uint64_t step, uint64_t stride) {
   if (!llvm::all_of(symbols, llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr,
                                            WaveIterSymbolAttr>)) {
     return emitError() << "expected all symbols to be a WaveSymbolAttr, "

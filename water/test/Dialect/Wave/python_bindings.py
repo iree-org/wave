@@ -44,7 +44,7 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with TypeError."
 
-    # CHECK: #wave<index_mapping[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3, WG0 + BLOCK_M, T0 mod WG0)>
+    # CHECK: #wave<index_mapping[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3, 1, 4)>
     symbols = [
         wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0),
         wave.WaveSymbolAttr.get("BLOCK_M"),
@@ -54,20 +54,18 @@ with ir.Context() as ctx:
     s1 = ir.AffineSymbolExpr.get(1)
     s2 = ir.AffineSymbolExpr.get(2)
     start_map = ir.AffineMap.get(0, 3, [s0 * 3])
-    step_map = ir.AffineMap.get(0, 3, [s0 + s1])
-    stride_map = ir.AffineMap.get(0, 3, [s2 % s0])
-    index_mapping_attr = wave.WaveIndexMappingAttr.get(
-        symbols, start_map, step_map, stride_map
-    )
+    step = 1
+    stride = 4
+    index_mapping_attr = wave.WaveIndexMappingAttr.get(symbols, start_map, step, stride)
     print(index_mapping_attr)
 
     # CHECK: ()[s0, s1, s2] -> (s0 * 3)
     print(index_mapping_attr.start)
 
-    # CHECK: ()[s0, s1, s2] -> (s0 + s1)
+    # CHECK: 1
     print(index_mapping_attr.step)
 
-    # CHECK: ()[s0, s1, s2] -> (s2 mod s0)
+    # CHECK: 4
     print(index_mapping_attr.stride)
 
     # CHECK: 3
@@ -84,7 +82,7 @@ with ir.Context() as ctx:
     print(retrieved_symbols[2])
 
     try:
-        wave.WaveIndexMappingAttr.get([], start_map, step_map, stride_map)
+        wave.WaveIndexMappingAttr.get([], start_map, step, stride)
     except ValueError as e:
         assert "co-indexed" in str(e)
     else:
@@ -92,23 +90,15 @@ with ir.Context() as ctx:
 
     try:
         dimension_map = ir.AffineMap.get(1, 0, [])
-        wave.WaveIndexMappingAttr.get([], dimension_map, dimension_map, dimension_map)
+        wave.WaveIndexMappingAttr.get([], dimension_map, step, stride)
     except ValueError as e:
         assert "not involve dimensions" in str(e)
     else:
         assert False, "Expected to fail with ValueError."
 
     try:
-        no_result_map = ir.AffineMap.get(0, 3, [])
-        wave.WaveIndexMappingAttr.get(symbols, start_map, no_result_map, stride_map)
-    except ValueError as e:
-        assert "same number of results" in str(e)
-    else:
-        assert False, "Expected to fail with ValueError."
-
-    try:
         wave.WaveIndexMappingAttr.get(
-            ["string", "instead", "of", "attrs"], start_map, step_map, stride_map
+            ["string", "instead", "of", "attrs"], start_map, step, stride
         )
     except TypeError as e:
         assert "ir.Attribute" in str(e)

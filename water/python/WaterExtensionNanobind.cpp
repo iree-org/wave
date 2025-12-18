@@ -128,27 +128,20 @@ NB_MODULE(_waterDialects, m) {
       .def_classmethod(
           "get",
           [](const nb::object &cls, std::vector<MlirAttribute> &symbols,
-             MlirAffineMap start, MlirAffineMap step, MlirAffineMap stride,
+             MlirAffineMap start, uint64_t step, uint64_t stride,
              // MlirContext should always come last to allow for being
              // automatically deduced from context.
              MlirContext context) {
             intptr_t numSymbols = symbols.size();
-            intptr_t numResults = mlirAffineMapGetNumResults(start);
-            for (MlirAffineMap map : {start, step, stride}) {
-              if (numSymbols != mlirAffineMapGetNumSymbols(map)) {
-                throw nb::value_error("Expected symbols, start, step and "
-                                      "stride to be co-indexed.");
-              }
-              if (mlirAffineMapGetNumDims(map) != 0) {
-                throw nb::value_error("Maps should not involve dimensions.");
-              }
-              if (numResults != mlirAffineMapGetNumResults(map)) {
-                throw nb::value_error(
-                    "Maps should have the same number of results.");
-              }
+            if (numSymbols != mlirAffineMapGetNumSymbols(start)) {
+              throw nb::value_error(
+                  "Expected symbols and start to be co-indexed.");
             }
-            return cls(mlirWaveIndexMappingAttrGet(context, symbols.data(),
-                                                   start, step, stride));
+            if (mlirAffineMapGetNumDims(start) != 0) {
+              throw nb::value_error("Start map should not involve dimensions.");
+            }
+            return cls(mlirWaveIndexMappingAttrGet(
+                context, symbols.data(), numSymbols, start, step, stride));
           },
           nb::arg("cls"), nb::arg("symbols"), nb::arg("start"), nb::arg("step"),
           nb::arg("stride"), nb::arg("context") = nb::none(),

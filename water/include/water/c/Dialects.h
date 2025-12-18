@@ -100,13 +100,11 @@ MLIR_CAPI_EXPORTED bool
 mlirAttributeIsAWaveIndexMappingAttr(MlirAttribute attr);
 
 /// Creates a new WaveIndexMappingAttr with the given start, step and stride
-/// maps that are interpreted as accepting the symbols provided in the
-/// `symbolNames` list. The list must have as many entries as maps have symbols,
-/// and all maps must have the same number of symbols and zero dimensions. The
-/// list is expected to only contain WaveSymbolAttr instances.
+/// values that are interpreted as constant offsets. The `symbolNames` list
+/// is expected to only contain WaveSymbolAttr instances.
 MLIR_CAPI_EXPORTED MlirAttribute mlirWaveIndexMappingAttrGet(
-    MlirContext mlirCtx, MlirAttribute *symbolNames, MlirAffineMap start,
-    MlirAffineMap step, MlirAffineMap stride);
+    MlirContext mlirCtx, MlirAttribute *symbolNames, intptr_t numSymbols,
+    MlirAffineMap start, uint64_t step, uint64_t stride);
 
 /// Returns the typeID of a WaveIndexMappingAttr.
 MLIR_CAPI_EXPORTED MlirTypeID mlirWaveIndexMappingAttrGetTypeID();
@@ -116,11 +114,10 @@ MLIR_CAPI_EXPORTED MlirAffineMap
 mlirWaveIndexMappingAttrGetStart(MlirAttribute attr);
 
 /// Get the step from a WaveIndexMappingAttr.
-MLIR_CAPI_EXPORTED MlirAffineMap
-mlirWaveIndexMappingAttrGetStep(MlirAttribute attr);
+MLIR_CAPI_EXPORTED uint64_t mlirWaveIndexMappingAttrGetStep(MlirAttribute attr);
 
 /// Get the stride from a WaveIndexMappingAttr.
-MLIR_CAPI_EXPORTED MlirAffineMap
+MLIR_CAPI_EXPORTED uint64_t
 mlirWaveIndexMappingAttrGetStride(MlirAttribute attr);
 
 /// Get the number of (input) symbols.
