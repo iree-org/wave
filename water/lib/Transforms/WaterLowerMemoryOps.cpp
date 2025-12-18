@@ -199,6 +199,50 @@ static bool isRDNA(const amdgpu::Chipset &chipset) {
   return chipset.majorVersion != 9;
 }
 
+static Operation *propagateExtract(Operation *op) {
+  if (auto extract = dyn_cast<vector::ExtractOp>(op))
+    return extract.getSource().getDefiningOp();
+  if (auto extract = dyn_cast<vector::ExtractStridedSliceOp>(op))
+    return extract.getSource().getDefiningOp();
+  return nullptr;
+}
+
+static unsigned checkHazards(Operation *currentOp, Value value) {
+  Operation *op = value.getDefiningOp();
+  if (!op)
+    return 0;
+
+  while (auto nextOp = propagateExtract(op))
+    op = nextOp;
+
+  if (op->getBlock() != currentOp->getBlock())
+    return 0;
+
+  if (!isa<amdgpu::MFMAOp, amdgpu::WMMAOp>(op))
+    return 0;
+
+  while (op != currentOp) {
+    if (isa<LLVM::CallIntrinsicOp>(op) &&
+        cast<LLVM::CallIntrinsicOp>(op).getIntrin() == "llvm.amdgcn.s.nop")
+      return 0;
+    op = op->getNextNode();
+  }
+
+  return 5; // HACK for now
+}
+
+static void handleHazards(IRRewriter &rewriter, Location loc, Operation *op,
+                          Value value) {
+  unsigned hazard = checkHazards(op, value);
+  if (hazard > 0) {
+    ROCDL::SchedBarrier::create(rewriter, loc, {}, 0);
+    Value nopCount =
+        arith::ConstantIntOp::create(rewriter, loc, hazard - 1, 16);
+    StringAttr intrin = rewriter.getStringAttr("llvm.amdgcn.s.nop");
+    LLVM::CallIntrinsicOp::create(rewriter, loc, {}, intrin, nopCount);
+  }
+}
+
 /// Compute byte offset as iX for a memref access with indices
 template <int Bits>
 static Value computeMemrefByteOffset(IRRewriter &rewriter, Location loc,
@@ -493,6 +537,7 @@ static LogicalResult lowerStoreBuffer(StoreOpTy storeOp, IRRewriter &rewriter,
 
   Location loc = storeOp.getLoc();
   rewriter.setInsertionPoint(storeOp);
+  handleHazards(rewriter, loc, storeOp, storeOp.getValueToStore());
 
   // Build inline assembly: "buffer_store_<suffix> $0, $1, $2, 0 offen"
   std::string asmStr =
@@ -540,14 +585,14 @@ static LogicalResult lowerStoreGlobal(StoreOpTy storeOp, IRRewriter &rewriter,
     return storeOp.emitError("unsupported store bit width: ") << bitWidth;
 
   Location loc = storeOp.getLoc();
+  rewriter.setInsertionPoint(storeOp);
+  handleHazards(rewriter, loc, storeOp, storeOp.getValueToStore());
 
   // Build the inline assembly string: "global_store_b64 $0, $1, off"
   std::string asmStr = ("global_store_" + *suffix + " $0, $1, off").str();
 
   // Constraints: "v" for address (VGPR), "v" for data (VGPR)
   StringRef constraints = "v,v";
-
-  rewriter.setInsertionPoint(storeOp);
 
   // Compute the final address
   unsigned elementBitWidth =
@@ -579,6 +624,7 @@ static LogicalResult lowerStoreDS(StoreOpTy storeOp, IRRewriter &rewriter,
 
   Location loc = storeOp.getLoc();
   rewriter.setInsertionPoint(storeOp);
+  handleHazards(rewriter, loc, storeOp, storeOp.getValueToStore());
 
   // Build inline assembly: "ds_write_b32 $0, $1"
   std::string asmStr = ("ds_write_" + *suffix + " $0, $1").str();

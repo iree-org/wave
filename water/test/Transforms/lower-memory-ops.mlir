@@ -494,3 +494,64 @@ func.func @multiple_reg_allocas(%arg0: memref<100xf32>, %arg1: memref<100xf32, #
   // CHECK-NOT: memref.alloca
   return %val0, %val1, %val2 : f32, vector<4xf32>, vector<4xf32>
 }
+
+// -----
+// Test MFMA hazard handling with s_nop insertion
+
+// CHECK-LABEL: func.func @mfma_hazard_store
+func.func @mfma_hazard_store(%arg0: memref<1024xf32>, %a: vector<4xf16>, %b: vector<4xf16>, %c: vector<4xf32>) {
+  %offset = arith.constant 0 : index
+
+  // Perform MFMA operation
+  %result = amdgpu.mfma 16x16x16 %a * %b + %c blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+  // Store MFMA result - should trigger hazard handling
+  // CHECK: rocdl.sched.barrier
+  // CHECK: arith.constant 4 : i16
+  // CHECK: llvm.call_intrinsic "llvm.amdgcn.s.nop"
+  // GFX9: llvm.inline_asm has_side_effects "global_store_dwordx4 $0, $1, off", "v,v"
+  // GFX12: llvm.inline_asm has_side_effects "global_store_b128 $0, $1, off", "v,v"
+  vector.store %result, %arg0[%offset] : memref<1024xf32>, vector<4xf32>
+
+  return
+}
+
+// CHECK-LABEL: func.func @mfma_hazard_with_extract
+func.func @mfma_hazard_with_extract(%arg0: memref<1024xf32>, %a: vector<4xf16>, %b: vector<4xf16>, %c: vector<4xf32>) {
+  %offset = arith.constant 0 : index
+
+  // MFMA with vector extract - hazard checking should propagate through extract
+  %result = amdgpu.mfma 16x16x16 %a * %b + %c blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+  %extracted = vector.extract %result[0] : f32 from vector<4xf32>
+
+  // Store extracted value - should still detect hazard through propagation
+  // CHECK: rocdl.sched.barrier
+  // CHECK: arith.constant 4 : i16
+  // CHECK: llvm.call_intrinsic "llvm.amdgcn.s.nop"
+  // GFX9: llvm.inline_asm has_side_effects "global_store_dword $0, $1, off", "v,v"
+  // GFX12: llvm.inline_asm has_side_effects "global_store_b32 $0, $1, off", "v,v"
+  memref.store %extracted, %arg0[%offset] : memref<1024xf32>
+
+  return
+}
+
+// CHECK-LABEL: func.func @no_hazard_with_existing_nop
+func.func @no_hazard_with_existing_nop(%arg0: memref<1024xf32>, %a: vector<4xf16>, %b: vector<4xf16>, %c: vector<4xf32>) {
+  %offset = arith.constant 0 : index
+
+  %result = amdgpu.mfma 16x16x16 %a * %b + %c blgp = none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+
+  // Manually insert s.nop
+  %nop_count = arith.constant 4 : i16
+  llvm.call_intrinsic "llvm.amdgcn.s.nop"(%nop_count) : (i16) -> ()
+
+  // Store should NOT insert another s.nop since one already exists
+  // CHECK: llvm.call_intrinsic "llvm.amdgcn.s.nop"
+  // CHECK-NOT: rocdl.sched.barrier
+  // GFX9: llvm.inline_asm has_side_effects "global_store_dwordx4 $0, $1, off", "v,v"
+  // GFX12: llvm.inline_asm has_side_effects "global_store_b128 $0, $1, off", "v,v"
+  vector.store %result, %arg0[%offset] : memref<1024xf32>, vector<4xf32>
+
+  return
+}
