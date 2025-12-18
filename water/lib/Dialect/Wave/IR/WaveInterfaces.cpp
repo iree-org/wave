@@ -693,7 +693,7 @@ static bool isIndexExprMapFunctionOf(AffineMap map,
 //   - thread dependent component (thread and GPR indices)
 //   - one component per iter dimension
 //
-// Two maps can be joined if, for all pairwise components:
+// Two start maps can be joined if, for all pairwise components:
 //
 //   - the components are equal;
 //   - the component is absent from one of the maps.
@@ -723,7 +723,7 @@ static bool isIndexExprMapFunctionOf(AffineMap map,
 // even further, consider having a lattice that is a collection of constraints
 // applicable to the value + metadata (like it being used in LHS/RHS/Acc of an
 // MMA) without creating the expression immediately.
-static FailureOr<AffineMap> getIndexExprsJoinedMap(
+static FailureOr<AffineMap> getIndexExprStartJoinedMap(
     AffineMap lhs, AffineMap rhs, ArrayRef<Attribute> lhsSymbols,
     ArrayRef<Attribute> rhsSymbols, ArrayRef<Attribute> allSymbols,
     ArrayRef<unsigned> disallowedSymbols) {
@@ -805,9 +805,44 @@ static FailureOr<AffineMap> getIndexExprsJoinedMap(
   return simplifyAffineMap(addMaps(lhs, rhsOnly));
 }
 
+// Two step/stride maps can be joined if one of them is a constant one, at which
+// point the join is the other map, or if they are equal. All other combinations
+// join to lattice top.
+static FailureOr<AffineMap> getIndexExprStepStrideJoinedMap(
+    AffineMap lhs, AffineMap rhs, ArrayRef<Attribute> lhsSymbols,
+    ArrayRef<Attribute> rhsSymbols, ArrayRef<Attribute> allSymbols,
+    ArrayRef<unsigned> disallowedSymbols) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+
+  lhs = wave::alignMapSymbols(lhs, lhsSymbols, allSymbols);
+  rhs = wave::alignMapSymbols(rhs, rhsSymbols, allSymbols);
+
+  if (lhs == rhs)
+    return lhs;
+
+  AffineExpr lhsExpr = lhs.getResult(0);
+  AffineExpr rhsExpr = rhs.getResult(0);
+  auto isConstantOne = [](AffineExpr expr) -> bool {
+    if (auto constantExpr = llvm::dyn_cast<AffineConstantExpr>(expr)) {
+      return constantExpr.getValue() == 1;
+    }
+    return false;
+  };
+  bool lhsIsConstantOne = isConstantOne(lhsExpr);
+  bool rhsIsConstantOne = isConstantOne(rhsExpr);
+  if (lhsIsConstantOne)
+    return rhs;
+  if (rhsIsConstantOne)
+    return lhs;
+  return failure();
+}
+
 // Join two concrete index expressions mappings by joining their
-// start/step/stride maps independently. See getIndexExprsJoinedMap for more
-// details.
+// start/step/stride maps independently. See getIndexExprStartJoinedMap and
+// getIndexExprStepStrideJoinedMap for more details.
 static wave::WaveIndexMappingAttr
 getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
                           wave::WaveIndexMappingAttr rhs) {
@@ -831,17 +866,17 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
     commonSymbolPositions.push_back(std::distance(lhsSymbols.begin(), it));
   }
 
-  FailureOr<AffineMap> joinedStart = getIndexExprsJoinedMap(
+  FailureOr<AffineMap> joinedStart = getIndexExprStartJoinedMap(
       lhs.getStart(), rhs.getStart(), lhsSymbols.getArrayRef(),
       rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
   if (failed(joinedStart))
     return nullptr;
-  FailureOr<AffineMap> joinedStep = getIndexExprsJoinedMap(
+  FailureOr<AffineMap> joinedStep = getIndexExprStepStrideJoinedMap(
       lhs.getStep(), rhs.getStep(), lhsSymbols.getArrayRef(),
       rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
   if (failed(joinedStep))
     return nullptr;
-  FailureOr<AffineMap> joinedStride = getIndexExprsJoinedMap(
+  FailureOr<AffineMap> joinedStride = getIndexExprStepStrideJoinedMap(
       lhs.getStride(), rhs.getStride(), lhsSymbols.getArrayRef(),
       rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
   if (failed(joinedStride))
