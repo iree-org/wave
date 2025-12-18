@@ -13,7 +13,6 @@ import subprocess
 import sys
 import math
 import re
-import importlib.util
 from typing import Any, Sequence
 from functools import lru_cache
 
@@ -34,9 +33,6 @@ from wave_lang.support.ir_imports import (
     memref_d,
     stream_d,
 )
-
-# Water Python bindings are conditionally available
-# We'll try to import them dynamically when needed
 
 
 def _find_single_nested(name: str, parent: Operation) -> Operation:
@@ -193,7 +189,13 @@ def find_binary(name: str) -> str | None:
 
 @lru_cache
 def is_water_available() -> bool:
-    """Returns True if the water-opt binary is available."""
+    """Returns True if the water_mlir package is available."""
+    return (get_water_mlir_dir()).exists()
+
+
+@lru_cache
+def is_water_binary_available() -> bool:
+    """Returns True if the water-opt binary is available and executable."""
     return find_binary("water-opt") is not None
 
 

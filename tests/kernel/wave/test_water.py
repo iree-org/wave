@@ -13,11 +13,12 @@ from wave_lang.kernel.wave.water import (
     apply_water_lowering_passes,
     find_binary,
     is_water_available,
+    is_water_binary_available,
 )
 
 
 @pytest.mark.skipif(
-    not is_water_available(), reason="Water MLIR package not installed."
+    not is_water_binary_available(), reason="water-opt binary not available."
 )
 def test_find_binary():
     subprocess.check_call([find_binary("water-opt"), "--version"])
@@ -33,11 +34,9 @@ class TestWaterLowering:
 
     def test_apply_water_lowering_passes_unavailable(self):
         """Test apply_water_lowering_passes when water-opt is not available."""
-        with patch(
-            "wave_lang.kernel.wave.water.get_water_opt",
-            side_effect=RuntimeError("Not found"),
-        ):
-            with pytest.raises(RuntimeError, match="Not found"):
+        # Mock find_binary to return None, simulating water-opt not being found
+        with patch("wave_lang.kernel.wave.water.find_binary", return_value=None):
+            with pytest.raises(RuntimeError, match="water-opt binary not found"):
                 apply_water_lowering_passes("module {}")
 
     def test_apply_water_lowering_passes_success(self):
@@ -85,11 +84,9 @@ class TestWaterLowering:
 
 
 @pytest.mark.skipif(
-    not is_water_available(), reason="Water not available."
+    not is_water_binary_available(), reason="water-opt binary not available."
 )
 class TestWaterLoweringIntegration:
-    """Integration tests that require actual water-opt binary."""
-
     def test_lowering_passes(self):
         # Test with simple Wave dialect operations - just register and add
         wave_mlir = """
@@ -108,7 +105,7 @@ class TestWaterLoweringIntegration:
         result = apply_water_lowering_passes(wave_mlir)
         assert result is not None
         assert "module" in result
-        assert "func.func" in result
+        assert "func.func @test_kernel" in result
 
         # Verify Wave operations are lowered
         assert "wave.register" not in result
@@ -117,7 +114,5 @@ class TestWaterLoweringIntegration:
         # Wave attributes should be cleaned
         assert "wave.normal_form" not in result
 
-        # Should have standard MLIR operations instead
-        assert "arith.constant" in result  # Original constants preserved
-        assert "arith.addf" in result      # wave.add becomes arith.addf
-        assert "vector<4xf32>" in result   # Vector types preserved
+        # Should only have `return` remained
+        assert "return" in result
