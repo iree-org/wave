@@ -247,7 +247,7 @@ jobs:
         run: |
           if [[ "${{ contains(matrix.os, 'mi35x') }}" == 'true' ]]; then
             # TODO: mlir_converter tests segfault on mi35x
-            echo "WAVE_TEST_WATER=0" >> $GITHUB_ENV
+            export WAVE_TEST_WATER=0
           fi
           WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
 
