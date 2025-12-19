@@ -72,11 +72,8 @@ def test_mma():
     # CHECK-DAG:        %[[workgroup_id_0:.*]] = gpu.block_id x
     # CHECK-DAG:        %[[thread_id_x:.*]] = gpu.thread_id  x
 
-    # CHECK-DAG:        %[[BASE_ALLOC:.+]] = memref.alloc() : memref<2560xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:        %[[C0:.+]] = arith.constant 0 : index
-    # CHECK-DAG:        %[[C1280:.+]] = arith.constant 1280 : index
-    # CHECK-DAG:        %[[ALLOC:.+]] = memref.view %[[BASE_ALLOC]][%[[C0]]][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x20xf16, #gpu.address_space<workgroup>>
-    # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.view %[[BASE_ALLOC]][%[[C1280]]][] : memref<2560xi8, #gpu.address_space<workgroup>> to memref<32x20xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:        %[[ALLOC:.+]] = memref.alloc() : memref<32x20xf16, #gpu.address_space<workgroup>>
+    # CHECK-DAG:        %[[ALLOC_0:.+]] = memref.alloc() : memref<32x20xf16, #gpu.address_space<workgroup>>
     # CHECK-DAG:        %[[D12:.+]] = vector.load %[[ALLOC]][{{.*}}, {{.*}}] : memref<32x20xf16,
     # CHECK-DAG:        %[[D20:.+]] = vector.load %[[ALLOC_0]][{{.*}}, {{.*}}] : memref<32x20xf16,
     # CHECK:            %[[D21:.+]] = amdgpu.mfma 16x16x16 %[[D20]] * %[[D12]] + %[[CST]] blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
