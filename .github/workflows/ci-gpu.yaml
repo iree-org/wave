@@ -226,6 +226,7 @@ jobs:
       - name: Test TKW runtime related stack on amdgpu
         if: ${{ env.HAS_GPU == 'true' && !cancelled() }}
         run: |
+          python -c "import torch; print(torch.cuda.get_device_properties().gcnArchName if torch.cuda.is_available() else 'cpu')"
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
           nproc
