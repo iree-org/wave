@@ -48,6 +48,7 @@ if (WATER_ENABLE_PYTHON)
       WaterPythonSources
       MLIRPythonExtension.RegisterEverything
       MLIRPythonSources.Core
+      MLIRPythonSources.Dialects.amdgpu
       MLIRPythonSources.Dialects.transform
       MLIRPythonSources.Dialects.transform.interpreter
       MLIRPythonSources.Dialects.transform.extras
