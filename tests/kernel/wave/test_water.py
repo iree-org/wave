@@ -39,6 +39,8 @@ class TestWaterLowering:
             with pytest.raises(RuntimeError, match="water-opt binary not found"):
                 apply_water_middle_end_passes("module {}")
 
+        get_water_opt.cache_clear()
+
     def test_apply_water_middle_end_passes_success(self):
         """Test apply_water_middle_end_passes with mocked subprocess."""
         mlir_input = (
