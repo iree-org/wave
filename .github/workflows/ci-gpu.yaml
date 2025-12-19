@@ -152,16 +152,10 @@ jobs:
           echo "WAVE_BUILD_WATER=1" >> $GITHUB_ENV
           echo "WAVE_LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install" >> $GITHUB_ENV
 
-      - name: Setup env
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
-        run: |
-          sudo apt update
-          sudo apt install -y ninja-build cmake clang lld
-
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        if: ${{ env.IS_MI325 == 'true' || env.IS_MI35X == 'true' }}
         with:
           path: llvm-mlir/_mlir_install/**
           key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
