@@ -35,11 +35,12 @@ class TestWaterLowering:
         """Test apply_water_middle_end_passes when water-opt is not available."""
         # Mock find_binary to return None, simulating water-opt not being found
         get_water_opt.cache_clear()  # get_water_opt caches find_binary result
-        with patch("wave_lang.kernel.wave.water.find_binary", return_value=None):
-            with pytest.raises(RuntimeError, match="water-opt binary not found"):
-                apply_water_middle_end_passes("module {}")
-
-        get_water_opt.cache_clear()
+        try:
+            with patch("wave_lang.kernel.wave.water.find_binary", return_value=None):
+                with pytest.raises(RuntimeError, match="water-opt binary not found"):
+                    apply_water_middle_end_passes("module {}")
+        finally:
+            get_water_opt.cache_clear()
 
     def test_apply_water_middle_end_passes_success(self):
         """Test apply_water_middle_end_passes with mocked subprocess."""
