@@ -113,16 +113,6 @@ jobs:
     timeout-minutes: 60
     needs: build_llvm_linux
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-
-    container:
-      if: ${{ contains(matrix.os, 'mi35x') }}
-      image: 'ghcr.io/rocm/no_rocm_image_ubuntu24_04@sha256:405945a40deaff9db90b9839c0f41d4cba4a383c1a7459b28627047bf6302a26'
-      options: --ipc host
-        --group-add video
-        --device /dev/kfd
-        --device /dev/dri
-        --env-file /etc/podinfo/gha-gpu-isolation-settings
-
     env:
       VENV_DIR: ${{ github.workspace }}/.wave-venv
 
