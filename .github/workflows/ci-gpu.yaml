@@ -184,7 +184,7 @@ jobs:
           sudo apt-get install -y dwarfdump
 
       - name: Install pip deps
-        if: ${{ env.HAS_NO_GPU == 'true' && !cancelled() }}
+        if: ${{ env.HAS_NO_GPU == 'true' }}
         run: |
           python -m pip install --no-compile --upgrade pip
           # Note: We install in three steps in order to satisfy requirements
@@ -217,7 +217,7 @@ jobs:
           pip install -r requirements.txt -e .
 
       - name: Install pip deps (mi250/mi325)
-        if: ${{ env.HAS_GPU == 'true' && env.IS_MI35X == 'false' && !cancelled() }}
+        if: ${{ env.HAS_GPU == 'true' && env.IS_MI35X == 'false' }}
         run: |
           python -m pip install --upgrade pip
           pip install -r pytorch-rocm-requirements.txt
