@@ -7,6 +7,7 @@
 import pytest
 from wave_lang.kernel.wave.utils.run_utils import get_default_arch
 from pathlib import Path
+from dataclasses import dataclass, field
 
 require_e2e = pytest.mark.require_e2e
 expensive_test = pytest.mark.expensive_test
@@ -91,3 +92,65 @@ def use_water_backend_bool(name: str):
 
 def glob_asm_files(path: Path) -> list[Path]:
     return list(filter(lambda x: x.suffix in [".s", ".rocmasm"], path.glob("*")))
+
+
+@dataclass
+class KernelMetadata:
+    """Metadata extracted from kernel assembly."""
+
+    vgpr_count: int | None = None
+    vgpr_spill_count: int | None = None
+    sgpr_count: int | None = None
+    sgpr_spill_count: int | None = None
+    waitcnt_ops: list[str] = field(default_factory=list)
+
+
+def extract_kernel_metadata(asm_text: str) -> KernelMetadata:
+    """
+    Extract kernel metadata from ROCm assembly text.
+
+    Args:
+        asm_text: Assembly text content (e.g., from .rocmasm file)
+
+    Returns:
+        KernelMetadata containing:
+        - vgpr_count: Number of VGPRs allocated
+        - vgpr_spill_count: Number of VGPRs spilled
+        - sgpr_count: Number of SGPRs allocated
+        - sgpr_spill_count: Number of SGPRs spilled
+        - waitcnt_ops: List of all waitcnt operations found in the assembly
+    """
+    import re
+
+    metadata = KernelMetadata()
+
+    # Extract from YAML metadata section (more reliable)
+    # Look for patterns like:
+    #   .vgpr_count:     3
+    #   .vgpr_spill_count: 0
+    #   .sgpr_count:     8
+    #   .sgpr_spill_count: 0
+
+    vgpr_count_match = re.search(r"\.vgpr_count:\s+(\d+)", asm_text)
+    if vgpr_count_match:
+        metadata.vgpr_count = int(vgpr_count_match.group(1))
+
+    vgpr_spill_match = re.search(r"\.vgpr_spill_count:\s+(\d+)", asm_text)
+    if vgpr_spill_match:
+        metadata.vgpr_spill_count = int(vgpr_spill_match.group(1))
+
+    sgpr_count_match = re.search(r"\.sgpr_count:\s+(\d+)", asm_text)
+    if sgpr_count_match:
+        metadata.sgpr_count = int(sgpr_count_match.group(1))
+
+    sgpr_spill_match = re.search(r"\.sgpr_spill_count:\s+(\d+)", asm_text)
+    if sgpr_spill_match:
+        metadata.sgpr_spill_count = int(sgpr_spill_match.group(1))
+
+    # Extract all waitcnt operations
+    # Pattern: s_waitcnt followed by any arguments
+    # Examples: s_waitcnt lgkmcnt(0), s_waitcnt vmcnt(0), etc.
+    waitcnt_pattern = re.compile(r"s_waitcnt\s+[^\n]+")
+    metadata.waitcnt_ops = waitcnt_pattern.findall(asm_text)
+
+    return metadata
