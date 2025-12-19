@@ -386,7 +386,7 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
     options.target = "gfx950"
     options.dump_intermediates = tmp_path
     options.use_water_backend = use_water_backend
-    batched_gemm = wave_compile(options, batched_gemm)
+    wave_compile(options, batched_gemm)
     asm_files = glob_asm_files(tmp_path)
 
     assert len(asm_files) == 1, "Expected 1 ASM file"
@@ -394,7 +394,7 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
 
     metadata = extract_kernel_metadata(text)
 
-    # We encode the exact registers and wait counts count as we want to know if
+    # We encode the exact registers and wait counts as we want to know if
     # they suddenly change due to backend or upstream MLIR changes.
     if use_water_backend:
         vgpr_count = 160
