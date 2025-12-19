@@ -88,34 +88,30 @@ def test_mxfp4_scaled_mma_16x16x128():
     # CHECK-DAG:    #[[MAP7:.+]] = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 3)>
     # CHECK:    func.func @scaled_mma(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding) attributes {translation_info = #translation} {
     # CHECK-DAG:    %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
-    # CHECK-DAG:    %[[C2304:.+]] = arith.constant 2304 : index
-    # CHECK-DAG:    %[[C4992:.+]] = arith.constant 4992 : index
     # CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
-    # CHECK-DAG:    %[[C4608:.+]] = arith.constant 4608 : index
     # CHECK-DAG:    %[[THREAD_ID_X:.+]] = gpu.thread_id  x
     # CHECK-DAG:    %[[THREAD_ID_Y:.+]] = gpu.thread_id  y
-    # CHECK:        %[[ALLOC:.+]] = memref.alloc() : memref<5376xi8, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW:.+]] = memref.view %[[ALLOC]][%[[C4608]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW_0:.+]] = memref.view %[[ALLOC]][%[[C0]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x72xi8, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW_1:.+]] = memref.view %[[ALLOC]][%[[C4992]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VIEW_2:.+]] = memref.view %[[ALLOC]][%[[C2304]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x72xi8, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC:.+]] = memref.alloc() : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC_1:.+]] = memref.alloc() : memref<32x72xi8, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC_2:.+]] = memref.alloc() : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC_3:.+]] = memref.alloc() : memref<32x72xi8, #gpu.address_space<workgroup>>
     # CHECK:        %[[AFFINE_APPLY_0:.+]] = affine.apply #[[MAP0]]()[%[[THREAD_ID_X]]]
     # CHECK:        %[[AFFINE_APPLY_1:.+]] = affine.apply #[[MAP1]]()[%[[THREAD_ID_X]]]
     # CHECK:        %[[VECTOR_LOAD_0:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_1]]] : memref<32x64xi8, strided<[64, 1]>>, vector<16xi8>
-    # CHECK:        vector.store %[[VECTOR_LOAD_0]], %[[VIEW_2]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        vector.store %[[VECTOR_LOAD_0]], %[[ALLOC_3]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
     # CHECK:        %[[AFFINE_APPLY_2:.+]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
     # CHECK:        %[[VECTOR_LOAD_1:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_2]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
-    # CHECK:        vector.store %[[VECTOR_LOAD_1]], %[[VIEW_1]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
+    # CHECK:        vector.store %[[VECTOR_LOAD_1]], %[[ALLOC_2]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
     # CHECK:        %[[AFFINE_APPLY_3:.+]] = affine.apply #[[MAP3]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
     # CHECK:        %[[VECTOR_LOAD_2:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_1]]] : memref<32x64xi8, strided<[64, 1]>>, vector<16xi8>
-    # CHECK:        vector.store %[[VECTOR_LOAD_2]], %[[VIEW_0]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        vector.store %[[VECTOR_LOAD_2]], %[[ALLOC_1]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
     # CHECK:        %[[VECTOR_LOAD_3:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_2]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
-    # CHECK:        vector.store %[[VECTOR_LOAD_3]], %[[VIEW]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
+    # CHECK:        vector.store %[[VECTOR_LOAD_3]], %[[ALLOC]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
     # CHECK:        amdgpu.lds_barrier
-    # CHECK:        %[[VECTOR_LOAD_4:.+]] = memref.load %[[VIEW]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VECTOR_LOAD_5:.+]] = vector.load %[[VIEW_0]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK:        %[[VECTOR_LOAD_6:.+]] = memref.load %[[VIEW_1]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VECTOR_LOAD_7:.+]] = vector.load %[[VIEW_2]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        %[[VECTOR_LOAD_4:.+]] = memref.load %[[ALLOC]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[VECTOR_LOAD_5:.+]] = vector.load %[[ALLOC_1]][%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        %[[VECTOR_LOAD_6:.+]] = memref.load %[[ALLOC_2]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_2]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[VECTOR_LOAD_7:.+]] = vector.load %[[ALLOC_3]][%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_1]]] : memref<32x72xi8, #gpu.address_space<workgroup>>, vector<16xi8>
     # CHECK:        %[[BITCAST_0:.+]] = vector.bitcast %[[VECTOR_LOAD_7]] : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK:        %[[BITCAST_1:.+]] = vector.bitcast %[[VECTOR_LOAD_5]] : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK:        %[[SCALED_MFMA:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[VECTOR_LOAD_6]][0] * %[[BITCAST_0]]) * (%[[VECTOR_LOAD_4]][0] * %[[BITCAST_1]]) + %[[CST]] : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>
@@ -208,43 +204,39 @@ def test_mxfp8_scaled_mma_16x16x128():
     # CHECK:   func.func @scaled_mma(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding) attributes {translation_info = #translation} {
     # CHECK-DAG:   %[[CST:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
     # CHECK-DAG:   %[[CST_0:.*]] = arith.constant dense<0.000000e+00> : vector<32xf8E5M2>
-    # CHECK-DAG:   %[[C4352:.*]] = arith.constant 4352 : index
-    # CHECK-DAG:   %[[C9088:.*]] = arith.constant 9088 : index
     # CHECK-DAG:   %[[C0:.*]] = arith.constant 0 : index
-    # CHECK-DAG:   %[[C8704:.*]] = arith.constant 8704 : index
     # CHECK-DAG:   %[[THREAD_ID_X:.*]] = gpu.thread_id  x
     # CHECK-DAG:   %[[THREAD_ID_Y:.*]] = gpu.thread_id  y
-    # CHECK-DAG:   %[[ALLOC:.*]] = memref.alloc() : memref<9472xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:   %[[VIEW:.*]] = memref.view %[[ALLOC]][%[[C8704]]][] : memref<9472xi8, #gpu.address_space<workgroup>> to memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK-DAG:   %[[VIEW_1:.*]] = memref.view %[[ALLOC]][%[[C0]]][] : memref<9472xi8, #gpu.address_space<workgroup>> to memref<32x136xf8E5M2, #gpu.address_space<workgroup>>
-    # CHECK-DAG:   %[[VIEW_2:.*]] = memref.view %[[ALLOC]][%[[C9088]]][] : memref<9472xi8, #gpu.address_space<workgroup>> to memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK-DAG:   %[[VIEW_3:.*]] = memref.view %[[ALLOC]][%[[C4352]]][] : memref<9472xi8, #gpu.address_space<workgroup>> to memref<32x136xf8E5M2, #gpu.address_space<workgroup>>
+    # CHECK:       %[[ALLOC:.*]] = memref.alloc() : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:       %[[ALLOC_1:.*]] = memref.alloc() : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>
+    # CHECK:       %[[ALLOC_2:.*]] = memref.alloc() : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:       %[[ALLOC_3:.*]] = memref.alloc() : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>
     # CHECK:       %[[AFFINE_APPLY:.*]] = affine.apply #[[MAP]]()[%[[THREAD_ID_X]]]
     # CHECK:       %[[AFFINE_APPLY1:.*]] = affine.apply #[[MAP1]]()[%[[THREAD_ID_X]]]
     # CHECK:       %[[LOAD:.*]] = vector.load %{{.*}}[%[[AFFINE_APPLY]], %[[AFFINE_APPLY1]]] : memref<32x128xf8E5M2, strided<[128, 1]>>, vector<16xf8E5M2>
     # CHECK:       %[[AFFINE_APPLY2:.*]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
     # CHECK:       %[[LOAD_0:.*]] = vector.load %{{.*}}[%[[AFFINE_APPLY]], %[[AFFINE_APPLY2]]] : memref<32x128xf8E5M2, strided<[128, 1]>>, vector<16xf8E5M2>
-    # CHECK:       vector.store %[[LOAD]], %[[VIEW_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
-    # CHECK:       vector.store %[[LOAD_0]], %[[VIEW_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       vector.store %[[LOAD]], %[[ALLOC_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       vector.store %[[LOAD_0]], %[[ALLOC_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
     # CHECK:       %[[AFFINE_APPLY3:.*]] = affine.apply #[[MAP3]]()[%[[THREAD_ID_X]]]
     # CHECK:       %[[LOAD1:.*]] = vector.load %{{.*}}[%[[AFFINE_APPLY]], %[[AFFINE_APPLY3]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
-    # CHECK:       vector.store %[[LOAD1]], %[[VIEW_2]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
+    # CHECK:       vector.store %[[LOAD1]], %[[ALLOC_2]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
     # CHECK:       %[[AFFINE_APPLY4:.*]] = affine.apply #[[MAP4]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
     # CHECK:       %[[LOAD2:.*]] = vector.load %{{.*}}[%[[AFFINE_APPLY4]], %[[AFFINE_APPLY1]]] : memref<32x128xf8E5M2, strided<[128, 1]>>, vector<16xf8E5M2>
     # CHECK:       %[[LOAD_2:.*]] = vector.load %{{.*}}[%[[AFFINE_APPLY4]], %[[AFFINE_APPLY2]]] : memref<32x128xf8E5M2, strided<[128, 1]>>, vector<16xf8E5M2>
-    # CHECK:       vector.store %[[LOAD2]], %[[VIEW_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
-    # CHECK:       vector.store %[[LOAD_2]], %[[VIEW_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       vector.store %[[LOAD2]], %[[ALLOC_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       vector.store %[[LOAD_2]], %[[ALLOC_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
     # CHECK:       %[[LOAD3:.*]] = vector.load %{{.*}}[%[[AFFINE_APPLY4]], %[[AFFINE_APPLY3]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
-    # CHECK:       vector.store %[[LOAD3]], %[[VIEW]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
+    # CHECK:       vector.store %[[LOAD3]], %[[ALLOC]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
     # CHECK:       amdgpu.lds_barrier
-    # CHECK:       %[[LOAD4:.*]] = memref.load %[[VIEW]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:       %[[LOAD5:.*]] = vector.load %[[VIEW_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
-    # CHECK:       %[[LOAD6:.*]] = vector.load %[[VIEW_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       %[[LOAD4:.*]] = memref.load %[[ALLOC]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:       %[[LOAD5:.*]] = vector.load %[[ALLOC_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       %[[LOAD6:.*]] = vector.load %[[ALLOC_1]][%[[AFFINE_APPLY4]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
     # CHECK:       %[[INSERT_STRIDED_SLICE:.*]] = vector.insert_strided_slice %[[LOAD5]], %[[CST_0]] {offsets = [0], strides = [1]} : vector<16xf8E5M2> into vector<32xf8E5M2>
     # CHECK:       %[[INSERT_STRIDED_SLICE_3:.*]] = vector.insert_strided_slice %[[LOAD6]], %[[INSERT_STRIDED_SLICE]] {offsets = [16], strides = [1]} : vector<16xf8E5M2> into vector<32xf8E5M2>
-    # CHECK:       %[[LOAD7:.*]] = memref.load %[[VIEW_2]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:       %[[LOAD8:.*]] = vector.load %[[VIEW_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
-    # CHECK:       %[[LOAD9:.*]] = vector.load %[[VIEW_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       %[[LOAD7:.*]] = memref.load %[[ALLOC_2]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY3]]] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:       %[[LOAD8:.*]] = vector.load %[[ALLOC_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY1]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
+    # CHECK:       %[[LOAD9:.*]] = vector.load %[[ALLOC_3]][%[[AFFINE_APPLY]], %[[AFFINE_APPLY2]]] : memref<32x136xf8E5M2, #gpu.address_space<workgroup>>, vector<16xf8E5M2>
     # CHECK:       %[[INSERT_STRIDED_SLICE_4:.*]] = vector.insert_strided_slice %[[LOAD8]], %[[CST_0]] {offsets = [0], strides = [1]} : vector<16xf8E5M2> into vector<32xf8E5M2>
     # CHECK:       %[[INSERT_STRIDED_SLICE_5:.*]] = vector.insert_strided_slice %[[LOAD9]], %[[INSERT_STRIDED_SLICE_4]] {offsets = [16], strides = [1]} : vector<16xf8E5M2> into vector<32xf8E5M2>
     # CHECK:       %[[SCALED_MFMA:.*]] = amdgpu.scaled_mfma 16x16x128 (%[[LOAD7]][0] * %[[INSERT_STRIDED_SLICE_5]]) * (%[[LOAD4]][0] * %[[INSERT_STRIDED_SLICE_3]]) + %[[CST]] : f8E8M0FNU, vector<32xf8E5M2>, f8E8M0FNU, vector<32xf8E5M2>, vector<4xf32>
@@ -431,50 +423,46 @@ def test_mxfp4_scaled_mma_linearize_shared_access():
     # CHECK-LABEL:  test_mxfp4_scaled_mma_linearize_shared_access
     # CHECK-DAG:    #[[MAP0:.+]] = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
     # CHECK-DAG:    #[[MAP1:.+]] = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #[[MAP2:.+]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
-    # CHECK-DAG:    #[[MAP3:.+]] = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #[[MAP8:.+]] = affine_map<()[s0] -> (s0 * 72 + (s0 floordiv 64) * 1152 - (s0 floordiv 16) * 1152 + ((s0 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #[[MAP9:.+]] = affine_map<()[s0] -> (s0 * 12 + (s0 floordiv 64) * 192 + (s0 mod 64) floordiv 16 - (s0 floordiv 16) * 192)>
-    # CHECK-DAG:    #[[MAP10:.+]] = affine_map<()[s0, s1] -> (s0 * 1152 + s1 * 72 - (s1 floordiv 16) * 1152 + ((s1 mod 64) floordiv 16) * 16)>
-    # CHECK-DAG:    #[[MAP11:.+]] = affine_map<()[s0, s1] -> (s0 * 12 + s1 * 192 + (s0 mod 64) floordiv 16 - (s0 floordiv 16) * 192)>
+    # CHECK-DAG:    #[[MAP2:.+]] = affine_map<()[s0] -> (s0 * 72 + (s0 floordiv 64) * 1152 - (s0 floordiv 16) * 1152 + ((s0 mod 64) floordiv 16) * 16)>
+    # CHECK-DAG:    #[[MAP3:.+]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
+    # CHECK-DAG:    #[[MAP4:.+]] = affine_map<()[s0] -> (s0 * 12 + (s0 floordiv 64) * 192 + (s0 mod 64) floordiv 16 - (s0 floordiv 16) * 192)>
+    # CHECK-DAG:    #[[MAP5:.+]] = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
+    # CHECK-DAG:    #[[MAP6:.+]] = affine_map<()[s0, s1] -> (s0 * 1152 + s1 * 72 - (s1 floordiv 16) * 1152 + ((s1 mod 64) floordiv 16) * 16)>
+    # CHECK-DAG:    #[[MAP7:.+]] = affine_map<()[s0, s1] -> (s0 * 12 + s1 * 192 + (s0 mod 64) floordiv 16 - (s0 floordiv 16) * 192)>
     # CHECK:    func.func @scaled_mma(%arg0: !stream.binding, %arg1: !stream.binding, %arg2: !stream.binding, %arg3: !stream.binding, %arg4: !stream.binding) attributes {translation_info = #translation} {
     # CHECK-DAG:    %[[CST:.+]] = arith.constant dense<0.000000e+00> : vector<4xf32>
-    # CHECK-DAG:    %[[C2304:.+]] = arith.constant 2304 : index
-    # CHECK-DAG:    %[[C4992:.+]] = arith.constant 4992 : index
     # CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
-    # CHECK-DAG:    %[[C4608:.+]] = arith.constant 4608 : index
     # CHECK-DAG:    %[[THREAD_ID_X:.+]] = gpu.thread_id  x
     # CHECK-DAG:    %[[THREAD_ID_Y:.+]] = gpu.thread_id  y
-    # CHECK-DAG:    %[[ALLOC:.+]] = memref.alloc() : memref<5376xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:    %[[VIEW:.+]] = memref.view %[[ALLOC]][%[[C4608]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK-DAG:    %[[VIEW_0:.+]] = memref.view %[[ALLOC]][%[[C0]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x72xi8, #gpu.address_space<workgroup>>
-    # CHECK-DAG:    %[[VIEW_1:.+]] = memref.view %[[ALLOC]][%[[C4992]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK-DAG:    %[[VIEW_2:.+]] = memref.view %[[ALLOC]][%[[C2304]]][] : memref<5376xi8, #gpu.address_space<workgroup>> to memref<32x72xi8, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC:.+]] = memref.alloc() : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC_1:.+]] = memref.alloc() : memref<32x72xi8, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC_2:.+]] = memref.alloc() : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[ALLOC_3:.+]] = memref.alloc() : memref<32x72xi8, #gpu.address_space<workgroup>>
     # CHECK:        %[[AFFINE_APPLY_0:.+]] = affine.apply #[[MAP0]]()[%[[THREAD_ID_X]]]
     # CHECK:        %[[AFFINE_APPLY_1:.+]] = affine.apply #[[MAP1]]()[%[[THREAD_ID_X]]]
     # CHECK:        %[[VECTOR_LOAD_0:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_1]]] : memref<32x64xi8, strided<[64, 1]>>, vector<16xi8>
-    # CHECK:        %[[LINEAR_VIEW_2:.+]] = memref.reinterpret_cast %[[VIEW_2]] to offset: [0], sizes: [2304], strides: [1] : memref<32x72xi8, #gpu.address_space<workgroup>> to memref<2304xi8, #gpu.address_space<workgroup>>
-    # CHECK:        %[[AFFINE_APPLY_8:.+]] = affine.apply #[[MAP8]]()[%[[THREAD_ID_X]]]
-    # CHECK:        vector.store %[[VECTOR_LOAD_0]], %[[LINEAR_VIEW_2]][%[[AFFINE_APPLY_8]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        %[[LINEAR_VIEW_2:.+]] = memref.reinterpret_cast %[[ALLOC_3]] to offset: [0], sizes: [2304], strides: [1] : memref<32x72xi8, #gpu.address_space<workgroup>> to memref<2304xi8, #gpu.address_space<workgroup>>
     # CHECK:        %[[AFFINE_APPLY_2:.+]] = affine.apply #[[MAP2]]()[%[[THREAD_ID_X]]]
-    # CHECK:        %[[VECTOR_LOAD_1:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_2]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
-    # CHECK:        %[[LINEAR_VIEW_1:.+]] = memref.reinterpret_cast %[[VIEW_1]] to offset: [0], sizes: [384], strides: [1] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>> to memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:        %[[AFFINE_APPLY_9:.+]] = affine.apply #[[MAP9]]()[%[[THREAD_ID_X]]]
-    # CHECK:        vector.store %[[VECTOR_LOAD_1]], %[[LINEAR_VIEW_1]][%[[AFFINE_APPLY_9]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
-    # CHECK:        %[[AFFINE_APPLY_3:.+]] = affine.apply #[[MAP3]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
-    # CHECK:        %[[VECTOR_LOAD_2:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_1]]] : memref<32x64xi8, strided<[64, 1]>>, vector<16xi8>
-    # CHECK:        %[[LINEAR_VIEW_0:.+]] = memref.reinterpret_cast %[[VIEW_0]] to offset: [0], sizes: [2304], strides: [1] : memref<32x72xi8, #gpu.address_space<workgroup>> to memref<2304xi8, #gpu.address_space<workgroup>>
-    # CHECK:        %[[AFFINE_APPLY_10:.+]] = affine.apply #[[MAP10]]()[%[[THREAD_ID_Y]], %[[THREAD_ID_X]]]
-    # CHECK:        vector.store %[[VECTOR_LOAD_2]], %[[LINEAR_VIEW_0]][%[[AFFINE_APPLY_10]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK:        %[[VECTOR_LOAD_3:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_3]], %[[AFFINE_APPLY_2]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
-    # CHECK:        %[[LINEAR_VIEW:.+]] = memref.reinterpret_cast %[[VIEW]] to offset: [0], sizes: [384], strides: [1] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>> to memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:        %[[AFFINE_APPLY_11:.+]] = affine.apply #[[MAP11]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
-    # CHECK:        vector.store %[[VECTOR_LOAD_3]], %[[LINEAR_VIEW]][%[[AFFINE_APPLY_11]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
+    # CHECK:        vector.store %[[VECTOR_LOAD_0]], %[[LINEAR_VIEW_2]][%[[AFFINE_APPLY_2]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        %[[AFFINE_APPLY_3:.+]] = affine.apply #[[MAP3]]()[%[[THREAD_ID_X]]]
+    # CHECK:        %[[VECTOR_LOAD_1:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_0]], %[[AFFINE_APPLY_3]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
+    # CHECK:        %[[LINEAR_VIEW_1:.+]] = memref.reinterpret_cast %[[ALLOC_2]] to offset: [0], sizes: [384], strides: [1] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>> to memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[AFFINE_APPLY_4:.+]] = affine.apply #[[MAP4]]()[%[[THREAD_ID_X]]]
+    # CHECK:        vector.store %[[VECTOR_LOAD_1]], %[[LINEAR_VIEW_1]][%[[AFFINE_APPLY_4]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
+    # CHECK:        %[[AFFINE_APPLY_5:.+]] = affine.apply #[[MAP5]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK:        %[[VECTOR_LOAD_2:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_5]], %[[AFFINE_APPLY_1]]] : memref<32x64xi8, strided<[64, 1]>>, vector<16xi8>
+    # CHECK:        %[[LINEAR_VIEW_0:.+]] = memref.reinterpret_cast %[[ALLOC_1]] to offset: [0], sizes: [2304], strides: [1] : memref<32x72xi8, #gpu.address_space<workgroup>> to memref<2304xi8, #gpu.address_space<workgroup>>
+    # CHECK:        %[[AFFINE_APPLY_6:.+]] = affine.apply #[[MAP6]]()[%[[THREAD_ID_Y]], %[[THREAD_ID_X]]]
+    # CHECK:        vector.store %[[VECTOR_LOAD_2]], %[[LINEAR_VIEW_0]][%[[AFFINE_APPLY_6]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        %[[VECTOR_LOAD_3:.+]] = vector.load %{{.*}}[%[[AFFINE_APPLY_5]], %[[AFFINE_APPLY_3]]] : memref<32x4xf8E8M0FNU, strided<[4, 1]>>, vector<1xf8E8M0FNU>
+    # CHECK:        %[[LINEAR_VIEW:.+]] = memref.reinterpret_cast %[[ALLOC]] to offset: [0], sizes: [384], strides: [1] : memref<32x12xf8E8M0FNU, #gpu.address_space<workgroup>> to memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[AFFINE_APPLY_7:.+]] = affine.apply #[[MAP7]]()[%[[THREAD_ID_X]], %[[THREAD_ID_Y]]]
+    # CHECK:        vector.store %[[VECTOR_LOAD_3]], %[[LINEAR_VIEW]][%[[AFFINE_APPLY_7]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>, vector<1xf8E8M0FNU>
     # CHECK:        amdgpu.lds_barrier
-    # CHECK:        %[[VECTOR_LOAD_4:.+]] = memref.load %[[LINEAR_VIEW]][%[[AFFINE_APPLY_11]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>
-    # CHECK:        %[[VECTOR_LOAD_5:.+]] = vector.load %[[LINEAR_VIEW_0]][%[[AFFINE_APPLY_10]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
-    # CHECK:        %[[VECTOR_LOAD_6:.+]] = memref.load %[[LINEAR_VIEW_1]][%[[AFFINE_APPLY_9]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>
-    # CHECK:        %[[VECTOR_LOAD_7:.+]] = vector.load %[[LINEAR_VIEW_2]][%[[AFFINE_APPLY_8]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        %[[VECTOR_LOAD_4:.+]] = memref.load %[[LINEAR_VIEW]][%[[AFFINE_APPLY_7]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>>
+    # CHECK:        %[[VECTOR_LOAD_5:.+]] = vector.load %[[LINEAR_VIEW_0]][%[[AFFINE_APPLY_6]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
+    # CHECK:        %[[VECTOR_LOAD_6:.+]] = memref.load %[[LINEAR_VIEW_1]][%[[AFFINE_APPLY_4]]] : memref<384xf8E8M0FNU, #gpu.address_space<workgroup>
+    # CHECK:        %[[VECTOR_LOAD_7:.+]] = vector.load %[[LINEAR_VIEW_2]][%[[AFFINE_APPLY_2]]] : memref<2304xi8, #gpu.address_space<workgroup>>, vector<16xi8>
     # CHECK:        %[[BITCAST_0:.+]] = vector.bitcast %[[VECTOR_LOAD_7]] : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK:        %[[BITCAST_1:.+]] = vector.bitcast %[[VECTOR_LOAD_5]] : vector<16xi8> to vector<32xf4E2M1FN>
     # CHECK:        %[[SCALED_MFMA:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[VECTOR_LOAD_6]][0] * %[[BITCAST_0]]) * (%[[VECTOR_LOAD_4]][0] * %[[BITCAST_1]]) + %[[CST]] : f8E8M0FNU, vector<32xf4E2M1FN>, f8E8M0FNU, vector<32xf4E2M1FN>, vector<4xf32>

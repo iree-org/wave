@@ -7,6 +7,15 @@ The goal is to assign a starting memory offset to each allocation such that the 
 
 The heuristic provides a fast, approximate solution to this problem. It does not guarantee optimality but often performs well in practice.
 
+Performance Implications & Usage Guidelines
+-------------------------------------------
+
+   This optimization works by merging multiple distinct `memref.alloc` operations into a single large allocation with views. While this can reduce peak memory usage, it has a significant side effect: **it obscures aliasing information.**
+
+   * **The Mechanism:** The ``AMDGPULowerModuleLDS`` pass relies on distinct allocations to generate precise aliasing metadata. When allocations are merged, this metadata is lost.
+   * **The Consequence:** Without precise aliasing info, the ``SIInsertWaitcnts`` pass conservatively inserts synchronization barriers (e.g., ``s_waitcnt vmcnt(0)``) to prevent potential data hazards. This breaks software pipelining by preventing the intended overlap of global memory loads with computation.
+   * **When to use:** This optimization is beneficial for kernels with **disjoint buffer lifecycles** (e.g., Extended Attention). In these cases, it allows memory buffers to be reused across time.
+
 The Allocation Data
 --------------------
 
