@@ -346,16 +346,24 @@ def construct_conditional_pipelined_loop(
 
     # The GetResult nodes we created earlier have been updated by construct_pipelined_loop
     # to point to the new pipelined reduction. Use those for the output.
-    # Note: construct_pipelined_loop may have added additional GetResult nodes,
-    # so we need to find all GetResult nodes that reference the pipelined loop
+    # Note: construct_pipelined_loop adds additional GetResult nodes for rotating registers,
+    # but we should only return the actual loop results (corresponding to init_args).
+    # The rotating registers are internal to the pipelined loop implementation.
     final_get_results = []
     for node in conditional_subgraph.nodes:
         custom = get_custom(node) if hasattr(node, 'tkw_op') else None
         if isinstance(custom, GetResultOp) and custom.value == pipelined_node:
-            final_get_results.append(node)
+            # Only include GetResult nodes that correspond to the original init_args
+            # (i.e., res_idx < len(original_init_args))
+            if custom.res_idx < len(original_init_args):
+                final_get_results.append(node)
 
     # Sort by res_idx to ensure correct order
     final_get_results.sort(key=lambda n: get_custom(n).res_idx)
+
+    # Verify we have the right number of results
+    assert len(final_get_results) == len(original_init_args), \
+        f"Expected {len(original_init_args)} results but found {len(final_get_results)}"
 
     # Add Output to the conditional subgraph
     Output(final_get_results).add_to_graph(conditional_subgraph, loc=reduction.location)
