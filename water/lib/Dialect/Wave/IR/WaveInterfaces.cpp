@@ -1007,7 +1007,7 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
         for (wave::WaveSymbolAttr iterSymbol : iterSymbols) {
           auto actualIterSymbol =
               wave::WaveIterSymbolAttr::get(ctx, iterSymbol.getName());
-          value = value.removeInput(actualIterSymbol);
+          value = value.removeInput(actualIterSymbol).removeUnusedInputs();
         }
         return mlir::NamedAttribute(attr.getName(), value);
       });

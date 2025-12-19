@@ -71,7 +71,7 @@ def param_bool(name, shortname=None, values=None):
 
 
 def _is_water_and_ee_available() -> bool:
-    from wave_lang.kernel.wave.water import is_water_available
+    from wave_lang.support.detect_water import is_water_available
     from wave_lang.kernel.wave.execution_engine import is_execution_engine_available
 
     return is_water_available() and is_execution_engine_available()

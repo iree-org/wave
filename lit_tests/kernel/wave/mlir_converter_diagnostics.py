@@ -85,7 +85,7 @@ def mlir_converter_diagnostics_emission():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    _, diagnostics = emit_wave_dialect(
+    _, diagnostics, _ = emit_wave_dialect(
         trace, constraints, options, test_diagnostic_emission=True
     )
 

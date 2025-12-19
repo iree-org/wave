@@ -81,6 +81,7 @@ jobs:
       - name: Run unit tests
         run: |
           pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
+          pytest -n 4 --capture=tee-sys -vv ./tests/mlir_wave_iface
 
       - name: Run LIT tests
         run: |

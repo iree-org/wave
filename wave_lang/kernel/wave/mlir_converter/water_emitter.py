@@ -22,14 +22,21 @@ if __name__ == "__main__":
     _parent_dir = str(_current_file.parent.parent)  # Go up to wave_lang/kernel/wave/
     if _parent_dir not in sys.path:
         sys.path.append(_parent_dir)
+    # Add current directory to enable importing mlir_to_wave without full package path
+    _current_dir = str(_current_file.parent)
+    if _current_dir not in sys.path:
+        sys.path.append(_current_dir)
+
+from mlir_to_wave import (
+    INDEX_SYMBOL_MAP,
+    ITER_SYMBOL_NAME_WATER_PREFIX,
+    convert_index_mapping_array_to_sympy,
+    ITER_SYMBOL_NAME_WAVE_PREFIX,
+)
 
 
 if TYPE_CHECKING:
-    from wave_lang.kernel._support.tracing import CapturedTrace
-    from wave_lang.kernel.wave.compile_options import WaveCompileOptions
-    from wave_lang.kernel.wave.constraints import Constraint
-    from wave_lang.kernel.lang.wave_types import Memory, Register, IndexSymbol
-    from wave_lang.kernel._support.indexing import IndexSequence
+    from wave_lang.kernel._support.indexing import IndexSequence, IndexSymbol
     from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
@@ -79,24 +86,24 @@ try:
         AddOp,
         AllocateOp,
         DivOp,
-        ExtractSliceOp,
         Exp2Op,
+        ExtractSliceOp,
+        IterateOp,
         MmaOp,
         MulOp,
         ReadOp,
         RegisterOp,
         WriteOp,
-        IterateOp,
         YieldOp,
-        WaveExprListAttr,
-        HardwareConstraintAttr,
-        WorkgroupConstraintAttr,
-        WaveConstraintAttr,
-        TilingConstraintAttr,
         DeviceConstraintAttr,
+        HardwareConstraintAttr,
+        TilingConstraintAttr,
+        WaveConstraintAttr,
+        WaveExprListAttr,
         WaveMmaKind,
         WaveMmaKindAttr,
         WaveWorkgroupDimAttr,
+        WorkgroupConstraintAttr,
     )
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
@@ -274,14 +281,20 @@ def _preprocess_symbols(
 ) -> dict[sympy.Symbol, sympy.Symbol]:
     """
     Preprocess symbols by:
-    (1) adding assumptions about all symbols being positive to later enable more simplifications.
-    (2) replacing `$ARG` prefix of argument symbols (e.g. `ARG0`) by `_Iter_` to match dialect expectations.
+
+      1. adding assumptions about all symbols being positive to later enable
+         more simplifications.
+      2. replacing ITER_SYMBOL_NAME_WAVE_PREFIX (`$ARG`) prefix of argument
+         symbols (e.g. `ARG0`) by ITER_SYMBOL_NAME_WATER_PREFIX (`_Iter_`) to
+         match dialect expectations.
     """
     result = {}
     for sym in symbols:
-        # Special case: rename $ARG* symbols to _Iter_*
-        if sym.name.startswith("$ARG"):
-            new_name = sym.name.replace("$ARG", "_Iter_")
+        # Special case: rename $ARG* symbols to _Iter_*.
+        if sym.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX):
+            new_name = sym.name.replace(
+                ITER_SYMBOL_NAME_WAVE_PREFIX, ITER_SYMBOL_NAME_WATER_PREFIX
+            )
             result[sym] = sympy.Symbol(new_name, positive=True)
         else:
             result[sym] = sympy.Symbol(sym.name, positive=True)
@@ -295,24 +308,13 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
     Special symbols starting with $ are converted to WaveIndexSymbolAttr,
     while regular symbols are converted to WaveSymbolAttr.
     """
-    # Mapping of special symbol names to WaveIndexSymbol enum values
-    INDEX_SYMBOL_MAP = {
-        "$WG0": wave.WaveIndexSymbol.WORKGROUP_0,
-        "$WG1": wave.WaveIndexSymbol.WORKGROUP_1,
-        "$WG2": wave.WaveIndexSymbol.WORKGROUP_2,
-        "$T0": wave.WaveIndexSymbol.THREAD_0,
-        "$T1": wave.WaveIndexSymbol.THREAD_1,
-        "$T2": wave.WaveIndexSymbol.THREAD_2,
-        "$DD0": wave.WaveIndexSymbol.DEVICE_DIM_0,
-        "$DD1": wave.WaveIndexSymbol.DEVICE_DIM_1,
-        "$DD2": wave.WaveIndexSymbol.DEVICE_DIM_2,
-        "$GPR_NUM": wave.WaveIndexSymbol.GPR_NUMBER,
-    }
 
     if name in INDEX_SYMBOL_MAP:
         return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
-    elif name.startswith("_Iter_"):
-        return wave.WaveIterSymbolAttr.get(name.replace("_Iter_", ""))
+    if name.startswith(ITER_SYMBOL_NAME_WATER_PREFIX):
+        return wave.WaveIterSymbolAttr.get(
+            name.replace(ITER_SYMBOL_NAME_WATER_PREFIX, "")
+        )
     else:
         return wave.WaveSymbolAttr.get(name)
 
@@ -344,7 +346,7 @@ def _build_index_mapping_dict(
         induction_symbols_to_remove = {
             symbol
             for symbol in all_symbols_set
-            if symbol.name.startswith("$ARG")
+            if symbol.name.startswith(ITER_SYMBOL_NAME_WAVE_PREFIX)
             and symbol not in allowed_induction_symbols
         }
         if induction_symbols_to_remove:
@@ -374,7 +376,9 @@ def _build_index_mapping_dict(
     return ir.DictAttr.get(index_mappings)
 
 
-def _attach_attributes(node: CustomOp, op: ir.Operation):
+def _attach_attributes(
+    node: CustomOp, op: ir.Operation, known_ids: set[str] | None = None
+):
     if getattr(node, "index", None) and isinstance(node.index, dict):
         dict_attrs: list[ir.DictAttr] = []
 
@@ -428,6 +432,13 @@ def _attach_attributes(node: CustomOp, op: ir.Operation):
             bounds[dim.name] = wave.WaveExprListAttr.get(symbol_attrs, result)
         op.attributes["bounds"] = wave.WaveReadWriteBoundsAttr.get(bounds)
 
+    if water_id := getattr(node.fx_node, "_water_id", None):
+        op.attributes[_INTERNAL_WATER_ID_ATTR_NAME] = ir.StringAttr.get(water_id)
+        if known_ids is not None:
+            known_ids.add(water_id)
+    elif known_ids is not None:
+        raise RuntimeError(f"Water id requested but not specified for node {node}.")
+
 
 def _convert_to_wave_expr_list_tuple(
     exprs: Sequence[sympy.Expr | int],
@@ -468,6 +479,7 @@ def _emit_ops_from_graph(
     trace: CapturedTrace,
     value_map: dict[fx.Node | fx.Proxy, ir.Value],
     ctx: ir.Context,
+    known_ids: set[str] | None = None,
 ):
     # Emit in original order to preserve dependencies
     for fx_node in graph.nodes:
@@ -495,6 +507,29 @@ def _emit_ops_from_graph(
                         f"GetResult index is higher than number of results of corresponding iterate node ({node.res_idx} vs {len(iterate_op.results)})"
                     )
                 value_map[fx_node] = iterate_op.results[node.res_idx]
+
+                # Attach IDs of `get_result` to the loop instead so we can recover them
+                # later because `get_result` doesn't exist in the dialect.
+                if known_ids is not None:
+                    water_id = getattr(fx_node, "_water_id", None)
+                    if water_id is None:
+                        raise RuntimeError(
+                            f"Water id requested for 'get_result' but not specified: {node}"
+                        )
+                    known_ids.add(water_id)
+                    current_attribute = (
+                        iterate_op.attributes[_INTERNAL_RESULT_WATER_IRS_ATTR_NAME]
+                        if _INTERNAL_RESULT_WATER_IRS_ATTR_NAME in iterate_op.attributes
+                        else ir.ArrayAttr.get(
+                            [ir.UnitAttr.get()] * len(iterate_op.results)
+                        )
+                    )
+                    attribute_list = list(current_attribute)
+                    attribute_list[node.res_idx] = ir.StringAttr.get(water_id)
+                    iterate_op.attributes[_INTERNAL_RESULT_WATER_IRS_ATTR_NAME] = (
+                        ir.ArrayAttr.get(attribute_list)
+                    )
+
                 # additional handling for this op is not needed, skip rest
                 continue
             if isinstance(node, SharedMemoryBarrier):
@@ -534,6 +569,8 @@ def _emit_ops_from_graph(
                     result_types = []
                     result_locs = []
                     outputs = node.outputs()
+                    if not isinstance(outputs, Sequence):
+                        outputs = [outputs]
                     for fx_output in outputs:
                         output = get_custom(fx_output)
                         output.infer_type()
@@ -563,6 +600,7 @@ def _emit_ops_from_graph(
                             trace,
                             value_map,
                             ctx,
+                            known_ids,
                         )
 
                         # create YieldOp
@@ -603,7 +641,7 @@ def _emit_ops_from_graph(
                     f"Missing support for '{node.tkw_op_name}' operation"
                 )
 
-            _attach_attributes(node, mlir_op.operation)
+            _attach_attributes(node, mlir_op.operation, known_ids)
 
             # Add results to the value map in case they are used as
             # operands later
@@ -667,11 +705,18 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
-def _flush_output(module_str: str, diagnostics: list[str]) -> None:
+def _flush_output(
+    module_str: str,
+    diagnostics: list[str],
+    inferred_attributes: dict[str, dict[str, Any]] | None = None,
+) -> None:
     output = dill.dumps(
         {
             "diagnostics": [d.encode("utf-8") for d in diagnostics],
             "module": module_str.encode("utf-8"),
+            "inferred_attributes": (
+                inferred_attributes if inferred_attributes is not None else {}
+            ),
         }
     )
     sys.stdout.buffer.write(output)
@@ -684,7 +729,7 @@ def _create_kernel_module(
     constraints: list[Constraint],
     options: WaveCompileOptions,
     test_diagnostics: bool = False,
-) -> tuple[ir.Module | None, list[str]]:
+) -> tuple[ir.Module | None, list[str], set[str]]:
     """Creates an MLIR module containing the kernel function from the captured trace.
 
     Args:
@@ -697,8 +742,10 @@ def _create_kernel_module(
     Returns:
         - The created MLIR module, or None if creation failed.
         - List of diagnostic messages.
+        - Set of known water IDs if options require checking water analysis.
     """
     diagnostics: list[str] = []
+    known_ids: set[str] | None = set() if options.check_water_analysis else None
 
     def diagnostics_handler(d):
         diagnostics.append(f"{d.location}: {d.message}")
@@ -711,9 +758,9 @@ def _create_kernel_module(
             module = ir.Module.parse(options.override_mlir, context=ctx)
         except ir.MLIRError as e:
             diagnostics.append(str(e))
-            return None, diagnostics
+            return None, diagnostics, known_ids
         else:
-            return module, diagnostics
+            return module, diagnostics, known_ids
 
     # Keep track of which emitted value stems from what node to wire
     # arguments correctly.
@@ -743,7 +790,6 @@ def _create_kernel_module(
         # should be global by now (shared memory allocation happens inside the kernel).
         # Thus, resolve symbolic address spaces from hyperparameters.
 
-        # print(t, t.address_space)
         if issubclass(t, Memory) and t.address_space in options.subs:
             # Create a new type with resolved address space
             resolved_address_space = options.subs[t.address_space]
@@ -807,17 +853,23 @@ def _create_kernel_module(
             ]
 
         with ir.InsertionPoint(entry_block):
-            _emit_ops_from_graph(trace.get_root_graph(), trace, value_map, ctx)
+            _emit_ops_from_graph(
+                trace.get_root_graph(), trace, value_map, ctx, known_ids
+            )
             func.ReturnOp(operands_=[])
 
-    return module, diagnostics
+    return module, diagnostics, known_ids
+
+
+_INTERNAL_WATER_ID_ATTR_NAME = "_water_internal.id"
+_INTERNAL_RESULT_WATER_IRS_ATTR_NAME = "_water_internal.result_ids"
 
 
 def _emit_from_captured_trace(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    pipeline: str,
+    pipeline: str = "",
     test_diagnostics=False,
 ) -> int:
 
@@ -830,18 +882,20 @@ def _emit_from_captured_trace(
     if enable_debug_info and not trace.location:
         diagnostics.append("Missing debug location for wave trace")
 
-    with ir.Context() as ctx, (
-        trace.location.to_water() if trace.location else ir.Location.unknown()
+    with (
+        ir.Context() as ctx,
+        trace.location.to_water() if trace.location else ir.Location.unknown(),
     ):
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
+        wave.register_passes()
 
-        module, creation_diagnostics = _create_kernel_module(
+        module, creation_diagnostics, known_ids = _create_kernel_module(
             ctx, trace, constraints, options, test_diagnostics
         )
         diagnostics.extend(creation_diagnostics)
         if module is None:
-            _flush_output("", diagnostics)
+            _flush_output("", diagnostics, None)
             return 0
 
         # Verify the module before transforming or printing.
@@ -856,8 +910,12 @@ def _emit_from_captured_trace(
                     enable_debug_info=enable_debug_info, print_generic_op_form=True
                 ),
                 diagnostics,
+                None,
             )
             return 0
+
+        if options.print_mlir_before_water:
+            print(module.operation.get_asm(), file=sys.stderr)
 
         # If a transform script was provided, parse and apply it to the module.
         # This expects a transform module with a named sequence as first operation.
@@ -882,7 +940,70 @@ def _emit_from_captured_trace(
                 diagnostics.append(f"Failed to apply transform script: {e}")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
-        _flush_output(module_str, diagnostics)
+        if options.print_mlir_after_water:
+            print(module_str, file=sys.stderr)
+
+        # Collect attributes inferred by the pass and store them in the per-id dictionary.
+        inferred_attributes: dict[str, dict[str, Any]] = (
+            {id: {} for id in known_ids} if known_ids else {}
+        )
+        if options.check_water_analysis:
+
+            def extractor(op: ir.Operation) -> ir.WalkResult:
+                attribute: ir.Attribute | None = (
+                    op.attributes[_INTERNAL_WATER_ID_ATTR_NAME]
+                    if _INTERNAL_WATER_ID_ATTR_NAME in op.attributes
+                    else None
+                )
+                result_attribute: ir.Attribute | None = (
+                    op.attributes[_INTERNAL_RESULT_WATER_IRS_ATTR_NAME]
+                    if _INTERNAL_RESULT_WATER_IRS_ATTR_NAME in op.attributes
+                    else None
+                )
+                if attribute is None and result_attribute is None:
+                    return ir.WalkResult.ADVANCE
+
+                def record_index(
+                    attribute: ir.Attribute,
+                    inferred_attributes: dict[str, dict[str, Any]],
+                ):
+                    assert isinstance(
+                        attribute, ir.StringAttr
+                    ), f"Unexpected attribute type: {attribute}."
+                    assert (
+                        attribute.value in inferred_attributes
+                    ), f"Unknown water id {attribute.value}."
+                    assert (
+                        "index" not in inferred_attributes[attribute.value]
+                    ), f"Index already set for water id {attribute.value}."
+                    assert "index" in op.attributes, f"Index not inferred for {op}."
+
+                    inferred_attributes[attribute.value].update(
+                        {
+                            "index": convert_index_mapping_array_to_sympy(
+                                op, op.attributes["index"]
+                            )
+                        }
+                    )
+
+                if attribute is not None:
+                    record_index(attribute, inferred_attributes)
+                if result_attribute is not None:
+                    assert isinstance(
+                        result_attribute, ir.ArrayAttr
+                    ), f"Unexpected attribute type: {result_attribute}."
+                    for attribute in result_attribute:
+                        record_index(attribute, inferred_attributes)
+
+                return ir.WalkResult.ADVANCE
+
+            module.operation.walk(extractor)
+            for water_id, inferred_attribute in inferred_attributes.items():
+                if "index" not in inferred_attribute:
+                    raise RuntimeError(f"Index not inferred for water id {water_id}.")
+
+        module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
+        _flush_output(module_str, diagnostics, inferred_attributes)
     return 0
 
 
@@ -897,9 +1018,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    trace, constraints, options, pipeline = _parse_input()
+    trace, constraints, options, pass_pipeline = _parse_input()
     sys.exit(
         _emit_from_captured_trace(
-            trace, constraints, options, pipeline, args.test_diagnostic_emission
+            trace, constraints, options, pass_pipeline, args.test_diagnostic_emission
         )
     )

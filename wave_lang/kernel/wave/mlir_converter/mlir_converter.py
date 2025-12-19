@@ -1,4 +1,4 @@
-# Copyright 2025 The IREE Authors
+# Copyright 2025 The Wave Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
@@ -20,6 +20,7 @@ The converter handles:
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 import dill
 from wave_lang.kernel._support.tracing import CapturedTrace
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
@@ -30,10 +31,9 @@ def emit_wave_dialect(
     trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
-    *,
     test_diagnostic_emission: bool = False,
     pipeline: str = "",
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], dict[str, dict[str, Any]]]:
     """Emit Wave MLIR by sending the pickled trace and options to the emitter.
 
     The `subs` field of options is the only option used during emission. If
@@ -65,6 +65,20 @@ def emit_wave_dialect(
         stderr=subprocess.PIPE,
     )
 
+    assert (
+        not options.check_water_analysis or not pipeline
+    ), "Cannot check water analysis and use a pipeline"
+    if options.check_water_analysis:
+        pipeline = """
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%arg0: !transform.any_op) {
+    %0 = transform.apply_registered_pass "water-wave-detect-normal-forms" to %arg0 : (!transform.any_op) -> !transform.any_op
+    %1 = transform.apply_registered_pass "water-wave-propagate-defaults-from-constraints" to %0 : (!transform.any_op) -> !transform.any_op
+    transform.apply_registered_pass "water-wave-infer-index-exprs" to %1 : (!transform.any_op) -> !transform.any_op
+    transform.yield
+  }
+}"""
+
     output, err = proc.communicate(
         dill.dumps(
             {
@@ -93,9 +107,16 @@ def emit_wave_dialect(
         ) from e
     diagnostics = unpickled.get("diagnostics") if isinstance(unpickled, dict) else None
     module = unpickled.get("module") if isinstance(unpickled, dict) else None
+    inferred_attributes = (
+        unpickled.get("inferred_attributes") if isinstance(unpickled, dict) else None
+    )
 
     # Preserve stderr messages.
     if err:
         print(err.decode("utf-8", errors="replace"), file=sys.stderr)
 
-    return module.decode("utf-8"), [d.decode("utf-8") for d in diagnostics]
+    return (
+        module.decode("utf-8"),
+        [d.decode("utf-8") for d in diagnostics],
+        inferred_attributes,
+    )

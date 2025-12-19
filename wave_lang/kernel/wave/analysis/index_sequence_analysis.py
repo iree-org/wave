@@ -14,6 +14,8 @@ import torch.fx as fx
 
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel._support.dtype import DataType
+from wave_lang.kernel.wave.mlir_converter.mlir_converter import emit_wave_dialect
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.logging import get_logger
 
 from ..._support.indexing import IndexSequence, IndexSymbol
@@ -258,6 +260,104 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
         assert (
             custom.vector_shapes is not None
         ), f"Vector shapes not set for node {custom.fx_node}: {custom}"
+
+
+def _set_water_id(trace: CapturedTrace):
+    """Set a unique identifier for each node in the trace."""
+    for node in trace.walk(lambda x: x):
+        setattr(node, "_water_id", str(id(node)))
+
+
+def _reset_water_id(trace: CapturedTrace):
+    """Remove the previously set unique identifier for each node in the trace."""
+    for node in trace.walk(lambda x: x):
+        delattr(node, "_water_id")
+
+
+def _check_index_difference_is_zero(
+    index1: dict[IndexSymbol, IndexSequence], index2: dict[IndexSymbol, IndexSequence]
+) -> bool:
+    """Check if two index sequences are equal, raise assertions if not."""
+
+    def f(seq1: IndexSequence, seq2: IndexSequence) -> bool:
+        start = sympy.simplify(seq1.start - seq2.start)
+        size = sympy.simplify(seq1.size - seq2.size)
+        stride = sympy.simplify(seq1.stride - seq2.stride)
+        if start != 0:
+            raise ValueError(f"Start difference: {start}")
+        if size != 0:
+            raise ValueError(f"Size difference: {size}")
+        if stride != 0:
+            raise ValueError(f"Stride difference: {stride}")
+        return True
+
+    return index1.keys() == index2.keys() and all(
+        f(seq, index2[dim]) for dim, seq in index1.items()
+    )
+
+
+def _check_water_indices(trace: CapturedTrace, inferred: dict[str, IndexSequence]):
+    """Check that the indices for each node in the trace match the water-inferred indices.
+
+    Expects unique identifiers to be set on each node in the trace and uses
+    those to find the index inferred by Water.
+    """
+    for node in trace.walk(lambda x: x):
+        water_id = getattr(node, "_water_id")
+        custom = get_custom(node)
+        if isinstance(custom, (Placeholder, Output)):
+            continue
+        if water_id not in inferred:
+            raise RuntimeError(
+                f"Node {get_custom(node)} with id {water_id} not found in water-inferred index expressions."
+            )
+        inferred_index = inferred[water_id].get("index", None)
+        if not getattr(node, "index", None):
+            assert isinstance(
+                custom, NestedRegionOp
+            ), "Index may only be missing for NestedRegionOps."
+            continue
+        # Skip GetResult because they are special-cased in Python propagation,
+        # making them have incorrect indexes in dataflow sense.
+        if isinstance(custom, GetResult):
+            continue
+
+        # Check that that indices match, raise an error if they don't. Start by
+        # a trivial direct comparison, fall back to computing and simplifying
+        # the difference. The latter can raise with additional information,
+        # which this wants to preserve.
+        try:
+            if node.index != inferred_index and not _check_index_difference_is_zero(
+                node.index, inferred_index
+            ):
+                raise ValueError("mismatching indices")
+        except ValueError as e:
+            raise RuntimeError(
+                f"Index for node {get_custom(node)}, {get_custom(node).index} does not match inferred index {inferred_index}."
+            ) from e
+
+
+def set_node_indices_water_checked(
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    print_ir_before: Sequence[str] = [],
+    print_ir_after: Sequence[str] = [],
+):
+    """Set the indices for each note in the trace and checks whether water infers the same indices.
+
+    For now, indices inferred by water are discarded after comparison. Raises
+    errors if the indices do not match or if there was a problem communicating
+    with water.
+    """
+
+    _set_water_id(trace)
+    _, diagnostics, inferred_attributes = emit_wave_dialect(trace, constraints, options)
+    if diagnostics:
+        raise RuntimeError(f"Water indices check failed: {diagnostics}")
+    set_node_indices(trace, constraints, print_ir_before, print_ir_after)
+    _check_water_indices(trace, inferred_attributes)
+    _reset_water_id(trace)
 
 
 def set_node_indices(

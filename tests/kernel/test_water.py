@@ -9,6 +9,8 @@ import subprocess
 from unittest.mock import patch
 from wave_lang.kernel.wave.water import (
     apply_water_middle_end_passes,
+)
+from wave_lang.support.detect_water import (
     find_binary,
     get_water_opt,
     is_water_available,
@@ -36,7 +38,7 @@ class TestWaterLowering:
         # Mock find_binary to return None, simulating water-opt not being found
         get_water_opt.cache_clear()  # get_water_opt caches find_binary result
         try:
-            with patch("wave_lang.kernel.wave.water.find_binary", return_value=None):
+            with patch("wave_lang.support.detect_water.find_binary", return_value=None):
                 with pytest.raises(RuntimeError, match="water-opt binary not found"):
                     apply_water_middle_end_passes("module {}")
         finally:

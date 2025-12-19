@@ -80,7 +80,7 @@ def failure_to_parse_override_mlir():
 
     # Override the MLIR module after `wave_compile` so it doesn't attempt to parse it.
     options.override_mlir = "module {"
-    _, diagnostics = emit_wave_dialect(trace, constraints, options)
+    _, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     assert len(diagnostics) == 1
     # CHECK: Unable to parse module assembly
@@ -91,7 +91,9 @@ def failure_to_parse_override_mlir():
 @run_test
 def failure_to_parse_pipeline():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
-    _, diagnostics = emit_wave_dialect(trace, constraints, options, pipeline="module {")
+    _, diagnostics, _ = emit_wave_dialect(
+        trace, constraints, options, pipeline="module {"
+    )
 
     assert len(diagnostics) == 1
     # CHECK: Failed to apply transform script: Unable to parse module assembly
@@ -102,7 +104,7 @@ def failure_to_parse_pipeline():
 @run_test
 def pipeline_is_empty():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
-    _, diagnostics = emit_wave_dialect(
+    _, diagnostics, _ = emit_wave_dialect(
         trace, constraints, options, pipeline="module {}"
     )
 
@@ -115,7 +117,7 @@ def pipeline_is_empty():
 @run_test
 def pipeline_is_not_a_named_sequence():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
-    _, diagnostics = emit_wave_dialect(
+    _, diagnostics, _ = emit_wave_dialect(
         trace, constraints, options, pipeline="module { module {}}"
     )
 
@@ -141,7 +143,7 @@ module attributes {transform.with_named_sequence} {
 def failure_in_pipeline():
     trace, options, constraints = _get_dummy_trace_options_and_constraints()
     options.override_mlir = "module {}"
-    _, diagnostics = emit_wave_dialect(
+    _, diagnostics, _ = emit_wave_dialect(
         trace, constraints, options, pipeline=GUARANTEED_FAIL_TRANSFORM_SCRIPT
     )
     assert len(diagnostics) == 1
@@ -158,7 +160,7 @@ def override_mlir():
 module {
   func.func private @overridden_mlir()
 }"""
-    emitted, diagnostics = emit_wave_dialect(trace, constraints, options)
+    emitted, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
     assert len(diagnostics) == 0, "Did not expect errors in overridden IR."
 
     # CHECK: func.func private @overridden_mlir()
@@ -218,7 +220,7 @@ def mlir_converter_matrix_add():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         for diagnostic in diagnostics:
@@ -374,7 +376,7 @@ def mlir_converter_matmul():
 
     # Use the mlir_converter to emit wave MLIR dialect and apply the empty
     # pipeline.
-    mlir_output, diagnostics = emit_wave_dialect(
+    mlir_output, diagnostics, _ = emit_wave_dialect(
         trace, constraints, options, pipeline=pipeline_asm
     )
 
@@ -528,7 +530,7 @@ def mlir_converter_mixed_memory_spaces():
     constraints = mixed_memory_kernel.constraints
 
     with Context(), Location.unknown():
-        mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+        mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
 
@@ -582,7 +584,7 @@ def mlir_converter_invalid_non_int_hyperparameter():
     # This should raise a RuntimeError due to invalid non-int hyperparameter
     try:
         with Context(), Location.unknown():
-            mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+            mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
         assert False, "Expected RuntimeError for invalid non-int hyperparameter"
     except RuntimeError as e:
         # Verify the error message is what we expect

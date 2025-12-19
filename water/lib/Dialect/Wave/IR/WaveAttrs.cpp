@@ -294,10 +294,21 @@ WaveIndexMappingAttr WaveIndexMappingAttr::removeUnusedInputs() const {
     newSymbols.push_back(symbol);
   }
   assert(newSymbols.size() == usedSymbolPositions.size());
-  AffineMap start = getStart() ? getStart().replace(replacement) : AffineMap();
-  AffineMap step = getStep() ? getStep().replace(replacement) : AffineMap();
+  AffineMap start =
+      getStart()
+          ? getStart().replace(replacement, /*numResultDims=*/0,
+                               /*numResultSyms=*/usedSymbolPositions.size())
+          : AffineMap();
+  AffineMap step =
+      getStep()
+          ? getStep().replace(replacement, /*numResultDims=*/0,
+                              /*numResultSyms=*/usedSymbolPositions.size())
+          : AffineMap();
   AffineMap stride =
-      getStride() ? getStride().replace(replacement) : AffineMap();
+      getStride()
+          ? getStride().replace(replacement, /*numResultDims=*/0,
+                                /*numResultSyms=*/usedSymbolPositions.size())
+          : AffineMap();
   return get(getContext(), newSymbols, start, step, stride);
 }
 

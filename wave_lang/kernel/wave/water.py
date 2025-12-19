@@ -13,9 +13,9 @@ import subprocess
 import sys
 import math
 from typing import Any, Sequence
-from functools import lru_cache
 
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+from wave_lang.support.detect_water import get_water_mlir_pkg_path, get_water_opt
 from wave_lang.support.ir_imports import (
     Attribute,
     BlockArgument,
@@ -172,39 +172,6 @@ def _deiree(module: Module) -> str:
     if int(os.environ.get("WAVE_WATER_DUMP_MLIR_BEFORE", "0")) != 0:
         print(local_module, file=sys.stderr)
     return local_module.get_asm(binary=False, print_generic_op_form=True)
-
-
-def get_water_mlir_dir() -> Path:
-    return Path(__file__).parent / "water_mlir"
-
-
-def find_binary(name: str) -> str | None:
-    tool_path = get_water_mlir_dir() / "bin" / name
-    if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
-        return None
-
-    return str(tool_path)
-
-
-@lru_cache
-def is_water_available() -> bool:
-    """Returns True if the water_mlir package is available."""
-    return (get_water_mlir_dir()).exists()
-
-
-@lru_cache
-def is_water_binary_available() -> bool:
-    """Returns True if the water-opt binary is available and executable."""
-    return find_binary("water-opt") is not None
-
-
-@lru_cache
-def get_water_opt() -> str:
-    path = find_binary("water-opt")
-    if path is None:
-        raise RuntimeError("water-opt binary not found")
-
-    return path
 
 
 def make_linear_pass_pipeline(
@@ -453,7 +420,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
 
     llvm_opt_level = 3 if options.optimization_level else 0
     dump_intermediates = options.dump_intermediates or ""
-    toolkit_path = get_water_mlir_dir()
+    toolkit_path = get_water_mlir_pkg_path()
 
     pipeline = [
         "lower-affine",

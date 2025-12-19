@@ -95,7 +95,7 @@ def mlir_converter_location():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(diagnostics)
@@ -210,7 +210,7 @@ def mlir_converter_location_iterate():
     constraints = matmul.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(diagnostics)

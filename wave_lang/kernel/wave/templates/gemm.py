@@ -56,8 +56,8 @@ def get_gemm_kernel(
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
-    constraints += [tkw.WaveConstraint(M, BLOCK_M / waves_per_block[0])]
-    constraints += [tkw.WaveConstraint(N, BLOCK_N / waves_per_block[1])]
+    constraints += [tkw.WaveConstraint(M, sympy.floor(BLOCK_M / waves_per_block[0]))]
+    constraints += [tkw.WaveConstraint(N, sympy.floor(BLOCK_N / waves_per_block[1]))]
 
     constraints += [
         tkw.HardwareConstraint(

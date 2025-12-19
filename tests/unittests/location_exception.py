@@ -3,7 +3,7 @@ import wave_lang.kernel.wave as tkw
 from wave_lang.kernel._support.location import StackTraceInfo
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
-from wave_lang.kernel.wave.water import is_water_available
+from wave_lang.support.detect_water import is_water_available
 import pytest
 
 from iree.compiler.ir import Context
