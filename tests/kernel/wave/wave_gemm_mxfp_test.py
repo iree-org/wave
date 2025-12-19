@@ -1,5 +1,6 @@
 import torch
 import pytest
+from pathlib import Path
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
@@ -25,7 +26,14 @@ from wave_lang.kernel.wave.constraints import (
     ScaledMMAType,
 )
 
-from .common.utils import param_bool, require_e2e, require_cdna4
+from .common.utils import (
+    extract_kernel_metadata,
+    glob_asm_files,
+    param_bool,
+    require_cdna4,
+    require_e2e,
+    use_water_backend_bool,
+)
 
 # Note this is specified by the HW and cannot be changed.
 SCALE_GROUP_SIZE = 32
@@ -230,32 +238,11 @@ def testScaledGemmMXFP4(
 
 
 # BMK @ NK -> BMN represents Linear Layer style BMM.
-@require_e2e
-@require_cdna4
-@pytest.mark.parametrize("batch", [4, 8])
-@pytest.mark.parametrize(
-    "shape",
-    [(1024, 1024, 1024), (8192, 8192, 8192), (16384, 16384, 16384), (1, 16384, 1664)],
-)
-@pytest.mark.parametrize(
-    "mfma_variant",
-    [
-        ScaledMMAType.F32_16x16x128_F8F6F4,
-    ],
-)
-@pytest.mark.parametrize(
-    "enable_scheduling",
-    [
-        SchedulingType.PREFETCH,
-        SchedulingType.FOUR_STAGE,
-    ],
-)
-def testScaledBatchedGemmMXFP4(
-    batch: int,
-    shape: tuple[int],
+def get_scaled_gemm_template(
+    shape: tuple[int, int, int],
     mfma_variant: ScaledMMAType,
     enable_scheduling: SchedulingType,
-):
+) -> tuple[WaveCompileOptions, "LaunchableWave"]:
     # Input sizes
     B = tkl.sym.B
     M = tkl.sym.M
@@ -332,7 +319,42 @@ def testScaledBatchedGemmMXFP4(
         linearize_shared_access=True,
         dynamic_symbols=dynamic_symbols,
     )
+    return options, batched_gemm
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.parametrize("batch", [4, 8])
+@pytest.mark.parametrize(
+    "shape",
+    [(1024, 1024, 1024), (8192, 8192, 8192), (16384, 16384, 16384), (1, 16384, 1664)],
+)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [
+        ScaledMMAType.F32_16x16x128_F8F6F4,
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_scheduling",
+    [
+        SchedulingType.PREFETCH,
+        SchedulingType.FOUR_STAGE,
+    ],
+)
+@use_water_backend_bool("use_water_backend")
+def testScaledBatchedGemmMXFP4(
+    batch: int,
+    shape: tuple[int, int, int],
+    mfma_variant: ScaledMMAType,
+    enable_scheduling: SchedulingType,
+    use_water_backend: bool,
+):
+    options, batched_gemm = get_scaled_gemm_template(
+        shape, mfma_variant, enable_scheduling
+    )
     options = set_default_run_config(options)
+    options.use_water_backend = use_water_backend
     batched_gemm = wave_compile(options, batched_gemm)
 
     linearized_shape = (batch * shape[0], shape[1], shape[2])
@@ -349,6 +371,126 @@ def testScaledBatchedGemmMXFP4(
     torch_flat_out = torchScaledGemmMXFP4(flat_x, w, flat_x_scales, w_scales)
     torch_out = torch_flat_out.view(batch, shape[0], shape[1])
     torch.testing.assert_close(torch_out, out)
+
+
+@use_water_backend_bool("use_water_backend")
+def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
+    shape = (16384, 16384, 16384)
+    mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
+    enable_scheduling = SchedulingType.PREFETCH
+    options, batched_gemm = get_scaled_gemm_template(
+        shape, mfma_variant, enable_scheduling
+    )
+    options.target = "gfx950"
+    options.minimize_shared_allocs = False
+    # options.use_global_to_shared = True
+    options.dump_intermediates = tmp_path
+    options.use_water_backend = use_water_backend
+    batched_gemm = wave_compile(options, batched_gemm)
+    asm_files = glob_asm_files(tmp_path)
+
+    assert len(asm_files) == 1, "Expected 1 ASM file"
+    text = asm_files[0].read_text()
+
+    metadata = extract_kernel_metadata(text)
+
+    # We encode the exact registers and wait counts count as we want to know if
+    # they suddenly change dur to backend or upstream MLIR changes.
+    if use_water_backend:
+        vgpr_count = 156
+        vgpr_spill_count = 0
+        sgpr_count = 45
+        sgpr_spill_count = 0
+        waitcounts = [
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt vmcnt(7)",
+            "s_waitcnt vmcnt(6)",
+            "s_waitcnt vmcnt(5)",
+            "s_waitcnt vmcnt(4)",
+            "s_waitcnt vmcnt(3)",
+            "s_waitcnt vmcnt(2)",
+            "s_waitcnt vmcnt(1)",
+            "s_waitcnt vmcnt(0)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt lgkmcnt(13)",
+            "s_waitcnt lgkmcnt(10)",
+            "s_waitcnt lgkmcnt(8)",
+            "s_waitcnt lgkmcnt(5)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt vmcnt(6)",
+            "s_waitcnt vmcnt(3)",
+            "s_waitcnt vmcnt(2)",
+            "s_waitcnt vmcnt(1)",
+            "s_waitcnt vmcnt(0)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt lgkmcnt(7)",
+            "s_waitcnt lgkmcnt(4)",
+            "s_waitcnt lgkmcnt(3)",
+            "s_waitcnt lgkmcnt(2)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(0)",
+        ]
+    else:
+        vgpr_count = 160
+        vgpr_spill_count = 0
+        sgpr_count = 46
+        sgpr_spill_count = 0
+        waitcounts = [
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt vmcnt(7)",
+            "s_waitcnt vmcnt(6)",
+            "s_waitcnt vmcnt(5)",
+            "s_waitcnt vmcnt(4)",
+            "s_waitcnt vmcnt(3)",
+            "s_waitcnt vmcnt(2)",
+            "s_waitcnt vmcnt(1)",
+            "s_waitcnt vmcnt(0)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt lgkmcnt(6)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(3)",
+            "s_waitcnt lgkmcnt(2)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt vmcnt(6)",
+            "s_waitcnt vmcnt(3)",
+            "s_waitcnt vmcnt(2)",
+            "s_waitcnt vmcnt(1)",
+            "s_waitcnt vmcnt(0)",
+            "s_waitcnt lgkmcnt(0)",
+            "s_waitcnt lgkmcnt(7)",
+            "s_waitcnt lgkmcnt(5)",
+            "s_waitcnt lgkmcnt(4)",
+            "s_waitcnt lgkmcnt(3)",
+            "s_waitcnt lgkmcnt(2)",
+            "s_waitcnt lgkmcnt(1)",
+            "s_waitcnt lgkmcnt(0)",
+        ]
+
+    assert (
+        metadata.vgpr_count == vgpr_count
+    ), f"Expected {vgpr_count} VGPRs, got {metadata.vgpr_count}"
+    assert (
+        metadata.vgpr_spill_count == vgpr_spill_count
+    ), f"Expected {vgpr_spill_count} VGPR spills, got {metadata.vgpr_spill_count}"
+    assert (
+        metadata.sgpr_count == sgpr_count
+    ), f"Expected {sgpr_count} SGPRs, got {metadata.sgpr_count}"
+    assert (
+        metadata.sgpr_spill_count == sgpr_spill_count
+    ), f"Expected {sgpr_spill_count} SGPR spills, got {metadata.sgpr_spill_count}"
+    assert (
+        metadata.waitcnt_ops == waitcounts
+    ), f"Expected {waitcounts} waitcnt operations, got {metadata.waitcnt_ops}"
 
 
 @require_e2e

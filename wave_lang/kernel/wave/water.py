@@ -226,7 +226,7 @@ def make_linear_pass_pipeline(
     """
 
     def make_pass_arguments(
-        name: str, args: dict[str, Any], root_op: str | None = None
+        name: str, args: dict[str, Any], root_op: str | Sequence[str] | None = None
     ) -> str:
         ret = (
             name
@@ -235,7 +235,12 @@ def make_linear_pass_pipeline(
             + "}"
         )
         if root_op:
-            ret = root_op + "(" + ret + ")"
+            if isinstance(root_op, str):
+                ret = root_op + "(" + ret + ")"
+            elif isinstance(root_op, Sequence):
+                ret = "(".join(root_op) + "(" + ret + ")" * len(root_op)
+            else:
+                raise ValueError(f"Invalid root op: {root_op}")
         return ret
 
     return (
@@ -408,7 +413,15 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     mlir_asm = module.operation.get_asm()
     target_chip = options.target
 
-    def add_opt(pipeline):
+    enable_asm_lowering = True
+
+    def add_asm_pass(*args: Any) -> list[Any]:
+        if enable_asm_lowering:
+            return [args]
+
+        return []
+
+    def add_opt(pipeline: Any) -> list[Any]:
         if options.optimization_level:
             return [pipeline]
 
@@ -455,11 +468,18 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     dump_intermediates = options.dump_intermediates or ""
     toolkit_path = get_water_mlir_dir()
 
+    gpu_func = ("gpu.module", "gpu.func")
+
     pipeline = [
+        *add_asm_pass("water-materialize-reg-copy", {}, gpu_func),
+        *add_asm_pass("water-insert-waitcnt", {}, gpu_func),
+        "expand-strided-metadata",
         "lower-affine",
         *add_opt(canonicalize_cse),
         *add_opt("loop-invariant-code-motion"),
         *add_opt("int-range-optimizations"),
+        *add_asm_pass("water-number-registers", {}, gpu_func),
+        *add_asm_pass("water-lower-memory-ops", {"chipset": target_chip}, gpu_func),
         "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("water-alloc-to-alloca", {}, "gpu.module"),

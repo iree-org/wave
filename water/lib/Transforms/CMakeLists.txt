@@ -7,6 +7,10 @@ add_mlir_dialect_library(MLIRWaterTransforms
   GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   SLPVectorizer.cpp
+  WaterInsertWaitcnt.cpp
+  WaterLowerMemoryOps.cpp
+  WaterMaterializeRegCopy.cpp
+  WaterNumberRegisters.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/water
@@ -15,6 +19,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   MLIRWaterPassesIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAMDGPUDialect
   MLIRAnalysis
   MLIRArithDialect
   MLIRControlFlowDialect
