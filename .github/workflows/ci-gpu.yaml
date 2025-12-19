@@ -125,6 +125,12 @@ jobs:
             echo "IS_MI325=false" >> $GITHUB_ENV
           fi
 
+          if [[ "${{ contains(matrix.os, 'mi35x') }}" == 'true' ]]; then
+            echo "IS_MI35X=true" >> $GITHUB_ENV
+          else
+            echo "IS_MI35X=false" >> $GITHUB_ENV
+          fi
+
           if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi35x') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' ]]; then
             echo "HAS_GPU=true" >> $GITHUB_ENV
             echo "HAS_NO_GPU=false" >> $GITHUB_ENV
@@ -182,6 +188,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y dwarfdump
+
+      - name: Install pip deps (mi35x)
+        if: ${{ env.IS_MI35X == 'true' }}
+        run: |
+          # Install TheRock
+          python -m pip install --upgrade pip
+          python -m pip install \
+            --index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx950-dcgpu/ \
+            rocm[libraries,devel]
+          python -m pip install \
+            --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ \
+            torch
 
       - name: Install pip deps
         if: ${{ env.HAS_NO_GPU == 'true' && !cancelled() }}
