@@ -327,7 +327,7 @@ def construct_conditional_pipelined_loop(
     if temp_body_name not in trace.region_graph.subgraphs:
         trace.region_graph.subgraphs[temp_body_name] = conditional_body_graph
 
-    pipelined_node, _ = build_pipelined(
+    pipelined_node, node_mapping = build_pipelined(
         trace,
         get_custom(temp_reduction),
         conditional_body_graph,
@@ -417,6 +417,9 @@ def construct_conditional_pipelined_loop(
 
     logger.info("Conditional + pipelined loop + remainder loop construction complete")
 
+    # Return the pipelined node and node mapping so manual schedules can reference it
+    return pipelined_node, node_mapping
+
 
 def construct_pipelined_loop_with_conditional(
     trace: CapturedTrace,
@@ -480,13 +483,13 @@ def construct_pipelined_loop_with_conditional(
         )
         if new_reduction:
             get_custom(new_reduction).count = max_induction_variable - (num_stages - 1)
-        return
+        return new_reduction, node_mapping
 
     # For dynamic shapes, emit conditional + pipelined loop + remainder loop
     logger.info(f"Using conditional pipelining for dynamic shape")
 
     # Call helper function to build the conditional structure
-    construct_conditional_pipelined_loop(
+    return construct_conditional_pipelined_loop(
         trace,
         reduction,
         reduction_graph,
@@ -527,7 +530,7 @@ def apply_pipelined_schedule(
     # For static shapes, the same structure is emitted and later compiler
     # passes will optimize away the conditional or remainder loop as needed.
 
-    construct_pipelined_loop_with_conditional(
+    return construct_pipelined_loop_with_conditional(
         trace,
         reduction,
         reduction_graph,
