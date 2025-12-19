@@ -415,8 +415,6 @@ def construct_conditional_pipelined_loop(
     # Step 8: Erase the original reduction (now safe since it has no users)
     reduction.erase()
 
-    logger.info("Conditional + pipelined loop + remainder loop construction complete")
-
     # Return the pipelined node and node mapping so manual schedules can reference it
     return pipelined_node, node_mapping
 
@@ -468,7 +466,6 @@ def construct_pipelined_loop_with_conditional(
 
     if not is_dynamic:
         # For static shapes, use the old implementation
-        logger.info(f"Using old pipelining for static shape: {max_induction_variable}")
         new_reduction, node_mapping = construct_pipelined_loop(
             trace,
             reduction,
@@ -486,8 +483,6 @@ def construct_pipelined_loop_with_conditional(
         return new_reduction, node_mapping
 
     # For dynamic shapes, emit conditional + pipelined loop + remainder loop
-    logger.info(f"Using conditional pipelining for dynamic shape")
-
     # Call helper function to build the conditional structure
     return construct_conditional_pipelined_loop(
         trace,
