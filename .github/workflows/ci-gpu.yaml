@@ -145,7 +145,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Cache Vars
-        if: ${{ env.IS_MI325 == 'true' && !cancelled() }}
+        if: ${{ env.IS_MI325 == 'true' || env.IS_MI35X == 'true' }}
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
           echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
