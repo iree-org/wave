@@ -500,10 +500,10 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         return Module.parse(result)
 
 
-def apply_water_lowering_passes(mlir_text: str) -> str:
-    """Apply Water Wave lowering passes using subprocess water-opt.
+def apply_water_middle_end_passes(mlir_text: str) -> str:
+    """Apply Water middle-end pipeline using subprocess water-opt.
 
-    This function applies the standard Wave lowering passes:
+    This function applies the following passes:
     - water-wave-detect-normal-forms
     - water-wave-propagate-elements-per-thread
     - lower-wave-to-mlir
@@ -542,7 +542,7 @@ def apply_water_lowering_passes(mlir_text: str) -> str:
         )
 
         # Clean Wave-specific attributes that cause issues in later pipelines
-        # TODO(tyb): do this in the very last pass of water pipeline instead
+        # TODO(#595): do this in the very last pass of water pipeline instead
         result = re.sub(
             r",\s*wave\.normal_form\s*=\s*#wave\.normal_form<[^>]*>",
             "",

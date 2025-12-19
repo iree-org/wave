@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from wave_lang.kernel.wave.water import (
-    apply_water_lowering_passes,
+    apply_water_middle_end_passes,
     find_binary,
     is_water_available,
     is_water_binary_available,
@@ -32,15 +32,15 @@ class TestWaterLowering:
         result = is_water_available()
         assert isinstance(result, bool)
 
-    def test_apply_water_lowering_passes_unavailable(self):
-        """Test apply_water_lowering_passes when water-opt is not available."""
+    def test_apply_water_middle_end_passes_unavailable(self):
+        """Test apply_water_middle_end_passes when water-opt is not available."""
         # Mock find_binary to return None, simulating water-opt not being found
         with patch("wave_lang.kernel.wave.water.find_binary", return_value=None):
             with pytest.raises(RuntimeError, match="water-opt binary not found"):
-                apply_water_lowering_passes("module {}")
+                apply_water_middle_end_passes("module {}")
 
-    def test_apply_water_lowering_passes_success(self):
-        """Test apply_water_lowering_passes with mocked subprocess."""
+    def test_apply_water_middle_end_passes_success(self):
+        """Test apply_water_middle_end_passes with mocked subprocess."""
         mlir_input = (
             "module attributes {wave.normal_form = #wave.normal_form<full_types>} {}"
         )
@@ -52,7 +52,7 @@ class TestWaterLowering:
             with patch("subprocess.check_output") as mock_subprocess:
                 mock_subprocess.return_value = expected_output
 
-                result = apply_water_lowering_passes(mlir_input)
+                result = apply_water_middle_end_passes(mlir_input)
 
                 # Verify basic operation
                 assert result is not None
@@ -67,8 +67,8 @@ class TestWaterLowering:
                 assert kwargs["input"] == mlir_input
                 assert kwargs["text"] is True
 
-    def test_apply_water_lowering_passes_subprocess_error(self):
-        """Test apply_water_lowering_passes when subprocess fails."""
+    def test_apply_water_middle_end_passes_subprocess_error(self):
+        """Test apply_water_middle_end_passes when subprocess fails."""
         with patch("wave_lang.kernel.wave.water.get_water_opt") as mock_get_water_opt:
             mock_get_water_opt.return_value = "/mock/water-opt"
 
@@ -80,7 +80,7 @@ class TestWaterLowering:
                 with pytest.raises(
                     RuntimeError, match="water-opt subprocess failed with return code 1"
                 ):
-                    apply_water_lowering_passes("module {}")
+                    apply_water_middle_end_passes("module {}")
 
 
 @pytest.mark.skipif(
@@ -102,7 +102,7 @@ class TestWaterLoweringIntegration:
         }
         """
 
-        result = apply_water_lowering_passes(wave_mlir)
+        result = apply_water_middle_end_passes(wave_mlir)
         assert result is not None
         assert "module" in result
         assert "func.func @test_kernel" in result
@@ -114,5 +114,5 @@ class TestWaterLoweringIntegration:
         # Wave attributes should be cleaned
         assert "wave.normal_form" not in result
 
-        # Should only have `return` remained
+        # Only `return` should remain
         assert "return" in result
