@@ -404,7 +404,15 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     mlir_asm = module.operation.get_asm()
     target_chip = options.target
 
-    def add_opt(pipeline):
+    enable_asm_lowering = True
+
+    def add_asm_pass(*args: Any) -> list[Any]:
+        if enable_asm_lowering:
+            return [args]
+
+        return []
+
+    def add_opt(pipeline: Any) -> list[Any]:
         if options.optimization_level:
             return [pipeline]
 
@@ -453,15 +461,15 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     gpu_func = ("gpu.module", "gpu.func")
 
     pipeline = [
-        ("water-materialize-reg-copy", {}, gpu_func),
-        ("water-insert-waitcnt", {}, gpu_func),
+        *add_asm_pass("water-materialize-reg-copy", {}, gpu_func),
+        *add_asm_pass("water-insert-waitcnt", {}, gpu_func),
         "expand-strided-metadata",
         "lower-affine",
         *add_opt(canonicalize_cse),
         *add_opt("loop-invariant-code-motion"),
         *add_opt("int-range-optimizations"),
-        ("water-number-registers", {}, gpu_func),
-        ("water-lower-memory-ops", {"chipset": target_chip}, gpu_func),
+        *add_asm_pass("water-number-registers", {}, gpu_func),
+        *add_asm_pass("water-lower-memory-ops", {"chipset": target_chip}, gpu_func),
         "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("water-alloc-to-alloca", {}, "gpu.module"),
