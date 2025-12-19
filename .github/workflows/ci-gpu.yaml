@@ -199,12 +199,7 @@ jobs:
         run: |
           # Install TheRock
           python -m pip install --upgrade pip
-          python -m pip install \
-            --index-url https://d2awnip2yjpvqn.cloudfront.net/v2/gfx950-dcgpu/ \
-            rocm[libraries,devel]
-          python -m pip install \
-            --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ \
-            torch
+          python -m pip install --index-url https://repo.amd.com/rocm/whl/gfx950-dcgpu/ "rocm[libraries,devel]" "torch>=2.6,<2.9"
 
           # Set environment variables
           # TODO: Why do we even need this for mi350?
