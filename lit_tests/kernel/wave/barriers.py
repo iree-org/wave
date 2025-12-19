@@ -407,31 +407,30 @@ def test_bshd_attention_pipelined():
     print(base_attention.asm)
 
     # CHECK-LABEL:  func.func @base_attention
-    # CHECK-DAG:      memref.alloc()
-    # CHECK-DAG:      %[[V0:.*]] = memref.view {{.*}} #gpu.address_space<workgroup>>
-    # CHECK-DAG:      %[[V1:.*]] = memref.view {{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:      %[[ALLOC0:.*]] = memref.alloc(){{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:      %[[ALLOC1:.*]] = memref.alloc(){{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      vector.load
 
-    # CHECK-DAG:      vector.store {{.*}} %[[V1]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:      vector.store {{.*}} %[[ALLOC1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      rocdl.s.wait.dscnt 0
     # CHECK-DAG:      rocdl.s.barrier.signal -1
 
     # CHECK-DAG:      vector.extract
 
     # CHECK-DAG:      rocdl.s.barrier.wait -1
-    # CHECK-DAG:      vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:      vector.load %[[ALLOC1]]{{.*}} #gpu.address_space<workgroup>>
 
     ### loads and stores are operating on differnt parts of shared buffers -> no barriers need to be inserted here.
 
-    # CHECK-DAG:      vector.store {{.*}} %[[V0]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:      vector.store {{.*}} %[[ALLOC0]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      rocdl.s.wait.dscnt 0
-    # CHECK-DAG:      rocdl.s.barrier.signal -1
+    # CHECK-DAG:      rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:      amdgpu.wmma
 
     # CHECK-DAG:      rocdl.s.barrier.wait -1
-    # CHECK-DAG:      vector.load %[[V0]]{{.*}} #gpu.address_space<workgroup>>
-    # CHECK-DAG:      vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:      vector.load %[[ALLOC0]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:      vector.load %[[ALLOC1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      amdgpu.wmma
 
     # CHECK:        scf.for
@@ -441,7 +440,7 @@ def test_bshd_attention_pipelined():
     # CHECK-DAG:        rocdl.s.wait.dscnt 0
     # CHECK-DAG:        rocdl.s.barrier.signal -1
     # CHECK-DAG:        rocdl.s.barrier.wait -1
-    # CHECK-DAG:        vector.store {{.*}} %[[V1]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:        vector.store {{.*}} %[[ALLOC1]]{{.*}} #gpu.address_space<workgroup>>
 
     ### signal write to buffer 1 completes.
 
@@ -451,8 +450,8 @@ def test_bshd_attention_pipelined():
     # CHECK-DAG:        vector.load
 
     # CHECK-DAG:        rocdl.s.barrier.wait -1
-    # CHECK-DAG:        vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
-    # CHECK-DAG:        vector.store {{.*}} %[[V0]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:        vector.load %[[ALLOC1]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:        vector.store {{.*}} %[[ALLOC0]]{{.*}} #gpu.address_space<workgroup>>
 
     ### signal here represents 2 things: read from buffer 1 completes, write to buffer 0 completes.
 
@@ -464,10 +463,10 @@ def test_bshd_attention_pipelined():
     ### wait here then waits for read from buffer 1 completes, write to buffer 0 completes.
 
     # CHECK-DAG:        rocdl.s.barrier.wait -1
-    # CHECK-DAG:        vector.load %[[V0]]{{.*}} #gpu.address_space<workgroup>>
-    # CHECK-DAG:        vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:        vector.load %[[ALLOC0]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:        vector.load %[[ALLOC1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:        amdgpu.wmma
-    # CHECK-DAG:        vector.load %[[V0]]{{.*}} #gpu.address_space<workgroup>>
+    # CHECK-DAG:        vector.load %[[ALLOC0]]{{.*}} #gpu.address_space<workgroup>>
 
     # CHECK-DAG:        arith.maximumf
     # CHECK-DAG:        amdgpu.wmma
