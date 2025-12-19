@@ -1063,10 +1063,12 @@ def create_attention_clusters(
     local_load_k: List[fx.Node],
     local_write_k: List[fx.Node],
     global_load_k: List[fx.Node],
+    gather_to_lds_k: List[fx.Node],
     mma1_nodes: List[fx.Node],
     local_load_v: List[fx.Node],
     local_write_v: List[fx.Node],
     global_load_v: List[fx.Node],
+    gather_to_lds_v: List[fx.Node],
     softmax0_nodes: List[fx.Node],
     softmax1_nodes: List[fx.Node],
 ) -> List:
@@ -1097,7 +1099,7 @@ def create_attention_clusters(
     # Cluster 1: K data movement (global load, local write, local load V)
     clusters.extend(
         _create_k_data_movement_cluster(
-            global_load_k, local_write_k, local_load_v, tmp_graph
+            global_load_k, gather_to_lds_k, local_write_k, local_load_v, tmp_graph
         )
     )
 
@@ -1107,7 +1109,7 @@ def create_attention_clusters(
     # Cluster 3: V data movement (global load, local write, local load K)
     clusters.extend(
         _create_v_data_movement_cluster(
-            global_load_v, local_write_v, local_load_k, tmp_graph
+            global_load_v, gather_to_lds_v, local_write_v, local_load_k, tmp_graph
         )
     )
 
@@ -1147,6 +1149,7 @@ def _create_qk_softmax_cluster(
 
 def _create_k_data_movement_cluster(
     global_load_k: List[fx.Node],
+    gather_to_lds_k: List[fx.Node],
     local_write_k: List[fx.Node],
     local_load_v: List[fx.Node],
     tmp_graph: fx.Graph,
@@ -1154,15 +1157,24 @@ def _create_k_data_movement_cluster(
     """Create cluster for K data movement operations."""
     clusters = []
 
-    context_location = (
-        (global_load_k and get_custom(global_load_k[0]).location)
-        or (local_write_k and get_custom(local_write_k[0]).location)
-        or (local_load_v and get_custom(local_load_v[0]).location)
-    )
+    # G2S -> SR
+    if gather_to_lds_k:
+        context_location = (
+            gather_to_lds_k and get_custom(gather_to_lds_k[0]).location
+        ) or (local_load_v and get_custom(local_load_v[0]).location)
+        # Gather to LDS
+        clusters.append(gather_to_lds_k)
 
-    # Global load K, local write K
-    clusters.append(global_load_k)
-    clusters.append(local_write_k)
+    # G2S -> SW -> SR
+    else:
+        context_location = (
+            (global_load_k and get_custom(global_load_k[0]).location)
+            or (local_write_k and get_custom(local_write_k[0]).location)
+            or (local_load_v and get_custom(local_load_v[0]).location)
+        )
+        # Global load K, local write K
+        clusters.append(global_load_k)
+        clusters.append(local_write_k)
 
     # Local load V and scheduling barrier
     clusters.append(local_load_v)
@@ -1209,6 +1221,7 @@ def _create_pv_softmax_cluster(
 
 def _create_v_data_movement_cluster(
     global_load_v: List[fx.Node],
+    gather_to_lds_v: List[fx.Node],
     local_write_v: List[fx.Node],
     local_load_k: List[fx.Node],
     tmp_graph: fx.Graph,
@@ -1216,15 +1229,24 @@ def _create_v_data_movement_cluster(
     """Create cluster for V data movement operations."""
     clusters = []
 
-    context_location = (
-        (global_load_v and get_custom(global_load_v[0]).location)
-        or (local_write_v and get_custom(local_write_v[0]).location)
-        or (local_load_k and get_custom(local_load_k[0]).location)
-    )
+    # G2S -> SR
+    if gather_to_lds_v:
+        context_location = (
+            gather_to_lds_v and get_custom(gather_to_lds_v[0]).location
+        ) or (local_load_k and get_custom(local_load_k[0]).location)
+        # Gather to LDS
+        clusters.append(gather_to_lds_v)
 
-    # Global load V, local write V
-    clusters.append(global_load_v)
-    clusters.append(local_write_v)
+    # G2S -> SW -> SR
+    else:
+        context_location = (
+            (global_load_v and get_custom(global_load_v[0]).location)
+            or (local_write_v and get_custom(local_write_v[0]).location)
+            or (local_load_k and get_custom(local_load_k[0]).location)
+        )
+        # Global load V, local write V
+        clusters.append(global_load_v)
+        clusters.append(local_write_v)
 
     # Local load K and scheduling barrier
     clusters.append(local_load_k)
@@ -1278,8 +1300,28 @@ def _validate_attention_operations(
     Returns:
         True if validation passes, False otherwise
     """
+
+    optional_ops = [
+        AttentionOperationType.GLOBAL_LOAD_0,
+        AttentionOperationType.GATHER_TO_LDS_0,
+        AttentionOperationType.LOCAL_STORE_0,
+        AttentionOperationType.GLOBAL_LOAD_1,
+        AttentionOperationType.GATHER_TO_LDS_1,
+        AttentionOperationType.LOCAL_STORE_1,
+    ]
+    incompatible_op_pairs = [
+        (optional_ops[1], optional_ops[2]),
+        (optional_ops[4], optional_ops[5]),
+    ]
+
+    for op1, op2 in incompatible_op_pairs:
+        if operation_groups[op1] and operation_groups[op2]:
+            return False
+
     # All operation types are required
     for op_type in AttentionOperationType.get_all_types():
+        if op_type in optional_ops:
+            continue
         if not operation_groups[op_type]:
             return False
 
@@ -1324,6 +1366,8 @@ def _process_attention_iterate_node(
         trace: Captured trace containing the computation graph
         hardware_constraint: Hardware constraints for the computation
     """
+    iterate_node.meta["reordering_success"] = False
+
     custom_iterate = get_custom(iterate_node)
     graph = trace.get_subgraph(custom_iterate.subgraph_name)
 
@@ -1332,6 +1376,7 @@ def _process_attention_iterate_node(
 
     # Validate that all required operations are present
     if not _validate_attention_operations(operation_groups):
+        breakpoint()
         return
 
     # Create operation clusters for reordering
@@ -1340,10 +1385,12 @@ def _process_attention_iterate_node(
         local_load_k=operation_groups[AttentionOperationType.LOCAL_LOAD_0],
         local_write_k=operation_groups[AttentionOperationType.LOCAL_STORE_0],
         global_load_k=operation_groups[AttentionOperationType.GLOBAL_LOAD_0],
+        gather_to_lds_k=operation_groups[AttentionOperationType.GATHER_TO_LDS_0],
         mma1_nodes=operation_groups[AttentionOperationType.MMA_1],
         local_load_v=operation_groups[AttentionOperationType.LOCAL_LOAD_1],
         local_write_v=operation_groups[AttentionOperationType.LOCAL_STORE_1],
         global_load_v=operation_groups[AttentionOperationType.GLOBAL_LOAD_1],
+        gather_to_lds_v=operation_groups[AttentionOperationType.GATHER_TO_LDS_1],
         softmax0_nodes=operation_groups[AttentionOperationType.SOFTMAX_0],
         softmax1_nodes=operation_groups[AttentionOperationType.SOFTMAX_1],
     )
@@ -1358,6 +1405,9 @@ def _process_attention_iterate_node(
 
     # Add conditional barriers for ping-pong strategies
     add_conditional_barriers_to_loop(custom_iterate, trace, hardware_constraint)
+
+    # Annotate iterate node to reflect successful reordering
+    iterate_node.meta["reordering_success"] = True
 
 
 def _update_trace_with_reordered_graph(
