@@ -797,8 +797,9 @@ def erase_allocs(allocs: list[fx.Node]):
     DCE the allocs that are not used.
     """
     for alloc in allocs:
-        # Erase will assert that the alloc is still used.
-        get_custom(alloc).erase()
+        # Only erase if the alloc has no users
+        if not alloc.users:
+            get_custom(alloc).erase()
 
 
 def construct_pipelined_loop(
