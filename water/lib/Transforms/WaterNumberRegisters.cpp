@@ -55,45 +55,54 @@ public:
     auto func = getOperation();
     MLIRContext *ctx = &getContext();
 
-    // TODO: for now, just assign registers sequentially. In the future,
-    // we need a liveness analysis to assign registers.
-    unsigned nextRegister = 0;
+    SmallVector<std::pair<unsigned, Operation *>> regCounts;
 
+    Type i32 = IntegerType::get(ctx, 32);
     WalkResult result = func->walk([&](memref::AllocaOp allocaOp) {
       auto memrefType = allocaOp.getType();
       if (!isInRegisterSpace(memrefType))
         return WalkResult::advance();
 
-      auto regCountOr = getRegisterCount(memrefType);
-      if (failed(regCountOr)) {
+      auto regCount = getRegisterCount(memrefType);
+      if (failed(regCount)) {
         allocaOp->emitError(
             "Cannot allocate dynamic-sized memref in register space");
         return WalkResult::interrupt();
       }
 
-      unsigned regCount = *regCountOr;
-
-      // Assign starting register number.
-      allocaOp->setAttr(
-          "water.vgpr_number",
-          IntegerAttr::get(IntegerType::get(ctx, 32), nextRegister));
-
-      // Track how many registers this alloca uses.
-      allocaOp->setAttr("water.vgpr_count",
-                        IntegerAttr::get(IntegerType::get(ctx, 32), regCount));
-
-      // Advance to next available register.
-      nextRegister += regCount;
-
+      regCounts.emplace_back(*regCount, allocaOp);
       return WalkResult::advance();
     });
 
     if (result.wasInterrupted())
       return signalPassFailure();
 
+    // Sort by register size to reduce register alignment gaps.
+    llvm::stable_sort(regCounts, [](const std::pair<unsigned, Operation *> &a,
+                                    const std::pair<unsigned, Operation *> &b) {
+      return a.first < b.first;
+    });
+
+    // TODO: for now, just assign registers sequentially. In the future,
+    // we need a liveness analysis to assign registers.
+    unsigned nextRegister = 0;
+
+    for (auto [regCount, op] : regCounts) {
+      // Align to regCount boundary.
+      nextRegister = ((nextRegister + regCount - 1) / regCount) * regCount;
+
+      // Assign starting register number.
+      op->setAttr("water.vgpr_number", IntegerAttr::get(i32, nextRegister));
+
+      // Track how many registers this alloca uses.
+      op->setAttr("water.vgpr_count", IntegerAttr::get(i32, regCount));
+
+      // Advance to next available register.
+      nextRegister += regCount;
+    }
+
     // Attach metadata to function with total register count.
-    func->setAttr("water.total_vgprs",
-                  IntegerAttr::get(IntegerType::get(ctx, 32), nextRegister));
+    func->setAttr("water.total_vgprs", IntegerAttr::get(i32, nextRegister));
   }
 };
 

@@ -1,7 +1,7 @@
 // RUN: water-opt %s --pass-pipeline='builtin.module(func.func(water-number-registers))' | FileCheck %s
 
 // CHECK-LABEL: func @test_simple_numbering
-// CHECK-SAME: attributes {water.total_vgprs = 6 : i32}
+// CHECK-SAME: attributes {water.total_vgprs = 8 : i32}
 func.func @test_simple_numbering(%arg0: memref<100xf32>) -> f32 {
   %c0 = arith.constant 0 : index
 
@@ -9,12 +9,12 @@ func.func @test_simple_numbering(%arg0: memref<100xf32>) -> f32 {
   // CHECK: memref.alloca() {water.vgpr_count = 1 : i32, water.vgpr_number = 0 : i32}
   %reg0 = memref.alloca() : memref<1xf32, 128 : i32>
 
-  // 4xf32 = 16 bytes = 4 registers, starts at reg 1
-  // CHECK: memref.alloca() {water.vgpr_count = 4 : i32, water.vgpr_number = 1 : i32}
+  // 4xf32 = 16 bytes = 4 registers, starts at reg 4
+  // CHECK: memref.alloca() {water.vgpr_count = 4 : i32, water.vgpr_number = 4 : i32}
   %reg1 = memref.alloca() : memref<4xf32, 128 : i32>
 
-  // 1xf32 = 4 bytes = 1 register, starts at reg 5 (after reg1)
-  // CHECK: memref.alloca() {water.vgpr_count = 1 : i32, water.vgpr_number = 5 : i32}
+  // 1xf32 = 4 bytes = 1 register, starts at reg 1 (after reg0)
+  // CHECK: memref.alloca() {water.vgpr_count = 1 : i32, water.vgpr_number = 1 : i32}
   %reg2 = memref.alloca() : memref<1xf32, 128 : i32>
 
   %subview0 = memref.subview %arg0[%c0] [1] [1] : memref<100xf32> to memref<1xf32, strided<[1], offset: ?>>
