@@ -238,7 +238,7 @@ def testScaledGemmMXFP4(
 
 
 # BMK @ NK -> BMN represents Linear Layer style BMM.
-def get_scaled_gemm_template(
+def get_batched_scaled_gemm_template(
     shape: tuple[int, int, int],
     mfma_variant: ScaledMMAType,
     enable_scheduling: SchedulingType,
@@ -352,7 +352,7 @@ def testScaledBatchedGemmMXFP4(
     enable_scheduling: SchedulingType,
     use_water_backend: bool,
 ):
-    options, batched_gemm = get_scaled_gemm_template(
+    options, batched_gemm = get_batched_scaled_gemm_template(
         shape, mfma_variant, enable_scheduling
     )
     options = set_default_run_config(options)
@@ -380,7 +380,7 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
     shape = (16384, 16384, 16384)
     mfma_variant = ScaledMMAType.F32_16x16x128_F8F6F4
     enable_scheduling = SchedulingType.PREFETCH
-    options, batched_gemm = get_scaled_gemm_template(
+    options, batched_gemm = get_batched_scaled_gemm_template(
         shape, mfma_variant, enable_scheduling
     )
     options.target = "gfx950"
