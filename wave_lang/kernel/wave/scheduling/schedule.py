@@ -205,110 +205,217 @@ def construct_conditional_pipelined_loop(
     multi_buffer_count: Optional[int] = None,
 ):
     """
-    Build pipelined loop + remainder loop for dynamic shapes.
+    Build conditional + pipelined loop + remainder loop for dynamic shapes.
 
     Structure:
-        pipelined_result = pipelined_loop_with_prologue_epilogue(count=<reduced>)
-        final_result = remainder_loop(init=pipelined_result, count=max_induction_variable)
+        if (max_induction_variable >= num_stages):
+            pipelined_result = pipelined_loop_with_prologue_epilogue()
+        else:
+            pipelined_result = init_values
+        final_result = remainder_loop(init=pipelined_result)
 
-    The pipelined loop runs for floor(max_induction_variable/num_stages) iterations.
-    The remainder loop picks up any leftover iterations.
+    The conditional ensures prologue/epilogue only run when there are enough iterations.
     """
-    from ..utils.graph_utils import graph_copy
-    from ...ops.wave_ops import Iterate as IterateOp, get_custom
-    from .loop_reconstruction import construct_pipelined_loop
+    from ..utils.graph_utils import (
+        prepare_subgraph_for_conditional,
+        graph_copy,
+        get_graph_node,
+    )
+    from ...ops.wave_ops import (
+        Iterate as IterateOp,
+        GetResult,
+        Conditional,
+        NewScalar,
+        Ge,
+        Output,
+        Allocate,
+        get_custom,
+    )
+    import wave_lang.kernel.lang as tkl
+    import sys
 
-    # Step 0: Save properties and find existing GetResult nodes (before pipelining transforms things)
+    # Step 0: Save properties before any transformations
     original_index = reduction.index
     original_init_args = reduction.init_args
     original_fx_node = reduction.fx_node
+    main_graph = reduction.graph
 
-    # Find all GetResult nodes that reference this reduction - we'll need to update them later
+    # Find all GetResult nodes that reference this reduction
     from ...ops.wave_ops import GetResult as GetResultOp
     existing_get_results = []
-    for node in reduction.graph.nodes:
+    for node in main_graph.nodes:
         custom = get_custom(node) if hasattr(node, 'tkw_op') else None
         if isinstance(custom, GetResultOp) and custom.value == original_fx_node:
             existing_get_results.append(node)
 
-    # Step 1: Copy the reduction body graph BEFORE pipelining transforms it
-    # This copy will be used for the remainder loop
-    remainder_graph, _ = graph_copy(reduction_graph)
+    # Step 1: Create condition: max_induction_variable >= num_stages
+    with main_graph.inserting_before(reduction.fx_node):
+        num_stages_scalar = get_graph_node(
+            NewScalar(num_stages, tkl.i32),
+            main_graph,
+            reduction.location
+        )
+        num_iters_scalar = get_graph_node(
+            NewScalar(max_induction_variable, tkl.i32),
+            main_graph,
+            reduction.location
+        )
+        condition = get_graph_node(
+            Ge(num_iters_scalar, num_stages_scalar),
+            main_graph,
+            reduction.location
+        )
 
-    # Step 2: Build the pipelined loop using the existing construct_pipelined_loop function
-    # This will transform the original reduction into a pipelined version with prologue/steady-state/epilogue
-    pipelined_reduction_node, node_mapping = construct_pipelined_loop(
+    # Step 2: Prepare conditional subgraph
+    captured_nodes = list(reduction.init_args) + list(reduction.implicit_captures)
+    memory_nodes = [node for node in captured_nodes if isinstance(get_custom(node), Allocate)]
+
+    subgraph_name = f"pipelined_conditional_{reduction.fx_node.name}"
+    conditional_subgraph, implicit_captures, placeholders = prepare_subgraph_for_conditional(
+        subgraph_name,
+        captured_nodes,
+        memory_nodes=memory_nodes
+    )
+
+    # Step 3: Build pipelined loop INSIDE the conditional subgraph
+    # We need to create a temporary reduction in the conditional subgraph,
+    # then call construct_pipelined_loop on it
+
+    # Copy the reduction body graph for use in the conditional
+    conditional_body_graph, _ = graph_copy(reduction_graph)
+
+    # Create placeholder versions of init_args and captures for the conditional subgraph
+    placeholder_init_args = [placeholders[arg] for arg in reduction.init_args]
+    placeholder_captures = [placeholders[cap] for cap in reduction.implicit_captures]
+
+    # Register the body graph in the conditional subgraph
+    temp_body_name = f"{reduction.subgraph_name}_cond"
+    if not hasattr(conditional_subgraph, 'subgraphs'):
+        conditional_subgraph.subgraphs = {}
+    conditional_subgraph.subgraphs[temp_body_name] = conditional_body_graph
+
+    # Create temporary reduction in conditional subgraph
+    temp_reduction = IterateOp(
+        reduction.axis,
+        init_args=placeholder_init_args,
+        step=reduction.step,
+        subgraph_name=temp_body_name,
+        implicit_captures=placeholder_captures,
+    ).add_to_graph(conditional_subgraph, type=reduction.type, loc=reduction.location)
+
+    conditional_body_graph.parent_op = temp_reduction
+    get_custom(temp_reduction).index = original_index
+    get_custom(temp_reduction).count = max_induction_variable
+
+    # Create GetResult nodes for the temp reduction - these are needed by construct_pipelined_loop
+    # The epilogue construction expects to find existing GetResult nodes
+    temp_get_results = []
+    for i in range(len(placeholder_init_args)):
+        gr = GetResult(temp_reduction, i).add_to_graph(
+            conditional_subgraph,
+            type=placeholder_init_args[i].type if hasattr(placeholder_init_args[i], 'type') else None,
+            loc=reduction.location
+        )
+        temp_get_results.append(gr)
+
+    # Now call construct_pipelined_loop on this temporary reduction
+    # This will create the prologue, pipelined loop, and epilogue inside the conditional
+    from .loop_reconstruction import construct_pipelined_loop as build_pipelined
+
+    # Create a temporary trace wrapper for the conditional subgraph
+    # We need to register the body graph properly
+    if temp_body_name not in trace.region_graph.subgraphs:
+        trace.region_graph.subgraphs[temp_body_name] = conditional_body_graph
+
+    pipelined_node, _ = build_pipelined(
         trace,
-        reduction,
-        reduction_graph,
+        get_custom(temp_reduction),
+        conditional_body_graph,
         constraints,
         num_stages,
         initiation_interval,
-        # For dynamic shapes, we pass a placeholder value - the actual count will be set below
-        num_stages,
+        num_stages,  # placeholder count
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
     )
 
-    # Step 3: Adjust the count of the pipelined loop
-    # The pipelined loop should run for floor(max_induction_variable / num_stages) * num_stages iterations
-    # For now, we'll set it to run for all iterations and handle the remainder separately
-    pipelined_reduction = get_custom(pipelined_reduction_node)
-    pipelined_reduction.count = max_induction_variable
+    # Set the count for the pipelined loop
+    # It should process floor(max_induction_variable / num_stages) * num_stages iterations
+    get_custom(pipelined_node).count = max_induction_variable
 
-    #Step 4: Create remainder loop using the copied (non-pipelined) body
-    # The remainder loop takes the results from the pipelined loop as init args
-    main_graph = reduction.graph
+    # The GetResult nodes we created earlier have been updated by construct_pipelined_loop
+    # to point to the new pipelined reduction. Use those for the output.
+    # Note: construct_pipelined_loop may have added additional GetResult nodes,
+    # so we need to find all GetResult nodes that reference the pipelined loop
+    final_get_results = []
+    for node in conditional_subgraph.nodes:
+        custom = get_custom(node) if hasattr(node, 'tkw_op') else None
+        if isinstance(custom, GetResultOp) and custom.value == pipelined_node:
+            final_get_results.append(node)
 
-    # Get results from the pipelined loop to use as init args for remainder
-    from ...ops.wave_ops import GetResult
-    import sys
-    print(f"DEBUG: pipelined_reduction_node = {pipelined_reduction_node}, name = {pipelined_reduction_node.name}", file=sys.stderr)
-    print(f"DEBUG: pipelined_reduction_node in main_graph.nodes = {pipelined_reduction_node in main_graph.nodes}", file=sys.stderr)
-    pipelined_results = []
-    for i in range(len(original_init_args)):
-        # GetResult takes an fx.Node, not a CustomOp
-        result_node = GetResult(pipelined_reduction_node, i).add_to_graph(
-            main_graph,
-            type=original_init_args[i].type if hasattr(original_init_args[i], 'type') else None,
-            loc=reduction.location
-        )
-        print(f"DEBUG: Created GetResult {result_node.name} referencing {pipelined_reduction_node.name}", file=sys.stderr)
-        pipelined_results.append(result_node)
+    # Sort by res_idx to ensure correct order
+    final_get_results.sort(key=lambda n: get_custom(n).res_idx)
 
-    # Register the remainder subgraph BEFORE creating the loop
-    remainder_subgraph_name = f"{reduction.subgraph_name}_remainder"
+    # Add Output to the conditional subgraph
+    Output(final_get_results).add_to_graph(conditional_subgraph, loc=reduction.location)
+
+    # Step 4: Create the Conditional node in the main graph
+    # Register the conditional subgraph
     if not hasattr(main_graph, 'subgraphs'):
         main_graph.subgraphs = {}
+    main_graph.subgraphs[subgraph_name] = conditional_subgraph
+    trace.region_graph.subgraphs[subgraph_name] = conditional_subgraph
+
+    with main_graph.inserting_before(reduction.fx_node):
+        conditional_op = Conditional(
+            condition,
+            subgraph_name=subgraph_name,
+            implicit_captures=implicit_captures,
+            else_return=list(reduction.init_args)  # Else: return init values unchanged
+        ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
+
+    conditional_subgraph.parent_op = conditional_op
+
+    # Step 5: Extract results from conditional
+    conditional_results = []
+    with main_graph.inserting_before(reduction.fx_node):
+        for i in range(len(original_init_args)):
+            result = GetResult(conditional_op, i).add_to_graph(
+                main_graph,
+                type=original_init_args[i].type if hasattr(original_init_args[i], 'type') else None,
+                loc=reduction.location
+            )
+            conditional_results.append(result)
+
+    # Step 6: Create remainder loop using a copy of the original body
+    remainder_graph, _ = graph_copy(reduction_graph)
+    remainder_subgraph_name = f"{reduction.subgraph_name}_remainder"
+
     main_graph.subgraphs[remainder_subgraph_name] = remainder_graph
     trace.region_graph.subgraphs[remainder_subgraph_name] = remainder_graph
 
-    # Create remainder loop
-    remainder_reduction_op = IterateOp(
-        reduction.axis,
-        init_args=pipelined_results,
-        step=reduction.step,
-        subgraph_name=remainder_subgraph_name,
-        implicit_captures=reduction.implicit_captures,
-    ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
+    with main_graph.inserting_before(reduction.fx_node):
+        remainder_reduction = IterateOp(
+            reduction.axis,
+            init_args=conditional_results,
+            step=reduction.step,
+            subgraph_name=remainder_subgraph_name,
+            implicit_captures=reduction.implicit_captures,
+        ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
 
-    remainder_graph.parent_op = remainder_reduction_op
-    remainder_reduction_op.index = original_index
-    remainder_reduction_op.count = max_induction_variable
+    remainder_graph.parent_op = remainder_reduction
+    get_custom(remainder_reduction).index = original_index
+    get_custom(remainder_reduction).count = max_induction_variable
 
-    # Step 5: Update existing GetResult nodes to point to the remainder loop
-    # These GetResult nodes were originally pointing to the reduction before pipelining,
-    # but now they should get results from the remainder loop (which produces the final results)
-    # remainder_reduction_op is already an fx.Node (returned from add_to_graph)
-    remainder_fx_node = remainder_reduction_op
-    for get_result_node in existing_get_results:
-        get_result_custom = get_custom(get_result_node)
-        # Update the value reference to point to the remainder loop
-        get_result_custom._value = remainder_fx_node
-        print(f"DEBUG: Updated GetResult {get_result_node.name} to reference remainder loop {remainder_fx_node.name}", file=sys.stderr)
+    # Step 7: Replace all uses of the original reduction with the remainder loop
+    # This will update all GetResult nodes automatically
+    reduction.replace_all_uses_with(get_custom(remainder_reduction))
 
-    logger.info("Pipelined loop + remainder loop construction complete")
+    # Step 8: Erase the original reduction (now safe since it has no users)
+    reduction.erase()
+
+    logger.info("Conditional + pipelined loop + remainder loop construction complete")
 
 
 def construct_pipelined_loop_with_conditional(

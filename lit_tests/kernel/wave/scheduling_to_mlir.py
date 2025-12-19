@@ -218,7 +218,7 @@ def test_gemm_dynamic_pipelined_trace():
     # CHECK-LABEL: test_gemm_dynamic_pipelined_trace
     # Verify that conditional branching is generated for dynamic pipelining
     # The pipelined conditional should check if we have enough iterations
-    # CHECK: arith.cmpi sgt
+    # CHECK: arith.cmpi sge
     # CHECK: scf.if
     #
     # Inside the pipelined conditional, we should have:
