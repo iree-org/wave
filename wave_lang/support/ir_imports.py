@@ -83,6 +83,7 @@ from iree.compiler.ir import (
     ComplexType,
     Context,
     DenseElementsAttr,
+    DenseI32ArrayAttr,
     DenseResourceElementsAttr,
     DictAttr,
     F16Type,

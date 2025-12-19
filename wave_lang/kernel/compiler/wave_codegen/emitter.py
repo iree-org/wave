@@ -28,6 +28,7 @@ from wave_lang.support.ir_imports import (
     AffineMap,
     Attribute,
     DenseElementsAttr,
+    DenseI32ArrayAttr,
     F16Type,
     F32Type,
     F64Type,
@@ -369,6 +370,9 @@ class WaveEmitter:
 
         subs = add_emitter_subs(self)
         threads_per_block = self.hardware_constraint.threads_per_block
+
+        kernel_func_wrapper.known_block_size = DenseI32ArrayAttr.get(threads_per_block)
+
         with InsertionPoint(entry_block), Location.name("wave-generated host function"):
             func_args = entry_block.arguments[1:]
             # Populate dynamic symbols from kernel function arguments
