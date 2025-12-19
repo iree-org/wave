@@ -8,6 +8,12 @@
 
 namespace wave {
 
+// Populates `constraints` with a mapping from an operation with a Wave
+// constraints attribute attached to that attribute.
+llvm::LogicalResult collectWaveConstraints(
+    mlir::Operation *top,
+    llvm::DenseMap<mlir::Operation *, mlir::Attribute> &constraints);
+
 // Sets the attribute indicating that the operation satisfies provided normal
 // forms. The presence of the attribute, in turn, performs verification of the
 // normal form every time a verifier runs on the operation, including by default

@@ -9,6 +9,29 @@
 
 #include "mlir/IR/Operation.h"
 
+llvm::LogicalResult wave::collectWaveConstraints(
+    mlir::Operation *top,
+    llvm::DenseMap<mlir::Operation *, mlir::Attribute> &constraints) {
+  auto *waveDialect = top->getContext()->getLoadedDialect<wave::WaveDialect>();
+  auto walkResult =
+      top->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *op) {
+        if (auto attr = op->getAttrOfType<mlir::ArrayAttr>(
+                wave::WaveDialect::kWaveConstraintsAttrName)) {
+          constraints[op] = attr;
+          return mlir::WalkResult::skip();
+        }
+        if (op->getDialect() == waveDialect) {
+          op->emitError()
+              << "wave dialect operation without constraints on an ancestor";
+          return mlir::WalkResult::interrupt();
+        }
+        return mlir::WalkResult::advance();
+      });
+  if (walkResult.wasInterrupted())
+    return llvm::failure();
+  return llvm::success();
+}
+
 llvm::LogicalResult
 wave::setNormalFormPassPostcondition(wave::WaveNormalForm form,
                                      mlir::Operation *root, bool preserve) {

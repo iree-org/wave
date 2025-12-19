@@ -137,4 +137,14 @@ def WaterWavePropagateElementsPerThreadPass
   }];
 }
 
+def WaterWavePropagateDefaultsFromConstraintsPass
+    : Pass<"water-wave-propagate-defaults-from-constraints"> {
+  let summary = "Propagate default values from constraints to operations where "
+                "they are not set.";
+  let description = [{
+    Propagates the following values:
+     - `mma_type` is propagate to mma operations that have no `mma_kind` set.
+  }];
+}
+
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_PASSES

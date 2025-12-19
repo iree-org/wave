@@ -119,7 +119,7 @@ def MmaOp : WaveOp<"mma",
     Arg<WaveTensorInRegister, "Left-hand side of the multiplication">:$lhs,
     Arg<WaveTensorInRegister, "Right-hand side of the multiplication">:$rhs,
     Arg<WaveTensorInRegister, "Accumulator for addition">:$accumulator,
-    Arg<WaveMmaKindAttr, "Kind of the MMA intrinsic to target">:$kind
+    Arg<OptionalAttr<WaveMmaKindAttr>, "Kind of the MMA intrinsic to target">:$kind
   ), commonArguments);
 
   let results = (outs

@@ -975,13 +975,11 @@ LogicalResult MmaOp::initializeIndexExprsForward(
   wave::WaveSymbolAttr mSymbol = indexingSymbols[0];
   wave::WaveSymbolAttr nSymbol = indexingSymbols[1];
 
-  // TODO: propagate MMA kinds from hardware constraints as a
-  // separate step...
-  wave::WaveMmaKind mmaKind =
-      getKindAttr() ? getKind()
-                    : initObject.hardwareConstraint.getMmaType().getValue();
+  std::optional<wave::WaveMmaKind> mmaKind = getKind();
+  if (!mmaKind)
+    return emitError() << "MMA operation without kind attribute not supported";
   if (llvm::failed(populateMmaIndexingExpr(
-          mmaKind,
+          *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
           /*kSymbol=*/nullptr, symbolMappings))) {
@@ -1012,15 +1010,13 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   wave::WaveSymbolAttr nSymbol = resultType.getShape()[1];
   wave::WaveSymbolAttr kSymbol = lhsType.getShape()[1];
 
-  // TODO: propagate MMA kinds from hardware constraints as a
-  // separate step...
-  wave::WaveMmaKind mmaKind =
-      getKindAttr() ? getKind()
-                    : initObject.hardwareConstraint.getMmaType().getValue();
+  std::optional<wave::WaveMmaKind> mmaKind = getKind();
+  if (!mmaKind)
+    return emitError() << "MMA operation without kind attribute not supported";
 
   llvm::SmallVector<mlir::NamedAttribute> operandSymbolMappings;
   if (llvm::failed(populateMmaIndexingExpr(
-          mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
+          *mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
           kSymbol, operandSymbolMappings))) {
     return emitError() << "MMA kind not supported by index deduction";
@@ -1028,7 +1024,7 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   llvm::SmallVector<mlir::NamedAttribute> accumulatorSymbolMappings;
   if (llvm::failed(populateMmaIndexingExpr(
-          mmaKind,
+          *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
           nullptr, accumulatorSymbolMappings))) {
@@ -1133,7 +1129,10 @@ LogicalResult MmaOp::verify() {
     return mlir::failure();
   }
 
-  return checkMmaTypeCompatibility(getLoc(), getKind(),
+  if (!getKind())
+    return success();
+
+  return checkMmaTypeCompatibility(getLoc(), *getKind(),
                                    lhsType.getElementType(),
                                    accumulatorType.getElementType());
 }

@@ -1085,30 +1085,6 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
   return os;
 }
 
-// Helper function to walk the IR and collect wave constraints attributes.
-static llvm::LogicalResult collectWaveConstraints(
-    mlir::Operation *top,
-    llvm::DenseMap<mlir::Operation *, mlir::Attribute> &constraints) {
-  auto *waveDialect = top->getContext()->getLoadedDialect<wave::WaveDialect>();
-  auto walkResult =
-      top->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *op) {
-        if (auto attr = op->getAttrOfType<mlir::ArrayAttr>(
-                wave::WaveDialect::kWaveConstraintsAttrName)) {
-          constraints[op] = attr;
-          return mlir::WalkResult::skip();
-        }
-        if (op->getDialect() == waveDialect) {
-          op->emitError()
-              << "wave dialect operation without constraints on an ancestor";
-          return mlir::WalkResult::interrupt();
-        }
-        return mlir::WalkResult::advance();
-      });
-  if (walkResult.wasInterrupted())
-    return llvm::failure();
-  return llvm::success();
-}
-
 class IndexExprsForwardAnalysis
     : public mlir::dataflow::SparseForwardDataFlowAnalysis<IndexExprsLattice> {
 private:
@@ -1137,7 +1113,7 @@ public:
       return mlir::failure();
 
     llvm::DenseMap<mlir::Operation *, mlir::Attribute> constraints;
-    if (llvm::failed(collectWaveConstraints(top, constraints)))
+    if (llvm::failed(wave::collectWaveConstraints(top, constraints)))
       return llvm::failure();
 
     for (auto &&[parent, attr] : constraints) {
@@ -1453,7 +1429,7 @@ public:
       return llvm::failure();
 
     llvm::DenseMap<mlir::Operation *, mlir::Attribute> constraints;
-    if (llvm::failed(collectWaveConstraints(top, constraints)))
+    if (llvm::failed(wave::collectWaveConstraints(top, constraints)))
       return llvm::failure();
     for (auto &&[parent, attr] : constraints) {
       auto initObject =

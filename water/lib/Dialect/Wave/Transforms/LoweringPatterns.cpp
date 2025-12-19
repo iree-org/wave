@@ -540,9 +540,13 @@ public:
            accType.getRank() == 1 &&
            "only 1-D vectors supported for mma lowering");
 
-    wave::WaveMmaKind kind = op.getKind();
+    std::optional<wave::WaveMmaKind> kind = op.getKind();
+    if (!kind)
+      return rewriter.notifyMatchFailure(
+          op, "mma operation without kind attribute");
+
     auto [M, N, K] =
-        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), kind);
+        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), *kind);
 
     // TODO: Extend lowering for ops beyond MFMA, e.g. WMMA
     auto mfma = mlir::amdgpu::MFMAOp::create(rewriter, loc, acc.getType(),

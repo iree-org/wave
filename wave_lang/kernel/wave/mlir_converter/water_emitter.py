@@ -560,12 +560,14 @@ def _emit_ops_from_graph(
                         # create YieldOp
                         YieldOp([value_map[output] for output in outputs])
                 elif isinstance(node, MMA):
-                    if node.mma_type is None:
-                        raise RuntimeError("MMA op missing mma_type")
-                    mma_kind = ir.Attribute.parse(
-                        f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
+                    mma_kind = (
+                        ir.Attribute.parse(
+                            f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
+                        )
+                        if node.mma_type is not None
+                        else None
                     )
-                    mlir_op = op_builder(result_type, *mlir_operands, mma_kind)
+                    mlir_op = op_builder(result_type, *mlir_operands, kind=mma_kind)
                 elif isinstance(node, Allocate):
                     mlir_op = op_builder(
                         result_type,
