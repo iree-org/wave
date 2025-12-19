@@ -135,6 +135,22 @@ func.func @register_with_hyperparameter() attributes {hyperparameters = #wave.hy
   return
 }
 
+// CHECK-LABEL: @register_with_elements_per_thread
+func.func @register_with_elements_per_thread() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 64}>} {
+  %cst = arith.constant 0.0 : f32
+  // CHECK: wave.register %{{.*}} {elements_per_thread = 4 : i64}
+  %reg = wave.register %cst {elements_per_thread = 4} : !wave.tensor<[@M] of f32, <register>>
+
+  %cst_f16 = arith.constant 1.0 : f16
+  // CHECK: wave.register %{{.*}} {elements_per_thread = 8 : i64}
+  %reg_f16 = wave.register %cst_f16 {elements_per_thread = 8} : !wave.tensor<[@N] of f16, <register>>
+
+  %cst_bf16 = arith.constant 5.0 : bf16
+  // CHECK: wave.register %{{.*}} {elements_per_thread = 16 : i64}
+  %reg_bf16 = wave.register %cst_bf16 {elements_per_thread = 16} : !wave.tensor<[@N] of bf16, <register>>
+  return
+}
+
 // CHECK-LABEL: @allocate
 func.func @allocate() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
   // CHECK: wave.allocate
