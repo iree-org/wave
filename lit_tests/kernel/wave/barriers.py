@@ -335,6 +335,7 @@ def test_split_barriers():
         print_trace(trace, False)
 
     # MODULO - Root graph:
+    # CHECK: region_1 [root]:
     # CHECK: %a
     # CHECK-NEXT: %b
     # CHECK-NEXT: %c
@@ -346,6 +347,7 @@ def test_split_barriers():
     # CHECK:      return None
 
     # region_0:
+    # CHECK: region_0:
     # CHECK: %b
     # CHECK: %a
     # CHECK-DAG: %acc_

@@ -336,7 +336,7 @@ def construct_conditional_pipelined_loop(
     if temp_body_name not in trace.region_graph.subgraphs:
         trace.region_graph.subgraphs[temp_body_name] = conditional_body_graph
 
-    pipelined_node, node_mapping = build_pipelined(
+    pipelined_node, node_mapping, final_results = build_pipelined(
         trace,
         get_custom(temp_reduction),
         conditional_body_graph,
@@ -354,29 +354,20 @@ def construct_conditional_pipelined_loop(
     # because the prologue and epilogue each handle (num_stages - 1) partial iterations
     get_custom(pipelined_node).count = pipelined_iterations - (num_stages - 1)
 
-    # The GetResult nodes we created earlier have been updated by construct_pipelined_loop
-    # to point to the new pipelined reduction. Use those for the output.
-    # Note: construct_pipelined_loop adds additional GetResult nodes for rotating registers,
-    # but we should only return the actual loop results (corresponding to init_args).
-    # The rotating registers are internal to the pipelined loop implementation.
-    final_get_results = []
-    for node in conditional_subgraph.nodes:
-        custom = get_custom(node) if hasattr(node, 'tkw_op') else None
-        if isinstance(custom, GetResultOp) and custom.value == pipelined_node:
-            # Only include GetResult nodes that correspond to the original init_args
-            # (i.e., res_idx < len(original_init_args))
-            if custom.res_idx < len(original_init_args):
-                final_get_results.append(node)
+    # Now final_results contains the actual nodes that should be output from the conditional.
+    # These are the correct final values from the epilogue, taking into account rotating registers.
+    # We no longer need to search for GetResult nodes - we have the right nodes already!
 
-    # Sort by res_idx to ensure correct order
-    final_get_results.sort(key=lambda n: get_custom(n).res_idx)
+    # Now final_results contains the actual nodes that should be output from the conditional.
+    # These are the correct final values from the epilogue, taking into account rotating registers.
+    # We no longer need to search for GetResult nodes - we have the right nodes already!
 
     # Verify we have the right number of results
-    assert len(final_get_results) == len(original_init_args), \
-        f"Expected {len(original_init_args)} results but found {len(final_get_results)}"
+    assert len(final_results) == len(original_init_args), \
+        f"Expected {len(original_init_args)} results but found {len(final_results)}"
 
-    # Add Output to the conditional subgraph
-    Output(final_get_results).add_to_graph(conditional_subgraph, loc=reduction.location)
+    # Add Output to the conditional subgraph using the final results from the epilogue
+    Output(final_results).add_to_graph(conditional_subgraph, loc=reduction.location)
 
     # Step 4: Create the Conditional node in the main graph
     # Register the conditional subgraph
@@ -497,7 +488,7 @@ def construct_pipelined_loop_with_conditional(
 
     if not is_dynamic:
         # For static shapes, use the old implementation
-        new_reduction, node_mapping = construct_pipelined_loop(
+        new_reduction, node_mapping, _ = construct_pipelined_loop(
             trace,
             reduction,
             reduction_graph,
@@ -549,6 +540,15 @@ def apply_pipelined_schedule(
     # we will be peeling off num_stages iterations from the loop).
     tiling_constraint = get_tiling_constraint(reduction, constraints)
     max_induction_variable = subs_idxc(tiling_constraint.count)
+    
+    # Try to evaluate the expression to a concrete number if possible
+    import sympy
+    if isinstance(max_induction_variable, sympy.Basic):
+        # First simplify
+        max_induction_variable = max_induction_variable.simplify()
+        # If it's now a number, convert to int
+        if max_induction_variable.is_number:
+            max_induction_variable = int(max_induction_variable)
 
     # For dynamic shapes, we emit a conditional that checks at runtime
     # whether we have enough iterations to pipeline, and a remainder loop
