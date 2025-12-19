@@ -281,6 +281,15 @@ def construct_conditional_pipelined_loop(
     # We need to create a temporary reduction in the conditional subgraph,
     # then call construct_pipelined_loop on it
 
+    # Compute the number of iterations the pipelined loop should process:
+    # floor(max_induction_variable / num_stages) * num_stages
+    # This ensures the pipelined loop only processes complete pipeline stages
+    if isinstance(max_induction_variable, (int, float)):
+        pipelined_iterations = (int(max_induction_variable) // num_stages) * num_stages
+    else:
+        # For symbolic expressions, use sympy floor division
+        pipelined_iterations = (max_induction_variable // num_stages) * num_stages
+
     # Copy the reduction body graph for use in the conditional
     conditional_body_graph, _ = graph_copy(reduction_graph)
 
@@ -305,7 +314,7 @@ def construct_conditional_pipelined_loop(
 
     conditional_body_graph.parent_op = temp_reduction
     get_custom(temp_reduction).index = original_index
-    get_custom(temp_reduction).count = max_induction_variable
+    get_custom(temp_reduction).count = pipelined_iterations
 
     # Create GetResult nodes for the temp reduction - these are needed by construct_pipelined_loop
     # The epilogue construction expects to find existing GetResult nodes
@@ -334,15 +343,16 @@ def construct_conditional_pipelined_loop(
         constraints,
         num_stages,
         initiation_interval,
-        num_stages,  # placeholder count
+        pipelined_iterations,  # Pass the actual number of iterations to process
         visualize,
         use_scheduling_barriers,
         multi_buffer_count,
     )
 
     # Set the count for the pipelined loop
-    # It should process floor(max_induction_variable / num_stages) * num_stages iterations
-    get_custom(pipelined_node).count = max_induction_variable
+    # The kernel loop runs for pipelined_iterations - (num_stages - 1) iterations
+    # because the prologue and epilogue each handle (num_stages - 1) partial iterations
+    get_custom(pipelined_node).count = pipelined_iterations - (num_stages - 1)
 
     # The GetResult nodes we created earlier have been updated by construct_pipelined_loop
     # to point to the new pipelined reduction. Use those for the output.
@@ -397,22 +407,35 @@ def construct_conditional_pipelined_loop(
             conditional_results.append(result)
 
     # Step 6: Create remainder loop using a copy of the original body
+    # The remainder loop should start where the pipelined loop ended
     remainder_graph, _ = graph_copy(reduction_graph)
     remainder_subgraph_name = f"{reduction.subgraph_name}_remainder"
 
     main_graph.subgraphs[remainder_subgraph_name] = remainder_graph
     trace.region_graph.subgraphs[remainder_subgraph_name] = remainder_graph
 
+    # Create a scalar node for the starting iteration (where pipelined loop ended)
+    # This will be pipelined_iterations
+    import wave_lang.kernel.lang as tkl
     with main_graph.inserting_before(reduction.fx_node):
+        start_iter = get_graph_node(
+            NewScalar(pipelined_iterations, tkl.index),
+            main_graph,
+            reduction.location
+        )
+        
         remainder_reduction = IterateOp(
             reduction.axis,
             init_args=conditional_results,
             step=reduction.step,
             subgraph_name=remainder_subgraph_name,
             implicit_captures=reduction.implicit_captures,
+            start=start_iter,  # Start where pipelined loop ended
         ).add_to_graph(main_graph, type=reduction.type, loc=reduction.location)
 
     remainder_graph.parent_op = remainder_reduction
+    # The index needs to account for the starting offset
+    # We need to adjust the index to start from pipelined_iterations instead of 0
     get_custom(remainder_reduction).index = original_index
     get_custom(remainder_reduction).count = max_induction_variable
 
