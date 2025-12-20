@@ -8,6 +8,7 @@ Assembly emitter for generating AMDGCN assembly instructions.
 """
 
 from typing import Dict, List, Tuple, Union, Optional, Set
+from dataclasses import dataclass, field
 
 from wave_lang.support.ir_imports import (
     func_d,
@@ -59,6 +60,90 @@ def get_register_granularity(target: str) -> Tuple[int, int]:
         - CDNA2/CDNA3 (gfx90a, gfx940, gfx941, gfx942): VGPRs in blocks of 4, SGPRs in blocks of 8
     """
     return (4, 8)
+
+
+@dataclass
+class SpecialRegs:
+    """
+    ABI/system register contract.
+    
+    Centralizes all ABI-mandated and system register assignments.
+    These are the ONLY registers that may be referenced by hardcoded indices.
+    All other register usage must go through the allocators.
+    
+    ABI-mandated SGPR layout (when enabled):
+        - s[0:1]: kernarg_segment_ptr (always present)
+        - s2, s3, s4: workgroup_id_{x,y,z} (in order, only if requested)
+    
+    ABI-mandated VGPR layout (system_vgpr_workitem_id):
+        - When == 1: v0 = flat workitem ID (packed tid_x, tid_y, tid_z)
+        - When == 0: No system VGPRs
+    
+    Flat workitem ID encoding (AMD hardware fixed):
+        - Bits 0-9: tid_x (0-1023)
+        - Bits 10-19: tid_y (0-1023)
+        - Bits 20-29: tid_z (0-1023)
+    """
+    # SGPR assignments (None if not requested/available)
+    kernarg_ptr_lo: int = 0  # s0 - always present
+    kernarg_ptr_hi: int = 1  # s1 - always present
+    workgroup_id_x: Optional[int] = None  # s2 if requested
+    workgroup_id_y: Optional[int] = None  # s3 if requested (and x requested)
+    workgroup_id_z: Optional[int] = None  # s4 if requested (and x,y requested)
+    
+    # VGPR assignments (None if not requested/available)
+    flat_tid_vgpr: Optional[int] = None  # v0 when system_vgpr_workitem_id >= 1
+    
+    # Configuration
+    system_vgpr_workitem_id: int = 0  # 0, 1, 2, or 3
+    
+    def get_flat_tid_vgpr(self) -> int:
+        """Get the VGPR containing flat thread ID, or raise if not available."""
+        if self.flat_tid_vgpr is None:
+            raise ValueError(
+                "Flat thread ID VGPR not available. "
+                "This kernel may be single-wave or system_vgpr_workitem_id=0."
+            )
+        return self.flat_tid_vgpr
+    
+    def has_flat_tid(self) -> bool:
+        """Check if flat thread ID VGPR is available."""
+        return self.flat_tid_vgpr is not None
+    
+    def get_workgroup_id_sgpr(self, dim: str) -> int:
+        """Get SGPR containing workgroup ID for given dimension."""
+        if dim == "x":
+            if self.workgroup_id_x is None:
+                raise ValueError("workgroup_id_x not available")
+            return self.workgroup_id_x
+        elif dim == "y":
+            if self.workgroup_id_y is None:
+                raise ValueError("workgroup_id_y not available")
+            return self.workgroup_id_y
+        elif dim == "z":
+            if self.workgroup_id_z is None:
+                raise ValueError("workgroup_id_z not available")
+            return self.workgroup_id_z
+        else:
+            raise ValueError(f"Invalid dimension: {dim}")
+    
+    def first_user_sgpr(self) -> int:
+        """Get the first SGPR index available for user allocation."""
+        # SGPRs 0,1 are kernarg ptr, then workgroup IDs
+        next_sgpr = 2
+        if self.workgroup_id_x is not None:
+            next_sgpr = max(next_sgpr, self.workgroup_id_x + 1)
+        if self.workgroup_id_y is not None:
+            next_sgpr = max(next_sgpr, self.workgroup_id_y + 1)
+        if self.workgroup_id_z is not None:
+            next_sgpr = max(next_sgpr, self.workgroup_id_z + 1)
+        return next_sgpr
+    
+    def first_user_vgpr(self) -> int:
+        """Get the first VGPR index available for user allocation."""
+        # If we have flat_tid, it's in v0, so user starts at v1
+        # But with system_vgpr_workitem_id=1, only v0 is reserved
+        return self.system_vgpr_workitem_id  # 0 or 1
 
 
 class AsmEmitter:
@@ -144,14 +229,20 @@ class AsmEmitter:
         # Track pinned VGPRs for future lifetime management (API surface)
         self._pinned_vgprs = set()
 
+        # Centralized ABI/system register contract
+        # This is the single source of truth for all ABI-mandated registers
+        self.special_regs = SpecialRegs()
+        
         # Workgroup ID tracking (for multi-workgroup support)
         # These are assigned sequentially after kernarg ptr based on what we request
+        # NOTE: These are aliased via special_regs for backwards compatibility
         self.sgpr_workgroup_id_x = None
         self.sgpr_workgroup_id_y = None
         self.sgpr_workgroup_id_z = None
 
         # Thread/workitem ID tracking (for multi-wave support)
         # System VGPRs are allocated by hardware at v0, v1, v2 for tid_x, tid_y, tid_z
+        # NOTE: These are aliased via special_regs for backwards compatibility
         self.vgpr_tid_x = None  # Will be v0 when system_vgpr_workitem_id >= 1
         self.vgpr_tid_y = None  # Will be v1 when system_vgpr_workitem_id >= 2
         self.vgpr_tid_z = None  # Will be v2 when system_vgpr_workitem_id == 3
@@ -376,21 +467,27 @@ class AsmEmitter:
         # Allocate system SGPRs based on what's actually needed
         if self.needs_wgid_x:
             self.sgpr_workgroup_id_x = next_system_sgpr
+            self.special_regs.workgroup_id_x = next_system_sgpr
             next_system_sgpr += 1
         else:
             self.sgpr_workgroup_id_x = None
+            self.special_regs.workgroup_id_x = None
 
         if self.needs_wgid_y:
             self.sgpr_workgroup_id_y = next_system_sgpr
+            self.special_regs.workgroup_id_y = next_system_sgpr
             next_system_sgpr += 1
         else:
             self.sgpr_workgroup_id_y = None
+            self.special_regs.workgroup_id_y = None
 
         if self.needs_wgid_z:
             self.sgpr_workgroup_id_z = next_system_sgpr
+            self.special_regs.workgroup_id_z = next_system_sgpr
             next_system_sgpr += 1
         else:
             self.sgpr_workgroup_id_z = None
+            self.special_regs.workgroup_id_z = None
 
         # Reserve all allocated workgroup ID SGPRs
         if next_system_sgpr > kernarg_ptr_sgprs:
@@ -440,6 +537,9 @@ class AsmEmitter:
             self.vgpr_tid_x = 0  # v0 contains flat thread ID
             self.vgpr_tid_y = None  # Will be extracted on-demand
             self.vgpr_tid_z = None  # Will be extracted on-demand
+            # Update special_regs contract
+            self.special_regs.flat_tid_vgpr = 0
+            self.special_regs.system_vgpr_workitem_id = requested_dims
             self._reserve_system_vgprs(requested_dims)
         else:
             # Single-wave: no system VGPRs (matches LLVM)
@@ -447,6 +547,9 @@ class AsmEmitter:
             self.vgpr_tid_x = None  # No system VGPR, use lane_id fallback
             self.vgpr_tid_y = None
             self.vgpr_tid_z = None
+            # Update special_regs contract
+            self.special_regs.flat_tid_vgpr = None
+            self.special_regs.system_vgpr_workitem_id = 0
             # Don't reserve v0 - it's a regular VGPR
 
         return requested_dims
@@ -462,6 +565,25 @@ class AsmEmitter:
             self.vgpr_allocator.reserve(i)
         # User-allocated VGPRs start after system VGPRs
         self.vgpr_allocator.base = n
+    
+    def get_flat_tid_vgpr(self) -> int:
+        """
+        Get the VGPR containing flat thread ID.
+        
+        This is the single source of truth for accessing the system VGPR
+        that contains the packed thread IDs.
+        
+        Returns:
+            VGPR index (typically 0) containing flat thread ID
+            
+        Raises:
+            ValueError: If not in multi-wave mode (no flat tid available)
+        """
+        return self.special_regs.get_flat_tid_vgpr()
+    
+    def has_flat_tid(self) -> bool:
+        """Check if flat thread ID VGPR is available (multi-wave mode)."""
+        return self.special_regs.has_flat_tid()
 
     # ---- high-level sections ----
     def emit_prologue(self, kernel_name: str, wg_size: tuple):
@@ -876,16 +998,16 @@ amdhsa.kernels:
         self.emit_instruction(DSWriteB128(addr_vreg, src_quad))
 
     def emit_lds_read_b64(self, dst_pair: Tuple[int, int], addr_vreg: int, offset: int = 0):
-        """Emit ds_read_b64 instruction with optional offset.
+        """Emit ds_read_b64 instruction.
         
         Args:
             dst_pair: Tuple of (start, end) VGPRs for destination
             addr_vreg: VGPR containing base address
-            offset: Immediate offset to add (0-65535, must be 8-byte aligned)
+            offset: Optional immediate offset in bytes (0-65535)
         """
         from .instructions import DSReadB64
 
-        self.emit_instruction(DSReadB64(dst_pair, addr_vreg, offset=offset))
+        self.emit_instruction(DSReadB64(dst_pair, addr_vreg, offset))
 
     def emit_mfma_16x16x16_f16(
         self, a_pair: Tuple[int, int], b_pair: Tuple[int, int], acc_quad=None

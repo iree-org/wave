@@ -65,21 +65,38 @@ Key Components
   - Peak VGPR usage tracking for performance analysis
   - Typed operation logging with RegisterOp enum
 
-**Expression Emitter** (`expression_emitter.py`)
-  Generic SymPy expression visitor that emits AMDGCN instructions with CSE:
+**Expression Emitter** (`expression_emitter.py`, `expr_emitter_v2.py`)
+  SymPy expression visitors that emit AMDGCN instructions with CSE:
 
-  - Automatic Common Subexpression Elimination (CSE) with memoization
-  - Expression canonicalization to maximize CSE hits (flatten, sort, fold constants)
-  - Iterative postorder traversal of expression trees
-  - Support for constants, symbols, and complex expressions
+  - **ExprEmitterV2** (default): Two-phase emitter using virtual register IR
+    
+    - Emits to virtual registers first, then allocates physical registers
+    - Global CSE across entire kernel (not just per-expression)
+    - Register coalescing eliminates redundant v_mov instructions
+    - Immediate value optimization for inline constants (0-64, -1 to -16)
+    - Algebraic simplification (floor/mod identities)
+    - CachedExprRef wrapper prevents sympy Add flattening
+
+  - Legacy ExprEmitter: Direct emission with per-expression CSE
+  - Expression canonicalization to maximize CSE hits
   - Optimized instruction selection (shifts for power-of-2, masks for modulo)
-  - Const marker system for efficient register usage
-  - Handles Add, Mul, Mod, floor division, and Pow operations
-  - Rational expression support for division in address calculations
-  - Structural expression keys for cache lookup
-  - SGPR reference handling for loop induction variables
   - Multi-wave thread ID extraction (tid_x, tid_y) from flat ID
-  - Error handling for unsupported expression types
+
+**Virtual Register IR** (`expr_ir.py`, `expr_regalloc.py`, `expr_opt.py`)
+  Infrastructure for ExprEmitterV2:
+
+  - VReg/SReg classes for virtual registers
+  - ExprProgram for instruction sequences
+  - Linear scan register allocator with multiple policies
+  - Optimization passes (copy propagation, DCE, coalescing)
+  - CachedExprRef for preserving subexpressions during sympy operations
+
+**Expression Simplification** (`expr_simplify.py`)
+  Algebraic simplification rules:
+
+  - Floor/mod identity simplification
+  - Redundant floor elimination
+  - Common term factoring
 
 **Utils** (`utils.py`)
   Provides utility functions for:

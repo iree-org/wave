@@ -474,6 +474,32 @@ class VLshrrevB32(ArithmeticInstruction):
         )
 
 
+class VLshlAddU32(ArithmeticInstruction):
+    """Fused left-shift-and-add: dst = (src0 << shift) + src2.
+    
+    Maps to v_lshl_add_u32 instruction (VOP3).
+    """
+
+    def __init__(
+        self,
+        destination_register: int,
+        shift_source: int,
+        shift_amount: int,
+        add_source: int,
+        comment: str = None,
+    ):
+        super().__init__(
+            "v_lshl_add_u32",
+            [
+                f"v{destination_register}",
+                f"v{shift_source}",
+                str(shift_amount),
+                f"v{add_source}",
+            ],
+            comment,
+        )
+
+
 class VMovB32(ArithmeticInstruction):
     """Move 32-bit vector value."""
 
@@ -575,13 +601,17 @@ class DSWriteB32(MemoryInstruction):
         src_vreg: VGPR containing data to write
         offset: Optional immediate offset (0-65535 bytes)
         comment: Optional comment
+    
+    Note: offset is a modifier, not a comma-separated operand.
     """
 
     def __init__(self, addr_vreg: int, src_vreg: int, offset: int = 0, comment: str = None):
+        operands = [f"v{addr_vreg}", f"v{src_vreg}"]
         self._offset = offset
-        if offset < 0 or offset > 65535:
-            raise ValueError(f"ds_write_b32 offset must be 0-65535, got {offset}")
-        super().__init__("ds_write_b32", [f"v{addr_vreg}", f"v{src_vreg}"], comment)
+        if offset != 0:
+            if offset < 0 or offset > 65535:
+                raise ValueError(f"ds_write_b32 offset must be 0-65535, got {offset}")
+        super().__init__("ds_write_b32", operands, comment)
     
     def __str__(self) -> str:
         base = super().__str__()
@@ -598,18 +628,18 @@ class DSWriteB64(MemoryInstruction):
         src_vregs: Tuple of (start, end) VGPRs containing data to write
         offset: Optional immediate offset (0-65535 bytes)
         comment: Optional comment
+    
+    Note: offset is a modifier, not a comma-separated operand.
     """
 
     def __init__(self, addr_vreg: int, src_vregs: Tuple[int, int], 
                  offset: int = 0, comment: str = None):
+        operands = [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[1]}]"]
         self._offset = offset
-        if offset < 0 or offset > 65535:
-            raise ValueError(f"ds_write_b64 offset must be 0-65535, got {offset}")
-        super().__init__(
-            "ds_write_b64",
-            [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[1]}]"],
-            comment,
-        )
+        if offset != 0:
+            if offset < 0 or offset > 65535:
+                raise ValueError(f"ds_write_b64 offset must be 0-65535, got {offset}")
+        super().__init__("ds_write_b64", operands, comment)
     
     def __str__(self) -> str:
         base = super().__str__()
@@ -626,18 +656,18 @@ class DSWriteB128(MemoryInstruction):
         src_vregs: Tuple of 4 VGPRs containing data to write
         offset: Optional immediate offset (0-65535 bytes)
         comment: Optional comment
+    
+    Note: offset is a modifier, not a comma-separated operand.
     """
 
     def __init__(self, addr_vreg: int, src_vregs: Tuple[int, int, int, int], 
                  offset: int = 0, comment: str = None):
+        operands = [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[3]}]"]
         self._offset = offset
-        if offset < 0 or offset > 65535:
-            raise ValueError(f"ds_write_b128 offset must be 0-65535, got {offset}")
-        super().__init__(
-            "ds_write_b128",
-            [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[3]}]"],
-            comment,
-        )
+        if offset != 0:
+            if offset < 0 or offset > 65535:
+                raise ValueError(f"ds_write_b128 offset must be 0-65535, got {offset}")
+        super().__init__("ds_write_b128", operands, comment)
     
     def __str__(self) -> str:
         base = super().__str__()
@@ -652,24 +682,25 @@ class DSReadB64(MemoryInstruction):
     Args:
         dst_vregs: Tuple of (start, end) VGPRs for destination
         addr_vreg: VGPR containing base address
-        offset: Optional immediate offset (0-65535 bytes)
+        offset: Optional immediate offset (0-65535 bytes, must be 8-byte aligned for b64)
         comment: Optional comment
     
-    Assembly format: ds_read_b64 vdst, vaddr offset:N
+    Assembly format: ds_read_b64 vdst, vaddr [offset:N]
+    Note: offset is a modifier, not a comma-separated operand.
     """
 
     def __init__(self, dst_vregs: Tuple[int, int], addr_vreg: int, 
                  offset: int = 0, comment: str = None):
+        operands = [f"v[{dst_vregs[0]}:{dst_vregs[1]}]", f"v{addr_vreg}"]
         self._offset = offset
-        if offset < 0 or offset > 65535:
-            raise ValueError(f"ds_read_b64 offset must be 0-65535, got {offset}")
-        super().__init__(
-            "ds_read_b64",
-            [f"v[{dst_vregs[0]}:{dst_vregs[1]}]", f"v{addr_vreg}"],
-            comment,
-        )
+        if offset != 0:
+            # ds_read offset is in bytes, max 65535
+            if offset < 0 or offset > 65535:
+                raise ValueError(f"ds_read_b64 offset must be 0-65535, got {offset}")
+        super().__init__("ds_read_b64", operands, comment)
     
     def __str__(self) -> str:
+        """Generate assembly with offset as space-separated modifier."""
         base = super().__str__()
         if self._offset != 0:
             base += f" offset:{self._offset}"

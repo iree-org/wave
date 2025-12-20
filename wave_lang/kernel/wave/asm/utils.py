@@ -346,11 +346,15 @@ def _emit_thread_id_expression(
     """
     Emit ASM for expressions involving thread ID symbols.
 
-    Uses the generic ExprEmitter visitor to walk the expression tree and emit
-    appropriate AMDGCN instructions.
+    Uses the expression emitter (ExprEmitterV2 by default, or legacy ExprEmitter)
+    to walk the expression tree and emit appropriate AMDGCN instructions.
+
+    Note: This creates a fresh emitter instance, so CSE is not shared with the
+    main per-kernel emitter. For best CSE behavior, use the per-kernel emitter
+    from OperationHandlers._get_expr_emitter() instead.
 
     Supports:
-    - Constants and tid_x
+    - Constants and tid_x/tid_y/wgid_x/wgid_y
     - Additive chains (left-to-right accumulation)
     - Multiplication by integer (power-of-two -> shift, else mul)
     - Mod(expr, 2^k) -> VAndB32
@@ -361,13 +365,13 @@ def _emit_thread_id_expression(
     - Non-power-of-two mod/div
     - Products of two dynamic sub-expressions
     """
-    from .expression_emitter import ExprEmitter
+    from .expr_emitter_interface import create_expr_emitter
 
-    visitor = ExprEmitter(emitter, kernel_info)
+    visitor = create_expr_emitter(emitter, kernel_info)
     return visitor.emit(expression, destination_register)
 
 
-def emit_expression_asm(expr: sympy.Expr, emitter, ki, dst_reg: str = "v2") -> str:
+def emit_expression_asm(expr: sympy.Expr, emitter, ki, dst_reg: str) -> str:
     """Emit ASM instructions for a simplified SymPy expression."""
     # Get all free symbols in the expression
     free_symbols = expr.free_symbols
@@ -530,6 +534,76 @@ def split_const_dynamic(
         const_term = 0
 
     return const_term, dynamic_expr
+
+
+def factor_ds_read_offset(
+    const_offset: int, *, ds_max: int = 2040, align: int = 8
+) -> Tuple[int, int]:
+    """
+    Factor a constant offset into (base_const, ds_offset) for ds_read instructions.
+    
+    When a constant offset exceeds the hardware's ds_read offset limit, we need to
+    split it: fold the large part into the base address (via v_add_u32), and keep
+    only a small remainder as the ds_read immediate offset.
+    
+    Args:
+        const_offset: The total constant offset in bytes
+        ds_max: Maximum allowed ds_read offset (default 2040 for CDNA3/4 safety)
+        align: Required alignment for ds_offset (default 8 for ds_read_b64)
+    
+    Returns:
+        Tuple of (base_const, ds_offset) where:
+        - base_const: Amount to add to the base VGPR address
+        - ds_offset: Amount to encode in ds_read offset field
+        - base_const + ds_offset == const_offset
+        - 0 <= ds_offset <= ds_max
+        - ds_offset % align == 0
+    
+    Example:
+        >>> factor_ds_read_offset(2176, ds_max=2040, align=8)
+        (2048, 128)  # 2176 = 2048 + 128, where 128 <= 2040
+    """
+    if const_offset < 0:
+        # Negative offsets: fold entirely into base
+        return const_offset, 0
+    
+    if const_offset <= ds_max:
+        # Offset fits directly - check alignment
+        if const_offset % align == 0:
+            return 0, const_offset
+        else:
+            # Not aligned - fold into base
+            return const_offset, 0
+    
+    # Offset exceeds limit - factor it
+    # Strategy: find largest aligned chunk <= ds_max, remainder goes to base
+    # We want: base_const = const_offset - ds_offset, where ds_offset <= ds_max
+    
+    # Compute ds_offset as (const_offset mod (ds_max + align)) rounded to alignment
+    # This keeps ds_offset small and in the valid range
+    chunk_size = ds_max + align  # Use a chunk size slightly larger than ds_max
+    remainder = const_offset % chunk_size
+    
+    # Round remainder down to alignment
+    ds_offset = (remainder // align) * align
+    
+    # If ds_offset would be 0, use a larger portion
+    if ds_offset == 0 and const_offset >= align:
+        ds_offset = min((const_offset // align) * align, ds_max)
+        ds_offset = (ds_offset // align) * align  # Ensure aligned
+    
+    # Ensure ds_offset is within limit
+    if ds_offset > ds_max:
+        ds_offset = (ds_max // align) * align
+    
+    base_const = const_offset - ds_offset
+    
+    # Sanity checks
+    assert base_const + ds_offset == const_offset
+    assert 0 <= ds_offset <= ds_max
+    assert ds_offset % align == 0
+    
+    return base_const, ds_offset
 
 
 def build_element_byte_offset_exprs(

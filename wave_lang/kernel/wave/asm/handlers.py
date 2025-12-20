@@ -34,7 +34,7 @@ from .utils import (
     simplify_expression,
     split_const_dynamic,
 )
-from .expression_emitter import ExprEmitter
+from .expr_emitter_interface import create_expr_emitter, use_v2_emitter
 from .gather_to_shared import G2SHandler
 
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
@@ -61,15 +61,19 @@ class OperationHandlers:
         # Gather-to-LDS handler (composition)
         self.g2s = G2SHandler(self)
 
-    def _get_expr_emitter(self, kernel_info: KernelInfo) -> ExprEmitter:
+    def _get_expr_emitter(self, kernel_info: KernelInfo):
         """
         Get or create expression emitter for this kernel (with CSE).
+
+        Uses ExprEmitterV2 by default (virtual register IR with streaming emission).
+        Set WAVE_EXPR_EMITTER=legacy to use the original ExprEmitter.
 
         Binds workgroup ID and thread ID symbols if they are available.
         """
         key = id(kernel_info)
         if key not in self._expr_emitters_by_kernel:
-            expr_emitter = ExprEmitter(self.walker.emitter, kernel_info)
+            # Use factory function to select emitter implementation
+            expr_emitter = create_expr_emitter(self.walker.emitter, kernel_info)
 
             emitter = self.walker.emitter
 
@@ -82,6 +86,8 @@ class OperationHandlers:
                 expr_emitter.bind_symbol("wgid_z", f"s{emitter.sgpr_workgroup_id_z}")
 
             # Bind thread/workitem ID symbols to their VGPRs (for multi-wave support)
+            # Note: ExprEmitterV2 auto-binds ABI registers, but we still bind here
+            # for legacy emitter compatibility
             if emitter.vgpr_tid_x is not None:
                 expr_emitter.bind_symbol("tid_x", f"v{emitter.vgpr_tid_x}")
             if emitter.vgpr_tid_y is not None:
@@ -649,24 +655,123 @@ class OperationHandlers:
         forcing lane-linear addressing. The MLIR indices already encode the correct
         addressing for both single-wave and multi-wave modes, including any swizzle
         patterns needed for cache efficiency.
+        
+        Optimization: When the address has a constant offset component that fits within
+        the hardware limit (DS_MAX_OFFSET), we use the ds_read offset field instead of
+        computing the full address. This saves a v_add_u32 instruction.
+        
+        For offsets exceeding DS_MAX_OFFSET (~2040 bytes on CDNA3/4), we use two-stage
+        factoring: split const_offset into (base_const, ds_offset) where ds_offset fits
+        within the limit. The base_const is added to the base address expression once
+        (CSE'd across loads), and ds_offset goes into the ds_read offset field.
+        
+        We use CachedExprRef to wrap the base expression, preventing sympy from flattening
+        the addition and preserving the subexpression for CSE recognition.
         """
+        import os
         import sympy
+        from .utils import split_const_dynamic, factor_ds_read_offset
+        from .expr_ir import CachedExprRef
 
+        DEBUG_DS_OFFSET = os.environ.get("WAVE_LDS_DSREAD_OFFSET_DEBUG", "0") == "1"
+        
         # Add view base offset if present
         vbase_val = self.walker._lds_view_base_bytes.get(memref_ssa, 0)
+        original_byte_offset_expr = byte_offset_expr  # Save for debug
 
         # Use MLIR-derived expression for all cases (single-wave, multi-wave, g2s, non-g2s)
         # The MLIR index expression already contains the correct addressing formula
         if vbase_val:
             byte_offset_expr = byte_offset_expr + sympy.Integer(vbase_val)
 
-        # Materialize the byte offset expression into a VGPR for LDS addressing (with CSE)
-        addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
-        addr_v = int(addr_reg[1:])
+        # Split address into base + constant offset to use ds_read offset field
+        # ds_read supports 16-bit offset (0-65535), but we use conservative limits
+        const_offset, base_expr = split_const_dynamic(byte_offset_expr, max_immediate=65528)
+        
+        # Max offset for ds_read_b64 on CDNA3/CDNA4
+        # Empirically, large offsets (>= ~2048) seem to cause issues
+        # The ISA spec says 16-bit unsigned, but we use a conservative limit
+        DS_MAX_OFFSET = 2040  # Conservative limit, 8-byte aligned
+        DS_ALIGN = 8  # ds_read_b64 requires 8-byte alignment
+        
+        if DEBUG_DS_OFFSET:
+            print(f"[DS_OFFSET_DEBUG] memref={memref_ssa[:60]}...")
+            print(f"[DS_OFFSET_DEBUG]   vbase_val={vbase_val}")
+            print(f"[DS_OFFSET_DEBUG]   original_expr={original_byte_offset_expr}")
+            print(f"[DS_OFFSET_DEBUG]   after_vbase_expr={byte_offset_expr}")
+            print(f"[DS_OFFSET_DEBUG]   const_offset={const_offset}, base_expr={base_expr}")
+        
+        # Determine if we can use the offset field and how
+        has_dynamic_base = len(base_expr.free_symbols) > 0
+        
+        if not has_dynamic_base:
+            # Pure constant address - just emit it directly
+            addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
+            addr_v = int(addr_reg[1:])
+            lds_offset = 0
+            if DEBUG_DS_OFFSET:
+                print(f"[DS_OFFSET_DEBUG]   -> PURE_CONST: addr_reg={addr_reg}, lds_offset=0")
+        elif const_offset >= DS_ALIGN and const_offset <= DS_MAX_OFFSET and const_offset % DS_ALIGN == 0:
+            # Offset fits directly within limit - use it
+            addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(base_expr)
+            addr_v = int(addr_reg[1:])
+            lds_offset = const_offset
+            if DEBUG_DS_OFFSET:
+                print(f"[DS_OFFSET_DEBUG]   -> DIRECT_OFFSET: addr_reg={addr_reg}, lds_offset={lds_offset}")
+        elif const_offset > DS_MAX_OFFSET and const_offset % DS_ALIGN == 0:
+            # Large offset exceeds ds_read offset limit - use two-stage factoring
+            # Factor: const_offset = base_const + ds_offset, where ds_offset <= DS_MAX_OFFSET
+            # Two-stage factoring using CachedExprRef
+            # Currently disabled by default pending investigation of correctness issues
+            # Set WAVE_DS_TWO_STAGE=1 to enable (experimental)
+            ENABLE_TWO_STAGE = os.environ.get("WAVE_DS_TWO_STAGE", "0") == "1"
+            
+            base_const, ds_offset = factor_ds_read_offset(
+                const_offset, ds_max=DS_MAX_OFFSET, align=DS_ALIGN
+            )
+            
+            if ENABLE_TWO_STAGE and ds_offset > 0 and ds_offset <= DS_MAX_OFFSET:
+                # Factor succeeded - use CachedExprRef to preserve base_expr as a unit
+                # This prevents sympy from flattening the addition and breaking CSE
+                # First, ensure base_expr is cached by emitting it
+                self._get_expr_emitter(kernel_info).get_or_emit(base_expr)
+                
+                # Now construct factored expression using CachedExprRef wrapper
+                # CachedExprRef(base_expr) + base_const will NOT flatten because
+                # CachedExprRef is a sympy.Expr subclass that preserves its argument
+                wrapped_base = CachedExprRef(base_expr)
+                factored_addr_expr = wrapped_base + sympy.Integer(base_const)
+                
+                if DEBUG_DS_OFFSET:
+                    print(f"[DS_OFFSET_DEBUG]   -> TWO_STAGE: base_const={base_const}, ds_offset={ds_offset}")
+                    print(f"[DS_OFFSET_DEBUG]   -> factored_addr_expr={factored_addr_expr}")
+                    print(f"[DS_OFFSET_DEBUG]   -> factored_addr_expr.args={factored_addr_expr.args}")
+                
+                addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(factored_addr_expr)
+                addr_v = int(addr_reg[1:])
+                lds_offset = ds_offset
+                if DEBUG_DS_OFFSET:
+                    print(f"[DS_OFFSET_DEBUG]   -> addr_reg={addr_reg}, lds_offset={lds_offset}")
+            else:
+                # Factoring didn't produce useful result - fall back to full address
+                addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
+                addr_v = int(addr_reg[1:])
+                lds_offset = 0
+                if DEBUG_DS_OFFSET:
+                    print(f"[DS_OFFSET_DEBUG]   -> FACTOR_FALLBACK: addr_reg={addr_reg}, lds_offset=0")
+        else:
+            # Offset is 0, negative, or unaligned - compute full address
+            addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
+            addr_v = int(addr_reg[1:])
+            lds_offset = 0
+            if DEBUG_DS_OFFSET:
+                print(f"[DS_OFFSET_DEBUG]   -> FALLBACK: addr_reg={addr_reg}, lds_offset=0")
 
         # Emit LDS read into allocated VGPR pairs
         pair = self.walker.emitter.vgpr_allocator.alloc_v_pair()
-        self.walker.emitter.emit_lds_read_b64(pair, addr_v)
+        if DEBUG_DS_OFFSET:
+            print(f"[DS_OFFSET_DEBUG]   -> ds_read: addr=v{addr_v}, offset={lds_offset}, dest=v[{pair[0]}:{pair[1]}]")
+        self.walker.emitter.emit_lds_read_b64(pair, addr_v, offset=lds_offset)
 
         # Track the loaded data in unified SSA→VGPR map
         result_ssa = str(operation.results[0])
