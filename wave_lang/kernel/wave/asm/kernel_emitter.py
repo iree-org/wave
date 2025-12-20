@@ -30,7 +30,12 @@ DEBUG_KERNEL_EMITTER = os.environ.get("WAVE_KERNEL_EMITTER_DEBUG", "0") == "1"
 DEBUG_CSE = os.environ.get("WAVE_KERNEL_CSE_DEBUG", "0") == "1"
 
 # Enable algebraic simplification
-# Disable simplification by default until the g2s-shape1 issue is investigated
+# Disable simplification by default for KernelEmitter
+# The issue is that certain expression patterns after simplification cause incorrect results
+# in the g2s (global-to-shared) path. The expressions are mathematically equivalent but
+# something in the instruction emission order or register allocation causes NaN values.
+# This needs further investigation. Use WAVE_EXPR_SIMPLIFY=1 to enable for testing.
+# Note: The legacy ExprEmitter works correctly with simplification enabled.
 ENABLE_SIMPLIFY = os.environ.get("WAVE_EXPR_SIMPLIFY", "0") == "1"
 
 # Marker for rational values (expr / const)
@@ -198,8 +203,10 @@ class KernelEmitter:
         if ENABLE_SIMPLIFY:
             original = expr
             expr = simplify_for_emission(expr, self._get_symbol_bounds())
-            if DEBUG_KERNEL_EMITTER and expr != original:
-                print(f"[SIMPLIFY] {original} → {expr}")
+            if expr != original:
+                if DEBUG_KERNEL_EMITTER:
+                    print(f"[SIMPLIFY] {original}")
+                    print(f"        -> {expr}")
                 self._simplify_stats.record(original, expr)
         
         key = expr_key(expr)
