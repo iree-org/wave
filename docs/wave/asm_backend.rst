@@ -89,11 +89,14 @@ Key Components
   - CachedExprRef for preserving subexpressions during sympy operations
 
 **Expression Simplification** (`expr_simplify.py`)
-  Algebraic simplification rules:
+  Algebraic simplification using singledispatch for type-based rule dispatch:
 
-  - Floor/mod identity simplification
-  - Redundant floor elimination
-  - Common term factoring
+  - Declarative rewrite rules with SymPy Wild patterns
+  - `@singledispatch` for `get_max_value`, `simplify_expr`, `combine_like_terms`
+  - Floor/mod identity: `floor(x/n)*n + Mod(x,n) → x`
+  - Linear floor to mod: `a*x - a*n*floor(x/n) → a*Mod(x,n)`
+  - Redundant floor elimination when `max(x) < n`
+  - Power-of-2 shift combining: `x * 2^a * 2^b → x * 2^(a+b)`
 
 **Utils** (`utils.py`)
   Provides utility functions for:
