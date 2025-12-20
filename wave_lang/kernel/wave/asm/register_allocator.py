@@ -7,13 +7,32 @@
 Register file and allocators for AMDGCN assembly generation.
 """
 
-from typing import Tuple, List, Union, Optional
+from typing import Tuple, List, Union, Optional, Set
+from dataclasses import dataclass, field
 from enum import Enum
 import os
 
 
 # Global debug flag for allocator logging (set DEBUG_ASM_ALLOCATOR=1 to enable)
 DEBUG_ALLOCATOR = os.environ.get("DEBUG_ASM_ALLOCATOR", "0") == "1"
+# Extra verbose mode with call sites (set DEBUG_ASM_ALLOCATOR=2 for call site tracking)
+DEBUG_ALLOCATOR_CALLSITES = os.environ.get("DEBUG_ASM_ALLOCATOR", "0") == "2"
+# Verification mode - strict checking of register allocation/free/use
+# Set DEBUG_ASM_ALLOCATOR=verify to enable assertions
+VERIFY_ALLOCATOR = os.environ.get("DEBUG_ASM_ALLOCATOR", "0") == "verify"
+
+
+def _get_callsite() -> str:
+    """Get the call site information (file:line:function) for debugging."""
+    if not DEBUG_ALLOCATOR_CALLSITES:
+        return ""
+    import traceback
+    # Walk up the stack to find the first non-allocator caller
+    for frame_info in traceback.extract_stack()[:-2]:
+        if "register_allocator.py" not in frame_info.filename:
+            filename = frame_info.filename.split("/")[-1]
+            return f" @ {filename}:{frame_info.lineno}:{frame_info.name}"
+    return ""
 
 
 class RegisterOp(Enum):
@@ -30,12 +49,29 @@ class RegisterOp(Enum):
     FREE_S = "free_s"
 
 
-def _log_alloc(msg: str):
-    """Log allocator operations if debug flag is enabled."""
-    if DEBUG_ALLOCATOR:
-        import sys
+@dataclass
+class AllocationEvent:
+    """Detailed allocation event for tracing."""
+    op: RegisterOp
+    registers: Union[int, Tuple[int, ...]]
+    callsite: str = ""
+    reused: bool = False
+    
+    def __str__(self) -> str:
+        if isinstance(self.registers, int):
+            reg_str = f"v{self.registers}"
+        else:
+            reg_str = f"v[{self.registers[0]}:{self.registers[-1]}]"
+        reuse_str = " (reused)" if self.reused else ""
+        return f"{self.op.value}: {reg_str}{reuse_str}{self.callsite}"
 
-        print(f"[ALLOCATOR] {msg}", file=sys.stderr)
+
+def _log_alloc(msg: str, include_callsite: bool = True):
+    """Log allocator operations if debug flag is enabled."""
+    if DEBUG_ALLOCATOR or DEBUG_ALLOCATOR_CALLSITES:
+        import sys
+        callsite = _get_callsite() if include_callsite else ""
+        print(f"[ALLOCATOR] {msg}{callsite}", file=sys.stderr)
 
 
 class RegFile:
@@ -46,9 +82,152 @@ class RegFile:
         self.a_max = -1  # Track maximum AGPR index used
 
         # Track allocation history for debugging (enabled via DEBUG_ALLOCATOR)
-        self.allocation_history: List[str] = (
-            []
-        )  # Human-readable log of alloc/free events
+        self.allocation_history: List[str] = []  # Human-readable log of alloc/free events
+        
+        # Detailed allocation events for advanced debugging (enabled via DEBUG_ASM_ALLOCATOR=2)
+        self.allocation_events: List[AllocationEvent] = []
+    
+    def dump_allocation_trace(self, filepath: str = None) -> str:
+        """Dump allocation history to a file or return as string."""
+        lines = ["=" * 60, "VGPR ALLOCATION TRACE", "=" * 60]
+        for i, event in enumerate(self.allocation_events):
+            lines.append(f"{i:4d}: {event}")
+        lines.append("=" * 60)
+        result = "\n".join(lines)
+        
+        if filepath:
+            with open(filepath, "w") as f:
+                f.write(result)
+        return result
+
+
+class RegisterVerifier:
+    """
+    Debug-time verification of register allocation/usage.
+    
+    When enabled (DEBUG_ASM_ALLOCATOR=verify), this class tracks:
+    - All allocated registers and their states (allocated, freed, reserved)
+    - Verifies that only allocated registers are used in instructions
+    - Verifies that freed registers are not used unless re-allocated
+    - Verifies that reserved registers are never reallocated
+    
+    Usage:
+        verifier = RegisterVerifier()
+        verifier.on_alloc("v", 5)  # Register v5 allocated
+        verifier.on_free("v", 5)   # Register v5 freed
+        verifier.verify_use("v", 5)  # ERROR: v5 was freed
+    """
+    
+    def __init__(self, abi_vgprs: Set[int] = None, abi_sgprs: Set[int] = None):
+        """
+        Initialize verifier with ABI-allowed registers.
+        
+        Args:
+            abi_vgprs: Set of VGPR indices that are ABI-mandated (e.g., {0} for flat tid)
+            abi_sgprs: Set of SGPR indices that are ABI-mandated (e.g., {0, 1} for kernarg ptr)
+        """
+        self.abi_vgprs = abi_vgprs or set()
+        self.abi_sgprs = abi_sgprs or {0, 1}  # kernarg ptr always at s[0:1]
+        
+        # State tracking
+        self.allocated_vgprs: Set[int] = set()
+        self.reserved_vgprs: Set[int] = set()
+        self.freed_vgprs: Set[int] = set()
+        
+        self.allocated_sgprs: Set[int] = set()
+        self.reserved_sgprs: Set[int] = set()
+        self.freed_sgprs: Set[int] = set()
+        
+        # Error collection
+        self.errors: List[str] = []
+    
+    def on_alloc(self, reg_type: str, index: int) -> None:
+        """Record a register allocation."""
+        if reg_type == "v":
+            if index in self.reserved_vgprs:
+                self.errors.append(f"ALLOC ERROR: v{index} was reserved, cannot reallocate")
+            self.allocated_vgprs.add(index)
+            self.freed_vgprs.discard(index)
+        elif reg_type == "s":
+            if index in self.reserved_sgprs:
+                self.errors.append(f"ALLOC ERROR: s{index} was reserved, cannot reallocate")
+            self.allocated_sgprs.add(index)
+            self.freed_sgprs.discard(index)
+    
+    def on_free(self, reg_type: str, index: int) -> None:
+        """Record a register free."""
+        if reg_type == "v":
+            if index not in self.allocated_vgprs:
+                self.errors.append(f"FREE ERROR: v{index} was not allocated")
+            elif index in self.reserved_vgprs:
+                self.errors.append(f"FREE ERROR: v{index} is reserved, cannot free")
+            else:
+                self.freed_vgprs.add(index)
+        elif reg_type == "s":
+            if index not in self.allocated_sgprs:
+                self.errors.append(f"FREE ERROR: s{index} was not allocated")
+            elif index in self.reserved_sgprs:
+                self.errors.append(f"FREE ERROR: s{index} is reserved, cannot free")
+            else:
+                self.freed_sgprs.add(index)
+    
+    def on_reserve(self, reg_type: str, index: int) -> None:
+        """Record a register reservation."""
+        if reg_type == "v":
+            self.reserved_vgprs.add(index)
+            self.allocated_vgprs.add(index)
+        elif reg_type == "s":
+            self.reserved_sgprs.add(index)
+            self.allocated_sgprs.add(index)
+    
+    def verify_use(self, reg_type: str, index: int, context: str = "") -> None:
+        """Verify a register is valid for use (allocated, not freed)."""
+        if not VERIFY_ALLOCATOR:
+            return
+        
+        if reg_type == "v":
+            # ABI registers are always valid
+            if index in self.abi_vgprs:
+                return
+            # Must be allocated and not freed
+            if index not in self.allocated_vgprs:
+                self.errors.append(f"USE ERROR: v{index} was never allocated {context}")
+            elif index in self.freed_vgprs:
+                self.errors.append(f"USE ERROR: v{index} was freed but used {context}")
+        elif reg_type == "s":
+            if index in self.abi_sgprs:
+                return
+            if index not in self.allocated_sgprs:
+                self.errors.append(f"USE ERROR: s{index} was never allocated {context}")
+            elif index in self.freed_sgprs:
+                self.errors.append(f"USE ERROR: s{index} was freed but used {context}")
+    
+    def check_errors(self) -> None:
+        """Raise assertion if any errors were found."""
+        if self.errors:
+            error_msg = "\n".join(self.errors)
+            raise AssertionError(f"Register verification failed:\n{error_msg}")
+    
+    def get_report(self) -> str:
+        """Generate a summary report."""
+        lines = [
+            "=" * 60,
+            "REGISTER VERIFIER REPORT",
+            "=" * 60,
+            f"Allocated VGPRs: {sorted(self.allocated_vgprs)}",
+            f"Reserved VGPRs: {sorted(self.reserved_vgprs)}",
+            f"Freed VGPRs: {sorted(self.freed_vgprs)}",
+            f"Allocated SGPRs: {sorted(self.allocated_sgprs)}",
+            f"Reserved SGPRs: {sorted(self.reserved_sgprs)}",
+            f"Freed SGPRs: {sorted(self.freed_sgprs)}",
+            f"Errors: {len(self.errors)}",
+        ]
+        if self.errors:
+            lines.append("Error details:")
+            for err in self.errors:
+                lines.append(f"  - {err}")
+        lines.append("=" * 60)
+        return "\n".join(lines)
 
 
 class SGPRAllocator:
@@ -127,9 +306,13 @@ class VGPRAllocator:
         self.reserved.add(reg)
         self.register_file.v_used.add(reg)
         self.v_peak = max(self.v_peak, reg)
+        callsite = _get_callsite()
         _log_alloc(f"{RegisterOp.RESERVE.value}: v{reg}")
         self.register_file.allocation_history.append(
             f"{RegisterOp.RESERVE.value}: v{reg}"
+        )
+        self.register_file.allocation_events.append(
+            AllocationEvent(RegisterOp.RESERVE, reg, callsite)
         )
 
     def _try_reuse(
@@ -149,6 +332,7 @@ class VGPRAllocator:
                 self.register_file.v_used.update(regs_tuple)
 
                 # Log the reuse
+                callsite = _get_callsite()
                 if isinstance(regs, int):
                     _log_alloc(f"{op.value}: v{regs} (reused)")
                     self.register_file.allocation_history.append(
@@ -159,6 +343,10 @@ class VGPRAllocator:
                     self.register_file.allocation_history.append(
                         f"{op.value}: v[{regs[0]}:{regs[-1]}] (reused)"
                     )
+                
+                self.register_file.allocation_events.append(
+                    AllocationEvent(op, regs, callsite, reused=True)
+                )
 
                 return regs
         return None
@@ -194,6 +382,7 @@ class VGPRAllocator:
         self.v_peak = max(self.v_peak, base_reg + count - 1)
 
         # Log allocation
+        callsite = _get_callsite()
         if count == 1:
             _log_alloc(f"{op.value}: v{regs} (new, v_peak={self.v_peak})")
             self.register_file.allocation_history.append(f"{op.value}: v{regs} (new)")
@@ -204,6 +393,10 @@ class VGPRAllocator:
             self.register_file.allocation_history.append(
                 f"{op.value}: v[{regs[0]}:{regs[-1]}] (new)"
             )
+        
+        self.register_file.allocation_events.append(
+            AllocationEvent(op, regs, callsite, reused=False)
+        )
 
         return regs
 
@@ -265,6 +458,7 @@ class VGPRAllocator:
         free_list.append(regs)
 
         # Log the operation
+        callsite = _get_callsite()
         if isinstance(regs, int):
             _log_alloc(f"{op.value}: v{regs}")
             self.register_file.allocation_history.append(f"{op.value}: v{regs}")
@@ -273,6 +467,10 @@ class VGPRAllocator:
             self.register_file.allocation_history.append(
                 f"{op.value}: v[{regs[0]}:{regs[-1]}]"
             )
+        
+        self.register_file.allocation_events.append(
+            AllocationEvent(op, regs, callsite)
+        )
 
     def free_v(self, reg: int):
         """Free a single VGPR."""

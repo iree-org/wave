@@ -29,5 +29,19 @@
             "expected_accept_index": [[0, 3, 4, 5], [6, 10, 11, -1]],
             "expected_accept_token_num": [3, 2]
         }
+    ],
+    "gemm_shapes": [
+        {
+            "name": "gemm-asm-benchmark",
+            "description": "GEMM benchmark for ASM vs LLVM backend comparison with 2x2 waves per workgroup",
+            "M": 256,
+            "N": 256,
+            "K": 128,
+            "BLOCK_M": 32,
+            "BLOCK_N": 32,
+            "BLOCK_K": 64,
+            "WAVE_M": 16,
+            "WAVE_N": 16
+        }
     ]
 }

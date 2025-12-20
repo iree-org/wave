@@ -99,24 +99,45 @@ def canonicalize_expr(expr: sympy.Expr) -> sympy.Expr:
 
 
 def expr_key(expr: sympy.Expr):
-    """Build a structural, hashable key for an expression."""
-    expr = canonicalize_expr(expr)
-
+    """
+    Build a structural, hashable key for an expression.
+    
+    Uses a direct structural walk instead of canonicalization to avoid
+    sympy.simplify which can incorrectly simplify floor expressions.
+    The key is commutative-aware (Add and Mul args are sorted).
+    """
+    # Import here to avoid circular imports
+    from .expr_ir import CachedExprRef
+    
     def to_key(e):
+        if e is None:
+            return ("none",)
+        # Handle CachedExprRef - key is based on the wrapped expression
+        if isinstance(e, CachedExprRef):
+            return ("cached_ref", to_key(e.wrapped))
         if isinstance(e, sympy.Integer):
             return ("int", int(e))
+        if isinstance(e, sympy.Rational) and not isinstance(e, sympy.Integer):
+            # Rationals like 1/64 - preserve structure
+            return ("rat", int(e.p), int(e.q))
         if isinstance(e, sympy.Symbol):
             return ("sym", str(e))
         if isinstance(e, sympy.Add):
-            return ("add", tuple(to_key(a) for a in e.args))
+            # Sort args by their string keys for commutativity
+            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
+            return ("add", arg_keys)
         if isinstance(e, sympy.Mul):
-            return ("mul", tuple(to_key(a) for a in e.args))
+            # Sort args by their string keys for commutativity
+            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
+            return ("mul", arg_keys)
         if isinstance(e, sympy.Mod):
             return ("mod", to_key(e.args[0]), to_key(e.args[1]))
         if getattr(e, "func", None) == sympy.floor:
             return ("floor", to_key(e.args[0]))
-        # Generic fallback
-        return ("raw", str(e))
+        if isinstance(e, sympy.Pow):
+            return ("pow", to_key(e.args[0]), to_key(e.args[1]))
+        # Generic fallback - use srepr for structural representation
+        return ("raw", sympy.srepr(e))
 
     return to_key(expr)
 
@@ -150,6 +171,10 @@ class ExprEmitter:
 
         # Symbol bindings for workgroup IDs (maps symbol -> SGPR index or register name)
         self.symbol_bindings: Dict[sympy.Symbol, str] = {}
+        
+        # CSE cache for tid_x/tid_y extractions - extracted once and reused
+        self._tid_x_cached_reg: Optional[int] = None
+        self._tid_y_cached_reg: Optional[int] = None
 
     def bind_symbol(self, symbol_name: str, register: str) -> None:
         """
@@ -194,6 +219,10 @@ class ExprEmitter:
     def clear_cache(self):
         """Clear the expression cache."""
         self._cache.clear()
+
+    def maybe_dump_summary(self) -> None:
+        """Dump CSE summary (no-op for legacy emitter)."""
+        pass
 
     def emit(self, expr: sympy.Expr, dst_reg: str) -> str:
         """
@@ -278,12 +307,25 @@ class ExprEmitter:
     def _extract_tid_x_from_flat_id(self, flat_tid_v: int, stack: list) -> None:
         """
         Extract tid_x (bits 0-9) from flat thread ID register.
+        
+        Uses CSE with allocation padding to maintain VGPR allocation count.
 
         Args:
             flat_tid_v: VGPR index containing flat thread ID
             stack: Expression stack to push result onto
         """
+        # CSE: Return cached VGPR if already extracted
+        if self._tid_x_cached_reg is not None:
+            # Allocate a padding VGPR to maintain allocation order
+            # This is needed because other code depends on allocation count
+            _padding = self.emitter.vgpr_allocator.alloc_v()
+            stack.append(f"v{self._tid_x_cached_reg}")
+            return
+        
+        # First extraction: allocate VGPR
         temp_v = self.emitter.vgpr_allocator.alloc_v()
+        self._tid_x_cached_reg = temp_v
+        
         self.emitter.emit(
             f"    v_and_b32 v{temp_v}, 0x3ff, v{flat_tid_v}  // Extract tid_x: mask 0x3ff = bits 0-9"
         )
@@ -292,12 +334,25 @@ class ExprEmitter:
     def _extract_tid_y_from_flat_id(self, flat_tid_v: int, stack: list) -> None:
         """
         Extract tid_y (bits 10-19) from flat thread ID register.
+        
+        Uses CSE with allocation padding to maintain VGPR allocation count.
 
         Args:
             flat_tid_v: VGPR index containing flat thread ID
             stack: Expression stack to push result onto
         """
+        # CSE: Return cached VGPR if already extracted
+        if self._tid_y_cached_reg is not None:
+            # Allocate a padding VGPR to maintain allocation order
+            # This is needed because other code depends on allocation count
+            _padding = self.emitter.vgpr_allocator.alloc_v()
+            stack.append(f"v{self._tid_y_cached_reg}")
+            return
+        
+        # First extraction: allocate VGPR
         temp_v = self.emitter.vgpr_allocator.alloc_v()
+        self._tid_y_cached_reg = temp_v
+        
         self.emitter.emit(
             f"    v_bfe_u32 v{temp_v}, v{flat_tid_v}, 10, 10  // Extract tid_y from bits 10-19"
         )
