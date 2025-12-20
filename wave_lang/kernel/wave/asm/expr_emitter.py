@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple, Set, Union
 
 from .expr_ir import (
     ExprProgram, ExprInstr, VReg, SReg, PhysVReg, PhysSReg, Imm, OpCode,
-    VirtualReg, PhysicalReg, Operand, CachedExprRef, is_inline_constant,
+    VirtualReg, PhysicalReg, Operand, is_inline_constant,
 )
 from .expr_regalloc import ExprRegAlloc, AllocPolicy, allocate_program
 from .expr_opt import optimize_program, OptimizationStats
@@ -581,24 +581,7 @@ class ExprEmitter:
                 return PhysSReg(int(cached_reg[1:]))
         
         # Not cached - proceed with emission
-        if isinstance(expr, CachedExprRef):
-            # CachedExprRef is a wrapper that preserves a subexpression as a unit.
-            # Look up the wrapped expression in the cache - it should already be computed.
-            wrapped = expr.wrapped
-            wrapped_key = expr_key(wrapped)
-            if wrapped_key in self._cache:
-                cached_reg = self._cache[wrapped_key]
-                if DEBUG_EXPR_V2_CSE:
-                    print(f"[CACHED_EXPR_REF] {wrapped} -> {cached_reg}")
-                if cached_reg.startswith("v"):
-                    return PhysVReg(int(cached_reg[1:]))
-                elif cached_reg.startswith("s"):
-                    return PhysSReg(int(cached_reg[1:]))
-            # Not in cache - emit the wrapped expression
-            if DEBUG_EXPR_V2_CSE:
-                print(f"[CACHED_EXPR_REF] {wrapped} not in cache, emitting")
-            return self._emit_to_program(program, wrapped)
-        elif isinstance(expr, sympy.Symbol):
+        if isinstance(expr, sympy.Symbol):
             return self._emit_symbol_to_program(program, expr)
         elif isinstance(expr, sympy.Integer):
             return ("_const", int(expr))

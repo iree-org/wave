@@ -37,50 +37,6 @@ from enum import Enum, auto
 import sympy
 
 
-class CachedExprRef(sympy.Expr):
-    """
-    A wrapper for sympy expressions that prevents flattening when combined with other terms.
-    
-    When you add a constant to a sympy.Add expression like `base_expr + 2048`, sympy flattens
-    it so that `base_expr` is no longer a single argument - instead, the args of `base_expr`
-    get merged with the new constant. This breaks CSE because the emitter can't recognize
-    that `base_expr` was already computed.
-    
-    CachedExprRef solves this by:
-    1. Wrapping a sympy expression in a special Function
-    2. When the emitter sees CachedExprRef, it looks up the wrapped expression in the cache
-    3. The wrapped expression is preserved as a single unit in Add/Mul operations
-    
-    Example:
-        >>> base = 136*Mod(tid_x, 16) + 8*floor(Mod(tid_x, 64)/16)
-        >>> wrapped = CachedExprRef(base)
-        >>> expr = wrapped + 2048
-        >>> expr.args  # [CachedExprRef(base), 2048] - base is preserved!
-    """
-    
-    def __new__(cls, wrapped_expr):
-        """Create a new CachedExprRef wrapping the given expression."""
-        obj = sympy.Expr.__new__(cls, wrapped_expr)
-        return obj
-    
-    @property
-    def wrapped(self):
-        """Get the wrapped sympy expression."""
-        return self.args[0]
-    
-    def _sympystr(self, printer):
-        """String representation for debugging."""
-        return f"CachedExprRef({self.wrapped})"
-    
-    def _eval_is_real(self):
-        """Propagate realness from wrapped expression."""
-        return self.wrapped.is_real
-    
-    def _eval_is_positive(self):
-        """Propagate positivity from wrapped expression."""
-        return self.wrapped.is_positive
-
-
 def expr_key(expr: sympy.Expr):
     """
     Build a structural, hashable key for an expression.
@@ -92,9 +48,6 @@ def expr_key(expr: sympy.Expr):
     def to_key(e):
         if e is None:
             return ("none",)
-        # Handle CachedExprRef - key is based on the wrapped expression
-        if isinstance(e, CachedExprRef):
-            return ("cached_ref", to_key(e.wrapped))
         if isinstance(e, sympy.Integer):
             return ("int", int(e))
         if isinstance(e, sympy.Rational) and not isinstance(e, sympy.Integer):
