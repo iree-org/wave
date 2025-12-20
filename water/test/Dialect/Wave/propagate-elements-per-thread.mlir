@@ -147,6 +147,7 @@ func.func @unsupported_op() attributes {wave.hyperparameters = #wave.hyperparame
 }
 }
 
+
 // -----
 
 // CHECK: #wave.normal_form<memory_only_types>
@@ -157,4 +158,44 @@ module {
     wave.write %reg, %mem { elements_per_thread = 8 } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
     return
   }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+func.func @mma_uninitialized_lhs(%mem1: !wave.tensor<[@N, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>} {
+  // LHS without elements_per_thread - this will remain uninitialized.
+  %lhs_init = arith.constant 0.0 : f16
+  %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
+
+  // RHS properly initialized through read operation.
+  %rhs = wave.read %mem1 {elements_per_thread = 4} : (!wave.tensor<[@N, @K] of f16, <global>>) -> !wave.tensor<[@N, @K] of f16, <register>>
+
+  // ACC properly initialized through read operation.
+  %acc = wave.read %mem2 {elements_per_thread = 4} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+  // expected-error @below {{failed to propagate elements per thread backward: MMA operand #0 (LHS) has uninitialized elements_per_thread}}
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+func.func @mma_uninitialized_rhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>, %mem2: !wave.tensor<[@M, @N] of f32, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>} {
+  // LHS properly initialized through read operation.
+  %lhs = wave.read %mem1 {elements_per_thread = 4} : (!wave.tensor<[@M, @K] of f16, <global>>) -> !wave.tensor<[@M, @K] of f16, <register>>
+
+  // RHS without elements_per_thread - this will remain uninitialized.
+  %rhs_init = arith.constant 0.0 : f16
+  %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
+
+  // ACC properly initialized through read operation.
+  %acc = wave.read %mem2 {elements_per_thread = 4} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+  // expected-error @below {{failed to propagate elements per thread backward: MMA operand #1 (RHS) has uninitialized elements_per_thread}}
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
 }

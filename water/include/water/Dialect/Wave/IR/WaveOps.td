@@ -110,6 +110,7 @@ def Exp2Op : UnaryWaveOp<"exp2"> {
 
 def MmaOp : WaveOp<"mma",
     [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+     DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
      DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
       ["initializeIndexExprsForward", "initializeIndexExprsBackward"]>]>,
             WaveArithmeticOpDoc {
@@ -130,6 +131,11 @@ def MmaOp : WaveOp<"mma",
     "$lhs `,` $rhs `,` $accumulator " # commonArgumentsSyntax # "attr-dict `:`"
     "functional-type(operands, results)";
   let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    /// Compute the expected elements per thread for this MMA operation.
+    unsigned computeElementsPerThread();
+  }];
 }
 
 //-----------------------------------------------------------------------------
