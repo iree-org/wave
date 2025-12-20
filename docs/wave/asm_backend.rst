@@ -88,7 +88,7 @@ Key Components
   - Optimization passes (copy propagation, DCE, coalescing)
 
 **Kernel-Level IR** (`kernel_ir.py`, `kernel_liveness.py`, `kernel_regalloc.py`)
-  Infrastructure for whole-program register allocation (experimental, WAVE_KERNEL_LSRA=1):
+  Infrastructure for whole-program register allocation:
 
   - KVReg/KSReg classes for kernel-scope virtual registers
   - KernelProgram for entire kernel instruction sequences
@@ -100,8 +100,9 @@ Key Components
   - No spilling: fails compilation with diagnostic if allocation fails
 
 **Kernel-Level Expression Emitter** (`kernel_emitter.py`)
-  Kernel-wide expression emitter with streaming allocation (WAVE_KERNEL_LSRA=1):
+  Default kernel-wide expression emitter with streaming allocation:
 
+  - Default since WAVE_KERNEL_LSRA=1 is now the default (use WAVE_KERNEL_LSRA=0 to disable)
   - Direct alternative to ExprEmitter with same API (get_or_emit, bind_symbol)
   - Kernel-wide register pool for better register reuse across expressions
   - Global CSE cache for all expressions in the kernel
