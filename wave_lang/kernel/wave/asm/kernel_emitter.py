@@ -30,7 +30,8 @@ DEBUG_KERNEL_EMITTER = os.environ.get("WAVE_KERNEL_EMITTER_DEBUG", "0") == "1"
 DEBUG_CSE = os.environ.get("WAVE_KERNEL_CSE_DEBUG", "0") == "1"
 
 # Enable algebraic simplification
-ENABLE_SIMPLIFY = os.environ.get("WAVE_EXPR_SIMPLIFY", "1") == "1"
+# Disable simplification by default until the g2s-shape1 issue is investigated
+ENABLE_SIMPLIFY = os.environ.get("WAVE_EXPR_SIMPLIFY", "0") == "1"
 
 # Marker for rational values (expr / const)
 _RationalReg = namedtuple("_RationalReg", ["numerator_vreg", "denominator"])
@@ -85,6 +86,10 @@ class KernelEmitter:
         # Initialize
         self._bind_abi_registers()
         self._init_pools()
+    
+    def _emit(self, line: str) -> None:
+        """Emit an assembly line."""
+        self.asm_emitter.emit(line)
     
     def _init_pools(self):
         """Initialize register allocation state."""
@@ -231,6 +236,8 @@ class KernelEmitter:
         key = expr_key(expr)
         if key in self._cache:
             self._subexpr_cse_hits += 1
+            if DEBUG_CSE:
+                print(f"[SUBEXPR CSE HIT] {expr} -> {self._cache[key]}")
             return self._cache[key]
         
         # Emit based on type
@@ -267,9 +274,9 @@ class KernelEmitter:
         """Emit a constant value."""
         phys = self._alloc_vgpr()
         if -16 <= value <= 64:
-            self.asm_emitter.emit(f"    v_mov_b32 v{phys}, {value}")
+            self._emit(f"    v_mov_b32 v{phys}, {value}")
         else:
-            self.asm_emitter.emit(f"    v_mov_b32 v{phys}, 0x{value & 0xffffffff:x}")
+            self._emit(f"    v_mov_b32 v{phys}, 0x{value & 0xffffffff:x}")
         return f"v{phys}"
     
     def _emit_symbol(self, sym: sympy.Symbol) -> str:
@@ -319,7 +326,7 @@ class KernelEmitter:
         phys = self._alloc_vgpr()
         
         # v_bfe_u32 extracts bits [offset, offset+width)
-        self.asm_emitter.emit(f"    v_bfe_u32 v{phys}, v{flat_tid}, 0, 10")
+        self._emit(f"    v_bfe_u32 v{phys}, v{flat_tid}, 0, 10")
         
         self._tid_x_phys = f"v{phys}"
         return self._tid_x_phys
@@ -332,7 +339,7 @@ class KernelEmitter:
         flat_tid = self._get_flat_tid_vgpr()
         phys = self._alloc_vgpr()
         
-        self.asm_emitter.emit(f"    v_bfe_u32 v{phys}, v{flat_tid}, 10, 10")
+        self._emit(f"    v_bfe_u32 v{phys}, v{flat_tid}, 10, 10")
         
         self._tid_y_phys = f"v{phys}"
         return self._tid_y_phys
@@ -373,18 +380,18 @@ class KernelEmitter:
         # Add remaining registers
         for reg in reg_args[1:]:
             new_phys = self._alloc_vgpr()
-            self.asm_emitter.emit(f"    v_add_u32 v{new_phys}, {result}, {reg}")
+            self._emit(f"    v_add_u32 v{new_phys}, {result}, {reg}")
             result = f"v{new_phys}"
         
         # Add constant if non-zero
         if const_sum != 0:
             new_phys = self._alloc_vgpr()
             if -16 <= const_sum <= 64:
-                self.asm_emitter.emit(f"    v_add_u32 v{new_phys}, {result}, {const_sum}")
+                self._emit(f"    v_add_u32 v{new_phys}, {result}, {const_sum}")
             else:
                 # Need to materialize constant first
                 const_reg = self._get_or_materialize_const(const_sum)
-                self.asm_emitter.emit(f"    v_add_u32 v{new_phys}, {result}, v{const_reg}")
+                self._emit(f"    v_add_u32 v{new_phys}, {result}, v{const_reg}")
             result = f"v{new_phys}"
         
         return result
@@ -432,21 +439,21 @@ class KernelEmitter:
             # Power of 2 - use shift
             shift = const_product.bit_length() - 1
             new_phys = self._alloc_vgpr()
-            self.asm_emitter.emit(f"    v_lshlrev_b32 v{new_phys}, {shift}, {src_reg}")
+            self._emit(f"    v_lshlrev_b32 v{new_phys}, {shift}, {src_reg}")
             result = f"v{new_phys}"
         elif const_product == -1:
             # Negate
             new_phys = self._alloc_vgpr()
-            self.asm_emitter.emit(f"    v_sub_u32 v{new_phys}, 0, {src_reg}")
+            self._emit(f"    v_sub_u32 v{new_phys}, 0, {src_reg}")
             result = f"v{new_phys}"
         else:
             # General multiplication
             new_phys = self._alloc_vgpr()
             if -16 <= const_product <= 64:
-                self.asm_emitter.emit(f"    v_mul_lo_u32 v{new_phys}, {src_reg}, {const_product}")
+                self._emit(f"    v_mul_lo_u32 v{new_phys}, {src_reg}, {const_product}")
             else:
                 const_reg = self._get_or_materialize_const(const_product)
-                self.asm_emitter.emit(f"    v_mul_lo_u32 v{new_phys}, {src_reg}, v{const_reg}")
+                self._emit(f"    v_mul_lo_u32 v{new_phys}, {src_reg}, v{const_reg}")
             result = f"v{new_phys}"
         
         # Apply division if present (floor division = right shift for power-of-2)
@@ -455,7 +462,7 @@ class KernelEmitter:
                 shift = divisor.bit_length() - 1
                 if shift > 0:
                     new_phys = self._alloc_vgpr()
-                    self.asm_emitter.emit(f"    v_lshrrev_b32 v{new_phys}, {shift}, {result}")
+                    self._emit(f"    v_lshrrev_b32 v{new_phys}, {shift}, {result}")
                     result = f"v{new_phys}"
             else:
                 raise ValueError(f"Non-power-of-2 division: {divisor}")
@@ -464,6 +471,7 @@ class KernelEmitter:
     
     def _emit_mod(self, expr: sympy.Mod) -> str:
         """Emit a modulo operation."""
+        
         dividend_expr, divisor_expr = expr.args
         
         if not isinstance(divisor_expr, (int, sympy.Integer)):
@@ -485,11 +493,11 @@ class KernelEmitter:
         
         if mask <= 64:
             # Inline constant in src0 position
-            self.asm_emitter.emit(f"    v_and_b32 v{new_phys}, {mask}, {dividend}")
+            self._emit(f"    v_and_b32 v{new_phys}, {mask}, {dividend}")
         else:
             # Use BFE for larger masks
             width = divisor.bit_length() - 1
-            self.asm_emitter.emit(f"    v_bfe_u32 v{new_phys}, {dividend}, 0, {width}")
+            self._emit(f"    v_bfe_u32 v{new_phys}, {dividend}, 0, {width}")
         
         return f"v{new_phys}"
     
@@ -574,7 +582,7 @@ class KernelEmitter:
         shift = div_val.bit_length() - 1
         if shift > 0:
             new_phys = self._alloc_vgpr()
-            self.asm_emitter.emit(f"    v_lshrrev_b32 v{new_phys}, {shift}, {src}")
+            self._emit(f"    v_lshrrev_b32 v{new_phys}, {shift}, {src}")
             return f"v{new_phys}"
         
         return src
@@ -599,9 +607,9 @@ class KernelEmitter:
         
         const_v = self._alloc_vgpr()
         if -16 <= value <= 64:
-            self.asm_emitter.emit(f"    v_mov_b32 v{const_v}, {value}")
+            self._emit(f"    v_mov_b32 v{const_v}, {value}")
         else:
-            self.asm_emitter.emit(f"    v_mov_b32 v{const_v}, 0x{value & 0xffffffff:x}")
+            self._emit(f"    v_mov_b32 v{const_v}, 0x{value & 0xffffffff:x}")
         
         self._const_cache[value] = const_v
         self._const_cache_pinned.add(const_v)
@@ -621,14 +629,31 @@ class KernelEmitter:
             return self.asm_emitter.special_regs.get_flat_tid_vgpr()
         return 0
     
+    def emit(self, expr: sympy.Expr, dst_reg: str) -> str:
+        """
+        Emit instructions for an expression into a specific register.
+        
+        Lower-level than get_or_emit - always emits, but uses caching internally.
+        
+        Args:
+            expr: SymPy expression to emit
+            dst_reg: Destination register (e.g., "v2")
+        
+        Returns:
+            The register containing the result (usually dst_reg).
+        """
+        # Use get_or_emit which handles CSE
+        result = self.get_or_emit(expr, dst_hint=dst_reg)
+        return result
+    
     def clear_cache(self) -> None:
         """Clear the expression cache."""
         self._cache.clear()
 
 
 def use_kernel_emitter() -> bool:
-    """Check if kernel-level emitter is enabled."""
-    return os.environ.get("WAVE_KERNEL_LSRA", "0") == "1"
+    """Check if kernel-level emitter is enabled (default: on)."""
+    return os.environ.get("WAVE_KERNEL_LSRA", "1") == "1"
 
 
 def create_emitter(asm_emitter, kernel_info):
@@ -638,7 +663,10 @@ def create_emitter(asm_emitter, kernel_info):
     Returns KernelEmitter if WAVE_KERNEL_LSRA=1, otherwise ExprEmitter.
     """
     if use_kernel_emitter():
-        return KernelEmitter(asm_emitter, kernel_info)
+        emitter = KernelEmitter(asm_emitter, kernel_info)
+        if DEBUG_KERNEL_EMITTER:
+            print(f"[EMITTER] Created KernelEmitter id={id(emitter)}")
+        return emitter
     else:
         from .expr_emitter import ExprEmitter
         return ExprEmitter(asm_emitter, kernel_info)
