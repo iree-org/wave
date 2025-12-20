@@ -265,9 +265,9 @@ def test_async_gemm_schedule(is_debug=False):
     """
     GEMM scheduling with async global_to_shared operations and ping-pong buffering.
 
-    This example uses the following scheduling techniques with GatherToLDS:
+    This example uses the following scheduling techniques with TensorLoadToLDS:
 
-    1. Async Global-to-Shared: Uses GatherToLDS to combine global load + shared write into a single async operation
+    1. Async Global-to-Shared: Uses TensorLoadToLDS to combine global load + shared write into a single async operation
     2. Partitioning: Splits MMA operations by K dimension to interleave compute with memory ops
     3. Clustering: Groups instructions to define execution order
     4. Wave Priority: Uses SetWavePrio to adjust compute wave priorities
@@ -351,7 +351,6 @@ def test_async_gemm_schedule(is_debug=False):
         shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
 
         mma = tkw.get_node_by_tag("mma")
-        breakpoint()
 
         pipeline_loop = tkw.pipeline(k_loop)
         # First, create the basic 2-stage pipeline
@@ -496,6 +495,200 @@ def test_async_gemm_schedule(is_debug=False):
     assert torch.allclose(c, expected, rtol=1e-2, atol=1e-2)
 
     print("Async GEMM schedule with global_to_shared test passed!")
+
+
+def test_gfx1250_optim_gemm(is_debug=False):
+    """
+    GEMM scheduling matching GFX1250 optimization kernel pattern.
+    
+    - Prologue: Prefetch 2 iterations worth of data
+    - Main loop: 
+      * Stage 0: Load from shared memory (ds_load)
+      * Stage 1: Async load next iteration + Compute current data (overlapped)
+    - Epilogue: Drain pipeline with remaining compute
+    
+    Key configuration:
+    - 256x256x64 blocks
+    - 1024x1024x1024 problem size
+    - Double buffering (NUM_BUFFERS=2)
+    - F32_16x16x32_F16 MMA (32 elements in K)
+    """
+    shape: tuple[int, int, int] = (1024, 1024, 1024)
+    mfma_variant: tkw.MMAType = tkw.MMAType.GFX1250_F32_16x16x32_F16
+
+    # Symbol definitions
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    ADDRESS_SPACE_0 = tkl.sym.ADDRESS_SPACE_0
+
+    # Constraints needed for compilation
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.TilingConstraint(K, BLOCK_K)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 4)]  # 256/4 = 64
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2)]  # 256/2 = 128
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=32,
+            mma_type=mfma_variant,
+        )
+    ]
+
+    # Define the kernel
+    @tkw.wave(constraints)
+    def gemm_gfx1250_optim(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, ADDRESS_SPACE_0, tkl.f32],
+    ):
+        c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+        @tkw.iterate(K, init_args=[c_reg], tag="k_loop")
+        def repeat(
+            acc: tkl.Register[M, N, tkl.f32],
+        ) -> tkl.Register[M, N, tkl.f32]:
+            a_reg = tkw.read(a, tag="read_a")
+            b_reg = tkw.read(b, tag="read_b")
+            acc = tkw.mma(a_reg, b_reg, acc, tag="mma")
+            return acc
+
+        tkw.write(repeat, c)
+
+    # Define the GFX1250 optimization schedule
+    @wave_schedule.wave_schedule()
+    def gfx1250_optim_gemm_schedule():
+        """
+        Schedule matching GFX1250 optimization kernel pattern.
+        """
+        # Get nodes to be manipulated in the schedule
+        k_loop = tkw.get_node_by_tag("k_loop")
+
+        # Get all nodes with tag "read_a" - includes both Read and TensorLoadToLDS nodes
+        all_read_a = tkw.get_node_by_tag("read_a")
+        global_to_shared_a = tkw.filter_nodes(all_read_a, node_type=tkw.TensorLoadToLDS)
+        shared_load_a = tkw.filter_nodes(all_read_a, node_type=tkw.Read)
+
+        # Get all nodes with tag "read_b" - includes both Read and TensorLoadToLDS nodes
+        all_read_b = tkw.get_node_by_tag("read_b")
+        global_to_shared_b = tkw.filter_nodes(all_read_b, node_type=tkw.TensorLoadToLDS)
+        shared_load_b = tkw.filter_nodes(all_read_b, node_type=tkw.Read)
+
+        mma = tkw.get_node_by_tag("mma")
+
+        pipeline_loop = tkw.pipeline(k_loop)
+        
+        # Create 2-stage pipeline
+        with pipeline_loop as pl:
+            # Stage 0: Load from shared memory (ds_load)
+            pl.set_stage(
+                [
+                    (global_to_shared_a, global_to_shared_b), 
+                    (),
+                ],
+            )
+            
+            # Stage 1: Async load next iteration + Compute current
+            pl.set_stage(
+                [
+                    (shared_load_a, shared_load_b),  # ds_load operations
+                    (mma,),  # Compute with CURRENT iteration's data (from stage 0)
+                ],
+            )
+
+        # Now apply reordering to the KERNEL stage
+        global_to_shared_a = tkw.filter_nodes(
+            global_to_shared_a, subgraph=pipeline_loop.KERNEL
+        )
+        shared_load_a = tkw.filter_nodes(shared_load_a, subgraph=pipeline_loop.KERNEL)
+        global_to_shared_b = tkw.filter_nodes(
+            global_to_shared_b, subgraph=pipeline_loop.KERNEL
+        )
+        shared_load_b = tkw.filter_nodes(shared_load_b, subgraph=pipeline_loop.KERNEL)
+        mma = tkw.filter_nodes(mma, subgraph=pipeline_loop.KERNEL)
+
+        independent_global_count = len(global_to_shared_a) + len(global_to_shared_b)
+
+        # Create clusters:
+        # Phase 1: All loads + barrier → Phase 2: Async loads → Phase 3: All compute + final barrier
+        clusters = [
+            # Cluster 1: ALL shared memory loads + barrier
+            tkw.cluster(
+                [
+                    shared_load_a,  # All ds_loads for A together
+                    shared_load_b,  # All ds_loads for B together
+                    global_to_shared_a,  # Start async loads for next iteration
+                    global_to_shared_b,
+                    mma,  # ALL 128 WMMAs execute together with NO interruptions
+                ],
+            ),
+        ]
+        
+        tkw.insert_before(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+        tkw.insert_after(pipeline_loop.KERNEL, tkw.SharedMemoryBarrier())
+
+        # Apply the cluster-based reordering to create the desired instruction pattern
+        tkw.reorder_graph(pipeline_loop.KERNEL, clusters)
+
+    # Define compile options
+    M_val, N_val, K_val = shape
+    options = WaveCompileOptions(
+        subs={
+            M: M_val,
+            N: N_val,
+            K: K_val,
+            BLOCK_M: 256,
+            BLOCK_N: 256,
+            BLOCK_K: 64,
+            ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+            ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
+            READ_SHARED_DELAY: 1,
+            WRITE_SHARED_DELAY: 1,
+            READ_GLOBAL_DELAY: 2,
+            WRITE_GLOBAL_DELAY: 2,
+            MMA_DELAY: 1,
+            VALU_DELAY: 1,
+            SHUFFLE_DELAY: 1,
+            SHARED_MEMORY_UNITS: 4,
+            GLOBAL_MEMORY_UNITS: 4,
+            MMA_UNITS: 4,
+            VALU_UNITS: 8,
+            SHUFFLE_UNITS: 8,
+        },
+        canonicalize=True,
+        schedule=SchedulingType.MANUAL,
+        print_ir_after="all" if is_debug else [],
+        use_global_to_shared=True,
+        dump_binaries="./",
+        dump_intermediates="./"
+    )
+
+    # Set runtime configuration for execution
+    options = set_default_run_config(options)
+
+    # Compile the kernel with the gfx1250 optimization schedule
+    gemm_gfx1250_optim = wave_compile(options, gemm_gfx1250_optim, gfx1250_optim_gemm_schedule)
+    with open("gemm_gfx1250_optim.asm", "w") as f:
+        f.write(gemm_gfx1250_optim.asm)
+
+    # Create test data
+    datatype = torch.float16
+    a = torch.ones(shape[0], shape[2], dtype=datatype).cuda()
+    b = torch.ones(shape[1], shape[2], dtype=datatype).cuda()
+    c = torch.zeros(shape[0], shape[1], dtype=torch.float32).cuda()
+
+    # Run the kernel
+    gemm_gfx1250_optim(a, b, c)
+
+    expected = torch.matmul(a, b.t()).to(torch.float32)
+    assert torch.allclose(c, expected, rtol=1e-2, atol=1e-2)
+
+    print("GFX1250 optimization GEMM schedule test passed!")
 
 
 if __name__ == "__main__":
