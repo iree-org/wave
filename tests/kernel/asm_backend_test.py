@@ -414,10 +414,8 @@ def test_mma_multi_wave_asm_backend(shape, config, run_bench):
         # Larger problem size with BLOCK_K=64
         ((256, 256, 128), 64, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, 8x8 WGs
         # Non-square block configurations with BLOCK_K=64
-        # NOTE: These 8-wave configs expose pre-existing bugs in the ASM backend
-        # for non-square block layouts and are commented out until fixed.
-        # ((128, 64, 64), 64, (64, 32, 16, 16)),  # 4x2 = 8 waves per WG, non-square
-        # ((64, 128, 64), 64, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, non-square
+        ((128, 64, 64), 64, (64, 32, 16, 16)),  # 4x2 = 8 waves per WG, non-square
+        ((64, 128, 64), 64, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, non-square
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
@@ -453,16 +451,6 @@ def test_gemm_asm_backend(shape, block_k, config, use_global_to_shared, run_benc
     waves_per_wg_m = block_m // WAVE_M
     waves_per_wg_n = block_n // WAVE_N
     waves_per_wg = waves_per_wg_m * waves_per_wg_n
-
-    # Skip g2s for non-square block configurations with BLOCK_K > 16
-    # The gather_to_lds multi-wave path has LDS layout issues with these configs
-    is_non_square_blocks = block_m != block_n
-    is_large_block_k = block_k > 16
-    if use_global_to_shared and is_non_square_blocks and is_large_block_k:
-        pytest.skip(
-            f"g2s not supported for non-square blocks ({block_m}x{block_n}) "
-            f"with BLOCK_K={block_k} in multi-wave configs"
-        )
 
     constraints: list[tkw.Constraint] = [
         tkw.WorkgroupConstraint(M, BLOCK_M, 0),

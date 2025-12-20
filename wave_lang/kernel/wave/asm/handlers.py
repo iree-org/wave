@@ -34,7 +34,7 @@ from .utils import (
     simplify_expression,
     split_const_dynamic,
 )
-from .expr_emitter_interface import create_expr_emitter, use_v2_emitter
+from .expr_emitter import ExprEmitter
 from .gather_to_shared import G2SHandler
 
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
@@ -65,15 +65,14 @@ class OperationHandlers:
         """
         Get or create expression emitter for this kernel (with CSE).
 
-        Uses ExprEmitterV2 by default (virtual register IR with streaming emission).
+        Uses ExprEmitter with virtual register IR and streaming emission.
         Set WAVE_EXPR_EMITTER=legacy to use the original ExprEmitter.
 
         Binds workgroup ID and thread ID symbols if they are available.
         """
         key = id(kernel_info)
         if key not in self._expr_emitters_by_kernel:
-            # Use factory function to select emitter implementation
-            expr_emitter = create_expr_emitter(self.walker.emitter, kernel_info)
+            expr_emitter = ExprEmitter(self.walker.emitter, kernel_info)
 
             emitter = self.walker.emitter
 
@@ -86,7 +85,7 @@ class OperationHandlers:
                 expr_emitter.bind_symbol("wgid_z", f"s{emitter.sgpr_workgroup_id_z}")
 
             # Bind thread/workitem ID symbols to their VGPRs (for multi-wave support)
-            # Note: ExprEmitterV2 auto-binds ABI registers, but we still bind here
+            # Note: ExprEmitter auto-binds ABI registers, but we still bind here
             # for legacy emitter compatibility
             if emitter.vgpr_tid_x is not None:
                 expr_emitter.bind_symbol("tid_x", f"v{emitter.vgpr_tid_x}")

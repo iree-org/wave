@@ -81,6 +81,47 @@ class CachedExprRef(sympy.Expr):
         return self.wrapped.is_positive
 
 
+def expr_key(expr: sympy.Expr):
+    """
+    Build a structural, hashable key for an expression.
+    
+    Uses a direct structural walk instead of canonicalization to avoid
+    sympy.simplify which can incorrectly simplify floor expressions.
+    The key is commutative-aware (Add and Mul args are sorted).
+    """
+    def to_key(e):
+        if e is None:
+            return ("none",)
+        # Handle CachedExprRef - key is based on the wrapped expression
+        if isinstance(e, CachedExprRef):
+            return ("cached_ref", to_key(e.wrapped))
+        if isinstance(e, sympy.Integer):
+            return ("int", int(e))
+        if isinstance(e, sympy.Rational) and not isinstance(e, sympy.Integer):
+            # Rationals like 1/64 - preserve structure
+            return ("rat", int(e.p), int(e.q))
+        if isinstance(e, sympy.Symbol):
+            return ("sym", str(e))
+        if isinstance(e, sympy.Add):
+            # Sort args by their string keys for commutativity
+            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
+            return ("add", arg_keys)
+        if isinstance(e, sympy.Mul):
+            # Sort args by their string keys for commutativity
+            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
+            return ("mul", arg_keys)
+        if isinstance(e, sympy.Mod):
+            return ("mod", to_key(e.args[0]), to_key(e.args[1]))
+        if getattr(e, "func", None) == sympy.floor:
+            return ("floor", to_key(e.args[0]))
+        if isinstance(e, sympy.Pow):
+            return ("pow", to_key(e.args[0]), to_key(e.args[1]))
+        # Generic fallback - use srepr for structural representation
+        return ("raw", sympy.srepr(e))
+
+    return to_key(expr)
+
+
 class OpCode(Enum):
     """Opcodes for expression IR instructions."""
     # Register moves

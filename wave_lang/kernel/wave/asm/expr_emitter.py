@@ -6,7 +6,7 @@
 """
 Expression emitter using virtual register IR for allocation-order independence.
 
-This module provides ExprEmitterV2, which uses virtual registers internally
+This module provides ExprEmitter, which uses virtual registers internally
 for expression emission, enabling safe global CSE without allocation-order
 correctness coupling.
 
@@ -16,7 +16,7 @@ Key benefits over the original ExprEmitter:
 3. Easy to test with different allocation policies
 
 Streaming mode (default):
-    emitter = ExprEmitterV2(asm_emitter, kernel_info)
+    emitter = ExprEmitter(asm_emitter, kernel_info)
     reg = emitter.get_or_emit(sympy_expr)  # Returns "v5" - physical
     # Instructions are emitted immediately, result is cached
     reg2 = emitter.get_or_emit(sympy_expr)  # Returns "v5" - CSE hit
@@ -34,7 +34,7 @@ from .expr_ir import (
 from .expr_regalloc import ExprRegAlloc, AllocPolicy, allocate_program
 from .expr_opt import optimize_program, OptimizationStats
 from .expr_simplify import simplify_for_emission, SimplifyStats
-from .expression_emitter import expr_key
+from .expr_ir import expr_key
 
 
 # Debug flag for CSE logging
@@ -82,7 +82,7 @@ def _get_alloc_seed() -> Optional[int]:
 _RationalReg = namedtuple("_RationalReg", ["numerator_vreg", "denominator"])
 
 
-class ExprEmitterV2:
+class ExprEmitter:
     """
     Expression emitter using virtual register IR with streaming emission.
     
@@ -616,7 +616,7 @@ class ExprEmitterV2:
             return self._emit_pow_to_program(program, expr)
         else:
             raise ValueError(
-                f"ExprEmitterV2: Unsupported expression type: {type(expr).__name__}: {expr}. "
+                f"ExprEmitter: Unsupported expression type: {type(expr).__name__}: {expr}. "
                 "Please add support or use WAVE_EXPR_EMITTER=legacy to fall back."
             )
     
@@ -659,14 +659,14 @@ class ExprEmitterV2:
         
         # Handle tid_z
         if sym == self.tid_z_symbol:
-            raise ValueError("tid_z not yet supported in ExprEmitterV2")
+            raise ValueError("tid_z not yet supported in ExprEmitter")
         
         # Direct SGPR reference like s4
         sym_str = str(sym)
         if sym_str.startswith("s") and sym_str[1:].isdigit():
             return PhysSReg(int(sym_str[1:]))
         
-        raise ValueError(f"ExprEmitterV2: Unknown symbol: {sym}")
+        raise ValueError(f"ExprEmitter: Unknown symbol: {sym}")
     
     def _emit_tid_x_to_program(self, program: ExprProgram) -> VReg:
         """Emit tid_x extraction to program."""
@@ -1008,7 +1008,7 @@ class ExprEmitterV2:
         
         else:
             raise ValueError(
-                f"ExprEmitterV2: Unsupported opcode: {instr.opcode}. "
+                f"ExprEmitter: Unsupported opcode: {instr.opcode}. "
                 "Please add support or use WAVE_EXPR_EMITTER=legacy to fall back."
             )
     
@@ -1032,7 +1032,7 @@ class ExprEmitterV2:
         """Dump the CSE cache for debugging."""
         lines = [
             "=" * 60,
-            "ExprEmitterV2 CSE Cache",
+            "ExprEmitter CSE Cache",
             f"  Entries: {len(self._cache)}",
             f"  Hits: {self._cse_hits}, Misses: {self._cse_misses}",
             f"  Pinned outputs: {sorted(self._pinned_outputs)}",
