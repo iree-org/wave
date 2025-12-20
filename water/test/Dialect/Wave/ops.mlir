@@ -135,6 +135,162 @@ func.func @register_with_hyperparameter() attributes {hyperparameters = #wave.hy
   return
 }
 
+#hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
+                                         waves_per_block = [1, 1, 1],
+                                         mma_type = #wave.mma_kind<f32_32x32x8_f16>,
+                                         vector_shapes = {M = 1, N = 1, K = 8},
+                                         max_bits_per_load = 128>
+
+// CHECK-LABEL: @mma_elements_per_thread_interface
+func.func @mma_elements_per_thread_interface() attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32, K = 8}>,
+  wave.constraints = [#hw_constraint]
+} {
+  %lhs_init = arith.constant 1.0 : f16
+  %rhs_init = arith.constant 2.0 : f16
+  %acc_init = arith.constant 0.0 : f32
+
+  // Create register values - elements_per_thread determined by MMA backward propagation.
+  %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
+  %acc = wave.register %acc_init : !wave.tensor<[@M, @N] of f32, <register>>
+
+  // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_32x32x8_f16>}
+  // f32_32x32x8_f16: 32*32/64 threads = 16 elements per thread.
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_32x32x8_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+#hw_constraint_32_threads = #wave.hardware_constraint<threads_per_wave = 32,
+                                                     waves_per_block = [1, 1, 1],
+                                                     mma_type = #wave.mma_kind<f32_16x16x16_f16>,
+                                                     vector_shapes = {M = 1, N = 1, K = 16},
+                                                     max_bits_per_load = 128>
+
+// CHECK-LABEL: @mma_elements_per_thread_32_threads
+func.func @mma_elements_per_thread_32_threads() attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>,
+  wave.constraints = [#hw_constraint_32_threads]
+} {
+  %lhs_init = arith.constant 1.0 : f16
+  %rhs_init = arith.constant 2.0 : f16
+  %acc_init = arith.constant 0.0 : f32
+
+  // Create register values - elements_per_thread determined by MMA backward propagation.
+  %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
+  %acc = wave.register %acc_init : !wave.tensor<[@M, @N] of f32, <register>>
+
+  // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_16x16x16_f16>}
+  // f32_16x16x16_f16: 16*16/32 threads = 8 elements per thread.
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+#hw_constraint_128_threads = #wave.hardware_constraint<threads_per_wave = 128,
+                                                      waves_per_block = [1, 1, 1],
+                                                      mma_type = #wave.mma_kind<f32_32x32x8_f16>,
+                                                      vector_shapes = {M = 1, N = 1, K = 8},
+                                                      max_bits_per_load = 128>
+
+// CHECK-LABEL: @mma_elements_per_thread_128_threads
+func.func @mma_elements_per_thread_128_threads() attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32, K = 8}>,
+  wave.constraints = [#hw_constraint_128_threads]
+} {
+  %lhs_init = arith.constant 1.0 : f16
+  %rhs_init = arith.constant 2.0 : f16
+  %acc_init = arith.constant 0.0 : f32
+
+  // Create register values - elements_per_thread determined by MMA backward propagation.
+  %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
+  %acc = wave.register %acc_init : !wave.tensor<[@M, @N] of f32, <register>>
+
+  // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_32x32x8_f16>}
+  // f32_32x32x8_f16: 32*32/128 threads = 8 elements per thread.
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_32x32x8_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+#hw_constraint_interface_alt = #wave.hardware_constraint<threads_per_wave = 64,
+                                         waves_per_block = [1, 1, 1],
+                                         mma_type = #wave.mma_kind<f32_32x32x8_f16>,
+                                         vector_shapes = {M = 1, N = 1, K = 8},
+                                         max_bits_per_load = 128>
+
+// CHECK-LABEL: @mma_elements_per_thread_interface_explicit
+func.func @mma_elements_per_thread_interface_explicit() attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32, K = 8}>,
+  wave.constraints = [#hw_constraint_interface_alt]
+} {
+  %lhs_init = arith.constant 1.0 : f16
+  %rhs_init = arith.constant 2.0 : f16
+  %acc_init = arith.constant 0.0 : f32
+
+  // Create register values with explicit elements_per_thread.
+  %lhs = wave.register %lhs_init {elements_per_thread = 8} : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init {elements_per_thread = 8} : !wave.tensor<[@N, @K] of f16, <register>>
+  %acc = wave.register %acc_init {elements_per_thread = 16} : !wave.tensor<[@M, @N] of f32, <register>>
+
+  // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_32x32x8_f16>}
+  // f32_32x32x8_f16: 32*32/64 threads = 16 elements per thread.
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_32x32x8_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+#hw_constraint_32_threads_explicit = #wave.hardware_constraint<threads_per_wave = 32,
+                                                     waves_per_block = [1, 1, 1],
+                                                     mma_type = #wave.mma_kind<f32_16x16x16_f16>,
+                                                     vector_shapes = {M = 1, N = 1, K = 16},
+                                                     max_bits_per_load = 128>
+
+// CHECK-LABEL: @mma_elements_per_thread_32_threads_explicit
+func.func @mma_elements_per_thread_32_threads_explicit() attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>,
+  wave.constraints = [#hw_constraint_32_threads_explicit]
+} {
+  %lhs_init = arith.constant 1.0 : f16
+  %rhs_init = arith.constant 2.0 : f16
+  %acc_init = arith.constant 0.0 : f32
+
+  // Create register values with explicit elements_per_thread.
+  %lhs = wave.register %lhs_init {elements_per_thread = 8} : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init {elements_per_thread = 8} : !wave.tensor<[@N, @K] of f16, <register>>
+  %acc = wave.register %acc_init {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>
+
+  // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_16x16x16_f16>}
+  // f32_16x16x16_f16: 16*16/32 threads = 8 elements per thread.
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
+#hw_constraint_128_threads_explicit = #wave.hardware_constraint<threads_per_wave = 128,
+                                                      waves_per_block = [1, 1, 1],
+                                                      mma_type = #wave.mma_kind<f32_32x32x8_f16>,
+                                                      vector_shapes = {M = 1, N = 1, K = 8},
+                                                      max_bits_per_load = 128>
+
+// CHECK-LABEL: @mma_elements_per_thread_128_threads_explicit
+func.func @mma_elements_per_thread_128_threads_explicit() attributes {
+  wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32, K = 8}>,
+  wave.constraints = [#hw_constraint_128_threads_explicit]
+} {
+  %lhs_init = arith.constant 1.0 : f16
+  %rhs_init = arith.constant 2.0 : f16
+  %acc_init = arith.constant 0.0 : f32
+
+  // Create register values with explicit elements_per_thread.
+  %lhs = wave.register %lhs_init {elements_per_thread = 8} : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init {elements_per_thread = 8} : !wave.tensor<[@N, @K] of f16, <register>>
+  %acc = wave.register %acc_init {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>
+
+  // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_32x32x8_f16>}
+  // f32_32x32x8_f16: 32*32/128 threads = 8 elements per thread.
+  %result = wave.mma %lhs, %rhs, %acc {kind = #wave.mma_kind<f32_32x32x8_f16>} : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+  return
+}
+
 // CHECK-LABEL: @allocate
 func.func @allocate() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
   // CHECK: wave.allocate
