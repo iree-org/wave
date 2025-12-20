@@ -80,13 +80,24 @@ Key Components
   - Multi-wave thread ID extraction (tid_x, tid_y) from flat ID
 
 **Virtual Register IR** (`expr_ir.py`, `expr_regalloc.py`, `expr_opt.py`)
-  Infrastructure for ExprEmitterV2:
+  Infrastructure for expression-level virtual registers:
 
   - VReg/SReg classes for virtual registers
   - ExprProgram for instruction sequences
   - Linear scan register allocator with multiple policies
   - Optimization passes (copy propagation, DCE, coalescing)
-  - CachedExprRef for preserving subexpressions during sympy operations
+
+**Kernel-Level IR** (`kernel_ir.py`, `kernel_liveness.py`, `kernel_regalloc.py`)
+  Infrastructure for whole-program register allocation (experimental, WAVE_KERNEL_LSRA=1):
+
+  - KVReg/KSReg classes for kernel-scope virtual registers
+  - KernelProgram for entire kernel instruction sequences
+  - KernelBuilder with instruction emission helpers
+  - SSA-based liveness analysis (compute_liveness)
+  - Constraint-aware linear scan allocator (range allocation, alignment)
+  - Precoloring for ABI-mandated registers (v0 for flat tid, s[0:1] for kernarg)
+  - KernelRenderer for assembly generation with physical register substitution
+  - No spilling: fails compilation with diagnostic if allocation fails
 
 **Expression Simplification** (`expr_simplify.py`)
   Algebraic simplification using singledispatch for type-based rule dispatch:
