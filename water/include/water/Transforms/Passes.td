@@ -160,13 +160,9 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
     indexing calculations. It transforms operations like memref.load and
     memref.store by computing linear offsets from multi-dimensional indices,
     making the address arithmetic explicit in the IR.
-
-    This is useful for:
-    - Understanding memory access patterns
-    - Optimizing address calculations
-    - Preparing for lowering to targets that work with linear addresses
   }];
   let dependentDialects = [
+    "::mlir::affine::AffineDialect",
     "::mlir::arith::ArithDialect",
     "::mlir::memref::MemRefDialect",
   ];
