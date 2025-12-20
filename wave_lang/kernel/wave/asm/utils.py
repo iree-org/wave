@@ -365,6 +365,10 @@ def _emit_thread_id_expression(
     - Non-power-of-two mod/div
     - Products of two dynamic sub-expressions
     """
+    import os
+    if os.environ.get("WAVE_UTILS_DEBUG", "0") == "1":
+        print(f"[UTILS] _emit_thread_id_expression: expr={expression}, dst={destination_register}")
+    
     from .expr_emitter import ExprEmitter
 
     visitor = ExprEmitter(emitter, kernel_info)
