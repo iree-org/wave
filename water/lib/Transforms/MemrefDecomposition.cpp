@@ -7,6 +7,7 @@
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
@@ -33,11 +34,32 @@ static Value getValue(OpBuilder &rewriter, Location loc, OpFoldResult in) {
   return cast<Value>(in);
 }
 
+static SmallVector<Value> flatten(ArrayRef<ValueRange> values) {
+  SmallVector<Value> result;
+  for (ValueRange value : values)
+    llvm::append_range(result, value);
+
+  return result;
+}
+
+static std::tuple<Value, ValueRange, ValueRange>
+unflattenDescriptor(ValueRange values, unsigned rank) {
+  Value buffer = values.front();
+  values = values.drop_front();
+  ValueRange sizes = values.take_front(rank);
+  values = values.drop_front(rank);
+  ValueRange strides = values.take_front(rank);
+  return {buffer, sizes, strides};
+}
+
 /// Type converter for memref decomposition.
 /// Converts memref<NxMx...xT> to (memref<?xi8>, sizes..., strides...)
 class MemrefDecompositionTypeConverter : public TypeConverter {
 public:
   MemrefDecompositionTypeConverter() {
+    // Keep all other types unchanged.
+    addConversion([](Type type) { return type; });
+
     // Convert memref types to memref<?xi8> + sizes + strides (1-to-N
     // conversion).
     addConversion(
@@ -68,17 +90,85 @@ public:
           return success();
         });
 
-    // Keep all other types unchanged.
-    addConversion([](Type type) { return type; });
-
-    // Add target materializations to reconstruct memref from components.
-    addTargetMaterialization([](OpBuilder &builder, Type resultType,
+    /// Source materialization to reconstruct memref from components.
+    addSourceMaterialization([](OpBuilder &builder, MemRefType resultType,
                                 ValueRange inputs, Location loc) -> Value {
-      // This would reconstruct a memref from (buffer, sizes, strides).
-      // For now, just return the buffer.
-      if (inputs.empty())
-        return nullptr;
-      return inputs[0];
+      unsigned rank = resultType.getRank();
+      if (inputs.size() != 1 + rank * 2)
+        return {};
+
+      if (!isa<MemRefType>(inputs.front().getType()))
+        return {};
+
+      if (!llvm::all_of(inputs.drop_front(), [](Value value) {
+            return isa<IndexType>(value.getType());
+          }))
+        return {};
+
+      auto bufferType = MemRefType::get({}, resultType.getElementType(),
+                                        MemRefLayoutAttrInterface{},
+                                        resultType.getMemorySpace());
+
+      auto [buffer, sizes, strides] = unflattenDescriptor(inputs, rank);
+      buffer =
+          UnrealizedConversionCastOp::create(builder, loc, bufferType, buffer)
+              .getResult(0);
+      Value offset = arith::ConstantIndexOp::create(builder, loc, 0);
+      return memref::ReinterpretCastOp::create(builder, loc, resultType, buffer,
+                                               offset, sizes, strides);
+    });
+
+    /// Target materialization to decompose memref into components.
+    addTargetMaterialization([](OpBuilder &builder, TypeRange resultType,
+                                ValueRange inputs,
+                                Location loc) -> SmallVector<Value> {
+      if (inputs.size() != 1)
+        return {};
+
+      Value input = inputs.front();
+      auto memrefType = dyn_cast<MemRefType>(input.getType());
+      if (!memrefType)
+        return {};
+
+      unsigned rank = memrefType.getRank();
+      if (resultType.size() != 1 + rank * 2)
+        return {};
+
+      if (!isa<MemRefType>(resultType.front()))
+        return {};
+
+      if (!llvm::all_of(resultType.drop_front(),
+                        [](Type type) { return isa<IndexType>(type); }))
+        return {};
+
+      unsigned bitwidth = memrefType.getElementType().getIntOrFloatBitWidth();
+      AffineExpr sizeExpr = builder.getAffineConstantExpr(bitwidth / 8);
+      for (auto i : llvm::seq(rank))
+        sizeExpr = sizeExpr * builder.getAffineSymbolExpr(i);
+
+      auto metadata =
+          memref::ExtractStridedMetadataOp::create(builder, loc, input);
+      Value base = metadata.getBaseBuffer();
+      Value offset = metadata.getOffset();
+      ValueRange sizes = metadata.getSizes();
+      ValueRange strides = metadata.getStrides();
+
+      Value size =
+          getValue(builder, loc,
+                   affine::makeComposedFoldedAffineApply(
+                       builder, loc, sizeExpr, getAsOpFoldResult(sizes)));
+
+      Type bufferType = resultType.front();
+      base = UnrealizedConversionCastOp::create(builder, loc, bufferType, base)
+                 .getResult(0);
+      base =
+          memref::ViewOp::create(builder, loc, bufferType, base, offset, size);
+
+      SmallVector<Value> result;
+      result.push_back(base);
+      llvm::append_range(result, sizes);
+      llvm::append_range(result, strides);
+      return result;
     });
   }
 };
@@ -90,11 +180,12 @@ static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
                               ValueRange strides, ValueRange indices) {
   auto sourceType = cast<MemRefType>(source.getType());
   unsigned typeBit = sourceType.getElementType().getIntOrFloatBitWidth();
+  OpFoldResult zero = rewriter.getIndexAttr(0);
   OpFoldResult linearizedIndices;
   memref::LinearizedMemRefInfo linearizedInfo;
   std::tie(linearizedInfo, linearizedIndices) =
       memref::getLinearizedMemRefOffsetAndSize(
-          rewriter, loc, typeBit, typeBit, {}, getAsOpFoldResult(sizes),
+          rewriter, loc, typeBit, typeBit, zero, getAsOpFoldResult(sizes),
           getAsOpFoldResult(strides), getAsOpFoldResult(indices));
 
   auto targetMemrefType = MemRefType::get(
@@ -130,12 +221,8 @@ struct DecomposeMemrefLoadOp : public OpConversionPattern<memref::LoadOp> {
       return rewriter.notifyMatchFailure(loadOp,
                                          "expected memref to be decomposed");
 
-    Value buffer = sourceDecomposed[0];
-    sourceDecomposed.drop_front();
-    ValueRange sizes = sourceDecomposed.take_front(rank);
-    sourceDecomposed.drop_front(rank);
-    ValueRange strides = sourceDecomposed.take_front(rank);
-    ValueRange indices = llvm::getSingleElement(adaptor.getIndices());
+    auto [buffer, sizes, strides] = unflattenDescriptor(sourceDecomposed, rank);
+    SmallVector<Value> indices = flatten(adaptor.getIndices());
 
     Value viewMemref = getFlattenMemref(rewriter, loc, buffer, loadType, sizes,
                                         strides, indices);
@@ -163,12 +250,8 @@ struct DecomposeMemrefStoreOp : public OpConversionPattern<memref::StoreOp> {
       return rewriter.notifyMatchFailure(storeOp,
                                          "expected memref to be decomposed");
 
-    Value buffer = sourceDecomposed[0];
-    sourceDecomposed.drop_front();
-    ValueRange sizes = sourceDecomposed.take_front(rank);
-    sourceDecomposed.drop_front(rank);
-    ValueRange strides = sourceDecomposed.take_front(rank);
-    ValueRange indices = llvm::getSingleElement(adaptor.getIndices());
+    auto [buffer, sizes, strides] = unflattenDescriptor(sourceDecomposed, rank);
+    SmallVector<Value> indices = flatten(adaptor.getIndices());
     Value valueToStore = llvm::getSingleElement(adaptor.getValue());
     Type storeType = valueToStore.getType();
 
@@ -195,6 +278,17 @@ public:
     ConversionTarget target(*ctx);
     target.addLegalDialect<arith::ArithDialect, affine::AffineDialect,
                            memref::MemRefDialect>();
+
+    // Mark load/store operations with non-0D memrefs as illegal.
+    target.addDynamicallyLegalOp<memref::LoadOp>([](memref::LoadOp op) {
+      auto memrefType = cast<MemRefType>(op.getMemRefType());
+      return memrefType.getRank() == 0;
+    });
+
+    target.addDynamicallyLegalOp<memref::StoreOp>([](memref::StoreOp op) {
+      auto memrefType = cast<MemRefType>(op.getMemRefType());
+      return memrefType.getRank() == 0;
+    });
 
     // Add conversion patterns with type converter.
     RewritePatternSet patterns(ctx);
