@@ -875,10 +875,17 @@ amdhsa.kernels:
 
         self.emit_instruction(DSWriteB128(addr_vreg, src_quad))
 
-    def emit_lds_read_b64(self, dst_pair: Tuple[int, int], addr_vreg: int):
+    def emit_lds_read_b64(self, dst_pair: Tuple[int, int], addr_vreg: int, offset: int = 0):
+        """Emit ds_read_b64 instruction with optional offset.
+        
+        Args:
+            dst_pair: Tuple of (start, end) VGPRs for destination
+            addr_vreg: VGPR containing base address
+            offset: Immediate offset to add (0-65535, must be 8-byte aligned)
+        """
         from .instructions import DSReadB64
 
-        self.emit_instruction(DSReadB64(dst_pair, addr_vreg))
+        self.emit_instruction(DSReadB64(dst_pair, addr_vreg, offset=offset))
 
     def emit_mfma_16x16x16_f16(
         self, a_pair: Tuple[int, int], b_pair: Tuple[int, int], acc_quad=None

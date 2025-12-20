@@ -167,7 +167,7 @@ Hardware Accelerated Operations
 The ASM backend provides native support for AMD GPU specialized instructions:
 
 - **MFMA (Matrix Multiply-Accumulate)**: Hardware-accelerated matrix operations on CDNA architectures using VGPR-variant instructions with accumulator chaining for K-loops
-- **LDS Operations**: Fast shared memory operations (ds_read_b64, ds_write_b64)
+- **LDS Operations**: Fast shared memory operations (ds_read_b64, ds_write_b64) with offset field support for reduced address computation
 - **Multi-Wave Support**: Automatic detection and handling of multi-wave workgroups with proper thread ID extraction
 - **Multi-Workgroup Support**: Dynamic detection of workgroup ID usage and conditional SGPR allocation
 - **Loop Support (scf.for)**: Native support for structured control flow loops with SGPR induction variables and VGPR accumulators

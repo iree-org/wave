@@ -568,45 +568,112 @@ class VAndB32(ArithmeticInstruction):
 
 # DS (LDS) Instructions
 class DSWriteB32(MemoryInstruction):
-    """Write 32 bits to LDS."""
+    """Write 32 bits to LDS.
+    
+    Args:
+        addr_vreg: VGPR containing base address
+        src_vreg: VGPR containing data to write
+        offset: Optional immediate offset (0-65535 bytes)
+        comment: Optional comment
+    """
 
-    def __init__(self, addr_vreg: int, src_vreg: int, comment: str = None):
+    def __init__(self, addr_vreg: int, src_vreg: int, offset: int = 0, comment: str = None):
+        self._offset = offset
+        if offset < 0 or offset > 65535:
+            raise ValueError(f"ds_write_b32 offset must be 0-65535, got {offset}")
         super().__init__("ds_write_b32", [f"v{addr_vreg}", f"v{src_vreg}"], comment)
+    
+    def __str__(self) -> str:
+        base = super().__str__()
+        if self._offset != 0:
+            base += f" offset:{self._offset}"
+        return base
 
 
 class DSWriteB64(MemoryInstruction):
-    """Write 64 bits to LDS."""
+    """Write 64 bits to LDS.
+    
+    Args:
+        addr_vreg: VGPR containing base address
+        src_vregs: Tuple of (start, end) VGPRs containing data to write
+        offset: Optional immediate offset (0-65535 bytes)
+        comment: Optional comment
+    """
 
-    def __init__(self, addr_vreg: int, src_vregs: Tuple[int, int], comment: str = None):
+    def __init__(self, addr_vreg: int, src_vregs: Tuple[int, int], 
+                 offset: int = 0, comment: str = None):
+        self._offset = offset
+        if offset < 0 or offset > 65535:
+            raise ValueError(f"ds_write_b64 offset must be 0-65535, got {offset}")
         super().__init__(
             "ds_write_b64",
             [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[1]}]"],
             comment,
         )
+    
+    def __str__(self) -> str:
+        base = super().__str__()
+        if self._offset != 0:
+            base += f" offset:{self._offset}"
+        return base
 
 
 class DSWriteB128(MemoryInstruction):
-    """Write 128 bits to LDS."""
+    """Write 128 bits to LDS.
+    
+    Args:
+        addr_vreg: VGPR containing base address
+        src_vregs: Tuple of 4 VGPRs containing data to write
+        offset: Optional immediate offset (0-65535 bytes)
+        comment: Optional comment
+    """
 
-    def __init__(
-        self, addr_vreg: int, src_vregs: Tuple[int, int, int, int], comment: str = None
-    ):
+    def __init__(self, addr_vreg: int, src_vregs: Tuple[int, int, int, int], 
+                 offset: int = 0, comment: str = None):
+        self._offset = offset
+        if offset < 0 or offset > 65535:
+            raise ValueError(f"ds_write_b128 offset must be 0-65535, got {offset}")
         super().__init__(
             "ds_write_b128",
             [f"v{addr_vreg}", f"v[{src_vregs[0]}:{src_vregs[3]}]"],
             comment,
         )
+    
+    def __str__(self) -> str:
+        base = super().__str__()
+        if self._offset != 0:
+            base += f" offset:{self._offset}"
+        return base
 
 
 class DSReadB64(MemoryInstruction):
-    """Read 64 bits from LDS."""
+    """Read 64 bits from LDS.
+    
+    Args:
+        dst_vregs: Tuple of (start, end) VGPRs for destination
+        addr_vreg: VGPR containing base address
+        offset: Optional immediate offset (0-65535 bytes)
+        comment: Optional comment
+    
+    Assembly format: ds_read_b64 vdst, vaddr offset:N
+    """
 
-    def __init__(self, dst_vregs: Tuple[int, int], addr_vreg: int, comment: str = None):
+    def __init__(self, dst_vregs: Tuple[int, int], addr_vreg: int, 
+                 offset: int = 0, comment: str = None):
+        self._offset = offset
+        if offset < 0 or offset > 65535:
+            raise ValueError(f"ds_read_b64 offset must be 0-65535, got {offset}")
         super().__init__(
             "ds_read_b64",
             [f"v[{dst_vregs[0]}:{dst_vregs[1]}]", f"v{addr_vreg}"],
             comment,
         )
+    
+    def __str__(self) -> str:
+        base = super().__str__()
+        if self._offset != 0:
+            base += f" offset:{self._offset}"
+        return base
 
 
 # MFMA + AGPR spill
