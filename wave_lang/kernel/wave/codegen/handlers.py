@@ -1470,7 +1470,7 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
     except ValueError as e:
         raise ValidationError("Malformed arguments") from e
 
-    if start and condition:
+    if start is not None and condition is not None:
         return handle_iterate_while(emitter, node)
 
     # Flatten init_args and get IR values for each of them.
@@ -1478,7 +1478,7 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
     flat_init_args = [cast_py_value(emitter, arg) for arg in flat_init_args]
 
     # Use provided start value if available, otherwise default to 0
-    if start:
+    if start is not None:
         start_value = cast_py_value(emitter, start).ir_value
         # Handle the case where start is a symbolic expression
         if isinstance(start_value.type, VectorType):
