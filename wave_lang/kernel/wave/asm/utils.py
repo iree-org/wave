@@ -346,7 +346,7 @@ def _emit_thread_id_expression(
     """
     Emit ASM for expressions involving thread ID symbols.
 
-    Uses the expression emitter (ExprEmitterV2 by default, or legacy ExprEmitter)
+    Uses ExprEmitter (virtual register IR with CSE and optimization passes)
     to walk the expression tree and emit appropriate AMDGCN instructions.
 
     Note: This creates a fresh emitter instance, so CSE is not shared with the
@@ -365,9 +365,9 @@ def _emit_thread_id_expression(
     - Non-power-of-two mod/div
     - Products of two dynamic sub-expressions
     """
-    from .expr_emitter_interface import create_expr_emitter
+    from .expr_emitter import ExprEmitter
 
-    visitor = create_expr_emitter(emitter, kernel_info)
+    visitor = ExprEmitter(emitter, kernel_info)
     return visitor.emit(expression, destination_register)
 
 

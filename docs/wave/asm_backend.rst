@@ -65,19 +65,16 @@ Key Components
   - Peak VGPR usage tracking for performance analysis
   - Typed operation logging with RegisterOp enum
 
-**Expression Emitter** (`expression_emitter.py`, `expr_emitter_v2.py`)
-  SymPy expression visitors that emit AMDGCN instructions with CSE:
+**Expression Emitter** (`expr_emitter.py`)
+  SymPy expression visitor that emits AMDGCN instructions with CSE:
 
-  - **ExprEmitterV2** (default): Two-phase emitter using virtual register IR
-    
-    - Emits to virtual registers first, then allocates physical registers
-    - Global CSE across entire kernel (not just per-expression)
-    - Register coalescing eliminates redundant v_mov instructions
-    - Immediate value optimization for inline constants (0-64, -1 to -16)
-    - Algebraic simplification (floor/mod identities)
-    - CachedExprRef wrapper prevents sympy Add flattening
-
-  - Legacy ExprEmitter: Direct emission with per-expression CSE
+  - Two-phase emitter using virtual register IR
+  - Emits to virtual registers first, then allocates physical registers
+  - Global CSE across entire kernel (not just per-expression)
+  - Register coalescing eliminates redundant v_mov instructions
+  - Immediate value optimization for inline constants (0-64, -1 to -16)
+  - Algebraic simplification (floor/mod identities)
+  - CachedExprRef wrapper prevents sympy Add flattening
   - Expression canonicalization to maximize CSE hits
   - Optimized instruction selection (shifts for power-of-2, masks for modulo)
   - Multi-wave thread ID extraction (tid_x, tid_y) from flat ID
@@ -800,7 +797,7 @@ The ASM backend maintains a unified mapping from MLIR SSA values to their alloca
 Expression Visitor System
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ASM backend uses a sophisticated expression visitor (``ExprEmitter``) to convert SymPy expressions to AMDGCN assembly with automatic Common Subexpression Elimination:
+The ASM backend uses a sophisticated expression visitor (``ExprEmitterV2``) to convert SymPy expressions to AMDGCN assembly with automatic Common Subexpression Elimination:
 
 **Supported Operations:**
 
