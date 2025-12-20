@@ -659,18 +659,12 @@ class OperationHandlers:
         the hardware limit (DS_MAX_OFFSET), we use the ds_read offset field instead of
         computing the full address. This saves a v_add_u32 instruction.
         
-        For offsets exceeding DS_MAX_OFFSET (~2040 bytes on CDNA3/4), we use two-stage
-        factoring: split const_offset into (base_const, ds_offset) where ds_offset fits
-        within the limit. The base_const is added to the base address expression once
-        (CSE'd across loads), and ds_offset goes into the ds_read offset field.
-        
-        We use CachedExprRef to wrap the base expression, preventing sympy from flattening
-        the addition and preserving the subexpression for CSE recognition.
+        For offsets exceeding DS_MAX_OFFSET (~2040 bytes on CDNA3/4), we fall back to
+        computing the full address without using the offset field.
         """
         import os
         import sympy
-        from .utils import split_const_dynamic, factor_ds_read_offset
-        from .expr_ir import CachedExprRef
+        from .utils import split_const_dynamic
 
         DEBUG_DS_OFFSET = os.environ.get("WAVE_LDS_DSREAD_OFFSET_DEBUG", "0") == "1"
         
@@ -717,47 +711,6 @@ class OperationHandlers:
             lds_offset = const_offset
             if DEBUG_DS_OFFSET:
                 print(f"[DS_OFFSET_DEBUG]   -> DIRECT_OFFSET: addr_reg={addr_reg}, lds_offset={lds_offset}")
-        elif const_offset > DS_MAX_OFFSET and const_offset % DS_ALIGN == 0:
-            # Large offset exceeds ds_read offset limit - use two-stage factoring
-            # Factor: const_offset = base_const + ds_offset, where ds_offset <= DS_MAX_OFFSET
-            # Two-stage factoring using CachedExprRef
-            # Currently disabled by default pending investigation of correctness issues
-            # Set WAVE_DS_TWO_STAGE=1 to enable (experimental)
-            ENABLE_TWO_STAGE = os.environ.get("WAVE_DS_TWO_STAGE", "0") == "1"
-            
-            base_const, ds_offset = factor_ds_read_offset(
-                const_offset, ds_max=DS_MAX_OFFSET, align=DS_ALIGN
-            )
-            
-            if ENABLE_TWO_STAGE and ds_offset > 0 and ds_offset <= DS_MAX_OFFSET:
-                # Factor succeeded - use CachedExprRef to preserve base_expr as a unit
-                # This prevents sympy from flattening the addition and breaking CSE
-                # First, ensure base_expr is cached by emitting it
-                self._get_expr_emitter(kernel_info).get_or_emit(base_expr)
-                
-                # Now construct factored expression using CachedExprRef wrapper
-                # CachedExprRef(base_expr) + base_const will NOT flatten because
-                # CachedExprRef is a sympy.Expr subclass that preserves its argument
-                wrapped_base = CachedExprRef(base_expr)
-                factored_addr_expr = wrapped_base + sympy.Integer(base_const)
-                
-                if DEBUG_DS_OFFSET:
-                    print(f"[DS_OFFSET_DEBUG]   -> TWO_STAGE: base_const={base_const}, ds_offset={ds_offset}")
-                    print(f"[DS_OFFSET_DEBUG]   -> factored_addr_expr={factored_addr_expr}")
-                    print(f"[DS_OFFSET_DEBUG]   -> factored_addr_expr.args={factored_addr_expr.args}")
-                
-                addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(factored_addr_expr)
-                addr_v = int(addr_reg[1:])
-                lds_offset = ds_offset
-                if DEBUG_DS_OFFSET:
-                    print(f"[DS_OFFSET_DEBUG]   -> addr_reg={addr_reg}, lds_offset={lds_offset}")
-            else:
-                # Factoring didn't produce useful result - fall back to full address
-                addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
-                addr_v = int(addr_reg[1:])
-                lds_offset = 0
-                if DEBUG_DS_OFFSET:
-                    print(f"[DS_OFFSET_DEBUG]   -> FACTOR_FALLBACK: addr_reg={addr_reg}, lds_offset=0")
         else:
             # Offset is 0, negative, or unaligned - compute full address
             addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
