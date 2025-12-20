@@ -34,7 +34,7 @@ from .utils import (
     simplify_expression,
     split_const_dynamic,
 )
-from .expr_emitter import ExprEmitter
+from .kernel_emitter import create_emitter, use_kernel_emitter
 from .gather_to_shared import G2SHandler
 
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
@@ -65,14 +65,14 @@ class OperationHandlers:
         """
         Get or create expression emitter for this kernel (with CSE).
 
-        Uses ExprEmitter with virtual register IR and streaming emission.
-        Set WAVE_EXPR_EMITTER=legacy to use the original ExprEmitter.
+        Uses KernelEmitter with whole-program allocation when WAVE_KERNEL_LSRA=1,
+        otherwise uses ExprEmitter with per-expression allocation.
 
         Binds workgroup ID and thread ID symbols if they are available.
         """
         key = id(kernel_info)
         if key not in self._expr_emitters_by_kernel:
-            expr_emitter = ExprEmitter(self.walker.emitter, kernel_info)
+            expr_emitter = create_emitter(self.walker.emitter, kernel_info)
 
             emitter = self.walker.emitter
 

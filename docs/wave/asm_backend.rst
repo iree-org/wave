@@ -99,6 +99,17 @@ Key Components
   - KernelRenderer for assembly generation with physical register substitution
   - No spilling: fails compilation with diagnostic if allocation fails
 
+**Kernel-Level Expression Emitter** (`kernel_emitter.py`)
+  Kernel-wide expression emitter with streaming allocation (WAVE_KERNEL_LSRA=1):
+
+  - Direct alternative to ExprEmitter with same API (get_or_emit, bind_symbol)
+  - Kernel-wide register pool for better register reuse across expressions
+  - Global CSE cache for all expressions in the kernel
+  - Streaming emission: allocates physical registers and emits immediately
+  - Handles complex expressions: floor/div, mod, nested arithmetic
+  - Power-of-2 optimizations: shifts for multiply/divide, AND for modulo
+  - Constant materialization with caching to avoid redundant v_mov_b32
+
 **Expression Simplification** (`expr_simplify.py`)
   Algebraic simplification using singledispatch for type-based rule dispatch:
 
