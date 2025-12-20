@@ -29,14 +29,10 @@ from .expr_ir import expr_key
 DEBUG_KERNEL_EMITTER = os.environ.get("WAVE_KERNEL_EMITTER_DEBUG", "0") == "1"
 DEBUG_CSE = os.environ.get("WAVE_KERNEL_CSE_DEBUG", "0") == "1"
 
-# Enable algebraic simplification
-# Disable simplification by default for KernelEmitter
-# The issue is that certain expression patterns after simplification cause incorrect results
-# in the g2s (global-to-shared) path. The expressions are mathematically equivalent but
-# something in the instruction emission order or register allocation causes NaN values.
-# This needs further investigation. Use WAVE_EXPR_SIMPLIFY=1 to enable for testing.
-# Note: The legacy ExprEmitter works correctly with simplification enabled.
-ENABLE_SIMPLIFY = os.environ.get("WAVE_EXPR_SIMPLIFY", "0") == "1"
+# Enable algebraic simplification (default: enabled)
+# The simplification transforms patterns like 16*tid_x - 64*floor(tid_x/4) to 16*Mod(tid_x, 4)
+# which reduces instruction count. Use WAVE_EXPR_SIMPLIFY=0 to disable for debugging.
+ENABLE_SIMPLIFY = os.environ.get("WAVE_EXPR_SIMPLIFY", "1") == "1"
 
 # Marker for rational values (expr / const)
 _RationalReg = namedtuple("_RationalReg", ["numerator_vreg", "denominator"])
@@ -438,6 +434,12 @@ class KernelEmitter:
             raise ValueError(f"Multiple register operands in mul: {expr}")
         
         src_reg = reg_args[0]
+        
+        # Copy SGPR to VGPR if needed (SGPRs can't be used directly in some VOP instructions)
+        if src_reg.startswith("s"):
+            new_phys = self._alloc_vgpr()
+            self._emit(f"    v_mov_b32 v{new_phys}, {src_reg}")
+            src_reg = f"v{new_phys}"
         
         # Apply constant multiplication
         if const_product == 1:
