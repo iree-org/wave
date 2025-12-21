@@ -50,6 +50,56 @@ func.func @load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: index) -
   return %0 : f16
 }
 
+// CHECK-LABEL: func.func @vector_load_2d
+// CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
+func.func @vector_load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> vector<4xf32> {
+  // CHECK: %[[BASE:.*]], %[[OFFSET:.*]], %[[SIZES:.*]]:2, %[[STRIDES:.*]]:2 = memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: %[[SIZE:.*]] = affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[OFFSET]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
+  // CHECK: %[[IDX:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX2:.*]] = affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]][%[[IDX2]]][] : memref<?xi8> to memref<vector<4xf32>>
+  // CHECK: %[[LOAD:.*]] = memref.load %[[VIEW2]][] : memref<vector<4xf32>>
+  // CHECK: return %[[LOAD]]
+  %0 = vector.load %arg0[%i, %j] : memref<10x20xf32>, vector<4xf32>
+  return %0 : vector<4xf32>
+}
+
+// CHECK-LABEL: func.func @vector_store_2d
+// CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: vector<4xf32>)
+func.func @vector_store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val: vector<4xf32>) {
+  // CHECK: %[[BASE:.*]], %[[OFFSET:.*]], %[[SIZES:.*]]:2, %[[STRIDES:.*]]:2 = memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: %[[SIZE:.*]] = affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[OFFSET]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
+  // CHECK: %[[IDX:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX2:.*]] = affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]][%[[IDX2]]][] : memref<?xi8> to memref<vector<4xf32>>
+  // CHECK: memref.store %[[ARG3]], %[[VIEW2]][] : memref<vector<4xf32>>
+  vector.store %val, %arg0[%i, %j] : memref<10x20xf32>, vector<4xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @vector_load_3d
+// CHECK-SAME: (%[[ARG0:.*]]: memref<4x8x16xf16>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: index)
+func.func @vector_load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: index) -> vector<8xf16> {
+  // CHECK: %[[BASE:.*]], %[[OFFSET:.*]], %[[SIZES:.*]]:3, %[[STRIDES:.*]]:3 = memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: %[[SIZE:.*]] = affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f16> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[OFFSET]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
+  // CHECK: %[[IDX:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX2:.*]] = affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]][%[[IDX2]]][] : memref<?xi8> to memref<vector<8xf16>>
+  // CHECK: %[[LOAD:.*]] = memref.load %[[VIEW2]][] : memref<vector<8xf16>>
+  // CHECK: return %[[LOAD]]
+  %0 = vector.load %arg0[%i, %j, %k] : memref<4x8x16xf16>, vector<8xf16>
+  return %0 : vector<8xf16>
+}
+
 // CHECK-LABEL: func.func @multiple_loads
 // CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
 func.func @multiple_loads(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {

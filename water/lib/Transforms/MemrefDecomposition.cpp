@@ -11,6 +11,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -201,11 +202,14 @@ static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
                                 {});
 }
 
-struct DecomposeMemrefLoadOp : public OpConversionPattern<memref::LoadOp> {
-  using Base::Base;
+template <typename OpTy>
+struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+  using OneToNOpAdaptor =
+      typename OpTy::template GenericAdaptor<ArrayRef<ValueRange>>;
 
   LogicalResult
-  matchAndRewrite(memref::LoadOp loadOp, OneToNOpAdaptor adaptor,
+  matchAndRewrite(OpTy loadOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = loadOp.getLoc();
     auto memrefType = cast<MemRefType>(loadOp.getMemRefType());
@@ -216,7 +220,13 @@ struct DecomposeMemrefLoadOp : public OpConversionPattern<memref::LoadOp> {
 
     Type loadType = loadOp.getType();
 
-    ValueRange sourceDecomposed = adaptor.getMemref();
+    ValueRange sourceDecomposed;
+    if constexpr (std::is_same_v<OpTy, memref::LoadOp>) {
+      sourceDecomposed = adaptor.getMemref();
+    } else {
+      sourceDecomposed = adaptor.getBase();
+    }
+
     if (sourceDecomposed.size() != 1 + rank * 2)
       return rewriter.notifyMatchFailure(loadOp,
                                          "expected memref to be decomposed");
@@ -232,11 +242,14 @@ struct DecomposeMemrefLoadOp : public OpConversionPattern<memref::LoadOp> {
   }
 };
 
-struct DecomposeMemrefStoreOp : public OpConversionPattern<memref::StoreOp> {
-  using Base::Base;
+template <typename OpTy>
+struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+  using OneToNOpAdaptor =
+      typename OpTy::template GenericAdaptor<ArrayRef<ValueRange>>;
 
   LogicalResult
-  matchAndRewrite(memref::StoreOp storeOp, OneToNOpAdaptor adaptor,
+  matchAndRewrite(OpTy storeOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = storeOp.getLoc();
     auto memrefType = cast<MemRefType>(storeOp.getMemRefType());
@@ -245,14 +258,25 @@ struct DecomposeMemrefStoreOp : public OpConversionPattern<memref::StoreOp> {
     if (rank == 0)
       return rewriter.notifyMatchFailure(storeOp, "already 0D memref");
 
-    ValueRange sourceDecomposed = adaptor.getMemref();
+    ValueRange sourceDecomposed;
+    if constexpr (std::is_same_v<OpTy, memref::StoreOp>) {
+      sourceDecomposed = adaptor.getMemref();
+    } else {
+      sourceDecomposed = adaptor.getBase();
+    }
+
     if (sourceDecomposed.size() != 1 + rank * 2)
       return rewriter.notifyMatchFailure(storeOp,
                                          "expected memref to be decomposed");
 
     auto [buffer, sizes, strides] = unflattenDescriptor(sourceDecomposed, rank);
     SmallVector<Value> indices = flatten(adaptor.getIndices());
-    Value valueToStore = llvm::getSingleElement(adaptor.getValue());
+    Value valueToStore;
+    if constexpr (std::is_same_v<OpTy, memref::StoreOp>) {
+      valueToStore = llvm::getSingleElement(adaptor.getValue());
+    } else {
+      valueToStore = llvm::getSingleElement(adaptor.getValueToStore());
+    }
     Type storeType = valueToStore.getType();
 
     Value viewMemref = getFlattenMemref(rewriter, loc, buffer, storeType, sizes,
@@ -262,6 +286,11 @@ struct DecomposeMemrefStoreOp : public OpConversionPattern<memref::StoreOp> {
     return success();
   }
 };
+
+template <typename OpTy> static bool isDynamicallyLegalOp(OpTy op) {
+  auto memrefType = cast<MemRefType>(op.getMemRefType());
+  return memrefType.getRank() == 0;
+}
 
 class MemrefDecompositionPass
     : public water::impl::WaterMemrefDecompositionPassBase<
@@ -277,23 +306,23 @@ public:
     // Set up conversion target.
     ConversionTarget target(*ctx);
     target.addLegalDialect<arith::ArithDialect, affine::AffineDialect,
-                           memref::MemRefDialect>();
-
+                           memref::MemRefDialect, vector::VectorDialect>();
     // Mark load/store operations with non-0D memrefs as illegal.
-    target.addDynamicallyLegalOp<memref::LoadOp>([](memref::LoadOp op) {
-      auto memrefType = cast<MemRefType>(op.getMemRefType());
-      return memrefType.getRank() == 0;
-    });
-
-    target.addDynamicallyLegalOp<memref::StoreOp>([](memref::StoreOp op) {
-      auto memrefType = cast<MemRefType>(op.getMemRefType());
-      return memrefType.getRank() == 0;
-    });
+    target.addDynamicallyLegalOp<memref::LoadOp>(
+        isDynamicallyLegalOp<memref::LoadOp>);
+    target.addDynamicallyLegalOp<memref::StoreOp>(
+        isDynamicallyLegalOp<memref::StoreOp>);
+    target.addDynamicallyLegalOp<vector::LoadOp>(
+        isDynamicallyLegalOp<vector::LoadOp>);
+    target.addDynamicallyLegalOp<vector::StoreOp>(
+        isDynamicallyLegalOp<vector::StoreOp>);
 
     // Add conversion patterns with type converter.
     RewritePatternSet patterns(ctx);
-    patterns.add<DecomposeMemrefLoadOp, DecomposeMemrefStoreOp>(typeConverter,
-                                                                ctx);
+    patterns
+        .add<DecomposeLoadOp<memref::LoadOp>, DecomposeStoreOp<memref::StoreOp>,
+             DecomposeLoadOp<vector::LoadOp>,
+             DecomposeStoreOp<vector::StoreOp>>(typeConverter, ctx);
 
     // Apply partial conversion.
     if (failed(applyPartialConversion(op, target, std::move(patterns))))
