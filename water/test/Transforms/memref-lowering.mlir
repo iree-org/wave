@@ -1,8 +1,15 @@
 // RUN: water-opt %s --water-memref-lowering | FileCheck %s
 
-// CHECK-LABEL: func @test_signature
+// CHECK-LABEL: func @test_signature_0d
 //  CHECK-SAME: (%[[ARG:.*]]: !llvm.ptr) -> !llvm.ptr
-func.func @test_signature(%arg0: memref<?xi8>) -> memref<?xi8> {
+func.func @test_signature_0d(%arg0: memref<i32>) -> memref<i32> {
+  // CHECK: return %[[ARG]] : !llvm.ptr
+  return %arg0 : memref<i32>
+}
+
+// CHECK-LABEL: func @test_signature_1d
+//  CHECK-SAME: (%[[ARG:.*]]: !llvm.ptr) -> !llvm.ptr
+func.func @test_signature_1d(%arg0: memref<?xi8>) -> memref<?xi8> {
   // CHECK: return %[[ARG]] : !llvm.ptr
   return %arg0 : memref<?xi8>
 }
