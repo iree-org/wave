@@ -168,4 +168,15 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
+def WaterMemrefLoweringPass : Pass<"water-memref-lowering"> {
+  let summary = "Memref to LLVM lowering pass";
+  let description = [{
+    This pass loweris memref operations to LLVM dialect.
+  }];
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::memref::MemRefDialect",
+  ];
+}
+
 #endif // WATER_PASSES
