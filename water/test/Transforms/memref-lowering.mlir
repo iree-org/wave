@@ -22,6 +22,18 @@ func.func @test_unrealized_cast(%arg0: memref<?xi8>) -> memref<i32> {
   return %0 : memref<i32>
 }
 
+// CHECK-LABEL: func @test_view
+//  CHECK-SAME: (%[[ARG:.*]]: !llvm.ptr) -> !llvm.ptr
+func.func @test_view(%arg0: memref<?xi8>) -> memref<10xi8> {
+  %c64 = arith.constant 64 : index
+  %0 = memref.view %arg0[%c64][] : memref<?xi8> to memref<10xi8>
+  // CHECK: %[[C64:.*]] = arith.constant 64 : index
+  // CHECK: %[[C64I:.*]] = arith.index_cast %[[C64]] : index to i64
+  // CHECK: %[[RES:.*]] = llvm.getelementptr %[[ARG]][%[[C64I]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
+  // CHECK: return %[[RES]] : !llvm.ptr
+  return %0 : memref<10xi8>
+}
+
 // CHECK-LABEL: func @test_load
 //  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr)
 func.func @test_load(%ptr: memref<f32>) -> f32 {

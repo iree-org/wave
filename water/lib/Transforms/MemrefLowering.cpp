@@ -86,6 +86,32 @@ struct ConvertMemrefStore : public OpConversionPattern<memref::StoreOp> {
   }
 };
 
+struct ConvertMemrefView : public OpConversionPattern<memref::ViewOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::ViewOp viewOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType<LLVM::LLVMPointerType>(
+        viewOp.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(viewOp,
+                                         "failed to convert result type");
+
+    Value offset = adaptor.getByteShift();
+    if (!isa<IntegerType>(offset.getType())) {
+      Type i64 = rewriter.getIntegerType(64);
+      offset =
+          arith::IndexCastOp::create(rewriter, viewOp.getLoc(), i64, offset);
+    }
+
+    Type i8 = rewriter.getIntegerType(8);
+    rewriter.replaceOpWithNewOp<LLVM::GEPOp>(viewOp, resultType, i8,
+                                             adaptor.getSource(), offset);
+    return success();
+  }
+};
+
 /// Type converter for memref to LLVM lowering.
 /// Converts contiguous memref types to LLVM pointer types.
 class MemrefToLLVMTypeConverter : public TypeConverter {
@@ -149,7 +175,7 @@ public:
     RewritePatternSet patterns(ctx);
 
     patterns.add<ConvertUnrealizedConversionCast, ConvertMemrefLoad,
-                 ConvertMemrefStore>(typeConverter, ctx);
+                 ConvertMemrefStore, ConvertMemrefView>(typeConverter, ctx);
 
     populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                         typeConverter);
