@@ -23,3 +23,54 @@ func.func @test_store(%ptr: memref<f32>, %val: f32) {
   memref.store %val, %ptr[] : memref<f32>
   return
 }
+
+// CHECK-LABEL: func @test_load_aligned
+//  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr)
+func.func @test_load_aligned(%ptr: memref<f32>) -> f32 {
+  // CHECK: %[[VAL:.*]] = llvm.load %[[PTR]] {alignment = 16 : i64} : !llvm.ptr -> f32
+  // CHECK: return %[[VAL]]
+  %0 = memref.load %ptr[] {alignment = 16 : i64} : memref<f32>
+  return %0 : f32
+}
+
+// CHECK-LABEL: func @test_store_aligned
+//  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr, %[[VAL:.*]]: f32)
+func.func @test_store_aligned(%ptr: memref<f32>, %val: f32) {
+  // CHECK: llvm.store %[[VAL]], %[[PTR]] {alignment = 16 : i64} : f32, !llvm.ptr
+  memref.store %val, %ptr[] {alignment = 16 : i64} : memref<f32>
+  return
+}
+
+// CHECK-LABEL: func @test_load_nontemporal
+//  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr)
+func.func @test_load_nontemporal(%ptr: memref<f32>) -> f32 {
+  // CHECK: %[[VAL:.*]] = llvm.load %[[PTR]] {nontemporal} : !llvm.ptr -> f32
+  // CHECK: return %[[VAL]]
+  %0 = memref.load %ptr[] {nontemporal = true} : memref<f32>
+  return %0 : f32
+}
+
+// CHECK-LABEL: func @test_store_nontemporal
+//  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr, %[[VAL:.*]]: f32)
+func.func @test_store_nontemporal(%ptr: memref<f32>, %val: f32) {
+  // CHECK: llvm.store %[[VAL]], %[[PTR]] {nontemporal} : f32, !llvm.ptr
+  memref.store %val, %ptr[] {nontemporal = true} : memref<f32>
+  return
+}
+
+// CHECK-LABEL: func @test_load_aligned_nontemporal
+//  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr)
+func.func @test_load_aligned_nontemporal(%ptr: memref<f32>) -> f32 {
+  // CHECK: %[[VAL:.*]] = llvm.load %[[PTR]] {alignment = 8 : i64, nontemporal} : !llvm.ptr -> f32
+  // CHECK: return %[[VAL]]
+  %0 = memref.load %ptr[] {alignment = 8 : i64, nontemporal = true} : memref<f32>
+  return %0 : f32
+}
+
+// CHECK-LABEL: func @test_store_aligned_nontemporal
+//  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr, %[[VAL:.*]]: f32)
+func.func @test_store_aligned_nontemporal(%ptr: memref<f32>, %val: f32) {
+  // CHECK: llvm.store %[[VAL]], %[[PTR]] {alignment = 8 : i64, nontemporal} : f32, !llvm.ptr
+  memref.store %val, %ptr[] {alignment = 8 : i64, nontemporal = true} : memref<f32>
+  return
+}
