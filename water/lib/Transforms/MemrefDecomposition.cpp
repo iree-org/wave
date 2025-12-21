@@ -237,7 +237,9 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
     Value viewMemref = getFlattenMemref(rewriter, loc, buffer, loadType, sizes,
                                         strides, indices);
 
-    rewriter.replaceOpWithNewOp<memref::LoadOp>(loadOp, loadType, viewMemref);
+    rewriter.replaceOpWithNewOp<memref::LoadOp>(
+        loadOp, loadType, viewMemref, /*indices*/ ValueRange{},
+        loadOp.getNontemporal(), loadOp.getAlignmentAttr());
     return success();
   }
 };
@@ -281,8 +283,9 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
 
     Value viewMemref = getFlattenMemref(rewriter, loc, buffer, storeType, sizes,
                                         strides, indices);
-    rewriter.replaceOpWithNewOp<memref::StoreOp>(storeOp, valueToStore,
-                                                 viewMemref);
+    rewriter.replaceOpWithNewOp<memref::StoreOp>(
+        storeOp, valueToStore, viewMemref, /*indices*/ ValueRange{},
+        storeOp.getNontemporal(), storeOp.getAlignmentAttr());
     return success();
   }
 };
