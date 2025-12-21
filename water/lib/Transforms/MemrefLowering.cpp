@@ -22,6 +22,29 @@ namespace mlir::water {
 } // namespace mlir::water
 
 namespace {
+struct ConvertUnrealizedConversionCast
+    : public OpConversionPattern<UnrealizedConversionCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(UnrealizedConversionCastOp castOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ValueRange inputs = adaptor.getInputs();
+    if (inputs.size() != castOp.getNumResults())
+      return rewriter.notifyMatchFailure(
+          castOp, "expected number of operands to match number of results");
+
+    for (auto [input, result] : llvm::zip(inputs, castOp.getResults())) {
+      Type resultType = typeConverter->convertType(result.getType());
+      if (resultType != input.getType())
+        return rewriter.notifyMatchFailure(castOp,
+                                           "failed to convert result type");
+    }
+
+    rewriter.replaceOp(castOp, inputs);
+    return success();
+  }
+};
 
 struct ConvertMemrefLoad : public OpConversionPattern<memref::LoadOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -125,7 +148,8 @@ public:
     // Add conversion patterns.
     RewritePatternSet patterns(ctx);
 
-    patterns.add<ConvertMemrefLoad, ConvertMemrefStore>(typeConverter, ctx);
+    patterns.add<ConvertUnrealizedConversionCast, ConvertMemrefLoad,
+                 ConvertMemrefStore>(typeConverter, ctx);
 
     populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                         typeConverter);

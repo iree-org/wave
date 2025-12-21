@@ -14,6 +14,14 @@ func.func @test_signature_1d(%arg0: memref<?xi8>) -> memref<?xi8> {
   return %arg0 : memref<?xi8>
 }
 
+// CHECK-LABEL: func @test_unrealized_cast
+//  CHECK-SAME: (%[[ARG:.*]]: !llvm.ptr) -> !llvm.ptr
+func.func @test_unrealized_cast(%arg0: memref<?xi8>) -> memref<i32> {
+  %0 = builtin.unrealized_conversion_cast %arg0 : memref<?xi8> to memref<i32>
+  // CHECK: return %[[ARG]] : !llvm.ptr
+  return %0 : memref<i32>
+}
+
 // CHECK-LABEL: func @test_load
 //  CHECK-SAME: (%[[PTR:.*]]: !llvm.ptr)
 func.func @test_load(%ptr: memref<f32>) -> f32 {
