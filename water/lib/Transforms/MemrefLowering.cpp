@@ -23,6 +23,46 @@ namespace mlir::water {
 
 namespace {
 
+struct ConvertMemrefLoad : public OpConversionPattern<memref::LoadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::LoadOp loadOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto memrefType = cast<MemRefType>(loadOp.getMemRefType());
+
+    // Only handle 0D memrefs.
+    if (memrefType.getRank() != 0)
+      return rewriter.notifyMatchFailure(loadOp, "only 0D memrefs supported");
+
+    Value ptr = adaptor.getMemref();
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(
+        loadOp, typeConverter->convertType(memrefType.getElementType()), ptr,
+        loadOp.getAlignment().value_or(0), false, loadOp.getNontemporal());
+    return success();
+  }
+};
+
+struct ConvertMemrefStore : public OpConversionPattern<memref::StoreOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::StoreOp storeOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto memrefType = cast<MemRefType>(storeOp.getMemRefType());
+
+    // Only handle 0D memrefs.
+    if (memrefType.getRank() != 0)
+      return rewriter.notifyMatchFailure(storeOp, "only 0D memrefs supported");
+
+    Value ptr = adaptor.getMemref();
+    rewriter.replaceOpWithNewOp<LLVM::StoreOp>(
+        storeOp, adaptor.getValue(), ptr, storeOp.getAlignment().value_or(0),
+        false, storeOp.getNontemporal());
+    return success();
+  }
+};
+
 /// Type converter for memref to LLVM lowering.
 /// Converts contiguous memref types to LLVM pointer types.
 class MemrefToLLVMTypeConverter : public TypeConverter {
@@ -84,7 +124,8 @@ public:
 
     // Add conversion patterns.
     RewritePatternSet patterns(ctx);
-    // TODO: Add conversion patterns here.
+
+    patterns.add<ConvertMemrefLoad, ConvertMemrefStore>(typeConverter, ctx);
 
     populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                         typeConverter);
