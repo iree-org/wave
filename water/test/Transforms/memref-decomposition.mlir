@@ -145,3 +145,19 @@ func.func @different_types(%arg0: memref<8x16xi32>, %arg1: memref<4x8xf64>, %i: 
   %1 = memref.load %arg1[%i, %j] : memref<4x8xf64>
   return
 }
+
+// CHECK-LABEL: func.func @reinterpret_cast
+// CHECK-SAME: (%[[BASE:.*]]: memref<100xf32>, %[[OFFSET:.*]]: index, %[[SIZE0:.*]]: index, %[[SIZE1:.*]]: index, %[[STRIDE0:.*]]: index, %[[STRIDE1:.*]]: index)
+func.func @reinterpret_cast(%base: memref<100xf32>, %offset: index, %size0: index, %size1: index, %stride0: index, %stride1: index) -> memref<?x?xf32, strided<[?, ?], offset: ?>> {
+  // CHECK: %[[BASE_BUF:.*]], %[[BASE_OFF:.*]], %[[BASE_SIZE:.*]], %[[BASE_STRIDE:.*]] = memref.extract_strided_metadata %[[BASE]]
+  // CHECK: affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE_BUF]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]]
+  // CHECK: affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]]
+  // CHECK: %[[CAST2:.*]] = builtin.unrealized_conversion_cast %[[VIEW2]] : memref<?xi8> to memref<f32>
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: memref.reinterpret_cast %[[CAST2]] to offset: [%[[C0]]], sizes: [%[[SIZE0]], %[[SIZE1]]], strides: [%[[STRIDE0]], %[[STRIDE1]]]
+  %0 = memref.reinterpret_cast %base to offset: [%offset], sizes: [%size0, %size1], strides: [%stride0, %stride1] : memref<100xf32> to memref<?x?xf32, strided<[?, ?], offset: ?>>
+  return %0 : memref<?x?xf32, strided<[?, ?], offset: ?>>
+}

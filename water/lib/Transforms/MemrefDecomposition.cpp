@@ -290,6 +290,73 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
   }
 };
 
+struct DecomposeReinterpretCast
+    : public OpConversionPattern<memref::ReinterpretCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+  using OneToNOpAdaptor =
+      memref::ReinterpretCastOp::GenericAdaptor<ArrayRef<ValueRange>>;
+
+  LogicalResult
+  matchAndRewrite(memref::ReinterpretCastOp castOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = castOp.getLoc();
+    auto resultType = cast<MemRefType>(castOp.getType());
+    unsigned resultRank = resultType.getRank();
+
+    if (resultRank == 0)
+      return rewriter.notifyMatchFailure(castOp, "already 0D memref");
+
+    auto sourceType = cast<MemRefType>(castOp.getSource().getType());
+    unsigned sourceRank = sourceType.getRank();
+
+    // Get decomposed source.
+    ValueRange sourceDecomposed = adaptor.getSource();
+    if (sourceDecomposed.size() != 1 + sourceRank * 2)
+      return rewriter.notifyMatchFailure(castOp,
+                                         "expected source to be decomposed");
+
+    auto [buffer, oldSizes, oldStrides] =
+        unflattenDescriptor(sourceDecomposed, sourceRank);
+
+    // Get new offset, sizes, and strides from the operation.
+    ArrayRef<OpFoldResult> offsetsRef = castOp.getMixedOffsets();
+    Value offset = getValue(rewriter, loc, offsetsRef[0]);
+    SmallVector<Value> newSizes = flatten({adaptor.getSizes()});
+    SmallVector<Value> newStrides = flatten({adaptor.getStrides()});
+
+    // Apply offset to buffer using memref.view.
+    unsigned typeBit = resultType.getElementType().getIntOrFloatBitWidth();
+
+    // Compute size: (product of sizes) * (element size in bytes).
+    AffineExpr sizeExpr = rewriter.getAffineConstantExpr(typeBit / 8);
+    for (unsigned i = 0; i < resultRank; ++i)
+      sizeExpr = sizeExpr * rewriter.getAffineSymbolExpr(i);
+
+    Value size =
+        getValue(rewriter, loc,
+                 affine::makeComposedFoldedAffineApply(
+                     rewriter, loc, sizeExpr, getAsOpFoldResult(newSizes)));
+
+    // Compute adjusted offset in bytes.
+    AffineExpr offsetExpr = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
+    OpFoldResult adjustedOffset = affine::makeComposedFoldedAffineApply(
+        rewriter, loc, offsetExpr, getAsOpFoldResult(offset));
+    Value adjustedOffsetValue = getValue(rewriter, loc, adjustedOffset);
+
+    Value newBuffer = memref::ViewOp::create(rewriter, loc, buffer.getType(),
+                                             buffer, adjustedOffsetValue, size);
+
+    // Build result as decomposed memref (buffer, sizes, strides).
+    SmallVector<Value> decomposedResult;
+    decomposedResult.push_back(newBuffer);
+    llvm::append_range(decomposedResult, newSizes);
+    llvm::append_range(decomposedResult, newStrides);
+
+    rewriter.replaceOpWithMultiple(castOp, {decomposedResult});
+    return success();
+  }
+};
+
 template <typename OpTy> static bool isDynamicallyLegalOp(OpTy op) {
   auto memrefType = cast<MemRefType>(op.getMemRefType());
   return memrefType.getRank() == 0;
@@ -320,12 +387,19 @@ public:
     target.addDynamicallyLegalOp<vector::StoreOp>(
         isDynamicallyLegalOp<vector::StoreOp>);
 
+    // Mark reinterpret_cast with non-0D result as illegal.
+    target.addDynamicallyLegalOp<memref::ReinterpretCastOp>(
+        [](memref::ReinterpretCastOp op) {
+          auto resultType = cast<MemRefType>(op.getType());
+          return resultType.getRank() == 0;
+        });
+
     // Add conversion patterns with type converter.
     RewritePatternSet patterns(ctx);
     patterns
         .add<DecomposeLoadOp<memref::LoadOp>, DecomposeStoreOp<memref::StoreOp>,
-             DecomposeLoadOp<vector::LoadOp>,
-             DecomposeStoreOp<vector::StoreOp>>(typeConverter, ctx);
+             DecomposeLoadOp<vector::LoadOp>, DecomposeStoreOp<vector::StoreOp>,
+             DecomposeReinterpretCast>(typeConverter, ctx);
 
     // Apply partial conversion.
     if (failed(applyPartialConversion(op, target, std::move(patterns))))
