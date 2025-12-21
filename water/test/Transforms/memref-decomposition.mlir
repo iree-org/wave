@@ -8,7 +8,7 @@ func.func @load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {
   // CHECK: %[[C20:.*]] = arith.constant 20 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: %[[SIZE:.*]] = affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[C0]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[IDX:.*]] = affine.apply
   // CHECK: affine.max
@@ -28,7 +28,7 @@ func.func @store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val: f32) {
   // CHECK: %[[C20:.*]] = arith.constant 20 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: %[[SIZE:.*]] = affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[C0]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[IDX:.*]] = affine.apply
   // CHECK: affine.max
@@ -48,7 +48,7 @@ func.func @load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: index) -
   // CHECK: %[[C16:.*]] = arith.constant 16 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: %[[SIZE:.*]] = affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f16> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<4x8x16xf16> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[C0]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[IDX:.*]] = affine.apply
   // CHECK: affine.max
@@ -68,7 +68,7 @@ func.func @vector_load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> vec
   // CHECK: %[[C20:.*]] = arith.constant 20 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: %[[SIZE:.*]] = affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[C0]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[IDX:.*]] = affine.apply
   // CHECK: affine.max
@@ -88,7 +88,7 @@ func.func @vector_store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val:
   // CHECK: %[[C20:.*]] = arith.constant 20 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: %[[SIZE:.*]] = affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[C0]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[IDX:.*]] = affine.apply
   // CHECK: affine.max
@@ -108,7 +108,7 @@ func.func @vector_load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: i
   // CHECK: %[[C16:.*]] = arith.constant 16 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: %[[SIZE:.*]] = affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f16> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<4x8x16xf16> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[C0]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[IDX:.*]] = affine.apply
   // CHECK: affine.max
@@ -128,7 +128,7 @@ func.func @multiple_loads(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32
   // CHECK: %[[C20:.*]] = arith.constant 20 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: %[[SIZE:.*]] = affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[C0]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[IDX:.*]] = affine.apply
   // CHECK: affine.max
@@ -157,13 +157,13 @@ func.func @different_types(%arg0: memref<8x16xi32>, %arg1: memref<4x8xf64>, %i: 
   // CHECK: arith.constant 0 : index
   // CHECK: arith.constant 8 : index
   // CHECK: arith.constant 1 : index
-  // CHECK: builtin.unrealized_conversion_cast {{.*}} : memref<f64> to memref<?xi8>
+  // CHECK: builtin.unrealized_conversion_cast %[[ARG1]] : memref<4x8xf64> to memref<?xi8>
   // CHECK: memref.view {{.*}} : memref<?xi8> to memref<?xi8>
   // CHECK: memref.extract_strided_metadata %[[ARG0]]
   // CHECK: arith.constant 0 : index
   // CHECK: arith.constant 16 : index
   // CHECK: arith.constant 1 : index
-  // CHECK: builtin.unrealized_conversion_cast {{.*}} : memref<i32> to memref<?xi8>
+  // CHECK: builtin.unrealized_conversion_cast %[[ARG0]] : memref<8x16xi32> to memref<?xi8>
   // CHECK: memref.view {{.*}} : memref<?xi8> to memref<?xi8>
   // CHECK: memref.view {{.*}} : memref<?xi8> to memref<i32>
   // CHECK: memref.load {{.*}} : memref<i32>
@@ -180,7 +180,7 @@ func.func @different_types(%arg0: memref<8x16xi32>, %arg1: memref<4x8xf64>, %i: 
 func.func @reinterpret_cast_0d(%base: memref<f32>) -> memref<?x?xf32, strided<[?, ?], offset: ?>> {
   // CHECK: %[[BASE_BUF:.*]], %[[BASE_OFF:.*]] = memref.extract_strided_metadata %[[BASE]]
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE_BUF]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]]
   // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]]
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
@@ -202,7 +202,7 @@ func.func @reinterpret_cast(%base: memref<100xf32>, %offset: index, %size0: inde
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
   // CHECK: %[[C1:.*]] = arith.constant 1 : index
   // CHECK: affine.apply
-  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE_BUF]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<100xf32> to memref<?xi8>
   // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]]
   // CHECK: affine.apply
   // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]]

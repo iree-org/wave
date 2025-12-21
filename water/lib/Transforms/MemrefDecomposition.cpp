@@ -152,7 +152,6 @@ public:
 
       auto metadata =
           memref::ExtractStridedMetadataOp::create(builder, loc, input);
-      Value base = metadata.getBaseBuffer();
       Value offset = metadata.getOffset();
       ValueRange sizes = metadata.getSizes();
       ValueRange strides = metadata.getStrides();
@@ -171,8 +170,9 @@ public:
                        builder, loc, sizeExpr, getAsOpFoldResult(sizes)));
 
       Type bufferType = resultType.front();
-      base = UnrealizedConversionCastOp::create(builder, loc, bufferType, base)
-                 .getResult(0);
+      Value base =
+          UnrealizedConversionCastOp::create(builder, loc, bufferType, input)
+              .getResult(0);
       base =
           memref::ViewOp::create(builder, loc, bufferType, base, offset, size);
 
