@@ -140,6 +140,11 @@ public:
                         [](Type type) { return isa<IndexType>(type); }))
         return {};
 
+      int64_t staticOffset = 0;
+      SmallVector<int64_t> staticStrides;
+      if (failed(memrefType.getStridesAndOffset(staticStrides, staticOffset)))
+        return {};
+
       unsigned bitwidth = memrefType.getElementType().getIntOrFloatBitWidth();
       AffineExpr sizeExpr = builder.getAffineConstantExpr(bitwidth / 8);
       for (auto i : llvm::seq(rank))
@@ -151,6 +156,14 @@ public:
       Value offset = metadata.getOffset();
       ValueRange sizes = metadata.getSizes();
       ValueRange strides = metadata.getStrides();
+
+      if (staticOffset != ShapedType::kDynamic)
+        offset = arith::ConstantIndexOp::create(builder, loc, staticOffset);
+
+      for (auto i : llvm::seq(rank))
+        if (staticStrides[i] != ShapedType::kDynamic)
+          strides[i] =
+              arith::ConstantIndexOp::create(builder, loc, staticStrides[i]);
 
       Value size =
           getValue(builder, loc,
