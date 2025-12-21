@@ -91,8 +91,13 @@ public:
     populateCallOpTypeConversionPattern(patterns, typeConverter);
     populateReturnOpTypeConversionPattern(patterns, typeConverter);
 
-    target.markUnknownOpDynamicallyLegal(
-        [&](Operation *op) { return typeConverter.isLegal(op); });
+    target.markUnknownOpDynamicallyLegal([&](Operation *op) {
+      if (auto funcOp = dyn_cast<FunctionOpInterface>(op))
+        return typeConverter.isSignatureLegal(
+            cast<FunctionType>(funcOp.getFunctionType()));
+
+      return typeConverter.isLegal(op);
+    });
 
     // Apply partial conversion.
     if (failed(applyPartialConversion(op, target, std::move(patterns))))
