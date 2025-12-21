@@ -82,6 +82,18 @@ def get_copy_template(
     return options, test
 
 
+def test_check_leaks():
+    live = []
+
+    @check_leaks
+    def test_inner():
+        nonlocal live
+        live.append(torch.tensor([1, 2, 3]))
+
+    with pytest.raises(RuntimeError):
+        test_inner()
+
+
 @require_e2e
 @pytest.mark.parametrize("shape", get_test_shapes("test_copy"))
 @param_bool("use_buffer_ops", "buf_ops")

@@ -9,7 +9,6 @@ import math
 import os
 from collections import deque
 from typing import Any, Callable, Optional, Sequence
-import warnings
 
 import sympy
 import torch
@@ -561,12 +560,17 @@ def get_live_tensors() -> list[torch.Tensor]:
     tensors = []
     import gc
 
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
     gc.collect()
     for obj in gc.get_objects():
         try:
-            if torch.is_tensor(obj) or (
-                hasattr(obj, "data") and torch.is_tensor(obj.data)
-            ):
+            # To avoid torch deprecation warning.
+            if "reduce_op" in str(obj):
+                continue
+
+            if torch.is_tensor(obj):
                 tensors.append(obj)
         except:
             pass
@@ -606,7 +610,7 @@ def check_leaks(f):
                 if id(obj) not in before:
                     print(hex(id(obj)), type(obj), obj.size())
             print("--------------------------------")
-            warnings.warn("Leaks detected", RuntimeWarning)
+            raise RuntimeError("Leaks detected")
 
         return result
 
