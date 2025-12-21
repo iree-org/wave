@@ -1,43 +1,74 @@
 // RUN: water-opt %s --water-memref-decomposition | FileCheck %s
 
 // CHECK-LABEL: func.func @load_2d
-// CHECK-SAME: (%[[ARG0:.*]]: memref<?xi8>, %[[SIZE0:.*]]: index, %[[SIZE1:.*]]: index, %[[STRIDE0:.*]]: index, %[[STRIDE1:.*]]: index, %[[I:.*]]: index, %[[J:.*]]: index)
+// CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
 func.func @load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {
-  // CHECK: %[[VIEW:.*]] = memref.view %[[ARG0]]
-  // CHECK: %[[LOAD:.*]] = memref.load %[[VIEW]][] : memref<f32>
+  // CHECK: %[[BASE:.*]], %[[OFFSET:.*]], %[[SIZES:.*]]:2, %[[STRIDES:.*]]:2 = memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: %[[SIZE:.*]] = affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[OFFSET]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
+  // CHECK: %[[IDX:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX2:.*]] = affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]][%[[IDX2]]][] : memref<?xi8> to memref<f32>
+  // CHECK: %[[LOAD:.*]] = memref.load %[[VIEW2]][] : memref<f32>
   // CHECK: return %[[LOAD]]
   %0 = memref.load %arg0[%i, %j] : memref<10x20xf32>
   return %0 : f32
 }
 
 // CHECK-LABEL: func.func @store_2d
-// CHECK-SAME: (%[[ARG0:.*]]: memref<?xi8>, %[[SIZE0:.*]]: index, %[[SIZE1:.*]]: index, %[[STRIDE0:.*]]: index, %[[STRIDE1:.*]]: index, %[[I:.*]]: index, %[[J:.*]]: index, %[[VAL:.*]]: f32)
+// CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: f32)
 func.func @store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val: f32) {
-  // CHECK: %[[VIEW:.*]] = memref.view %[[ARG0]]
-  // CHECK: memref.store %[[VAL]], %[[VIEW]][] : memref<f32>
+  // CHECK: %[[BASE:.*]], %[[OFFSET:.*]], %[[SIZES:.*]]:2, %[[STRIDES:.*]]:2 = memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: %[[SIZE:.*]] = affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[OFFSET]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
+  // CHECK: %[[IDX:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX2:.*]] = affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]][%[[IDX2]]][] : memref<?xi8> to memref<f32>
+  // CHECK: memref.store %[[ARG3]], %[[VIEW2]][] : memref<f32>
   memref.store %val, %arg0[%i, %j] : memref<10x20xf32>
   return
 }
 
 // CHECK-LABEL: func.func @load_3d
-// CHECK-SAME: (%[[ARG0:.*]]: memref<?xi8>, %[[SIZE0:.*]]: index, %[[SIZE1:.*]]: index, %[[SIZE2:.*]]: index, %[[STRIDE0:.*]]: index, %[[STRIDE1:.*]]: index, %[[STRIDE2:.*]]: index, %[[I:.*]]: index, %[[J:.*]]: index, %[[K:.*]]: index)
+// CHECK-SAME: (%[[ARG0:.*]]: memref<4x8x16xf16>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: index)
 func.func @load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: index) -> f16 {
-  // CHECK: %[[VIEW:.*]] = memref.view %[[ARG0]]
-  // CHECK: %[[LOAD:.*]] = memref.load %[[VIEW]][] : memref<f16>
+  // CHECK: %[[BASE:.*]], %[[OFFSET:.*]], %[[SIZES:.*]]:3, %[[STRIDES:.*]]:3 = memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: %[[SIZE:.*]] = affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f16> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[OFFSET]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
+  // CHECK: %[[IDX:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX2:.*]] = affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]][%[[IDX2]]][] : memref<?xi8> to memref<f16>
+  // CHECK: %[[LOAD:.*]] = memref.load %[[VIEW2]][] : memref<f16>
   // CHECK: return %[[LOAD]]
   %0 = memref.load %arg0[%i, %j, %k] : memref<4x8x16xf16>
   return %0 : f16
 }
 
 // CHECK-LABEL: func.func @multiple_loads
-// CHECK-SAME: (%[[ARG0:.*]]: memref<?xi8>, %[[SIZE0:.*]]: index, %[[SIZE1:.*]]: index, %[[STRIDE0:.*]]: index, %[[STRIDE1:.*]]: index, %[[I:.*]]: index, %[[J:.*]]: index)
+// CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
 func.func @multiple_loads(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {
-  // CHECK: %[[VIEW0:.*]] = memref.view %[[ARG0]]
-  // CHECK: %[[LOAD0:.*]] = memref.load %[[VIEW0]][] : memref<f32>
+  // CHECK: %[[BASE:.*]], %[[OFFSET:.*]], %[[SIZES:.*]]:2, %[[STRIDES:.*]]:2 = memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: %[[SIZE:.*]] = affine.apply
+  // CHECK: %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<f32> to memref<?xi8>
+  // CHECK: %[[VIEW:.*]] = memref.view %[[CAST]][%[[OFFSET]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
+  // CHECK: %[[IDX:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX2:.*]] = affine.apply
+  // CHECK: %[[VIEW2:.*]] = memref.view %[[VIEW]][%[[IDX2]]][] : memref<?xi8> to memref<f32>
+  // CHECK: %[[LOAD0:.*]] = memref.load %[[VIEW2]][] : memref<f32>
   %0 = memref.load %arg0[%i, %j] : memref<10x20xf32>
 
-  // CHECK: %[[VIEW1:.*]] = memref.view %[[ARG0]]
-  // CHECK: %[[LOAD1:.*]] = memref.load %[[VIEW1]][] : memref<f32>
+  // CHECK: %[[IDX3:.*]] = affine.apply
+  // CHECK: affine.max
+  // CHECK: %[[IDX4:.*]] = affine.apply
+  // CHECK: %[[VIEW3:.*]] = memref.view %[[VIEW]][%[[IDX4]]][] : memref<?xi8> to memref<f32>
+  // CHECK: %[[LOAD1:.*]] = memref.load %[[VIEW3]][] : memref<f32>
   %1 = memref.load %arg0[%j, %i] : memref<10x20xf32>
 
   // CHECK: %[[ADD:.*]] = arith.addf %[[LOAD0]], %[[LOAD1]]
@@ -47,7 +78,14 @@ func.func @multiple_loads(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32
 }
 
 // CHECK-LABEL: func.func @different_types
+// CHECK-SAME: (%[[ARG0:.*]]: memref<8x16xi32>, %[[ARG1:.*]]: memref<4x8xf64>, %[[ARG2:.*]]: index, %[[ARG3:.*]]: index)
 func.func @different_types(%arg0: memref<8x16xi32>, %arg1: memref<4x8xf64>, %i: index, %j: index) {
+  // CHECK: memref.extract_strided_metadata %[[ARG1]]
+  // CHECK: builtin.unrealized_conversion_cast {{.*}} : memref<f64> to memref<?xi8>
+  // CHECK: memref.view {{.*}} : memref<?xi8> to memref<?xi8>
+  // CHECK: memref.extract_strided_metadata %[[ARG0]]
+  // CHECK: builtin.unrealized_conversion_cast {{.*}} : memref<i32> to memref<?xi8>
+  // CHECK: memref.view {{.*}} : memref<?xi8> to memref<?xi8>
   // CHECK: memref.view {{.*}} : memref<?xi8> to memref<i32>
   // CHECK: memref.load {{.*}} : memref<i32>
   %0 = memref.load %arg0[%i, %j] : memref<8x16xi32>
