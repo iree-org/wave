@@ -35,6 +35,14 @@ static Value getValue(OpBuilder &rewriter, Location loc, OpFoldResult in) {
   return cast<Value>(in);
 }
 
+static SmallVector<Value> getValues(OpBuilder &rewriter, Location loc,
+                                    ArrayRef<OpFoldResult> in) {
+  SmallVector<Value> result;
+  for (OpFoldResult value : in)
+    result.push_back(getValue(rewriter, loc, value));
+  return result;
+}
+
 static SmallVector<Value> flatten(ArrayRef<ValueRange> values) {
   SmallVector<Value> result;
   for (ValueRange value : values)
@@ -76,18 +84,8 @@ public:
                                                 type.getMemorySpace());
 
           results.push_back(byteMemrefType);
-
-          // Add size types (one index per dimension).
           unsigned rank = type.getRank();
-          for (unsigned i = 0; i < rank; ++i) {
-            results.push_back(indexType);
-          }
-
-          // Add stride types (one index per dimension).
-          for (unsigned i = 0; i < rank; ++i) {
-            results.push_back(indexType);
-          }
-
+          results.resize(1 + rank * 2, indexType);
           return success();
         });
 
@@ -321,21 +319,25 @@ struct DecomposeReinterpretCast
     // Get new offset, sizes, and strides from the operation.
     ArrayRef<OpFoldResult> offsetsRef = castOp.getMixedOffsets();
     Value offset = getValue(rewriter, loc, offsetsRef[0]);
-    SmallVector<Value> newSizes = flatten({adaptor.getSizes()});
-    SmallVector<Value> newStrides = flatten({adaptor.getStrides()});
+    SmallVector<OpFoldResult> newSizes = getMixedValues(
+        castOp.getStaticSizes(), flatten(adaptor.getSizes()), rewriter);
+    SmallVector<OpFoldResult> newStrides = getMixedValues(
+        castOp.getStaticStrides(), flatten(adaptor.getStrides()), rewriter);
 
     // Apply offset to buffer using memref.view.
     unsigned typeBit = resultType.getElementType().getIntOrFloatBitWidth();
 
     // Compute size: (product of sizes) * (element size in bytes).
     AffineExpr sizeExpr = rewriter.getAffineConstantExpr(typeBit / 8);
-    for (unsigned i = 0; i < resultRank; ++i)
+    for (auto i : llvm::seq(resultRank))
       sizeExpr = sizeExpr * rewriter.getAffineSymbolExpr(i);
 
-    Value size =
-        getValue(rewriter, loc,
-                 affine::makeComposedFoldedAffineApply(
-                     rewriter, loc, sizeExpr, getAsOpFoldResult(newSizes)));
+    assert(resultRank == newSizes.size() && resultRank == newStrides.size() &&
+           "sizes and strides must have the same rank");
+
+    Value size = getValue(rewriter, loc,
+                          affine::makeComposedFoldedAffineApply(
+                              rewriter, loc, sizeExpr, newSizes));
 
     // Compute adjusted offset in bytes.
     AffineExpr offsetExpr = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
@@ -349,8 +351,8 @@ struct DecomposeReinterpretCast
     // Build result as decomposed memref (buffer, sizes, strides).
     SmallVector<Value> decomposedResult;
     decomposedResult.push_back(newBuffer);
-    llvm::append_range(decomposedResult, newSizes);
-    llvm::append_range(decomposedResult, newStrides);
+    llvm::append_range(decomposedResult, getValues(rewriter, loc, newSizes));
+    llvm::append_range(decomposedResult, getValues(rewriter, loc, newStrides));
 
     rewriter.replaceOpWithMultiple(castOp, {decomposedResult});
     return success();
