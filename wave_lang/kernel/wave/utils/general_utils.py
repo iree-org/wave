@@ -560,7 +560,7 @@ def get_live_tensors() -> list[torch.Tensor]:
     tensors = []
     import gc
 
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and torch.cuda.current_device() != -1:
         torch.cuda.synchronize()
 
     gc.collect()
