@@ -22,6 +22,14 @@ func.func @test_unrealized_cast(%arg0: memref<?xi8>) -> memref<i32> {
   return %0 : memref<i32>
 }
 
+// CHECK-LABEL: func @test_cast
+//  CHECK-SAME: (%[[ARG:.*]]: !llvm.ptr) -> !llvm.ptr
+func.func @test_cast(%arg0: memref<?xi8>) -> memref<2xi8> {
+  %0 = memref.cast %arg0 : memref<?xi8> to memref<2xi8>
+  // CHECK: return %[[ARG]] : !llvm.ptr
+  return %0 : memref<2xi8>
+}
+
 // CHECK-LABEL: func @test_view
 //  CHECK-SAME: (%[[ARG:.*]]: !llvm.ptr) -> !llvm.ptr
 func.func @test_view(%arg0: memref<?xi8>) -> memref<10xi8> {

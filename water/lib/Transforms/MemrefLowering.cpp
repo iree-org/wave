@@ -46,6 +46,23 @@ struct ConvertUnrealizedConversionCast
   }
 };
 
+struct ConvertMemrefCast : public OpConversionPattern<memref::CastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(memref::CastOp castOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value source = adaptor.getSource();
+    Type resultType = typeConverter->convertType(castOp.getResult().getType());
+    if (resultType != source.getType())
+      return rewriter.notifyMatchFailure(castOp,
+                                         "failed to convert result type");
+
+    rewriter.replaceOp(castOp, source);
+    return success();
+  }
+};
+
 struct ConvertMemrefLoad : public OpConversionPattern<memref::LoadOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -174,8 +191,9 @@ public:
     // Add conversion patterns.
     RewritePatternSet patterns(ctx);
 
-    patterns.add<ConvertUnrealizedConversionCast, ConvertMemrefLoad,
-                 ConvertMemrefStore, ConvertMemrefView>(typeConverter, ctx);
+    patterns.add<ConvertUnrealizedConversionCast, ConvertMemrefCast,
+                 ConvertMemrefLoad, ConvertMemrefStore, ConvertMemrefView>(
+        typeConverter, ctx);
 
     populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                         typeConverter);
