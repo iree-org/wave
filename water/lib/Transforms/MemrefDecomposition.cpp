@@ -159,6 +159,12 @@ public:
       if (staticOffset != ShapedType::kDynamic)
         offset = arith::ConstantIndexOp::create(builder, loc, staticOffset);
 
+      AffineExpr offsetExpr = builder.getAffineConstantExpr(0) * (bitwidth / 8);
+      offset =
+          getValue(builder, loc,
+                   affine::makeComposedFoldedAffineApply(
+                       builder, loc, offsetExpr, getAsOpFoldResult(offset)));
+
       for (auto i : llvm::seq(rank))
         if (staticStrides[i] != ShapedType::kDynamic)
           strides[i] =
@@ -188,10 +194,9 @@ public:
 /// Returns a collapsed memref and the linearized index to access the element
 /// at the specified indices.
 static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
-                              Type loadType, ValueRange sizes,
+                              unsigned typeBit, Type loadType, ValueRange sizes,
                               ValueRange strides, ValueRange indices) {
   auto sourceType = cast<MemRefType>(source.getType());
-  unsigned typeBit = sourceType.getElementType().getIntOrFloatBitWidth();
   OpFoldResult zero = rewriter.getIndexAttr(0);
   OpFoldResult linearizedIndices;
   memref::LinearizedMemRefInfo linearizedInfo;
@@ -225,6 +230,7 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
     Location loc = loadOp.getLoc();
     auto memrefType = cast<MemRefType>(loadOp.getMemRefType());
     unsigned rank = memrefType.getRank();
+    unsigned typeBit = memrefType.getElementType().getIntOrFloatBitWidth();
 
     if (rank == 0)
       return rewriter.notifyMatchFailure(loadOp, "already 0D memref");
@@ -245,8 +251,8 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
     auto [buffer, sizes, strides] = unflattenDescriptor(sourceDecomposed, rank);
     SmallVector<Value> indices = flatten(adaptor.getIndices());
 
-    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, loadType, sizes,
-                                        strides, indices);
+    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, typeBit,
+                                        loadType, sizes, strides, indices);
 
     rewriter.replaceOpWithNewOp<memref::LoadOp>(
         loadOp, loadType, viewMemref, /*indices*/ ValueRange{},
@@ -267,6 +273,7 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
     Location loc = storeOp.getLoc();
     auto memrefType = cast<MemRefType>(storeOp.getMemRefType());
     unsigned rank = memrefType.getRank();
+    unsigned typeBit = memrefType.getElementType().getIntOrFloatBitWidth();
 
     if (rank == 0)
       return rewriter.notifyMatchFailure(storeOp, "already 0D memref");
@@ -292,8 +299,8 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
     }
     Type storeType = valueToStore.getType();
 
-    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, storeType, sizes,
-                                        strides, indices);
+    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, typeBit,
+                                        storeType, sizes, strides, indices);
     rewriter.replaceOpWithNewOp<memref::StoreOp>(
         storeOp, valueToStore, viewMemref, /*indices*/ ValueRange{},
         storeOp.getNontemporal(), storeOp.getAlignmentAttr());
