@@ -33,7 +33,7 @@ from enum import Enum, auto
 import os
 
 from .kernel_ir import (
-    KernelProgram, KInstr, KOpcode,
+    KernelProgram, KInstr,
     KVReg, KSReg, KPhysVReg, KPhysSReg,
     KReg, KRegRange, RegClass,
     is_virtual, is_vgpr, is_sgpr, get_reg_class,

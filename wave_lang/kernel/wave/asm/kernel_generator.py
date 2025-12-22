@@ -7,23 +7,28 @@
 Generator for kernel IR to AMDGCN assembly.
 
 This module converts a KernelProgram (with virtual registers allocated to
-physical registers) into final assembly text or instruction objects.
+physical registers) into final assembly text.
 
 The generator:
 1. Takes a KernelProgram and a mapping from virtual to physical registers
 2. Substitutes physical register numbers for virtual registers
-3. Formats instructions according to AMDGCN assembly syntax
+3. Uses the instruction registry to look up mnemonics and formatting
+4. Formats instructions according to AMDGCN assembly syntax
+
+Note: Instruction mnemonics are looked up from the YAML registry, making
+it the single source of truth for instruction definitions.
 """
 
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 
 from .kernel_ir import (
-    KernelProgram, KInstr, KOpcode,
+    KernelProgram, KInstr,
     KVReg, KSReg, KPhysVReg, KPhysSReg, KSpecialReg,
     KReg, KRegRange, KImm, KMemOffset, KOperand,
     is_virtual, is_vgpr, is_sgpr, is_special,
 )
+from .instruction_registry import get_registry, InstructionRegistry
 
 
 @dataclass
@@ -50,53 +55,51 @@ class PhysicalMapping:
 class KernelGenerator:
     """
     Generates AMDGCN assembly from KernelProgram.
+    
+    Uses the instruction registry to look up mnemonics, ensuring the
+    YAML files are the single source of truth for instruction definitions.
     """
     
-    def __init__(self, program: KernelProgram, mapping: PhysicalMapping):
+    def __init__(self, program: KernelProgram, mapping: PhysicalMapping, architecture: str = "common"):
         self.program = program
         self.mapping = mapping
+        self._registry = get_registry(architecture)
     
     def generate(self) -> List[str]:
         """Generate the entire program as assembly lines."""
         lines = []
-        for instr in self.program:
+        for instr in self.program.instructions:
             line = self._generate_instr(instr)
-            if line:
+            if line is not None:
                 lines.append(line)
         return lines
     
     def generate_to_string(self) -> str:
-        """Generate the entire program to a single string."""
+        """Generate the entire program as a single string."""
         return "\n".join(self.generate())
     
     def _resolve_reg(self, reg: KReg) -> str:
-        """Resolve a register to its physical name."""
-        if isinstance(reg, KSpecialReg):
-            return reg.name  # Special regs render as-is (e.g., "m0", "exec")
+        """Resolve a register to its physical string representation."""
+        if isinstance(reg, KVReg):
+            phys = self.mapping.get_phys_vreg(reg)
+            return f"v{phys}"
+        elif isinstance(reg, KSReg):
+            phys = self.mapping.get_phys_sreg(reg)
+            return f"s{phys}"
         elif isinstance(reg, KPhysVReg):
             return f"v{reg.index}"
         elif isinstance(reg, KPhysSReg):
             return f"s{reg.index}"
-        elif isinstance(reg, KVReg):
-            phys_idx = self.mapping.get_phys_vreg(reg)
-            return f"v{phys_idx}"
-        elif isinstance(reg, KSReg):
-            phys_idx = self.mapping.get_phys_sreg(reg)
-            return f"s{phys_idx}"
+        elif isinstance(reg, KSpecialReg):
+            return reg.name
         raise ValueError(f"Unknown register type: {type(reg)}")
     
-    def _resolve_reg_range(self, rng: KRegRange) -> str:
-        """Resolve a register range to its physical representation."""
-        base_reg = rng.base_reg
-        count = rng.count
+    def _resolve_reg_range(self, range_: KRegRange) -> str:
+        """Resolve a register range to its physical string representation."""
+        base_reg = range_.base_reg
+        count = range_.count
         
-        if isinstance(base_reg, KPhysVReg):
-            start = base_reg.index
-            return f"v[{start}:{start + count - 1}]"
-        elif isinstance(base_reg, KPhysSReg):
-            start = base_reg.index
-            return f"s[{start}:{start + count - 1}]"
-        elif isinstance(base_reg, KVReg):
+        if isinstance(base_reg, KVReg):
             start = self.mapping.get_phys_vreg(base_reg)
             return f"v[{start}:{start + count - 1}]"
         elif isinstance(base_reg, KSReg):
@@ -126,25 +129,30 @@ class KernelGenerator:
     
     def _generate_instr(self, instr: KInstr) -> Optional[str]:
         """Generate a single instruction to assembly."""
-        opcode = instr.opcode
+        name = instr.name
         
         # Handle pseudo-ops
-        if opcode == KOpcode.COMMENT:
+        if instr.is_comment:
             if instr.comment:
                 return f"    // {instr.comment}"
             return None
         
-        if opcode == KOpcode.LABEL:
+        if instr.is_label:
             if instr.comment:
                 return f"{instr.comment}:"
             return None
         
-        if opcode == KOpcode.RAW_ASM:
+        if instr.is_raw_asm:
             # RAW_ASM uses comment field for the raw assembly line
             return instr.comment if instr.comment else None
         
-        # Map opcode to mnemonic
-        mnemonic = self._get_mnemonic(opcode)
+        # Look up instruction in registry to get mnemonic
+        instr_def = self._registry.get(name)
+        if instr_def:
+            mnemonic = instr_def.mnemonic
+        else:
+            # Fall back to using name as mnemonic (for instructions not in registry)
+            mnemonic = name
         
         # Build operand list
         operands = []
@@ -171,180 +179,73 @@ class KernelGenerator:
             line += f"  // {instr.comment}"
         
         # Special formatting for certain instructions
-        line = self._apply_special_formatting(opcode, line, operands)
+        line = self._apply_special_formatting(name, instr_def, line, operands)
         
         return line
     
-    def _get_mnemonic(self, opcode: KOpcode) -> str:
-        """Map opcode to assembly mnemonic."""
-        mnemonic_map = {
-            # Moves
-            KOpcode.V_MOV_B32: "v_mov_b32",
-            KOpcode.S_MOV_B32: "s_mov_b32",
-            KOpcode.S_MOV_B64: "s_mov_b64",
-            
-            # Vector arithmetic
-            KOpcode.V_ADD_U32: "v_add_u32",
-            KOpcode.V_SUB_U32: "v_sub_u32",
-            KOpcode.V_MUL_LO_U32: "v_mul_lo_u32",
-            KOpcode.V_MUL_HI_U32: "v_mul_hi_u32",
-            
-            # Vector bitwise
-            KOpcode.V_AND_B32: "v_and_b32",
-            KOpcode.V_OR_B32: "v_or_b32",
-            KOpcode.V_XOR_B32: "v_xor_b32",
-            
-            # Vector shifts
-            KOpcode.V_LSHLREV_B32: "v_lshlrev_b32",
-            KOpcode.V_LSHRREV_B32: "v_lshrrev_b32",
-            KOpcode.V_ASHRREV_I32: "v_ashrrev_i32",
-            
-            # Fused ops
-            KOpcode.V_LSHL_ADD_U32: "v_lshl_add_u32",
-            KOpcode.V_LSHL_OR_B32: "v_lshl_or_b32",
-            KOpcode.V_ADD_LSHL_U32: "v_add_lshl_u32",
-            KOpcode.V_OR3_B32: "v_or3_b32",
-            
-            # Bit field
-            KOpcode.V_BFE_U32: "v_bfe_u32",
-            
-            # Scalar arithmetic
-            KOpcode.S_ADD_U32: "s_add_u32",
-            KOpcode.S_MUL_I32: "s_mul_i32",
-            KOpcode.S_LSHL_B32: "s_lshl_b32",
-            KOpcode.S_LSHR_B32: "s_lshr_b32",
-            KOpcode.S_AND_B32: "s_and_b32",
-            KOpcode.S_OR_B32: "s_or_b32",
-            KOpcode.S_ADD_U64: "s_add_u64",
-            KOpcode.S_LSHL_B64: "s_lshl_b64",
-            
-            # Scalar loads
-            KOpcode.S_LOAD_DWORD: "s_load_dword",
-            KOpcode.S_LOAD_DWORDX2: "s_load_dwordx2",
-            KOpcode.S_LOAD_DWORDX4: "s_load_dwordx4",
-            
-            # Buffer loads
-            KOpcode.BUFFER_LOAD_DWORD: "buffer_load_dword",
-            KOpcode.BUFFER_LOAD_DWORDX2: "buffer_load_dwordx2",
-            KOpcode.BUFFER_LOAD_DWORDX4: "buffer_load_dwordx4",
-            
-            # Global loads
-            KOpcode.GLOBAL_LOAD_DWORD: "global_load_dword",
-            KOpcode.GLOBAL_LOAD_DWORDX2: "global_load_dwordx2",
-            KOpcode.GLOBAL_LOAD_DWORDX4: "global_load_dwordx4",
-            
-            # Buffer stores
-            KOpcode.BUFFER_STORE_DWORD: "buffer_store_dword",
-            KOpcode.BUFFER_STORE_DWORDX2: "buffer_store_dwordx2",
-            KOpcode.BUFFER_STORE_DWORDX4: "buffer_store_dwordx4",
-            
-            # Global stores
-            KOpcode.GLOBAL_STORE_DWORD: "global_store_dword",
-            KOpcode.GLOBAL_STORE_DWORDX2: "global_store_dwordx2",
-            KOpcode.GLOBAL_STORE_DWORDX4: "global_store_dwordx4",
-            
-            # LDS ops
-            KOpcode.DS_READ_B32: "ds_read_b32",
-            KOpcode.DS_READ_B64: "ds_read_b64",
-            KOpcode.DS_READ_B128: "ds_read_b128",
-            KOpcode.DS_WRITE_B32: "ds_write_b32",
-            KOpcode.DS_WRITE_B64: "ds_write_b64",
-            KOpcode.DS_WRITE_B128: "ds_write_b128",
-            
-            # Buffer load with LDS
-            KOpcode.BUFFER_LOAD_DWORD_LDS: "buffer_load_dword",
-            KOpcode.BUFFER_LOAD_DWORDX4_LDS: "buffer_load_dwordx4",
-            
-            # MFMA
-            KOpcode.V_MFMA_F32_16X16X16_F16: "v_mfma_f32_16x16x16_f16",
-            KOpcode.V_MFMA_F32_32X32X8_F16: "v_mfma_f32_32x32x8_f16",
-            KOpcode.V_MFMA_F16_16X16X16_F16: "v_mfma_f16_16x16x16_f16",
-            KOpcode.V_MFMA_F16_32X32X8_F16: "v_mfma_f16_32x32x8_f16",
-            
-            # Lane operations
-            KOpcode.V_MBCNT_LO_U32_B32: "v_mbcnt_lo_u32_b32",
-            KOpcode.V_MBCNT_HI_U32_B32: "v_mbcnt_hi_u32_b32",
-            
-            # Conversion
-            KOpcode.V_CVT_F32_F16: "v_cvt_f32_f16",
-            KOpcode.V_CVT_F16_F32: "v_cvt_f16_f32",
-            KOpcode.V_PACK_B32_F16: "v_pack_b32_f16",
-            KOpcode.V_CVT_PK_FP8_F32: "v_cvt_pk_fp8_f32",
-            
-            # Control flow
-            KOpcode.S_WAITCNT: "s_waitcnt",
-            KOpcode.S_BARRIER: "s_barrier",
-            KOpcode.S_NOP: "s_nop",
-            KOpcode.S_ENDPGM: "s_endpgm",
-            
-            # Loop control flow
-            KOpcode.S_CMP_LT_U32: "s_cmp_lt_u32",
-            KOpcode.S_CMP_LE_U32: "s_cmp_le_u32",
-            KOpcode.S_CMP_EQ_U32: "s_cmp_eq_u32",
-            KOpcode.S_CBRANCH_SCC1: "s_cbranch_scc1",
-            KOpcode.S_CBRANCH_SCC0: "s_cbranch_scc0",
-            KOpcode.S_BRANCH: "s_branch",
-            
-            # Lane ops
-            KOpcode.V_READFIRSTLANE_B32: "v_readfirstlane_b32",
-            
-            # Scalar movk
-            KOpcode.S_MOVK_I32: "s_movk_i32",
-            
-            # 64-bit scalar bitwise
-            KOpcode.S_AND_B64: "s_and_b64",
-            KOpcode.S_OR_B64: "s_or_b64",
-        }
-        
-        if opcode not in mnemonic_map:
-            raise ValueError(f"Unknown opcode: {opcode}")
-        return mnemonic_map[opcode]
-    
-    def _apply_special_formatting(self, opcode: KOpcode, line: str, operands: List[str]) -> str:
-        """Apply special formatting rules for certain instructions."""
-        # ds_read/ds_write: offset is space-separated, not comma-separated
-        if opcode in {KOpcode.DS_READ_B32, KOpcode.DS_READ_B64, KOpcode.DS_READ_B128,
-                      KOpcode.DS_WRITE_B32, KOpcode.DS_WRITE_B64, KOpcode.DS_WRITE_B128}:
-            if "offset:" in line:
-                # Move offset to space-separated position
+    def _apply_special_formatting(self, name: str, instr_def, line: str, operands: List[str]) -> str:
+        """Apply instruction-specific formatting rules."""
+        # DS instructions: offset is space-separated
+        if instr_def and instr_def.offset_format == "space_separated":
+            if ", offset:" in line:
                 parts = line.split(", offset:")
                 if len(parts) == 2:
                     line = parts[0] + " offset:" + parts[1]
         
-        # Buffer load with LDS modifier: append "lds" to the instruction
-        if opcode in {KOpcode.BUFFER_LOAD_DWORD_LDS, KOpcode.BUFFER_LOAD_DWORDX4_LDS}:
-            # Insert "lds" before any comment
+        # s_waitcnt: format the wait count value
+        if name == "s_waitcnt":
+            # Parse the waitcnt immediate and format nicely
+            # The immediate is encoded as: vmcnt[5:0] | lgkmcnt[11:8]
+            for i, op in enumerate(operands):
+                try:
+                    val = int(op.replace("0x", ""), 16 if "0x" in op else 10)
+                    vmcnt = val & 0x3f
+                    lgkmcnt = (val >> 8) & 0xf
+                    if lgkmcnt == 0:
+                        line = f"    s_waitcnt vmcnt({vmcnt})"
+                    else:
+                        line = f"    s_waitcnt vmcnt({vmcnt}) lgkmcnt({lgkmcnt})"
+                except:
+                    pass  # Use original if parsing fails
+        
+        # Buffer instructions: add offen modifier
+        if name.startswith("buffer_"):
+            # Add offen for buffer operations using VGPR offset
+            if " " in line:
+                prefix, rest = line.split(" ", 1)
+                parts = rest.split(", ")
+                if len(parts) >= 4:
+                    base = ", ".join(parts[:4])
+                    modifiers = ["offen"]
+                    for part in parts[4:]:
+                        if part.startswith("offset:"):
+                            modifiers.append(part)
+                    line = f"{prefix} {base} {' '.join(modifiers)}"
+        
+        # Buffer load with LDS: add lds modifier
+        if name.endswith("_lds"):
             if "  //" in line:
                 parts = line.split("  //")
                 line = parts[0] + " lds  //" + parts[1]
             else:
                 line = line + " lds"
         
-        # Branch instructions: label is in the comment field, move it to operand position
-        if opcode in {KOpcode.S_CBRANCH_SCC1, KOpcode.S_CBRANCH_SCC0, KOpcode.S_BRANCH}:
-            # The label is stored as the comment, extract it
-            if "  //" in line:
-                # Remove the comment that's actually the label
-                mnemonic = line.split()[0]
-                comment_part = line.split("  //")[1].strip()
-                line = f"    {mnemonic} {comment_part}"
-        
-        # s_waitcnt: decode and format wait counts
-        if opcode == KOpcode.S_WAITCNT:
-            # The operand is the encoded waitcnt value
-            # Extract and format nicely
-            pass  # Keep simple format for now
-        
         return line
 
 
-# Backwards compatibility aliases
-KernelRenderer = KernelGenerator
-render_program = lambda program, mapping: KernelGenerator(program, mapping).generate_to_string()
-
+# =============================================================================
+# Convenience Functions
+# =============================================================================
 
 def generate_program(program: KernelProgram, mapping: PhysicalMapping) -> str:
-    """Convenience function to generate a program to assembly string."""
-    generator = KernelGenerator(program, mapping)
-    return generator.generate_to_string()
+    """Generate assembly string from a kernel program."""
+    return KernelGenerator(program, mapping).generate_to_string()
 
+
+# =============================================================================
+# Backwards Compatibility Aliases
+# =============================================================================
+
+# Keep old names for backwards compatibility
+KernelRenderer = KernelGenerator
+render_program = lambda program, mapping: KernelGenerator(program, mapping).generate_to_string()

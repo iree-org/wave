@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from .kernel_model import KernelInfo
 
 from .kernel_ir import (
-    KernelProgram, KernelBuilder, KInstr, KOpcode,
+    KernelProgram, KernelBuilder, KInstr,
     KVReg, KSReg, KPhysVReg, KPhysSReg, KSpecialReg,
     KReg, KRegRange, KImm, KMemOffset,
     KernelABI, RegClass, M0,
@@ -74,27 +74,6 @@ def use_kernel_ir_path() -> bool:
 def use_kernel_lsra() -> bool:
     """Check if kernel-level LSRA is enabled."""
     return os.environ.get(WAVE_KERNEL_LSRA_ENV, "0") == "1"
-
-
-# =============================================================================
-# Instruction name to KOpcode mapping
-# =============================================================================
-
-def _build_opcode_mapping() -> Dict[str, KOpcode]:
-    """Build mapping from instruction names to KOpcode enum values."""
-    mapping = {}
-    for opcode in KOpcode:
-        # Convert enum name to instruction name: V_ADD_U32 -> v_add_u32
-        name = opcode.name.lower()
-        mapping[name] = opcode
-    return mapping
-
-_OPCODE_MAP: Dict[str, KOpcode] = _build_opcode_mapping()
-
-
-def _get_opcode(name: str) -> Optional[KOpcode]:
-    """Get KOpcode for an instruction name."""
-    return _OPCODE_MAP.get(name)
 
 
 # =============================================================================
@@ -222,20 +201,19 @@ class KernelCompilationContext:
         When ctx.v_add_u32(...) is called and v_add_u32 isn't explicitly defined,
         this method handles it by:
         1. Looking up the instruction in the registry
-        2. Mapping to a KOpcode
-        3. Allocating destination registers
-        4. Emitting a KInstr
+        2. Allocating destination registers based on operand types
+        3. Emitting a KInstr with the instruction name
         """
         # Avoid recursion on internal attributes
         if name.startswith('_'):
             raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
         
-        # Check if it's an instruction
-        opcode = _get_opcode(name)
-        if opcode is not None:
+        # Check if it's an instruction in the registry
+        instr_def = self._registry.get(name)
+        if instr_def is not None:
             # Create and return an emission method
             def emit_method(*args, comment: str = None, **kwargs):
-                return self._emit_instruction(name, opcode, args, kwargs, comment)
+                return self._emit_instruction(name, instr_def, args, kwargs, comment)
             return emit_method
         
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
@@ -243,7 +221,7 @@ class KernelCompilationContext:
     def _emit_instruction(
         self,
         name: str,
-        opcode: KOpcode,
+        instr_def: InstructionDef,
         args: tuple,
         kwargs: dict,
         comment: str,
@@ -252,19 +230,15 @@ class KernelCompilationContext:
         Emit an instruction with automatic register allocation.
         
         This method:
-        1. Looks up the instruction in the registry
-        2. Allocates destination registers based on operand types
-        3. Emits a KInstr to the program
-        4. Returns the destination register(s) if any
+        1. Allocates destination registers based on operand types
+        2. Emits a KInstr to the program with the instruction name
+        3. Returns the destination register(s) if any
         """
-        # Look up instruction in registry
-        instr_def = self._registry.get(name)
-        
         # Determine destination type and allocate
         dst = None
         defs = ()
         
-        if instr_def and instr_def.defs:
+        if instr_def.defs:
             # Get the first def's type info
             def_op = instr_def.defs[0]
             reg_class, count, alignment = _get_def_info(def_op.types)
@@ -286,9 +260,8 @@ class KernelCompilationContext:
         uses = []
         for arg in args:
             if isinstance(arg, int):
-                # Check if this should be a KImm or KMemOffset based on position
-                # For simplicity, assume it's an immediate unless it's clearly an offset
-                uses.append(arg)  # Let kernel_generator handle raw ints
+                # Let kernel_generator handle raw ints
+                uses.append(arg)
             else:
                 uses.append(arg)
         
@@ -296,8 +269,8 @@ class KernelCompilationContext:
         if 'offset' in kwargs and kwargs['offset']:
             uses.append(KMemOffset(kwargs['offset']))
         
-        # Emit the instruction
-        self.program.emit(KInstr(opcode, defs, tuple(uses), comment=comment))
+        # Emit the instruction using name string
+        self.program.emit(KInstr(name, defs, tuple(uses), comment=comment))
         
         return dst
     
@@ -378,11 +351,11 @@ class KernelCompilationContext:
     
     def emit_raw(self, asm_line: str):
         """Emit a raw assembly line (escape hatch)."""
-        self.program.emit(KInstr(KOpcode.RAW_ASM, (), (), comment=asm_line))
+        self.program.emit(KInstr("_raw_asm", (), (), comment=asm_line))
     
     def emit_label(self, label: str):
         """Emit a label."""
-        self.program.emit(KInstr(KOpcode.LABEL, (), (), comment=label))
+        self.program.emit(KInstr("_label", (), (), comment=label))
     
     def comment(self, text: str):
         """Emit a comment."""
@@ -390,15 +363,15 @@ class KernelCompilationContext:
     
     def s_mov_b32_to_m0(self, src, comment: str = None):
         """Emit s_mov_b32 m0, src (special: destination is M0)."""
-        self.program.emit(KInstr(KOpcode.S_MOV_B32, (M0,), (src,), comment=comment))
+        self.program.emit(KInstr("s_mov_b32", (M0,), (src,), comment=comment))
     
     def s_cbranch_scc1(self, label: str, comment: str = None):
         """Emit s_cbranch_scc1 (label stored in comment)."""
-        self.program.emit(KInstr(KOpcode.S_CBRANCH_SCC1, (), (), comment=label))
+        self.program.emit(KInstr("s_cbranch_scc1", (), (), comment=label))
     
     def s_branch(self, label: str, comment: str = None):
         """Emit s_branch (label stored in comment)."""
-        self.program.emit(KInstr(KOpcode.S_BRANCH, (), (), comment=label))
+        self.program.emit(KInstr("s_branch", (), (), comment=label))
     
     @property
     def unified(self) -> UnifiedEmitter:
