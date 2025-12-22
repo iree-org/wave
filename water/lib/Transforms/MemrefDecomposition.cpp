@@ -6,6 +6,7 @@
 
 #include "water/Transforms/Passes.h"
 
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -61,6 +62,20 @@ unflattenDescriptor(ValueRange values, unsigned rank) {
   return {buffer, sizes, strides};
 }
 
+static Value GEP(OpBuilder &builder, Location loc, Value buffer, Value offset) {
+  auto srcType = cast<MemRefType>(buffer.getType());
+  assert(srcType.getRank() == 0 && "buffer must be 0D");
+  auto bufferType =
+      MemRefType::get({ShapedType::kDynamic}, builder.getIntegerType(8),
+                      MemRefLayoutAttrInterface{}, srcType.getMemorySpace());
+  if (bufferType != srcType)
+    buffer =
+        UnrealizedConversionCastOp::create(builder, loc, bufferType, buffer)
+            .getResult(0);
+
+  return memref::ViewOp::create(builder, loc, srcType, buffer, offset, {});
+}
+
 /// Type converter for memref decomposition.
 /// Converts memref<NxMx...xT> to (memref<?xi8>, sizes..., strides...)
 class MemrefDecompositionTypeConverter : public TypeConverter {
@@ -74,17 +89,19 @@ public:
     addConversion(
         [](MemRefType type,
            SmallVectorImpl<Type> &results) -> std::optional<LogicalResult> {
+          unsigned rank = type.getRank();
+          if (rank == 0)
+            return std::nullopt;
+
           MLIRContext *ctx = type.getContext();
           auto indexType = IndexType::get(ctx);
-          auto i8Type = IntegerType::get(ctx, 8);
 
           // Create the byte buffer type.
-          auto byteMemrefType = MemRefType::get({ShapedType::kDynamic}, i8Type,
+          auto byteMemrefType = MemRefType::get({}, type.getElementType(),
                                                 MemRefLayoutAttrInterface{},
                                                 type.getMemorySpace());
 
           results.push_back(byteMemrefType);
-          unsigned rank = type.getRank();
           results.resize(1 + rank * 2, indexType);
           return success();
         });
@@ -109,14 +126,7 @@ public:
       if (failed(resultType.getStridesAndOffset(staticStrides, staticOffset)))
         return {};
 
-      auto bufferType = MemRefType::get({}, resultType.getElementType(),
-                                        MemRefLayoutAttrInterface{},
-                                        resultType.getMemorySpace());
-
       auto [buffer, sizes, strides] = unflattenDescriptor(inputs, rank);
-      buffer =
-          UnrealizedConversionCastOp::create(builder, loc, bufferType, buffer)
-              .getResult(0);
 
       OpFoldResult offset = builder.getIndexAttr(0);
       SmallVector<OpFoldResult> mixedSizes;
@@ -191,17 +201,16 @@ public:
           strides[i] =
               arith::ConstantIndexOp::create(builder, loc, staticStrides[i]);
 
-      Value size =
-          getValue(builder, loc,
-                   affine::makeComposedFoldedAffineApply(
-                       builder, loc, sizeExpr, getAsOpFoldResult(sizes)));
+      if (memrefType.getRank() != 0) {
+        auto bufferType = MemRefType::get({}, memrefType.getElementType(),
+                                          MemRefLayoutAttrInterface{},
+                                          memrefType.getMemorySpace());
+        input =
+            UnrealizedConversionCastOp::create(builder, loc, bufferType, input)
+                .getResult(0);
+      }
 
-      Type bufferType = resultType.front();
-      Value base =
-          UnrealizedConversionCastOp::create(builder, loc, bufferType, input)
-              .getResult(0);
-      base =
-          memref::ViewOp::create(builder, loc, bufferType, base, offset, size);
+      Value base = GEP(builder, loc, input, offset);
 
       SmallVector<Value> result;
       result.push_back(base);
@@ -215,9 +224,10 @@ public:
 /// Returns a collapsed memref and the linearized index to access the element
 /// at the specified indices.
 static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
-                              unsigned typeBit, Type loadType, ValueRange sizes,
+                              Type loadType, ValueRange sizes,
                               ValueRange strides, ValueRange indices) {
   auto sourceType = cast<MemRefType>(source.getType());
+  unsigned typeBit = sourceType.getElementType().getIntOrFloatBitWidth();
   OpFoldResult zero = rewriter.getIndexAttr(0);
   OpFoldResult linearizedIndices;
   memref::LinearizedMemRefInfo linearizedInfo;
@@ -226,17 +236,20 @@ static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
           rewriter, loc, typeBit, typeBit, zero, getAsOpFoldResult(sizes),
           getAsOpFoldResult(strides), getAsOpFoldResult(indices));
 
-  auto targetMemrefType = MemRefType::get(
-      /*shape*/ {}, loadType, MemRefLayoutAttrInterface{},
-      sourceType.getMemorySpace());
-
   AffineExpr mul = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
   linearizedIndices = affine::makeComposedFoldedAffineApply(rewriter, loc, mul,
                                                             linearizedIndices);
 
+  if (sourceType.getElementType() != loadType) {
+    auto bufferType = MemRefType::get({}, loadType, MemRefLayoutAttrInterface{},
+                                      sourceType.getMemorySpace());
+    source =
+        UnrealizedConversionCastOp::create(rewriter, loc, bufferType, source)
+            .getResult(0);
+  }
+
   Value offset = getValue(rewriter, loc, linearizedIndices);
-  return memref::ViewOp::create(rewriter, loc, targetMemrefType, source, offset,
-                                {});
+  return GEP(rewriter, loc, source, offset);
 }
 
 template <typename OpTy>
@@ -251,7 +264,6 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
     Location loc = loadOp.getLoc();
     auto memrefType = cast<MemRefType>(loadOp.getMemRefType());
     unsigned rank = memrefType.getRank();
-    unsigned typeBit = memrefType.getElementType().getIntOrFloatBitWidth();
 
     if (rank == 0)
       return rewriter.notifyMatchFailure(loadOp, "already 0D memref");
@@ -272,8 +284,8 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
     auto [buffer, sizes, strides] = unflattenDescriptor(sourceDecomposed, rank);
     SmallVector<Value> indices = flatten(adaptor.getIndices());
 
-    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, typeBit,
-                                        loadType, sizes, strides, indices);
+    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, loadType, sizes,
+                                        strides, indices);
 
     rewriter.replaceOpWithNewOp<memref::LoadOp>(
         loadOp, loadType, viewMemref, /*indices*/ ValueRange{},
@@ -294,7 +306,6 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
     Location loc = storeOp.getLoc();
     auto memrefType = cast<MemRefType>(storeOp.getMemRefType());
     unsigned rank = memrefType.getRank();
-    unsigned typeBit = memrefType.getElementType().getIntOrFloatBitWidth();
 
     if (rank == 0)
       return rewriter.notifyMatchFailure(storeOp, "already 0D memref");
@@ -320,8 +331,8 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
     }
     Type storeType = valueToStore.getType();
 
-    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, typeBit,
-                                        storeType, sizes, strides, indices);
+    Value viewMemref = getFlattenMemref(rewriter, loc, buffer, storeType, sizes,
+                                        strides, indices);
     rewriter.replaceOpWithNewOp<memref::StoreOp>(
         storeOp, valueToStore, viewMemref, /*indices*/ ValueRange{},
         storeOp.getNontemporal(), storeOp.getAlignmentAttr());
@@ -376,24 +387,69 @@ struct DecomposeReinterpretCast
     assert(resultRank == newSizes.size() && resultRank == newStrides.size() &&
            "sizes and strides must have the same rank");
 
-    Value size = getValue(rewriter, loc,
-                          affine::makeComposedFoldedAffineApply(
-                              rewriter, loc, sizeExpr, newSizes));
-
     // Compute adjusted offset in bytes.
     AffineExpr offsetExpr = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
     OpFoldResult adjustedOffset = affine::makeComposedFoldedAffineApply(
         rewriter, loc, offsetExpr, getAsOpFoldResult(offset));
     Value adjustedOffsetValue = getValue(rewriter, loc, adjustedOffset);
 
-    Value newBuffer = memref::ViewOp::create(rewriter, loc, buffer.getType(),
-                                             buffer, adjustedOffsetValue, size);
+    Value newBuffer = GEP(rewriter, loc, buffer, adjustedOffsetValue);
 
     // Build result as decomposed memref (buffer, sizes, strides).
     SmallVector<Value> decomposedResult;
     decomposedResult.push_back(newBuffer);
     llvm::append_range(decomposedResult, getValues(rewriter, loc, newSizes));
     llvm::append_range(decomposedResult, getValues(rewriter, loc, newStrides));
+
+    rewriter.replaceOpWithMultiple(castOp, {decomposedResult});
+    return success();
+  }
+};
+
+struct DecomposeFatRawBufferCast
+    : public OpConversionPattern<amdgpu::FatRawBufferCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+  using OneToNOpAdaptor =
+      amdgpu::FatRawBufferCastOp::GenericAdaptor<ArrayRef<ValueRange>>;
+
+  LogicalResult
+  matchAndRewrite(amdgpu::FatRawBufferCastOp castOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = castOp.getLoc();
+    auto resultType = cast<MemRefType>(castOp.getType());
+    unsigned resultRank = resultType.getRank();
+
+    if (resultRank == 0)
+      return rewriter.notifyMatchFailure(castOp, "already 0D memref");
+
+    auto sourceType = cast<MemRefType>(castOp.getSource().getType());
+    unsigned sourceRank = sourceType.getRank();
+
+    // Get decomposed source.
+    ValueRange sourceDecomposed = adaptor.getSource();
+    if (sourceDecomposed.size() != 1 + sourceRank * 2)
+      return rewriter.notifyMatchFailure(castOp,
+                                         "expected source to be decomposed");
+
+    auto [buffer, sizes, strides] =
+        unflattenDescriptor(sourceDecomposed, sourceRank);
+
+    // Apply fat_raw_buffer_cast to the buffer only.
+    auto bufferType = cast<MemRefType>(buffer.getType());
+    auto resultBufferType =
+        MemRefType::get(bufferType.getShape(), bufferType.getElementType(),
+                        bufferType.getLayout(), resultType.getMemorySpace());
+
+    Value fatBuffer = amdgpu::FatRawBufferCastOp::create(
+        rewriter, loc, resultBufferType, buffer, castOp.getValidBytes(),
+        castOp.getCacheSwizzleStride(), castOp.getBoundsCheck(),
+        castOp.getResetOffset());
+
+    // Build result as decomposed memref (buffer, sizes, strides).
+    SmallVector<Value> decomposedResult;
+    decomposedResult.push_back(fatBuffer);
+    llvm::append_range(decomposedResult, sizes);
+    llvm::append_range(decomposedResult, strides);
 
     rewriter.replaceOpWithMultiple(castOp, {decomposedResult});
     return success();
@@ -419,7 +475,10 @@ public:
     // Set up conversion target.
     ConversionTarget target(*ctx);
     target.addLegalDialect<arith::ArithDialect, affine::AffineDialect,
-                           memref::MemRefDialect, vector::VectorDialect>();
+                           memref::MemRefDialect, vector::VectorDialect,
+                           amdgpu::AMDGPUDialect>();
+    target.addLegalOp<UnrealizedConversionCastOp>();
+
     // Mark load/store operations with non-0D memrefs as illegal.
     target.addDynamicallyLegalOp<memref::LoadOp>(
         isDynamicallyLegalOp<memref::LoadOp>);
@@ -431,9 +490,10 @@ public:
         isDynamicallyLegalOp<vector::StoreOp>);
 
     // Mark reinterpret_cast with non-0D result as illegal.
-    target.addDynamicallyLegalOp<memref::ReinterpretCastOp>(
-        [](memref::ReinterpretCastOp op) {
-          auto resultType = cast<MemRefType>(op.getType());
+    target.addDynamicallyLegalOp<memref::ReinterpretCastOp,
+                                 amdgpu::FatRawBufferCastOp>(
+        [&](Operation *op) {
+          auto resultType = cast<MemRefType>(op->getResult(0).getType());
           return resultType.getRank() == 0;
         });
 
@@ -442,7 +502,8 @@ public:
     patterns
         .add<DecomposeLoadOp<memref::LoadOp>, DecomposeStoreOp<memref::StoreOp>,
              DecomposeLoadOp<vector::LoadOp>, DecomposeStoreOp<vector::StoreOp>,
-             DecomposeReinterpretCast>(typeConverter, ctx);
+             DecomposeReinterpretCast, DecomposeFatRawBufferCast>(typeConverter,
+                                                                  ctx);
 
     // Apply partial conversion.
     if (failed(applyPartialConversion(op, target, std::move(patterns))))
