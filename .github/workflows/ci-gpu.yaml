@@ -103,12 +103,12 @@ jobs:
 
 
   test:
-    name: "${{ matrix.os }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
+    name: "${{ contains( 'self-hosted', matrix.os ) ? matrix.os[0] : matrix.os }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
     strategy:
       fail-fast: false
       matrix:
         version: [3.11]
-        os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org, linux-mi35x-1gpu-ossci-iree-org, [self-hosted, Linux, X64, rdna4, shark49]] # nodai-amdgpu-mi250-x86-64
+        os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org, linux-mi35x-1gpu-ossci-iree-org, [rdna4, self-hosted, Linux, X64, shark49]] # nodai-amdgpu-mi250-x86-64
     runs-on: ${{matrix.os}}
     timeout-minutes: 60
     needs: build_llvm_linux
