@@ -115,6 +115,11 @@ class KernelGenerator:
             if -16 <= op.value <= 64:
                 return str(op.value)
             return f"0x{op.value & 0xffffffff:x}"
+        elif isinstance(op, int):
+            # Handle raw integer immediates (convenience)
+            if -16 <= op <= 64:
+                return str(op)
+            return f"0x{op & 0xffffffff:x}"
         elif isinstance(op, KMemOffset):
             return f"offset:{op.bytes}"
         raise ValueError(f"Unknown operand type: {type(op)}")
