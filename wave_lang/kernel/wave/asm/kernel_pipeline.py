@@ -45,6 +45,7 @@ from .kernel_ir import (
 from .kernel_liveness import compute_liveness, LivenessInfo
 from .kernel_regalloc import KernelRegAlloc, allocate_kernel, AllocationStats, AllocationError
 from .kernel_generator import KernelGenerator, PhysicalMapping, generate_program
+from .unified_emitter import UnifiedEmitter, EmissionMode
 
 
 # Environment variable to enable kernel-level LSRA
@@ -100,6 +101,7 @@ class KernelCompilationContext:
     # Internal state
     program: KernelProgram = field(init=False)
     builder: KernelBuilder = field(init=False)
+    _unified: UnifiedEmitter = field(init=False)
     
     # Symbol bindings: MLIR SSA value string -> virtual register
     _symbol_bindings: Dict[str, KReg] = field(default_factory=dict, init=False)
@@ -132,6 +134,14 @@ class KernelCompilationContext:
         # Create program
         self.program = KernelProgram(abi=abi, max_vgprs=self.max_vgprs, max_sgprs=self.max_sgprs)
         self.builder = KernelBuilder(self.program)
+        
+        # Create unified emitter in KERNEL_IR mode
+        # This allows callers to use kernel_ctx.unified.v_add_u32(...) syntax
+        self._unified = UnifiedEmitter(
+            architecture="common",
+            mode=EmissionMode.KERNEL_IR,
+            context=self,
+        )
     
     # =========================================================================
     # Symbol binding (for MLIR SSA value tracking)
@@ -244,6 +254,24 @@ class KernelCompilationContext:
         """Emit a label."""
         self.program.emit(KInstr(KOpcode.LABEL, (), (), comment=label))
     
+    @property
+    def unified(self) -> UnifiedEmitter:
+        """
+        Get the unified emitter for this context.
+        
+        This provides a consistent API with AsmEmitter.unified, allowing
+        callers to use kernel_ctx.unified.v_add_u32(...) syntax.
+        
+        When using the unified emitter:
+        - Methods that exist on KernelCompilationContext are called directly
+        - Methods that don't exist fall back to emit_raw()
+        - Virtual registers are returned for instructions with destinations
+        
+        Example:
+            result = kernel_ctx.unified.v_add_u32(src0, src1, comment="add")
+        """
+        return self._unified
+
     # =========================================================================
     # Additional instruction emission
     # =========================================================================
