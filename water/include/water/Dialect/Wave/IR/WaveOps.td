@@ -282,7 +282,7 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
-    WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
     WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Reads from memory";
@@ -336,7 +336,7 @@ def RegisterOp : WaveOp<"register", [
 
 def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
-    WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
+    DeclareOpInterfaceMethods<WaveElementsPerThreadOpInterface>,
     CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Writes into memory";
