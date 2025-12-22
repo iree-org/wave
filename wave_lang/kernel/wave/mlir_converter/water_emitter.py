@@ -34,6 +34,44 @@ if TYPE_CHECKING:
     from wave_lang.kernel.ops.wave_ops import *
 
 from wave_lang.support.location_config import LocationCaptureLevel
+from wave_lang.kernel.lang.wave_types import Memory, Register
+from wave_lang.kernel._support.tracing import CapturedTrace
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+from wave_lang.kernel._support.indexing import safe_subs
+from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
+
+from wave_lang.kernel.ops.wave_ops import (
+    Allocate,
+    ExtractSlice,
+    get_custom,
+    GetResult,
+    IterArg,
+    Iterate,
+    MMA,
+    NewRegister,
+    Output,
+    Placeholder,
+    SharedMemoryBarrier,
+    Write,
+)
+from wave_lang.kernel.wave.constraints import (
+    Constraint,
+    DeviceConstraint,
+    HardwareConstraint,
+    TilingConstraint,
+    WaveConstraint,
+    WorkgroupConstraint,
+)
+from wave_lang.kernel.lang.global_symbols import (
+    GLOBAL_ADDRESS_SPACE,
+    SHARED_ADDRESS_SPACE,
+)
+
+assert "iree" not in sys.modules, (
+    "IREE was transitively imported into the water emitter, "
+    + "which will lead to MLIR library clashes. "
+    + "Please clean up the import list so as not to import IREE."
+)
 
 try:
     from water_mlir.water_mlir import ir
@@ -137,9 +175,6 @@ def _type_to_wave_mlir(
     ctx: ir.Context, type_: type[Register] | type[Memory]
 ) -> ir.Type:
     # TODO: Use WaveTensorType bindings when they exist
-    # TODO: Properly importing this unconditionally at top of the file still
-    #       clashes with IREE bindings.
-    from wave_lang.kernel.lang.wave_types import Memory, Register
 
     # Map Python Wave types to MLIR types
     if issubclass(type_, Register):
@@ -187,12 +222,6 @@ def _parse_input() -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions,
     constraints = unpickled.get("constraints") if isinstance(unpickled, dict) else None
     options = unpickled.get("options") if isinstance(unpickled, dict) else None
     pipeline = unpickled.get("pipeline") if isinstance(unpickled, dict) else None
-
-    # TODO: Properly importing this unconditionally at top of the file still
-    #       clashes with IREE bindings.
-    from wave_lang.kernel._support.tracing import CapturedTrace
-    from wave_lang.kernel.wave.compile_options import WaveCompileOptions
-    from wave_lang.kernel.wave.constraints import Constraint
 
     if not isinstance(trace, CapturedTrace):
         raise SystemExit(
@@ -288,8 +317,6 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
         return wave.WaveSymbolAttr.get(name)
 
 
-# Cannot specify better types here because it would require importing from
-# wave_lang and bringing in the IREE dependency we can't have at the top level.
 def _build_index_mapping_dict(
     index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
 ) -> ir.DictAttr:
@@ -304,7 +331,6 @@ def _build_index_mapping_dict(
     symbols that are allowed to be present in the expressions. Other symbols
     will be removed and a warning will be generated if it is the case.
     """
-    from wave_lang.kernel._support.indexing import safe_subs
 
     index_mappings: dict[str, ir.Attribute] = {}
     for dim, exprs in index.items():
@@ -349,9 +375,6 @@ def _build_index_mapping_dict(
 
 
 def _attach_attributes(node: CustomOp, op: ir.Operation):
-    from wave_lang.kernel.ops.wave_ops import Iterate, MMA, get_custom
-    from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
-
     if getattr(node, "index", None) and isinstance(node.index, dict):
         dict_attrs: list[ir.DictAttr] = []
 
@@ -446,21 +469,6 @@ def _emit_ops_from_graph(
     value_map: dict[fx.Node | fx.Proxy, ir.Value],
     ctx: ir.Context,
 ):
-    # Import wave types locally to avoid clashing with iree bindings
-    from wave_lang.kernel.ops.wave_ops import (
-        get_custom,
-        Allocate,
-        ExtractSlice,
-        GetResult,
-        Output,
-        Placeholder,
-        Write,
-        MMA,
-        NewRegister,
-        Iterate,
-        SharedMemoryBarrier,
-    )
-
     # Emit in original order to preserve dependencies
     for fx_node in graph.nodes:
         node = get_custom(fx_node)
@@ -609,14 +617,6 @@ def _emit_ops_from_graph(
 
 
 def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
-    from wave_lang.kernel.wave.constraints import (
-        WorkgroupConstraint,
-        HardwareConstraint,
-        WaveConstraint,
-        TilingConstraint,
-        DeviceConstraint,
-    )
-
     if isinstance(constraint, HardwareConstraint):
         mma_type_attr = None
         if constraint.mma_type:
@@ -698,12 +698,6 @@ def _create_kernel_module(
         - The created MLIR module, or None if creation failed.
         - List of diagnostic messages.
     """
-    from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
-    from wave_lang.kernel.lang.global_symbols import (
-        GLOBAL_ADDRESS_SPACE,
-        SHARED_ADDRESS_SPACE,
-    )
-
     diagnostics: list[str] = []
 
     def diagnostics_handler(d):
@@ -748,7 +742,6 @@ def _create_kernel_module(
         # have been handled by Python `promote_placeholders` transformation, and all function arguments
         # should be global by now (shared memory allocation happens inside the kernel).
         # Thus, resolve symbolic address spaces from hyperparameters.
-        from wave_lang.kernel.lang.wave_types import Memory
 
         # print(t, t.address_space)
         if issubclass(t, Memory) and t.address_space in options.subs:
