@@ -103,7 +103,7 @@ jobs:
 
 
   test:
-    name: "${{ contains( 'self-hosted', matrix.os ) ? matrix.os[0] : matrix.os }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
+    name: "${{ contains( 'self-hosted', matrix.os ) && matrix.os[0] || matrix.os }} :: ${{ matrix.version }} :: Unit Tests and Type Checking"
     strategy:
       fail-fast: false
       matrix:
