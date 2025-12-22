@@ -58,11 +58,6 @@ class IRWalker:
         self._lds_view_base_bytes: dict[str, int] = {}  # LDS view offsets
         # Initialize operation handlers
         self.handlers = OperationHandlers(self)
-    
-    @property
-    def use_kernel_ir(self) -> bool:
-        """Check if kernel IR mode is active."""
-        return self.kernel_ctx is not None
 
     def interpret_func(self, fn: func_d.FuncOp) -> KernelInfo:
         kernel_info = KernelInfo(name=fn.sym_name.value)
