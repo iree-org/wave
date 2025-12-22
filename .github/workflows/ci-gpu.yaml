@@ -251,11 +251,17 @@ jobs:
 
       - name: Run LIT tests
         run: |
+          export WAVE_TEST_DWARFDUMP=1
           if [[ "${{ contains(matrix.os, 'mi35x') }}" == 'true' ]]; then
             # TODO: mlir_converter tests segfault on mi35x
             export WAVE_TEST_WATER=0
           fi
-          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
+
+          if [[ "${{ contains(matrix.os, 'rdna4') }}" == 'true' ]]; then
+            # TODO: can't sudo to install dwarfdump on rdna4
+            export WAVE_TEST_DWARFDUMP=0
+          fi
+          lit lit_tests/ -v
 
       - name: MyPy Type Checking
         run: |
