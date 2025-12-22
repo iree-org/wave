@@ -108,7 +108,7 @@ jobs:
       fail-fast: false
       matrix:
         version: [3.11]
-        os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org, linux-mi35x-1gpu-ossci-iree-org] # nodai-amdgpu-mi250-x86-64
+        os: [ubuntu-22.04, linux-mi325-1gpu-ossci-iree-org, linux-mi35x-1gpu-ossci-iree-org, [self-hosted, Linux, X64, rdna4, shark49]] # nodai-amdgpu-mi250-x86-64
     runs-on: ${{matrix.os}}
     timeout-minutes: 60
     needs: build_llvm_linux
@@ -131,7 +131,7 @@ jobs:
             echo "IS_MI35X=false" >> $GITHUB_ENV
           fi
 
-          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi35x') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' ]]; then
+          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi35x') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' || "${{ contains(matrix.os, 'rdna') }}" == 'true' ]]; then
             echo "HAS_GPU=true" >> $GITHUB_ENV
             echo "HAS_NO_GPU=false" >> $GITHUB_ENV
           else
@@ -211,7 +211,7 @@ jobs:
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -r requirements.txt -e .
 
-      - name: Install pip deps (mi250/mi325)
+      - name: Install pip deps (mi250/mi325/rdna)
         if: ${{ env.HAS_GPU == 'true' && env.IS_MI35X == 'false' }}
         run: |
           python -m pip install --upgrade pip
