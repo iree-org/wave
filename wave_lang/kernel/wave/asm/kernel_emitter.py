@@ -10,10 +10,10 @@ This module provides KernelEmitter, which uses a single kernel-wide program
 and allocator for all expression emission. Key benefits:
 
 1. Global CSE across all expressions in the kernel
-2. Better register reuse through liveness-aware allocation
+2. Better register reuse through kernel-wide allocation
 3. Reduced register pressure through kernel-wide optimization
 
-Enable with WAVE_KERNEL_LSRA=1 environment variable.
+Algebraic simplification is enabled by default (WAVE_EXPR_SIMPLIFY=0 to disable).
 """
 
 import os
@@ -22,7 +22,44 @@ from collections import namedtuple
 from typing import Dict, List, Optional, Tuple, Set, Union
 
 from .expr_simplify import simplify_for_emission, SimplifyStats
-from .expr_ir import expr_key
+
+
+def expr_key(expr: sympy.Expr):
+    """
+    Build a structural, hashable key for an expression.
+    
+    Uses a direct structural walk instead of canonicalization to avoid
+    sympy.simplify which can incorrectly simplify floor expressions.
+    The key is commutative-aware (Add and Mul args are sorted).
+    """
+    def to_key(e):
+        if e is None:
+            return ("none",)
+        if isinstance(e, sympy.Integer):
+            return ("int", int(e))
+        if isinstance(e, sympy.Rational) and not isinstance(e, sympy.Integer):
+            # Rationals like 1/64 - preserve structure
+            return ("rat", int(e.p), int(e.q))
+        if isinstance(e, sympy.Symbol):
+            return ("sym", str(e))
+        if isinstance(e, sympy.Add):
+            # Sort args by their string keys for commutativity
+            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
+            return ("add", arg_keys)
+        if isinstance(e, sympy.Mul):
+            # Sort args by their string keys for commutativity
+            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
+            return ("mul", arg_keys)
+        if isinstance(e, sympy.Mod):
+            return ("mod", to_key(e.args[0]), to_key(e.args[1]))
+        if getattr(e, "func", None) == sympy.floor:
+            return ("floor", to_key(e.args[0]))
+        if isinstance(e, sympy.Pow):
+            return ("pow", to_key(e.args[0]), to_key(e.args[1]))
+        # Generic fallback - use srepr for structural representation
+        return ("raw", sympy.srepr(e))
+
+    return to_key(expr)
 
 
 # Debug flags
@@ -660,22 +697,14 @@ class KernelEmitter:
         self._cache.clear()
 
 
-def use_kernel_emitter() -> bool:
-    """Check if kernel-level emitter is enabled (default: on)."""
-    return os.environ.get("WAVE_KERNEL_LSRA", "1") == "1"
-
-
 def create_emitter(asm_emitter, kernel_info):
     """
-    Create the appropriate emitter based on configuration.
+    Create a KernelEmitter for the given kernel.
     
-    Returns KernelEmitter if WAVE_KERNEL_LSRA=1, otherwise ExprEmitter.
+    KernelEmitter manages registers across the entire kernel, providing
+    global CSE and better register reuse than per-expression allocation.
     """
-    if use_kernel_emitter():
-        emitter = KernelEmitter(asm_emitter, kernel_info)
-        if DEBUG_KERNEL_EMITTER:
-            print(f"[EMITTER] Created KernelEmitter id={id(emitter)}")
-        return emitter
-    else:
-        from .expr_emitter import ExprEmitter
-        return ExprEmitter(asm_emitter, kernel_info)
+    emitter = KernelEmitter(asm_emitter, kernel_info)
+    if DEBUG_KERNEL_EMITTER:
+        print(f"[EMITTER] Created KernelEmitter id={id(emitter)}")
+    return emitter

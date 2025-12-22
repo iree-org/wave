@@ -65,28 +65,6 @@ Key Components
   - Peak VGPR usage tracking for performance analysis
   - Typed operation logging with RegisterOp enum
 
-**Expression Emitter** (`expr_emitter.py`)
-  SymPy expression visitor that emits AMDGCN instructions with CSE:
-
-  - Two-phase emitter using virtual register IR
-  - Emits to virtual registers first, then allocates physical registers
-  - Global CSE across entire kernel (not just per-expression)
-  - Register coalescing eliminates redundant v_mov instructions
-  - Immediate value optimization for inline constants (0-64, -1 to -16)
-  - Algebraic simplification (floor/mod identities)
-  - CachedExprRef wrapper prevents sympy Add flattening
-  - Expression canonicalization to maximize CSE hits
-  - Optimized instruction selection (shifts for power-of-2, masks for modulo)
-  - Multi-wave thread ID extraction (tid_x, tid_y) from flat ID
-
-**Virtual Register IR** (`expr_ir.py`, `expr_regalloc.py`, `expr_opt.py`)
-  Infrastructure for expression-level virtual registers:
-
-  - VReg/SReg classes for virtual registers
-  - ExprProgram for instruction sequences
-  - Linear scan register allocator with multiple policies
-  - Optimization passes (copy propagation, DCE, coalescing)
-
 **Kernel-Level IR** (`kernel_ir.py`, `kernel_liveness.py`, `kernel_regalloc.py`)
   Infrastructure for whole-program register allocation:
 
@@ -100,11 +78,10 @@ Key Components
   - No spilling: fails compilation with diagnostic if allocation fails
 
 **Kernel-Level Expression Emitter** (`kernel_emitter.py`)
-  Default kernel-wide expression emitter with streaming allocation:
+  Kernel-wide expression emitter with streaming allocation:
 
-  - Default since WAVE_KERNEL_LSRA=1 is now the default (use WAVE_KERNEL_LSRA=0 to disable)
   - Algebraic simplification enabled by default (use WAVE_EXPR_SIMPLIFY=0 to disable)
-  - Direct alternative to ExprEmitter with same API (get_or_emit, bind_symbol)
+  - API: get_or_emit (emit expression and return register), bind_symbol (bind symbol to register)
   - Kernel-wide register pool for better register reuse across expressions
   - Global CSE cache for all expressions in the kernel
   - Streaming emission: allocates physical registers and emits immediately
@@ -825,7 +802,7 @@ The ASM backend maintains a unified mapping from MLIR SSA values to their alloca
 Expression Visitor System
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ASM backend uses a sophisticated expression visitor (``ExprEmitterV2``) to convert SymPy expressions to AMDGCN assembly with automatic Common Subexpression Elimination:
+The ASM backend uses ``KernelEmitter`` to convert SymPy expressions to AMDGCN assembly with automatic Common Subexpression Elimination:
 
 **Supported Operations:**
 

@@ -346,12 +346,12 @@ def _emit_thread_id_expression(
     """
     Emit ASM for expressions involving thread ID symbols.
 
-    Uses ExprEmitter (virtual register IR with CSE and optimization passes)
-    to walk the expression tree and emit appropriate AMDGCN instructions.
+    Uses KernelEmitter to walk the expression tree and emit appropriate 
+    AMDGCN instructions.
 
     Note: This creates a fresh emitter instance, so CSE is not shared with the
     main per-kernel emitter. For best CSE behavior, use the per-kernel emitter
-    from OperationHandlers._get_expr_emitter() instead.
+    from OperationHandlers._get_expr_emitter() instead for shared CSE.
 
     Supports:
     - Constants and tid_x/tid_y/wgid_x/wgid_y
@@ -369,9 +369,9 @@ def _emit_thread_id_expression(
     if os.environ.get("WAVE_UTILS_DEBUG", "0") == "1":
         print(f"[UTILS] _emit_thread_id_expression: expr={expression}, dst={destination_register}")
     
-    from .expr_emitter import ExprEmitter
+    from .kernel_emitter import KernelEmitter
 
-    visitor = ExprEmitter(emitter, kernel_info)
+    visitor = KernelEmitter(emitter, kernel_info)
     return visitor.emit(expression, destination_register)
 
 
