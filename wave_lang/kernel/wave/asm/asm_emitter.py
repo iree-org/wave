@@ -20,24 +20,8 @@ from .kernel_model import KernelInfo, MemRefInfo
 from .utils import emit_expression_asm, normalize_wg_size
 from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator, AGPRAllocator
 from .mlir_walker import IRWalker
-from .instructions import (
-    SLoadDwordx2,
-    BufferLoadDwordx4,
-    BufferLoadDwordx2,
-    BufferStoreDwordx4,
-    BufferStoreDword,
-    SMovB32,
-    SMovkI32,
-    VMbcntLoU32B32,
-    VMbcntHiU32B32,
-    VLshlRevB32,
-    VMovB32,
-    VMulLoU32,
-    SWaitcnt,
-    SEndpgm,
-    SBarrier,
-    emit_kernargs,
-)
+# Instructions removed - using unified emitter directly
+from .instruction_categories import InstructionCategory, categorize_instruction
 
 # Import latency-aware scheduling infrastructure
 from .latency_provider import LatencyProvider
@@ -61,6 +45,52 @@ def get_register_granularity(target: str) -> Tuple[int, int]:
         - CDNA2/CDNA3 (gfx90a, gfx940, gfx941, gfx942): VGPRs in blocks of 4, SGPRs in blocks of 8
     """
     return (4, 8)
+
+
+class TicketingEmitterWrapper:
+    """
+    Wrapper around UnifiedEmitter that handles ticketing for memory operations.
+    
+    Intercepts all method calls and issues VMEM/LGKM tickets for memory operations
+    before delegating to the underlying emitter.
+    """
+    
+    def __init__(self, base_emitter: UnifiedEmitter, asm_emitter: "AsmEmitter"):
+        self._base = base_emitter
+        self._asm_emitter = asm_emitter
+        self._registry = base_emitter._registry
+    
+    def __getattr__(self, name: str):
+        """Intercept method calls to add ticketing."""
+        attr = getattr(self._base, name)
+        
+        if callable(attr):
+            # Look up instruction to check category
+            instr_def = self._registry.get(name)
+            if instr_def:
+                mnemonic = instr_def.mnemonic
+                
+                def wrapper(*args, **kwargs):
+                    # Issue tickets for memory operations
+                    category = categorize_instruction(mnemonic)
+                    if category == InstructionCategory.VMEM:
+                        self._asm_emitter.ticketing.next_vmem_ticket()
+                    elif category == InstructionCategory.LGKM:
+                        self._asm_emitter.ticketing.next_lgkm_ticket()
+                    
+                    # Call the actual method
+                    result = attr(*args, **kwargs)
+                    
+                    # Hazard mitigation
+                    mitigation = self._asm_emitter.hazard_detector.get_mitigation(mnemonic)
+                    if mitigation:
+                        self._asm_emitter.lines.append(str(mitigation))
+                    
+                    return result
+                
+                return wrapper
+        
+        return attr
 
 
 @dataclass
@@ -405,9 +435,9 @@ class AsmEmitter:
     # ---- Unified Emitter Integration ----
     
     @property
-    def unified(self) -> UnifiedEmitter:
+    def unified(self) -> "TicketingEmitterWrapper":
         """
-        Get the unified instruction emitter.
+        Get the unified instruction emitter with ticketing support.
         
         Provides a consistent API for instruction emission that works with
         both the legacy line-based emission and kernel IR paths.
@@ -418,12 +448,14 @@ class AsmEmitter:
         """
         if self._unified_emitter is None:
             # Create unified emitter in direct mode, sharing our line buffer
-            self._unified_emitter = UnifiedEmitter(
+            base_emitter = UnifiedEmitter(
                 architecture=self._get_architecture(),
                 mode=EmissionMode.DIRECT,
             )
             # Share the lines buffer
-            self._unified_emitter._lines = self.lines
+            base_emitter._lines = self.lines
+            # Wrap with ticketing support
+            self._unified_emitter = TicketingEmitterWrapper(base_emitter, self)
         return self._unified_emitter
     
     def _get_architecture(self) -> str:
@@ -688,12 +720,10 @@ class AsmEmitter:
         upper_bound_sgpr = self.sgpr_allocator.alloc_s()
 
         # Initialize loop counter
-        from .instructions import SMovB32
-
         self.emit(f"    # Initialize loop {loop_id} counter and bounds")
-        self.emit_instruction(SMovB32(counter_sgpr, lower_bound))
-        self.emit_instruction(SMovB32(step_sgpr, step))
-        self.emit_instruction(SMovB32(upper_bound_sgpr, upper_bound))
+        self.unified.s_mov_b32(f"s{counter_sgpr}", lower_bound)
+        self.unified.s_mov_b32(f"s{step_sgpr}", step)
+        self.unified.s_mov_b32(f"s{upper_bound_sgpr}", upper_bound)
 
         loop_ctx = {
             "loop_id": loop_id,
@@ -714,12 +744,10 @@ class AsmEmitter:
         counter = loop_ctx["counter_sgpr"]
         upper = loop_ctx["upper_bound_sgpr"]
 
-        from .instructions import SCmpLtU32, SCBranchSCC1
-
         self.emit(f"loop_{loop_id}_header:    # Loop {loop_id} header")
         # Use s_cmp_lt_u32 (less than, not equal) for scf.for semantics [lower, upper)
-        self.emit_instruction(SCmpLtU32(f"s{counter}", f"s{upper}"))
-        self.emit_instruction(SCBranchSCC1(f"loop_{loop_id}_body"))
+        self.unified.s_cmp_lt_u32(f"s{counter}", f"s{upper}")
+        self.unified.s_cbranch_scc1(f"loop_{loop_id}_body")
         self.emit(f"    s_branch loop_{loop_id}_exit")
         self.emit(f"loop_{loop_id}_body:    # Loop {loop_id} body")
 
@@ -729,11 +757,9 @@ class AsmEmitter:
         counter = loop_ctx["counter_sgpr"]
         step = loop_ctx["step_sgpr"]
 
-        from .instructions import SAddU32, SBranch
-
         self.emit(f"loop_{loop_id}_latch:    # Loop {loop_id} latch")
-        self.emit_instruction(SAddU32(f"s{counter}", f"s{counter}", f"s{step}"))
-        self.emit_instruction(SBranch(f"loop_{loop_id}_header"))
+        self.unified.s_add_u32(f"s{counter}", f"s{counter}", f"s{step}")
+        self.unified.s_branch(f"loop_{loop_id}_header")
 
     def end_loop(self):
         """End loop and emit exit label."""
@@ -749,7 +775,7 @@ class AsmEmitter:
         num_args: int,
         lds_size_bytes: int = 0,
     ):
-        self.emit_instruction(SEndpgm())
+        self.unified.s_endpgm()
         self.emit("")
 
         # Extract workgroup dimensions
@@ -875,8 +901,8 @@ amdhsa.kernels:
 
         self.emit(f"    # lane id (0..{subgroup_size-1})")
         # Compute lane ID directly into allocated VGPR
-        self.emit_instruction(VMbcntLoU32B32(self.lane_id_v, -1))
-        self.emit_instruction(VMbcntHiU32B32(self.lane_id_v, -1, self.lane_id_v))
+        self.unified.v_mbcnt_lo_u32_b32(f"v{self.lane_id_v}", -1, 0)
+        self.unified.v_mbcnt_hi_u32_b32(f"v{self.lane_id_v}", -1, f"v{self.lane_id_v}")
         self.lane_id_emitted = True
         return self.lane_id_v
 
@@ -926,9 +952,7 @@ amdhsa.kernels:
             cycles_needed = mfma_to_agpr_read_latency - elapsed
             nops = min(int(cycles_needed), 15)
             if nops > 0:
-                from .instructions import SNop
-
-                self.emit_instruction(SNop(nops))
+                self.unified.s_nop(nops)
                 self.scoreboard.advance(nops)
 
     # ========= Scoreboard-based hazard detection (optional) =========
@@ -982,12 +1006,10 @@ amdhsa.kernels:
                 # Insert s_nop if < 10 cycles, otherwise s_waitcnt
                 if cycles_needed < 10:
                     nops = min(int(cycles_needed), 15)
-                    from .instructions import SNop
-
-                    self.emit_instruction(SNop(nops))
+                    self.unified.s_nop(nops)
                 else:
                     # Insert wait for pending operations
-                    self.emit_instruction(SWaitcnt("vmcnt(0) lgkmcnt(0)"))
+                    self.unified.s_waitcnt("vmcnt(0) lgkmcnt(0)")
 
     # ---- synchronization and LDS helpers ----
     def emit_barrier(self):
@@ -1010,29 +1032,23 @@ amdhsa.kernels:
 
         # Emit lgkmcnt(0) only if there are outstanding LGKM operations
         if has_outstanding_lgkm:
-            self.emit_instruction(SWaitcnt("lgkmcnt(0)"))
+            self.unified.s_waitcnt("lgkmcnt(0)")
 
         # Always record that we've observed an lgkmcnt(0) at this barrier
         # This prevents redundant waits after the barrier until new LGKM ops occur
         self.ticketing.observe_lgkm_wait(0)
 
         # Emit the workgroup synchronization barrier
-        self.emit_instruction(SBarrier())
+        self.unified.s_barrier()
 
     def emit_lds_write_b32(self, addr_vreg: int, src_vreg: int):
-        from .instructions import DSWriteB32
-
-        self.emit_instruction(DSWriteB32(addr_vreg, src_vreg))
+        self.unified.ds_write_b32(f"v{addr_vreg}", f"v{src_vreg}")
 
     def emit_lds_write_b64(self, addr_vreg: int, src_pair: Tuple[int, int]):
-        from .instructions import DSWriteB64
-
-        self.emit_instruction(DSWriteB64(addr_vreg, src_pair))
+        self.unified.ds_write_b64(f"v{addr_vreg}", f"v[{src_pair[0]}:{src_pair[1]}]")
 
     def emit_lds_write_b128(self, addr_vreg: int, src_quad: Tuple[int, int, int, int]):
-        from .instructions import DSWriteB128
-
-        self.emit_instruction(DSWriteB128(addr_vreg, src_quad))
+        self.unified.ds_write_b128(f"v{addr_vreg}", f"v[{src_quad[0]}:{src_quad[3]}]")
 
     def emit_lds_read_b64(self, dst_pair: Tuple[int, int], addr_vreg: int, offset: int = 0):
         """Emit ds_read_b64 instruction.
@@ -1042,9 +1058,7 @@ amdhsa.kernels:
             addr_vreg: VGPR containing base address
             offset: Optional immediate offset in bytes (0-65535)
         """
-        from .instructions import DSReadB64
-
-        self.emit_instruction(DSReadB64(dst_pair, addr_vreg, offset))
+        self.unified.ds_read_b64(f"v[{dst_pair[0]}:{dst_pair[1]}]", f"v{addr_vreg}", offset=offset)
 
     def emit_mfma_16x16x16_f16(
         self, a_pair: Tuple[int, int], b_pair: Tuple[int, int], acc_quad=None
@@ -1061,10 +1075,8 @@ amdhsa.kernels:
             b_pair: VGPR pair for B operand
             acc_quad: Optional VGPR quad to use as accumulator (for chained MFMAs)
         """
-        from .instructions import VMfmaF32_16x16x16F16, SWaitcnt
-
         # Wait for LDS reads to complete before MFMA
-        self.emit_instruction(SWaitcnt("lgkmcnt(0)"))
+        self.unified.s_waitcnt("lgkmcnt(0)")
 
         # Determine result/accumulator quad
         use_loop_accumulator = False
@@ -1092,10 +1104,13 @@ amdhsa.kernels:
         # Emit MFMA into VGPR quad
         # If using loop accumulator or explicit accumulator, pass it as the accumulator operand
         # Otherwise use 0 (zero initialization)
-        acc_operand = vgpr_base if use_loop_accumulator else 0
+        acc_operand = f"v[{vgpr_base}:{vgpr_base+3}]" if use_loop_accumulator else "0"
 
-        self.emit_instruction(
-            VMfmaF32_16x16x16F16(vgpr_base, a_pair, b_pair, acc_operand, use_vgpr=True)
+        self.unified.v_mfma_f32_16x16x16_f16(
+            f"v[{vgpr_base}:{vgpr_base+3}]",
+            f"v[{a_pair[0]}:{a_pair[1]}]",
+            f"v[{b_pair[0]}:{b_pair[1]}]",
+            acc_operand
         )
         # Track MFMA for latency-aware scheduling
         self.track_mfma("v_mfma_f32_16x16x16_f16")
@@ -1119,12 +1134,12 @@ amdhsa.kernels:
         if (scale_bytes & (scale_bytes - 1)) == 0:
             # Power of 2: use shift
             shift_amount = scale_bytes.bit_length() - 1
-            self.emit_instruction(VLshlRevB32(result_v, shift_amount, lane_id_v))
+            self.unified.v_lshlrev_b32(f"v{result_v}", shift_amount, f"v{lane_id_v}")
         else:
             # Non-power of 2: use multiply
             temp_v = self.vgpr_allocator.alloc_v()
-            self.emit_instruction(VMovB32(temp_v, scale_bytes))
-            self.emit_instruction(VMulLoU32(result_v, lane_id_v, temp_v))
+            self.unified.v_mov_b32(f"v{temp_v}", scale_bytes)
+            self.unified.v_mul_lo_u32(f"v{result_v}", f"v{lane_id_v}", f"v{temp_v}")
             self.vgpr_allocator.free_v(temp_v)
 
         return result_v
@@ -1132,9 +1147,9 @@ amdhsa.kernels:
     def materialize_scalar_literal(self, sreg: int, literal: int):
         # Use s_movk_i32 for small literals (16-bit signed); fallback to s_mov_b32 for larger values
         if -32768 <= literal <= 32767:
-            self.emit_instruction(SMovkI32(sreg, int(literal)))
+            self.unified.s_movk_i32(f"s{sreg}", int(literal))
         else:
-            self.emit_instruction(SMovB32(sreg, int(literal)))
+            self.unified.s_mov_b32(f"s{sreg}", int(literal))
         self.register_file.s_max = max(self.register_file.s_max, sreg)
 
     def emit_kernargs(self, num_args: int):
@@ -1143,24 +1158,21 @@ amdhsa.kernels:
         kernarg_ptr_low = 0
         kernarg_ptr_high = 1
 
-        kernarg_instructions = emit_kernargs(
-            num_args, (kernarg_ptr_low, kernarg_ptr_high)
-        )
-        for i, instruction in enumerate(kernarg_instructions):
-            if isinstance(instruction, SLoadDwordx2):
-                # Allocate SGPR pair for this kernel argument
-                low_register, high_register = self.sgpr_allocator.pair()
-                self.ptr_pairs[i] = (low_register, high_register)
+        for i in range(num_args):
+            # Allocate SGPR pair for this kernel argument
+            low_register, high_register = self.sgpr_allocator.pair()
+            self.ptr_pairs[i] = (low_register, high_register)
 
-                # Create instruction with allocated registers
-                new_instruction = SLoadDwordx2(
-                    (low_register, high_register),
-                    (kernarg_ptr_low, kernarg_ptr_high),
-                    i * 8,
-                )
-                self.emit_instruction(new_instruction)
-            else:
-                self.emit_instruction(instruction)
+            # Emit load instruction using unified emitter
+            self.unified.s_load_dwordx2(
+                f"s[{low_register}:{high_register}]",
+                f"s[{kernarg_ptr_low}:{kernarg_ptr_high}]",
+                f"0x{i * 8:x}",
+                comment=f"Load kernarg at offset {i * 8}"
+            )
+        
+        # Wait for all kernel argument loads
+        self.unified.s_waitcnt("lgkmcnt(0)", comment="wait for all kernarg loads")
         self.emit("")  # Add empty line
 
     def ensure_srd_for_subspan(self, memref_ssa: str, arg_index: int, limit_bytes: int):
@@ -1180,10 +1192,10 @@ amdhsa.kernels:
         )
 
         self.emit(f"    # SRD for {memref_ssa} (arg{arg_index})")
-        self.emit_instruction(SMovB32(srd_register_0, f"s{base_low_register}"))
-        self.emit_instruction(SMovB32(srd_register_1, f"s{base_high_register}"))
-        self.emit_instruction(SMovB32(srd_register_2, limit_bytes))
-        self.emit_instruction(SMovB32(srd_register_3, "Srd127_96"))
+        self.unified.s_mov_b32(f"s{srd_register_0}", f"s{base_low_register}")
+        self.unified.s_mov_b32(f"s{srd_register_1}", f"s{base_high_register}")
+        self.unified.s_mov_b32(f"s{srd_register_2}", limit_bytes)
+        self.unified.s_mov_b32(f"s{srd_register_3}", "Srd127_96")
 
     def compute_voffset_and_instoffset_expr(
         self,
@@ -1203,7 +1215,6 @@ amdhsa.kernels:
             - instoffset: Integer constant offset for instruction immediate
         """
         from .utils import split_const_dynamic
-        from .instructions import VMovB32
 
         # Split into constant and dynamic parts
         const_offset, dynamic_expr = split_const_dynamic(byte_offset_expr)
@@ -1213,7 +1224,7 @@ amdhsa.kernels:
             hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
         ):
             voffset_v = self.vgpr_allocator.alloc_v()
-            self.emit_instruction(VMovB32(voffset_v, 0))
+            self.unified.v_mov_b32(f"v{voffset_v}", 0)
             return voffset_v, const_offset
 
         # Materialize dynamic expression into a VGPR
@@ -1240,15 +1251,13 @@ amdhsa.kernels:
         Returns:
             VGPR index containing the computed address (caller owns lifetime)
         """
-        from .instructions import VMovB32
-
         # If expression is a constant, just materialize it
         if isinstance(byte_offset_expr, int) or (
             hasattr(byte_offset_expr, "is_number") and byte_offset_expr.is_number
         ):
             addr_v = self.vgpr_allocator.alloc_v()
             const_val = int(byte_offset_expr)
-            self.emit_instruction(VMovB32(addr_v, const_val))
+            self.unified.v_mov_b32(f"v{addr_v}", const_val)
             return addr_v
 
         # Materialize the full expression into a VGPR
@@ -1332,30 +1341,35 @@ amdhsa.kernels:
         ]
         register_list = []
         self.emit(f"    # load {vector_bytes}B from {memref_ssa}")
+        
+        # Format vindex_reg if it's an integer
+        vindex_str = f"v{vector_index_register}" if isinstance(vector_index_register, int) else vector_index_register
+        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
+        
         if vector_bytes == 8:
             # Allocate a pair of VGPRs using the allocator
             vpair = self.vgpr_allocator.alloc_v_pair()
             register_list.append(vpair)
-            load_instruction = BufferLoadDwordx2(
-                (vpair[0], vpair[1]),
-                vector_index_register,
-                (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
-                instruction_offset_base,
+            self.unified.buffer_load_dwordx2(
+                f"v[{vpair[0]}:{vpair[1]}]",
+                vindex_str,
+                srd_str,
+                "0",
+                instruction_offset_base
             )
-            self.emit_instruction(load_instruction)
             # Don't wait immediately - let caller decide when to wait
         else:
             for offset in self.chunk_offsets(vector_bytes):
                 vector_quad = self.vgpr_allocator.quad()
                 register_list.append(vector_quad)
                 total_offset = instruction_offset_base + offset
-                load_instruction = BufferLoadDwordx4(
-                    vector_quad,
-                    vector_index_register,
-                    (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
-                    total_offset,
+                self.unified.buffer_load_dwordx4(
+                    f"v[{vector_quad[0]}:{vector_quad[3]}]",
+                    vindex_str,
+                    srd_str,
+                    "0",
+                    total_offset
                 )
-                self.emit_instruction(load_instruction)
                 # Don't wait immediately - let caller decide when to wait
         # Return the current VMEM ticket (the last one issued by the loads above)
         ticket = self.ticketing._vmem_last_ticket
@@ -1373,6 +1387,11 @@ amdhsa.kernels:
             memref_ssa
         ]
         self.emit(f"    # store {vector_bytes}B to {memref_ssa}")
+        
+        # Format vindex_reg if it's an integer
+        vindex_str = f"v{vector_index_register}" if isinstance(vector_index_register, int) else vector_index_register
+        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
+        
         if vector_bytes == 4:
             # Treat register_list[0] as a scalar VGPR
             src_reg = (
@@ -1380,25 +1399,25 @@ amdhsa.kernels:
                 if isinstance(register_list[0], int)
                 else register_list[0][0]
             )
-            store_instruction = BufferStoreDword(
-                src_reg,
-                vector_index_register,
-                (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
-                instruction_offset_base,
+            self.unified.buffer_store_dword(
+                f"v{src_reg}",
+                vindex_str,
+                srd_str,
+                "0",
+                instruction_offset_base
             )
-            self.emit_instruction(store_instruction)
         else:
             for vector_quad, offset in zip(
                 register_list, self.chunk_offsets(vector_bytes)
             ):
                 total_offset = instruction_offset_base + offset
-                store_instruction = BufferStoreDwordx4(
-                    vector_quad,
-                    vector_index_register,
-                    (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
-                    total_offset,
+                self.unified.buffer_store_dwordx4(
+                    f"v[{vector_quad[0]}:{vector_quad[3]}]",
+                    vindex_str,
+                    srd_str,
+                    "0",
+                    total_offset
                 )
-                self.emit_instruction(store_instruction)
 
     def emit_store_scalar(
         self,
@@ -1410,14 +1429,15 @@ amdhsa.kernels:
         srd_register_0, srd_register_1, srd_register_2, srd_register_3 = self.srds[
             memref_ssa
         ]
+        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
         self.emit(f"    # store 4B to {memref_ssa}")
-        store_instruction = BufferStoreDword(
-            src_vreg,
+        self.unified.buffer_store_dword(
+            f"v{src_vreg}",
             vector_index_register,
-            (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
-            instruction_offset,
+            srd_str,
+            "0",
+            instruction_offset
         )
-        self.emit_instruction(store_instruction)
 
     def emit_store_scalar_with_vindex(
         self,
@@ -1429,11 +1449,12 @@ amdhsa.kernels:
         srd_register_0, srd_register_1, srd_register_2, srd_register_3 = self.srds[
             memref_ssa
         ]
+        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
         self.emit(f"    # store 4B to {memref_ssa}")
-        store_instruction = BufferStoreDword(
-            src_vreg,
+        self.unified.buffer_store_dword(
+            f"v{src_vreg}",
             f"v{vindex_vreg}",
-            (srd_register_0, srd_register_1, srd_register_2, srd_register_3),
-            instoffset,
+            srd_str,
+            "0",
+            instoffset
         )
-        self.emit_instruction(store_instruction)

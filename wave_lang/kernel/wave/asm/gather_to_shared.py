@@ -21,16 +21,7 @@ import sympy
 
 from wave_lang.support.ir_imports import amdgpu_d, MemRefType, VectorType
 
-from .instructions import (
-    BufferLoadDwordLds,
-    BufferLoadDwordx4Lds,
-    SMovB32,
-    SMovB32M0,
-    SAndB32,
-    SOrB32,
-    VMovB32,
-    VReadfirstlaneB32,
-)
+# Instruction classes removed - using unified emitter
 from .utils import parse_vector_type_from_obj, parse_memref_type_from_obj
 
 if TYPE_CHECKING:
@@ -195,18 +186,16 @@ class G2SHandler:
         emitter = self.walker.emitter
         s0, s1, s2, s3 = srd_regs
 
-        emitter.emit_instruction(SMovB32(s0, f"s{orig_srd_regs[0]}", "SRD word0"))
+        emitter.unified.s_mov_b32(f"s{s0}", f"s{orig_srd_regs[0]}", comment="SRD word0")
 
         if cache_swizzle_bits == 0:
-            emitter.emit_instruction(SMovB32(s1, f"s{orig_srd_regs[1]}", "SRD word1"))
+            emitter.unified.s_mov_b32(f"s{s1}", f"s{orig_srd_regs[1]}", comment="SRD word1")
         else:
-            emitter.emit_instruction(SAndB32(s1, f"s{orig_srd_regs[1]}", 0xFFFF))
-            emitter.emit_instruction(
-                SOrB32(s1, f"s{s1}", cache_swizzle_bits, "cache swizzle")
-            )
+            emitter.unified.s_and_b32(f"s{s1}", f"s{orig_srd_regs[1]}", hex(0xFFFF))
+            emitter.unified.s_or_b32(f"s{s1}", f"s{s1}", hex(cache_swizzle_bits), comment="cache swizzle")
 
-        emitter.emit_instruction(SMovB32(s2, _SRD_MAX_BUFFER_SIZE, "SRD word2"))
-        emitter.emit_instruction(SMovB32(s3, _SRD_WORD3_LDS, "SRD word3"))
+        emitter.unified.s_mov_b32(f"s{s2}", _SRD_MAX_BUFFER_SIZE, comment="SRD word2")
+        emitter.unified.s_mov_b32(f"s{s3}", _SRD_WORD3_LDS, comment="SRD word3")
 
     def _get_or_create_srd(
         self, orig_srd_regs: tuple, src_memref_ssa: str
@@ -239,9 +228,7 @@ class G2SHandler:
 
         if isinstance(value, int):
             voffset = self.walker.emitter.vgpr_allocator.alloc_v()
-            self.walker.emitter.emit_instruction(
-                VMovB32(voffset, value * scale_bytes, "offset")
-            )
+            self.walker.emitter.unified.v_mov_b32(f"v{voffset}", value * scale_bytes, comment="offset")
             return voffset
 
         if isinstance(value, sympy.Expr):
@@ -288,9 +275,7 @@ class G2SHandler:
         if m0_sgprs:
             precomputed = m0_sgprs.get(id(operation))
             if precomputed is not None:
-                emitter.emit_instruction(
-                    SMovB32M0(f"s{precomputed}", "Pre-computed M0")
-                )
+                emitter.unified.s_mov_b32("m0", f"s{precomputed}", comment="Pre-computed M0")
                 return
 
         # Compute M0 inline from row/col indices
@@ -308,14 +293,14 @@ class G2SHandler:
 
         # Emit: either constant or expression -> readfirstlane -> M0
         if m0_expr.is_number:
-            emitter.emit_instruction(SMovB32M0(int(m0_expr), "LDS offset"))
+            emitter.unified.s_mov_b32("m0", int(m0_expr), comment="LDS offset")
         else:
             m0_vreg = int(
                 self.handlers._get_expr_emitter(kernel_info).get_or_emit(m0_expr)[1:]
             )
             s_tmp = emitter.sgpr_allocator.alloc_s()
-            emitter.emit_instruction(VReadfirstlaneB32(s_tmp, m0_vreg))
-            emitter.emit_instruction(SMovB32M0(f"s{s_tmp}"))
+            emitter.unified.v_readfirstlane_b32(f"s{s_tmp}", f"v{m0_vreg}")
+            emitter.unified.s_mov_b32("m0", f"s{s_tmp}")
             emitter.sgpr_allocator.free_s(s_tmp)
 
     def _emit_buffer_load(
@@ -323,16 +308,15 @@ class G2SHandler:
     ) -> None:
         """Emit buffer_load...lds instruction."""
         emitter = self.walker.emitter
+        srd_str = f"s[{srd_regs[0]}:{srd_regs[3]}]"
 
         if transfer_bytes == 4:
-            emitter.emit_instruction(
-                BufferLoadDwordLds(voffset, srd_regs, 0, 0, f"gather {transfer_bytes}B")
+            emitter.unified.buffer_load_dword_lds(
+                f"v{voffset}", srd_str, "0", comment=f"gather {transfer_bytes}B"
             )
         elif transfer_bytes == 16:
-            emitter.emit_instruction(
-                BufferLoadDwordx4Lds(
-                    voffset, srd_regs, 0, 0, f"gather {transfer_bytes}B"
-                )
+            emitter.unified.buffer_load_dwordx4_lds(
+                f"v{voffset}", srd_str, "0", comment=f"gather {transfer_bytes}B"
             )
         else:
             raise NotImplementedError(
@@ -366,12 +350,12 @@ class G2SHandler:
         s_m0 = emitter.sgpr_allocator.alloc_s()
 
         if m0_expr.is_number:
-            emitter.emit_instruction(SMovB32(s_m0, int(m0_expr), "Pre-compute M0"))
+            emitter.unified.s_mov_b32(f"s{s_m0}", int(m0_expr), comment="Pre-compute M0")
         else:
             m0_vreg = int(
                 self.handlers._get_expr_emitter(kernel_info).get_or_emit(m0_expr)[1:]
             )
-            emitter.emit_instruction(VReadfirstlaneB32(s_m0, m0_vreg, "Pre-compute M0"))
+            emitter.unified.v_readfirstlane_b32(f"s{s_m0}", f"v{m0_vreg}", comment="Pre-compute M0")
 
         return s_m0
 

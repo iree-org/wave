@@ -804,9 +804,7 @@ class OperationHandlers:
                 self.walker.emitter.vgpr_allocator.alloc_v(),
                 const_offset,
             )
-            from .instructions import VMovB32
-
-            self.walker.emitter.emit_instruction(VMovB32(voffset_v, 0))
+            self.walker.emitter.unified.v_mov_b32(f"v{voffset_v}", 0)
             voffset_is_temp = True
         else:
             voffset_reg = self._get_expr_emitter(kernel_info).get_or_emit(dynamic_expr)
@@ -966,9 +964,7 @@ class OperationHandlers:
                 self.walker.last_vmem_ticket
             )
             if threshold is not None:
-                from .instructions import SWaitcnt
-
-                self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({threshold})"))
+                self.walker.emitter.unified.s_waitcnt(f"vmcnt({threshold})")
         src_regs = self._extract_source_registers(vector_bytes)
         self._emit_ds_write(memref_ssa, addr_v, src_regs, vector_bytes)
 
@@ -1014,9 +1010,7 @@ class OperationHandlers:
             hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
         ):
             voffset_v = self.walker.emitter.vgpr_allocator.alloc_v()
-            from .instructions import VMovB32
-
-            self.walker.emitter.emit_instruction(VMovB32(voffset_v, 0))
+            self.walker.emitter.unified.v_mov_b32(f"v{voffset_v}", 0)
             return voffset_v, const_offset, True
         else:
             voffset_reg = self._get_expr_emitter(kernel_info).get_or_emit(dynamic_expr)
@@ -1045,9 +1039,7 @@ class OperationHandlers:
                 self.walker.last_vmem_ticket
             )
             if threshold is not None:
-                from .instructions import SWaitcnt
-
-                self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({threshold})"))
+                self.walker.emitter.unified.s_waitcnt(f"vmcnt({threshold})")
 
         if num_elements == 1:
             # Scalar store: get first register, emit, free
@@ -1175,8 +1167,6 @@ class OperationHandlers:
         loop_ctx["induction_var_ssa"] = induction_var_ssa
 
         # Allocate and initialize VGPRs for iter_args (accumulators)
-        from .instructions import VMovB32
-
         iter_arg_vgprs = []
 
         for i, arg in enumerate(loop_body.arguments[1:]):  # Skip induction variable
@@ -1191,7 +1181,7 @@ class OperationHandlers:
             # Initialize accumulator to 0.0 before loop
             emitter.emit(f"    # Initialize accumulator {i} to 0.0")
             for vreg in quad:
-                emitter.emit_instruction(VMovB32(vreg, 0))
+                emitter.unified.v_mov_b32(f"v{vreg}", 0)
 
         loop_ctx["iter_arg_vgprs"] = iter_arg_vgprs
 
@@ -1308,12 +1298,10 @@ class OperationHandlers:
 
         Encoding (gfx9+): bits 0-3 = vmcnt (0 = wait for all, 15 = no wait)
         """
-        from .instructions import SWaitcnt
-
         waitcnt_value = int(operation.bitfield.value)
         vmcnt = waitcnt_value & 0xF  # 4-bit field: 0-15
 
         # vmcnt=15 means "no wait" (max 4-bit value), so only emit if < 15
         if vmcnt < 15:
-            self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({vmcnt})"))
+            self.walker.emitter.unified.s_waitcnt(f"vmcnt({vmcnt})")
             self.walker.emitter.ticketing.observe_vmem_wait(vmcnt)
