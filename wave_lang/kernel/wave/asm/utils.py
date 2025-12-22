@@ -323,14 +323,12 @@ def _emit_constant_expression(
     expression: sympy.Expr, emitter, kernel_info, destination_register: str
 ) -> str:
     """Emit ASM for a constant expression."""
-    from .instructions import VMovB32
-
     try:
         constant_value = int(expression)
         # Parse destination vreg index from string like "v2"
         assert destination_register.startswith("v")
         dst_v = int(destination_register[1:])
-        emitter.emit_instruction(VMovB32(dst_v, constant_value))
+        emitter.unified.v_mov_b32(destination_register, constant_value)
         emitter.register_file.v_used.add(dst_v)
         return destination_register
     except:

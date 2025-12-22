@@ -28,8 +28,6 @@ wait state before v_readfirstlane can safely read the result.
 
 from typing import List, Optional
 
-from .instructions import Instruction, SNop
-
 
 class HazardDetector:
     """
@@ -74,7 +72,7 @@ class HazardDetector:
         """
         return mnemonic.lower() in self.HAZARDOUS_VALU_OPS
 
-    def get_mitigation(self, mnemonic: str) -> Optional[Instruction]:
+    def get_mitigation(self, mnemonic: str) -> Optional[str]:
         """
         Get the hazard mitigation instruction for a given mnemonic.
 
@@ -82,15 +80,15 @@ class HazardDetector:
             mnemonic: The mnemonic of the instruction that was just emitted
 
         Returns:
-            Mitigation instruction object, or None if no mitigation needed
+            Mitigation instruction string, or None if no mitigation needed
         """
         if not mnemonic or not self.check_valu_hazard(mnemonic):
             return None
 
         # s_nop 0 provides 1 wait cycle for VALU->readfirstlane hazard
-        return SNop(0)
+        return "    s_nop 0"
 
-    def get_mitigations(self, mnemonic: str) -> List[Instruction]:
+    def get_mitigations(self, mnemonic: str) -> List[str]:
         """
         Get list of mitigation instructions (for compatibility).
 
@@ -98,7 +96,7 @@ class HazardDetector:
             mnemonic: The mnemonic of the instruction that was just emitted
 
         Returns:
-            List of mitigation instruction objects (may be empty)
+            List of mitigation instruction strings (may be empty)
         """
         mitigation = self.get_mitigation(mnemonic)
         return [mitigation] if mitigation else []

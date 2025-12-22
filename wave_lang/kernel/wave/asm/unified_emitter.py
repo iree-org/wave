@@ -286,6 +286,30 @@ class InstructionBuilder:
                 if len(parts) == 2:
                     line = parts[0] + " offset:" + parts[1]
         
+        # Buffer instructions: special formatting
+        # For loads: mnemonic dst, vaddr, srd, soffset offen [offset:N]
+        # For stores: mnemonic src, vaddr, srd, soffset offen [offset:N]
+        # For lds loads: mnemonic vaddr, srd, soffset offen [offset:N] lds
+        if self.instr_def.mnemonic.startswith("buffer_"):
+            # Split into mnemonic and operands
+            if " " in line:
+                prefix, rest = line.split(" ", 1)
+                parts = rest.split(", ")
+                
+                # Find where comma-separated operands end and modifiers begin
+                # LDS loads have 3 operands, regular have 4
+                is_lds = self.instr_def.lds_modifier
+                min_parts = 3 if is_lds else 4
+                
+                if len(parts) >= min_parts:
+                    # First min_parts comma-separated, then add offen and offset
+                    base = ", ".join(parts[:min_parts])
+                    modifiers = ["offen"]
+                    for part in parts[min_parts:]:
+                        if part.startswith("offset:"):
+                            modifiers.append(part)
+                    line = f"{prefix} {base} {' '.join(modifiers)}"
+        
         # Branch instructions: label from comment
         if self.instr_def.is_branch and not operands:
             # Label might be in operands or needs special handling
