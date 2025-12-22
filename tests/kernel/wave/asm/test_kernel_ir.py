@@ -17,7 +17,7 @@ These tests verify:
 
 import pytest
 from wave_lang.kernel.wave.asm.kernel_ir import (
-    KernelProgram, KernelBuilder, KInstr, KOpcode,
+    KernelProgram, KernelBuilder, KInstr,
     KVReg, KSReg, KPhysVReg, KPhysSReg,
     KRegRange, KImm, KMemOffset,
     KernelABI, RegClass,
@@ -73,7 +73,8 @@ class TestKernelIR:
         assert pair.count == 2
         assert pair.alignment == 2
         assert isinstance(pair.base_reg, KVReg)
-        assert pair.reg_class == RegClass.VGPR
+        # Verify it's a VGPR by checking the base register type
+        assert is_vgpr(pair.base_reg)
     
     def test_instruction_emission(self):
         """Test instruction emission."""
@@ -84,8 +85,8 @@ class TestKernelIR:
         v2 = builder.v_add_u32(v1, KImm(1))
         
         assert len(prog) == 2
-        assert prog.instructions[0].opcode == KOpcode.V_MOV_B32
-        assert prog.instructions[1].opcode == KOpcode.V_ADD_U32
+        assert prog.instructions[0].name == "v_mov_b32"
+        assert prog.instructions[1].name == "v_add_u32"
     
     def test_builder_helpers(self):
         """Test builder helper methods."""
@@ -184,8 +185,8 @@ class TestLiveness:
         
         # Manually create an SSA violation (same reg defined twice)
         v0 = prog.alloc_vreg()
-        prog.emit(KInstr(KOpcode.V_MOV_B32, (v0,), (KImm(1),)))
-        prog.emit(KInstr(KOpcode.V_MOV_B32, (v0,), (KImm(2),)))  # Violation!
+        prog.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
+        prog.emit(KInstr("v_mov_b32", (v0,), (KImm(2),)))  # Violation!
         
         errors = validate_ssa(prog)
         assert len(errors) > 0
@@ -259,7 +260,7 @@ class TestRegAlloc:
         addr = builder.v_mov_b32(KImm(0))
         
         # Emit ds_read_b64 that defines the pair
-        prog.emit(KInstr(KOpcode.DS_READ_B64, (pair,), (addr,)))
+        prog.emit(KInstr("ds_read_b64", (pair,), (addr,)))
         
         mapping, stats = allocate_kernel(prog)
         

@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 
 from .kernel_ir import (
-    KernelProgram, KInstr, KOpcode,
+    KernelProgram, KInstr,
     KVReg, KSReg, KPhysVReg, KPhysSReg,
     KReg, KRegRange, KOperand,
     RegClass, is_virtual, is_vgpr, is_sgpr, get_reg_class,
