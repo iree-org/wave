@@ -7,32 +7,12 @@
 # Lang, compiler, ops, constraints
 import inspect
 import logging
-import warnings
-from itertools import chain
 
 # Others
-from typing import Any, Callable, Optional, Sequence, get_type_hints
+from typing import Any, Callable, Optional, get_type_hints
 
-import sympy
 import torch.fx as fx
-from sympy.utilities.lambdify import lambdastr
 
-from wave_lang.support.ir_imports import (
-    Block,
-    BlockArgument,
-    Context,
-    IndexType,
-    InsertionPoint,
-    IntegerAttr,
-    Location,
-    MemRefType,
-    Module,
-    Operation,
-    arith_d,
-    builtin_d,
-    stream_d,
-)
-from .scheduling.schedule_enums import SchedulingType
 from .wave_schedule import WaveSchedule
 
 from .._support.indexing import IndexExpr, IndexingContext, index_symbol
@@ -44,27 +24,11 @@ from .._support.tracing import (
     KernelRegionGraph,
     Launchable,
 )
-from ..compiler import builder, dispatch_codegen, kernel_codegen
 from ..lang import Grid, Memory, SymbolBind
 from ..lang.global_symbols import *
 from ..ops import wave_ops
 from ..ops.wave_ops import CustomOp, Iterate, get_custom, Placeholder, Output
 
-# Passes
-from .analysis.index_sequence_analysis import (
-    set_node_indices,
-    set_post_expansion_indices,
-)
-from .analysis.partition_strided_operators import (
-    partition_gather_like_ops,
-    partition_ops_with_gpr_offsets,
-    partition_strided_operators,
-)
-from .barriers import add_shared_memory_barriers
-from .cluster_barriers import add_cluster_barriers
-from .cache import get_temp_binary_dir
-from ..compiler.wave_codegen import WaveEmitter
-from .compile_options import WaveCompileOptions
 from .constraints import (
     Constraint,
     GridConstraint,
@@ -77,108 +41,19 @@ from .constraints import (
     get_grid_shape,
     get_device_layout,
 )
-from .construct_index_mapping import construct_index_mapping
-from .debug_log_hoist import (
-    debug_log_hoist,
-    debug_log_write_replace,
-    DebugArgInfo,
-)
-from .decompose_dot_mma import decompose_dot_mma
-from .decompose_reduce_ops import decompose_reduce_ops
-from .decompose_scan_ops import decompose_scan_ops
-from .decompose_topk_ops import decompose_topk_ops
-from .decompose_vmma_ops import decompose_vmma_ops
-from .expansion.expansion import add_get_results, expand_graph
-from .tensor_load_to_shared import tensor_load_to_shared
-from .multicast import multicast
-from .fuse_tensor_loads import fuse_tensor_loads
-from .gather_to_shared import gather_to_shared, gather_to_shared_swizzling
-from .generate_bounds_exprs import generate_bounds_exprs
-from .global_to_shared_gathers import global_to_shared_gathers
-from .hardware_transpose import mark_hardware_transpose_candidates
-from .hoisting import hoist_loop_invariant_ops
-from .in_thread_transpose import in_thread_transpose
-from .location_check_pass import location_check_pass
-from .memory_analysis.minimize_shared_allocs import minimize_shared_allocs
-from .minimize_global_loads import minimize_global_loads
-from .promotion import compute_shared_memory_usage, promote_placeholders
-from .schedule_reordering import schedule_reordering
-from .scheduling.schedule import schedule_graph
-from .shared_memory_indexing import apply_shared_memory_indexing_corrections
-from .generate_bound_checks import generate_bound_checks
+
 from .symbolic_constraints import SymbolicAlias
-from .specialize import specialize_kernel
-from .type_inference import infer_types
-from .utils.compile_utils import canonicalize_module, apply_transform
 from .utils.general_utils import (
     delinearize_index,
-    get_hardware_constraint,
-    partial,
-    remove_files_with_extension,
 )
-from .utils.graph_utils import (
-    initialize_iter_args,
-    remove_chained_extractslice,
-    remove_chained_getresult,
-)
-from .utils.print_utils import print_trace, try_apply_pass
 
 # Utils
 from .utils.symbol_utils import safe_subs, subs_idxc, get_induction_symbol
-from .workgroup_reordering import reorder_workgroups
 
 logger = logging.getLogger(__name__)
 
 
 __all__ = ["wave", "wave_trace_only"]
-
-# Warn only once
-_warned = False
-
-
-def _are_versions_compatible(ver1: "Version", ver2: "Version") -> bool:
-    if ver1.is_prerelease or ver2.is_prerelease:
-        return ver1 == ver2
-    else:
-        # For stable releases, it is fine if the patch level mismatches.
-        return (ver1.major == ver2.major) and (ver1.minor == ver2.minor)
-
-
-def _warn_iree_is_too_old():
-    """
-    Issue a warning if IREE runtime and compiler versions mismatch or IREE
-    version is too low.
-
-    Warning is issued only once.
-    """
-    global _warned
-    if _warned:
-        return
-
-    _warned = True
-
-    try:
-        from importlib.metadata import version
-
-        from packaging.version import Version
-
-        iree_compiler_ver = Version(version("iree-base-compiler"))
-        iree_runtime_ver = Version(version("iree-base-runtime"))
-    except:
-        return
-
-    if not _are_versions_compatible(iree_compiler_ver, iree_runtime_ver):
-        warnings.warn(
-            f"IREE compiler and runtime versions mismatch: {iree_compiler_ver} and {iree_runtime_ver}"
-        )
-
-    # Increment only when IREE has breaking changes.
-    # We don't want to enforce it on package level or make it a hard error just yet.
-    min_iree_version = Version("3.6.0rc20250721")
-    if iree_compiler_ver < min_iree_version:
-        warnings.warn(
-            f"IREE version is too old: {iree_compiler_ver}, min version: {min_iree_version}"
-        )
 
 
 def wave(constraints: Optional[list[Constraint]] = None):
@@ -251,68 +126,6 @@ def add_placeholder_locations(
             custom_op.fx_node.location = kernel_location
 
     return trace
-
-
-def _rewrite_module_for_iree_stream_abi(
-    module_op: Module,
-    dispatch_entrypoint: dispatch_codegen.DispatchEntrypoint,
-    exe: dispatch_codegen.StreamExecutable,
-) -> None:
-    """
-    Update an existing MLIR module that has been wrapped with IREE stream executable
-    to be compatible with stream bindings arguments.
-    """
-
-    with exe._loc, InsertionPoint.at_block_begin(dispatch_entrypoint.entry_block):
-        target_block = dispatch_entrypoint.entry_block
-        source_func_op = module_op.operation.regions[0].blocks[0].operations[0]
-        source_block = source_func_op.regions[0].blocks[0]
-
-        target_args = list(target_block.arguments)
-
-        def convert_memref_to_stream_binding(
-            target_block: Block,
-            old_arg: BlockArgument,
-            new_arg: BlockArgument,
-            index: int,
-        ) -> stream_d.BindingSubspanOp:
-            """Convert a memref argument to stream.binding + subspan extraction."""
-            # Create zero constant
-            result_type = IndexType.get()
-            zero_value = arith_d.constant(result_type, IntegerAttr.get(result_type, 0))
-
-            # Create subspan operation
-            subspan_op = stream_d.binding_subspan(
-                old_arg.type,  # The original memref type
-                new_arg,  # The stream.binding argument
-                byte_offset=zero_value,
-                # dynamic_dims=dispatch_entrypoint.get_dynamic_dims(binding),
-                dynamic_dims=[],  # TODO: get dynamic dims
-            )
-
-            return subspan_op
-
-        # Create argument mapping
-        arg_mapping = {}
-        for i, old_arg in enumerate(source_block.arguments):
-            if i < len(target_args) and isinstance(old_arg.type, MemRefType):
-                new_subspan = convert_memref_to_stream_binding(
-                    target_block, old_arg, target_args[i], i
-                )
-                arg_mapping[old_arg] = new_subspan
-            else:
-                # Map scalar arguments to their corresponding arguments directly.
-                arg_mapping[old_arg] = target_args[i]
-
-        # Move operations
-        ops_to_move = list(source_block)
-        for op in ops_to_move:
-            op.detach_from_parent()
-            target_block.append(op)
-
-        # Replace all uses of old arguments with new subspan results
-        for old_arg, new_value in arg_mapping.items():
-            old_arg.replace_all_uses_with(new_value)
 
 
 class LaunchableWave(Launchable):
@@ -464,6 +277,10 @@ class LaunchableWave(Launchable):
 
         return
 
+    @property
+    def name(self) -> str:
+        return self._name
+
     def _trace(
         self, *, location_capture_config: Optional[LocationCaptureConfig] = None
     ) -> CapturedTrace:
@@ -471,7 +288,7 @@ class LaunchableWave(Launchable):
             location_capture_config=location_capture_config, func=self._f
         )
         with CompiledContext(region_graph, grid_type=self.grid_type) as context:
-            # Get all explictly defined custom ops
+            # Get all explicitly defined custom ops
             custom_ops: dict[str, wave_ops.CustomOp] = {
                 cls.tkw_op_name: cls
                 for _, cls in inspect.getmembers(wave_ops, inspect.isclass)
@@ -671,381 +488,6 @@ class LaunchableWave(Launchable):
                 else max_device_dim
             )
             self.device_layout.dims[dim] *= safe_subs(constraint.count, idxc.subs)
-
-    def compile_to_mlir(
-        self,
-        trace: CapturedTrace,
-        context: Context,
-        module_op: Optional[Module] = None,
-        options: WaveCompileOptions = None,
-    ):
-        entrypoint_name = self._name
-        root_graph = trace.get_root_graph()
-
-        # pass device constraint to kernel signature
-        # so that we can set the dimensions of the tensors per device
-        kernel_sig = kernel_codegen.KernelSignature(self.device_constraints)
-        kernel_sig.add_from_graph_placeholders(root_graph)
-        kernel_sig.add_from_dynamic_symbols(options.dynamic_symbols)
-        kernel_sig.add_grid(self.grid_type)
-        kernel_sig.determine_input_output_buffers(root_graph)
-        if options.print_signature:
-            print(kernel_sig)
-
-        mb = builder.ModuleBuilder(context=context, module_op=None)
-        exe = dispatch_codegen.StreamExecutable(mb, name=entrypoint_name)
-        workgroup_size = self.hardware_constraints[0].threads_per_block
-        subgroup_size = self.hardware_constraints[0].threads_per_wave
-
-        # Setup LLVM func compilation configs.
-        llvm_func_config = {}
-        if options.denorm_fp_math_f32:
-            llvm_func_config["denormal-fp-math-f32"] = options.denorm_fp_math_f32
-
-        if options.waves_per_eu:
-            llvm_func_config["amdgpu-waves-per-eu"] = options.waves_per_eu
-
-        dispatch_entrypoint = exe.define_entrypoint(
-            entrypoint_name,
-            kernel_sig,
-            self.grid_type,
-            workgroup_size,
-            subgroup_size,
-            options.dynamic_symbols,
-            llvm_func_config,
-            trace.location,
-        )
-
-        # Only emit MLIR if we don't have a module yet.
-        if not module_op:
-            emitter = WaveEmitter(
-                dispatch_entrypoint,
-                trace,
-                self.constraints,
-                options,
-                self.grid_type.dims,
-                entrypoint_name,
-            )
-            with mb.module_op.context, Location.unknown():
-                module_op = builtin_d.ModuleOp()
-
-            with InsertionPoint(module_op.body), Location.unknown():
-                func = emitter.emit(trace.get_root_graph())
-                if options.use_water_backend:
-                    emitter.emit_host_func(func)
-
-        # Otherwise, we need to iree-fy the existing module (that supposedly has
-        # upstream MLIR ops only) in order for it to be executable in the wave
-        # pipeline.
-        # `dispatch_entrypoint` already has most of the setup, we'll just need
-        # to move the ops from existing module to inside `dispatch_entrypoint`.
-        # Also we'll need to update the uses of the memref arguments (from the
-        # existing module) to be compatible with the new stream.binding arguments.
-
-        if options.use_water_backend:
-            mb.module_op = module_op
-        else:
-            assert not any(
-                isinstance(op, stream_d.ExecutableOp)
-                for op in module_op.operation.regions[0].blocks[0]
-            ), "expected overriding module to contain only upstream MLIR ops"
-            _rewrite_module_for_iree_stream_abi(module_op, dispatch_entrypoint, exe)
-
-        if options.postprocess:
-            apply_transform(mb.module_op, options.postprocess, options.subs)
-
-        if options.canonicalize:
-            canonicalize_module(mb.module_op)
-
-        return mb, trace, exe, kernel_sig, entrypoint_name
-
-    def build_initial_pass_pipeline(
-        self,
-        trace: CapturedTrace,
-        options: WaveCompileOptions,
-        debug_arg_info: list[DebugArgInfo],
-        debug_handlers: list[Any],
-        print_ir_before: Sequence[str] = [],
-        print_ir_after: Sequence[str] = [],
-    ):
-        idxc = IndexingContext.current()
-
-        def finalize_indices():
-            idxc.finalize()
-
-        def substitute_vector_shapes():
-            self.hardware_constraints[0].subs_vector_shapes(idxc.subs)
-
-        return [
-            partial(debug_log_hoist, trace, debug_handlers),
-            partial(initialize_iter_args, trace),
-            partial(self.create_induction_vars, trace),
-            partial(self.initialize_reductions, trace),
-            finalize_indices,
-            substitute_vector_shapes,
-            partial(add_get_results, trace),
-            partial(infer_types, trace, self.constraints),
-            partial(construct_index_mapping, trace, self.constraints),
-            partial(
-                debug_log_write_replace,
-                trace,
-                self.constraints,
-                options,
-                debug_arg_info,
-            ),
-            partial(
-                promote_placeholders,
-                trace,
-                self.constraints,
-                options.reorder_allocs,
-            ),
-            partial(
-                set_node_indices,
-                trace,
-                self.constraints,
-                print_ir_before,
-                print_ir_after,
-            ),
-            partial(reorder_workgroups, trace, self.reordering_constraints),
-            partial(expand_graph, trace, self.constraints),
-            partial(set_post_expansion_indices, trace, self.constraints),
-            partial(remove_chained_getresult, trace),
-        ]
-
-    def _trace_and_get_kernel_signature(
-        self,
-        options: WaveCompileOptions,
-        schedule: Optional[WaveSchedule] = None,
-        context: Optional[Context] = None,
-        module_op: Optional[Operation] = None,
-    ) -> tuple[
-        builder.ModuleBuilder,
-        CapturedTrace,
-        dispatch_codegen.StreamExecutable,
-        kernel_codegen.KernelSignature,
-        str,
-        WaveCompileOptions,
-        Sequence[DebugArgInfo],
-        Grid,
-    ]:
-        # Issue a warning if IREE ver is too low.
-        # Warning will only be issued if we are compiling the kernel and won't
-        # if we are using cached kernel as we don't want to add any additional
-        # overhead to 'happy' path.
-        _warn_iree_is_too_old()
-
-        # Build wave runtime, if specified.
-        if options.wave_runtime:
-            # Remove any existing hsaco files in this directory.
-            # If the kernel is being cached, then it will be referenced from the
-            # cache directory. When kernels are not being cached, we remove them
-            # to ensure that at any time there is only one hsaco file in this directory.
-            remove_files_with_extension(get_temp_binary_dir(), ".hsaco")
-
-        print_ir_after = options.print_ir_after
-        print_ir_before = options.print_ir_before
-        profile_pass = options.profile_pass
-        if options.print_trace_begin:
-            print(f"\n***Tracing kernel {self._name}***")
-
-        debug_arg_info = []
-        debug_handlers = []
-
-        trace = self._trace(location_capture_config=options.location_capture_config)
-        if (
-            "all" in print_ir_after
-            or "all" in print_ir_before
-            or "trace" in print_ir_after
-            or "first" in print_ir_before
-        ):
-            print(f"***After trace/Before first pass***\n")
-            print_trace(trace)
-
-        # Initial passes, pre-optimization.
-        graph_passes = self.build_initial_pass_pipeline(
-            trace,
-            options,
-            debug_arg_info,
-            debug_handlers,
-            print_ir_before,
-            print_ir_after,
-        )
-
-        graph_passes += [
-            partial(decompose_vmma_ops, trace, self.constraints),
-            partial(decompose_dot_mma, trace, self.constraints),
-        ]
-
-        # Optimizations.
-        if options.optimization_level:
-            graph_passes += [
-                partial(hoist_loop_invariant_ops, trace, self.constraints),
-                partial(tensor_load_to_shared, trace, self.constraints, options),
-                partial(multicast, trace, self.constraints, options),
-                partial(fuse_tensor_loads, trace, self.constraints, options),
-                partial(in_thread_transpose, trace, self.constraints, options),
-                partial(global_to_shared_gathers, trace, self.constraints),
-                partial(minimize_global_loads, trace, self.constraints),
-                # Wave specialization
-                partial(specialize_kernel, trace, self.constraints, options),
-                partial(gather_to_shared, trace, self.constraints, options),
-                partial(gather_to_shared_swizzling, trace, self.constraints, options),
-                partial(
-                    mark_hardware_transpose_candidates, trace, self.constraints, options
-                ),
-            ]
-        graph_passes += [
-            partial(apply_shared_memory_indexing_corrections, trace, self.constraints),
-        ]
-
-        # Partition strided operators.
-        graph_passes += [
-            partial(partition_ops_with_gpr_offsets, trace, self.constraints),
-            partial(partition_strided_operators, trace, self.constraints),
-            partial(remove_chained_extractslice, trace),
-        ]
-
-        graph_passes += [
-            partial(decompose_reduce_ops, trace, self.constraints),
-            partial(decompose_scan_ops, trace, self.constraints),
-            partial(decompose_topk_ops, trace, self.constraints),
-        ]
-
-        # Schedule the iterate ops.
-        scheduling_type = options.schedule
-        use_scheduling_barriers = options.use_scheduling_barriers
-        if options.schedule == SchedulingType.MANUAL:
-            graph_passes.append(
-                partial(
-                    self.run_manual_schedule,
-                    trace,
-                    self.constraints,
-                    schedule,
-                    use_scheduling_barriers,
-                ),
-            )
-        else:
-            graph_passes.append(
-                partial(
-                    schedule_graph,
-                    trace,
-                    self.constraints,
-                    use_scheduling_barriers,
-                    scheduling_type,
-                    options.override_schedule,
-                    options.dump_schedule,
-                    options.multi_buffer_count,
-                )
-            )
-
-        if options.optimization_level:
-            graph_passes += [
-                partial(
-                    schedule_reordering,
-                    trace,
-                    self.constraints,
-                    scheduling_type,
-                    options.use_global_to_shared,
-                ),
-                partial(
-                    minimize_shared_allocs,
-                    trace,
-                    options.minimize_shared_allocs,
-                ),
-            ]
-        graph_passes += [
-            partial(
-                add_shared_memory_barriers,
-                trace,
-                target=options.target,
-                is_specialized=options.specialize,
-            ),
-            partial(add_cluster_barriers, trace, self.constraints, options),
-            partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
-            partial(partition_gather_like_ops, trace, self.constraints, options.target),
-            partial(generate_bounds_exprs, trace, self.constraints),
-        ]
-
-        if options.use_bound_check:
-            graph_passes += [
-                partial(generate_bound_checks, trace),
-            ]
-
-        graph_passes.append(
-            partial(
-                location_check_pass,
-                trace,
-                "enforce-locations",
-                log=False,
-                enforce_locations=options.enforce_locations,
-            )
-        )
-
-        pass_times = {}
-        for p in graph_passes:
-            try_apply_pass(
-                p, trace, print_ir_before, print_ir_after, profile_pass, pass_times
-            )
-
-        if options.print_pass_times:
-            pass_times_list = sorted(
-                pass_times.items(), key=lambda x: x[1], reverse=True
-            )
-
-            print(f"Pass times:")
-            for k, v in pass_times_list:
-                print(f"    {k}: {v:.4f}s")
-
-        if "all" in print_ir_after or "last" in print_ir_after:
-            # Take advantage of Python leaking loop variables
-            print(f"***After final pass {p.__name__}***\n")
-            print_trace(trace)
-
-        # Determine grid shape.
-        self.infer_grid_shape(IndexingContext.current())
-        self.infer_device_layout(IndexingContext.current())
-
-        if options.print_grid:
-            print(f"Grid Dimensions: {self.grid_type.dims}")
-            print(f"Device layout: {self.device_layout}")
-
-        # Add grid and block dims to kernel launch info.
-        # Convert the grid into a lambda that we can use to compute the grid dimension.
-        hw_constraint = get_hardware_constraint(self.constraints)
-        grid_symbols = list(self.bound_scalar_symbols.keys()) + list(
-            options.dynamic_symbols
-        )
-        options.kernel_launch_info.grid = sympy.lambdify(
-            [grid_symbols], self.grid_type.dims
-        )
-        options.kernel_launch_info.grid_str = lambdastr(
-            [grid_symbols], self.grid_type.dims
-        )
-        options.kernel_launch_info.blocks = [
-            int(x) for x in hw_constraint.threads_per_block
-        ]
-        options.kernel_launch_info.cluster_dims = (
-            [int(x) for x in hw_constraint.workgroups_per_cluster]
-            if hw_constraint.workgroups_per_cluster
-            else [0, 0, 0]
-        )
-        options.kernel_launch_info.func_name = self._name
-
-        idxc = IndexingContext.current()
-        for sym, val in zip(
-            [THREAD_0, THREAD_1, THREAD_2, WORKGROUP_0, WORKGROUP_1, WORKGROUP_2],
-            chain(hw_constraint.threads_per_block, self.grid_type.dims),
-        ):
-            if safe_subs(val, idxc.subs) == 1:
-                idxc.bind_constant(sym, 0)
-
-        return (
-            *self.compile_to_mlir(trace, context, module_op, options=options),
-            options,
-            debug_arg_info,
-            debug_handlers,
-            self.device_layout,
-        )
 
     def aot_execute(self, args, kwargs):
         raise NotImplementedError("AOT execution for wave not implemented yet.")

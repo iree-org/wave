@@ -4,6 +4,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import warnings
+from packaging.version import Version
 import torch
 
 from wave_lang.runtime.launch import Launchable
@@ -12,6 +14,54 @@ from .utils.run_utils import get_benchmark_flags, print_bench_result
 from .profiling import benchmark_module
 from .utils.compile_utils import compile_to_vmfb
 import iree.runtime as rt
+
+# Warn only once
+_warned = False
+
+
+def _are_versions_compatible(ver1: Version, ver2: Version) -> bool:
+    if ver1.is_prerelease or ver2.is_prerelease:
+        return ver1 == ver2
+    else:
+        # For stable releases, it is fine if the patch level mismatches.
+        return (ver1.major == ver2.major) and (ver1.minor == ver2.minor)
+
+
+def warn_iree_is_too_old():
+    """
+    Issue a warning if IREE runtime and compiler versions mismatch or IREE
+    version is too low.
+
+    Warning is issued only once.
+    """
+    global _warned
+    if _warned:
+        return
+
+    _warned = True
+
+    try:
+        from importlib.metadata import version
+
+        from packaging.version import Version
+
+        iree_compiler_ver = Version(version("iree-base-compiler"))
+        iree_runtime_ver = Version(version("iree-base-runtime"))
+    except:
+        return
+
+    if not _are_versions_compatible(iree_compiler_ver, iree_runtime_ver):
+        warnings.warn(
+            f"IREE compiler and runtime versions mismatch: {iree_compiler_ver} and {iree_runtime_ver}"
+        )
+
+    # Increment only when IREE has breaking changes.
+    # We don't want to enforce it on package level or make it a hard error just yet.
+    min_iree_version = Version("3.6.0rc20250721")
+    if iree_compiler_ver < min_iree_version:
+        warnings.warn(
+            f"IREE version is too old: {iree_compiler_ver}, min version: {min_iree_version}"
+        )
 
 
 def get_chain_mmt_asm(
