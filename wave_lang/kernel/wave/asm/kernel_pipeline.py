@@ -60,25 +60,18 @@ from .instruction_registry import (
 # Default is "0" (disabled) during development
 WAVE_KERNEL_LSRA_ENV = "WAVE_KERNEL_LSRA"
 
-# Environment variable to use kernel IR compilation path
-# Default is "0" (disabled) - requires full handler migration to work correctly
-WAVE_USE_KERNEL_IR_ENV = "WAVE_USE_KERNEL_IR"
-
-
-def use_kernel_ir_path() -> bool:
-    """Check if kernel IR compilation path should be used.
-    
-    Kernel IR mode is currently disabled by default because handlers still
-    allocate physical registers from AsmEmitter while emitting virtual 
-    instructions to KernelCompilationContext. These need to be coordinated.
-    
-    Set WAVE_USE_KERNEL_IR=1 to enable for testing.
-    """
-    return os.environ.get(WAVE_USE_KERNEL_IR_ENV, "0") == "1"
-
 
 def use_kernel_lsra() -> bool:
     """Check if kernel-level LSRA is enabled."""
+# Environment variable to enable full kernel IR path (handlers allocate virtual regs)
+# Default is "0" (disabled) - set to "1" when handlers are migrated
+WAVE_KERNEL_IR_ENV = "WAVE_KERNEL_IR"
+
+
+def use_kernel_ir() -> bool:
+    """Check if full kernel IR path is enabled."""
+    return os.environ.get(WAVE_KERNEL_IR_ENV, "0") == "1"
+
     return os.environ.get(WAVE_KERNEL_LSRA_ENV, "0") == "1"
 
 
@@ -156,14 +149,19 @@ class KernelCompilationContext:
     # Symbol bindings: MLIR SSA value string -> virtual register
     _symbol_bindings: Dict[str, KReg] = field(default_factory=dict, init=False)
     
-    # SSA to register mapping for MLIR SSA values (like walker.ssa_to_vgpr)
-    # Maps SSA value string to tuple of virtual registers (single or range)
-    ssa_to_reg: Dict[str, Tuple[KVReg, ...]] = field(default_factory=dict, init=False)
+    # SSA to register mapping for MLIR SSA values
+    # Maps SSA value string to tuple of virtual registers (for multi-reg results like loads)
+    # This is the source of truth for all SSA-to-register tracking
+    ssa_to_reg: Dict[str, Tuple[KReg, ...]] = field(default_factory=dict, init=False)
     
     # CSE cache: expression key -> virtual register
     _cse_cache: Dict[tuple, KVReg] = field(default_factory=dict, init=False)
     
-    # SRD tracking (like emitter.srds)
+    # SRD tracking: memref_ssa -> KRegRange (virtual SGPR range for SRD)
+    # Unlike legacy emitter.srds which uses physical indices, this uses virtual regs
+    srd_ranges: Dict[str, KRegRange] = field(default_factory=dict, init=False)
+    
+    # Legacy compatibility: physical SRD indices (will be removed later)
     srds: Dict[str, Tuple[int, ...]] = field(default_factory=dict, init=False)
     
     # Statistics
@@ -297,6 +295,60 @@ class KernelCompilationContext:
         if symbol not in self._symbol_bindings:
             raise ValueError(f"Symbol '{symbol}' not bound to any register")
         return self._symbol_bindings[symbol]
+    
+    # =========================================================================
+    # SSA-to-register mapping (for vector results)
+    # =========================================================================
+    
+    def bind_ssa(self, ssa_value: str, regs: Tuple[KReg, ...]) -> None:
+        """
+        Bind an MLIR SSA value to a tuple of virtual registers.
+        
+        Used for operations that produce multi-register results like:
+        - vector loads (dwordx2/x4 → 2/4 regs)
+        - MFMA results (4 regs)
+        
+        Args:
+            ssa_value: The SSA value string (e.g., "%12")
+            regs: Tuple of virtual registers
+        """
+        self.ssa_to_reg[ssa_value] = regs
+    
+    def bind_ssa_single(self, ssa_value: str, reg: KReg) -> None:
+        """Bind an SSA value to a single register (convenience method)."""
+        self.ssa_to_reg[ssa_value] = (reg,)
+    
+    def bind_ssa_range(self, ssa_value: str, reg_range: KRegRange) -> None:
+        """
+        Bind an SSA value to a register range.
+        
+        Extracts individual registers from the range for proper tracking.
+        """
+        # For ranges, we track the base_reg and count
+        # The actual tuple will be derived during allocation
+        base = reg_range.base_reg
+        if isinstance(base, KVReg):
+            regs = tuple(KVReg(base.id + i) for i in range(reg_range.count))
+        elif isinstance(base, KSReg):
+            regs = tuple(KSReg(base.id + i) for i in range(reg_range.count))
+        else:
+            # Physical regs - store as-is
+            regs = (reg_range,)
+        self.ssa_to_reg[ssa_value] = regs
+    
+    def get_ssa_regs(self, ssa_value: str) -> Optional[Tuple[KReg, ...]]:
+        """Get the virtual registers bound to an SSA value."""
+        return self.ssa_to_reg.get(ssa_value)
+    
+    def require_ssa_regs(self, ssa_value: str) -> Tuple[KReg, ...]:
+        """Get the virtual registers bound to an SSA value, or raise."""
+        regs = self.ssa_to_reg.get(ssa_value)
+        if regs is None:
+            raise ValueError(
+                f"SSA value '{ssa_value}' not bound to any registers. "
+                f"Available: {list(self.ssa_to_reg.keys())}"
+            )
+        return regs
     
     # =========================================================================
     # CSE support
