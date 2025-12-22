@@ -411,8 +411,26 @@ class AsmEmitter:
                     emitter.emit_kernargs(num_args)
 
                     # Walk MLIR and emit instructions
-                    walker = IRWalker(emitter)
+                    from .kernel_pipeline import use_kernel_ir_path, KernelCompilationContext
+                    
+                    if use_kernel_ir_path():
+                        # Kernel IR mode: instructions go to KernelProgram
+                        kernel_ctx = KernelCompilationContext(
+                            use_flat_tid=True,
+                            use_workgroup_ids=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                        )
+                        walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
+                    else:
+                        # Legacy mode: instructions go directly to AsmEmitter
+                        kernel_ctx = None
+                        walker = IRWalker(emitter)
+                    
                     kernel_info = walker.interpret_func(fn)
+                    
+                    # In kernel IR mode, finalize and append generated assembly
+                    if kernel_ctx is not None:
+                        body_lines, _stats = kernel_ctx.finalize()
+                        emitter.lines.extend(body_lines)
 
                     emitter.emit_epilogue(
                         kernel_info.name,

@@ -125,6 +125,9 @@ class KernelGenerator:
             return f"0x{op & 0xffffffff:x}"
         elif isinstance(op, KMemOffset):
             return f"offset:{op.bytes}"
+        elif isinstance(op, str):
+            # Handle string operands (e.g., waitcnt values like "vmcnt(0)")
+            return op
         raise ValueError(f"Unknown operand type: {type(op)}")
     
     def _generate_instr(self, instr: KInstr) -> Optional[str]:

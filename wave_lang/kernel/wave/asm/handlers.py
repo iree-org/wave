@@ -1172,7 +1172,7 @@ class OperationHandlers:
             # Initialize accumulator to 0.0 before loop
             emitter.emit(f"    # Initialize accumulator {i} to 0.0")
             for vreg in quad:
-                emitter.unified.v_mov_b32(f"v{vreg}", 0)
+                self.walker.unified.v_mov_b32(f"v{vreg}", 0)
 
         loop_ctx["iter_arg_vgprs"] = iter_arg_vgprs
 
