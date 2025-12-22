@@ -20,7 +20,7 @@ from wave_lang.support.ir_imports import (
 
 from .mlir_walker import IRWalker
 from .asm_emitter import AsmEmitter
-from .kernel_pipeline import use_kernel_ir_path, KernelCompilationContext
+from .kernel_pipeline import KernelCompilationContext, use_kernel_ir
 
 
 def walk_ops_recursively(operation: Operation) -> Iterable[Operation]:
@@ -92,7 +92,7 @@ def main():
                 emitter.emit_kernargs(num_args)
 
                 # Walk MLIR and emit instructions
-                if use_kernel_ir_path():
+                if use_kernel_ir():
                     # Kernel IR mode: instructions go to KernelProgram
                     kernel_ctx = KernelCompilationContext(
                         use_flat_tid=True,

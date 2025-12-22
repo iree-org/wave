@@ -31,27 +31,85 @@ from .utils import (
 from .kernel_model import KernelInfo
 from .handlers import OperationHandlers
 from .gather_to_shared import analyze_g2s_region, precompute_m0_values
-from .kernel_pipeline import use_kernel_ir_path, KernelCompilationContext
+from .kernel_pipeline import KernelCompilationContext
+
+
+class _SSAToVGPRAdapter(dict):
+    """
+    Adapter that provides dict-like access to kernel_ctx.ssa_to_reg.
+    
+    This maintains backward compatibility with code that accesses
+    walker.ssa_to_vgpr[key] = (v1, v2, ...) using physical indices.
+    
+    During the migration:
+    - Gets return tuple of virtual reg IDs (for comparison/iteration)
+    - Sets store into kernel_ctx.ssa_to_reg
+    """
+    def __init__(self, kernel_ctx: KernelCompilationContext):
+        self._ctx = kernel_ctx
+    
+    def __getitem__(self, key):
+        regs = self._ctx.ssa_to_reg.get(key)
+        if regs is None:
+            raise KeyError(key)
+        # Extract IDs for backward compatibility
+        from .kernel_ir import KVReg, KSReg
+        return tuple(
+            r.id if isinstance(r, (KVReg, KSReg)) else r
+            for r in regs
+        )
+    
+    def __setitem__(self, key, value):
+        # Convert physical indices to virtual regs
+        from .kernel_ir import KVReg
+        if isinstance(value, tuple):
+            regs = tuple(
+                KVReg(v) if isinstance(v, int) else v
+                for v in value
+            )
+            self._ctx.ssa_to_reg[key] = regs
+        else:
+            self._ctx.ssa_to_reg[key] = (value,)
+    
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+    
+    def __contains__(self, key):
+        return key in self._ctx.ssa_to_reg
+    
+    def keys(self):
+        return self._ctx.ssa_to_reg.keys()
+    
+    def values(self):
+        # Return tuples of IDs for compatibility
+        from .kernel_ir import KVReg, KSReg
+        for regs in self._ctx.ssa_to_reg.values():
+            yield tuple(
+                r.id if isinstance(r, (KVReg, KSReg)) else r
+                for r in regs
+            )
+    
+    def items(self):
+        for key in self._ctx.ssa_to_reg:
+            yield key, self[key]
 
 
 class IRWalker:
     def __init__(self, emitter=None, kernel_ctx: KernelCompilationContext = None):
         """
-        Initialize IRWalker with optional emitter and kernel context.
+        Initialize IRWalker with kernel compilation context.
         
         Args:
-            emitter: Legacy AsmEmitter for direct instruction emission.
-            kernel_ctx: KernelCompilationContext for kernel IR mode.
-                        If provided, instructions are emitted to the kernel IR
-                        instead of directly to the emitter.
+            emitter: Legacy AsmEmitter (kept for compatibility during migration,
+                     but will be removed once kernel IR owns everything).
+            kernel_ctx: KernelCompilationContext - the source of truth for
+                        instruction emission and register allocation.
         """
         self.emitter = emitter
         self.kernel_ctx = kernel_ctx
-
-        # Unified SSA-to-VGPR mapping for all vector operations
-        # Maps SSA value strings to register allocations (tuples of register indices)
-        # In kernel IR mode, this maps to virtual register IDs instead of physical indices
-        self.ssa_to_vgpr: dict[str, tuple[int, ...]] = {}
 
         # Supporting fields
         self.last_vmem_ticket = None  # Used for wait count computation
@@ -60,12 +118,25 @@ class IRWalker:
         self.handlers = OperationHandlers(self)
 
     @property
-    def unified(self):
-        """Return the unified emitter for instruction emission.
-        
-        Routes to kernel_ctx.unified when in kernel IR mode, otherwise to
-        emitter.unified for direct assembly emission.
+    def ssa_to_vgpr(self) -> dict:
         """
+        Legacy SSA-to-VGPR mapping property.
+        
+        Delegates to kernel_ctx.ssa_to_reg for actual storage.
+        During migration, handlers will be updated to use kernel_ctx directly.
+        """
+        if self.kernel_ctx is not None:
+            # Return a view that extracts physical-like indices from virtual regs
+            # This maintains backward compatibility during the migration
+            return _SSAToVGPRAdapter(self.kernel_ctx)
+        # Fallback for legacy mode (will be removed)
+        if not hasattr(self, '_legacy_ssa_to_vgpr'):
+            self._legacy_ssa_to_vgpr = {}
+        return self._legacy_ssa_to_vgpr
+
+    @property
+    def unified(self):
+        """Return the unified emitter for instruction emission."""
         if self.kernel_ctx is not None:
             return self.kernel_ctx.unified
         return self.emitter.unified
