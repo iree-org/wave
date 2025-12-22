@@ -83,7 +83,6 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
       std::optional<int64_t> value = hyper.getSymbolValue(name);
 #ifndef NDEBUG
       if (!value) {
-        llvm::errs() << "symbol: " << name << "\n";
         assert(false && "unknown symbol, should have been caught by verifiers");
       }
 #endif
@@ -134,6 +133,7 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
     AffineMap submap =
         AffineMap::get(map.getNumDims(), map.getNumSymbols(), expr);
     SmallVector<Value> symVals = baseSymVals;
+
     affine::canonicalizeMapAndOperands(&submap, &symVals);
 
     Value apply = affine::AffineApplyOp::create(rewriter, loc, submap, symVals);

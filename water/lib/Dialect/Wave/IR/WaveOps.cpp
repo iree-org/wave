@@ -199,10 +199,26 @@ void wave::IterateOp::makeNonIsolated(mlir::RewriterBase &rewriter) {
 }
 
 bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
-  return detail::verifyTypesCompatible(llvm::cast<wave::WaveTensorType>(lhs),
-                                       llvm::cast<wave::WaveTensorType>(rhs),
-                                       /*includeAddressSpace=*/true)
-      .succeeded();
+  // Handle both WaveTensorType and VectorType combinations
+  auto lhsTensor = llvm::dyn_cast<wave::WaveTensorType>(lhs);
+  auto rhsTensor = llvm::dyn_cast<wave::WaveTensorType>(rhs);
+  auto lhsVector = llvm::dyn_cast<mlir::VectorType>(lhs);
+  auto rhsVector = llvm::dyn_cast<mlir::VectorType>(rhs);
+
+  // Both are wave tensors - use existing logic
+  if (lhsTensor && rhsTensor) {
+    return detail::verifyTypesCompatible(lhsTensor, rhsTensor,
+                                         /*includeAddressSpace=*/true)
+        .succeeded();
+  }
+
+  // Both are vectors - simple equality check
+  if (lhsVector && rhsVector) {
+    return lhsVector == rhsVector;
+  }
+
+  // Mixed types are not compatible
+  return false;
 }
 
 mlir::OperandRange
@@ -251,19 +267,42 @@ mlir::LogicalResult wave::IterateOp::verify() {
   }
   for (auto &&[i, iterArg, result] :
        llvm::enumerate(iterArgTypes, resultTypes)) {
-    auto iterArgTensor = llvm::cast<wave::WaveTensorType>(iterArg);
-    auto resultTensor = llvm::cast<wave::WaveTensorType>(result);
-    if (!iterArgTensor.getFullySpecified() || !resultTensor.getFullySpecified())
-      continue;
+    // Handle verification for both wave tensors and vectors
+    auto iterArgTensor = llvm::dyn_cast<wave::WaveTensorType>(iterArg);
+    auto resultTensor = llvm::dyn_cast<wave::WaveTensorType>(result);
+    auto iterArgVector = llvm::dyn_cast<mlir::VectorType>(iterArg);
+    auto resultVector = llvm::dyn_cast<mlir::VectorType>(result);
 
-    auto allDims =
-        llvm::to_vector(llvm::iota_range<int>(0, iterArgTensor.getRank(),
-                                              /*Inclusive=*/false));
     auto istr = std::to_string(i);
-    if (mlir::failed(detail::verifyTypesMatchingDimensions(
-            getLoc(), "iter_args #" + istr, iterArgTensor, allDims,
-            "result #" + istr, resultTensor, allDims)))
-      return mlir::failure();
+
+    // Both are wave tensors - use existing shape verification logic
+    if (iterArgTensor && resultTensor) {
+      if (!iterArgTensor.getFullySpecified() ||
+          !resultTensor.getFullySpecified())
+        continue;
+
+      auto allDims =
+          llvm::to_vector(llvm::iota_range<int>(0, iterArgTensor.getRank(),
+                                                /*Inclusive=*/false));
+      if (mlir::failed(detail::verifyTypesMatchingDimensions(
+              getLoc(), "iter_args #" + istr, iterArgTensor, allDims,
+              "result #" + istr, resultTensor, allDims)))
+        return mlir::failure();
+    }
+    // Both are vectors - check exact type equality
+    else if (iterArgVector && resultVector) {
+      if (iterArgVector != resultVector) {
+        return emitOpError() << "iter_args #" << i << " type (" << iterArgVector
+                             << ") must match result #" << i << " type ("
+                             << resultVector << ")";
+      }
+    }
+    // Mixed types are not allowed
+    else {
+      return emitOpError() << "iter_args #" << i << " and result #" << i
+                           << " must be the same category of types (both wave "
+                              "tensors or both vectors)";
+    }
   }
 
   return mlir::success();
@@ -1083,11 +1122,11 @@ LogicalResult MmaOp::verify() {
 /// Extracts threadsPerWave from ancestor operations with hardware constraints.
 /// Returns 0 if no constraints are found.
 unsigned wave::MmaOp::computeElementsPerThread() {
-  auto kind = getKind();
-  if (!kind) {
+  if (!getKindAttr()) {
     return 0;
   }
-  wave::WaveMmaSpec spec = wave::WaveMmaKindAttr::getSpec(getContext(), *kind);
+  wave::WaveMmaSpec spec =
+      wave::WaveMmaKindAttr::getSpec(getContext(), getKind());
 
   // Extract threads per wave from hardware constraint by walking up the
   // ancestry.

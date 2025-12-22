@@ -259,3 +259,33 @@ func.func @mma_uninitialized_rhs(%mem1: !wave.tensor<[@M, @K] of f16, <global>>,
   return
 }
 }
+
+// -----
+
+// Test iterate working with vectors after PropagateElementsPerThread conversion
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+
+// CHECK-LABEL: @iterate_with_vectors_after_ept
+func.func @iterate_with_vectors_after_ept(%mem: !wave.tensor<[@M] of f32, <global>>)
+  attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, I = 4}>,
+              wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_32x32x8_f16>, vector_shapes = {M = 1, N = 1, K = 8}, max_bits_per_load = 128>]} {
+
+  // Read into register tensor - this will become a vector after PropagateElementsPerThread
+  %init = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
+
+  // Iterate should work with vectors after transformation
+  // CHECK: wave.iterate @I iter_args({{.*}})
+  %result = wave.iterate @I iter_args(%init) {
+  ^bb0(%arg: !wave.tensor<[@M] of f32, <register>>):
+    // Simple operation within the loop - should also work with vectors
+    %doubled = wave.add %arg, %arg : (!wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <register>>) -> !wave.tensor<[@M] of f32, <register>>
+    // CHECK: wave.yield {{.*}} : vector<8xf32>
+    wave.yield %doubled : !wave.tensor<[@M] of f32, <register>>
+  } : (!wave.tensor<[@M] of f32, <register>>) -> (!wave.tensor<[@M] of f32, <register>>)
+
+  // Write should also work with the vector result
+  wave.write %result, %mem {elements_per_thread = 8} : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
+  return
+}
+
+}

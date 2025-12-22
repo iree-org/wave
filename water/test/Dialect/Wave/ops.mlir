@@ -412,3 +412,51 @@ func.func @cast_mixed_specified(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.t
   %0 = wave.cast %arg0 : !wave.tensor<[@M, @N] of f32> to !wave.tensor<any of bf16>
   return %0 : !wave.tensor<any of bf16>
 }
+
+// -----
+// Test wave.iterate and wave.yield with vector types
+
+module attributes {wave.normal_form = #wave.normal_form<full_types>, wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
+
+// CHECK-LABEL: @iterate_pure_vectors
+func.func @iterate_pure_vectors() {
+  %input0 = arith.constant dense<1.0> : vector<8xf32>
+  %input1 = arith.constant dense<2.0> : vector<4xf16>
+
+  // CHECK: wave.iterate @I iter_args(%{{.*}}, %{{.*}})
+  %iter_result:2 = wave.iterate @I iter_args(%input0, %input1) {
+  ^bb0(%in_arg0: vector<8xf32>, %in_arg1: vector<4xf16>):
+    // CHECK: wave.yield %{{.*}}, %{{.*}} : vector<8xf32>, vector<4xf16>
+    wave.yield %in_arg0, %in_arg1 : vector<8xf32>, vector<4xf16>
+  } : (vector<8xf32>, vector<4xf16>) -> (vector<8xf32>, vector<4xf16>)
+  return
+}
+
+// CHECK-LABEL: @iterate_vector_captures
+func.func @iterate_vector_captures() {
+  %iter_arg = arith.constant dense<1.0> : vector<8xf32>
+  %capture = arith.constant dense<2.0> : vector<4xf16>
+
+  // CHECK: wave.iterate @I iter_args(%{{.*}}) captures(%{{.*}})
+  %result = wave.iterate @I iter_args(%iter_arg) captures(%capture) {
+  ^bb0(%in_arg: vector<8xf32>, %cap: vector<4xf16>):
+    // CHECK: wave.yield %{{.*}} : vector<8xf32>
+    wave.yield %in_arg : vector<8xf32>
+  } : (vector<8xf32>, vector<4xf16>) -> (vector<8xf32>)
+  return
+}
+
+// CHECK-LABEL: @iterate_multidim_vectors
+func.func @iterate_multidim_vectors() {
+  %input = arith.constant dense<1.0> : vector<4x8xf32>
+
+  // CHECK: wave.iterate @I iter_args(%{{.*}})
+  %result = wave.iterate @I iter_args(%input) {
+  ^bb0(%in_arg: vector<4x8xf32>):
+    // CHECK: wave.yield %{{.*}} : vector<4x8xf32>
+    wave.yield %in_arg : vector<4x8xf32>
+  } : (vector<4x8xf32>) -> (vector<4x8xf32>)
+  return
+}
+
+}
