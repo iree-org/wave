@@ -59,6 +59,17 @@ class IRWalker:
         # Initialize operation handlers
         self.handlers = OperationHandlers(self)
 
+    @property
+    def unified(self):
+        """Return the unified emitter for instruction emission.
+        
+        Routes to kernel_ctx.unified when in kernel IR mode, otherwise to
+        emitter.unified for direct assembly emission.
+        """
+        if self.kernel_ctx is not None:
+            return self.kernel_ctx.unified
+        return self.emitter.unified
+
     def interpret_func(self, fn: func_d.FuncOp) -> KernelInfo:
         kernel_info = KernelInfo(name=fn.sym_name.value)
 

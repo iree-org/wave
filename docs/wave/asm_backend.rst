@@ -66,7 +66,7 @@ Key Components
   - Typed operation logging with RegisterOp enum
 
 **Kernel-Level IR** (`kernel_ir.py`, `kernel_liveness.py`, `kernel_regalloc.py`)
-  Infrastructure for whole-program register allocation:
+  Infrastructure for whole-program register allocation (default compilation path):
 
   - KVReg/KSReg classes for kernel-scope virtual registers
   - KernelProgram for entire kernel instruction sequences
@@ -74,8 +74,9 @@ Key Components
   - SSA-based liveness analysis (compute_liveness)
   - Constraint-aware linear scan allocator (range allocation, alignment)
   - Precoloring for ABI-mandated registers (v0 for flat tid, s[0:1] for kernarg)
-  - KernelRenderer for assembly generation with physical register substitution
+  - KernelGenerator for assembly generation with physical register substitution
   - No spilling: fails compilation with diagnostic if allocation fails
+  - Enabled by default; use ``WAVE_USE_LEGACY_STREAMING=1`` to disable
 
 **Kernel-Level Expression Emitter** (`kernel_emitter.py`)
   Kernel-wide expression emitter with streaming allocation:

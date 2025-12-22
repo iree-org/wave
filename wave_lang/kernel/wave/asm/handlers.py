@@ -593,14 +593,14 @@ class OperationHandlers:
 
     def handle_barrier_op(self, operation: gpu_d.BarrierOp, kernel_info: KernelInfo):
         """Handle gpu.barrier operations - emit synchronization barrier."""
-        self.walker.emitter.unified.s_barrier(comment="workgroup barrier")
+        self.walker.unified.s_barrier(comment="workgroup barrier")
 
     def handle_lds_barrier_op(
         self, operation: amdgpu_d.LDSBarrierOp, kernel_info: KernelInfo
     ):
         """Handle amdgpu.lds_barrier - emit lgkmcnt(0) + s_barrier."""
-        self.walker.emitter.unified.s_waitcnt(waitcnt="lgkmcnt(0)")
-        self.walker.emitter.unified.s_barrier(comment="LDS barrier")
+        self.walker.unified.s_waitcnt(waitcnt="lgkmcnt(0)")
+        self.walker.unified.s_barrier(comment="LDS barrier")
 
     def handle_view_op(self, operation: memref_d.ViewOp, kernel_info: KernelInfo):
         """Handle memref.view operations - capture view base byte offset for LDS-backed memrefs."""
@@ -795,7 +795,7 @@ class OperationHandlers:
                 self.walker.emitter.vgpr_allocator.alloc_v(),
                 const_offset,
             )
-            self.walker.emitter.unified.v_mov_b32(f"v{voffset_v}", 0)
+            self.walker.unified.v_mov_b32(f"v{voffset_v}", 0)
             voffset_is_temp = True
         else:
             voffset_reg = self._get_expr_emitter(kernel_info).get_or_emit(dynamic_expr)
@@ -955,7 +955,7 @@ class OperationHandlers:
                 self.walker.last_vmem_ticket
             )
             if threshold is not None:
-                self.walker.emitter.unified.s_waitcnt(f"vmcnt({threshold})")
+                self.walker.unified.s_waitcnt(f"vmcnt({threshold})")
         src_regs = self._extract_source_registers(vector_bytes)
         self._emit_ds_write(memref_ssa, addr_v, src_regs, vector_bytes)
 
@@ -1001,7 +1001,7 @@ class OperationHandlers:
             hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
         ):
             voffset_v = self.walker.emitter.vgpr_allocator.alloc_v()
-            self.walker.emitter.unified.v_mov_b32(f"v{voffset_v}", 0)
+            self.walker.unified.v_mov_b32(f"v{voffset_v}", 0)
             return voffset_v, const_offset, True
         else:
             voffset_reg = self._get_expr_emitter(kernel_info).get_or_emit(dynamic_expr)
@@ -1030,7 +1030,7 @@ class OperationHandlers:
                 self.walker.last_vmem_ticket
             )
             if threshold is not None:
-                self.walker.emitter.unified.s_waitcnt(f"vmcnt({threshold})")
+                self.walker.unified.s_waitcnt(f"vmcnt({threshold})")
 
         if num_elements == 1:
             # Scalar store: get first register, emit, free
@@ -1294,5 +1294,5 @@ class OperationHandlers:
 
         # vmcnt=15 means "no wait" (max 4-bit value), so only emit if < 15
         if vmcnt < 15:
-            self.walker.emitter.unified.s_waitcnt(f"vmcnt({vmcnt})")
+            self.walker.unified.s_waitcnt(f"vmcnt({vmcnt})")
             self.walker.emitter.ticketing.observe_vmem_wait(vmcnt)

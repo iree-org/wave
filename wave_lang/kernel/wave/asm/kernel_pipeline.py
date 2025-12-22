@@ -67,8 +67,8 @@ WAVE_USE_LEGACY_STREAMING_ENV = "WAVE_USE_LEGACY_STREAMING"
 
 def use_kernel_ir_path() -> bool:
     """Check if kernel IR compilation path should be used."""
-    # Legacy streaming is the default for now
-    return os.environ.get(WAVE_USE_LEGACY_STREAMING_ENV, "1") == "0"
+    # Kernel IR path is now the default
+    return os.environ.get(WAVE_USE_LEGACY_STREAMING_ENV, "0") == "0"
 
 
 def use_kernel_lsra() -> bool:
