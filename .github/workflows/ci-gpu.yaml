@@ -224,7 +224,7 @@ jobs:
           pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
 
       - name: Test TKW runtime related stack on amdgpu
-        if: ${{ env.HAS_GPU == 'true' && !cancelled() }}
+        if: ${{ env.HAS_GPU == 'true' }}
         run: |
           python -c "import torch; print(torch.cuda.get_device_properties().gcnArchName if torch.cuda.is_available() else 'cpu')"
           export WAVE_CACHE_DIR=$PWD/.wave
@@ -233,17 +233,16 @@ jobs:
           WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/runtime
 
       - name: Run e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU == 'true' && (github.event_name == 'pull_request') && !cancelled() }}
+        if: ${{ env.HAS_GPU == 'true' && (github.event_name == 'pull_request') }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/
 
       - name: Run expensive e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU == 'true' && (github.event_name != 'pull_request') && !cancelled() }}
+        if: ${{ env.HAS_GPU == 'true' && (github.event_name != 'pull_request') }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
 
       - name: Run LIT tests
-        if: ${{ !cancelled() }}
         run: |
           if [[ "${{ contains(matrix.os, 'mi35x') }}" == 'true' ]]; then
             # TODO: mlir_converter tests segfault on mi35x
@@ -252,7 +251,6 @@ jobs:
           WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
 
       - name: MyPy Type Checking
-        if: ${{ !cancelled() }}
         run: |
           mypy
 
