@@ -6,17 +6,16 @@
 
 import pytest
 import torch
-import wave_lang.kernel as tk
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import *
 from .common.utils import (
     require_e2e,
     require_cdna_2_or_3_or_4,
+    expensive_test,
 )
 from wave_lang.kernel.wave.utils.run_utils import (
     set_default_run_config,
     enable_scheduling_barriers,
-    dump_generated_mlir,
     check_individual_kernels,
 )
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
@@ -31,8 +30,6 @@ from wave_lang.kernel.wave.templates.moe import (
 from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.lang import DataType
 import torch.nn.functional as F
-
-torch.manual_seed(0)
 
 
 def silu_and_mul_torch_ref(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
@@ -266,6 +263,7 @@ rtol, atol = 1e-1, 1e-2
 @pytest.mark.parametrize("e", num_experts)
 @pytest.mark.parametrize("topk", top_ks)
 @pytest.mark.parametrize("dtype", dtypes)
+@expensive_test
 def testReferenceMoe(
     m: int,
     n: int,
