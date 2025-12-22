@@ -50,7 +50,7 @@ The register allocation pipeline follows this flow::
              │
              ▼
     ┌─────────────────────┐
-    │  kernel_render.py   │  Substitute physical registers, emit assembly
+    │ kernel_generator.py │  Substitute physical registers, emit assembly
     └─────────────────────┘
 
 Kernel IR (kernel_ir.py)
@@ -324,10 +324,10 @@ Usage
     print(f"Peak VGPRs: {stats.peak_vgprs}")
     print(f"Peak SGPRs: {stats.peak_sgprs}")
 
-Rendering (kernel_render.py)
-============================
+Code Generation (kernel_generator.py)
+=====================================
 
-The ``KernelRenderer`` converts the allocated program to assembly text.
+The ``KernelGenerator`` converts the allocated program to assembly text.
 
 Physical Mapping
 ----------------
@@ -339,13 +339,13 @@ The ``PhysicalMapping`` class holds the virtual-to-physical register mappings::
         sreg_map={0: 8, 1: 9},         # ks0->s8, ks1->s9
     )
 
-Rendering
----------
+Generation
+----------
 
-The renderer substitutes physical register numbers and formats instructions::
+The generator substitutes physical register numbers and formats instructions::
 
-    renderer = KernelRenderer(program, mapping)
-    assembly = renderer.render_to_string()
+    generator = KernelGenerator(program, mapping)
+    assembly = generator.generate_to_string()
     
     # Output:
     #     v_add_u32 v7, v5, v6

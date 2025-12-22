@@ -39,7 +39,7 @@ from .kernel_ir import (
     is_virtual, is_vgpr, is_sgpr, get_reg_class,
 )
 from .kernel_liveness import LiveRange, LivenessInfo, compute_liveness
-from .kernel_render import PhysicalMapping
+from .kernel_generator import PhysicalMapping
 
 
 # Debug flag

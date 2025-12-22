@@ -4,12 +4,12 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """
-Renderer for kernel IR to AMDGCN assembly.
+Generator for kernel IR to AMDGCN assembly.
 
 This module converts a KernelProgram (with virtual registers allocated to
 physical registers) into final assembly text or instruction objects.
 
-The renderer:
+The generator:
 1. Takes a KernelProgram and a mapping from virtual to physical registers
 2. Substitutes physical register numbers for virtual registers
 3. Formats instructions according to AMDGCN assembly syntax
@@ -47,27 +47,27 @@ class PhysicalMapping:
         return self.sreg_map[sreg.id]
 
 
-class KernelRenderer:
+class KernelGenerator:
     """
-    Renders KernelProgram to assembly text.
+    Generates AMDGCN assembly from KernelProgram.
     """
     
     def __init__(self, program: KernelProgram, mapping: PhysicalMapping):
         self.program = program
         self.mapping = mapping
     
-    def render(self) -> List[str]:
-        """Render the entire program to assembly lines."""
+    def generate(self) -> List[str]:
+        """Generate the entire program as assembly lines."""
         lines = []
         for instr in self.program:
-            line = self._render_instr(instr)
+            line = self._generate_instr(instr)
             if line:
                 lines.append(line)
         return lines
     
-    def render_to_string(self) -> str:
-        """Render the entire program to a single string."""
-        return "\n".join(self.render())
+    def generate_to_string(self) -> str:
+        """Generate the entire program to a single string."""
+        return "\n".join(self.generate())
     
     def _resolve_reg(self, reg: KReg) -> str:
         """Resolve a register to its physical name."""
@@ -117,8 +117,8 @@ class KernelRenderer:
             return f"offset:{op.bytes}"
         raise ValueError(f"Unknown operand type: {type(op)}")
     
-    def _render_instr(self, instr: KInstr) -> Optional[str]:
-        """Render a single instruction to assembly."""
+    def _generate_instr(self, instr: KInstr) -> Optional[str]:
+        """Generate a single instruction to assembly."""
         opcode = instr.opcode
         
         # Handle pseudo-ops
@@ -286,8 +286,13 @@ class KernelRenderer:
         return line
 
 
-def render_program(program: KernelProgram, mapping: PhysicalMapping) -> str:
-    """Convenience function to render a program to assembly string."""
-    renderer = KernelRenderer(program, mapping)
-    return renderer.render_to_string()
+# Backwards compatibility aliases
+KernelRenderer = KernelGenerator
+render_program = lambda program, mapping: KernelGenerator(program, mapping).generate_to_string()
+
+
+def generate_program(program: KernelProgram, mapping: PhysicalMapping) -> str:
+    """Convenience function to generate a program to assembly string."""
+    generator = KernelGenerator(program, mapping)
+    return generator.generate_to_string()
 

@@ -30,7 +30,7 @@ from wave_lang.kernel.wave.asm.kernel_liveness import (
 from wave_lang.kernel.wave.asm.kernel_regalloc import (
     KernelRegAlloc, allocate_kernel, AllocationError, RegPool,
 )
-from wave_lang.kernel.wave.asm.kernel_render import (
+from wave_lang.kernel.wave.asm.kernel_generator import (
     KernelRenderer, PhysicalMapping, render_program,
 )
 from wave_lang.kernel.wave.asm.kernel_pipeline import (
