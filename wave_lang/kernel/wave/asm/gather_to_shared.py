@@ -228,7 +228,7 @@ class G2SHandler:
 
         if isinstance(value, int):
             voffset = self.walker.emitter.vgpr_allocator.alloc_v()
-            self.walker.emitter.unified.v_mov_b32(f"v{voffset}", value * scale_bytes, comment="offset")
+            self.walker.unified.v_mov_b32(f"v{voffset}", value * scale_bytes, comment="offset")
             return voffset
 
         if isinstance(value, sympy.Expr):
