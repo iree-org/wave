@@ -9,11 +9,24 @@
 
 include "mlir/Pass/PassBase.td"
 
-def LowerWaveToMLIRPass : Pass<"lower-wave-to-mlir"> {
-  let summary = "Lower Wave dialect to upstream MLIR dialects";
+def LowerWaveControlFlowPass : Pass<"lower-wave-control-flow"> {
+  let summary = "Lower Wave control flow operations to SCF";
   let description = [{
-    This pass lowers operations from the Wave dialect to upstream MLIR
-    dialects, notably arith and vector.
+    This pass lowers control flow operations from the Wave dialect to SCF,
+    specifically converting wave.iterate to scf.for. Other Wave operations
+    are left unchanged for subsequent lowering passes.
+  }];
+  let dependentDialects = [
+    "::mlir::scf::SCFDialect",
+  ];
+}
+
+def LowerWaveToMLIRPass : Pass<"lower-wave-to-mlir"> {
+  let summary = "Lower Wave dialect operations to upstream MLIR dialects";
+  let description = [{
+    This pass lowers remaining Wave dialect operations to upstream MLIR
+    dialects, notably arith and vector. Control flow operations should
+    be lowered separately using lower-wave-control-flow.
   }];
   let dependentDialects = [
     "::mlir::arith::ArithDialect",

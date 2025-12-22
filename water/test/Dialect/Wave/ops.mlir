@@ -228,10 +228,10 @@ func.func @mma_elements_per_thread_interface_explicit() attributes {
   %rhs_init = arith.constant 2.0 : f16
   %acc_init = arith.constant 0.0 : f32
 
-  // Create register values with explicit elements_per_thread.
-  %lhs = wave.register %lhs_init {elements_per_thread = 8} : !wave.tensor<[@M, @K] of f16, <register>>
-  %rhs = wave.register %rhs_init {elements_per_thread = 8} : !wave.tensor<[@N, @K] of f16, <register>>
-  %acc = wave.register %acc_init {elements_per_thread = 16} : !wave.tensor<[@M, @N] of f32, <register>>
+  // Create register values - elements_per_thread determined by MMA backward propagation.
+  %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
+  %acc = wave.register %acc_init : !wave.tensor<[@M, @N] of f32, <register>>
 
   // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_32x32x8_f16>}
   // f32_32x32x8_f16: 32*32/64 threads = 16 elements per thread.
@@ -254,9 +254,9 @@ func.func @mma_elements_per_thread_32_threads_explicit() attributes {
   %rhs_init = arith.constant 2.0 : f16
   %acc_init = arith.constant 0.0 : f32
 
-  // Create register values with explicit elements_per_thread.
-  %lhs = wave.register %lhs_init {elements_per_thread = 8} : !wave.tensor<[@M, @K] of f16, <register>>
-  %rhs = wave.register %rhs_init {elements_per_thread = 8} : !wave.tensor<[@N, @K] of f16, <register>>
+  // Create register values - elements_per_thread determined by MMA backward propagation.
+  %lhs = wave.register %lhs_init : !wave.tensor<[@M, @K] of f16, <register>>
+  %rhs = wave.register %rhs_init : !wave.tensor<[@N, @K] of f16, <register>>
   %acc = wave.register %acc_init {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>
 
   // CHECK: wave.mma {{.*}} {kind = #wave.mma_kind<f32_16x16x16_f16>}

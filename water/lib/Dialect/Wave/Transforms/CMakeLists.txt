@@ -3,6 +3,7 @@ add_mlir_dialect_library(MLIRWaveTransforms
   InferTypes.cpp
   LoweringPatterns.cpp
   LowerReadWriteOps.cpp
+  LowerWaveControlFlow.cpp
   LowerWaveToMLIR.cpp
   TypeConverter.cpp
   PropagateDefaultsFromConstraints.cpp
