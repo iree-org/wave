@@ -44,6 +44,7 @@ from .latency_provider import LatencyProvider
 from .scoreboard import Scoreboard
 from .ticketing import Ticketing
 from .hazards import HazardDetector
+from .unified_emitter import UnifiedEmitter, EmissionMode
 
 
 def get_register_granularity(target: str) -> Tuple[int, int]:
@@ -226,6 +227,10 @@ class AsmEmitter:
         self.lane_id_emitted = False
         self.lane_id_v = None  # Store which VGPR holds lane ID
         self.current_vgpr_quad = None  # Track current VGPR quad for MFMA results
+        
+        # Unified emitter bridge - provides unified API while emitting to self.lines
+        self._unified_emitter: Optional[UnifiedEmitter] = None
+        
         # Track pinned VGPRs for future lifetime management (API surface)
         self._pinned_vgprs = set()
 
@@ -396,6 +401,38 @@ class AsmEmitter:
                 for inner in block.operations:
                     yield inner
                     yield from self._walk_ops_recursively(inner)
+
+    # ---- Unified Emitter Integration ----
+    
+    @property
+    def unified(self) -> UnifiedEmitter:
+        """
+        Get the unified instruction emitter.
+        
+        Provides a consistent API for instruction emission that works with
+        both the legacy line-based emission and kernel IR paths.
+        
+        Usage:
+            emitter.unified.v_mov_b32("v0", 42, comment="load constant")
+            emitter.unified.s_barrier()
+        """
+        if self._unified_emitter is None:
+            # Create unified emitter in direct mode, sharing our line buffer
+            self._unified_emitter = UnifiedEmitter(
+                architecture=self._get_architecture(),
+                mode=EmissionMode.DIRECT,
+            )
+            # Share the lines buffer
+            self._unified_emitter._lines = self.lines
+        return self._unified_emitter
+    
+    def _get_architecture(self) -> str:
+        """Map targetid to architecture for instruction registry."""
+        if "gfx942" in self.targetid or "gfx940" in self.targetid:
+            return "gfx942"
+        elif "gfx950" in self.targetid:
+            return "gfx950"
+        return "common"
 
     # ---- low-level ----
     def emit(self, s: str):
