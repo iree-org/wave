@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from .._support.indexing import IndexSymbol
 from ...support.location_config import LocationCaptureConfig
-from ..compiler.kernel_codegen import KernelBufferUsage
+from ..lang.kernel_buffer import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
 from .utils.classes import KernelLaunchInfo, CoalescingType
 

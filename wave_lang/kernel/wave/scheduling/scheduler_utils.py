@@ -21,7 +21,7 @@ from .resources import Operation
 from typing import List
 from collections import deque
 from ..utils.classes import GemmOperationType
-from ...compiler.kernel_codegen import filter_fx_graph
+from ..._support.fx import filter_fx_graph
 
 ScheduleStage = TypeVar("ScheduleStage", bound=Enum)
 

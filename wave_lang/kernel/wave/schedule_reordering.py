@@ -17,7 +17,7 @@ import wave_lang.kernel.lang as tkl
 
 from .._support.tracing import CapturedTrace
 from .._support.location import CapturedLocation
-from ..compiler.kernel_codegen import filter_fx_graph
+from .._support.fx import filter_fx_graph
 from ..lang.global_symbols import *
 from ..ops.wave_ops import (
     MMA,
