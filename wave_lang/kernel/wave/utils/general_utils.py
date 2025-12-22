@@ -564,8 +564,11 @@ def get_live_tensors() -> list[torch.Tensor]:
     for obj in gc.get_objects():
         try:
             # To avoid torch deprecation warning.
-            if "reduce_op" in str(obj):
-                continue
+            try:
+                if obj is torch.distributed.reduce_op:
+                    continue
+            except:
+                pass
 
             if torch.is_tensor(obj):
                 tensors.append(obj)
