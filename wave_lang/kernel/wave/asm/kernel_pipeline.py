@@ -56,19 +56,25 @@ from .instruction_registry import (
 )
 
 
-# Environment variable to enable kernel-level LSRA
+# Environment variable to enable kernel-level LSRA (advanced allocation)
 # Default is "0" (disabled) during development
 WAVE_KERNEL_LSRA_ENV = "WAVE_KERNEL_LSRA"
 
-# Environment variable to use legacy streaming emission (bypass kernel IR)
-# Default is "1" (use legacy) during development; will flip to "0" when stable
-WAVE_USE_LEGACY_STREAMING_ENV = "WAVE_USE_LEGACY_STREAMING"
+# Environment variable to use kernel IR compilation path
+# Default is "0" (disabled) - requires full handler migration to work correctly
+WAVE_USE_KERNEL_IR_ENV = "WAVE_USE_KERNEL_IR"
 
 
 def use_kernel_ir_path() -> bool:
-    """Check if kernel IR compilation path should be used."""
-    # Kernel IR path is now the default
-    return os.environ.get(WAVE_USE_LEGACY_STREAMING_ENV, "0") == "0"
+    """Check if kernel IR compilation path should be used.
+    
+    Kernel IR mode is currently disabled by default because handlers still
+    allocate physical registers from AsmEmitter while emitting virtual 
+    instructions to KernelCompilationContext. These need to be coordinated.
+    
+    Set WAVE_USE_KERNEL_IR=1 to enable for testing.
+    """
+    return os.environ.get(WAVE_USE_KERNEL_IR_ENV, "0") == "1"
 
 
 def use_kernel_lsra() -> bool:

@@ -183,19 +183,19 @@ class G2SHandler:
         cache_swizzle_bits: int,
     ) -> None:
         """Emit SRD copy with cache swizzle modifications."""
-        emitter = self.walker.emitter
         s0, s1, s2, s3 = srd_regs
+        unified = self.walker.unified
 
-        emitter.unified.s_mov_b32(f"s{s0}", f"s{orig_srd_regs[0]}", comment="SRD word0")
+        unified.s_mov_b32(f"s{s0}", f"s{orig_srd_regs[0]}", comment="SRD word0")
 
         if cache_swizzle_bits == 0:
-            emitter.unified.s_mov_b32(f"s{s1}", f"s{orig_srd_regs[1]}", comment="SRD word1")
+            unified.s_mov_b32(f"s{s1}", f"s{orig_srd_regs[1]}", comment="SRD word1")
         else:
-            emitter.unified.s_and_b32(f"s{s1}", f"s{orig_srd_regs[1]}", hex(0xFFFF))
-            emitter.unified.s_or_b32(f"s{s1}", f"s{s1}", hex(cache_swizzle_bits), comment="cache swizzle")
+            unified.s_and_b32(f"s{s1}", f"s{orig_srd_regs[1]}", hex(0xFFFF))
+            unified.s_or_b32(f"s{s1}", f"s{s1}", hex(cache_swizzle_bits), comment="cache swizzle")
 
-        emitter.unified.s_mov_b32(f"s{s2}", _SRD_MAX_BUFFER_SIZE, comment="SRD word2")
-        emitter.unified.s_mov_b32(f"s{s3}", _SRD_WORD3_LDS, comment="SRD word3")
+        unified.s_mov_b32(f"s{s2}", _SRD_MAX_BUFFER_SIZE, comment="SRD word2")
+        unified.s_mov_b32(f"s{s3}", _SRD_WORD3_LDS, comment="SRD word3")
 
     def _get_or_create_srd(
         self, orig_srd_regs: tuple, src_memref_ssa: str
@@ -269,13 +269,14 @@ class G2SHandler:
     ) -> None:
         """Emit M0 register setup for LDS destination."""
         emitter = self.walker.emitter
+        unified = self.walker.unified
 
         # Check for pre-computed M0
         m0_sgprs = getattr(self.walker, "_m0_sgprs", None)
         if m0_sgprs:
             precomputed = m0_sgprs.get(id(operation))
             if precomputed is not None:
-                emitter.unified.s_mov_b32("m0", f"s{precomputed}", comment="Pre-computed M0")
+                unified.s_mov_b32("m0", f"s{precomputed}", comment="Pre-computed M0")
                 return
 
         # Compute M0 inline from row/col indices
@@ -293,29 +294,29 @@ class G2SHandler:
 
         # Emit: either constant or expression -> readfirstlane -> M0
         if m0_expr.is_number:
-            emitter.unified.s_mov_b32("m0", int(m0_expr), comment="LDS offset")
+            unified.s_mov_b32("m0", int(m0_expr), comment="LDS offset")
         else:
             m0_vreg = int(
                 self.handlers._get_expr_emitter(kernel_info).get_or_emit(m0_expr)[1:]
             )
             s_tmp = emitter.sgpr_allocator.alloc_s()
-            emitter.unified.v_readfirstlane_b32(f"s{s_tmp}", f"v{m0_vreg}")
-            emitter.unified.s_mov_b32("m0", f"s{s_tmp}")
+            unified.v_readfirstlane_b32(f"s{s_tmp}", f"v{m0_vreg}")
+            unified.s_mov_b32("m0", f"s{s_tmp}")
             emitter.sgpr_allocator.free_s(s_tmp)
 
     def _emit_buffer_load(
         self, transfer_bytes: int, voffset: int, srd_regs: tuple
     ) -> None:
         """Emit buffer_load...lds instruction."""
-        emitter = self.walker.emitter
+        unified = self.walker.unified
         srd_str = f"s[{srd_regs[0]}:{srd_regs[3]}]"
 
         if transfer_bytes == 4:
-            emitter.unified.buffer_load_dword_lds(
+            unified.buffer_load_dword_lds(
                 f"v{voffset}", srd_str, "0", comment=f"gather {transfer_bytes}B"
             )
         elif transfer_bytes == 16:
-            emitter.unified.buffer_load_dwordx4_lds(
+            unified.buffer_load_dwordx4_lds(
                 f"v{voffset}", srd_str, "0", comment=f"gather {transfer_bytes}B"
             )
         else:
@@ -347,15 +348,16 @@ class G2SHandler:
         m0_expr = sympy.simplify(lds_base + (row * lds_cols + col) * elem_bytes)
 
         emitter = self.walker.emitter
+        unified = self.walker.unified
         s_m0 = emitter.sgpr_allocator.alloc_s()
 
         if m0_expr.is_number:
-            emitter.unified.s_mov_b32(f"s{s_m0}", int(m0_expr), comment="Pre-compute M0")
+            unified.s_mov_b32(f"s{s_m0}", int(m0_expr), comment="Pre-compute M0")
         else:
             m0_vreg = int(
                 self.handlers._get_expr_emitter(kernel_info).get_or_emit(m0_expr)[1:]
             )
-            emitter.unified.v_readfirstlane_b32(f"s{s_m0}", f"v{m0_vreg}", comment="Pre-compute M0")
+            unified.v_readfirstlane_b32(f"s{s_m0}", f"v{m0_vreg}", comment="Pre-compute M0")
 
         return s_m0
 
