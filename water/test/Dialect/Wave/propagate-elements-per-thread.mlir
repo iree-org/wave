@@ -100,7 +100,7 @@ func.func @missing_elements_per_thread(%mem: !wave.tensor<[@M] of f16, <global>>
 module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 func.func @read_write_conflict(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
   %reg = wave.read %mem {elements_per_thread = 4} : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
-  // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (4)}}
+  // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and register operand #0 (4)}}
   wave.write %reg, %mem {elements_per_thread = 8} : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
   return
 }
@@ -112,7 +112,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 func.func @read_write_conflict_indirect(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
   %reg = wave.read %mem {elements_per_thread = 4} : (!wave.tensor<[@M] of f16, <global>>) -> !wave.tensor<[@M] of f16, <register>>
   %val = wave.exp2 %reg : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
-  // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (4)}}
+  // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and register operand #0 (4)}}
   wave.write %reg, %mem {elements_per_thread = 8} : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
   return
 }
@@ -158,6 +158,66 @@ module {
     wave.write %reg, %mem { elements_per_thread = 8 } : !wave.tensor<[@M] of f32, <register>>, !wave.tensor<[@M] of f32, <global>>
     return
   }
+}
+
+// -----
+
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+// CHECK-LABEL: @memory_resharding_allowed
+func.func @memory_resharding_allowed(%mem: !wave.tensor<[@M] of f16, <shared>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
+  %cst = arith.constant 0.0 : f16
+  // Register gets 8 elements per thread from write operation's backward propagation
+  // CHECK: wave.register {{.*}} : vector<8xf16>
+  %reg8 = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
+
+  // Write 8 elements per thread to memory
+  // CHECK: wave.write {{.*}} : vector<8xf16>, !wave.tensor<[@M] of f16, <shared>>
+  wave.write %reg8, %mem {elements_per_thread = 8} : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <shared>>
+
+  // Read 4 elements per thread from same memory - this should be allowed (memory resharding)
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M] of f16, <shared>>) -> vector<4xf16>
+  %reg4 = wave.read %mem {elements_per_thread = 4} : (!wave.tensor<[@M] of f16, <shared>>) -> !wave.tensor<[@M] of f16, <register>>
+
+  return
+}
+}
+
+// -----
+
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+// CHECK-LABEL: @write_backward_propagation
+func.func @write_backward_propagation(%mem: !wave.tensor<[@M] of f16, <shared>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
+  %cst = arith.constant 0.0 : f16
+  // RegisterOp without explicit elements_per_thread - should get it from backward propagation
+  // CHECK: wave.register {{.*}} : vector<4xf16>
+  %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
+
+  // WriteOp should propagate elements_per_thread backward to register operand
+  // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <shared>>
+  wave.write %reg, %mem {elements_per_thread = 4} : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <shared>>
+
+  return
+}
+}
+
+// -----
+
+// CHECK: #wave.normal_form<full_types,memory_only_types>
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+// CHECK-LABEL: @read_register_propagation
+func.func @read_register_propagation(%mem: !wave.tensor<[@M] of f16, <shared>>) attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>} {
+  // ReadOp should only propagate to its register result, not validate memory
+  // CHECK: wave.read {{.*}} : (!wave.tensor<[@M] of f16, <shared>>) -> vector<6xf16>
+  %reg = wave.read %mem {elements_per_thread = 6} : (!wave.tensor<[@M] of f16, <shared>>) -> !wave.tensor<[@M] of f16, <register>>
+
+  // Downstream operation should get 6 elements per thread
+  // CHECK: wave.exp2 {{.*}} : (vector<6xf16>) -> vector<6xf16>
+  %result = wave.exp2 %reg : (!wave.tensor<[@M] of f16, <register>>) -> !wave.tensor<[@M] of f16, <register>>
+
+  return
+}
 }
 
 // -----
