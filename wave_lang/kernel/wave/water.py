@@ -423,15 +423,18 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     toolkit_path = get_water_mlir_pkg_path()
 
     pipeline = [
+        "water-memref-decomposition",
+        *add_opt(canonicalize_cse),
         "lower-affine",
         *add_opt(canonicalize_cse),
         *add_opt("loop-invariant-code-motion"),
         *add_opt("int-range-optimizations"),
-        "convert-scf-to-cf",
-        ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("water-alloc-to-alloca", {}, "gpu.module"),
         # add_transform(alloc_to_alloca, "__transform_alloc_to_alloca"),
         add_transform(alloca_to_global, "__transform_alloca_to_global"),
+        "water-memref-lowering",
+        "convert-scf-to-cf",
+        ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
         ("rocdl-attach-target", {"chip": target_chip, "O": llvm_opt_level}),
         ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
