@@ -41,7 +41,7 @@ from .kernel_ir import (
 )
 from .kernel_liveness import compute_liveness, LivenessInfo
 from .kernel_regalloc import KernelRegAlloc, allocate_kernel, AllocationStats, AllocationError
-from .kernel_render import KernelRenderer, PhysicalMapping, render_program
+from .kernel_generator import KernelGenerator, PhysicalMapping, generate_program
 
 
 # Environment variable to enable kernel-level LSRA
@@ -244,8 +244,8 @@ class KernelCompilationContext:
         )
         
         # Render
-        renderer = KernelRenderer(self.program, mapping)
-        asm_lines = renderer.render()
+        generator = KernelGenerator(self.program, mapping)
+        asm_lines = generator.generate()
         
         return asm_lines, stats
     
