@@ -34,7 +34,7 @@ from .utils import (
     simplify_expression,
     split_const_dynamic,
 )
-from .kernel_emitter import create_emitter, use_kernel_emitter
+from .kernel_emitter import create_emitter
 from .gather_to_shared import G2SHandler
 
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
@@ -65,8 +65,8 @@ class OperationHandlers:
         """
         Get or create expression emitter for this kernel (with CSE).
 
-        Uses KernelEmitter with whole-program allocation when WAVE_KERNEL_LSRA=1,
-        otherwise uses ExprEmitter with per-expression allocation.
+        Uses KernelEmitter with whole-kernel register allocation, providing
+        global CSE and better register reuse.
 
         Binds workgroup ID and thread ID symbols if they are available.
         """

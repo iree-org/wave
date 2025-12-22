@@ -65,7 +65,7 @@ class ExpressionBridge:
     program: Optional[KernelProgram] = None
     builder: Optional[KernelBuilder] = None
     
-    # Mapping from physical regs (returned by expr_emitter) to virtual regs
+    # Mapping from physical regs (returned by kernel emitter) to virtual regs
     _phys_to_virtual: Dict[str, KVReg] = field(default_factory=dict, init=False)
     
     # Reverse mapping (virtual to physical, after allocation)
@@ -178,4 +178,5 @@ class ExpressionBridge:
 def create_expression_bridge() -> ExpressionBridge:
     """Create an expression bridge for the current compilation."""
     return ExpressionBridge()
+
 
