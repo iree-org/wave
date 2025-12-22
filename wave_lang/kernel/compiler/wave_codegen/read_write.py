@@ -44,9 +44,9 @@ from ..._support.indexing import (
     IndexSymbol,
     subs_idxc,
 )
-from ...compiler.base import ValidationError
-from ...compiler.builder import IRProxyValue
-from ...compiler.utils import strides_from_symbolic_shape
+from ..base import ValidationError
+from ..builder import IRProxyValue
+from ..utils import strides_from_symbolic_shape
 from ...lang.global_symbols import *
 from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
@@ -60,9 +60,9 @@ from ...ops.wave_ops import (
     read_meets_hw_transpose_requirements,
     MemoryAccessFlags,
 )
-from ..utils.general_utils import get_fastest_index, linearize_index
-from ..utils.mapping_utils import transform_index_on_mapping
-from ..utils.symbol_utils import safe_subs
+from ...wave.utils.general_utils import get_fastest_index, linearize_index
+from ...wave.utils.mapping_utils import transform_index_on_mapping
+from ...wave.utils.symbol_utils import safe_subs
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,

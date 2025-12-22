@@ -60,19 +60,19 @@ from wave_lang.support.ir_imports import (
 
 from ..._support.indexing import IndexExpr, IndexingContext, xor
 from ..._support.tracing import CapturedTrace
-from ...compiler.base import NDEBUG, CodegenError
-from ...compiler.builder import IRProxyValue, ScalarBuilder
-from ...compiler.kernel_codegen import (
+from ..base import NDEBUG, CodegenError
+from ..builder import IRProxyValue, ScalarBuilder
+from ..kernel_codegen import (
     BindingType,
     BindingDesc,
     BoundKernelSignature,
     create_argument_locations,
 )
 from ...lang.wave_types import IndexSymbol
-from ..compile_options import WaveCompileOptions
-from ..constraints import Constraint, HardwareConstraint, TilingConstraint
-from ..utils.general_utils import get_hardware_constraint
-from ..utils.symbol_utils import subs_idxc, is_literal
+from ...wave.compile_options import WaveCompileOptions
+from ...wave.constraints import Constraint, HardwareConstraint, TilingConstraint
+from ...wave.utils.general_utils import get_hardware_constraint
+from ...wave.utils.symbol_utils import subs_idxc, is_literal
 
 logger = get_logger("wave.ops_location_check")
 

@@ -63,7 +63,7 @@ from .analysis.partition_strided_operators import (
 from .barriers import add_shared_memory_barriers
 from .cluster_barriers import add_cluster_barriers
 from .cache import get_temp_binary_dir
-from .codegen import WaveEmitter
+from ..compiler.wave_codegen import WaveEmitter
 from .compile_options import WaveCompileOptions
 from .constraints import (
     Constraint,

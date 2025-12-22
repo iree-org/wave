@@ -202,7 +202,7 @@ class StreamExecutable:
             )
 
             # TODO: Support passing workload to the dispatch function.
-            from ..wave.codegen import gen_sympy_index
+            from .wave_codegen import gen_sympy_index
 
             arguments = workgroup_builder.entry_block.arguments
 

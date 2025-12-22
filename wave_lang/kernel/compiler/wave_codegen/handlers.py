@@ -48,8 +48,8 @@ from wave_lang.support.ir_imports import (
 
 # Indexing imports.
 from ..._support.indexing import IndexExpr, IndexingContext, IndexSequence, index_symbol
-from ...compiler.base import CodegenError, ValidationError
-from ...compiler.builder import IRProxyValue
+from ..base import CodegenError, ValidationError
+from ..builder import IRProxyValue
 from ...ops.wave_ops import (
     MMABase,
     abs,
@@ -113,17 +113,17 @@ from ...ops.wave_ops import (
     tanh_approx,
     workgroup_barrier,
 )
-from ..compile_options import WaveCompileOptions
-from ..cluster_barriers import CLUSTER_BARRIER_ID
-from ..constraints import GenericDot, HardwareConstraint, MMAType
-from ..scheduling.resources import get_scheduling_mask
-from ..utils.classes import ShuffleMode
-from ..utils.general_utils import (
+from ...wave.compile_options import WaveCompileOptions
+from ...wave.cluster_barriers import CLUSTER_BARRIER_ID
+from ...wave.constraints import GenericDot, HardwareConstraint, MMAType
+from ...wave.scheduling.resources import get_scheduling_mask
+from ...wave.utils.classes import ShuffleMode
+from ...wave.utils.general_utils import (
     get_fastest_index,
     get_largest_index_and_size,
 )
-from ..utils.mapping_utils import transform_index_on_mapping
-from ..utils.symbol_utils import subs_idxc
+from ...wave.utils.mapping_utils import transform_index_on_mapping
+from ...wave.utils.symbol_utils import subs_idxc
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
