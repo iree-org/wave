@@ -161,7 +161,7 @@ jobs:
       - name: Cache LLVM-MLIR
         id: cache-llvm-mlir
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
-        if: ${{ env.IS_MI325 == 'true' || env.IS_MI35X == 'true' }}
+        if: ${{ env.IS_MI325 == 'true' || env.IS_MI35X == 'true' || env.IS_RDNA4 == 'true' }}
         with:
           path: llvm-mlir/_mlir_install/**
           key: ${{ runner.os }}-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
