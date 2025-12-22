@@ -592,3 +592,48 @@ func.func @cast_underspecified_to_different_shape(%arg0: !wave.tensor<[@A, @B] o
   wave.cast %arg0 : !wave.tensor<[@A, @B] of f32> to !wave.tensor<[@X, @Y] of i32>
   return
 }
+
+// -----
+
+// Test mixed wave tensor and vector types in iterate - should fail
+func.func @iterate_mixed_tensor_vector_types() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, I = 4}>} {
+  %tensor_input = wave.allocate {distributed_shape = #wave.expr_list<[] -> (128)>} : !wave.tensor<[@M] of f32, <register>>
+  %vector_input = arith.constant dense<1.0> : vector<8xf32>
+
+  // expected-error @below {{iter_args #0 and result #0 must be the same category of types (both wave tensors or both vectors)}}
+  %iter_result:2 = wave.iterate @I iter_args(%tensor_input, %vector_input) {
+  ^bb0(%in_arg0: !wave.tensor<[@M] of f32, <register>>, %in_arg1: vector<8xf32>):
+    wave.yield %in_arg1, %in_arg0 : vector<8xf32>, !wave.tensor<[@M] of f32, <register>>
+  } : (!wave.tensor<[@M] of f32, <register>>, vector<8xf32>) -> (vector<8xf32>, !wave.tensor<[@M] of f32, <register>>)
+  return
+}
+
+// -----
+
+// Test vector type mismatch in iterate
+func.func @iterate_vector_type_mismatch() attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
+  %input = arith.constant dense<1.0> : vector<8xf32>
+
+  // expected-error @below {{iter_args #0 type ('vector<8xf32>') must match result #0 type ('vector<4xf32>')}}
+  %result = wave.iterate @I iter_args(%input) {
+  ^bb0(%in_arg: vector<8xf32>):
+    %different = arith.constant dense<2.0> : vector<4xf32>
+    wave.yield %different : vector<4xf32>
+  } : (vector<8xf32>) -> (vector<4xf32>)
+  return
+}
+
+// -----
+
+// Test vector element type mismatch in iterate
+func.func @iterate_vector_element_type_mismatch() attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
+  %input = arith.constant dense<1.0> : vector<8xf32>
+
+  // expected-error @below {{iter_args #0 type ('vector<8xf32>') must match result #0 type ('vector<8xf16>')}}
+  %result = wave.iterate @I iter_args(%input) {
+  ^bb0(%in_arg: vector<8xf32>):
+    %different = arith.constant dense<2.0> : vector<8xf16>
+    wave.yield %different : vector<8xf16>
+  } : (vector<8xf32>) -> (vector<8xf16>)
+  return
+}

@@ -13,7 +13,9 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -68,6 +70,7 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
   // the dim operands before the symbol operands below.
   assert(map.getNumDims() == 0 && "expected 0 dims");
 
+
   auto threadId = [&](gpu::Dimension d) -> Value {
     return gpu::ThreadIdOp::create(rewriter, loc, rewriter.getIndexType(), d);
   };
@@ -83,7 +86,6 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
       std::optional<int64_t> value = hyper.getSymbolValue(name);
 #ifndef NDEBUG
       if (!value) {
-        llvm::errs() << "symbol: " << name << "\n";
         assert(false && "unknown symbol, should have been caught by verifiers");
       }
 #endif
@@ -125,6 +127,90 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
       }
       continue;
     }
+
+    if (auto iterSymbol = dyn_cast<wave::WaveIterSymbolAttr>(attr)) {
+      // Check if we're inside an scf.for loop that corresponds to this iteration symbol
+      Block *currentBlock = rewriter.getInsertionBlock();
+      scf::ForOp parentFor = nullptr;
+
+      // Look for a parent scf.for operation
+      Operation *current = currentBlock->getParentOp();
+      while (current) {
+        if (auto forOp = dyn_cast<scf::ForOp>(current)) {
+          parentFor = forOp;
+          break;
+        }
+        current = current->getParentOp();
+      }
+
+      if (!parentFor) {
+        // Check if we're inside a wave.iterate instead
+        Operation *currentOp = currentBlock->getParentOp();
+        while (currentOp) {
+          if (isa<wave::IterateOp>(currentOp)) {
+            return rewriter.notifyMatchFailure(
+                loc, "iteration symbol found inside wave.iterate - "
+                     "please run lower-wave-control-flow pass first");
+          }
+          currentOp = currentOp->getParentOp();
+        }
+
+        return rewriter.notifyMatchFailure(
+            loc, "iteration symbol found but no iteration context available");
+      }
+
+      // Get the induction variable and compute iteration value
+      Value inductionVar = parentFor.getInductionVar();
+
+      // We need the tile size to compute iteration_value = induction_var * tile_size
+      // Get this from the function's tiling constraints
+      func::FuncOp parentFunc = current->getParentOfType<func::FuncOp>();
+      if (!parentFunc) {
+        return rewriter.notifyMatchFailure(loc, "no parent function found");
+      }
+
+      auto hyperparamAttr = parentFunc->getAttrOfType<wave::WaveHyperparameterAttr>(
+          wave::WaveDialect::kHyperparameterAttrName);
+      ArrayAttr constraints = parentFunc->getAttrOfType<ArrayAttr>(
+          wave::WaveDialect::kWaveConstraintsAttrName);
+
+      if (!hyperparamAttr || !constraints) {
+        return rewriter.notifyMatchFailure(loc, "missing hyperparameters or constraints");
+      }
+
+      // Find the tile size for this iteration symbol
+      std::optional<int64_t> tileSize;
+      for (Attribute constraintAttr : constraints) {
+        auto tilingConstraint = dyn_cast<wave::TilingConstraintAttr>(constraintAttr);
+        if (!tilingConstraint)
+          continue;
+
+        if (tilingConstraint.getDim().getName() == iterSymbol.getName()) {
+          wave::WaveExprListAttr tileSizeAttr = tilingConstraint.getTileSize();
+          std::optional<SmallVector<int64_t>> evaluatedTileSize =
+              wave::evaluateMapWithHyperparams(tileSizeAttr.getMap(),
+                                               tileSizeAttr.getSymbols(),
+                                               hyperparamAttr);
+          if (evaluatedTileSize && evaluatedTileSize->size() == 1) {
+            tileSize = (*evaluatedTileSize)[0];
+            break;
+          }
+        }
+      }
+
+      if (!tileSize) {
+        return rewriter.notifyMatchFailure(loc, "could not determine tile size");
+      }
+
+      // Create iteration value: induction_var * tile_size
+      Value tileValue = arith::ConstantIndexOp::create(rewriter, loc, *tileSize);
+      Value iterationValue = arith::MulIOp::create(rewriter, loc, inductionVar, tileValue);
+
+      // Add the iteration value as a symbol value
+      baseSymVals.push_back(iterationValue);
+      continue;
+    }
+
   }
 
   // In case map contains multiple results, create one apply per result.
@@ -134,6 +220,8 @@ materializeAffine(Location loc, ArrayRef<Attribute> symbols, AffineMap map,
     AffineMap submap =
         AffineMap::get(map.getNumDims(), map.getNumSymbols(), expr);
     SmallVector<Value> symVals = baseSymVals;
+
+
     affine::canonicalizeMapAndOperands(&submap, &symVals);
 
     Value apply = affine::AffineApplyOp::create(rewriter, loc, submap, symVals);

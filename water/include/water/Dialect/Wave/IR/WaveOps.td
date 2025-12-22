@@ -168,12 +168,14 @@ def IterateOp : Op<WaveDialect, "iterate", [
 
   let arguments = (ins
     Arg<WaveSymbolAttr, "Iterator symbol">:$iterator,
-    Arg<Variadic<WaveTensorType>, "Carried values">:$iter_args,
-    Arg<Variadic<WaveTensorType>, "Captured values">:$captures
+    // Accept both WaveTensorType (before PropagateElementsPerThread) and AnyVectorOfAnyRank (after)
+    Arg<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Carried values">:$iter_args,
+    Arg<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Captured values">:$captures
   );
 
   let results = (outs
-    Res<Variadic<WaveTensorType>, "Yielded values">:$results
+    // Results follow the same type constraints as inputs
+    Res<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Yielded values">:$results
   );
 
   let regions = (region
@@ -214,7 +216,8 @@ def YieldOp : Op<WaveDialect, "yield",
   let summary = "Yields values from the current control flow context";
 
   let arguments = (ins
-    Arg<Variadic<WaveTensorType>, "Yielded values">:$values
+    // Must match the type constraints of wave.iterate results
+    Arg<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Yielded values">:$values
   );
 
   let assemblyFormat = "$values attr-dict `:` type($values)";
