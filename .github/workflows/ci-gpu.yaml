@@ -185,6 +185,7 @@ jobs:
           toolchain: stable
 
       - name: "Install dwarfdump"
+        if: ${{ env.IS_RDNA4 == 'false' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y dwarfdump
