@@ -26,8 +26,7 @@ struct PyDeleter {
 using PyObjectPtr = std::unique_ptr<PyObject, PyDeleter>;
 } // namespace
 
-extern "C" void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret,
-                                             PyObject *obj_ptr) {
+extern "C" void *_mlir_ciface_wave_get_buffer(PyObject *obj_ptr) {
   GILState gil_state;
 
   // Get tensor.data_ptr() method and call it
@@ -52,13 +51,7 @@ extern "C" void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret,
         "wave_get_buffer: data_ptr() did not return a valid pointer");
   }
 
-  // Fill in the memref descriptor
-  ret->basePtr = static_cast<uint8_t *>(data_ptr);
-  ret->data = static_cast<uint8_t *>(data_ptr);
-  ret->offset = 0;
-  // Actual size doesn't matter we will cast it to 0D memref immediately.
-  ret->sizes[0] = -1;
-  ret->strides[0] = 1;
+  return data_ptr;
 }
 
 extern "C" int64_t _mlir_ciface_wave_get_int64(PyObject *obj_ptr) {

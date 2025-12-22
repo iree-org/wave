@@ -9,35 +9,10 @@
 #include <Python.h>
 #include <cstdint>
 
-/// StridedMemRefType is the descriptor structure used by MLIR for memrefs.
-/// This matches the ABI used by MLIR's memref lowering.
-template <typename T, int N> struct StridedMemRefType {
-  T *basePtr;         // Pointer to the allocated buffer
-  T *data;            // Aligned data pointer
-  int64_t offset;     // Offset in elements
-  int64_t sizes[N];   // Size of each dimension
-  int64_t strides[N]; // Stride of each dimension in elements
-};
-
-/// Rank-1 memref descriptor for memref<?xi8>, we need to pass this to
-/// memref.view op which only accepts 1D i8 memrefs.
-using MemRef1Di8 = StridedMemRefType<uint8_t, 1>;
-
 extern "C" {
 
 /// Extract a raw buffer pointer from a PyObject (PyTorch tensor).
-/// Returns a rank-1 memref descriptor: memref<?xi8>
-///
-/// The returned descriptor has:
-/// - basePtr: pointer to the raw data
-/// - data: same as basePtr (no alignment offset)
-/// - offset: 0
-/// - sizes[0]: -1
-/// - strides[0]: 1
-///
-/// This function assumes the PyObject is a PyTorch tensor and uses
-/// the PyTorch C API to extract the data pointer and size.
-void _mlir_ciface_wave_get_buffer(MemRef1Di8 *ret, PyObject *obj);
+void *_mlir_ciface_wave_get_buffer(PyObject *obj);
 
 /// Extract an int64_t value from a PyObject.
 /// Throws std::runtime_error if conversion fails.
