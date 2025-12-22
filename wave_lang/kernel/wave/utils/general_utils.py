@@ -560,6 +560,10 @@ def get_live_tensors() -> list[torch.Tensor]:
     tensors = []
     import gc
 
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+
     gc.collect()
     for obj in gc.get_objects():
         try:
