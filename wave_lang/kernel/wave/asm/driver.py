@@ -20,6 +20,7 @@ from wave_lang.support.ir_imports import (
 
 from .mlir_walker import IRWalker
 from .asm_emitter import AsmEmitter
+from .kernel_pipeline import use_kernel_ir_path, KernelCompilationContext
 
 
 def walk_ops_recursively(operation: Operation) -> Iterable[Operation]:
@@ -91,8 +92,25 @@ def main():
                 emitter.emit_kernargs(num_args)
 
                 # Walk MLIR and emit instructions
-                walker = IRWalker(emitter)
+                # Check if kernel IR mode is enabled
+                if use_kernel_ir_path():
+                    # Create kernel compilation context
+                    kernel_ctx = KernelCompilationContext(
+                        use_flat_tid=True,
+                        use_workgroup_ids=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                    )
+                    walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
+                else:
+                    kernel_ctx = None
+                    walker = IRWalker(emitter)
+                
                 kernel_info = walker.interpret_func(function_operation)
+                
+                # In kernel IR mode, finalize and append generated assembly
+                if kernel_ctx is not None:
+                    body_lines, _stats = kernel_ctx.finalize()
+                    # Insert body lines before epilogue
+                    emitter.lines.extend(body_lines)
 
                 emitter.emit_epilogue(
                     kernel_info.name,

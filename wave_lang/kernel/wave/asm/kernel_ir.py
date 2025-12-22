@@ -87,15 +87,41 @@ class KPhysSReg:
         return f"s{self.index}"
 
 
+@dataclass(frozen=True)
+class KSpecialReg:
+    """
+    Special non-allocatable register (e.g., m0, exec, vcc).
+    
+    These registers are not part of the VGPR/SGPR pools and are
+    never allocated by the register allocator. They are rendered
+    verbatim in the final assembly.
+    """
+    name: str
+    
+    def __repr__(self) -> str:
+        return self.name
+
+
+# Well-known special registers
+M0 = KSpecialReg("m0")
+EXEC = KSpecialReg("exec")
+VCC = KSpecialReg("vcc")
+
+
 # Type aliases
 KVirtualReg = Union[KVReg, KSReg]
 KPhysicalReg = Union[KPhysVReg, KPhysSReg]
-KReg = Union[KVirtualReg, KPhysicalReg]
+KReg = Union[KVirtualReg, KPhysicalReg, KSpecialReg]
 
 
 def is_virtual(reg: KReg) -> bool:
     """Check if register is virtual (needs allocation)."""
     return isinstance(reg, (KVReg, KSReg))
+
+
+def is_special(reg: KReg) -> bool:
+    """Check if register is a special non-allocatable register."""
+    return isinstance(reg, KSpecialReg)
 
 
 def is_vgpr(reg: KReg) -> bool:
@@ -257,11 +283,19 @@ class KOpcode(Enum):
     DS_WRITE_B64 = auto()   # ds_write_b64 addr, src [offset]
     DS_WRITE_B128 = auto()  # ds_write_b128 addr, src [offset]
     
+    # Buffer load with LDS modifier (gather-to-shared)
+    BUFFER_LOAD_DWORD_LDS = auto()    # buffer_load_dword ... lds
+    BUFFER_LOAD_DWORDX4_LDS = auto()  # buffer_load_dwordx4 ... lds
+    
     # MFMA instructions
     V_MFMA_F32_16X16X16_F16 = auto()
     V_MFMA_F32_32X32X8_F16 = auto()
     V_MFMA_F16_16X16X16_F16 = auto()
     V_MFMA_F16_32X32X8_F16 = auto()
+    
+    # Lane operations
+    V_MBCNT_LO_U32_B32 = auto()  # v_mbcnt_lo_u32_b32 dst, src0, src1
+    V_MBCNT_HI_U32_B32 = auto()  # v_mbcnt_hi_u32_b32 dst, src0, src1
     
     # Pack/conversion
     V_CVT_F32_F16 = auto()
@@ -275,12 +309,28 @@ class KOpcode(Enum):
     S_NOP = auto()
     S_ENDPGM = auto()
     
+    # Loop control flow
+    S_CMP_LT_U32 = auto()    # s_cmp_lt_u32 src0, src1
+    S_CMP_LE_U32 = auto()    # s_cmp_le_u32 src0, src1
+    S_CMP_EQ_U32 = auto()    # s_cmp_eq_u32 src0, src1
+    S_CBRANCH_SCC1 = auto()  # s_cbranch_scc1 label
+    S_CBRANCH_SCC0 = auto()  # s_cbranch_scc0 label
+    S_BRANCH = auto()        # s_branch label
+    
     # Readfirstlane / broadcast
     V_READFIRSTLANE_B32 = auto()
+    
+    # Scalar movk (16-bit immediate)
+    S_MOVK_I32 = auto()      # s_movk_i32 dst, imm16
+    
+    # 64-bit scalar bitwise
+    S_AND_B64 = auto()       # s_and_b64 dst, src1, src2
+    S_OR_B64 = auto()        # s_or_b64 dst, src1, src2
     
     # Pseudo-ops (internal use)
     COMMENT = auto()        # Emit a comment
     LABEL = auto()          # Define a label
+    RAW_ASM = auto()        # Raw assembly line (escape hatch)
 
 
 # =============================================================================
