@@ -445,12 +445,21 @@ public:
   LogicalResult
   matchAndRewrite(wave::ReadOp op, wave::ReadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type convertedType =
-        getTypeConverter()->convertType(op.getResult().getType());
-    if (!convertedType)
-      return rewriter.notifyMatchFailure(op,
-                                         "WaveTensorType conversion failed");
-    auto vectorType = cast<VectorType>(convertedType);
+    // Check if result is already a vector (after PropagateElementsPerThread
+    // pass)
+    Type resultType = op.getResult().getType();
+    VectorType vectorType;
+    if (auto vecType = dyn_cast<VectorType>(resultType)) {
+      // Already converted to vector by PropagateElementsPerThread
+      vectorType = vecType;
+    } else {
+      // Still a WaveTensorType, needs conversion
+      Type convertedType = getTypeConverter()->convertType(resultType);
+      if (!convertedType)
+        return rewriter.notifyMatchFailure(op,
+                                           "WaveTensorType conversion failed");
+      vectorType = cast<VectorType>(convertedType);
+    }
     FailureOr<MemAccessInfo> memInfo = createMemoryIndicesAndMask(
         rewriter, getTypeConverter(), op, op.getMemory().getType(), vectorType);
     if (failed(memInfo))
