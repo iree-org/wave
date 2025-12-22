@@ -593,13 +593,20 @@ class OperationHandlers:
 
     def handle_barrier_op(self, operation: gpu_d.BarrierOp, kernel_info: KernelInfo):
         """Handle gpu.barrier operations - emit synchronization barrier."""
-        self.walker.emitter.emit_barrier()
+        if self.walker.use_kernel_ir:
+            self.walker.kernel_ctx.s_barrier()
+        else:
+            self.walker.emitter.emit_barrier()
 
     def handle_lds_barrier_op(
         self, operation: amdgpu_d.LDSBarrierOp, kernel_info: KernelInfo
     ):
         """Handle amdgpu.lds_barrier - emit lgkmcnt(0) + s_barrier."""
-        self.walker.emitter.emit_barrier()
+        if self.walker.use_kernel_ir:
+            self.walker.kernel_ctx.s_waitcnt(vmcnt=0, lgkmcnt=0)
+            self.walker.kernel_ctx.s_barrier()
+        else:
+            self.walker.emitter.emit_barrier()
 
     def handle_view_op(self, operation: memref_d.ViewOp, kernel_info: KernelInfo):
         """Handle memref.view operations - capture view base byte offset for LDS-backed memrefs."""

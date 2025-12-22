@@ -31,13 +31,16 @@ Usage:
 
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .kernel_model import KernelInfo
 
 from .kernel_ir import (
     KernelProgram, KernelBuilder, KInstr, KOpcode,
-    KVReg, KSReg, KPhysVReg, KPhysSReg,
+    KVReg, KSReg, KPhysVReg, KPhysSReg, KSpecialReg,
     KReg, KRegRange, KImm, KMemOffset,
-    KernelABI, RegClass,
+    KernelABI, RegClass, M0,
 )
 from .kernel_liveness import compute_liveness, LivenessInfo
 from .kernel_regalloc import KernelRegAlloc, allocate_kernel, AllocationStats, AllocationError
@@ -47,6 +50,16 @@ from .kernel_generator import KernelGenerator, PhysicalMapping, generate_program
 # Environment variable to enable kernel-level LSRA
 # Default is "0" (disabled) during development
 WAVE_KERNEL_LSRA_ENV = "WAVE_KERNEL_LSRA"
+
+# Environment variable to use legacy streaming emission (bypass kernel IR)
+# Default is "1" (use legacy) during development; will flip to "0" when stable
+WAVE_USE_LEGACY_STREAMING_ENV = "WAVE_USE_LEGACY_STREAMING"
+
+
+def use_kernel_ir_path() -> bool:
+    """Check if kernel IR compilation path should be used."""
+    # Legacy streaming is the default for now
+    return os.environ.get(WAVE_USE_LEGACY_STREAMING_ENV, "1") == "0"
 
 
 def use_kernel_lsra() -> bool:
@@ -91,8 +104,15 @@ class KernelCompilationContext:
     # Symbol bindings: MLIR SSA value string -> virtual register
     _symbol_bindings: Dict[str, KReg] = field(default_factory=dict, init=False)
     
+    # SSA to register mapping for MLIR SSA values (like walker.ssa_to_vgpr)
+    # Maps SSA value string to tuple of virtual registers (single or range)
+    ssa_to_reg: Dict[str, Tuple[KVReg, ...]] = field(default_factory=dict, init=False)
+    
     # CSE cache: expression key -> virtual register
     _cse_cache: Dict[tuple, KVReg] = field(default_factory=dict, init=False)
+    
+    # SRD tracking (like emitter.srds)
+    srds: Dict[str, Tuple[int, ...]] = field(default_factory=dict, init=False)
     
     # Statistics
     _cse_hits: int = field(default=0, init=False)
@@ -215,6 +235,204 @@ class KernelCompilationContext:
     def emit(self, instr: KInstr):
         """Emit a raw instruction."""
         self.program.emit(instr)
+    
+    def emit_raw(self, asm_line: str):
+        """Emit a raw assembly line (escape hatch)."""
+        self.program.emit(KInstr(KOpcode.RAW_ASM, (), (), comment=asm_line))
+    
+    def emit_label(self, label: str):
+        """Emit a label."""
+        self.program.emit(KInstr(KOpcode.LABEL, (), (), comment=label))
+    
+    # =========================================================================
+    # Additional instruction emission
+    # =========================================================================
+    
+    def vreg_pair(self) -> KRegRange:
+        """Allocate a pair of virtual VGPRs."""
+        return self.program.alloc_vreg_range(2, alignment=2)
+    
+    def vreg_quad(self) -> KRegRange:
+        """Allocate a quad of virtual VGPRs."""
+        return self.program.alloc_vreg_range(4, alignment=4)
+    
+    def sreg_pair(self) -> KRegRange:
+        """Allocate a pair of virtual SGPRs."""
+        return self.program.alloc_sreg_range(2, alignment=2)
+    
+    def sreg_quad(self) -> KRegRange:
+        """Allocate a quad of virtual SGPRs."""
+        return self.program.alloc_sreg_range(4, alignment=4)
+    
+    def ds_write_b32(self, addr: KVReg, src: KVReg, offset: int = 0, comment: str = None):
+        """Emit ds_write_b32."""
+        uses = (addr, src) if offset == 0 else (addr, src, KMemOffset(offset))
+        self.program.emit(KInstr(KOpcode.DS_WRITE_B32, (), uses, comment=comment))
+    
+    def ds_write_b128(self, addr: KVReg, src: KRegRange, offset: int = 0, comment: str = None):
+        """Emit ds_write_b128."""
+        uses = (addr, src) if offset == 0 else (addr, src, KMemOffset(offset))
+        self.program.emit(KInstr(KOpcode.DS_WRITE_B128, (), uses, comment=comment))
+    
+    def ds_read_b128(self, addr: KVReg, offset: int = 0, comment: str = None) -> KRegRange:
+        """Emit ds_read_b128 and return destination vreg quad."""
+        dst = self.vreg_quad()
+        uses = (addr,) if offset == 0 else (addr, KMemOffset(offset))
+        self.program.emit(KInstr(KOpcode.DS_READ_B128, (dst,), uses, comment=comment))
+        return dst
+    
+    def v_readfirstlane_b32(self, src: KVReg, comment: str = None) -> KSReg:
+        """Emit v_readfirstlane_b32 and return destination sreg."""
+        dst = self.sreg()
+        self.program.emit(KInstr(KOpcode.V_READFIRSTLANE_B32, (dst,), (src,), comment=comment))
+        return dst
+    
+    def s_mov_b32_to_m0(self, src, comment: str = None):
+        """Emit s_mov_b32 m0, src."""
+        self.program.emit(KInstr(KOpcode.S_MOV_B32, (M0,), (src,), comment=comment))
+    
+    def v_mfma_f32_16x16x16_f16(
+        self, 
+        a_src: KRegRange, 
+        b_src: KRegRange, 
+        c_acc: KRegRange, 
+        comment: str = None
+    ) -> KRegRange:
+        """Emit v_mfma_f32_16x16x16_f16 and return destination quad."""
+        dst = self.vreg_quad()
+        self.program.emit(KInstr(
+            KOpcode.V_MFMA_F32_16X16X16_F16, 
+            (dst,), 
+            (a_src, b_src, c_acc), 
+            comment=comment
+        ))
+        return dst
+    
+    def buffer_load_dwordx4(
+        self,
+        vaddr: KVReg,
+        srd: KRegRange,
+        soffset,
+        offset: int = 0,
+        comment: str = None
+    ) -> KRegRange:
+        """Emit buffer_load_dwordx4."""
+        dst = self.vreg_quad()
+        uses = (vaddr, srd, soffset, KMemOffset(offset))
+        self.program.emit(KInstr(KOpcode.BUFFER_LOAD_DWORDX4, (dst,), uses, comment=comment))
+        return dst
+    
+    def buffer_store_dwordx4(
+        self,
+        src: KRegRange,
+        vaddr: KVReg,
+        srd: KRegRange,
+        soffset,
+        offset: int = 0,
+        comment: str = None
+    ):
+        """Emit buffer_store_dwordx4."""
+        uses = (src, vaddr, srd, soffset, KMemOffset(offset))
+        self.program.emit(KInstr(KOpcode.BUFFER_STORE_DWORDX4, (), uses, comment=comment))
+    
+    def s_load_dwordx2(
+        self,
+        base: KRegRange,
+        offset: int,
+        comment: str = None
+    ) -> KRegRange:
+        """Emit s_load_dwordx2."""
+        dst = self.sreg_pair()
+        self.program.emit(KInstr(KOpcode.S_LOAD_DWORDX2, (dst,), (base, KImm(offset)), comment=comment))
+        return dst
+    
+    def s_cmp_lt_u32(self, src0, src1, comment: str = None):
+        """Emit s_cmp_lt_u32."""
+        self.program.emit(KInstr(KOpcode.S_CMP_LT_U32, (), (src0, src1), comment=comment))
+    
+    def s_cbranch_scc1(self, label: str, comment: str = None):
+        """Emit s_cbranch_scc1."""
+        # Label is stored as comment for the instruction
+        self.program.emit(KInstr(KOpcode.S_CBRANCH_SCC1, (), (), comment=f"{label}"))
+    
+    def s_branch(self, label: str, comment: str = None):
+        """Emit s_branch."""
+        self.program.emit(KInstr(KOpcode.S_BRANCH, (), (), comment=f"{label}"))
+    
+    def s_add_u32(self, src1, src2, comment: str = None) -> KSReg:
+        """Emit s_add_u32 and return destination sreg."""
+        dst = self.sreg()
+        self.program.emit(KInstr(KOpcode.S_ADD_U32, (dst,), (src1, src2), comment=comment))
+        return dst
+    
+    def v_mbcnt_lo_u32_b32(self, src0, src1, comment: str = None) -> KVReg:
+        """Emit v_mbcnt_lo_u32_b32 and return destination vreg."""
+        dst = self.vreg()
+        self.program.emit(KInstr(KOpcode.V_MBCNT_LO_U32_B32, (dst,), (src0, src1), comment=comment))
+        return dst
+    
+    def v_mbcnt_hi_u32_b32(self, src0, src1, comment: str = None) -> KVReg:
+        """Emit v_mbcnt_hi_u32_b32 and return destination vreg."""
+        dst = self.vreg()
+        self.program.emit(KInstr(KOpcode.V_MBCNT_HI_U32_B32, (dst,), (src0, src1), comment=comment))
+        return dst
+    
+    def buffer_load_dword_lds(
+        self,
+        vaddr: KVReg,
+        srd: KRegRange,
+        soffset,
+        offset: int = 0,
+        comment: str = None
+    ):
+        """Emit buffer_load_dword with LDS modifier (no destination, writes to LDS via m0)."""
+        uses = (vaddr, srd, soffset, KMemOffset(offset))
+        # Note: This instruction has no destination (writes to LDS)
+        self.program.emit(KInstr(KOpcode.BUFFER_LOAD_DWORD_LDS, (), uses, comment=comment))
+    
+    def buffer_load_dwordx4_lds(
+        self,
+        vaddr: KVReg,
+        srd: KRegRange,
+        soffset,
+        offset: int = 0,
+        comment: str = None
+    ):
+        """Emit buffer_load_dwordx4 with LDS modifier (no destination, writes to LDS via m0)."""
+        uses = (vaddr, srd, soffset, KMemOffset(offset))
+        # Note: This instruction has no destination (writes to LDS)
+        self.program.emit(KInstr(KOpcode.BUFFER_LOAD_DWORDX4_LDS, (), uses, comment=comment))
+    
+    def ds_read_b32(self, addr: KVReg, offset: int = 0, comment: str = None) -> KVReg:
+        """Emit ds_read_b32 and return destination vreg."""
+        dst = self.vreg()
+        uses = (addr,) if offset == 0 else (addr, KMemOffset(offset))
+        self.program.emit(KInstr(KOpcode.DS_READ_B32, (dst,), uses, comment=comment))
+        return dst
+    
+    def v_sub_u32(self, src1, src2, comment: str = None) -> KVReg:
+        """Emit v_sub_u32 and return destination vreg."""
+        dst = self.vreg()
+        self.program.emit(KInstr(KOpcode.V_SUB_U32, (dst,), (src1, src2), comment=comment))
+        return dst
+    
+    def s_and_b32(self, src1, src2, comment: str = None) -> KSReg:
+        """Emit s_and_b32 and return destination sreg."""
+        dst = self.sreg()
+        self.program.emit(KInstr(KOpcode.S_AND_B32, (dst,), (src1, src2), comment=comment))
+        return dst
+    
+    def s_or_b32(self, src1, src2, comment: str = None) -> KSReg:
+        """Emit s_or_b32 and return destination sreg."""
+        dst = self.sreg()
+        self.program.emit(KInstr(KOpcode.S_OR_B32, (dst,), (src1, src2), comment=comment))
+        return dst
+    
+    def s_movk_i32(self, imm16: int, comment: str = None) -> KSReg:
+        """Emit s_movk_i32 and return destination sreg."""
+        dst = self.sreg()
+        self.program.emit(KInstr(KOpcode.S_MOVK_I32, (dst,), (KImm(imm16),), comment=comment))
+        return dst
     
     # =========================================================================
     # Finalization

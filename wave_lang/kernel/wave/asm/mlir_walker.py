@@ -31,15 +31,26 @@ from .utils import (
 from .kernel_model import KernelInfo
 from .handlers import OperationHandlers
 from .gather_to_shared import analyze_g2s_region, precompute_m0_values
+from .kernel_pipeline import use_kernel_ir_path, KernelCompilationContext
 
 
 class IRWalker:
-    def __init__(self, emitter=None):
-        """Initialize IRWalker with optional emitter."""
+    def __init__(self, emitter=None, kernel_ctx: KernelCompilationContext = None):
+        """
+        Initialize IRWalker with optional emitter and kernel context.
+        
+        Args:
+            emitter: Legacy AsmEmitter for direct instruction emission.
+            kernel_ctx: KernelCompilationContext for kernel IR mode.
+                        If provided, instructions are emitted to the kernel IR
+                        instead of directly to the emitter.
+        """
         self.emitter = emitter
+        self.kernel_ctx = kernel_ctx
 
         # Unified SSA-to-VGPR mapping for all vector operations
         # Maps SSA value strings to register allocations (tuples of register indices)
+        # In kernel IR mode, this maps to virtual register IDs instead of physical indices
         self.ssa_to_vgpr: dict[str, tuple[int, ...]] = {}
 
         # Supporting fields
@@ -47,6 +58,11 @@ class IRWalker:
         self._lds_view_base_bytes: dict[str, int] = {}  # LDS view offsets
         # Initialize operation handlers
         self.handlers = OperationHandlers(self)
+    
+    @property
+    def use_kernel_ir(self) -> bool:
+        """Check if kernel IR mode is active."""
+        return self.kernel_ctx is not None
 
     def interpret_func(self, fn: func_d.FuncOp) -> KernelInfo:
         kernel_info = KernelInfo(name=fn.sym_name.value)
