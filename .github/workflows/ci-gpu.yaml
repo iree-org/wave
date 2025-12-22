@@ -119,6 +119,12 @@ jobs:
     steps:
       - name: Set environment variables
         run: |
+          if [[ "${{ contains(matrix.os, 'rdna4') }}" == 'true' ]]; then
+            echo "IS_RDNA4=true" >> $GITHUB_ENV
+          else
+            echo "IS_RDNA4=false" >> $GITHUB_ENV
+          fi
+
           if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' ]]; then
             echo "IS_MI325=true" >> $GITHUB_ENV
           else
@@ -131,7 +137,7 @@ jobs:
             echo "IS_MI35X=false" >> $GITHUB_ENV
           fi
 
-          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi35x') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' || "${{ contains(matrix.os, 'rdna') }}" == 'true' ]]; then
+          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi35x') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' || "${{ contains(matrix.os, 'rdna4') }}" == 'true' ]]; then
             echo "HAS_GPU=true" >> $GITHUB_ENV
             echo "HAS_NO_GPU=false" >> $GITHUB_ENV
           else
@@ -145,7 +151,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Cache Vars
-        if: ${{ env.IS_MI325 == 'true' || env.IS_MI35X == 'true' }}
+        if: ${{ env.IS_MI325 == 'true' || env.IS_MI35X == 'true' || env.IS_RDNA4 == 'true' }}
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
           echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
