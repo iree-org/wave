@@ -104,6 +104,11 @@ public:
           }))
         return {};
 
+      int64_t staticOffset = 0;
+      SmallVector<int64_t> staticStrides;
+      if (failed(resultType.getStridesAndOffset(staticStrides, staticOffset)))
+        return {};
+
       auto bufferType = MemRefType::get({}, resultType.getElementType(),
                                         MemRefLayoutAttrInterface{},
                                         resultType.getMemorySpace());
@@ -112,9 +117,25 @@ public:
       buffer =
           UnrealizedConversionCastOp::create(builder, loc, bufferType, buffer)
               .getResult(0);
-      Value offset = arith::ConstantIndexOp::create(builder, loc, 0);
-      return memref::ReinterpretCastOp::create(builder, loc, resultType, buffer,
-                                               offset, sizes, strides);
+
+      OpFoldResult offset = builder.getIndexAttr(0);
+      SmallVector<OpFoldResult> mixedSizes;
+      SmallVector<OpFoldResult> mixedStrides;
+      for (auto i : llvm::seq(rank)) {
+        if (ShapedType::isDynamic(staticStrides[i]))
+          mixedStrides.push_back(strides[i]);
+        else
+          mixedStrides.push_back(builder.getIndexAttr(staticStrides[i]));
+
+        int64_t size = resultType.getDimSize(i);
+        if (ShapedType::isDynamic(size))
+          mixedSizes.push_back(sizes[i]);
+        else
+          mixedSizes.push_back(builder.getIndexAttr(size));
+      }
+
+      return memref::ReinterpretCastOp::create(
+          builder, loc, resultType, buffer, offset, mixedSizes, mixedStrides);
     });
 
     /// Target materialization to decompose memref into components.

@@ -146,8 +146,9 @@ func.func @reinterpret_cast_0d(%base: memref<f32>) -> memref<?x?xf32, strided<[?
   // CHECK: %[[VIEW2:.*]] = memref.view %[[CAST2]][%[[C0]]][] : memref<?xi8> to memref<8xi8>
   // CHECK: %[[CAST3:.*]] = memref.cast %[[VIEW2]] : memref<8xi8> to memref<?xi8>
   // CHECK: %[[CAST4:.*]] = builtin.unrealized_conversion_cast %[[CAST3]] : memref<?xi8> to memref<f32>
-  // CHECK: %[[REINTERPRET:.*]] = memref.reinterpret_cast %[[CAST4]] to offset: [0], sizes: [1, 2], strides: [3, 4]
-  // CHECK: memref.cast %[[REINTERPRET]]
+  // CHECK: %[[REINTERPRET:.*]] = memref.reinterpret_cast %[[CAST4]] to offset: [0], sizes: [1, 2], strides: [3, 4] : memref<f32> to memref<1x2xf32, strided<[3, 4]>>
+  // CHECK: %[[CAST5:.*]] = memref.cast %[[REINTERPRET]] : memref<1x2xf32, strided<[3, 4]>> to memref<?x?xf32, strided<[?, ?], offset: ?>>
+  // CHECK: return %[[CAST5]]
   %0 = memref.reinterpret_cast %base to offset: [0], sizes: [1, 2], strides: [3, 4] : memref<f32> to memref<?x?xf32, strided<[?, ?], offset: ?>>
   return %0 : memref<?x?xf32, strided<[?, ?], offset: ?>>
 }
@@ -164,8 +165,8 @@ func.func @reinterpret_cast(%base: memref<100xf32>, %offset: index, %size0: inde
   // CHECK: %[[OFF:.*]] = affine.apply
   // CHECK: %[[VIEW2:.*]] = memref.view %[[CAST2]][%[[OFF]]][%[[SIZE]]] : memref<?xi8> to memref<?xi8>
   // CHECK: %[[CAST3:.*]] = builtin.unrealized_conversion_cast %[[VIEW2]] : memref<?xi8> to memref<f32>
-  // CHECK: %[[REINTERPRET:.*]] = memref.reinterpret_cast %[[CAST3]] to offset: [0], sizes: [%[[SIZE0]], %[[SIZE1]]], strides: [%[[STRIDE0]], %[[STRIDE1]]]
-  // CHECK: memref.cast %[[REINTERPRET]]
+  // CHECK: %[[REINTERPRET:.*]] = memref.reinterpret_cast %[[CAST3]] to offset: [0], sizes: [%[[SIZE0]], %[[SIZE1]]], strides: [%[[STRIDE0]], %[[STRIDE1]]] : memref<f32> to memref<?x?xf32, strided<[?, ?], offset: ?>>
+  // CHECK: return %[[REINTERPRET]]
   %0 = memref.reinterpret_cast %base to offset: [%offset], sizes: [%size0, %size1], strides: [%stride0, %stride1] : memref<100xf32> to memref<?x?xf32, strided<[?, ?], offset: ?>>
   return %0 : memref<?x?xf32, strided<[?, ?], offset: ?>>
 }
