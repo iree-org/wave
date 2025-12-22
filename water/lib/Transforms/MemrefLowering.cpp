@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -24,7 +25,7 @@ namespace mlir::water {
 namespace {
 struct ConvertUnrealizedConversionCast
     : public OpConversionPattern<UnrealizedConversionCastOp> {
-  using OpConversionPattern::OpConversionPattern;
+  using Base::Base;
 
   LogicalResult
   matchAndRewrite(UnrealizedConversionCastOp castOp, OpAdaptor adaptor,
@@ -47,7 +48,7 @@ struct ConvertUnrealizedConversionCast
 };
 
 struct ConvertMemrefCast : public OpConversionPattern<memref::CastOp> {
-  using OpConversionPattern::OpConversionPattern;
+  using Base::Base;
 
   LogicalResult
   matchAndRewrite(memref::CastOp castOp, OpAdaptor adaptor,
@@ -64,7 +65,7 @@ struct ConvertMemrefCast : public OpConversionPattern<memref::CastOp> {
 };
 
 struct ConvertMemrefLoad : public OpConversionPattern<memref::LoadOp> {
-  using OpConversionPattern::OpConversionPattern;
+  using Base::Base;
 
   LogicalResult
   matchAndRewrite(memref::LoadOp loadOp, OpAdaptor adaptor,
@@ -84,7 +85,7 @@ struct ConvertMemrefLoad : public OpConversionPattern<memref::LoadOp> {
 };
 
 struct ConvertMemrefStore : public OpConversionPattern<memref::StoreOp> {
-  using OpConversionPattern::OpConversionPattern;
+  using Base::Base;
 
   LogicalResult
   matchAndRewrite(memref::StoreOp storeOp, OpAdaptor adaptor,
@@ -104,7 +105,7 @@ struct ConvertMemrefStore : public OpConversionPattern<memref::StoreOp> {
 };
 
 struct ConvertMemrefView : public OpConversionPattern<memref::ViewOp> {
-  using OpConversionPattern::OpConversionPattern;
+  using Base::Base;
 
   LogicalResult
   matchAndRewrite(memref::ViewOp viewOp, OpAdaptor adaptor,
@@ -125,6 +126,31 @@ struct ConvertMemrefView : public OpConversionPattern<memref::ViewOp> {
     Type i8 = rewriter.getIntegerType(8);
     rewriter.replaceOpWithNewOp<LLVM::GEPOp>(viewOp, resultType, i8,
                                              adaptor.getSource(), offset);
+    return success();
+  }
+};
+
+struct ConvertGPULaunchFunc : public OpConversionPattern<gpu::LaunchFuncOp> {
+  using Base::Base;
+
+  LogicalResult
+  matchAndRewrite(gpu::LaunchFuncOp launchOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    std::optional<gpu::KernelDim3> clusterSize;
+    if (launchOp.hasClusterSize())
+      clusterSize =
+          gpu::KernelDim3{adaptor.getClusterSizeX(), adaptor.getClusterSizeY(),
+                          adaptor.getClusterSizeZ()};
+
+    rewriter.replaceOpWithNewOp<gpu::LaunchFuncOp>(
+        launchOp, launchOp.getKernelAttr(),
+        gpu::KernelDim3{adaptor.getGridSizeX(), adaptor.getGridSizeY(),
+                        adaptor.getGridSizeZ()},
+        gpu::KernelDim3{adaptor.getBlockSizeX(), adaptor.getBlockSizeY(),
+                        adaptor.getBlockSizeZ()},
+        adaptor.getDynamicSharedMemorySize(), adaptor.getKernelOperands(),
+        adaptor.getAsyncObject(), clusterSize);
+
     return success();
   }
 };
@@ -181,6 +207,13 @@ public:
     ConversionTarget target(*ctx);
     target.addLegalDialect<arith::ArithDialect, LLVM::LLVMDialect>();
 
+    // Mark gpu.launch_func as dynamically illegal if it has memref operands.
+    target.addDynamicallyLegalOp<gpu::LaunchFuncOp>([&](gpu::LaunchFuncOp op) {
+      return llvm::none_of(op.getKernelOperands(), [](Value operand) {
+        return isa<MemRefType>(operand.getType());
+      });
+    });
+
     // Mark operations with memref types as illegal.
     target.addDynamicallyLegalDialect<memref::MemRefDialect>(
         [&](Operation *op) {
@@ -192,8 +225,8 @@ public:
     RewritePatternSet patterns(ctx);
 
     patterns.add<ConvertUnrealizedConversionCast, ConvertMemrefCast,
-                 ConvertMemrefLoad, ConvertMemrefStore, ConvertMemrefView>(
-        typeConverter, ctx);
+                 ConvertMemrefLoad, ConvertMemrefStore, ConvertMemrefView,
+                 ConvertGPULaunchFunc>(typeConverter, ctx);
 
     populateAnyFunctionOpInterfaceTypeConversionPattern(patterns,
                                                         typeConverter);
