@@ -1,11 +1,5 @@
 // RUN: water-opt %s --water-memref-decomposition --canonicalize | FileCheck %s
 
-#map = affine_map<()[s0, s1] -> (s0 * 80 + s1 * 4)>
-#map1 = affine_map<()[s0, s1, s2] -> (s0 * 256 + s1 * 32 + s2 * 2)>
-#map2 = affine_map<()[s0, s1] -> (s0 * 64 + s1 * 4)>
-#map3 = affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>
-#map4 = affine_map<()[s0] -> (s0 * 4)>
-
 // CHECK-LABEL: func.func @load_2d
 // CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
 func.func @load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {
