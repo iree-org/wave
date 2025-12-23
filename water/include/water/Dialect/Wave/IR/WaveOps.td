@@ -133,8 +133,9 @@ def MmaOp : WaveOp<"mma",
   let hasVerifier = 1;
 
   let extraClassDeclaration = [{
-    /// Compute the expected elements per thread for this MMA operation.
-    unsigned computeElementsPerThread();
+    /// Compute the expected elements per thread for a specific operand of this MMA operation.
+    /// Returns failure if no hardware constraints are available.
+    llvm::FailureOr<unsigned> computeElementsPerThreadForOperand(unsigned operandIndex);
   }];
 }
 

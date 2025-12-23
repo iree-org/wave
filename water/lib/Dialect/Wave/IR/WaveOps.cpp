@@ -1138,15 +1138,16 @@ LogicalResult MmaOp::verify() {
                                    accumulatorType.getElementType());
 }
 
-/// Compute the expected elements per thread for this MMA operation.
-/// Extracts threadsPerWave from ancestor operations with hardware constraints.
-/// Returns 0 if no constraints are found.
-unsigned wave::MmaOp::computeElementsPerThread() {
-  wave::WaveMmaKind kind = getKind();
-  if (!kind) {
-    return 0;
-  }
-  wave::WaveMmaSpec spec = wave::WaveMmaKindAttr::getSpec(getContext(), *kind);
+/// Compute the expected elements per thread for a specific MMA operand.
+/// operandIndex: 0=LHS, 1=RHS, 2=Accumulator/Result
+/// Returns failure if no constraints are found.
+llvm::FailureOr<unsigned>
+wave::MmaOp::computeElementsPerThreadForOperand(unsigned operandIndex) {
+  std::optional<wave::WaveMmaKind> mmaKind = getKind();
+  if (!mmaKind)
+    return mlir::failure();
+  wave::WaveMmaSpec spec =
+      wave::WaveMmaKindAttr::getSpec(getContext(), *mmaKind);
 
   // Extract threads per wave from hardware constraint by walking up the
   // ancestry.
@@ -1157,7 +1158,20 @@ unsigned wave::MmaOp::computeElementsPerThread() {
       for (mlir::Attribute constraint : constraints) {
         if (auto hardwareConstraint =
                 llvm::dyn_cast<wave::HardwareConstraintAttr>(constraint)) {
-          unsigned totalElements = spec.m * spec.n;
+          unsigned totalElements;
+          switch (operandIndex) {
+          case 0: // LHS: M x K
+            totalElements = spec.m * spec.k;
+            break;
+          case 1: // RHS: N x K
+            totalElements = spec.n * spec.k;
+            break;
+          case 2: // Accumulator/Result: M x N
+            totalElements = spec.m * spec.n;
+            break;
+          default:
+            return mlir::failure();
+          }
           return totalElements / hardwareConstraint.getThreadsPerWave();
         }
       }
@@ -1165,8 +1179,8 @@ unsigned wave::MmaOp::computeElementsPerThread() {
     op = op->getParentOp();
   }
 
-  // Return 0 to indicate failure if no constraints found.
-  return 0;
+  // Return failure if no constraints found.
+  return mlir::failure();
 }
 
 llvm::FailureOr<mlir::ChangeResult>
@@ -1174,11 +1188,14 @@ wave::MmaOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
     llvm::raw_ostream &errs) {
-  unsigned expectedElementsPerThread = computeElementsPerThread();
-  if (expectedElementsPerThread == 0) {
+  llvm::FailureOr<unsigned> expectedElementsPerThreadResult =
+      computeElementsPerThreadForOperand(
+          getAccumulatorMutable().getOperandNumber());
+  if (llvm::failed(expectedElementsPerThreadResult)) {
     errs << "MMA operation has no hardware constraints available";
     return mlir::failure();
   }
+  unsigned expectedElementsPerThread = *expectedElementsPerThreadResult;
   wave::ElementsPerThreadLatticeValue expectedResult(expectedElementsPerThread);
   return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
       expectedResult, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
@@ -1193,48 +1210,87 @@ wave::MmaOp::propagateElementsPerThreadBackward(
   // For MMA, the accumulator should have the same elements per thread as the
   // result. The LHS and RHS operands may have different constraints based on
   // their dimensions.
-  unsigned expectedElementsPerThread = computeElementsPerThread();
-  if (expectedElementsPerThread == 0) {
-    errs << "MMA operation has no hardware constraints available";
-    return mlir::failure();
-  }
-  wave::ElementsPerThreadLatticeValue expectedAccumulator(
-      expectedElementsPerThread);
+  // MMA operation always has exactly 3 operands: LHS, RHS, Accumulator
+  assert(operandElements.size() == 3 &&
+         "MMA operation must have exactly 3 operands");
 
+  unsigned lhsOperandNumber = getLhsMutable().getOperandNumber();
+  unsigned rhsOperandNumber = getRhsMutable().getOperandNumber();
   unsigned accumulatorOperandNumber =
       getAccumulatorMutable().getOperandNumber();
 
-  // Validate that LHS and RHS operands have concrete elements_per_thread
-  // values. We don't propagate to them, but we check they've been properly
-  // initialized. During analysis initialization, bottom values are acceptable -
-  // we return NoChange to let the analysis continue rather than failing.
-  // LHS (0) and RHS (1) operands.
-  bool allLhsRhsInitialized = true;
-  for (unsigned i = 0; i < 2 && i < operandElements.size(); ++i) {
-    if (operandElements[i].isBottom()) {
-      allLhsRhsInitialized = false;
-      break;
-    }
+  // Compute expected elements per thread for each operand
+  llvm::FailureOr<unsigned> expectedLhsElementsPerThreadResult =
+      computeElementsPerThreadForOperand(lhsOperandNumber);
+  llvm::FailureOr<unsigned> expectedRhsElementsPerThreadResult =
+      computeElementsPerThreadForOperand(rhsOperandNumber);
+  llvm::FailureOr<unsigned> expectedAccumulatorElementsPerThreadResult =
+      computeElementsPerThreadForOperand(accumulatorOperandNumber);
+
+  if (llvm::failed(expectedLhsElementsPerThreadResult) ||
+      llvm::failed(expectedRhsElementsPerThreadResult) ||
+      llvm::failed(expectedAccumulatorElementsPerThreadResult)) {
+    errs << "MMA operation has no hardware constraints available";
+    return mlir::failure();
   }
 
-  // If LHS/RHS operands are still at bottom, return NoChange to allow
-  // the analysis to continue. Forward propagation will initialize them.
-  if (!allLhsRhsInitialized) {
-    return mlir::ChangeResult::NoChange;
+  unsigned expectedLhsElementsPerThread = *expectedLhsElementsPerThreadResult;
+  unsigned expectedRhsElementsPerThread = *expectedRhsElementsPerThreadResult;
+  unsigned expectedAccumulatorElementsPerThread =
+      *expectedAccumulatorElementsPerThreadResult;
+
+  wave::ElementsPerThreadLatticeValue expectedLhs(expectedLhsElementsPerThread);
+  wave::ElementsPerThreadLatticeValue expectedRhs(expectedRhsElementsPerThread);
+  wave::ElementsPerThreadLatticeValue expectedAccumulator(
+      expectedAccumulatorElementsPerThread);
+
+  // Propagate elements_per_thread to LHS operand using the helper function
+  llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> lhsOnly =
+      operandElements.slice(lhsOperandNumber, 1);
+
+  llvm::FailureOr<mlir::ChangeResult> lhsResult =
+      wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+          expectedLhs, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+          lhsOnly, "computed from MMA kind", "", "LHS operand", errs);
+
+  if (llvm::failed(lhsResult)) {
+    return llvm::failure();
+  }
+
+  // Propagate elements_per_thread to RHS operand using the helper function
+  llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> rhsOnly =
+      operandElements.slice(rhsOperandNumber, 1);
+
+  llvm::FailureOr<mlir::ChangeResult> rhsResult =
+      wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+          expectedRhs, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+          rhsOnly, "computed from MMA kind", "", "RHS operand", errs);
+
+  if (llvm::failed(rhsResult)) {
+    return mlir::failure();
   }
 
   // Propagate to the accumulator operand.
-  if (operandElements.size() > accumulatorOperandNumber) {
-    llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> accumulatorOnly =
-        operandElements.slice(accumulatorOperandNumber, 1);
+  llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> accumulatorOnly =
+      operandElements.slice(accumulatorOperandNumber, 1);
 
-    return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
-        expectedAccumulator,
-        llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(), accumulatorOnly,
-        "computed from MMA kind", "", "accumulator operand", errs);
+  llvm::FailureOr<mlir::ChangeResult> accumulatorResult =
+      wave::detail::checkAndPropagateElementsPerThreadFromConstant(
+          expectedAccumulator,
+          llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
+          accumulatorOnly, "computed from MMA kind", "", "accumulator operand",
+          errs);
+
+  if (llvm::failed(accumulatorResult)) {
+    return mlir::failure();
   }
 
-  return mlir::ChangeResult::NoChange;
+  // Return Change if any operand changed
+  return (*lhsResult == mlir::ChangeResult::Change ||
+          *rhsResult == mlir::ChangeResult::Change ||
+          *accumulatorResult == mlir::ChangeResult::Change)
+             ? mlir::ChangeResult::Change
+             : mlir::ChangeResult::NoChange;
 }
 
 //-----------------------------------------------------------------------------
