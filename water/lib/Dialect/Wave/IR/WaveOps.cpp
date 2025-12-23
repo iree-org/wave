@@ -6,7 +6,6 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -1143,7 +1142,7 @@ LogicalResult MmaOp::verify() {
 /// Extracts threadsPerWave from ancestor operations with hardware constraints.
 /// Returns 0 if no constraints are found.
 unsigned wave::MmaOp::computeElementsPerThread() {
-  auto kind = getKind();
+  wave::WaveMmaKind kind = getKind();
   if (!kind) {
     return 0;
   }
@@ -1207,15 +1206,21 @@ wave::MmaOp::propagateElementsPerThreadBackward(
 
   // Validate that LHS and RHS operands have concrete elements_per_thread
   // values. We don't propagate to them, but we check they've been properly
-  // initialized.
+  // initialized. During analysis initialization, bottom values are acceptable -
+  // we return NoChange to let the analysis continue rather than failing.
   // LHS (0) and RHS (1) operands.
+  bool allLhsRhsInitialized = true;
   for (unsigned i = 0; i < 2 && i < operandElements.size(); ++i) {
     if (operandElements[i].isBottom()) {
-      errs << "MMA operand #" << i << " (";
-      errs << (i == 0 ? "LHS" : "RHS");
-      errs << ") has uninitialized elements_per_thread";
-      return mlir::failure();
+      allLhsRhsInitialized = false;
+      break;
     }
+  }
+
+  // If LHS/RHS operands are still at bottom, return NoChange to allow
+  // the analysis to continue. Forward propagation will initialize them.
+  if (!allLhsRhsInitialized) {
+    return mlir::ChangeResult::NoChange;
   }
 
   // Propagate to the accumulator operand.
