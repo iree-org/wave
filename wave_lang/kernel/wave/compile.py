@@ -360,7 +360,12 @@ class WaveKernelWithProfile(WaveKernel):
 
 class WaveKernelExecutionEngine:
     def __init__(
-        self, options: WaveCompileOptions, module: Module | bytes | str, mlir_asm: str
+        self,
+        options: WaveCompileOptions,
+        module: Module | bytes | str,
+        mlir_asm: str,
+        *,
+        create_execution_engine: bool = True,
     ):
         self.options = options
         self.asm = mlir_asm
@@ -381,6 +386,8 @@ class WaveKernelExecutionEngine:
         # Get the execution engine instance and load the module
         from wave_lang.kernel.wave.execution_engine import get_execution_engine
 
+        if not create_execution_engine:
+            return
         self._engine = get_execution_engine()
         self._module_handle = self._engine.load_module_from_text(optimized_mlir)
 
@@ -411,6 +418,10 @@ class WaveKernelExecutionEngine:
         """
         Invokes the wave kernel with the given arguments using the ExecutionEngine.
         """
+        assert (
+            self._engine is not None
+        ), "Cannot invoke kernel without creating an execution engine. Revise the constructor call."
+
         # Get the current stream
         stream_ptr = torch.cuda.current_stream().cuda_stream
 
@@ -871,7 +882,7 @@ def wave_compile(
     options: WaveCompileOptions,
     kernel: "LaunchableWave",
     schedule: Optional["WaveSchedule"] = None,
-) -> WaveKernel:
+) -> WaveKernel | WaveKernelExecutionEngine:
     """
     Compiles the wave kernel to an executable.
     """
@@ -1058,7 +1069,12 @@ def wave_compile(
                 _compile_asm_to_binary(asm, options)
         elif options.use_water_backend:
             module = water_lowering_pipeline(mb.module_op, options)
-            return WaveKernelExecutionEngine(options, module, asm)
+            return WaveKernelExecutionEngine(
+                options,
+                module,
+                asm,
+                create_execution_engine=not options.compile_to_mlir,
+            )
         elif not options.compile_to_mlir:
             # LLVM flow: only compile to VMFB when not in MLIR-only mode
             compiled_wave_vmfb = compile_to_vmfb(asm, options)
