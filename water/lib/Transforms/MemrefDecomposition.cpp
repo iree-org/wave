@@ -15,6 +15,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
+#include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
@@ -275,10 +276,15 @@ public:
                    affine::makeComposedFoldedAffineApply(
                        builder, loc, offsetExpr, getAsOpFoldResult(offset)));
 
-      for (auto i : llvm::seq(rank))
-        if (staticStrides[i] != ShapedType::kDynamic)
+      for (auto i : llvm::seq(rank)) {
+        if (ShapedType::isStatic(memrefType.getDimSize(i)))
+          sizes[i] = arith::ConstantIndexOp::create(builder, loc,
+                                                    memrefType.getDimSize(i));
+
+        if (ShapedType::isStatic(staticStrides[i]))
           strides[i] =
               arith::ConstantIndexOp::create(builder, loc, staticStrides[i]);
+      }
 
       input = toPtr(builder, loc,
                     cast<LLVM::LLVMPointerType>(resultType.front()), input);
@@ -570,7 +576,9 @@ public:
              DecomposeReinterpretCast, DecomposeFatRawBufferCast>(typeConverter,
                                                                   ctx);
 
-    // Apply partial conversion.
+    scf::populateSCFStructuralTypeConversionsAndLegality(typeConverter,
+                                                         patterns, target);
+
     if (failed(applyPartialConversion(op, target, std::move(patterns))))
       signalPassFailure();
   }
