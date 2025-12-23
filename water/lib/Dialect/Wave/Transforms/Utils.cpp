@@ -8,6 +8,7 @@
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 
 #include "mlir/IR/Operation.h"
+#include "llvm/Support/LogicalResult.h"
 
 llvm::LogicalResult wave::collectWaveConstraints(
     mlir::Operation *top,
@@ -46,12 +47,18 @@ wave::setNormalFormPassPostcondition(wave::WaveNormalForm form,
     }
   }
 
-  llvm::LogicalResult result = wave::detail::verifyNormalFormAttr(
-      root, finalForm, /*emitDiagnostics=*/false);
-  if (llvm::succeeded(result))
-    root->setAttr(wave::WaveDialect::kNormalFormAttrName,
-                  wave::WaveNormalFormAttr::get(root->getContext(), finalForm));
-  return result;
+  if (llvm::failed(
+          wave::detail::verifyNormalFormAttr(root, finalForm,
+                                             /*emitDiagnostics=*/false))) {
+    return mlir::emitError(root->getLoc())
+           << "failed to produce code with the '" << wave::stringifyEnum(form)
+           << "' normal form";
+  }
+
+  root->setAttr(wave::WaveDialect::kNormalFormAttrName,
+                wave::WaveNormalFormAttr::get(root->getContext(), finalForm));
+
+  return llvm::success();
 }
 
 llvm::LogicalResult

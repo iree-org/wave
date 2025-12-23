@@ -662,13 +662,8 @@ public:
 
     llvm::LogicalResult result = setNormalFormPassPostcondition(
         wave::WaveNormalForm::AllTypesSpecified, getOperation());
-    if (llvm::failed(result) && !force) {
-      emitError(getOperation()->getLoc())
-          << "failed to produce code with the '"
-          << wave::stringifyEnum(wave::WaveNormalForm::AllTypesSpecified)
-          << "' normal form";
+    if (llvm::failed(result) && !force)
       return signalPassFailure();
-    }
   }
 };
 
@@ -1044,13 +1039,8 @@ public:
       return signalPassFailure();
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            wave::WaveNormalForm::MemoryOnlyTypes, getOperation()))) {
-      emitError(getOperation()->getLoc())
-          << "failed to produce code with the '"
-          << wave::stringifyEnum(wave::WaveNormalForm::MemoryOnlyTypes)
-          << "' normal form";
+            wave::WaveNormalForm::MemoryOnlyTypes, getOperation())))
       return signalPassFailure();
-    }
   }
 };
 } // namespace
@@ -1694,13 +1684,8 @@ public:
     });
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            wave::WaveNormalForm::IndexExprsSpecified, getOperation()))) {
-      emitError(getOperation()->getLoc())
-          << "failed to produce code with the '"
-          << wave::stringifyEnum(wave::WaveNormalForm::IndexExprsSpecified)
-          << "' normal form";
+            wave::WaveNormalForm::IndexExprsSpecified, getOperation())))
       return signalPassFailure();
-    }
   }
 };
 } // namespace
