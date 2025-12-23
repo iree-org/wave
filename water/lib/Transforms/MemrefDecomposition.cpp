@@ -57,7 +57,8 @@ static SmallVector<Value> flatten(ArrayRef<ValueRange> values) {
 }
 
 static std::tuple<Value, ValueRange, ValueRange>
-unflattenDescriptor(ValueRange values, unsigned rank) {
+unflattenDescriptor(ValueRange values, MemRefType memrefType) {
+  unsigned rank = memrefType.getRank();
   Value buffer = values.front();
   values = values.drop_front();
   ValueRange sizes = values.take_front(rank);
@@ -201,7 +202,7 @@ public:
       if (failed(resultType.getStridesAndOffset(staticStrides, staticOffset)))
         return {};
 
-      auto [buffer, sizes, strides] = unflattenDescriptor(inputs, rank);
+      auto [buffer, sizes, strides] = unflattenDescriptor(inputs, resultType);
 
       auto memrefType = MemRefType::get({}, resultType.getElementType(),
                                         MemRefLayoutAttrInterface{},
@@ -350,7 +351,8 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
       return rewriter.notifyMatchFailure(loadOp,
                                          "expected memref to be decomposed");
 
-    auto [buffer, sizes, strides] = unflattenDescriptor(sourceDecomposed, rank);
+    auto [buffer, sizes, strides] =
+        unflattenDescriptor(sourceDecomposed, memrefType);
     SmallVector<Value> indices = flatten(adaptor.getIndices());
 
     Value ptr = getFlattenMemref(rewriter, loc, buffer, loadType, sizes,
@@ -392,7 +394,8 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
       return rewriter.notifyMatchFailure(storeOp,
                                          "expected memref to be decomposed");
 
-    auto [buffer, sizes, strides] = unflattenDescriptor(sourceDecomposed, rank);
+    auto [buffer, sizes, strides] =
+        unflattenDescriptor(sourceDecomposed, memrefType);
     SmallVector<Value> indices = flatten(adaptor.getIndices());
     Value valueToStore;
     if constexpr (std::is_same_v<OpTy, memref::StoreOp>) {
@@ -439,7 +442,7 @@ struct DecomposeReinterpretCast
                                          "expected source to be decomposed");
 
     auto [buffer, oldSizes, oldStrides] =
-        unflattenDescriptor(sourceDecomposed, sourceRank);
+        unflattenDescriptor(sourceDecomposed, sourceType);
 
     // Get new offset, sizes, and strides from the operation.
     ArrayRef<OpFoldResult> offsetsRef = castOp.getMixedOffsets();
@@ -498,6 +501,14 @@ struct DecomposeFatRawBufferCast
 
     unsigned sourceRank = sourceType.getRank();
 
+    ValueRange sourceDecomposed = adaptor.getSource();
+    if (sourceDecomposed.size() != 1 + sourceRank * 2)
+      return rewriter.notifyMatchFailure(castOp,
+                                         "expected source to be decomposed");
+
+    auto [buffer, sizes, strides] =
+        unflattenDescriptor(sourceDecomposed, sourceType);
+
     sourceType = make0DMemRefType(sourceType);
     resultType = make0DMemRefType(resultType);
 
@@ -506,15 +517,6 @@ struct DecomposeFatRawBufferCast
     if (!resultPtrType)
       return rewriter.notifyMatchFailure(castOp,
                                          "failed to convert result type");
-
-    // Get decomposed source.
-    ValueRange sourceDecomposed = adaptor.getSource();
-    if (sourceDecomposed.size() != 1 + sourceRank * 2)
-      return rewriter.notifyMatchFailure(castOp,
-                                         "expected source to be decomposed");
-
-    auto [buffer, sizes, strides] =
-        unflattenDescriptor(sourceDecomposed, sourceRank);
 
     auto sourcePtrType = dyn_cast<LLVM::LLVMPointerType>(buffer.getType());
     if (!sourcePtrType)
