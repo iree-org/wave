@@ -109,12 +109,31 @@ static Value fromPtr(OpBuilder &builder, Location loc, MemRefType memrefType,
       .getResult(0);
 }
 
+static Value integerCast(OpBuilder &builder, Location loc, Type dstType,
+                         Value value) {
+  Type srcType = value.getType();
+  assert((isa<IntegerType, IndexType>(srcType)) &&
+         "source type must be integer or index");
+  assert((isa<IntegerType, IndexType>(dstType)) &&
+         "destination type must be integer or index");
+  if (srcType == dstType)
+    return value;
+
+  if (isa<IndexType>(srcType) || isa<IntegerType>(srcType))
+    return arith::IndexCastOp::create(builder, loc, dstType, value);
+
+  if (cast<IntegerType>(srcType).getWidth() >
+      cast<IntegerType>(dstType).getWidth())
+    return arith::TruncIOp::create(builder, loc, dstType, value);
+  else
+    return arith::ExtSIOp::create(builder, loc, dstType, value);
+}
+
 static Value GEP(OpBuilder &builder, Location loc, Value buffer, Value offset) {
   Type elementType = builder.getIntegerType(8);
   Type i64 = builder.getIntegerType(64);
   auto flags = LLVM::GEPNoWrapFlags::nusw;
-  offset = UnrealizedConversionCastOp::create(builder, loc, i64, offset)
-               .getResult(0);
+  offset = integerCast(builder, loc, i64, offset);
   return LLVM::GEPOp::create(builder, loc, buffer.getType(), elementType,
                              buffer, offset, flags);
 }
