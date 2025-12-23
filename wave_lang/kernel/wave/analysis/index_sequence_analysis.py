@@ -51,6 +51,7 @@ from ...ops.wave_ops import (
 from ..constraints import (
     Constraint,
     DistributionConstraint,
+    GridConstraint,
     HardwareConstraint,
     TilingConstraint,
     WorkgroupConstraint,
@@ -250,12 +251,12 @@ def verify_nodes(trace: CapturedTrace, constraints: list[Constraint]):
             update_vector_shapes = [
                 dim for dim in custom.index if dim in hw_constraint.vector_shapes
             ]
-            if update_vector_shapes:
-                custom.vector_shapes = {}
-                for dim in update_vector_shapes:
-                    custom.vector_shapes[dim] = hw_constraint.vector_shapes[dim]
+            # Always initialize vector_shapes, even if empty (for scalar operations)
+            custom.vector_shapes = {}
+            for dim in update_vector_shapes:
+                custom.vector_shapes[dim] = hw_constraint.vector_shapes[dim]
         assert (
-            custom.vector_shapes
+            custom.vector_shapes is not None
         ), f"Vector shapes not set for node {custom.fx_node}: {custom}"
 
 
@@ -362,6 +363,7 @@ def set_thread_independent_index(
     if isinstance(custom, (Iterate, Placeholder)) and not isinstance(custom, IterArg):
         return
 
+    has_grid_constraint = any(isinstance(c, GridConstraint) for c in constraints)
     constraints = [c for c in constraints if isinstance(c, DistributionConstraint)]
 
     index = {}
@@ -376,6 +378,9 @@ def set_thread_independent_index(
             if isinstance(constraint, TilingConstraint):
                 if not hasattr(custom.graph, "parent_op"):
                     continue
+
+            if isinstance(constraint, WorkgroupConstraint) and has_grid_constraint:
+                continue
 
             if index_seq is None:
                 index_seq = constraint.apply()
@@ -639,7 +644,7 @@ def add_nodes_to_sources(
     """
     Populate the sources with the inputs and users of the source node.
     """
-    for args, reduction in [fn(source.fx_node, None)]:
+    for args, region in [fn(source.fx_node, None)]:
         logger.debug(f"{source.fx_node} -> {args}")
         if not args:
             break

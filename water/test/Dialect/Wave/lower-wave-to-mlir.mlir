@@ -481,7 +481,7 @@ func.func @lower_write(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes
       N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)}]
      : vector<8xf16>, !wave.tensor<[@M, @N] of f16, <global>>
      // CHECK: vector.store {{.*}}[%[[ROW]], %[[COL]]] : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
-
+     // CHECK-NOT: vector.transfer_write
   return
   }
 }
@@ -621,5 +621,149 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     %i32_to_i64 = wave.cast %f32_to_i32 : vector<4xi32> to vector<4xi64>
 
     return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_extract_slice_constants
+  func.func @lower_extract_slice_constants() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    // CHECK:     %[[INPUT:.*]] = arith.constant dense<0.000000e+00> : vector<16xf32>
+    %cst = arith.constant 0.0 : f32
+    %input = wave.register %cst : vector<16xf32>
+
+    // CHECK-NOT: wave.extract_slice
+    // CHECK:     vector.extract_strided_slice %[[INPUT]] {offsets = [4], sizes = [8], strides = [1]} : vector<16xf32> to vector<8xf32>
+    %result = wave.extract_slice %input {
+      offset = #wave.expr_list<[] -> (4)>,
+      size = #wave.expr_list<[] -> (8)>,
+      stride = #wave.expr_list<[] -> (1)>
+    } : (vector<16xf32>) -> vector<8xf32>
+
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_iterate
+  func.func @lower_iterate() attributes {
+    wave.hyperparameters = #wave.hyperparameters<{K = 128, BLOCK_K = 32, M = 64}>,
+    wave.constraints = [
+      #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+    ]
+  } {
+    %alloc = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)> }
+      : !wave.tensor<[@M] of f32, <shared>>
+
+    // CHECK-NOT: wave.iterate
+    // CHECK:     %[[LB:.*]] = arith.constant 0 : index
+    // CHECK:     %[[UB:.*]] = arith.constant 4 : index
+    // CHECK:     %[[STEP:.*]] = arith.constant 1 : index
+    // CHECK:     scf.for %{{.*}} = %[[LB]] to %[[UB]] step %[[STEP]] iter_args(%{{.*}} = %{{.*}}) -> (memref<64xf32, #gpu.address_space<workgroup>>) {
+    // CHECK:       scf.yield %{{.*}} : memref<64xf32, #gpu.address_space<workgroup>>
+    // CHECK:     }
+    %result = wave.iterate @K iter_args(%alloc) {
+    ^bb0(%arg0: !wave.tensor<[@M] of f32, <shared>>):
+      wave.yield %arg0 : !wave.tensor<[@M] of f32, <shared>>
+    } : (!wave.tensor<[@M] of f32, <shared>>) -> !wave.tensor<[@M] of f32, <shared>>
+
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @lower_iterate_with_operations
+  func.func @lower_iterate_with_operations() attributes {
+    wave.hyperparameters = #wave.hyperparameters<{K = 64, BLOCK_K = 16, M = 32}>,
+    wave.constraints = [
+      #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+    ]
+  } {
+    %alloc = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)> }
+      : !wave.tensor<[@M] of f32, <shared>>
+
+    // CHECK-NOT: wave.iterate
+    // CHECK:     %[[LB:.*]] = arith.constant 0 : index
+    // CHECK:     %[[UB:.*]] = arith.constant 4 : index
+    // CHECK:     %[[STEP:.*]] = arith.constant 1 : index
+    // CHECK:     scf.for %{{.*}} = %[[LB]] to %[[UB]] step %[[STEP]] iter_args(%{{.*}} = %{{.*}}) -> (memref<32xf32, #gpu.address_space<workgroup>>) {
+    // CHECK:       %[[TEMP:.*]] = memref.alloc() : memref<32xf32, #gpu.address_space<workgroup>>
+    // CHECK:       scf.yield %{{.*}} : memref<32xf32, #gpu.address_space<workgroup>>
+    // CHECK:     }
+    %result = wave.iterate @K iter_args(%alloc) {
+    ^bb0(%arg0: !wave.tensor<[@M] of f32, <shared>>):
+      %temp = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)> }
+        : !wave.tensor<[@M] of f32, <shared>>
+      wave.yield %arg0 : !wave.tensor<[@M] of f32, <shared>>
+    } : (!wave.tensor<[@M] of f32, <shared>>) -> !wave.tensor<[@M] of f32, <shared>>
+
+    return
+  }
+}
+
+// -----
+
+// CHECK: module {
+// CHECK-NOT: wave.normal_form
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: func.func @test_normal_form_cleared
+  func.func @test_normal_form_cleared() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_with_wave_input
+  // CHECK-SAME: (%[[ARG0:.*]]: memref<32x32xf16, #gpu.address_space<global>>)
+  func.func @func_with_wave_input(%arg0: !wave.tensor<[@M, @N] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32}>} {
+    func.return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_with_multiple_wave_inputs
+  // CHECK-SAME: (%[[ARG0:.*]]: memref<32x32xf16, #gpu.address_space<global>>, %[[ARG1:.*]]: memref<32x32xf16, #gpu.address_space<global>>, %[[ARG2:.*]]: memref<32x32xf16, #gpu.address_space<global>>)
+  func.func @func_with_multiple_wave_inputs(
+      %arg0: !wave.tensor<[@M, @N] of f16, <global>>,
+      %arg1: !wave.tensor<[@M, @N] of f16, <global>>,
+      %arg2: !wave.tensor<[@M, @N] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32}>} {
+    func.return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_with_mixed_input_types
+  // CHECK-SAME: (%[[ARG0:.*]]: memref<64x64xf32, #gpu.address_space<global>>, %[[ARG1:.*]]: i32, %[[ARG2:.*]]: memref<16x16xf16, #gpu.address_space<global>>)
+  func.func @func_with_mixed_input_types(
+      %arg0: !wave.tensor<[@M, @N] of f32, <global>>,
+      %arg1: i32,
+      %arg2: !wave.tensor<[@K, @L] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 64, K = 16, L = 16}>} {
+    func.return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @func_without_wave_tensors
+  // CHECK-SAME: (%[[ARG0:.*]]: f32, %[[ARG1:.*]]: i64) -> memref<32x32xf32>
+  func.func @func_without_wave_tensors(%arg0: f32, %arg1: i64) -> memref<32x32xf32>
+      attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
+    %alloc = memref.alloc() : memref<32x32xf32>
+    func.return %alloc : memref<32x32xf32>
   }
 }

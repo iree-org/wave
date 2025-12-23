@@ -5,10 +5,10 @@
 
 import functools
 import glob
+import math
 import os
 from collections import deque
 from typing import Any, Callable, Optional, Sequence
-import warnings
 
 import sympy
 import torch
@@ -36,6 +36,7 @@ from ..constraints import (
     DistributionConstraint,
     HardwareConstraint,
     TilingConstraint,
+    WaveConstraint,
     WorkgroupConstraint,
 )
 from .graph_utils import propagate_loop_carried_vars
@@ -75,7 +76,7 @@ def get_default_scheduling_params() -> dict[IndexSymbol, Any]:
         WRITE_SHARED_DELAY: 1,
         READ_GLOBAL_DELAY: 2,
         WRITE_GLOBAL_DELAY: 2,
-        GLOBAL_TO_SHARED_DELAY: 3,
+        GLOBAL_TO_SHARED_DELAY: 1,
         MMA_DELAY: 1,
         VALU_DELAY: 1,
         SHUFFLE_DELAY: 1,
@@ -317,6 +318,12 @@ def get_hardware_constraint(constraints: list[Constraint]) -> HardwareConstraint
         raise ValueError(f"Could not find hardware constraint in {constraints}")
 
 
+def get_wave_constraints(
+    constraints: list[Constraint],
+) -> list[WaveConstraint]:
+    return [x for x in constraints if isinstance(x, WaveConstraint)]
+
+
 def get_workgroup_constraints(
     constraints: list[Constraint],
 ) -> list[WorkgroupConstraint]:
@@ -489,23 +496,23 @@ def is_shared_read(node: CustomOp) -> bool:
     )
 
 
-def get_shared_memory_operand(node: fx.Node) -> Optional[fx.Node]:
+def get_shared_memory_operands(node: fx.Node) -> list[fx.Node]:
     custom = get_custom(node)
     if is_shared_read(custom) or is_shared_write(custom):
-        return custom.memory
+        return [custom.memory]
     if isinstance(custom, GatherToLDS):
-        return custom.dst
+        return [custom.dst]
     if isinstance(custom, TensorLoadToLDS):
         return custom.dst
 
-    return None
+    return []
 
 
 def collect_shared_memory_operands(graph: fx.Graph) -> list[fx.Node]:
     shared_memory_operands = {}
     for node in graph.nodes:
-        operand = get_shared_memory_operand(node)
-        if operand is not None:
+        operands = get_shared_memory_operands(node)
+        for operand in operands:
             operand = propagate_loop_carried_vars(operand)
             assert isinstance(
                 get_custom(operand), Allocate
@@ -553,12 +560,21 @@ def get_live_tensors() -> list[torch.Tensor]:
     tensors = []
     import gc
 
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+
     gc.collect()
     for obj in gc.get_objects():
         try:
-            if torch.is_tensor(obj) or (
-                hasattr(obj, "data") and torch.is_tensor(obj.data)
-            ):
+            # To avoid torch deprecation warning.
+            try:
+                if obj is torch.distributed.reduce_op:
+                    continue
+            except:
+                pass
+
+            if torch.is_tensor(obj):
                 tensors.append(obj)
         except:
             pass
@@ -598,7 +614,7 @@ def check_leaks(f):
                 if id(obj) not in before:
                     print(hex(id(obj)), type(obj), obj.size())
             print("--------------------------------")
-            warnings.warn("Leaks detected", RuntimeWarning)
+            raise RuntimeError("Leaks detected")
 
         return result
 
@@ -689,3 +705,69 @@ def topological_sort_with_dependencies(
 
 def rotate_list(src: Sequence[Any], k: int) -> list[Any]:
     return src[k:] + src[:k]
+
+
+def divide_shape_into_chunks(
+    shape: Sequence[int], num_chunks: int
+) -> tuple[list[int], list[int]]:
+    """
+    Divides an N-dimensional shape into chunks, starting from the leftmost dimension.
+
+    This function attempts to divide the shape by num_chunks, starting from dimension 0
+    and moving right. For each dimension, it applies as many factors of the remaining
+    chunks as possible while keeping the dimension evenly divisible.
+
+    Args:
+        shape: N-dimensional shape as a sequence of integers
+        num_chunks: Total number of chunks to divide the shape into
+
+    Returns:
+        A tuple of (chunks_per_dim, chunk_shape) where:
+        - chunks_per_dim: List showing how many chunks per dimension
+        - chunk_shape: Shape of each chunk (evenly divided)
+
+    Raises:
+        ValueError: If the shape cannot be evenly divided into num_chunks
+
+    Example:
+        >>> divide_shape_into_chunks([128, 256], 8)
+        ([8, 1], [16, 256])
+        >>> divide_shape_into_chunks([128, 256], 4)
+        ([4, 1], [32, 256])
+        >>> divide_shape_into_chunks([128, 256], 12)
+        # Error: 256 not divisible by 3
+    """
+    if num_chunks <= 0:
+        raise ValueError(f"num_chunks must be positive, got {num_chunks}")
+
+    ndim = len(shape)
+    if ndim == 0:
+        raise ValueError("shape must be non-empty")
+
+    # Start with no division
+    chunks_per_dim = [1] * ndim
+    remaining_chunks = num_chunks
+
+    # Process dimensions from left to right
+    for dim_idx in range(ndim):
+        if remaining_chunks == 1:
+            break
+
+        dim_size = shape[dim_idx]
+
+        # Use GCD to find the largest factor of remaining_chunks that divides dim_size
+        factor = math.gcd(dim_size, remaining_chunks)
+        chunks_per_dim[dim_idx] = factor
+        remaining_chunks //= factor
+
+    # Check if we successfully divided into all chunks
+    if remaining_chunks != 1:
+        raise ValueError(
+            f"Cannot evenly divide shape {list(shape)} into {num_chunks} chunks. "
+            f"Remaining chunks after processing: {remaining_chunks}"
+        )
+
+    # Calculate the resulting chunk shape
+    chunk_shape = [shape[i] // chunks_per_dim[i] for i in range(ndim)]
+
+    return chunks_per_dim, chunk_shape

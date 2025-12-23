@@ -141,7 +141,8 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
         consumer = region.consumer
         barrier = is_barrier_between(producer, consumer, barId)
 
-        is_tdm = is_tensor_op(producer) or is_tensor_op(consumer)
+        is_tdm = is_tensor_op(producer) or region.is_tdm
+
         if barrier is None:
             with producer.graph.inserting_after(producer):
                 SharedMemoryBarrierSignal(barId, tensor_wait=is_tdm).add_to_graph(
@@ -156,7 +157,15 @@ class BasicSplitBarrierEmitter(BarrierEmitter):
 def add_shared_memory_barriers(
     trace: CapturedTrace,
     target: str = "",
+    is_specialized: bool = False,
 ):
+    if is_specialized:
+        """
+        TODO(megan.kuo)
+        currently respect barriers inserted by specializations
+        """
+        return
+
     target_arch = TargetConfig(target)
 
     sync_regions = get_barriers_analysis(trace, target_arch)

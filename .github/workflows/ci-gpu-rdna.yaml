@@ -56,12 +56,13 @@ jobs:
 
     env:
       VENV_DIR: ${{ github.workspace }}/.wave-venv
+
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: "Setting up Python"
         id: setup_python
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
           python-version: ${{matrix.version}}
       - name: Create Python venv
@@ -71,51 +72,46 @@ jobs:
            echo VIRTUAL_ENV=$VIRTUAL_ENV >> "$GITHUB_ENV"
            echo "$VENV_DIR/bin" >> "$GITHUB_PATH"
 
-      - name: Install Rust via rustup.sh
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "CARGO_HOME=$HOME/.cargo" >> $GITHUB_ENV
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: "Setting up Rust"
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1.15.2
+        with:
+          toolchain: stable
 
       - name: Install pip deps
-        if: ${{ !cancelled() }}
         run: |
           # Install User libraries
           sudo apt-get update
-          sudo apt install -y libnuma1 numactl gfortran build-essential binutils
+          sudo apt install -y libnuma1 numactl gfortran build-essential binutils dwarfdump
 
           # Install torch+rocm6.4
-          python -m pip install --no-compile --upgrade pip
-          pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/rocm6.4
 
           # Install wave deps
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -r requirements.txt -e .
 
       - name: Run unit tests
-        if: ${{ !cancelled() }}
         run: |
-          pytest -n 4 --capture=tee-sys -vv ./tests/kernel/wave/
+          pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
 
       - name: Test TKW runtime related stack on amdgpu
-        if: ${{ !cancelled() }}
         run: |
           export WAVE_CACHE_DIR=$PWD/.wave
           rm -rf ./.wave
           nproc
-          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/runtime
+          WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/runtime
 
       - name: Run e2e tests on AMD GPU
-        if: ${{ (github.event_name == 'pull_request') && !cancelled() }}
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
-          WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/wave/
+          WAVE_CACHE_ON=0 pytest -n 1 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/
 
       - name: Run expensive e2e tests on AMD GPU
         if: ${{ (github.event_name != 'pull_request') && !cancelled() }}
         run: |
-          WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/wave/
+          WAVE_CACHE_ON=0 pytest -n 1 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
 
       - name: Run LIT tests
-        if: ${{ !cancelled() }}
         run: |
-          lit lit_tests/ -v
+          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v

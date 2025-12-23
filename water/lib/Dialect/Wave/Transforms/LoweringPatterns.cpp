@@ -6,11 +6,15 @@
 
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
@@ -300,11 +304,213 @@ public:
   }
 };
 
+/// Evaluate a Wave expression list to constant integer values.
+/// Since the Wave dialect verifier ensures expressions contain no symbols,
+/// this only handles pure constant expressions.
+static FailureOr<SmallVector<int64_t>>
+evaluateWaveExprList(wave::WaveExprListAttr exprListAttr) {
+  AffineMap map = exprListAttr.getMap();
+  if (!map.isConstant())
+    return failure();
+
+  return map.getConstantResults();
+}
+
+class ExtractSliceOpLoweringPattern
+    : public OpConversionPattern<wave::ExtractSliceOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::ExtractSliceOp op,
+                  wave::ExtractSliceOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Evaluate offset, size, and stride expressions to constant values.
+    FailureOr<SmallVector<int64_t>> offsetValues =
+        evaluateWaveExprList(op.getOffset());
+    if (failed(offsetValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate offset expression to constants");
+
+    FailureOr<SmallVector<int64_t>> sizeValues =
+        evaluateWaveExprList(op.getSize());
+    if (failed(sizeValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate size expression to constants");
+
+    FailureOr<SmallVector<int64_t>> strideValues =
+        evaluateWaveExprList(op.getStride());
+    if (failed(strideValues))
+      return rewriter.notifyMatchFailure(
+          op, "failed to evaluate stride expression to constants");
+
+    Type convertedResultType =
+        getTypeConverter()->convertType(op.getResult().getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    // Direct mapping from wave.extract_slice to vector.extract_strided_slice.
+    // The offset, size, and stride values are copied directly.
+    auto extractOp = vector::ExtractStridedSliceOp::create(
+        rewriter, op.getLoc(), adaptor.getMemory(),
+        ArrayRef<int64_t>(*offsetValues), ArrayRef<int64_t>(*sizeValues),
+        ArrayRef<int64_t>(*strideValues));
+    rewriter.replaceOp(op, extractOp);
+
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// IterateOp
+//===----------------------------------------------------------------------===//
+
+/// Lower `wave.iterate` to `scf.for`.
+class IterateOpLoweringPattern : public OpConversionPattern<wave::IterateOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(wave::IterateOp op, wave::IterateOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    // Get hyperparameters from type converter.
+    auto *waveTypeConverter =
+        static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
+    wave::WaveHyperparameterAttr hyperparams =
+        waveTypeConverter->getHyperparameters();
+
+    // Get the iterator symbol (e.g., "K").
+    wave::WaveSymbolAttr iteratorSymbol = op.getIterator();
+    StringRef symbolName = iteratorSymbol.getName();
+
+    // Find the tiling constraint for this iterator symbol.
+    func::FuncOp parentFunc = op->getParentOfType<func::FuncOp>();
+    if (!parentFunc) {
+      return rewriter.notifyMatchFailure(op, "iterate op not in function");
+    }
+
+    // Look for tiling constraints in function attributes.
+    ArrayAttr constraints = parentFunc->getAttrOfType<ArrayAttr>(
+        wave::WaveDialect::kWaveConstraintsAttrName);
+    if (!constraints) {
+      return rewriter.notifyMatchFailure(
+          op, "no wave constraints found in function");
+    }
+
+    // Get the dimension size (e.g., K = 640) from hyperparameters.
+    std::optional<SmallVector<int64_t>> resolvedDims =
+        wave::resolveSymbolNames(iteratorSymbol, hyperparams);
+    if (!resolvedDims || resolvedDims->size() != 1) {
+      return rewriter.notifyMatchFailure(
+          op, "iterator symbol not found in hyperparameters");
+    }
+    int64_t dimSize = resolvedDims->front();
+
+    // Find tiling constraint for this dimension to get tile_size.
+    std::optional<int64_t> tileSize;
+    for (Attribute constraintAttr : constraints) {
+      auto tilingConstraint =
+          dyn_cast<wave::TilingConstraintAttr>(constraintAttr);
+      if (!tilingConstraint)
+        continue;
+
+      wave::WaveSymbolAttr constraintDim = tilingConstraint.getDim();
+      if (constraintDim.getName() != symbolName)
+        continue;
+
+      wave::WaveExprListAttr tileSizeAttr = tilingConstraint.getTileSize();
+      AffineMap tileSizeMap = tileSizeAttr.getMap();
+      ArrayRef<Attribute> tileSizeSymbols = tileSizeAttr.getSymbols();
+
+      // Evaluate the tile size using hyperparameters.
+      std::optional<SmallVector<int64_t>> evaluatedTileSize =
+          wave::evaluateMapWithHyperparams(tileSizeMap, tileSizeSymbols,
+                                           hyperparams);
+      if (!evaluatedTileSize) {
+        return rewriter.notifyMatchFailure(
+            op, "failed to evaluate tile size from tiling constraint");
+      }
+      if (evaluatedTileSize->size() != 1) {
+        return rewriter.notifyMatchFailure(op,
+                                           "tile size must be single value");
+      }
+      tileSize = (*evaluatedTileSize)[0];
+      break;
+    }
+
+    if (!tileSize) {
+      return rewriter.notifyMatchFailure(
+          op, "no tiling constraint found for iterator symbol");
+    }
+
+    // TODO(tyb): we reject non-exact division for now, which should require
+    // peeling or padding to be correct.
+    // TODO(tyb): make these errors better visible to the caller from python.
+    if (*tileSize == 0) {
+      return rewriter.notifyMatchFailure(op, "tile size cannot be zero");
+    }
+    if (dimSize % *tileSize != 0) {
+      return op.emitOpError("non-exact division not supported to prevent "
+                            "potential out-of-bounds access");
+    }
+    int64_t numIterations = dimSize / *tileSize;
+
+    // Create loop bounds.
+    Value lowerBound = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    Value upperBound =
+        arith::ConstantIndexOp::create(rewriter, loc, numIterations);
+    Value step = arith::ConstantIndexOp::create(rewriter, loc, 1);
+
+    // Create the scf.for loop.
+    auto forOp = scf::ForOp::create(rewriter, loc, lowerBound, upperBound, step,
+                                    adaptor.getIterArgs());
+
+    // Convert the body.
+    Block &waveBody = op.getBody().front();
+    Block &scfBody = *forOp.getBody();
+
+    // Set up insertion point inside the loop body.
+    rewriter.setInsertionPointToStart(&scfBody);
+
+    // Create mapping from old block arguments to new ones.
+    IRMapping mapping;
+
+    // Map iter_args.
+    // Note: wave.iterate doesn't expose the induction variable, so we skip it.
+    for (auto [oldArg, newArg] : llvm::zip_equal(
+             waveBody.getArguments(), scfBody.getArguments().drop_front())) {
+      mapping.map(oldArg, newArg);
+    }
+
+    // Clone all operations except the terminator.
+    for (Operation &bodyOp : waveBody.without_terminator()) {
+      rewriter.clone(bodyOp, mapping);
+    }
+
+    // Convert wave.yield to scf.yield.
+    auto yieldOp = cast<wave::YieldOp>(waveBody.getTerminator());
+    SmallVector<Value> yieldValues;
+    yieldValues.reserve(yieldOp.getValues().size());
+    for (Value value : yieldOp.getValues()) {
+      yieldValues.push_back(mapping.lookup(value));
+    }
+    scf::YieldOp::create(rewriter, yieldOp.getLoc(), yieldValues);
+
+    // Replace the original op with the for loop results.
+    rewriter.replaceOp(op, forOp.getResults());
+
+    return success();
+  }
+};
+
 } // namespace
 
 void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<RegisterOpLoweringPattern, CastOpLoweringPattern>(
+  patterns.add<CastOpLoweringPattern, ExtractSliceOpLoweringPattern,
+               IterateOpLoweringPattern, RegisterOpLoweringPattern>(
       typeConverter, patterns.getContext());
 }
 
@@ -334,9 +540,13 @@ public:
            accType.getRank() == 1 &&
            "only 1-D vectors supported for mma lowering");
 
-    wave::WaveMmaKind kind = op.getKind();
+    std::optional<wave::WaveMmaKind> kind = op.getKind();
+    if (!kind)
+      return rewriter.notifyMatchFailure(
+          op, "mma operation without kind attribute");
+
     auto [M, N, K] =
-        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), kind);
+        wave::WaveMmaKindAttr::getShape(rewriter.getContext(), *kind);
 
     // TODO: Extend lowering for ops beyond MFMA, e.g. WMMA
     auto mfma = mlir::amdgpu::MFMAOp::create(rewriter, loc, acc.getType(),

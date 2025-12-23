@@ -95,7 +95,7 @@ def mlir_converter_location():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False)
+    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(diagnostics)
@@ -109,7 +109,7 @@ def mlir_converter_location():
     # CHECK-LABEL: mlir_converter_location
     # CHECK: #loc = loc("{{.*}}mlir_converter_debug_locations.py":44
     # CHECK: module
-    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg1: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg2: !wave.tensor<[@M, @N] of f16> loc("{{.*}}mlir_converter_debug_locations.py":44
+    # CHECK: func.func @kernel(%arg0: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg1: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":44{{.*}}), %arg2: !wave.tensor<[@M, @N] of f16, <global>> loc("{{.*}}mlir_converter_debug_locations.py":44
 
     # CHECK: wave.read
     # CHECK-SAME: loc(#loc1)
@@ -210,7 +210,7 @@ def mlir_converter_location_iterate():
     constraints = matmul.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options, False)
+    mlir_output, diagnostics = emit_wave_dialect(trace, constraints, options)
 
     if diagnostics:
         print(diagnostics)

@@ -16,12 +16,13 @@ This level handles #2.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Optional, Type
+from typing import Any, Optional, Type
 
 import sympy
 import torch.fx as fx
 
 from wave_lang.kernel._support.dtype import DataType
+from wave_lang.kernel._support.fx import filter_fx_graph
 from wave_lang.support.ir_imports import (
     Block,
     FunctionType,
@@ -89,15 +90,6 @@ def create_argument_locations(bindings: list["BindingDesc"]) -> list[Location]:
 def is_placeholder(node: fx.Node):
     custom = get_custom(node)
     return isinstance(custom, Placeholder)
-
-
-# Util fn to filter nodes in a graph based on specfied filter fn.
-def filter_fx_graph(graph: fx.Graph, filter: Callable[[fx.Node], bool]):
-    filtered_nodes: list[fx.Node] = []
-    for node in graph.nodes:
-        if filter(node):
-            filtered_nodes.append(node)
-    return filtered_nodes
 
 
 class BindingType(Enum):

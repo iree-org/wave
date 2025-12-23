@@ -47,6 +47,8 @@ def compile_to_vmfb(
     # TODO: More targets/backends support.
     if options.device == "hip":
         flags.append(f"--iree-hip-target={options.target}")
+        if not options.drop_debug_info_before_mlir:
+            flags.append("--iree-hip-emit-debug-info")
 
     if options.mlir_print_ir_after_all:
         flags.append("--mlir-print-ir-after-all")

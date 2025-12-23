@@ -200,3 +200,17 @@ module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
 // expected-error @below {{water-wave-infer-types pass expects the root operation or its ancestor to guarantee the full_func_boundary normal form}}
 module {
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+  func.func @iterate_mismatching_results(%arg0: !wave.tensor<[@A] of f32>, %arg1: !wave.tensor<[@B] of f32>) {
+    %read = wave.read %arg1 : (!wave.tensor<[@B] of f32>) -> !wave.tensor<any of f32>
+    // expected-error @below {{type conflict was detected for result #0}}
+    wave.iterate @I iter_args(%arg0, %read) {
+    ^bb0(%arg2: !wave.tensor<[@B] of f32>, %arg3: !wave.tensor<any of f32>):
+      wave.yield %arg2, %arg3 : !wave.tensor<[@B] of f32>, !wave.tensor<any of f32>
+    } : (!wave.tensor<[@A] of f32>, !wave.tensor<any of f32>) -> (!wave.tensor<any of f32>, !wave.tensor<any of f32>)
+    return
+  }
+}

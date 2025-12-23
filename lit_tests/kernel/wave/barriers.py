@@ -121,38 +121,38 @@ def test_read_write_equal_sizes():
     # CHECK-NEXT: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %write_1_shared_M:0_N:0
-    # CHECK-SAME: (%read_M:0_N:0, %allocate, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:0_N:0, %allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_1_shared_M:0_N:1
-    # CHECK-SAME: (%read_M:0_N:1, %allocate, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:0_N:1, %allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_1_shared_M:1_N:0
-    # CHECK-SAME: (%read_M:1_N:0, %allocate, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:1_N:0, %allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_1_shared_M:1_N:1
-    # CHECK-SAME: (%read_M:1_N:1, %allocate, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:1_N:1, %allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %shared_memory_barrier
     # CHECK-NEXT: %read_1_shared_M:0_N:0
-    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:0_N:0]
+    # CHECK-SAME: (%allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write_1_shared_M:0_N:0]
     # CHECK-NEXT: %read_1_shared_M:0_N:1
-    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:0_N:1]
+    # CHECK-SAME: (%allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write_1_shared_M:0_N:1]
     # CHECK-NEXT: %read_1_shared_M:1_N:0
-    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:1_N:0]
+    # CHECK-SAME: (%allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write_1_shared_M:1_N:0]
     # CHECK-NEXT: %read_1_shared_M:1_N:1
-    # CHECK-SAME: (%allocate, 4, None, (), None, None, None, [%write_1_shared_M:1_N:1]
+    # CHECK-SAME: (%allocate, 4, None, (), None, MemoryAccessFlags.NONE, None, None, [%write_1_shared_M:1_N:1]
     # CHECK-NEXT: %write_M:0_N:0
-    # CHECK-SAME: (%read_1_shared_M:0_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_1_shared_M:0_N:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:0_N:1
-    # CHECK-SAME: (%read_1_shared_M:0_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_1_shared_M:0_N:1, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0
-    # CHECK-SAME: (%read_1_shared_M:1_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_1_shared_M:1_N:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:1
-    # CHECK-SAME: (%read_1_shared_M:1_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_1_shared_M:1_N:1, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # CHECK: -----
@@ -230,13 +230,13 @@ def test_gemm():
     # CHECK-NEXT: %get_result_M:1_N:1_K:0
     # CHECK-SAME: (%iterate, 3)
     # CHECK-NEXT: %write_M:0_N:0_K:0
-    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:0_N:1_K:0
-    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0
-    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:1_K:0
-    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # iterate subgraph:
@@ -414,22 +414,22 @@ def test_bshd_attention_pipelined():
 
     # CHECK-DAG:      vector.store {{.*}} %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      rocdl.s.wait.dscnt 0
-    # CHECK-DAG:      rocdl.s.barrier.signal -1
+    # CHECK-DAG:      rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:      vector.extract
 
-    # CHECK-DAG:      rocdl.s.barrier.wait -1
+    # CHECK-DAG:      rocdl.s.barrier.wait id = -1
     # CHECK-DAG:      vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
 
     ### loads and stores are operating on differnt parts of shared buffers -> no barriers need to be inserted here.
 
     # CHECK-DAG:      vector.store {{.*}} %[[V0]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      rocdl.s.wait.dscnt 0
-    # CHECK-DAG:      rocdl.s.barrier.signal -1
+    # CHECK-DAG:      rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:      amdgpu.wmma
 
-    # CHECK-DAG:      rocdl.s.barrier.wait -1
+    # CHECK-DAG:      rocdl.s.barrier.wait id = -1
     # CHECK-DAG:      vector.load %[[V0]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:      amdgpu.wmma
@@ -439,31 +439,31 @@ def test_bshd_attention_pipelined():
     # CHECK-DAG:        vector.load
 
     # CHECK-DAG:        rocdl.s.wait.dscnt 0
-    # CHECK-DAG:        rocdl.s.barrier.signal -1
-    # CHECK-DAG:        rocdl.s.barrier.wait -1
+    # CHECK-DAG:        rocdl.s.barrier.signal id = -1
+    # CHECK-DAG:        rocdl.s.barrier.wait id = -1
     # CHECK-DAG:        vector.store {{.*}} %[[V1]]{{.*}} #gpu.address_space<workgroup>>
 
     ### signal write to buffer 1 completes.
 
     # CHECK-DAG:        rocdl.s.wait.dscnt 0
-    # CHECK-DAG:        rocdl.s.barrier.signal -1
+    # CHECK-DAG:        rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:        vector.load
 
-    # CHECK-DAG:        rocdl.s.barrier.wait -1
+    # CHECK-DAG:        rocdl.s.barrier.wait id = -1
     # CHECK-DAG:        vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:        vector.store {{.*}} %[[V0]]{{.*}} #gpu.address_space<workgroup>>
 
     ### signal here represents 2 things: read from buffer 1 completes, write to buffer 0 completes.
 
     # CHECK-DAG:        rocdl.s.wait.dscnt 0
-    # CHECK-DAG:        rocdl.s.barrier.signal -1
+    # CHECK-DAG:        rocdl.s.barrier.signal id = -1
 
     # CHECK-DAG:        amdgpu.wmma
 
     ### wait here then waits for read from buffer 1 completes, write to buffer 0 completes.
 
-    # CHECK-DAG:        rocdl.s.barrier.wait -1
+    # CHECK-DAG:        rocdl.s.barrier.wait id = -1
     # CHECK-DAG:        vector.load %[[V0]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:        vector.load %[[V1]]{{.*}} #gpu.address_space<workgroup>>
     # CHECK-DAG:        amdgpu.wmma

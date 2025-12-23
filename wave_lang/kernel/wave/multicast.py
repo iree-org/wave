@@ -72,7 +72,6 @@ def compute_multicast_mask(
                     safe_subs(v.start, subs, simultaneous=True)
                     for v in global_tile_index.values()
                 ]
-                logger.debug(f"New index: {new_index}")
 
                 # Linear index: bit position for this workgroup
                 bit_pos = wg_x + wg_y * wg_sizes[0] + wg_z * wg_sizes[0] * wg_sizes[1]
@@ -87,10 +86,7 @@ def compute_multicast_mask(
                 mask_expr += sympy.Piecewise((1 << bit_pos, condition), (0, True))
 
     # Try to simplify
-    mask_expr = sympy.simplify(mask_expr)
-
-    logger.debug(f"Symbolic multicast mask: {mask_expr}")
-    return mask_expr
+    return sympy.simplify(mask_expr)
 
 
 def multicast(
@@ -172,6 +168,3 @@ def multicast(
         if mask != 0:
             # Update the tensor load with multicast mask
             tensor_load.update_arg("multicast_mask", mask)
-            logger.info(
-                f"TensorLoadToLDS at {tensor_load.fx_node.name}: multicast_mask = {mask}"
-            )

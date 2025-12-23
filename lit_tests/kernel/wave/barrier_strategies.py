@@ -216,8 +216,8 @@ def test_find_intersecting_interval_strategy():
     print(base_attention.asm)
 
     # CHECK-LABEL: test_find_intersecting_interval_strategy
-    # CHECK-COUNT-3: rocdl.s.barrier.signal -1
-    # CHECK-COUNT-3: rocdl.s.barrier.wait -1
+    # CHECK-COUNT-3: rocdl.s.barrier.signal id = -1
+    # CHECK-COUNT-3: rocdl.s.barrier.wait id = -1
 
 
 @run_test

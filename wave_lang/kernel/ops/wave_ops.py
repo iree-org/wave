@@ -7,6 +7,7 @@ import operator
 import sys
 from abc import ABC
 from dataclasses import dataclass, field, fields
+from enum import IntFlag, auto
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -45,6 +46,27 @@ PlaceholderT = TypeVar("PlaceholderT", bound="Placeholder")
 # An example of this is tag, which is only used for tagging operators
 # for their use in the custom wave schedule.
 IGNORED_KEYWORDS = ["tag"]
+
+
+class MemoryAccessFlags(IntFlag):
+    """
+    Flags for memory access operations (read/write).
+    Maps to LLVM load/store attributes.
+
+    i.e. flags = MemoryAccessFlags.VOLATILE | MemoryAccessFlags.NONTEMPORAL
+    """
+
+    NONE = 0
+    VOLATILE = auto()
+    NONTEMPORAL = auto()
+
+    def __repr__(self) -> str:
+        if self._value_ == 0:
+            return "MemoryAccessFlags.NONE"
+        return f"MemoryAccessFlags.{self._name_}"
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
 
 def read_meets_hw_transpose_requirements(
@@ -150,11 +172,13 @@ def read(
     elements_per_thread: Optional[IndexExpr | int] = None,
     mapping: Optional[IndexMapping] = None,
     mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    flags: MemoryAccessFlags = MemoryAccessFlags.NONE,
 ) -> "Register": ...
 
 
 def conditional(
     condition: "Register" | IndexExpr,
+    else_return: Optional[Sequence["Register"]] = None,
 ) -> Callable[[Callable[[], None]], None]: ...
 
 
@@ -168,7 +192,7 @@ def register(
 ) -> "Register": ...
 
 
-def scalar(value: float | int, dtype: DataType) -> "Register": ...
+def scalar(value: float | int | IndexExpr, dtype: DataType) -> "Register": ...
 
 
 def mma(lhs: "Register", rhs: "Register", acc: "Register") -> "Register": ...
@@ -189,6 +213,7 @@ def write(
     elements_per_thread: Optional[IndexExpr | int] = None,
     mapping: Optional[IndexMapping] = None,
     mapping_dynamic_vals: "Register" | tuple["Register", ...] = (),
+    flags: MemoryAccessFlags = MemoryAccessFlags.NONE,
 ): ...
 
 
@@ -780,6 +805,9 @@ class CustomOp(ABC):
         self, new_node: CustomOp | fx.Node, except_nodes: list[CustomOp]
     ):
         """Replace all uses of the current node with the new node except for the nodes in except_nodes."""
+        if isinstance(new_node, fx.Node):
+            new_node = get_custom(new_node)
+
         self.replacement_location_propagate(new_node)
         for user in self.users:
             if user in except_nodes:
@@ -1059,6 +1087,7 @@ class BinaryOpBase(CustomOp, ABC):
 @define_py_op(operator.or_)
 @define_py_op(operator.truediv)
 @define_py_op(operator.mod)
+@define_py_op(operator.floordiv)
 @define_interface_op("maximum")
 @define_interface_op("minimum")
 @define_interface_op("atan2")
@@ -1917,6 +1946,7 @@ class Read(CustomOp):
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
+    flags: MemoryAccessFlags = MemoryAccessFlags.NONE
     source: Optional[tuple[IndexExpr]] = None
     target: Optional[tuple[IndexExpr]] = None
     _write_dependency: Optional[list[fx.Node]] = None
@@ -2111,6 +2141,33 @@ class NestedRegionOp(CustomOp):
         del subgraphs[self.subgraph_name]
         super().erase()
 
+    def iter_args(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
+        iter_args = []
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
+        for nested_node in graph.nodes:
+            custom = get_custom(nested_node)
+            if isinstance(custom, IterArg):
+                iter_args.append(nested_node)
+        # Sort by iter_idx.
+        iter_args = sorted(iter_args, key=lambda x: get_custom(x).iter_idx)
+        return iter_args
+
+    def outputs(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
+        if graph is None:
+            graph = self.get_root_graph().subgraphs[self.subgraph_name]
+
+        output = get_custom(graph.output_node())
+        assert isinstance(output, Output), f"Expected Output, but got {output}"
+        return output.return_vals[0]
+
+    def infer_type(self, *args):
+        if self.init_args is not None:
+            res_types = [get_custom(x).type for x in self.init_args]
+            if len(res_types) == 1:
+                res_types = res_types[0]
+            self.type = res_types
+
     @classmethod
     def handle(cls, graph: RegionGraph, *args, **kwargs):
         """
@@ -2155,19 +2212,15 @@ class NestedRegionOp(CustomOp):
             if tag is not None:
                 node.fx_node.node.tag = tag
 
-            # Iterate-specific logic
-            if cls.__name__ == "Iterate":
-                # Remember which placeholders are init args. This connection gets
-                # lost otherwise
-                for nested_node in graph.subgraphs[subgraph_name].nodes:
-                    if nested_node.op == "placeholder":
-                        if nested_node not in [
-                            var.node
-                            for var in graph.inner_freevars[
-                                graph.subgraphs[subgraph_name]
-                            ]
-                        ]:
-                            nested_node.tkw_op = IterArg
+            # Remember which placeholders are init args. This connection gets
+            # lost otherwise
+            for nested_node in graph.subgraphs[subgraph_name].nodes:
+                if nested_node.op == "placeholder":
+                    if nested_node not in [
+                        var.node
+                        for var in graph.inner_freevars[graph.subgraphs[subgraph_name]]
+                    ]:
+                        nested_node.tkw_op = IterArg
 
             graph.subgraphs[subgraph_name].parent_op = node.fx_node.node
             return node.fx_node
@@ -2178,15 +2231,46 @@ class NestedRegionOp(CustomOp):
 @define_op("conditional")
 @dataclass
 class Conditional(NestedRegionOp):
+    """
+    The optional `else_return` argument must match the type of any `return` statements in the conditional body.
+    The `else_return` are the default return value for the `else` branch.
+    """
+
     condition: fx.Proxy | IndexExpr
     subgraph_name: str
     implicit_captures: Sequence[fx.Proxy]
+    else_return: Optional[Sequence["Register"]] = None
 
     @property
-    def indexing_dims(self) -> list[IndexSymbol]:
-        if isinstance(self.condition, fx.Node):
-            return get_custom(self.condition).indexing_dims
+    def init_args(self):
+        """Alias for else_return to match Iterate interface for shared processing code."""
+        return self.else_return
 
+    @init_args.setter
+    def init_args(self, value):
+        self.else_return = value
+
+    @property
+    def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:
+        # If we have else_return, the conditional returns values
+        # and we need to get indexing dims from the return values
+        if self.else_return:
+            expand_dims: list[IndexSymbol] = []
+            subgraph = self.get_root_graph().subgraphs[self.subgraph_name]
+            return_node = get_custom(subgraph.output_node())
+            assert isinstance(return_node, Output)
+            return_vals = return_node.return_vals[0]
+            if not isinstance(return_vals, Sequence):
+                return_vals = [return_vals]
+            for return_val in return_vals:
+                return_dims = get_custom(return_val).indexing_dims
+                expand_dims.append(return_dims)
+            if len(expand_dims) == 1:
+                expand_dims = expand_dims[0]
+            return expand_dims
+        # Otherwise, get from condition
+        elif isinstance(self.condition, fx.Node):
+            return get_custom(self.condition).indexing_dims
         return []
 
 
@@ -2217,32 +2301,6 @@ class Iterate(NestedRegionOp):
         if len(expand_dims) == 1:
             expand_dims = expand_dims[0]
         return expand_dims
-
-    def iter_args(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
-        iter_args = []
-        if graph is None:
-            graph = self.get_root_graph().subgraphs[self.subgraph_name]
-        for nested_node in graph.nodes:
-            custom = get_custom(nested_node)
-            if isinstance(custom, IterArg):
-                iter_args.append(nested_node)
-        # Sort by iter_idx.
-        iter_args = sorted(iter_args, key=lambda x: get_custom(x).iter_idx)
-        return iter_args
-
-    def infer_type(self, *args):
-        res_types = [get_custom(x).type for x in self.init_args]
-        if len(res_types) == 1:
-            res_types = res_types[0]
-        self.type = res_types
-
-    def outputs(self, graph: Optional[fx.Graph] = None) -> list[fx.Node]:
-        if graph is None:
-            graph = self.get_root_graph().subgraphs[self.subgraph_name]
-
-        output = get_custom(graph.output_node())
-        assert isinstance(output, Output), f"Expected Output, but got {output}"
-        return output.return_vals[0]
 
     @property
     def index(self) -> list[dict[IndexSymbol, IndexSequence]]:
@@ -2287,6 +2345,7 @@ class Write(CustomOp):
     mapping: Optional[IndexMapping] = None
     mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     bounds: Optional[dict[IndexSymbol, IndexExpr]] = None
+    flags: MemoryAccessFlags = MemoryAccessFlags.NONE
     source: Optional[tuple[IndexExpr]] = None
     target: Optional[tuple[IndexExpr]] = None
 
@@ -3083,14 +3142,19 @@ class Reshape(CustomOp, ABC):
 @define_op("tensor_load_to_lds")
 @dataclass
 class TensorLoadToLDS(CustomOp):
-    src: Memory
-    dst: Memory
+    src: list[Memory]
+    dst: list[Memory]
     element_type: DataType
-    distributed_shape: list[IndexExpr]
+    distributed_shape: dict[IndexSymbol, IndexExpr]
     shared_tile_index: dict[IndexSymbol, IndexSequence]
     global_tile_index: dict[IndexSymbol, IndexSequence]
     bounds: dict[IndexSymbol, IndexExpr]
     multicast_mask: Optional[IndexExpr] = None
+    input_selector: IndexSymbol | int = 0
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("gather_to_lds")
@@ -3113,6 +3177,10 @@ class GatherToLDS(CustomOp):
     src_bounds: Optional[dict[IndexSymbol, IndexExpr]]
     src_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
     dst_mapping_dynamic_vals: tuple[fx.Node, ...] = ()
+
+    @property
+    def has_side_effects(self) -> bool:
+        return True
 
 
 @define_op("scatter_add")

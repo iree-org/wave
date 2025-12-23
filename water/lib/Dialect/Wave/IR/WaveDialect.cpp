@@ -119,12 +119,10 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
       }
     }
   }
-  // TODO: somehow get rid of hardcoded magic names (_ARG).
   mlir::WalkResult walkResult =
       namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
         usedSymbols.insert(symbolAttr.getName());
-        if (hyperparam.getMapping().contains(symbolAttr.getName()) ||
-            symbolAttr.getName().starts_with("_ARG"))
+        if (hyperparam.getMapping().contains(symbolAttr.getName()))
           return mlir::WalkResult::advance();
 
         mlir::InFlightDiagnostic diag = emitError()
@@ -137,9 +135,9 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
 }
 
 /// Verify DeviceConstraints, WorkgroupConstraints, WaveConstraints, and
-/// TilingConstraints for a given set of hyperparameters. This verifcation
+/// TilingConstraints for a given set of hyperparameters. This verification
 /// assumes that all symbols used in the wave.constraints attributes have a
-/// coresponding entry in the hyperparameter attribute.
+/// corresponding entry in the hyperparameter attribute.
 static llvm::LogicalResult
 verifyConstraints(mlir::ArrayAttr constraints,
                   wave::WaveHyperparameterAttr hyperparams,
@@ -455,6 +453,11 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
         diag.attachNote(parent->getLoc()) << "ancestor";
         return diag;
       }
+    }
+
+    if (llvm::count_if(attrs, llvm::IsaPred<wave::HardwareConstraintAttr>) >
+        1) {
+      return op->emitError() << "only one hardware constraint is allowed";
     }
 
     if (!needsHyperparams) {

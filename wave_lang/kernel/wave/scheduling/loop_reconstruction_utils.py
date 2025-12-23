@@ -7,7 +7,7 @@ import torch.fx as fx
 from wave_lang.support.logging import get_logger
 from ..utils.general_utils import (
     is_shared_write,
-    get_shared_memory_operand,
+    get_shared_memory_operands,
     ceildiv,
     propagate_loop_carried_vars,
 )
@@ -15,6 +15,7 @@ from ...ops.wave_ops import (
     GatherToLDS,
     GetResult,
     IterArg,
+    TensorLoadToLDS,
     Write,
     get_custom,
 )
@@ -282,7 +283,7 @@ def liveness_analysis(graph: fx.Graph) -> dict[fx.Node, int]:
         if is_shared_write(custom):
             continue
 
-        if isinstance(custom, GatherToLDS):
+        if isinstance(custom, (GatherToLDS, TensorLoadToLDS)):
             continue
 
         if l > 0:
@@ -300,32 +301,32 @@ def compute_multi_buffer_count(
     lifetime: dict[fx.Node, int] = compute_lifetime(graph, use_absolute_cycle=True)
     result: dict[fx.Node, int] = defaultdict(int)
     for node in graph.nodes:
-        if not isinstance(get_custom(node), (Write, GatherToLDS)):
+        if not isinstance(get_custom(node), (Write, GatherToLDS, TensorLoadToLDS)):
             continue
 
-        shared_memory_operand = get_shared_memory_operand(node)
-        if shared_memory_operand is None:
-            continue
+        shared_memory_operands = get_shared_memory_operands(node)
+        for shared_memory_operand in shared_memory_operands:
+            shared_memory_operand = propagate_loop_carried_vars(shared_memory_operand)
+            if multi_buffer_count:
+                result[shared_memory_operand] = multi_buffer_count
+                continue
 
-        shared_memory_operand = propagate_loop_carried_vars(shared_memory_operand)
-        if multi_buffer_count:
-            result[shared_memory_operand] = multi_buffer_count
-            continue
+            assert node in lifetime, f"Node {node} not found in lifetime"
+            # Lifetime returns 0 if node result only used on same clock, 1 if it used on next clock, etc,
+            # so we need to add 1 to the lifetime to get the number of clocks the result is live.
+            # Ceildiv is required for cases like (lifetime=3, initiation_interval=2) which would otherwise
+            # result in buffer_count=1:
+            # 000
+            #   111
+            #     222
+            buffer_count = ceildiv(lifetime[node] + 1, initiation_interval)
+            logger.debug(f"Node: {node}, Buffer count: {buffer_count}")
+            if buffer_count < 2:
+                continue
 
-        assert node in lifetime, f"Node {node} not found in lifetime"
-        # Lifetime returns 0 if node result only used on same clock, 1 if it used on next clock, etc,
-        # so we need to add 1 to the lifetime to get the number of clocks the result is live.
-        # Ceildiv is required for cases like (lifetime=3, initiation_interval=2) which would otherwise
-        # result in buffer_count=1:
-        # 000
-        #   111
-        #     222
-        buffer_count = ceildiv(lifetime[node] + 1, initiation_interval)
-        logger.debug(f"Node: {node}, Buffer count: {buffer_count}")
-        if buffer_count < 2:
-            continue
-
-        result[shared_memory_operand] = max(result[shared_memory_operand], buffer_count)
+            result[shared_memory_operand] = max(
+                result[shared_memory_operand], buffer_count
+            )
 
     return result
 

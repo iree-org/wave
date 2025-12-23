@@ -3,9 +3,9 @@ from typing import Any, Optional
 
 from .._support.indexing import IndexSymbol
 from ...support.location_config import LocationCaptureConfig
-from ..compiler.kernel_codegen import KernelBufferUsage
+from ..lang.kernel_buffer import KernelBufferUsage
 from .scheduling.schedule_enums import SchedulingType
-from .utils.classes import KernelLaunchInfo
+from .utils.classes import KernelLaunchInfo, CoalescingType
 
 
 def _get_location_capture_config():
@@ -47,6 +47,7 @@ class WaveCompileOptions:
     codeobj: str = "5"  # Code object version ("4" or "5")
     iree_preprocessing_pass_pipeline: str = None
     num_devices: int = 1
+    use_water_backend: bool = False  # Use Water backend with host wrapper
 
     # === Benchmark options ===
     run_bench: bool = False
@@ -67,7 +68,7 @@ class WaveCompileOptions:
     create_vmfb_file: str = None
     override_mlir: str = None
     dump_binaries: str = None
-    dump_intermediates: str = False
+    dump_intermediates: str | None = None
     compile_to_mlir: bool = False
     location_capture_config: LocationCaptureConfig = field(
         default_factory=_get_location_capture_config
@@ -88,6 +89,7 @@ class WaveCompileOptions:
     use_global_to_shared: bool = False
     linearize_shared_access: bool = False
     scalarize_packed_math: bool = False
+    coalescing_strategy_hint: CoalescingType = CoalescingType.LINEAR
 
     # === Compiler options ===
     minimize_shared_allocs: bool = True
@@ -95,6 +97,13 @@ class WaveCompileOptions:
     override_schedule: Optional[str] = None
     dump_schedule: Optional[str] = None
     use_bound_check: bool = False
+    specialize: bool = False
+
+    # Cluster barrier signal/wait delay in number of loop iterations
+    # None - no barriers inside the loop
+    # 0 - signal and wait on same iteration
+    # 1 - one iteration apart, 2 - two, etc
+    cluster_barrier_delay: Optional[int] = None
 
     # === Print options ===
     mlir_print_ir_after_all: bool = False

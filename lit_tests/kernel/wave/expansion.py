@@ -87,21 +87,21 @@ def test_read_write_equal_sizes():
     # CHECK: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %write_M:0_N:0
-    # CHECK-SAME: (%read_M:0_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:0_N:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:0_N:1
-    # CHECK-SAME: (%read_M:0_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:0_N:1, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0
-    # CHECK-SAME: (%read_M:1_N:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:1_N:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:1
-    # CHECK-SAME: (%read_M:1_N:1, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:1_N:1, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return
 
     # CHECK: Custom format:
@@ -170,17 +170,17 @@ def test_read_write():
     # CHECK: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %write_M:0_N:0_K:0
-    # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:0_N:0_K:1
-    # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0_K:0
-    # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0_K:1
-    # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%read_M:1_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # CHECK: Custom format:
@@ -338,7 +338,7 @@ def test_no_writes():
     # CHECK: %a :
     # CHECK-SAME: [num_users=1] = placeholder[target=a]
     # CHECK: %read :
-    # CHECK-SAME: (args = (%a, 16, None, (), None, None, None, None), kwargs = {})
+    # CHECK-SAME: (args = (%a, 16, None, (), None, MemoryAccessFlags.NONE, None, None, None), kwargs = {})
     # CHECK: return None
     # CHECK: Custom format:
     # CHECK: placeholder(_name=a, _type=Memory[M, K].of(f16))
@@ -391,13 +391,13 @@ def test_gemm():
     # CHECK-NEXT: %get_result_M:1_N:0_K:0
     # CHECK-NEXT: %get_result_M:1_N:1_K:0
     # CHECK-NEXT: %write_M:0_N:0_K:0
-    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:0_N:1_K:0
-    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0_K:0
-    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:1_K:0
-    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # CHECK: Custom format:
@@ -433,23 +433,23 @@ def test_gemm():
 
     # CHECK-NEXT: %a
     # CHECK-NEXT: %read_M:0_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:0_K:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0_K:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
     # CHECK-NEXT: %b
     # CHECK-NEXT: %read_1_M:0_N:0_K:0
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:0_K:1
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:1_K:0
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:1_K:1
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
     # CHECK-NEXT: %mma_M:0_N:0_K:0
     # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
@@ -475,15 +475,15 @@ def test_gemm():
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
     # CHECK-NEXT: placeholder(_name=a
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: placeholder(_name=b
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-SAME: acc=acc_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
@@ -581,13 +581,13 @@ def test_batched_gemm():
     # CHECK-NEXT: %get_result_M:1_N:0_K:0
     # CHECK-NEXT: %get_result_M:1_N:1_K:0
     # CHECK-NEXT: %write_M:0_N:0_K:0
-    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:0_N:1_K:0
-    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:0_N:1_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0_K:0
-    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:1_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:1_K:0
-    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:1_N:1_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # CHECK: Custom format:
@@ -622,23 +622,23 @@ def test_batched_gemm():
 
     # CHECK-NEXT: %a
     # CHECK-NEXT: %read_M:0_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:0_K:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0_K:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
     # CHECK-NEXT: %b
     # CHECK-NEXT: %read_1_M:0_N:0_K:0
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:0_K:1
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:1_K:0
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:1_K:1
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
     # CHECK-NEXT: %mma_M:0_N:0_K:0
     # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
@@ -664,15 +664,15 @@ def test_batched_gemm():
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:0_K:0
     # CHECK-NEXT: placeholder(_name=acc_M:1_N:1_K:0
     # CHECK-NEXT: placeholder(_name=a
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: placeholder(_name=b
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) + 16 : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-SAME: rhs=read_1_M:0_N:0_K:0     (index = {B: $WG2*BLOCK_B : 1 : 1, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-SAME: acc=acc_M:0_N:0_K:0      (index = {B: $WG2*BLOCK_B : 1 : 1, M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
@@ -860,7 +860,7 @@ def test_gemm_iterate_expansion_only():
     # CHECK-NEXT: %iterate
     # CHECK-NEXT: %get_result_M:0_N:0_K:0
     # CHECK-NEXT: %write_M:0_N:0_K:0
-    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%get_result_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # CHECK: Custom format:
@@ -880,15 +880,15 @@ def test_gemm_iterate_expansion_only():
 
     # CHECK-NEXT: %a
     # CHECK-NEXT: %read_M:0_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:0_N:0_K:1
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
     # CHECK-NEXT: %b
     # CHECK-NEXT: %read_1_M:0_N:0_K:0
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_1_M:0_N:0_K:1
-    # CHECK-SAME: (%b, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%b, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
 
     # CHECK-NEXT: %mma_M:0_N:0_K:0
     # CHECK-SAME: (%read_M:0_N:0_K:0, %read_1_M:0_N:0_K:0, %acc_M:0_N:0_K:0, MMAType.F32_16x16x16_F16)
@@ -901,11 +901,11 @@ def test_gemm_iterate_expansion_only():
 
     # CHECK-NEXT: placeholder(_name=acc_M:0_N:0_K:0
     # CHECK-NEXT: placeholder(_name=a
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: placeholder(_name=b
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
-    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
+    # CHECK-NEXT: read(memory=b, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) + 16 : 4 : 1})
     # CHECK-NEXT: mma(lhs=read_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-SAME: rhs=read_1_M:0_N:0_K:0 (index = {N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1, K: ARGK*BLOCK_K + 4*floor((Mod($T0, 64))/16) : 4 : 1})
     # CHECK-SAME: acc=acc_M:0_N:0_K:0 (index = {M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + 4*floor((Mod($T0, 64))/16) : 4 : 16, N: $T1*BLOCK_N/2 + $WG1*BLOCK_N + Mod($T0, 16) : 1 : 1}))
@@ -1098,9 +1098,9 @@ def py_arithmetic_different_dims():
     # CHECK: %a
     # CHECK-NEXT: %c
     # CHECK-NEXT: %read_M:0_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %read_M:1_N:0_K:0
-    # CHECK-SAME: (%a, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %add_M:0_N:0_K:0
     # CHECK-SAME: (%read_M:0_N:0_K:0, %read_M:0_N:0_K:0)
     # CHECK-NEXT: %add_M:1_N:0_K:0
@@ -1114,30 +1114,30 @@ def py_arithmetic_different_dims():
     # CHECK-NEXT: %neg_M:1_N:0_K:0
     # CHECK-SAME: (%sub_M:1_N:0_K:0,)
     # CHECK-NEXT: %write_M:0_N:0_K:0
-    # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:0_N:0_K:1
-    # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%neg_M:0_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0_K:0
-    # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: %write_M:1_N:0_K:1
-    # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, None, None)
+    # CHECK-SAME: (%neg_M:1_N:0_K:0, %c, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # CHECK: Custom format:
     # CHECK-NEXT: placeholder(_name=a
     # CHECK-NEXT: placeholder(_name=c
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
+    # CHECK-NEXT: read(memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
     # CHECK-NEXT: add(lhs=read_M:0_N:0_K:0, rhs=read_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
     # CHECK-NEXT: add(lhs=read_M:1_N:0_K:0, rhs=read_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
     # CHECK-NEXT: sub(lhs=add_M:0_N:0_K:0, rhs=read_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
     # CHECK-NEXT: sub(lhs=add_M:1_N:0_K:0, rhs=read_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
     # CHECK-NEXT: neg(arg=sub_M:0_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
     # CHECK-NEXT: neg(arg=sub_M:1_N:0_K:0, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, N: $T1*BLOCK_N/4 + $WG1*BLOCK_N : 4 : 1}
-    # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
-    # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
-    # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
-    # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:0_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K : 4 : 1}
+    # CHECK-NEXT: write(register_=neg_M:1_N:0_K:0, memory=c, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE, index={M: $T0*BLOCK_M/128 + $WG0*BLOCK_M + Mod($T0, 64) + 16 : 1 : 16, K: $WG2*BLOCK_K + 16 : 4 : 1}
 
     # CHECK: -----
 
@@ -1208,22 +1208,22 @@ def test_chained_gemm_32x32x8():
     # CHECK: %register
     # CHECK: %q
     # CHECK: %read_M:0_K2:0_K1:0
-    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_M:0_K2:0_K1:1
-    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_M:0_K2:0_K1:2
-    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_M:0_K2:0_K1:3
-    # CHECK-SAME: (args = (%q, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%q, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %k
     # CHECK: %read_1_shared_M:0_K2:0_K1:0
-    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_1_shared_M:0_K2:0_K1:1
-    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_1_shared_M:0_K2:0_K1:2
-    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_1_shared_M:0_K2:0_K1:3
-    # CHECK-SAME: (args = (%k, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%k, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %mma_M:0_K2:0_K1:0
     # CHECK-SAME: (args = (%read_1_shared_M:0_K2:0_K1:0, %read_M:0_K2:0_K1:0, %register_M:0_K2:0_K1:0, MMAType.F32_32x32x8_F16)
     # CHECK: %mma_M:0_K2:0_K1:1
@@ -1238,13 +1238,13 @@ def test_chained_gemm_32x32x8():
     # CHECK-SAME: (args = (%permute_M:0_K2:0, f16)
     # CHECK: %v
     # CHECK: %read_2_shared_M:0_N:0_K2:0
-    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_2_shared_M:0_N:0_K2:1
-    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_2_shared_M:0_N:0_K2:2
-    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %read_2_shared_M:0_N:0_K2:3
-    # CHECK-SAME: (args = (%v, 4, None, (), None, None, None, None)
+    # CHECK-SAME: (args = (%v, 4, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK: %reshape_M:0_N:0_K2:0
     # CHECK-SAME: (args = ([%cast_M:0_K2:0], {K2: 32, M: 32, K1: 8, B: 0})
     # CHECK: %reshape_M:0_N:0_K2:1

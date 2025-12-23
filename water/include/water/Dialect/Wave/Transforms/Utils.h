@@ -8,12 +8,26 @@
 
 namespace wave {
 
+// Populates `constraints` with a mapping from an operation with a Wave
+// constraints attribute attached to that attribute.
+llvm::LogicalResult collectWaveConstraints(
+    mlir::Operation *top,
+    llvm::DenseMap<mlir::Operation *, mlir::Attribute> &constraints);
+
 // Sets the attribute indicating that the operation satisfies provided normal
 // forms. The presence of the attribute, in turn, performs verification of the
 // normal form every time a verifier runs on the operation, including by default
 // after every pass.
+//
+// By default, preserves existing normal forms and adds the new form. Set
+// preserve=false to replace all existing forms with the provided form.
 llvm::LogicalResult setNormalFormPassPostcondition(wave::WaveNormalForm form,
-                                                   mlir::Operation *root);
+                                                   mlir::Operation *root,
+                                                   bool preserve = true);
+
+// Clears all normal form attributes from the operation, effectively setting
+// the normal form to None.
+llvm::LogicalResult clearNormalFormPassPostcondition(mlir::Operation *root);
 
 // Verifies if the operation, typically the root operation about to be processed
 // by a pass, satisfies the required normal form by checking the presence of the

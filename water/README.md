@@ -59,49 +59,6 @@ Here, `$LLVM_SRC_DIR` needs to point to the root of the monorepo.
   by IDEs to discover the source file tree.
 * `-DWATER_ENABLE_PYTHON=ON` - enable building Python bindings.
 
-### Python Wheel
-
-A Python wheel containing the `water-opt` binary can be produced using the
-following commands:
-
-```sh
-cd build_tools/wheel
-WATER_MLIR_DIR=$BUILD_DIR/lib/cmake/mlir python -m pip wheel .
-```
-
-This will produce a `.whl` file containing the `water-opt` and metadata. It can
-be installed using:
-
-```sh
-pip install --force-reinstall *.whl
-```
-
-Note that force-reinstallation flag without which the wheel may not be
-reinstalled without bumping the version.
-
-The package build can be configured to checkout and build LLVM from source by
-setting the `WATER_BUILD_LLVM` environment variable to `1`:
-
-```sh
-cd build_tools/wheel
-WATER_BUILD_LLVM=1 python -m pip wheel .
-```
-
-The build mode is controlled by the `WATER_BUILD_TYPE` environment variable
-whose content is forward to cmake.
-
-An editable build allows you to modify the python code and have the changes
-immediately reflected without reinstalling the package. This is useful during
-development. To install an editable build:
-
-```sh
-cd build_tools/wheel
-WATER_MLIR_DIR=$BUILD_DIR/lib/cmake/mlir python -m pip install -e .
-```
-
-Note that editable builds still require rebuilding native parts when they are
-modified.
-
 ## Developing
 
 ### Pre-commit

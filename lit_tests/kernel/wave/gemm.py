@@ -13,6 +13,8 @@ from wave_lang.kernel.wave.utils.general_utils import (
 from wave_lang.kernel.wave.templates.gemm import (
     get_gemm_kernel,
     get_gemm_kernel_transpose_a_b,
+    get_persistent_gemm_kernel,
+    get_streamk_gemm_kernel,
 )
 
 M = tkl.sym.M
@@ -1171,13 +1173,13 @@ def test_gemm_pipelined():
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-6:    vector.load
-    # CHECK-COUNT-3:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-3:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    vector.load
-    # CHECK-COUNT-1:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-1:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-2:    vector.store
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
     # CHECK-COUNT-1:    scf.yield
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
@@ -1266,7 +1268,7 @@ def test_gemm_prefetch():
 
     # Steady State Global Read
     # CHECK-COUNT-2:    vector.load {{.*}} : memref<128x128xf16, strided<[128, 1]>>, vector<8xf16>
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
 
     # Compute
     # CHECK-COUNT-8:    amdgpu.mfma
@@ -1274,7 +1276,7 @@ def test_gemm_prefetch():
 
     # Steady State Local Write
     # CHECK-COUNT-2:    vector.store
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
     # CHECK:          scf.yield
 
     # Prologue
@@ -1382,6 +1384,95 @@ def test_gemm_four_stage():
 
 
 @run_test
+def test_gemm_four_stage_global_to_lds():
+    shape = (4096, 4096, 4096)
+    dynamic_dims = None
+    mfma_variant = tkw.MMAType.GFX1250_F32_16x16x32_F16
+    block_shape = (128, 128, 256)
+    waves_per_block = (2, 2)
+    gemm, hyperparams, _ = get_gemm_kernel(
+        shape,
+        dynamic_dims,
+        mfma_variant,
+        block_shape=block_shape,
+        waves_per_block=waves_per_block,
+    )
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        target="gfx1250",
+        canonicalize=True,
+        schedule=SchedulingType.FOUR_STAGE,
+        multi_buffer_count=2,
+        use_global_to_shared=True,
+        compile_to_mlir=True,
+    )
+
+    gemm_four_stage_global_to_lds = wave_compile(options, gemm)
+    print(gemm_four_stage_global_to_lds.asm)
+    # CHECK-LABEL: test_gemm_four_stage_global_to_lds
+    # Test multibuffering: verify shared memory views are correctly allocated
+    # CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<266240xi8
+    # CHECK: %[[VIEW0:.*]] = memref.view %[[ALLOC]][%c0][] : memref<266240xi8
+    # CHECK: %[[VIEW1:.*]] = memref.view %[[ALLOC]][%c66560][] : memref<266240xi8
+    # CHECK: %[[VIEW2:.*]] = memref.view %[[ALLOC]][%c133120][] : memref<266240xi8
+    # CHECK: %[[VIEW3:.*]] = memref.view %[[ALLOC]][%c199680][] : memref<266240xi8
+
+    # Prologue
+    # Verify prologue stores to shared memory
+    # CHECK: rocdl.tensor.load.to.lds
+
+    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
+
+    # Verify prologue loads from shared memory
+    # CHECK: %[[LOAD_IDX1:.*]] = affine.apply #[[MAP_LOAD1:.*]]()[%thread_id_x, %thread_id_y]
+    # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
+    # CHECK: vector.load %[[VIEW1]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]]
+
+    # CHECK: rocdl.tensor.load.to.lds
+
+    # Main Loop:
+    # Verify Pipelined Loop, iter_args should contain vector values from prologue
+    # CHECK: scf.for %[[ARG3:.*]] = %c0 to %c14 step %c1 iter_args({{.*}}, %[[LVIEW3:.*]] = %[[VIEW3]], %[[LVIEW2:.*]] = %[[VIEW2]], %[[LVIEW1:.*]] = %[[VIEW1]], %[[LVIEW0:.*]] = %[[VIEW0]])
+
+    # Verify WMMA exists
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
+
+    # CHECK: vector.load %[[LVIEW0]]
+    # CHECK: vector.load %[[LVIEW2]]
+
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
+
+    # CHECK: rocdl.tensor.load.to.lds
+
+    # CHECK: scf.yield {{.*}}, %[[LVIEW2]], %[[LVIEW3]], %[[LVIEW0]], %[[LVIEW1]]
+
+    # Epilogue:
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK: rocdl.s.wait.tensorcnt 0
+    # CHECK: rocdl.s.wait.dscnt 0
+    # CHECK: rocdl.s.barrier.signal id = -1
+    # CHECK: rocdl.s.barrier.wait id = -1
+
+    # CHECK: vector.load
+    # CHECK: vector.load
+
+    # CHECK: rocdl.wmma.f32.16x16x32.f16 %{{.*}}, %{{.*}}, %{{.*}}
+
+    # CHECK-COUNT-8: vector.store
+
+
+@run_test
 def test_dynamic_gemm_pipelined():
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
@@ -1459,13 +1550,13 @@ def test_dynamic_gemm_pipelined():
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-4:    vector.load
     # CHECK-COUNT-2:    vector.maskedload
-    # CHECK-COUNT-3:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-3:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    vector.load
-    # CHECK-COUNT-1:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-1:    rocdl.sched.group.barrier
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
     # CHECK-COUNT-2:    vector.store
-    # CHECK-COUNT-2:    llvm.call_intrinsic "llvm.amdgcn.sched.group.barrier"
+    # CHECK-COUNT-2:    rocdl.sched.group.barrier
     # CHECK-COUNT-1:    scf.yield
     # CHECK-COUNT-4:    amdgpu.mfma
     # CHECK-COUNT-1:    amdgpu.lds_barrier
@@ -1566,41 +1657,41 @@ def test_gemm_two_cluster_pingpong():
     # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K1:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K0]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K1]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load LHS
     # CHECK-COUNT-2:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Second slice of Local read lhs and rhs
     # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K2:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-2:    vector.load %[[VIEW_1]][{{.*}}, %[[K3:.+]]] : memref<128x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K2]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-8:    vector.load %[[VIEW_0]][{{.*}}, %[[K3]]] : memref<256x68xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load RHS
     # CHECK-COUNT-4:    vector.load {{.*}} : memref<4096x4096xf16, strided<[4096, 1]>>, vector<8xf16>
     # CHECK:            rocdl.s.barrier
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # First dot slice
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-32:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
     # CHECK:            amdgpu.lds_barrier
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # 2nd cluster local writes.
     # CHECK-COUNT-6:    vector.store
     # CHECK:            rocdl.s.barrier
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # Second dot slice:
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-32:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # Final LDS barrier to synchronize shared writes.
     # CHECK:            amdgpu.lds_barrier
@@ -1669,17 +1760,17 @@ def test_gemm_two_async_cluster_pingpong():
     # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K1:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER:.+]][{{.*}}, %[[K0]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K1]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # 1st Cluster: Global load to shared
     # CHECK-COUNT-4:    amdgpu.gather_to_lds
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier
+    # CHECK:            rocdl.sched.barrier
 
     # First dot slice
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-16:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
     # CHECK-NEXT:       amdgpu.memory_counter_wait load(4)
     # CHECK-NEXT:       rocdl.s.barrier
 
@@ -1688,7 +1779,7 @@ def test_gemm_two_async_cluster_pingpong():
     # CHECK-COUNT-2:    vector.load %[[LHS_BUFFER]][{{.*}}, %[[K3:.+]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K2]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
     # CHECK-COUNT-4:    vector.load %[[RHS_BUFFER]][{{.*}}, %[[K3]]] : memref<128x64xf16, #gpu.address_space<workgroup>>, vector<4xf16>
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
     # CHECK-NEXT:       amdgpu.memory_counter_wait load(0)
     # CHECK-NEXT:       rocdl.s.barrier
 
@@ -1696,7 +1787,7 @@ def test_gemm_two_async_cluster_pingpong():
     # CHECK:            rocdl.s.setprio 1
     # CHECK-COUNT-16:   amdgpu.mfma
     # CHECK:            rocdl.s.setprio 0
-    # CHECK:            llvm.call_intrinsic "llvm.amdgcn.sched.barrier"
+    # CHECK:            rocdl.sched.barrier
 
     # Final LDS barrier to synchronize shared writes.
     # CHECK:            amdgpu.lds_barrier
@@ -2322,3 +2413,84 @@ def test_explicit_shared_gemm():
     # CHECK:              amdgpu.mfma
     # Verify write to global memory (outside loop)
     # CHECK:            vector.store %{{.*}}, %[[GLOBAL_C]]
+
+
+@run_test
+def test_persistent_gemm():
+    persistent_gemm, hyperparams = get_persistent_gemm_kernel(
+        shape=(2048, 2048, 2048),
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+        threads_per_wave=64,
+        block_shape=(128, 256, 64),
+        waves_per_block=(4, 1),
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    persistent_gemm = wave_compile(options, persistent_gemm)
+    print(persistent_gemm.asm)
+
+    # CHECK-LABEL:    test_persistent_gemm
+    # CHECK:          #[[TRANSLATION:.+]] = #iree_codegen.translation_info<pipeline = None workgroup_size = [256, 1, 1] subgroup_size = 64>
+    # CHECK:          func.func @persistent_gemm
+    # CHECK-SAME:       (%[[ARG0:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG1:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION]]} {
+
+    # CHECK-DAG:       %[[C304_I32:.+]] = arith.constant 304 : i32
+    # CHECK-DAG:       %[[C128:.+]] = arith.constant 128 : index
+    # CHECK:           %[[BLOCK_ID_X:.+]] = gpu.block_id  x upper_bound 304
+
+    # Persistent loop
+    # CHECK:           %{{.*}} = scf.while (%[[ARG3:.+]] = %[[BLOCK_ID_X]]) : (index) -> index {
+    # CHECK:             %{{.*}} = arith.cmpi slt, %[[ARG3]], %[[C128]] : index
+    # CHECK:             scf.condition(%{{.*}}) %[[ARG3]] : index
+    # CHECK:           } do {
+    # CHECK:             %{{.*}} = arith.index_cast %[[ARG3]] : index to i32
+
+    # Advance to next tile
+    # CHECK:             %{{.*}} = arith.addi %{{.*}}, %[[C304_I32]] : i32
+    # CHECK:             %{{.*}} = arith.index_cast %{{.*}} : i32 to index
+    # CHECK:             scf.yield %{{.*}} : index
+    # CHECK:           }
+    # CHECK:           return
+
+
+@run_test
+def test_streamk_gemm():
+    shape = (1536, 3072, 19776)
+    streamk_gemm, hyperparams = get_streamk_gemm_kernel(
+        shape=shape,
+        mfma_variant=tkw.MMAType.F32_16x16x16_F16,
+        threads_per_wave=64,
+    )
+
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+        compile_to_mlir=True,
+    )
+    streamk_gemm = wave_compile(options, streamk_gemm)
+    print(streamk_gemm.asm)
+
+    # CHECK-LABEL:    test_streamk_gemm
+    # CHECK:          #[[TRANSLATION:.+]] = #iree_codegen.translation_info<pipeline = None workgroup_size = [128, 2, 1] subgroup_size = 64>
+    # CHECK:          func.func @streamk_gemm
+    # CHECK-SAME:       (%[[ARG0:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG1:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG3:[a-zA-Z0-9_]+]]: !stream.binding,
+    # CHECK-SAME:       %[[ARG4:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION]]} {
+
+    # Outer StreamK loop (scf.while)
+    # CHECK:           scf.while (%{{.+}} = %{{.+}}) : (index) -> index {
+    # CHECK:             arith.cmpi slt
+    # CHECK:             scf.condition
+
+    # Dynamic K loop (scf.for) with dynamic bounds for MMA
+    # CHECK:           } do {
+    # CHECK:             scf.for %{{.+}} = %{{.+}} to %{{.+}} step %{{.+}} iter_args({{.+}}) -> (vector<4xf32>
+
+    # CHECK:           llvm.store volatile %{{.+}}, %{{.+}} : vector<1xf32>, !llvm.ptr
+
+    # CHECK:           llvm.load volatile %{{.+}} : !llvm.ptr -> vector<1xf32>

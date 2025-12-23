@@ -195,6 +195,7 @@ def partition_strided_operators(trace: CapturedTrace, constraints: list[Constrai
                     custom.memory,
                     mapping=custom.mapping,
                     elements_per_thread=1,
+                    flags=custom.flags,
                 ).add_to_graph(custom.graph, loc=custom.location)
                 write.index = {
                     dim: IndexSequence(
@@ -347,6 +348,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         elements_per_thread=gpr_size,
+                        flags=custom.flags,
                     ).add_to_graph(custom.graph, loc=custom.location)
                 elif isinstance(custom, Read):
                     # TODO: Add support on how to handle strided reads.
@@ -356,6 +358,7 @@ def partition_ops_with_gpr_offsets(trace: CapturedTrace, constraints: list[Const
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         _write_dependency=custom._write_dependency,
+                        flags=custom.flags,
                     ).add_to_graph(custom.graph, loc=custom.location)
                 elif isinstance(custom, SelfIndex):
                     # iff elements_per_thread is specified, we update
@@ -468,6 +471,7 @@ def partition_gather_like_ops(
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         elements_per_thread=1,
+                        flags=custom.flags,
                     ).add_to_graph(custom.graph, loc=custom.location)
                 elif isinstance(custom, Read):
                     new_node = Read(
@@ -476,6 +480,7 @@ def partition_gather_like_ops(
                         mapping=custom.mapping,
                         mapping_dynamic_vals=new_dynamic_vals,
                         _write_dependency=custom._write_dependency,
+                        flags=custom.flags,
                     ).add_to_graph(custom.graph, loc=custom.location)
                 else:
                     raise NotImplementedError(f"Unsupported op type: {custom}")

@@ -1,4 +1,4 @@
-// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-constructors --split-input-file --verify-diagnostics
+// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-functions --split-input-file --verify-diagnostics
 
 // expected-error @below {{expected element type to be integer, index or floating point scalar}}
 func.func private @unspecified_tensor() -> !wave.tensor<any of !wave.tensor<any of bf16>>
@@ -22,3 +22,8 @@ module attributes {wave.elements_per_thread = "abc"} {}
 
 // expected-error @below {{unexpected wave dialect attribute "wave.unexpected"}}
 module attributes {wave.unexpected = 42} {}
+
+// -----
+
+// expected-error @below {{symbols names starting with '_' are reserved for internal use}}
+module attributes {wave_test.symbol = #wave.symbol<"_A">}

@@ -5,22 +5,23 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
-#include "mlir/IR/AffineExpr.h"
-#include "mlir/IR/Attributes.h"
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/Support/LLVM.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/MLIRContext.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Support/LLVM.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLForwardCompat.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
@@ -40,25 +41,21 @@ using namespace wave;
 // Helpers
 //===----------------------------------------------------------------------===//
 
-/// Helper function to parse a `WaveSymbolAttr`, keeping track of both the
-/// parse WaveSymbolAttr and the symbol name string.
-static ParseResult parseSymbol(SmallVectorImpl<WaveSymbolAttr> &symbolNameAttrs,
-                               SmallVectorImpl<StringRef> &symbolNames,
-                               AsmParser &parser) {
-  MLIRContext *context = parser.getContext();
-  StringRef symbolName;
-  if (failed(parser.parseKeyword(&symbolName)))
-    return failure();
-  symbolNameAttrs.push_back(WaveSymbolAttr::get(context, symbolName));
-  symbolNames.push_back(symbolName);
-  return success();
-};
+constexpr llvm::StringLiteral kNullExpr = "NULL";
 
 /// Helper function to parse an affine wave expression with the wave
 /// symbol names passed in `names`.
 static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
-                                      AffineExpr &outExpr, AsmParser &parser) {
+                                      AffineExpr &outExpr, AsmParser &parser,
+                                      bool allowNull = false) {
   MLIRContext *context = parser.getContext();
+  if (allowNull && succeeded(parser.parseOptionalLess()) &&
+      succeeded(parser.parseKeyword(kNullExpr)) &&
+      succeeded(parser.parseGreater())) {
+    outExpr = nullptr;
+    return success();
+  }
+
   SmallVector<std::pair<StringRef, AffineExpr>> symbolSet;
   symbolSet.reserve(names.size());
   for (auto [i, nm] : llvm::enumerate(names))
@@ -74,6 +71,8 @@ static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
 // It textually substitutes 's<i>' occurrences with the corresponding names from
 // the provided `names` array.
 std::string stringifyWithNames(AffineMap map, ArrayRef<StringRef> names) {
+  if (!map)
+    return "<" + kNullExpr.str() + ">";
   AffineExpr expr = map.getResult(0);
   std::string exprStr;
   llvm::raw_string_ostream os(exprStr);
@@ -100,6 +99,34 @@ std::string stringifyWithNames(AffineMap map, ArrayRef<StringRef> names) {
   return exprStr;
 }
 
+// Populate `names` with the names of symbols to be used in the expression
+// syntax. If new names are generated on-the-fly, store them in
+// `owningSymbolNames`. It is the caller's responsibility to keep those names
+// alive at least as long as it needs `names`, which only stores references.
+LogicalResult
+getExprSymbolNames(ArrayRef<Attribute> symbols,
+                   SmallVectorImpl<StringRef> &names,
+                   SmallVectorImpl<llvm::SmallString<16>> &owningSymbolNames,
+                   function_ref<void(StringRef)> emitError) {
+  names.reserve(names.size() + symbols.size());
+  for (Attribute attr : symbols) {
+    if (auto sym = dyn_cast<WaveSymbolAttr>(attr)) {
+      names.push_back(sym.getName());
+    } else if (auto sym = dyn_cast<WaveIndexSymbolAttr>(attr)) {
+      names.push_back(stringifyWaveIndexSymbol(sym.getValue()));
+    } else if (auto sym = dyn_cast<WaveIterSymbolAttr>(attr)) {
+      llvm::raw_svector_ostream os(owningSymbolNames.emplace_back());
+      os << "_Iter_" << sym.getName();
+      names.push_back(os.str());
+    } else {
+      emitError("expected symbol names to be one of WaveSymbolAttr, "
+                "WaveIndexSymbolAttr or WaveIterSymbolAttr");
+      return failure();
+    }
+  }
+  return success();
+}
+
 Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
   // Parse custom syntax: '[' symbol-names ']' '->' '(' start, step, stride ')'
   // This preserves meaningful symbol names while leveraging the existing
@@ -123,28 +150,26 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
 
   MLIRContext *context = parser.getContext();
   SmallVector<StringRef> symbolNames;
-  symbolNames.reserve(symbolNameAttrs.size());
-  for (Attribute attr : symbolNameAttrs) {
-    if (auto sym = dyn_cast<WaveSymbolAttr>(attr)) {
-      symbolNames.push_back(sym.getName());
-    } else if (auto sym = dyn_cast<WaveIndexSymbolAttr>(attr)) {
-      symbolNames.push_back(stringifyWaveIndexSymbol(sym.getValue()));
-    } else {
-      parser.emitError(parser.getCurrentLocation(),
-                       "expected symbol names to be either a WaveSymbolAttr or "
-                       "WaveIndexSymbolAttr");
-      return {};
-    }
+  SmallVector<llvm::SmallString<16>> owningSymbolNames;
+  if (failed(getExprSymbolNames(symbolNameAttrs, symbolNames, owningSymbolNames,
+                                [&](StringRef message) {
+                                  parser.emitError(parser.getCurrentLocation(),
+                                                   message);
+                                }))) {
+    return {};
   }
 
   AffineExpr startExpr;
   AffineExpr stepExpr;
   AffineExpr strideExpr;
-  if (failed(parseExprWithNames(symbolNames, startExpr, parser)) ||
+  if (failed(parseExprWithNames(symbolNames, startExpr, parser,
+                                /*allowNull=*/true)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, stepExpr, parser)) ||
+      failed(parseExprWithNames(symbolNames, stepExpr, parser,
+                                /*allowNull=*/true)) ||
       parser.parseComma() ||
-      failed(parseExprWithNames(symbolNames, strideExpr, parser)) ||
+      failed(parseExprWithNames(symbolNames, strideExpr, parser,
+                                /*allowNull=*/true)) ||
       parser.parseRParen()) {
     parser.emitError(
         parser.getCurrentLocation(),
@@ -152,13 +177,21 @@ Attribute WaveIndexMappingAttr::parse(AsmParser &parser, Type type) {
     return {};
   }
 
-  // Build maps
-  auto startMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), startExpr, context);
-  auto stepMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), stepExpr, context);
-  auto strideMap = AffineMap::get(
-      /*numDims=*/0, /*numSymbols=*/symbolNames.size(), strideExpr, context);
+  auto startMap = startExpr
+                      ? AffineMap::get(
+                            /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
+                            startExpr, context)
+                      : AffineMap();
+  auto stepMap = stepExpr
+                     ? AffineMap::get(
+                           /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
+                           stepExpr, context)
+                     : AffineMap();
+  auto strideMap = strideExpr
+                       ? AffineMap::get(
+                             /*numDims=*/0, /*numSymbols=*/symbolNames.size(),
+                             strideExpr, context)
+                       : AffineMap();
 
   return get(context, symbolNameAttrs, startMap, stepMap, strideMap);
 }
@@ -176,14 +209,14 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
   printer << "] -> ";
 
   SmallVector<StringRef> names;
-  names.reserve(symbols.size());
-  for (Attribute symbolAttr : symbols) {
-    if (auto symbol = llvm::dyn_cast<WaveSymbolAttr>(symbolAttr))
-      names.push_back(symbol.getName());
-    else if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
-      names.emplace_back(wave::stringifyWaveIndexSymbol(symbol.getValue()));
-    else
-      llvm_unreachable("Unexpected symbol attribute type");
+  SmallVector<llvm::SmallString<16>> owningSymbolNames;
+  if (failed(getExprSymbolNames(
+          symbols, names, owningSymbolNames, [&](StringRef message) {
+            // TODO: double-check that printer doesn't crash on malformed
+            // attributes.
+            llvm_unreachable("Unexpected symbol attribute type");
+          }))) {
+    return;
   }
   // All three maps share the same symbol set and order.
   std::string startStr = stringifyWithNames(getStart(), names);
@@ -197,12 +230,75 @@ LogicalResult
 WaveIndexMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                              ArrayRef<Attribute> symbols, AffineMap start,
                              AffineMap step, AffineMap stride) {
-  if (!llvm::all_of(symbols,
-                    llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>))
-    return emitError() << "expected all symbols to be a WaveSymbolAttr or "
-                          "WaveIndexSymbolAttr";
+  if (!llvm::all_of(symbols, llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr,
+                                           WaveIterSymbolAttr>)) {
+    return emitError() << "expected all symbols to be a WaveSymbolAttr, "
+                          "WaveIndexSymbolAttr or WaveIterSymbolAttr";
+  }
 
   return success();
+}
+
+WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
+  SmallVector<Attribute> symbols = llvm::to_vector(getSymbols());
+  auto it = llvm::find(symbols, input);
+  if (it == symbols.end())
+    return *this;
+
+  size_t position = std::distance(symbols.begin(), it);
+  MLIRContext *ctx = getContext();
+  DenseMap<AffineExpr, AffineExpr> replacement;
+  replacement.try_emplace(getAffineSymbolExpr(position, ctx),
+                          getAffineConstantExpr(0, ctx));
+  for (size_t i = position + 1, e = symbols.size(); i < e; ++i) {
+    replacement.try_emplace(getAffineSymbolExpr(i, ctx),
+                            getAffineSymbolExpr(i - 1, ctx));
+  }
+
+  symbols.erase(it);
+  return get(ctx, symbols,
+             getStart() ? getStart().replace(replacement) : AffineMap(),
+             getStep() ? getStep().replace(replacement) : AffineMap(),
+             getStride() ? getStride().replace(replacement) : AffineMap());
+}
+
+SmallVector<unsigned> WaveIndexMappingAttr::getUsedSymbolPositions() const {
+  llvm::SetVector<unsigned> usedSymbolPositions;
+  auto collect = [&](AffineMap map) {
+    map.walkExprs([&](AffineExpr expr) {
+      if (auto symbolExpr = dyn_cast<AffineSymbolExpr>(expr))
+        usedSymbolPositions.insert(symbolExpr.getPosition());
+    });
+  };
+  if (getStart())
+    collect(getStart());
+  if (getStep())
+    collect(getStep());
+  if (getStride())
+    collect(getStride());
+  return usedSymbolPositions.takeVector();
+}
+
+WaveIndexMappingAttr WaveIndexMappingAttr::removeUnusedInputs() const {
+  SmallVector<unsigned> usedSymbolPositions = getUsedSymbolPositions();
+  llvm::sort(usedSymbolPositions);
+  SmallVector<Attribute> newSymbols;
+  DenseMap<AffineExpr, AffineExpr> replacement;
+  for (auto [oldPosition, symbol] : llvm::enumerate(getSymbols())) {
+    if (!llvm::is_contained(usedSymbolPositions, oldPosition))
+      continue;
+
+    replacement.try_emplace(
+        getAffineSymbolExpr(oldPosition, getContext()),
+        getAffineSymbolExpr(newSymbols.size(), getContext()));
+    newSymbols.push_back(symbol);
+  }
+  assert(newSymbols.size() == usedSymbolPositions.size());
+  AffineMap start = getStart() ? getStart().replace(replacement) : AffineMap();
+  AffineMap step = getStep() ? getStep().replace(replacement) : AffineMap();
+  AffineMap stride =
+      getStride() ? getStride().replace(replacement) : AffineMap();
+  return get(getContext(), newSymbols, start, step, stride);
 }
 
 //===----------------------------------------------------------------------===//
@@ -240,6 +336,9 @@ WaveSymbolAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     diag.attachNote() << "Did you mean to use WaveIndexSymbolAttr instead?";
     return diag;
   }
+  if (name.starts_with("_"))
+    return emitError()
+           << "symbols names starting with '_' are reserved for internal use";
   return llvm::success();
 }
 
@@ -300,18 +399,13 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
   if (parser.parseArrow())
     return {};
   MLIRContext *context = parser.getContext();
-  symbolNames.reserve(symbolNameAttrs.size());
-  for (Attribute attr : symbolNameAttrs) {
-    if (auto sym = dyn_cast<WaveSymbolAttr>(attr)) {
-      symbolNames.push_back(sym.getName());
-    } else if (auto sym = dyn_cast<WaveIndexSymbolAttr>(attr)) {
-      symbolNames.push_back(stringifyWaveIndexSymbol(sym.getValue()));
-    } else {
-      parser.emitError(parser.getCurrentLocation(),
-                       "expected symbol names to be either a WaveSymbolAttr or "
-                       "WaveIndexSymbolAttr");
-      return {};
-    }
+  SmallVector<llvm::SmallString<16>> owningSymbolNames;
+  if (failed(getExprSymbolNames(symbolNameAttrs, symbolNames, owningSymbolNames,
+                                [&](StringRef message) {
+                                  parser.emitError(parser.getCurrentLocation(),
+                                                   message);
+                                }))) {
+    return {};
   }
 
   SmallVector<AffineExpr> results;
@@ -351,14 +445,14 @@ void WaveExprListAttr::print(mlir::AsmPrinter &printer) const {
   });
   printer << "] -> (";
 
-  names.reserve(symbols.size());
-  for (Attribute symbolAttr : symbols) {
-    if (auto symbol = llvm::dyn_cast<WaveSymbolAttr>(symbolAttr))
-      names.push_back(symbol.getName());
-    else if (auto symbol = llvm::dyn_cast<WaveIndexSymbolAttr>(symbolAttr))
-      names.emplace_back(wave::stringifyWaveIndexSymbol(symbol.getValue()));
-    else
-      llvm_unreachable("Unexpected symbol attribute type");
+  SmallVector<llvm::SmallString<16>> owningSymbolNames;
+  if (failed(getExprSymbolNames(
+          symbols, names, owningSymbolNames, [&](StringRef message) {
+            // TODO: double-check that printer doesn't crash on malformed
+            // attributes.
+            llvm_unreachable("Unexpected symbol attribute type");
+          }))) {
+    return;
   }
 
   // We have one map with N results. For each result expr, make a 1-result map
@@ -379,10 +473,10 @@ void WaveExprListAttr::print(mlir::AsmPrinter &printer) const {
 LogicalResult
 WaveExprListAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                          ArrayRef<Attribute> symbols, AffineMap map) {
-  if (!llvm::all_of(symbols,
-                    llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr>))
-    return emitError() << "expected all symbols to be a WaveSymbolAttr or "
-                          "WaveIndexSymbolAttr";
+  if (!llvm::all_of(symbols, llvm::IsaPred<WaveSymbolAttr, WaveIndexSymbolAttr,
+                                           WaveIterSymbolAttr>))
+    return emitError() << "expected all symbols to be a WaveSymbolAttr, "
+                          "WaveIndexSymbolAttr or WaveIterSymbolAttr";
 
   return success();
 }
@@ -679,9 +773,11 @@ llvm::LogicalResult wave::detail::verifyNormalFormAttr(
                 form, wave::WaveNormalForm::IndexExprsSpecified)) {
           if (op->hasTrait<wave::HasWaveIndexMapping>() &&
               !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
-            op->emitError()
-                << "normal form requires index expressions to be "
-                   "provided for all supported wave dialect operations";
+            if (emitDiagnostics) {
+              op->emitError()
+                  << "normal form requires index expressions to be "
+                     "provided for all supported wave dialect operations";
+            }
             return mlir::WalkResult::interrupt();
           }
         }

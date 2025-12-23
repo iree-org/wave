@@ -5,7 +5,13 @@ set(LIBS
         ${conversion_libs}
         MLIRArithDialect
         MLIRGPUDialect
+        MLIRGPUToLLVMIRTranslation
+        MLIRLLVMToLLVMIRTranslation
+        MLIRLinalgTransformOps
+        MLIRMemRefTransformOps
         MLIROptLib
+        MLIRROCDLDialect
+        MLIRTransformDialectTransforms
         MLIRWaterTransforms
         MLIRWaveTransforms
 

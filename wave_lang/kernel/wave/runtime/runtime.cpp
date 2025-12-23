@@ -5,7 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <array>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/string.h>
@@ -31,7 +34,7 @@ static hipDrvLaunchKernelEx_t hipDrvLaunchKernelEx = nullptr;
 static hipGetErrorName_t hipGetErrorName = nullptr;
 static hipGetErrorString_t hipGetErrorString = nullptr;
 static hipModuleUnload_t hipModuleUnload = nullptr;
-static hipModuleLoad_t hipModuleLoad = nullptr;
+static hipModuleLoadData_t hipModuleLoadData = nullptr;
 static hipModuleGetFunction_t hipModuleGetFunction = nullptr;
 
 static void *get_symbol_address(module_handle_t module,
@@ -55,7 +58,7 @@ static void *get_symbol_address(module_handle_t module,
 
 static void load_hip_functions() {
   if (hipModuleLaunchKernel && hipGetErrorName && hipGetErrorString &&
-      hipModuleUnload && hipModuleLoad && hipModuleGetFunction)
+      hipModuleUnload && hipModuleLoadData && hipModuleGetFunction)
     return;
 
   module_handle_t module = nullptr;
@@ -78,8 +81,7 @@ static void load_hip_functions() {
   GET_FUNC(module, hipModuleLaunchKernel);
   GET_FUNC(module, hipGetErrorName);
   GET_FUNC(module, hipGetErrorString);
-  GET_FUNC(module, hipModuleUnload);
-  GET_FUNC(module, hipModuleLoad);
+  GET_FUNC(module, hipModuleLoadData);
   GET_FUNC(module, hipModuleGetFunction);
 
   // hipDrvLaunchKernelEx may not be available.
@@ -193,21 +195,40 @@ static void launch(const KernelLaunchInfo &info, const Int64Vector &tensors,
   }
 }
 
-static void unload_binary(void *ptr) noexcept {
-  auto module = reinterpret_cast<hipModule_t>(ptr);
-  if (auto e = hipModuleUnload(module)) {
-    nb::print(nb::str("Failed to unload module: ") +
-              nb::str(hipGetErrorString(e)));
+// Reads the entire contents of a binary file into a unique_ptr to char array.
+// Throws std::runtime_error if the file cannot be read.
+static std::unique_ptr<char[]> readFileIntoVector(const std::string &filename) {
+  std::error_code ec;
+  auto size = std::filesystem::file_size(filename, ec);
+  if (ec) {
+    throw std::runtime_error("Unable to get file size: " + filename + " - " +
+                             ec.message());
   }
+
+  FILE *file = fopen(filename.c_str(), "rb");
+  if (!file) {
+    throw std::runtime_error("Unable to open file: " + filename);
+  }
+
+  auto buffer = std::make_unique<char[]>(size);
+  size_t bytes_read = fread(buffer.get(), 1, size, file);
+  fclose(file);
+
+  if (bytes_read != size) {
+    throw std::runtime_error("Failed to read entire file: " + filename);
+  }
+
+  return buffer;
 }
 
 static nb::tuple load_binary(const std::string &path,
                              const std::string &func_name) {
   hipModule_t module;
   hipFunction_t function;
-  HIP_CHECK_EXC(hipModuleLoad(&module, path.c_str()));
+  auto hsacoVec = readFileIntoVector(path);
+  HIP_CHECK_EXC(hipModuleLoadData(&module, hsacoVec.get()));
   HIP_CHECK_EXC(hipModuleGetFunction(&function, module, func_name.c_str()));
-  nb::capsule capsule(reinterpret_cast<void *>(module), &unload_binary);
+  nb::capsule capsule(reinterpret_cast<void *>(module));
   return nb::make_tuple(capsule, reinterpret_cast<uintptr_t>(function));
 }
 

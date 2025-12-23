@@ -56,6 +56,7 @@ class SyncRegion:
     producers: Sequence[Any] = None
     consumers: Sequence[Any] = None
     cross_iter: bool = False
+    is_tdm: bool = False
     producer: fx.Node = None
     consumer: fx.Node = None
     prod_location: int = -1
@@ -102,44 +103,46 @@ def assign_preorder_index(nodes: List[fx.Node]) -> None:
         setattr(node, "_topo_location", idx)
 
 
-def get_memory_access_type(op: CustomOp) -> MemoryAccessType:
+def get_shared_memory_access_type(op: CustomOp) -> MemoryAccessType:
     """
     Get the memory access type of a custom node.
     """
-    if isinstance(op, Read):
+    if isinstance(op, Read) and op.memory_type.address_space == SHARED_ADDRESS_SPACE:
         return MemoryAccessType.READ
-    elif isinstance(op, Write):
+    elif isinstance(op, Write) and op.memory_type.address_space == SHARED_ADDRESS_SPACE:
         return MemoryAccessType.WRITE
-    elif isinstance(op, AtomicOp):
+    elif (
+        isinstance(op, AtomicOp)
+        and op.memory_type.address_space == SHARED_ADDRESS_SPACE
+    ):
         return MemoryAccessType.READ_WRITE
-    elif isinstance(op, GatherToLDS):
-        return MemoryAccessType.READ_WRITE
-    elif isinstance(op, TensorLoadToLDS):
-        return MemoryAccessType.READ_WRITE
+    elif isinstance(op, (GatherToLDS, TensorLoadToLDS)):
+        return MemoryAccessType.WRITE
     else:
         return MemoryAccessType.NONE
 
 
-def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> Optional[fx.Node]:
+def get_shared_memory_from_op(op: CustomOp, depth: int = 0) -> list[fx.Node]:
     """
-    Given a customOp, returns the shared memory node if it operates on a shared memory region, otherwise None.
+    Given a CustomOp, returns a list of shared memory nodes if the operation accesses shared memory,
+    otherwise returns an empty list.
     """
     if (
         isinstance(op, (Read, Write))
         and op.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
-        return propagate_loop_carried_vars(op.memory, depth)
+        return [propagate_loop_carried_vars(op.memory, depth)]
     if (
         isinstance(op, AtomicOp)
         and op.memory_type.address_space == SHARED_ADDRESS_SPACE
     ):
-        return propagate_loop_carried_vars(op.rhs, depth)
+        return [propagate_loop_carried_vars(op.rhs, depth)]
     if isinstance(op, GatherToLDS):
-        return propagate_loop_carried_vars(op.dst, depth)
+        return [propagate_loop_carried_vars(op.dst, depth)]
     if isinstance(op, TensorLoadToLDS):
-        return propagate_loop_carried_vars(op.dst, depth)
+        return [propagate_loop_carried_vars(dst, depth) for dst in op.dst]
 
-    return None
+    return []
 
 
 def need_barrier(
@@ -153,10 +156,10 @@ def need_barrier(
     node1 = get_custom(node1) if isinstance(node1, fx.Node) else node1
     node2 = get_custom(node2) if isinstance(node2, fx.Node) else node2
 
-    access_type1 = get_memory_access_type(node1)
+    access_type1 = get_shared_memory_access_type(node1)
     if access_type1 == MemoryAccessType.NONE:
         return False
-    access_type2 = get_memory_access_type(node2)
+    access_type2 = get_shared_memory_access_type(node2)
     if access_type2 == MemoryAccessType.NONE:
         return False
 
@@ -272,29 +275,29 @@ def handle_hazard(
         return
 
     op = get_custom(node)
-    access_kind = get_memory_access_type(op)
+    access_kind = get_shared_memory_access_type(op)
     if access_kind == MemoryAccessType.NONE:
         return
 
-    resource = get_shared_memory_from_op(op, depth)
+    resources = get_shared_memory_from_op(op, depth)
     assert (
-        resource is not None
+        resources
     ), "Expected op to access shared memory, but no shared memory resource found."
+    for resource in resources:
+        hazard_window = windows[resource]
+        if graph_info is not None:
+            hazard_window.graph_info = graph_info
 
-    hazard_window = windows[resource]
-    if graph_info is not None:
-        hazard_window.graph_info = graph_info
+        is_prod = access_kind & producer_kinds
+        is_cons = access_kind & consumer_kinds
 
-    is_prod = access_kind & producer_kinds
-    is_cons = access_kind & consumer_kinds
+        if is_prod:
+            add_hazard_if_window_valid(results, resource, hazard_window)
+            hazard_window.producers.append(node)
 
-    if is_prod:
-        add_hazard_if_window_valid(results, resource, hazard_window)
-        hazard_window.producers.append(node)
-
-    # Consumers only count after at least one producer for this resource.
-    if is_cons and hazard_window.producers:
-        hazard_window.consumers.append(node)
+        # Consumers only count after at least one producer for this resource.
+        if is_cons and hazard_window.producers:
+            hazard_window.consumers.append(node)
 
 
 def get_hazard_handle(
@@ -319,8 +322,8 @@ def get_barriers_analysis(
     all_nodes = trace.preorder_walk()
     assign_preorder_index(all_nodes)
 
-    is_shared_memory_node = (
-        lambda node: get_shared_memory_from_op(get_custom(node)) is not None
+    is_shared_memory_node = lambda node: bool(
+        get_shared_memory_from_op(get_custom(node))
     )
     is_iterate_node = lambda node: isinstance(get_custom(node), Iterate)
     is_condition_node = lambda node: isinstance(get_custom(node), Conditional)
@@ -532,10 +535,11 @@ def find_disjoint_interval_strategy(
     # --- Helpers ----
     get_location = lambda region: (region.prod_location, region.cons_location)
 
-    def make_request(prod: fx.Node, cons: fx.Node) -> SyncRegion:
+    def make_request(prod: fx.Node, cons: fx.Node, is_tdm: bool) -> SyncRegion:
         """Make a new request based on provided producer and consumer. dont care values are default to None."""
         return SyncRegion(
             cross_iter=False,
+            is_tdm=is_tdm,
             producer=prod,
             consumer=cons,
             prod_location=prod._topo_location,
@@ -557,14 +561,22 @@ def find_disjoint_interval_strategy(
     results = []
     for placement in minimal_placements:
         closest_signal = find_closest(ascending_producers, placement.cons_location)
+
+        is_tdm = any(
+            isinstance(get_custom(prod), TensorLoadToLDS)
+            for prod in placement.producers
+            if isinstance(prod, fx.Node)
+        )
+
         # special case 1)
         signal_placement = (
             closest_signal if closest_signal is not None else placement.consumer.prev
         )
+
         # special case 2)
         if signal_placement.graph != placement.consumer.graph:
             signal_placement = placement.consumer.prev
 
-        results.append(make_request(signal_placement, placement.consumer))
+        results.append(make_request(signal_placement, placement.consumer, is_tdm))
 
     return results

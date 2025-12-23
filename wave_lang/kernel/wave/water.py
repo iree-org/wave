@@ -13,8 +13,9 @@ import subprocess
 import sys
 import math
 from typing import Any, Sequence
-import importlib
+from functools import lru_cache
 
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.ir_imports import (
     Attribute,
     BlockArgument,
@@ -173,19 +174,82 @@ def _deiree(module: Module) -> str:
     return local_module.get_asm(binary=False, print_generic_op_form=True)
 
 
+def get_water_mlir_dir() -> Path:
+    return Path(__file__).parent / "water_mlir"
+
+
+def find_binary(name: str) -> str | None:
+    tool_path = get_water_mlir_dir() / "bin" / name
+    if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
+        return None
+
+    return str(tool_path)
+
+
+@lru_cache
 def is_water_available() -> bool:
-    """Returns True of the water_mlir package is available."""
-    return importlib.util.find_spec("water_mlir") is not None
+    """Returns True if the water_mlir package is available."""
+    return (get_water_mlir_dir()).exists()
+
+
+@lru_cache
+def is_water_binary_available() -> bool:
+    """Returns True if the water-opt binary is available and executable."""
+    return find_binary("water-opt") is not None
+
+
+@lru_cache
+def get_water_opt() -> str:
+    path = find_binary("water-opt")
+    if path is None:
+        raise RuntimeError("water-opt binary not found")
+
+    return path
+
+
+def make_linear_pass_pipeline(
+    pipeline: Sequence[
+        tuple[str, dict[str, Any]] | tuple[str, dict[str, Any], str] | str
+    ],
+) -> str:
+    """
+    Construct a pass pipeline string for mlir-opt style tool.
+
+    Args:
+        pipeline: A sequence of pass names and arguments.
+            - For the pass with no arguments/all default arguments, pass just the name as a string.
+            - For the pass with arguments, pass a tuple with the name and a dictionary of arguments.
+            - For the pass with a root op, pass a tuple with the name, a dictionary of arguments, and the root op name.
+              Arguments dict can be empty.
+    Returns:
+        A string representing the pass pipeline command line argument.
+    """
+
+    def make_pass_arguments(
+        name: str, args: dict[str, Any], root_op: str | None = None
+    ) -> str:
+        ret = (
+            name
+            + "{"
+            + " ".join("=".join((key, str(value))) for (key, value) in args.items())
+            + "}"
+        )
+        if root_op:
+            ret = root_op + "(" + ret + ")"
+        return ret
+
+    return (
+        "--pass-pipeline=builtin.module("
+        + ",".join(
+            entry if isinstance(entry, str) else make_pass_arguments(*entry)
+            for entry in pipeline
+        )
+        + ")"
+    )
 
 
 def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
-    try:
-        from water_mlir import binaries as water_bin
-    except ImportError as err:
-        raise RuntimeError(
-            "optional water_mlir module not installed but its use is requested"
-        ) from err
-    binary = water_bin.find_binary("water-opt")
+    binary = get_water_opt()
     generic_mlir = _deiree(module) if override_ir == "" else override_ir
     pipeline = [
         (
@@ -201,28 +265,8 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         "water-check-static-assertions",
     ]
 
-    def make_linear_pass_pipeline(
-        pipeline: Sequence[tuple[str, dict[str, Any]] | str],
-    ) -> str:
-        def make_pass_arguments(name: str, args: dict[str, Any]) -> str:
-            return (
-                name
-                + "{"
-                + " ".join("=".join((key, str(value))) for (key, value) in args.items())
-                + "}"
-            )
-
-        return (
-            "--pass-pipeline=builtin.module("
-            + ",".join(
-                entry if isinstance(entry, str) else make_pass_arguments(*entry)
-                for entry in pipeline
-            )
-            + ")"
-        )
-
     def get_code_context(
-        filename: str, start_line: int, end_line, context: int = 2
+        filename: str, start_line: int, end_line: int, context: int = 2
     ) -> str:
         """
         Retrieves a line and a few lines of context around it.
@@ -357,3 +401,149 @@ def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
         )
     else:
         print("[info] No out-of-bounds accesses detected.")
+
+
+def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:
+    binary = get_water_opt()
+    mlir_asm = module.operation.get_asm()
+    target_chip = options.target
+
+    def add_opt(pipeline):
+        if options.optimization_level:
+            return [pipeline]
+
+        return []
+
+    def add_transform(transform: str, entry_point: str) -> tuple[str, dict[str, Any]]:
+        nonlocal mlir_asm
+        # Erase the last occurrence of '}' from mlir_asm which closes the module operation
+        last_close = mlir_asm.rfind("}")
+        if last_close != -1:
+            mlir_asm = mlir_asm[:last_close]
+        mlir_asm += transform
+        mlir_asm += "}\n"
+        return ("transform-interpreter", {"entry-point": entry_point})
+
+    # TODO: this transform refuses to work.
+    alloc_to_alloca = """
+  transform.named_sequence @__transform_alloc_to_alloca(%arg0: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["gpu.func"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+    transform.apply_patterns to %0 {
+      transform.apply_patterns.memref.alloc_to_alloca
+    } : !transform.any_op
+    transform.yield
+  }
+"""
+
+    alloca_to_global = """
+  transform.named_sequence @__transform_alloca_to_global(%arg0: !transform.any_op {transform.readonly}) {
+    %alloca = transform.structured.match ops{["memref.alloca"]} in %arg0
+        : (!transform.any_op) -> !transform.op<"memref.alloca">
+    %get_global, %global = transform.memref.alloca_to_global %alloca
+          : (!transform.op<"memref.alloca">)
+            -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+"""
+
+    canonicalize_cse = "composite-fixed-point-pass", {
+        "name": "canonicalize_cse",
+        "pipeline": "any(canonicalize,cse)",
+    }
+
+    llvm_opt_level = 3 if options.optimization_level else 0
+    dump_intermediates = options.dump_intermediates or ""
+    toolkit_path = get_water_mlir_dir()
+
+    pipeline = [
+        "lower-affine",
+        *add_opt(canonicalize_cse),
+        *add_opt("loop-invariant-code-motion"),
+        *add_opt("int-range-optimizations"),
+        "convert-scf-to-cf",
+        ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
+        ("water-alloc-to-alloca", {}, "gpu.module"),
+        # add_transform(alloc_to_alloca, "__transform_alloc_to_alloca"),
+        add_transform(alloca_to_global, "__transform_alloca_to_global"),
+        ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
+        ("rocdl-attach-target", {"chip": target_chip, "O": llvm_opt_level}),
+        ("gpu-to-llvm", {"use-bare-pointers-for-kernels": "1"}),
+        "convert-vector-to-llvm",
+        "reconcile-unrealized-casts",
+        *add_opt(canonicalize_cse),
+        (
+            "water-gpu-module-to-binary",
+            {"dump-intermediates": dump_intermediates, "toolkit": toolkit_path},
+        ),
+        "water-gpu-to-gpu-runtime",
+        "water-drop-transform-ops",
+        "symbol-dce",
+        *add_opt(canonicalize_cse),
+    ]
+
+    args = [binary, make_linear_pass_pipeline(pipeline)]
+    if options.mlir_print_ir_after_all:
+        args.append("--mlir-print-ir-after-all")
+
+    try:
+        result = subprocess.check_output(
+            args,
+            input=mlir_asm,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Subprocess failed with return code {e.returncode}."
+        raise RuntimeError(error_msg) from e
+
+    with module.context:
+        return Module.parse(result)
+
+
+def apply_water_middle_end_passes(mlir_text: str) -> str:
+    """Apply Water middle-end pipeline using subprocess water-opt.
+
+    This function applies the following passes:
+    - water-wave-detect-normal-forms
+    - water-wave-propagate-elements-per-thread
+    - lower-wave-to-mlir
+    - canonicalize
+    - cse
+
+    Args:
+        mlir_text: Input Wave dialect MLIR as string
+
+    Returns:
+        Optimized MLIR as string after applying the passes
+
+    Raises:
+        RuntimeError: If water-opt is not available or passes fail
+    """
+    binary = get_water_opt()
+
+    # Define the pass pipeline for Wave lowering
+    pipeline = [
+        "water-wave-detect-normal-forms",
+        "water-wave-propagate-elements-per-thread",
+        "lower-wave-to-mlir",
+        "canonicalize",
+        "cse",
+    ]
+
+    try:
+        result = subprocess.check_output(
+            [
+                binary,
+                "--allow-unregistered-dialect",
+                make_linear_pass_pipeline(pipeline),
+            ],
+            input=mlir_text,
+            text=True,
+        )
+
+        return result
+
+    except subprocess.CalledProcessError as e:
+        error_msg = f"water-opt subprocess failed with return code {e.returncode}."
+        if e.stderr:
+            error_msg += f" Error: {e.stderr}"
+        raise RuntimeError(error_msg) from e

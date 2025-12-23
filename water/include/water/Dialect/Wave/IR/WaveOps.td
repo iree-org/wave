@@ -48,7 +48,8 @@ class UnaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
           WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-          CompatibleOperandsAndResultsOpTrait]>,
+          CompatibleOperandsAndResultsOpTrait,
+          WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Argument">:$argument
@@ -66,7 +67,8 @@ class BinaryWaveOp<string mnemonic>
     : WaveOp<mnemonic,
          [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
           WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
-          CompatibleOperandsAndResultsOpTrait]>,
+          CompatibleOperandsAndResultsOpTrait,
+          WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]>,
       WaveArithmeticOpDoc {
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Left-hand side">:$lhs,
@@ -107,7 +109,9 @@ def Exp2Op : UnaryWaveOp<"exp2"> {
 }
 
 def MmaOp : WaveOp<"mma",
-    [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>]>,
+    [DeclareOpInterfaceMethods<WaveInferTypeOpInterface>,
+     DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface,
+      ["initializeIndexExprsForward", "initializeIndexExprsBackward"]>]>,
             WaveArithmeticOpDoc {
   let summary = "Matrix multiply and accumulate";
 
@@ -115,7 +119,7 @@ def MmaOp : WaveOp<"mma",
     Arg<WaveTensorInRegister, "Left-hand side of the multiplication">:$lhs,
     Arg<WaveTensorInRegister, "Right-hand side of the multiplication">:$rhs,
     Arg<WaveTensorInRegister, "Accumulator for addition">:$accumulator,
-    Arg<WaveMmaKindAttr, "Kind of the MMA intrinsic to target">:$kind
+    Arg<OptionalAttr<WaveMmaKindAttr>, "Kind of the MMA intrinsic to target">:$kind
   ), commonArguments);
 
   let results = (outs
@@ -133,8 +137,10 @@ def MmaOp : WaveOp<"mma",
 //-----------------------------------------------------------------------------
 
 def IterateOp : Op<WaveDialect, "iterate", [
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<RegionBranchOpInterface,
-        ["areTypesCompatible", "getEntrySuccessorOperands"]>]> {
+        ["areTypesCompatible", "getEntrySuccessorOperands"]>,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Executes the body repeatedly";
   let description = [{
     Intrinsically sequential iterative execution that is akin to a loop with
@@ -145,11 +151,18 @@ def IterateOp : Op<WaveDialect, "iterate", [
     Similarly to other loop-like constructs, this operation uses secondary
     induction variables for loop-carried values. The initial values are supplied
     as `iter_args` and the resulting values are produced by `result`.
+
+    It optionally takes a list of captured values that are re-mapped to block
+    arguments. Unlike induction variables, these values cannot be updated and are
+    not returned from the loop. They are meant purely to indicate a distribution
+    scheme (index expressions) that is aware of tiling constraints applicable to
+    the loop.
   }];
 
   let arguments = (ins
     Arg<WaveSymbolAttr, "Iterator symbol">:$iterator,
-    Arg<Variadic<WaveTensorType>, "Carried values">:$iter_args
+    Arg<Variadic<WaveTensorType>, "Carried values">:$iter_args,
+    Arg<Variadic<WaveTensorType>, "Captured values">:$captures
   );
 
   let results = (outs
@@ -162,8 +175,30 @@ def IterateOp : Op<WaveDialect, "iterate", [
 
   let assemblyFormat =
     "custom<SingleSymbol>($iterator) (`iter_args` `(` $iter_args^ `)`)?"
+    "(`captures` `(` $captures^ `)`)?"
     "attr-dict-with-keyword regions `:` functional-type(operands, results)";
   let hasVerifier = 1;
+  let hasRegionVerifier = 1;
+
+  let extraClassDeclaration = [{
+    // Get the body block.
+    ::mlir::Block *getLoopBody() {
+      assert(llvm::hasSingleElement(getBody()));
+      return &getBody().front();
+    }
+
+    // Get the block arguments corresponding to captured values.
+    ::mlir::ValueRange getCaptureBlockArgs() {
+      return getLoopBody()->getArguments().take_back(getCaptures().size());
+    }
+
+    // Rewrite the loop to turn all values defined above and used inside the
+    // body into captures.
+    void makeIsolated(::mlir::RewriterBase &rewriter);
+
+    // Rewrite the loop to directly use values instead of capturing them.
+    void makeNonIsolated(::mlir::RewriterBase &rewriter);
+  }];
 }
 
 def YieldOp : Op<WaveDialect, "yield",
@@ -241,7 +276,8 @@ def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, Identity
 def ReadOp : WaveOp<"read", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
     WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
+    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Reads from memory";
   let description = [{
     Moves data from a memory-resident tensor to a register-resident tensor
@@ -267,7 +303,8 @@ def ReadOp : WaveOp<"read", [
 
 def RegisterOp : WaveOp<"register", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
-    NoOpElementsPerThreadOpTrait]> {
+    NoOpElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Defines a tensor value known to be placed in a register";
   let description = [{
     Defines a new register-resident tensor initialized with the given scalar
@@ -293,7 +330,8 @@ def RegisterOp : WaveOp<"register", [
 def WriteOp : WaveOp<"write", [
     WaveInferTypeOpInterface, NoOpTypeInferenceOpTrait,
     WaveElementsPerThreadOpInterface, AttrBasedElementsPerThreadOpTrait,
-    CompatibleOperandsAndResultsIgnoreSpaceOpTrait]> {
+    CompatibleOperandsAndResultsIgnoreSpaceOpTrait,
+    DeclareOpInterfaceMethods<WaveInferIndexExprsOpInterface>]> {
   let summary = "Writes into memory";
   let description = [{
     Moves data from a register-resident tensor into a memory-resident tensor
@@ -322,7 +360,8 @@ def WriteOp : WaveOp<"write", [
 
 def CastOp : WaveOp<"cast", [
     WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait,
-    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait]> {
+    WaveElementsPerThreadOpInterface, IdentityElementsPerThreadOpTrait,
+    WaveInferIndexExprsOpInterface, IdentityIndexExprsOpTrait]> {
   let summary = "Cast a register-resident tensor from one type to another";
   let description = [{
     Change the type of elements in the register-resident tensor without

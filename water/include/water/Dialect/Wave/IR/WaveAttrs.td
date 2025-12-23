@@ -104,6 +104,7 @@ def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
         NORMAL_FORM_FUNC_BOUNDARY, NORMAL_FORM_OP_TYPES
     ], "full_types">;
 
+// When anything changes below, also update the C and Python API.
 def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
   I32BitEnumAttrCaseNone<"None", "none">,
   // Bits.
@@ -124,6 +125,11 @@ def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
 def WaveNormalFormAttr
     : EnumAttr<WaveDialect, WaveNormalFormEnum, "normal_form"> {
   let assemblyFormat = "`<` $value `>`";
+  let extraClassDeclaration = [{
+    static unsigned getLastSetBit() {
+      return ::llvm::bit_width_constexpr<unsigned>(}] # !cast<BitEnumBase>(WaveNormalFormEnum).validBits # [{) - 1;
+    }
+  }];
 }
 
 //-----------------------------------------------------------------------------
@@ -361,6 +367,19 @@ def WaveSymbolAttr : AttrDef<WaveDialect, "WaveSymbol"> {
   }];
 }
 
+def WaveIterSymbolAttr : AttrDef<WaveDialect, "WaveIterSymbol"> {
+  let mnemonic = "iter";
+  let description = [{
+    Symbol referring to an induction variable that can be used in symbolic
+    expressions in the Wave dialect. Induction variables may have the same
+    name as other symbols without clashing with them.
+  }];
+
+  let parameters =
+      (ins StringRefParameter<"name of the induction variable">:$name);
+  let assemblyFormat = "`<` $name `>`";
+}
+
 def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
   let mnemonic = "index_mapping";
   let description = [{
@@ -384,6 +403,18 @@ def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
 
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
+
+  let extraClassDeclaration = [{
+    // Return a new mapping with all uses of the given input removed.
+    ::wave::WaveIndexMappingAttr removeInput(::mlir::Attribute input) const;
+
+    // Return positions of symbols that are used in any of the expressions in
+    // this mapping. They are not returned in any particular order.
+    ::llvm::SmallVector<unsigned> getUsedSymbolPositions() const;
+
+    // Return a copy of the mapping with unused symbols removed.
+    ::wave::WaveIndexMappingAttr removeUnusedInputs() const;
+  }];
 }
 
 def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {

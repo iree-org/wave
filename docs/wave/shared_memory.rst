@@ -124,4 +124,4 @@ This entire test can be reproduced locally by running the following command.
 
 .. code-block:: python
 
-   pytest -s tests/kernel/wave/memory_test.py
+   pytest -s tests/wave/memory_test.py

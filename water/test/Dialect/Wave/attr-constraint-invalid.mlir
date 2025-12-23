@@ -1,4 +1,4 @@
-// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-constructors --split-input-file --verify-diagnostics
+// RUN: water-opt %s --allow-unregistered-dialect --water-test-wave-dialect-functions --split-input-file --verify-diagnostics
 
 // expected-error @below {{waves_per_block (1) should have 3 elements}}
 #hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
@@ -15,6 +15,13 @@ func.func private @test_num_dimensions_mismatch1() attributes { wave.constraints
                                            mma_type = #wave.mma_kind<f32_16x16x16_f16>,
                                            vector_shapes = {M = "BLOCK_M", N = 64}>
 func.func private @test_num_dimensions_mismatch2() attributes { wave.constraints = [#hw_constraint] }
+
+// -----
+
+#hw_constraint = #wave.hardware_constraint<threads_per_wave = 64>
+#hw_constraint2 = #wave.hardware_constraint<threads_per_wave = 32>
+// expected-error @below {{only one hardware constraint is allowed}}
+func.func private @test_repeated_hw_constraint() attributes { wave.constraints = [#hw_constraint, #hw_constraint2] }
 
 // -----
 

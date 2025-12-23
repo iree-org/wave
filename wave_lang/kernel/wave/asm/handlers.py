@@ -11,12 +11,18 @@ This module contains handlers for various MLIR operations that are encountered
 during the IR traversal for assembly code generation.
 """
 
+import operator
+
+import sympy
+
 from wave_lang.support.ir_imports import (
     affine_d,
     amdgpu_d,
     arith_d,
     gpu_d,
     memref_d,
+    rocdl_d,
+    scf_d,
     stream_d,
     vector_d,
 )
@@ -29,6 +35,7 @@ from .utils import (
     split_const_dynamic,
 )
 from .expression_emitter import ExprEmitter
+from .gather_to_shared import G2SHandler
 
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
 
@@ -51,6 +58,8 @@ class OperationHandlers:
         self.walker = walker
         # Per-kernel expression emitters with CSE (one per kernel)
         self._expr_emitters_by_kernel = {}
+        # Gather-to-LDS handler (composition)
+        self.g2s = G2SHandler(self)
 
     def _get_expr_emitter(self, kernel_info: KernelInfo) -> ExprEmitter:
         """
@@ -105,6 +114,56 @@ class OperationHandlers:
             # Handle float-like types that represent exact integers
             kernel_info.index_env[str(operation.result)] = int(value)
 
+    def _handle_arith_binop(self, operation, kernel_info: KernelInfo, op_func):
+        """Handle binary arithmetic operations (addi, muli) in index_env.
+
+        Args:
+            operation: The MLIR operation (AddIOp or MulIOp)
+            kernel_info: Kernel info containing index_env
+            op_func: Binary function to apply (e.g., operator.add, operator.mul)
+        """
+        lhs = kernel_info.index_env.get(str(operation.operands[0]))
+        rhs = kernel_info.index_env.get(str(operation.operands[1]))
+
+        # Operands not tracked - can't compute result
+        if lhs is None or rhs is None:
+            return
+
+        # Convert symbolic strings (tid_x, wgid_x, etc.) to SymPy symbols
+        if isinstance(lhs, str):
+            lhs = sympy.Symbol(lhs)
+        if isinstance(rhs, str):
+            rhs = sympy.Symbol(rhs)
+
+        if isinstance(lhs, (int, sympy.Expr)) and isinstance(rhs, (int, sympy.Expr)):
+            kernel_info.index_env[str(operation.result)] = op_func(lhs, rhs)
+
+    def handle_arith_addi_op(self, operation: arith_d.AddIOp, kernel_info: KernelInfo):
+        """Handle arith.addi - track integer addition in index_env."""
+        self._handle_arith_binop(operation, kernel_info, operator.add)
+
+    def handle_arith_muli_op(self, operation: arith_d.MulIOp, kernel_info: KernelInfo):
+        """Handle arith.muli - track integer multiplication in index_env."""
+        self._handle_arith_binop(operation, kernel_info, operator.mul)
+
+    def handle_arith_index_cast_op(
+        self, operation: arith_d.IndexCastOp, kernel_info: KernelInfo
+    ):
+        """Handle arith.index_cast operations - propagate values through cast.
+
+        Propagates integers, SymPy expressions, and symbolic strings (tid_x, etc.).
+        """
+        result_ssa = str(operation.result)
+        src_ssa = str(operation.operands[0])
+
+        src_val = kernel_info.index_env.get(src_ssa)
+        if src_val is None:
+            return
+
+        # Propagate numeric values and symbolic strings
+        if isinstance(src_val, (int, sympy.Expr, str)):
+            kernel_info.index_env[result_ssa] = src_val
+
     def handle_gpu_thread_id_op(
         self, operation: gpu_d.ThreadIdOp, kernel_info: KernelInfo
     ):
@@ -155,6 +214,8 @@ class OperationHandlers:
         num_dimensions: int,
     ) -> list:
         """Extract dimension values from the first num_dimensions operands."""
+        import sympy
+
         dimension_values = []
 
         for i in range(num_dimensions):
@@ -163,6 +224,9 @@ class OperationHandlers:
                 operand_value = kernel_info.index_env.get(operand_ssa)
 
                 if isinstance(operand_value, int):
+                    dimension_values.append(operand_value)
+                elif isinstance(operand_value, sympy.Expr):
+                    # SymPy expressions from previous affine.apply results
                     dimension_values.append(operand_value)
                 elif operand_value in [
                     "tid_x",
@@ -191,6 +255,8 @@ class OperationHandlers:
         num_symbols: int,
     ) -> list:
         """Extract symbol values from the next num_symbols operands."""
+        import sympy
+
         symbol_values = []
 
         for i in range(num_symbols):
@@ -201,6 +267,9 @@ class OperationHandlers:
 
                 if isinstance(operand_value, int):
                     symbol_values.append(operand_value)
+                elif isinstance(operand_value, sympy.Expr):
+                    # SymPy expressions from previous affine.apply results
+                    symbol_values.append(operand_value)
                 elif operand_value in [
                     "tid_x",
                     "tid_y",
@@ -210,6 +279,13 @@ class OperationHandlers:
                     "wgid_z",
                 ]:
                     # Thread IDs and workgroup IDs can be used as symbol values
+                    symbol_values.append(operand_value)
+                elif (
+                    isinstance(operand_value, str)
+                    and operand_value.startswith("s")
+                    and operand_value[1:].isdigit()
+                ):
+                    # SGPR references (e.g., "s4" for loop counter) can be used as symbol values
                     symbol_values.append(operand_value)
                 else:
                     # If we can't resolve the symbol value, we can't simplify
@@ -323,6 +399,38 @@ class OperationHandlers:
         # Emit load instruction
         self._emit_load_instruction(operation, kernel_info, memref_ssa, indices)
 
+    def handle_vector_extract_strided_slice_op(
+        self, operation: vector_d.ExtractStridedSliceOp, kernel_info: KernelInfo
+    ):
+        """Handle vector.extract_strided_slice operations - extract subset of source registers."""
+        # Get source SSA value and its registers
+        source_ssa = str(operation.operands[0])
+        source_regs = self.walker.ssa_to_vgpr.get(source_ssa)
+
+        if not source_regs:
+            # Source not tracked - skip silently
+            return
+
+        # Extract offset and size from operation attributes
+        offsets = operation.attributes["offsets"]
+        sizes = operation.attributes["sizes"]
+
+        # Parse the offset value (should be a single integer for 1D extract)
+        offset_val = int(str(offsets).split("[")[1].split("]")[0])
+        size_val = int(str(sizes).split("[")[1].split("]")[0])
+
+        # Extract the appropriate subset of registers
+        if size_val == 1:
+            # Single scalar extract - return just the one register as a tuple
+            extracted_reg = source_regs[offset_val]
+            result_regs = (extracted_reg,)
+        else:
+            # Multi-element extract - return a slice
+            result_regs = source_regs[offset_val : offset_val + size_val]
+
+        result_ssa = str(operation.result)
+        self.walker.ssa_to_vgpr[result_ssa] = result_regs
+
     def handle_vector_store_op(
         self, operation: vector_d.StoreOp, kernel_info: KernelInfo
     ):
@@ -421,40 +529,61 @@ class OperationHandlers:
 
     def handle_mfma_op(self, operation: amdgpu_d.MFMAOp, kernel_info: KernelInfo):
         """Handle amdgpu.mfma operations - emit MFMA instruction with proper input sourcing."""
-        # Skip if MFMA has already been emitted
-        if self.walker._mfma_emitted:
-            return
-
         # Get the operand SSA values from the MFMA operation
         # MFMA format: %result = amdgpu.mfma %lhs * %rhs + %acc
-        if len(operation.operands) >= 2:
+        if len(operation.operands) >= 3:
             lhs_ssa = str(operation.operands[0])  # First operand (LHS of multiply)
             rhs_ssa = str(operation.operands[1])  # Second operand (RHS of multiply)
+            acc_ssa = str(operation.operands[2])  # Third operand (accumulator)
 
-            # Map the SSA values to their corresponding LDS-loaded register pairs
-            lhs_pair = self.walker._lds_last_pair.get(lhs_ssa)
-            rhs_pair = self.walker._lds_last_pair.get(rhs_ssa)
+            # Map the SSA values to their corresponding register pairs using unified tracking
+            lhs_pair = self.walker.ssa_to_vgpr.get(lhs_ssa)
+            rhs_pair = self.walker.ssa_to_vgpr.get(rhs_ssa)
 
             if lhs_pair and rhs_pair:
-                self.walker.emitter.emit_mfma_16x16x16_f16(lhs_pair, rhs_pair)
+                # Determine which accumulator to use
+                acc_quad = None
+
+                # Check if accumulator is from a previous MFMA result or vector
+                acc_regs = self.walker.ssa_to_vgpr.get(acc_ssa)
+                if acc_regs:
+                    # Accumulator from a previous operation
+                    if len(acc_regs) == 2:
+                        # Pair - extend to quad
+                        acc_quad = (
+                            acc_regs[0],
+                            acc_regs[0] + 1,
+                            acc_regs[0] + 2,
+                            acc_regs[0] + 3,
+                        )
+                    elif len(acc_regs) == 4:
+                        # Already a quad
+                        acc_quad = acc_regs
+
+                self.walker.emitter.emit_mfma_16x16x16_f16(lhs_pair, rhs_pair, acc_quad)
 
                 # MFMA now writes directly to VGPRs (not AGPRs), so result is already in VGPRs
                 result_quad = self.walker.emitter.current_vgpr_quad
 
-                # Free input pairs
-                self.walker.emitter.vgpr_allocator.free_v_pair(lhs_pair)
-                self.walker.emitter.vgpr_allocator.free_v_pair(rhs_pair)
+                # Track this MFMA result in unified SSA→VGPR map
+                result_ssa = str(operation.result)
+                self.walker.ssa_to_vgpr[result_ssa] = result_quad
 
-                self.walker.last_regs = list(result_quad)
+                # Free input pairs (unless they're from a previous MFMA or loop accumulator)
+                # Check if lhs/rhs are from loop accumulator or MFMA results (v4-v7 range)
+                if lhs_pair[0] < 4 or lhs_pair[0] > 7:
+                    self.walker.emitter.vgpr_allocator.free_v_pair(lhs_pair)
+                if rhs_pair[0] < 4 or rhs_pair[0] > 7:
+                    self.walker.emitter.vgpr_allocator.free_v_pair(rhs_pair)
+
                 self.walker.last_vmem_ticket = None  # Data now from MFMA, not VMEM
-                self.walker._mfma_emitted = True
                 return
 
         # If we reach here, MFMA inputs weren't properly set up
         raise RuntimeError(
             f"MFMA operation encountered but inputs not available. "
             f"Operands: {[str(op) for op in operation.operands]}, "
-            f"LDS pairs: {list(self.walker._lds_last_pair.keys())}"
+            f"Available SSA→VGPR mappings: {list(self.walker.ssa_to_vgpr.keys())}"
         )
 
     def handle_barrier_op(self, operation: gpu_d.BarrierOp, kernel_info: KernelInfo):
@@ -464,7 +593,7 @@ class OperationHandlers:
     def handle_lds_barrier_op(
         self, operation: amdgpu_d.LDSBarrierOp, kernel_info: KernelInfo
     ):
-        """Handle amdgpu.lds_barrier operations - emit LDS synchronization barrier."""
+        """Handle amdgpu.lds_barrier - emit lgkmcnt(0) + s_barrier."""
         self.walker.emitter.emit_barrier()
 
     def handle_view_op(self, operation: memref_d.ViewOp, kernel_info: KernelInfo):
@@ -517,31 +646,31 @@ class OperationHandlers:
         """Emit an LDS load operation using MLIR's 2D memref indices.
 
         Uses the byte_offset_expr computed from MLIR's actual indices rather than
-        forcing lane-linear addressing.
+        forcing lane-linear addressing. The MLIR indices already encode the correct
+        addressing for both single-wave and multi-wave modes, including any swizzle
+        patterns needed for cache efficiency.
         """
+        import sympy
 
-        # If LDS address wasn't established by a prior store, compute it from the passed-in expression
-        if memref_ssa not in self.walker._lds_addr_vreg:
-            # Add view base offset if present
-            vbase_val = self.walker._lds_view_base_bytes.get(memref_ssa, 0)
-            if vbase_val:
-                byte_offset_expr = byte_offset_expr + sympy.Integer(vbase_val)
+        # Add view base offset if present
+        vbase_val = self.walker._lds_view_base_bytes.get(memref_ssa, 0)
 
-            # Materialize the byte offset expression into a VGPR for LDS addressing (with CSE)
-            addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
-            addr_v = int(addr_reg[1:])
-            self.walker._lds_addr_vreg[memref_ssa] = addr_v
+        # Use MLIR-derived expression for all cases (single-wave, multi-wave, g2s, non-g2s)
+        # The MLIR index expression already contains the correct addressing formula
+        if vbase_val:
+            byte_offset_expr = byte_offset_expr + sympy.Integer(vbase_val)
+
+        # Materialize the byte offset expression into a VGPR for LDS addressing (with CSE)
+        addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
+        addr_v = int(addr_reg[1:])
 
         # Emit LDS read into allocated VGPR pairs
-        addr_v = self.walker._lds_addr_vreg[memref_ssa]
         pair = self.walker.emitter.vgpr_allocator.alloc_v_pair()
         self.walker.emitter.emit_lds_read_b64(pair, addr_v)
 
-        # Track the loaded data by result SSA value (for MFMA operand matching)
+        # Track the loaded data in unified SSA→VGPR map
         result_ssa = str(operation.results[0])
-        self.walker._lds_last_pair[result_ssa] = pair
-        self.walker._lds_read_order.append(result_ssa)
-        self.walker.last_regs = [pair]
+        self.walker.ssa_to_vgpr[result_ssa] = pair
 
     def _ensure_global_load_srd(self, kernel_info, memref_ssa):
         """Ensure SRD is set up for a global load."""
@@ -570,15 +699,29 @@ class OperationHandlers:
             raise ValueError(f"Cannot parse vector type for global load: {e}")
 
     def _emit_buffer_load_and_track(
-        self, kernel_info, memref_ssa, vector_bytes, voffset_v, instoffset
+        self, operation, kernel_info, memref_ssa, vector_bytes, voffset_v, instoffset
     ):
         """Emit buffer load instruction and track loaded registers and ticket."""
-        self.walker.last_regs, self.walker.last_vmem_ticket = (
-            self.walker.emitter.emit_load(
-                memref_ssa, vector_bytes, voffset_v, instoffset
-            )
+        loaded_regs, vmem_ticket = self.walker.emitter.emit_load(
+            memref_ssa, vector_bytes, voffset_v, instoffset
         )
-        self.walker.last_vec_bytes = vector_bytes
+
+        # emit_load returns a list of register tuples
+        # For single load (8/16 bytes), extract the tuple from the list
+        if isinstance(loaded_regs, list) and len(loaded_regs) == 1:
+            regs_tuple = loaded_regs[0]
+        elif isinstance(loaded_regs, list):
+            # Multiple loads - keep as list for now
+            regs_tuple = loaded_regs
+        else:
+            regs_tuple = loaded_regs
+
+        # Store in unified SSA→VGPR tracking
+        result_ssa = str(operation.results[0])
+        self.walker.ssa_to_vgpr[result_ssa] = regs_tuple
+
+        # Keep vmem_ticket for wait count computation
+        self.walker.last_vmem_ticket = vmem_ticket
 
     def _emit_global_load(self, operation, kernel_info, memref_ssa, byte_offset_expr):
         """Emit a global buffer load operation."""
@@ -606,7 +749,7 @@ class OperationHandlers:
         vector_bytes = self._parse_vector_load_type(operation)
 
         self._emit_buffer_load_and_track(
-            kernel_info, memref_ssa, vector_bytes, voffset_v, instoffset
+            operation, kernel_info, memref_ssa, vector_bytes, voffset_v, instoffset
         )
 
         # Free voffset only if it was a temporary (not from cache)
@@ -692,52 +835,50 @@ class OperationHandlers:
         return int(addr_reg[1:])
 
     def _extract_source_registers(self, vector_bytes):
-        """Extract source registers from last_regs based on vector size."""
-        first = (
-            self.walker.last_regs[0]
-            if isinstance(self.walker.last_regs, list)
-            else self.walker.last_regs
-        )
+        """Extract source registers from current store value based on vector size."""
+        regs = self._current_store_regs
+
+        # regs should already be a tuple of register indices from ssa_to_vgpr
+        # e.g., (8, 9) for a pair, (4, 5, 6, 7) for a quad
 
         if vector_bytes == 4:
-            # Single register (scalar)
-            return first[0] if isinstance(first, tuple) else first
+            # Single register (4 bytes) - extract first element
+            if isinstance(regs, (tuple, list)) and len(regs) > 0:
+                return regs[0]
+            elif isinstance(regs, int):
+                return regs
+            else:
+                raise ValueError(f"Expected register(s) for 4-byte store, got: {regs}")
         elif vector_bytes == 8:
-            # Register pair
-            return first if isinstance(first, tuple) else (first[0], first[1])
+            # Register pair (8 bytes)
+            if isinstance(regs, (tuple, list)) and len(regs) == 2:
+                return regs  # Already a pair
+            else:
+                raise ValueError(
+                    f"Expected 2-element tuple for 8-byte store, got {len(regs) if isinstance(regs, (tuple, list)) else 'non-tuple'}: {regs}"
+                )
         elif vector_bytes == 16:
-            # Register quad
-            return (
-                first
-                if isinstance(first, tuple)
-                else (first[0], first[1], first[2], first[3])
-            )
+            # Register quad (16 bytes)
+            if isinstance(regs, (tuple, list)) and len(regs) == 4:
+                return regs  # Already a quad
+            else:
+                raise ValueError(
+                    f"Expected 4-element tuple for 16-byte store, got {len(regs) if isinstance(regs, (tuple, list)) else 'non-tuple'}: {regs}"
+                )
         else:
             raise NotImplementedError(
                 f"LDS stores of {vector_bytes} bytes not yet supported. "
                 f"Supported sizes: 4 (ds_write_b32), 8 (ds_write_b64), 16 (ds_write_b128)"
             )
 
-    def _emit_ds_write_and_track(self, memref_ssa, addr_v, src_regs, vector_bytes):
-        """Emit ds_write instruction and track state for later reads."""
+    def _emit_ds_write(self, memref_ssa, addr_v, src_regs, vector_bytes):
+        """Emit ds_write instruction for LDS stores."""
         if vector_bytes == 4:
             self.walker.emitter.emit_lds_write_b32(addr_v, src_regs)
-            self.walker._lds_addr_vreg[memref_ssa] = addr_v
-            self.walker._lds_last_pair[memref_ssa] = (
-                src_regs,
-                src_regs,
-            )  # Store as pair for consistency
         elif vector_bytes == 8:
             self.walker.emitter.emit_lds_write_b64(addr_v, src_regs)
-            self.walker._lds_addr_vreg[memref_ssa] = addr_v
-            self.walker._lds_last_pair[memref_ssa] = src_regs
         elif vector_bytes == 16:
             self.walker.emitter.emit_lds_write_b128(addr_v, src_regs)
-            self.walker._lds_addr_vreg[memref_ssa] = addr_v
-            self.walker._lds_last_pair[memref_ssa] = (
-                src_regs[0],
-                src_regs[1],
-            )  # Store first pair
 
     def _emit_lds_store(
         self,
@@ -762,7 +903,7 @@ class OperationHandlers:
 
                 self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({threshold})"))
         src_regs = self._extract_source_registers(vector_bytes)
-        self._emit_ds_write_and_track(memref_ssa, addr_v, src_regs, vector_bytes)
+        self._emit_ds_write(memref_ssa, addr_v, src_regs, vector_bytes)
 
     def _ensure_global_store_srd(self, kernel_info, memref_ssa):
         """Ensure SRD is set up for a global store."""
@@ -778,29 +919,14 @@ class OperationHandlers:
             arg_idx = binding_use.arg_index if binding_use.arg_index >= 0 else 0
             self.walker.emitter.ensure_srd_for_subspan(memref_ssa, arg_idx, limit_bytes)
 
-    def _pop_next_scalar_register(self):
-        """Pop and return the next scalar register from the queue, updating state."""
-        # Normalize to list
-        src_regs = (
-            self.walker.last_regs
-            if isinstance(self.walker.last_regs, list)
-            else [self.walker.last_regs]
-        )
-        is_multi_element = len(src_regs) > 1
+    def _get_scalar_register_for_store(self):
+        """Get the scalar register to store (first element of current store value)."""
+        src_regs = self._current_store_regs
 
-        # Pop first element
+        # Get first element
         src_v = src_regs[0]
         if not isinstance(src_v, int):
             src_v = src_v[0] if isinstance(src_v, tuple) else src_v
-
-        # Update queue
-        remaining = src_regs[1:]
-        if remaining:
-            self.walker.last_regs = remaining
-        else:
-            self.walker.last_regs = None
-            if is_multi_element:
-                self.walker._mfma_stores_emitted = True
 
         return src_v
 
@@ -857,8 +983,8 @@ class OperationHandlers:
                 self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({threshold})"))
 
         if num_elements == 1:
-            # Scalar store: pop register from queue, emit, free
-            src_v = self._pop_next_scalar_register()
+            # Scalar store: get first register, emit, free
+            src_v = self._get_scalar_register_for_store()
             self.walker.emitter.emit_store_scalar_with_vindex(
                 memref_ssa, src_v, voffset_v, instoffset
             )
@@ -869,7 +995,11 @@ class OperationHandlers:
         else:
             # Vectorized store: emit all elements at once
             self.walker.emitter.emit_store_with_regs(
-                memref_ssa, self.walker.last_regs, vector_bytes, voffset_v, instoffset
+                memref_ssa,
+                self._current_store_regs,
+                vector_bytes,
+                voffset_v,
+                instoffset,
             )
             if voffset_is_temp:
                 self.walker.emitter.vgpr_allocator.free_v(voffset_v)
@@ -894,11 +1024,19 @@ class OperationHandlers:
             self._parse_store_type_info(operation)
         )
 
-        # Check if we have data to store
-        if not self.walker.last_regs:
+        # Get the SSA value being stored (first operand)
+        value_ssa = str(operation.operands[0])
+
+        # Look up the registers containing the value to store
+        value_regs = self.walker.ssa_to_vgpr.get(value_ssa)
+        if not value_regs:
             raise RuntimeError(
-                "Store encountered without a preceding load to provide data regs."
+                f"Store operation references SSA value {value_ssa} but it's not in ssa_to_vgpr. "
+                f"Available: {list(self.walker.ssa_to_vgpr.keys())}"
             )
+
+        # Store value_regs for extraction in subsequent methods
+        self._current_store_regs = value_regs
 
         # Check address space to determine LDS vs global
         if self._is_lds_store_memref(operation):
@@ -924,3 +1062,177 @@ class OperationHandlers:
             num_elements,
             vector_bytes,
         )
+
+    def handle_scf_for_op(self, operation: scf_d.ForOp, kernel_info: KernelInfo):
+        """
+        Handle scf.for operations - emit loop assembly code.
+
+        Args:
+            operation: The scf.for operation
+            kernel_info: Kernel information for context
+        """
+        emitter = self.walker.emitter
+
+        # Extract loop bounds
+        lower_bound_ssa = str(operation.lowerBound)
+        upper_bound_ssa = str(operation.upperBound)
+        step_ssa = str(operation.step)
+
+        # Get bounds from index_env (should be constants)
+        if lower_bound_ssa not in kernel_info.index_env:
+            raise ValueError(
+                f"Loop lower bound {lower_bound_ssa} not found in index_env"
+            )
+        if upper_bound_ssa not in kernel_info.index_env:
+            raise ValueError(
+                f"Loop upper bound {upper_bound_ssa} not found in index_env"
+            )
+        if step_ssa not in kernel_info.index_env:
+            raise ValueError(f"Loop step {step_ssa} not found in index_env")
+        lower_bound = kernel_info.index_env[lower_bound_ssa]
+        upper_bound = kernel_info.index_env[upper_bound_ssa]
+        step = kernel_info.index_env[step_ssa]
+
+        # Begin loop structure
+        loop_ctx = emitter.begin_loop(lower_bound, upper_bound, step)
+
+        # Get induction variable and map it to the loop counter SGPR
+        loop_body = operation.body
+        induction_var = loop_body.arguments[0]
+        induction_var_ssa = str(induction_var)
+        loop_counter_sgpr = loop_ctx["counter_sgpr"]
+
+        # Store mapping from SSA induction variable to SGPR counter for use in expressions
+        # This will be used when affine.apply operations reference the induction variable
+        kernel_info.index_env[induction_var_ssa] = f"s{loop_counter_sgpr}"
+        loop_ctx["induction_var_ssa"] = induction_var_ssa
+
+        # Allocate and initialize VGPRs for iter_args (accumulators)
+        from .instructions import VMovB32
+
+        iter_arg_vgprs = []
+
+        for i, arg in enumerate(loop_body.arguments[1:]):  # Skip induction variable
+            # Allocate quad for accumulator (MFMA result)
+            quad = emitter.vgpr_allocator.alloc_v_quad()
+            iter_arg_vgprs.append(quad)
+
+            # Track in unified SSA→VGPR map
+            arg_ssa = str(arg)
+            self.walker.ssa_to_vgpr[arg_ssa] = quad
+
+            # Initialize accumulator to 0.0 before loop
+            emitter.emit(f"    # Initialize accumulator {i} to 0.0")
+            for vreg in quad:
+                emitter.emit_instruction(VMovB32(vreg, 0))
+
+        loop_ctx["iter_arg_vgprs"] = iter_arg_vgprs
+
+        # Emit loop header and conditional branch
+        emitter.emit_loop_header(loop_ctx)
+
+        # Walk loop body
+        self.walker._walk_block(loop_body, kernel_info)
+
+        # Emit loop latch (increment and branch back)
+        emitter.emit_loop_latch(loop_ctx)
+
+        # End loop
+        emitter.end_loop()
+
+        # Map scf.for results to the final values of iter_args
+        # The results of scf.for are the final values after the loop completes
+        for i, result in enumerate(operation.results):
+            result_ssa = str(result)
+            if i < len(iter_arg_vgprs):
+                self.walker.ssa_to_vgpr[result_ssa] = iter_arg_vgprs[i]
+
+    # Note: gather_to_lds handlers moved to gather_to_shared.py (G2SMixin)
+
+    def handle_memref_cast_op(
+        self, operation: memref_d.CastOp, kernel_info: KernelInfo
+    ):
+        """Handle memref.cast operations - track source memref mapping.
+
+        MLIR format:
+            %result = memref.cast %src : memref<...> to memref<...>
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        # Track the cast chain for SRD lookup
+        if not hasattr(self.walker, "_memref_cast_sources"):
+            self.walker._memref_cast_sources = {}
+        self.walker._memref_cast_sources[result_ssa] = source_ssa
+
+    def handle_memref_reinterpret_cast_op(
+        self, operation: memref_d.ReinterpretCastOp, kernel_info: KernelInfo
+    ):
+        """Handle memref.reinterpret_cast operations - track source memref mapping.
+
+        MLIR format:
+            %result = memref.reinterpret_cast %src to offset: [...], sizes: [...], strides: [...]
+                : memref<...> to memref<...>
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        # Track the cast chain for SRD lookup
+        if not hasattr(self.walker, "_memref_cast_sources"):
+            self.walker._memref_cast_sources = {}
+        self.walker._memref_cast_sources[result_ssa] = source_ssa
+
+    def handle_fat_raw_buffer_cast_op(
+        self, operation: amdgpu_d.FatRawBufferCastOp, kernel_info: KernelInfo
+    ):
+        """Handle amdgpu.fat_raw_buffer_cast - track source memref and cache swizzle stride."""
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        # Extract cacheSwizzleStride from operand 2 if present
+        cache_swizzle_stride = None
+        if len(operation.operands) >= 3:
+            defining_op = operation.operands[2].owner.opview
+            if isinstance(defining_op, arith_d.ConstantOp) and hasattr(
+                defining_op.value, "value"
+            ):
+                cache_swizzle_stride = int(defining_op.value.value)
+
+        # Track for gather_to_lds SRD tracing
+        if not hasattr(self.walker, "_fat_buffer_sources"):
+            self.walker._fat_buffer_sources = {}
+        info = {"source_ssa": source_ssa}
+        if cache_swizzle_stride is not None:
+            info["cache_swizzle_stride"] = cache_swizzle_stride
+        self.walker._fat_buffer_sources[result_ssa] = info
+
+    def handle_readfirstlane_op(
+        self, operation: rocdl_d.ReadfirstlaneOp, kernel_info: KernelInfo
+    ):
+        """Handle rocdl.readfirstlane - propagate value for uniform broadcast.
+
+        The expression is preserved as-is (not evaluated) because each wavefront
+        has different tid values. v_readfirstlane is emitted during code generation.
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.operands[0])
+
+        if source_ssa in kernel_info.index_env:
+            kernel_info.index_env[result_ssa] = kernel_info.index_env[source_ssa]
+
+    def handle_s_waitcnt_op(
+        self, operation: rocdl_d.SWaitcntOp, kernel_info: KernelInfo
+    ):
+        """Handle rocdl.s.waitcnt - emit wait count instruction.
+
+        Encoding (gfx9+): bits 0-3 = vmcnt (0 = wait for all, 15 = no wait)
+        """
+        from .instructions import SWaitcnt
+
+        waitcnt_value = int(operation.bitfield.value)
+        vmcnt = waitcnt_value & 0xF  # 4-bit field: 0-15
+
+        # vmcnt=15 means "no wait" (max 4-bit value), so only emit if < 15
+        if vmcnt < 15:
+            self.walker.emitter.emit_instruction(SWaitcnt(f"vmcnt({vmcnt})"))
+            self.walker.emitter.ticketing.observe_vmem_wait(vmcnt)

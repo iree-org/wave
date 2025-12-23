@@ -75,7 +75,7 @@ def test_trace_py_arithmetic():
     print_trace(trace)
     # CHECK: %a
     # CHECK-NEXT: %read
-    # CHECK-SAME: (%a, None, None, (), None, None, None, None)
+    # CHECK-SAME: (%a, None, None, (), None, MemoryAccessFlags.NONE, None, None, None)
     # CHECK-NEXT: %add
     # CHECK-SAME: (%read, %read)
     # CHECK-NEXT: %sub
@@ -83,7 +83,7 @@ def test_trace_py_arithmetic():
     # CHECK-NEXT: %neg
     # CHECK-SAME: (%sub,)
     # CHECK-NEXT: %write
-    # CHECK-SAME: (%neg, %a, 4, None, (), None, None, None)
+    # CHECK-SAME: (%neg, %a, 4, None, (), None, MemoryAccessFlags.NONE, None, None)
     # CHECK-NEXT: return None
 
     # CHECK: Custom format:
@@ -92,7 +92,7 @@ def test_trace_py_arithmetic():
     # CHECK-NEXT: add(lhs=read, rhs=read)
     # CHECK-NEXT: sub(lhs=add, rhs=read)
     # CHECK-NEXT: neg(arg=sub)
-    # CHECK-NEXT: write(register_=neg, memory=a, elements_per_thread=4, mapping_dynamic_vals=())
+    # CHECK-NEXT: write(register_=neg, memory=a, elements_per_thread=4, mapping_dynamic_vals=(), flags=MemoryAccessFlags.NONE)
     # CHECK-NEXT: output
 
 

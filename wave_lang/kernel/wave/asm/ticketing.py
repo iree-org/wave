@@ -5,6 +5,9 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """
 Ticket-based tracking for VMEM and LGKM operations to enable optimal wait placement.
+
+The ticketing system tracks outstanding memory operations and enables coalescing
+of s_waitcnt instructions to minimize unnecessary waits while ensuring correctness.
 """
 
 from typing import Optional
@@ -163,3 +166,23 @@ class Ticketing:
             or threshold < self._lgkm_last_wait_threshold
         ):
             self._lgkm_last_wait_threshold = threshold
+
+    def observe_vmem_wait(self, threshold: int) -> None:
+        """
+        Record an externally emitted VMEM wait.
+
+        This method updates the internal coalescing state to reflect that a
+        vmcnt(threshold) wait has been issued by external code (e.g., MLIR's
+        rocdl.s.waitcnt).
+
+        After observing a wait, subsequent VMEM operations won't need to wait
+        again unless new VMEM operations are issued first.
+
+        Args:
+            threshold: The vmcnt threshold that was waited on (0 for full drain)
+        """
+        if (
+            self._vmem_last_wait_threshold is None
+            or threshold < self._vmem_last_wait_threshold
+        ):
+            self._vmem_last_wait_threshold = threshold

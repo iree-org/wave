@@ -13,23 +13,64 @@ import sys
 from typing import TYPE_CHECKING, Callable, Sequence
 import sympy
 import argparse
+from pathlib import Path
+
+if __name__ == "__main__":
+    # Add parent directory to sys.path to enable relative imports when running standalone
+    # This allows importing water_mlir from ../water_mlir/ as if it were a relative import
+    _current_file = Path(__file__).resolve()
+    _parent_dir = str(_current_file.parent.parent)  # Go up to wave_lang/kernel/wave/
+    if _parent_dir not in sys.path:
+        sys.path.append(_parent_dir)
 
 
 if TYPE_CHECKING:
     from wave_lang.kernel._support.tracing import CapturedTrace
     from wave_lang.kernel.wave.compile_options import WaveCompileOptions
     from wave_lang.kernel.wave.constraints import Constraint
-    from wave_lang.kernel.lang.wave_types import Memory, Register
+    from wave_lang.kernel.lang.wave_types import Memory, Register, IndexSymbol
+    from wave_lang.kernel._support.indexing import IndexSequence
     from wave_lang.kernel._support import dtype
     from wave_lang.kernel.ops.wave_ops import *
 
 from wave_lang.support.location_config import LocationCaptureLevel
+from wave_lang.kernel.lang.wave_types import Memory, Register
+from wave_lang.kernel._support.tracing import CapturedTrace
+from wave_lang.kernel.wave.compile_options import WaveCompileOptions
+from wave_lang.kernel._support.indexing import safe_subs
+from wave_lang.kernel.wave.utils.symbol_utils import get_induction_symbol
+
+from wave_lang.kernel.ops.wave_ops import (
+    Allocate,
+    ExtractSlice,
+    get_custom,
+    GetResult,
+    IterArg,
+    Iterate,
+    MMA,
+    NewRegister,
+    Output,
+    Placeholder,
+    SharedMemoryBarrier,
+    Write,
+)
 from wave_lang.kernel.wave.constraints import (
-    WorkgroupConstraint,
-    HardwareConstraint,
-    WaveConstraint,
-    TilingConstraint,
+    Constraint,
     DeviceConstraint,
+    HardwareConstraint,
+    TilingConstraint,
+    WaveConstraint,
+    WorkgroupConstraint,
+)
+from wave_lang.kernel.lang.global_symbols import (
+    GLOBAL_ADDRESS_SPACE,
+    SHARED_ADDRESS_SPACE,
+)
+
+assert "iree" not in sys.modules, (
+    "IREE was transitively imported into the water emitter, "
+    + "which will lead to MLIR library clashes. "
+    + "Please clean up the import list so as not to import IREE."
 )
 
 try:
@@ -64,6 +105,7 @@ try:
     from water_mlir.water_mlir.dialects import func
     from water_mlir.water_mlir.dialects import wave
     from water_mlir.water_mlir.dialects import amdgpu
+    from water_mlir.water_mlir.dialects.transform import interpreter
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
@@ -133,9 +175,6 @@ def _type_to_wave_mlir(
     ctx: ir.Context, type_: type[Register] | type[Memory]
 ) -> ir.Type:
     # TODO: Use WaveTensorType bindings when they exist
-    # TODO: Properly importing this unconditionally at top of the file still
-    #       clashes with IREE bindings.
-    from wave_lang.kernel.lang.wave_types import Memory, Register
 
     # Map Python Wave types to MLIR types
     if issubclass(type_, Register):
@@ -183,12 +222,6 @@ def _parse_input() -> tuple[CapturedTrace, list[Constraint], WaveCompileOptions,
     constraints = unpickled.get("constraints") if isinstance(unpickled, dict) else None
     options = unpickled.get("options") if isinstance(unpickled, dict) else None
     pipeline = unpickled.get("pipeline") if isinstance(unpickled, dict) else None
-
-    # TODO: Properly importing this unconditionally at top of the file still
-    #       clashes with IREE bindings.
-    from wave_lang.kernel._support.tracing import CapturedTrace
-    from wave_lang.kernel.wave.compile_options import WaveCompileOptions
-    from wave_lang.kernel.wave.constraints import Constraint
 
     if not isinstance(trace, CapturedTrace):
         raise SystemExit(
@@ -242,13 +275,13 @@ def _preprocess_symbols(
     """
     Preprocess symbols by:
     (1) adding assumptions about all symbols being positive to later enable more simplifications.
-    (2) replacing `$ARG` prefix of argument symbols (e.g. `ARG0`) by `_ARG` for consistency.
+    (2) replacing `$ARG` prefix of argument symbols (e.g. `ARG0`) by `_Iter_` to match dialect expectations.
     """
     result = {}
     for sym in symbols:
-        # Special case: rename ARG* symbols to _ARG*
+        # Special case: rename $ARG* symbols to _Iter_*
         if sym.name.startswith("$ARG"):
-            new_name = sym.name.replace("$", "_")
+            new_name = sym.name.replace("$ARG", "_Iter_")
             result[sym] = sympy.Symbol(new_name, positive=True)
         else:
             result[sym] = sympy.Symbol(sym.name, positive=True)
@@ -278,28 +311,56 @@ def _symbol_name_to_attribute(name: str) -> ir.Attribute:
 
     if name in INDEX_SYMBOL_MAP:
         return wave.WaveIndexSymbolAttr.get(INDEX_SYMBOL_MAP[name])
+    elif name.startswith("_Iter_"):
+        return wave.WaveIterSymbolAttr.get(name.replace("_Iter_", ""))
     else:
         return wave.WaveSymbolAttr.get(name)
 
 
-def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
+def _build_index_mapping_dict(
+    index: dict[IndexSymbol, IndexSequence], allowed_induction_symbols: set[IndexSymbol]
+) -> ir.DictAttr:
     """
-    Convert a Wave index dictionary into a DictionaryAttr of WaveIndexMappingAttr.
+    Convert a Wave index dictionary into a DictionaryAttr of
+    WaveIndexMappingAttr.
 
-    For MMA, multiple DictAttr objects are assembled into an ArrayAttr
-    (one per operand). For all other nodes a single-element ArrayAttr is used.
+    For MMA, multiple DictAttr objects are assembled into an ArrayAttr (one per
+    operand). For all other nodes a single-element ArrayAttr is used.
+
+    The `allowed_induction_symbols` argument lists induction variable-related
+    symbols that are allowed to be present in the expressions. Other symbols
+    will be removed and a warning will be generated if it is the case.
     """
+
     index_mappings: dict[str, ir.Attribute] = {}
     for dim, exprs in index.items():
-        all_symbols = list(
-            set().union(
-                *[
-                    expr.free_symbols
-                    for expr in [exprs.start, exprs.size, exprs.stride]
-                    if isinstance(expr, sympy.Expr)
-                ]
-            )
+        all_symbols_set = set().union(
+            *[
+                expr.free_symbols
+                for expr in [exprs.start, exprs.size, exprs.stride]
+                if isinstance(expr, sympy.Expr)
+            ]
         )
+        induction_symbols_to_remove = {
+            symbol
+            for symbol in all_symbols_set
+            if symbol.name.startswith("$ARG")
+            and symbol not in allowed_induction_symbols
+        }
+        if induction_symbols_to_remove:
+            induction_symbols_subs = {
+                symbol: sympy.Integer(0) for symbol in induction_symbols_to_remove
+            }
+            # TODO: can we wrap this into a diagnostic?
+            print(
+                f"WARNING: Removing invalid induction symbols {induction_symbols_to_remove} from {index}",
+                file=sys.stderr,
+            )
+            exprs.start = safe_subs(exprs.start, induction_symbols_subs)
+            exprs.size = safe_subs(exprs.size, induction_symbols_subs)
+            exprs.stride = safe_subs(exprs.stride, induction_symbols_subs)
+
+        all_symbols = list(all_symbols_set - induction_symbols_to_remove)
         symbol_mapping = _preprocess_symbols(all_symbols)
         start = _convert_sympy_expr_to_affine_map(exprs.start, symbol_mapping)
         size = _convert_sympy_expr_to_affine_map(exprs.size, symbol_mapping)
@@ -314,26 +375,44 @@ def _build_index_mapping_dict(index: dict) -> ir.DictAttr:
 
 
 def _attach_attributes(node: CustomOp, op: ir.Operation):
-    from wave_lang.kernel.ops.wave_ops import MMA
-
     if getattr(node, "index", None) and isinstance(node.index, dict):
         dict_attrs: list[ir.DictAttr] = []
+
+        # XXX: Collect induction-related symbols that make sense in the current
+        # context; the frontend is buggy and may have these symbols outside of
+        # the respective loops.
+        parent_fx_node = node.fx_node
+        allowed_induction_symbols: set[IndexSymbol] = set()
+        while parent_fx_node := getattr(parent_fx_node.graph, "parent_op", None):
+            parent_custom = get_custom(parent_fx_node)
+            if isinstance(parent_custom, Iterate):
+                induction_symbol = get_induction_symbol(parent_custom.axis)
+                allowed_induction_symbols.add(induction_symbol)
+
         if isinstance(node, MMA):
             # Build one index mapping dict per operand for MMA nodes
             if lhs_index := getattr(node, "lhs_index", None):
-                dict_attrs.append(_build_index_mapping_dict(lhs_index))
+                dict_attrs.append(
+                    _build_index_mapping_dict(lhs_index, allowed_induction_symbols)
+                )
             if rhs_index := getattr(node, "rhs_index", None):
-                dict_attrs.append(_build_index_mapping_dict(rhs_index))
+                dict_attrs.append(
+                    _build_index_mapping_dict(rhs_index, allowed_induction_symbols)
+                )
             if acc_index := getattr(node, "acc_index", None):
-                dict_attrs.append(_build_index_mapping_dict(acc_index))
+                dict_attrs.append(
+                    _build_index_mapping_dict(acc_index, allowed_induction_symbols)
+                )
         else:
-            dict_attrs.append(_build_index_mapping_dict(node.index))
+            dict_attrs.append(
+                _build_index_mapping_dict(node.index, allowed_induction_symbols)
+            )
 
         op.attributes["index"] = ir.ArrayAttr.get(dict_attrs)
 
     if getattr(node, "elements_per_thread", None):
-        op.attributes["wave.elements_per_thread"] = ir.IntegerAttr.get(
-            ir.IntegerType.get_signless(32), node.elements_per_thread
+        op.attributes["elements_per_thread"] = ir.IntegerAttr.get(
+            ir.IntegerType.get_signless(64), node.elements_per_thread
         )
 
     if getattr(node, "bounds", None):
@@ -390,21 +469,6 @@ def _emit_ops_from_graph(
     value_map: dict[fx.Node | fx.Proxy, ir.Value],
     ctx: ir.Context,
 ):
-    # Import wave types locally to avoid clashing with iree bindings
-    from wave_lang.kernel.ops.wave_ops import (
-        get_custom,
-        Allocate,
-        ExtractSlice,
-        GetResult,
-        Output,
-        Placeholder,
-        Write,
-        MMA,
-        NewRegister,
-        Iterate,
-        SharedMemoryBarrier,
-    )
-
     # Emit in original order to preserve dependencies
     for fx_node in graph.nodes:
         node = get_custom(fx_node)
@@ -480,7 +544,7 @@ def _emit_ops_from_graph(
                             else ir.Location.current
                         )
 
-                    mlir_op = op_builder(result_types, axis, carried_values)
+                    mlir_op = op_builder(result_types, axis, carried_values, [])
                     body = ir.Block.create_at_start(
                         mlir_op.regions[0], result_types, result_locs
                     )
@@ -504,12 +568,14 @@ def _emit_ops_from_graph(
                         # create YieldOp
                         YieldOp([value_map[output] for output in outputs])
                 elif isinstance(node, MMA):
-                    if node.mma_type is None:
-                        raise RuntimeError("MMA op missing mma_type")
-                    mma_kind = ir.Attribute.parse(
-                        f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
+                    mma_kind = (
+                        ir.Attribute.parse(
+                            f"#wave.mma_kind<{node.mma_type.name.lower()}>", context=ctx
+                        )
+                        if node.mma_type is not None
+                        else None
                     )
-                    mlir_op = op_builder(result_type, *mlir_operands, mma_kind)
+                    mlir_op = op_builder(result_type, *mlir_operands, kind=mma_kind)
                 elif isinstance(node, Allocate):
                     mlir_op = op_builder(
                         result_type,
@@ -522,7 +588,7 @@ def _emit_ops_from_graph(
                     stride = _convert_to_wave_expr_list_tuple(node.stride)
                     offset = _convert_to_wave_expr_list_tuple(node.offset)
                     mlir_op = op_builder(
-                        result_type, *mlir_operands, size, stride, offset
+                        result_type, *mlir_operands, offset, size, stride
                     )
                 else:
                     try:
@@ -601,24 +667,161 @@ def _emit_wave_constraints(constraint: Constraint) -> ir.Attribute:
     raise NotImplementedError(f"Unsupported constraint type: {type(constraint)}")
 
 
+def _flush_output(module_str: str, diagnostics: list[str]) -> None:
+    output = dill.dumps(
+        {
+            "diagnostics": [d.encode("utf-8") for d in diagnostics],
+            "module": module_str.encode("utf-8"),
+        }
+    )
+    sys.stdout.buffer.write(output)
+    sys.stdout.flush()
+
+
+def _create_kernel_module(
+    ctx: ir.Context,
+    trace: CapturedTrace,
+    constraints: list[Constraint],
+    options: WaveCompileOptions,
+    test_diagnostics: bool = False,
+) -> tuple[ir.Module | None, list[str]]:
+    """Creates an MLIR module containing the kernel function from the captured trace.
+
+    Args:
+        ctx: MLIR context set up with correct dialects.
+        trace: Captured Wave trace to convert.
+        constraints: List of Wave constraints to attach to the function.
+        options: Compilation options including hyperparameters.
+        test_diagnostics: Whether to emit a test diagnostic
+
+    Returns:
+        - The created MLIR module, or None if creation failed.
+        - List of diagnostic messages.
+    """
+    diagnostics: list[str] = []
+
+    def diagnostics_handler(d):
+        diagnostics.append(f"{d.location}: {d.message}")
+        return True
+
+    ctx.attach_diagnostic_handler(diagnostics_handler)
+
+    if options.override_mlir:
+        try:
+            module = ir.Module.parse(options.override_mlir, context=ctx)
+        except ir.MLIRError as e:
+            diagnostics.append(str(e))
+            return None, diagnostics
+        else:
+            return module, diagnostics
+
+    # Keep track of which emitted value stems from what node to wire
+    # arguments correctly.
+    value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
+
+    module = ir.Module.create()
+
+    if test_diagnostics:
+        loc = ir.Location.current
+        loc.emit_error("test error")
+
+    # Collect placeholders from graph
+    placeholders = [n for n in trace.walk() if getattr(n, "op", "") == "placeholder"]
+    top_level_placeholders = [
+        p for p in placeholders if getattr(p, "graph", None) is trace.get_root_graph()
+    ]
+    top_level_names = [p.name for p in top_level_placeholders]
+
+    # Build function argument types from top-level placeholders
+    arg_types = []
+    arg_locs = []
+    for p in top_level_placeholders:
+        c = get_custom(p)
+        t = getattr(c, "_type", None) or getattr(c, "type", None)
+        # At this pipeline stage, symbolic address spaces should
+        # have been handled by Python `promote_placeholders` transformation, and all function arguments
+        # should be global by now (shared memory allocation happens inside the kernel).
+        # Thus, resolve symbolic address spaces from hyperparameters.
+
+        # print(t, t.address_space)
+        if issubclass(t, Memory) and t.address_space in options.subs:
+            # Create a new type with resolved address space
+            resolved_address_space = options.subs[t.address_space]
+            if resolved_address_space != GLOBAL_ADDRESS_SPACE:
+                raise RuntimeError(
+                    f"Unexpected address space in hyperparameters: {t.address_space} -> {resolved_address_space}"
+                )
+            t = Memory[t.symbolic_shape, resolved_address_space, t.dtype]
+        arg_types.append(_type_to_wave_mlir(ctx, t))
+        arg_locs.append(c.location.to_water() if c.location else ir.Location.current)
+
+    # Return type of the function is always empty
+    func_type = ir.FunctionType.get(arg_types, [])
+    with ir.InsertionPoint(module.body):
+        func_op = func.FuncOp("kernel", func_type)
+        # Validate that all non-int mappings are address spaces (either SHARED_ADDRESS_SPACE or GLOBAL_ADDRESS_SPACE).
+        # These mappings can be dropped safely because the information has been encoded in either `arg_types` (for GLOBAL_ADDRESS_SPACE) or LDS allocations inside the kernel (done by `promote_placeholders for SHARED_ADDRESS_SPACE).
+        # print([(str(k), v) for k, v in options.subs.items()])
+        for k, v in options.subs.items():
+            if not isinstance(v, int):
+                if v not in (SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE):
+                    raise RuntimeError(
+                        f"Unexpected non-int mapping in hyperparameters: {k} -> {v}. "
+                        f"Expected all non-int values to be address spaces"
+                    )
+        # Convert the symbols in subs to strings and attach as
+        # WaveHyperparameterAttr to func_op
+        func_op.operation.attributes["wave.hyperparameters"] = (
+            wave.WaveHyperparameterAttr.get(
+                {str(k): v for k, v in options.subs.items() if isinstance(v, int)}
+            )
+        )
+
+        wave_constraints = list(map(_emit_wave_constraints, constraints))
+        array_attr = ir.ArrayAttr.get(wave_constraints)
+        func_op.operation.attributes[wave.WAVE_CONSTRAINTS_ATTR_NAME] = array_attr
+
+        entry_block = ir.Block.create_at_start(func_op.regions[0], arg_types, arg_locs)
+
+        # Map placeholders to function arguments
+        for i, fx_node in enumerate(top_level_placeholders):
+            value_map[fx_node] = entry_block.arguments[i]
+
+        # Subgraphs duplicate the placeholders of surrounding graphs so there
+        # are multiple placeholders representing the same values.
+        # Add mapping for these repeated placeholders as well
+        for nested_placeholder in placeholders:
+            if nested_placeholder in top_level_placeholders:
+                continue
+            if isinstance(get_custom(nested_placeholder), IterArg):
+                continue
+            # With top-level placeholders and iterargs filtered out the remaining
+            # placeholders are duplicates. Find the original one by name
+            if not nested_placeholder.name in top_level_names:
+                raise RuntimeError(
+                    f"Incorrectly structured placeholders in trace: "
+                    f"placeholder '{nested_placeholder.name}' not found in top-level names {top_level_names}."
+                )
+            value_map[nested_placeholder] = value_map[
+                top_level_placeholders[top_level_names.index(nested_placeholder.name)]
+            ]
+
+        with ir.InsertionPoint(entry_block):
+            _emit_ops_from_graph(trace.get_root_graph(), trace, value_map, ctx)
+            func.ReturnOp(operands_=[])
+
+    return module, diagnostics
+
+
 def _emit_from_captured_trace(
-    trace: "CapturedTrace",
+    trace: CapturedTrace,
     constraints: list[Constraint],
     options: WaveCompileOptions,
     pipeline: str,
     test_diagnostics=False,
 ) -> int:
-    from wave_lang.kernel.ops.wave_ops import get_custom, IterArg  # type: ignore
 
-    # keep track of which emitted value stems from what node to wire
-    # arguments correctly
-    value_map: dict[fx.Node | fx.Proxy, ir.Value] = {}
     diagnostics = []
-
-    if pipeline:
-        raise NotImplementedError(
-            "Transform dialect pipelines are not implemented yet."
-        )
 
     enable_debug_info = (
         options.location_capture_config.level is not LocationCaptureLevel.NONE
@@ -632,102 +835,54 @@ def _emit_from_captured_trace(
     ):
         ctx.allow_unregistered_dialects = False
         wave.register_dialect(ctx)
-        module = ir.Module.create()
 
-        def diagnostics_handler(d):
-            diagnostics.append(f"{d.location}: {d.message}")
-            return True
+        module, creation_diagnostics = _create_kernel_module(
+            ctx, trace, constraints, options, test_diagnostics
+        )
+        diagnostics.extend(creation_diagnostics)
+        if module is None:
+            _flush_output("", diagnostics)
+            return 0
 
-        ctx.attach_diagnostic_handler(diagnostics_handler)
-
-        if test_diagnostics:
-            loc = ir.Location.current
-            loc.emit_error("test error")
-
-        # Collect placeholders from graph
-        placeholders = [
-            n for n in trace.walk() if getattr(n, "op", "") == "placeholder"
-        ]
-        top_level_placeholders = [
-            p
-            for p in placeholders
-            if getattr(p, "graph", None) is trace.get_root_graph()
-        ]
-        top_level_names = [p.name for p in top_level_placeholders]
-
-        # Build function argument types from top-level placeholders
-        arg_types = []
-        arg_locs = []
-        for p in top_level_placeholders:
-            c = get_custom(p)
-            t = getattr(c, "_type", None) or getattr(c, "type", None)
-            arg_types.append(_type_to_wave_mlir(ctx, t))
-            arg_locs.append(
-                c.location.to_water() if c.location else ir.Location.current
-            )
-
-        # Return type of the function is always empty
-        func_type = ir.FunctionType.get(arg_types, [])
-        with ir.InsertionPoint(module.body):
-            func_op = func.FuncOp("kernel", func_type)
-            # TODO: WaveHyperparameterAttr only supports int currently, so we
-            #       lose mappings like ADDRESS_SPACE_A: SHARED_ADDRESS_SPACE
-            # Convert the symbols in subs to strings and attach as
-            # WaveHyperparameterAttr to func_op
-            func_op.operation.attributes["wave.hyperparameters"] = (
-                wave.WaveHyperparameterAttr.get(
-                    {str(k): v for k, v in options.subs.items() if isinstance(v, int)}
-                )
-            )
-
-            wave_constraints = list(map(_emit_wave_constraints, constraints))
-            array_attr = ir.ArrayAttr.get(wave_constraints)
-            func_op.operation.attributes[wave.WAVE_CONSTRAINTS_ATTR_NAME] = array_attr
-
-            entry_block = ir.Block.create_at_start(
-                func_op.regions[0], arg_types, arg_locs
-            )
-
-            # Map placeholders to function arguments
-            for i, fx_node in enumerate(top_level_placeholders):
-                value_map[fx_node] = entry_block.arguments[i]
-
-            # Subgraphs duplicate the placeholders of surrounding graphs so there
-            # are multiple placeholders representing the same values.
-            # Add mapping for these repeated placeholders as well
-            for nested_placeholder in placeholders:
-                if nested_placeholder in top_level_placeholders:
-                    continue
-                if isinstance(get_custom(nested_placeholder), IterArg):
-                    continue
-                # With top-level placeholders and iterargs filtered out the remaining
-                # placeholders are duplicates. Find the original one by name
-                if not nested_placeholder.name in top_level_names:
-                    raise RuntimeError(
-                        f"Incorrectly structured placeholders in trace: "
-                        f"placeholder '{nested_placeholder.name}' not found in top-level names {top_level_names}."
-                    )
-                value_map[nested_placeholder] = value_map[
-                    top_level_placeholders[
-                        top_level_names.index(nested_placeholder.name)
-                    ]
-                ]
-
-            with ir.InsertionPoint(entry_block):
-                _emit_ops_from_graph(trace.get_root_graph(), trace, value_map, ctx)
-                func.ReturnOp(operands_=[])
-
-        # Verify the module before printing
+        # Verify the module before transforming or printing.
         try:
             module.operation.verify()
         except ir.MLIRError as e:
             diagnostics.append(str(e))
+            # Print in generic form if verification fails, this form should be
+            # robust to that.
+            _flush_output(
+                module.operation.get_asm(
+                    enable_debug_info=enable_debug_info, print_generic_op_form=True
+                ),
+                diagnostics,
+            )
+            return 0
+
+        # If a transform script was provided, parse and apply it to the module.
+        # This expects a transform module with a named sequence as first operation.
+        if pipeline:
+            try:
+                transform_module = ir.Module.parse(pipeline)
+                ops = list(transform_module.body.operations)
+                if not ops:
+                    raise RuntimeError("Transform module is empty")
+                entry_op = ops[0]
+                # Require the first op to be a named sequence.
+                if entry_op.operation.name != "transform.named_sequence":
+                    raise RuntimeError(
+                        f'Expected first op to be "transform.named_sequence", got "{entry_op.operation.name}"'
+                    )
+                interpreter.apply_named_sequence(
+                    module,
+                    entry_op,
+                    transform_module,
+                )
+            except Exception as e:
+                diagnostics.append(f"Failed to apply transform script: {e}")
 
         module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
-
-        output = dill.dumps({"diagnostics": diagnostics, "module": module_str})
-        sys.stdout.buffer.write(output)
-        sys.stdout.flush()
+        _flush_output(module_str, diagnostics)
     return 0
 
 

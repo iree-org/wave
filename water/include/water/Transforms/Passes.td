@@ -104,4 +104,53 @@ def WaterGreedySLPVectorizer : Pass<"water-greedy-slp-vectorizer"> {
   ];
 }
 
+def WaterAllocToAllocaPass : Pass<"water-alloc-to-alloca"> {
+  let summary = "Convert memref.alloc to memref.alloca for GPU compatibility";
+  let description = [{
+    This pass converts memref.alloc to memref.alloca. This is needed because for
+    shared mem allocations, `gpu-to-llvm` pass will try to generate `malloc`
+    call from memref.alloc.
+  }];
+}
+
+def WaterGPUToGPURuntime : Pass<"water-gpu-to-gpu-runtime", "::mlir::ModuleOp"> {
+  let summary = "Lower GPU dialect ops to runtime calls";
+  let description = [{
+    This pass lowers operations from the GPU dialect to calls into GPU runtime
+    functions.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
+def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
+  let summary = "Transforms GPU modules into binaries.";
+  let description = [{
+    This pass searches for all nested GPU modules with target attributes
+    and serializes them to binary format, producing a GPU binary operation.
+
+    This is a simplified version of the upstream gpu-module-to-binary pass,
+    tailored for the Wave project. Currently supports ROCDL targets only.
+  }];
+  let options = [
+    Option<"toolkitPath", "toolkit", "std::string", [{""}],
+           "Toolkit path.">,
+    ListOption<"linkFiles", "l", "std::string",
+           "Extra bitcode files to link to.">,
+    Option<"dumpIntermediates", "dump-intermediates", "std::string", [{""}],
+           "Directory to dump intermediate compilation files (LLVM IR, ISA).">,
+    Option<"overrideIntermediates", "override-intermediates", "std::string", [{""}],
+           "Directory containing intermediate files to use instead of generating them.">,
+  ];
+}
+
+def WaterDropTransformOpsPass : Pass<"water-drop-transform-ops"> {
+  let summary = "Remove transform dialect operations from the module";
+  let description = [{
+    This pass removes all operations from the transform dialect, including
+    transform.named_sequence. This is useful after the transform-interpreter has
+    applied the transformations and the transform dialect operations are no
+    longer needed.
+  }];
+}
+
 #endif // WATER_PASSES

@@ -15,6 +15,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -42,6 +43,7 @@ struct LowerWaveToMLIRPass
       gpu::GPUDialect,
       amdgpu::AMDGPUDialect,
       memref::MemRefDialect,
+      scf::SCFDialect,
       vector::VectorDialect
         // clang-format on
         >();
@@ -63,15 +65,28 @@ struct LowerWaveToMLIRPass
         // clang-format off
       affine::AffineDialect,
       arith::ArithDialect,
+      func::FuncDialect,
       math::MathDialect,
       gpu::GPUDialect,
       amdgpu::AMDGPUDialect,
       memref::MemRefDialect,
+      scf::SCFDialect,
       vector::VectorDialect
         // clang-format on
         >();
-    target.addIllegalOp<wave::AllocateOp, wave::RegisterOp, wave::Exp2Op,
-                        wave::CastOp>();
+    target.addIllegalOp<wave::AddOp, wave::AllocateOp, wave::CastOp,
+                        wave::DivOp, wave::Exp2Op, wave::ExtractSliceOp,
+                        wave::IterateOp, wave::MmaOp, wave::MulOp, wave::ReadOp,
+                        wave::RegisterOp, wave::WriteOp, wave::YieldOp>();
+
+    // Mark functions as illegal if they have Wave tensor types in their
+    // signature.
+    target.addDynamicallyLegalOp<func::FuncOp>([](func::FuncOp op) {
+      return llvm::none_of(op.getFunctionType().getInputs(),
+                           llvm::IsaPred<wave::WaveTensorType>) &&
+             llvm::none_of(op.getFunctionType().getResults(),
+                           llvm::IsaPred<wave::WaveTensorType>);
+    });
     ConversionConfig config;
     config.allowPatternRollback = false;
 
@@ -94,6 +109,11 @@ struct LowerWaveToMLIRPass
 
           wave::WaveTypeConverter typeConverter(hyperparam);
           RewritePatternSet patterns(ctx);
+
+          // Add function signature conversion patterns.
+          mlir::populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(
+              patterns, typeConverter);
+
           wave::populateWaveMiscellaneousOpsLoweringPatterns(typeConverter,
                                                              patterns);
           wave::populateWaveBinaryOpLoweringPatterns(typeConverter, patterns);
@@ -109,13 +129,13 @@ struct LowerWaveToMLIRPass
           }
 
           op->removeAttr(wave::WaveDialect::kHyperparameterAttrName);
+          op->removeAttr(wave::WaveDialect::kWaveConstraintsAttrName);
           return WalkResult::skip();
         });
     if (walkResult.wasInterrupted())
       return signalPassFailure();
 
-    if (failed(wave::setNormalFormPassPostcondition(wave::WaveNormalForm::None,
-                                                    op)))
+    if (failed(wave::clearNormalFormPassPostcondition(op)))
       return signalPassFailure();
   }
 };

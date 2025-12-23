@@ -13,6 +13,7 @@ from typing import Dict, Optional
 # Similar to _Rational in emitter.py: tracks expr/const patterns
 _RationalReg = namedtuple("_RationalReg", ["numerator_reg", "denominator"])
 
+
 # Canonicalization helpers for CSE
 _TID_SYMBOL_NAMES = {"tid_x", "tid_y", "tid_z"}
 
@@ -170,25 +171,25 @@ class ExprEmitter:
             dst_hint: Optional destination register hint (e.g., "v2")
 
         Returns:
-            Register string (e.g., "v5") containing the expression result
+            Register string (e.g., "v5") containing the expression result.
+            Note: The actual register may differ from dst_hint if a fused
+            instruction path is used.
         """
         key = expr_key(expr)
         if key in self._cache:
             return self._cache[key]
 
-        # Materialize expression
+        # Materialize expression - emit returns the ACTUAL result register
+        # which may differ from dst_reg if fused patterns are used
         if dst_hint is not None:
-            dst_reg = dst_hint
-            self.emit(expr, dst_reg)
-            reg_str = dst_reg
+            actual_reg = self.emit(expr, dst_hint)
         else:
             v = self.emitter.vgpr_allocator.alloc_v()
             dst_reg = f"v{v}"
-            self.emit(expr, dst_reg)
-            reg_str = dst_reg
+            actual_reg = self.emit(expr, dst_reg)
 
-        self._cache[key] = reg_str
-        return reg_str
+        self._cache[key] = actual_reg
+        return actual_reg
 
     def clear_cache(self):
         """Clear the expression cache."""
@@ -198,8 +199,7 @@ class ExprEmitter:
         """
         Main entry point: emit ASM for expr into dst_reg.
 
-        Uses iterative postorder traversal of the SymPy expression tree,
-        similar to gen_sympy_index in emitter.py.
+        Uses iterative postorder traversal to emit instructions.
 
         Args:
             expr: SymPy expression to emit
@@ -214,10 +214,9 @@ class ExprEmitter:
         # Cache lane_id to avoid multiple calls
         lane_id_v = self.emitter.ensure_lane_id(self.kernel_info.subgroup_size)
 
-        # Stack holds register names (strings like "v2") during traversal
+        # Fall back to standard postorder traversal
         stack = []
 
-        # Iterate through expression in postorder (children before parents)
         for term in sympy.postorder_traversal(expr):
             if isinstance(term, sympy.Symbol):
                 self._handle_symbol(term, lane_id_v, stack)
@@ -286,7 +285,7 @@ class ExprEmitter:
         """
         temp_v = self.emitter.vgpr_allocator.alloc_v()
         self.emitter.emit(
-            f"  v_and_b32 v{temp_v}, 0x3ff, v{flat_tid_v}  // Extract tid_x: mask 0x3ff = bits 0-9"
+            f"    v_and_b32 v{temp_v}, 0x3ff, v{flat_tid_v}  // Extract tid_x: mask 0x3ff = bits 0-9"
         )
         stack.append(f"v{temp_v}")
 
@@ -300,7 +299,7 @@ class ExprEmitter:
         """
         temp_v = self.emitter.vgpr_allocator.alloc_v()
         self.emitter.emit(
-            f"  v_bfe_u32 v{temp_v}, v{flat_tid_v}, 10, 10  // Extract tid_y from bits 10-19"
+            f"    v_bfe_u32 v{temp_v}, v{flat_tid_v}, 10, 10  // Extract tid_y from bits 10-19"
         )
         stack.append(f"v{temp_v}")
 
@@ -453,11 +452,52 @@ class ExprEmitter:
                 self.emitter.emit_instruction(VMovB32(temp_v, arg[1]))
                 self.emitter.register_file.v_used.add(temp_v)
                 materialized_args.append(f"v{temp_v}")
+            elif isinstance(arg, _RationalReg):
+                # Rational in Add - materialize the numerator and perform division
+                # This handles expressions like `x / 8 + y`
+                if arg.numerator_reg is None:
+                    # Bare rational like 1/8 - treat as constant 0 (since 1/8 < 1, floor(1/8) = 0)
+                    # This can appear in address calculations where floor(1/divisor) is always 0
+                    temp_v = self.emitter.vgpr_allocator.alloc_v()
+                    self.emitter.emit_instruction(VMovB32(temp_v, 0))
+                    self.emitter.register_file.v_used.add(temp_v)
+                    materialized_args.append(f"v{temp_v}")
+                    continue
+
+                # Materialize the numerator first if needed
+                numerator = arg.numerator_reg
+                if isinstance(numerator, tuple) and numerator[0] == "_const":
+                    numerator_v = self.emitter.vgpr_allocator.alloc_v()
+                    self.emitter.emit_instruction(VMovB32(numerator_v, numerator[1]))
+                    self.emitter.register_file.v_used.add(numerator_v)
+                else:
+                    numerator_v = int(numerator[1:])
+
+                # Perform the division (must be power of 2)
+                from .instructions import VLshrrevB32
+
+                divisor = arg.denominator
+                if divisor <= 0 or (divisor & (divisor - 1)) != 0:
+                    raise ValueError(
+                        f"Division in Add requires power-of-2 divisor, got {divisor}"
+                    )
+                shift = divisor.bit_length() - 1
+                temp_v = self.emitter.vgpr_allocator.alloc_v()
+                self.emitter.emit_instruction(VLshrrevB32(temp_v, shift, numerator_v))
+                self.emitter.register_file.v_used.add(temp_v)
+                materialized_args.append(f"v{temp_v}")
+            elif isinstance(arg, tuple):
+                # Handle any other tuple types (shouldn't happen, but be defensive)
+                raise ValueError(f"Unexpected tuple type in _handle_add: {arg}")
             else:
                 materialized_args.append(arg)
 
         # Use first arg as accumulator
         result_reg = materialized_args[0]
+        if not isinstance(result_reg, str):
+            raise ValueError(
+                f"Expected register string, got {type(result_reg)}: {result_reg}"
+            )
         result_v = int(result_reg[1:])
 
         # If result is lane_id or dst, allocate a temp

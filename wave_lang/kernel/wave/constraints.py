@@ -234,6 +234,7 @@ class HardwareConstraint(Constraint):
     mma_type: Optional[MMAType | ScaledMMAType] = MMAType.F32_16x16x16_F16
     vector_shapes: Optional[dict[IndexSymbol, int]] = None
     max_bits_per_load: int = 128
+    n_service_waves: int = 0
 
     def max_elems_per_load(self, element_type: DataType) -> int:
         return self.max_bits_per_load // element_type.bitwidth()
@@ -448,11 +449,12 @@ class HardwareConstraint(Constraint):
         return offset
 
     @property
-    def threads_per_block(self) -> tuple[int]:
+    def threads_per_block(self) -> tuple[int, int, int]:
         # threads_per_block is set in initialize_wave_constraints method
         return (
-            self.waves_per_block[0] * self.threads_per_wave,
-        ) + self.waves_per_block[1:]
+            (self.waves_per_block[0]) * self.threads_per_wave,
+            self.waves_per_block[1] + self.n_service_waves,
+        ) + self.waves_per_block[2:]
 
     @property
     def linearized_thread_id(self) -> IndexExpr:
@@ -463,6 +465,16 @@ class HardwareConstraint(Constraint):
             self.threads_per_block[0] * self.threads_per_block[1],
         ]
         return sum([x * y for x, y in zip(thread_ids, threads_per_block)])
+
+    @property
+    def wave_id(self) -> tuple[int]:
+        # threads_per_block is set in initialize_wave_constraints method
+        return self.linearized_thread_id // self.threads_per_wave
+
+    @property
+    def lane_id(self) -> tuple[int]:
+        # threads_per_block is set in initialize_wave_constraints method
+        return self.linearized_thread_id % self.threads_per_wave
 
     # Inline substitution for vector_size given index map. In the future we can add support for other members.
     def subs_vector_shapes(self, index_map: dict[IndexSymbol, int]):
@@ -750,7 +762,7 @@ class TilingConstraint(DistributionConstraint):
     def apply(self) -> IndexSequence:
         if self.induction_var is None:
             raise ValueError(
-                "Index is being computed without setting induction variable"
+                f"Index is being computed without setting induction variable for dimension {self.dim}"
             )
         return IndexSequence(self.start + self.induction_var * self.tile_size, 1)
 
@@ -804,6 +816,7 @@ class WaveConstraint(DistributionConstraint):
     wave_id_0 = floor(thread_id_0 / threads_per_wave)
     wave_id_1 = thread_id_1
     wave_id_2 = thread_id_2
+
     """
 
     dim: IndexExpr
@@ -919,6 +932,23 @@ def get_constrained_shape(
             if isinstance(x, TilingConstraint)
         ][0]
     return tuple(constrained_shape)
+
+
+@dataclass
+class GridConstraint:
+    """
+    Explicitly specify grid launch dimensions
+    """
+
+    grid_size: IndexExpr | tuple[IndexExpr, IndexExpr, IndexExpr]
+
+    def __post_init__(self):
+        if not isinstance(self.grid_size, tuple):
+            self.grid_size = (self.grid_size, 1, 1)
+        elif len(self.grid_size) == 1:
+            self.grid_size = (self.grid_size[0], 1, 1)
+        else:
+            raise ValueError(f"Grid size must be 1D, got {len(self.grid_size)}D")
 
 
 @dataclass

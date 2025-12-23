@@ -1,9 +1,11 @@
 add_mlir_dialect_library(MLIRWaveTransforms
+  DetectNormalForms.cpp
   InferTypes.cpp
   LoweringPatterns.cpp
   LowerReadWriteOps.cpp
   LowerWaveToMLIR.cpp
   TypeConverter.cpp
+  PropagateDefaultsFromConstraints.cpp
   Utils.cpp
 
   ADDITIONAL_HEADER_DIRS
@@ -19,6 +21,7 @@ add_mlir_dialect_library(MLIRWaveTransforms
   MLIRGPUDialect
   MLIRIR
   MLIRPass
+  MLIRSCFDialect
   MLIRTransforms
   MLIRVectorDialect
   MLIRMathDialect

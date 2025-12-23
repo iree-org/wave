@@ -1,10 +1,13 @@
 from sympy import Max, Min, ceiling
 
+import torch
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
+from wave_lang.kernel.wave.constraints import MMAType
 from wave_lang.kernel.lang.global_symbols import *
 from wave_lang.kernel.wave.utils.general_utils import (
     get_default_scheduling_params,
+    torch_dtype_to_wave,
 )
 
 
@@ -18,8 +21,14 @@ def get_reordered_matmul(
     block_n_size: int,
     block_k_size: int,
     group_m_size: int,
-    mfma_variant,
+    mfma_variant: MMAType,
+    input_dtype: torch.dtype = torch.float16,
+    output_dtype: torch.dtype = torch.float32,
 ):
+
+    # Initializing dtypes
+    input_wtype = torch_dtype_to_wave(input_dtype)
+    output_wtype = torch_dtype_to_wave(output_dtype)
     # Input sizes
     M = tkl.sym.M
     N = tkl.sym.N
@@ -79,23 +88,23 @@ def get_reordered_matmul(
 
     @tkw.wave(constraints)
     def gemm(
-        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
-        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
-        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+        a: tkl.Memory[M, K, ADDRESS_SPACE, input_wtype],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, input_wtype],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, output_wtype],
     ):
         c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
         @tkw.iterate(K, init_args=[c_reg])
         def repeat(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
-            # a_reg: tkw.Register[M, K, tkl.f16]
+            # a_reg: tkw.Register[M, K, input_wtype]
             a_reg = tkw.read(a)
-            # b_reg: tkw.Register[N, K, tkl.f16]
+            # b_reg: tkw.Register[N, K, input_wtype]
             b_reg = tkw.read(b)
             # acc: tkw.Register[M, N, tkl.f32]
             acc = tkw.mma(a_reg, b_reg, acc)
             return acc
 
-        tkw.write(repeat, c)
+        tkw.write(tkw.cast(repeat, output_wtype), c)
 
     hyperparams = {
         M: m_size,

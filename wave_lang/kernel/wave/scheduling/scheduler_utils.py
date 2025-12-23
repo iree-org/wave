@@ -4,22 +4,24 @@ from enum import Enum
 from .graph_utils import Edge
 from ..utils.general_utils import is_shared_read
 from ...ops.wave_ops import (
+    TensorLoadToLDS,
     get_custom,
     CustomOp,
     Read,
     Write,
     GatherToLDS,
+    TensorLoadToLDS,
     MMA,
     ScaledMMA,
 )
 import math
-from typing import TypeVar
+from typing import Iterable, TypeVar
 from enum import Enum
 from .resources import Operation
 from typing import List
 from collections import deque
 from ..utils.classes import GemmOperationType
-from ...compiler.kernel_codegen import filter_fx_graph
+from ..._support.fx import filter_fx_graph
 
 ScheduleStage = TypeVar("ScheduleStage", bound=Enum)
 
@@ -80,8 +82,10 @@ class GemmScheduler(BaseScheduler):
         graph: fx.Graph,
         edges: list[Edge],
         resources: list[int],
+        meta_name: str = "prefetch_stage",
     ) -> None:
         super().__init__(graph, edges, resources)
+        self.meta_name = meta_name
         self.annotate_gemm_operation_type(self.graph)
 
     def get_closest_local_load(self, node: fx.Node):
@@ -127,46 +131,56 @@ class GemmScheduler(BaseScheduler):
             local_load_rhs_scale.append(rhs_scale)
         return local_load_lhs_scale, local_load_rhs_scale
 
-    def get_local_writes(self, local_loads):
-        local_writes = set()
+    def get_local_writes(self, local_loads: Iterable[Read]) -> Iterable[Write]:
+        local_writes = dict()
         for local_load in local_loads:
             custom = get_custom(local_load)
-            cur_writes = [
+            cur_writes = dict.fromkeys(
                 w
                 for w in custom.memory.users
                 if isinstance(get_custom(w), Write) and w.graph == custom.graph
-            ]
+            )
             local_writes.update(cur_writes)
-        return list(local_writes)
+        return local_writes.keys()
 
-    def get_lds_gathers(self, local_loads):
-        lds_gathers = set()
+    def get_global_loads_to_lds(
+        self, local_loads: Iterable[Read]
+    ) -> Iterable[GatherToLDS | TensorLoadToLDS]:
+        lds_gathers = dict()
         for local_load in local_loads:
             custom = get_custom(local_load)
             # Get direct users and users from rotated registers.
-            memory_users = set([g for g in custom.memory.users])
-            # Filter users for GatherToLDS
-            cur_gathers = [
+            memory_users = dict.fromkeys(g for g in custom.memory.users)
+            # Filter users for GatherToLDS or TensorLoadToLDS
+            cur_gathers = dict.fromkeys(
                 g
                 for g in memory_users
-                if isinstance(get_custom(g), GatherToLDS) and g.graph == custom.graph
-            ]
+                if isinstance(get_custom(g), (GatherToLDS, TensorLoadToLDS))
+                and g.graph == custom.graph
+            )
             lds_gathers.update(cur_gathers)
-        return list(lds_gathers)
+            cur_gathers = dict.fromkeys(
+                g
+                for g in memory_users
+                if isinstance(get_custom(g), TensorLoadToLDS)
+                and g.graph == custom.graph
+            )
+            lds_gathers.update(cur_gathers)
+        return lds_gathers.keys()
 
-    def get_global_loads(self, local_writes):
-        global_loads = set()
+    def get_global_loads(self, local_writes: Iterable[Write]) -> Iterable[Read]:
+        global_loads = dict()
         for local_write in local_writes:
             custom = get_custom(local_write)
             if isinstance(get_custom(custom.register_), Read):
-                global_loads.add(custom.register_)
-        return list(global_loads)
+                global_loads[custom.register_] = None
+        return global_loads.keys()
 
     def annotate_op_with_gemm_operation_type(self, nodes, gemm_operation_type):
         for node in nodes:
             if isinstance(node, CustomOp):
                 node = node.fx_node
-            node.meta["prefetch_stage"] = gemm_operation_type
+            node.meta[self.meta_name] = gemm_operation_type
 
     def annotate_gemm_operation_type(self, graph):
         mma_nodes = filter_fx_graph(
@@ -187,8 +201,8 @@ class GemmScheduler(BaseScheduler):
         # Early exit if cannot find either local loads
         if not local_load_lhs or not local_load_rhs:
             return
-        global_to_shared_lhs = self.get_lds_gathers(local_load_lhs)
-        global_to_shared_rhs = self.get_lds_gathers(local_load_rhs)
+        global_to_shared_lhs = self.get_global_loads_to_lds(local_load_lhs)
+        global_to_shared_rhs = self.get_global_loads_to_lds(local_load_rhs)
         local_write_lhs = self.get_local_writes(local_load_lhs)
         local_write_rhs = self.get_local_writes(local_load_rhs)
         global_load_lhs = self.get_global_loads(local_write_lhs)
@@ -223,8 +237,12 @@ class GemmScheduler(BaseScheduler):
             local_load_lhs_scale, local_load_rhs_scale = self.get_scale_local_loads(
                 mma_nodes
             )
-            global_to_shared_lhs_scale = self.get_lds_gathers(local_load_lhs_scale)
-            global_to_shared_rhs_scale = self.get_lds_gathers(local_load_rhs_scale)
+            global_to_shared_lhs_scale = self.get_global_loads_to_lds(
+                local_load_lhs_scale
+            )
+            global_to_shared_rhs_scale = self.get_global_loads_to_lds(
+                local_load_rhs_scale
+            )
             local_write_lhs_scale = self.get_local_writes(local_load_lhs_scale)
             local_write_rhs_scale = self.get_local_writes(local_load_rhs_scale)
             global_load_lhs_scale = self.get_global_loads(local_write_lhs_scale)
