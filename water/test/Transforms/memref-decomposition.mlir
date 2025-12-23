@@ -198,3 +198,33 @@ func.func @fat_raw_buffer_cast(%arg0: memref<10x20xf32>) -> memref<10x20xf32, #a
   %0 = amdgpu.fat_raw_buffer_cast %arg0 : memref<10x20xf32> to memref<10x20xf32, #amdgpu.address_space<fat_raw_buffer>>
   return %0 : memref<10x20xf32, #amdgpu.address_space<fat_raw_buffer>>
 }
+
+func.func private @get_memref() -> memref<10xf32>
+
+// CHECK-LABEL: func.func @scf_for_loop_carried
+// CHECK-SAME: (%[[ARG0:.*]]: memref<10xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: index)
+func.func @scf_for_loop_carried(%arg0: memref<10xf32>, %lb: index, %ub: index, %step: index) -> memref<10xf32> {
+  // Memref is hoisted out of loop since it doesn't change
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10xf32> to !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
+  // Loop no longer has iter_args since memref doesn't change
+  // CHECK: scf.for %[[IV:.*]] = %[[ARG1]] to %[[ARG2]] step %[[ARG3]] iter_args(%[[NEW_ITER:.*]] = %[[EXTRACT]]) -> (!llvm.ptr) {
+  %result = scf.for %iv = %lb to %ub step %step iter_args(%iter = %arg0) -> (memref<10xf32>) {
+    // CHECK: %[[IDX0:.*]] = affine.apply #[[MAP:.*]]()[%[[IV]]]
+    // CHECK: %[[CAST1:.*]] = arith.index_cast %[[IDX0]] : index to i64
+    // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[NEW_ITER]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
+    // CHECK: %[[LOAD:.*]] = llvm.load %[[GEP0]] : !llvm.ptr -> f32
+    %val = memref.load %iter[%iv] : memref<10xf32>
+    // CHECK: %[[ADD:.*]] = arith.addf %[[LOAD]], %[[LOAD]]
+    %new_val = arith.addf %val, %val : f32
+    // CHECK: %[[IDX1:.*]] = affine.apply #[[MAP]]()[%[[IV]]]
+    // CHECK: %[[CAST2:.*]] = arith.index_cast %[[IDX1]] : index to i64
+    // CHECK: %[[GEP1:.*]] = llvm.getelementptr nusw %[[NEW_ITER]][%[[CAST2]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
+    // CHECK: llvm.store %[[ADD]], %[[GEP1]] : f32, !llvm.ptr
+    memref.store %new_val, %iter[%iv] : memref<10xf32>
+    %new_iter = func.call @get_memref() : () -> memref<10xf32>
+    scf.yield %new_iter : memref<10xf32>
+  }
+
+  return %result : memref<10xf32>
+}
