@@ -1147,10 +1147,10 @@ unsigned wave::MmaOp::computeElementsPerThread() {
   if (!kind) {
     return 0;
   }
-  wave::WaveMmaSpec spec =
-      wave::WaveMmaKindAttr::getSpec(getContext(), *kind);
+  wave::WaveMmaSpec spec = wave::WaveMmaKindAttr::getSpec(getContext(), *kind);
 
-  // Extract threads per wave from hardware constraint by walking up the ancestry.
+  // Extract threads per wave from hardware constraint by walking up the
+  // ancestry.
   mlir::Operation *op = getOperation();
   while (op) {
     if (auto constraints = op->getAttrOfType<mlir::ArrayAttr>(
@@ -1204,6 +1204,19 @@ wave::MmaOp::propagateElementsPerThreadBackward(
 
   unsigned accumulatorOperandNumber =
       getAccumulatorMutable().getOperandNumber();
+
+  // Validate that LHS and RHS operands have concrete elements_per_thread
+  // values. We don't propagate to them, but we check they've been properly
+  // initialized.
+  // LHS (0) and RHS (1) operands.
+  for (unsigned i = 0; i < 2 && i < operandElements.size(); ++i) {
+    if (operandElements[i].isBottom()) {
+      errs << "MMA operand #" << i << " (";
+      errs << (i == 0 ? "LHS" : "RHS");
+      errs << ") has uninitialized elements_per_thread";
+      return mlir::failure();
+    }
+  }
 
   // Propagate to the accumulator operand.
   if (operandElements.size() > accumulatorOperandNumber) {

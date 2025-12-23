@@ -213,16 +213,16 @@ func.func @mma_elements_per_thread_128_threads() attributes {
   return
 }
 
-#hw_constraint = #wave.hardware_constraint<threads_per_wave = 64,
+#hw_constraint_interface_alt = #wave.hardware_constraint<threads_per_wave = 64,
                                          waves_per_block = [1, 1, 1],
                                          mma_type = #wave.mma_kind<f32_32x32x8_f16>,
                                          vector_shapes = {M = 1, N = 1, K = 8},
                                          max_bits_per_load = 128>
 
-// CHECK-LABEL: @mma_elements_per_thread_interface
-func.func @mma_elements_per_thread_interface() attributes {
+// CHECK-LABEL: @mma_elements_per_thread_interface_explicit
+func.func @mma_elements_per_thread_interface_explicit() attributes {
   wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32, K = 8}>,
-  wave.constraints = [#hw_constraint]
+  wave.constraints = [#hw_constraint_interface_alt]
 } {
   %lhs_init = arith.constant 1.0 : f16
   %rhs_init = arith.constant 2.0 : f16
@@ -239,16 +239,16 @@ func.func @mma_elements_per_thread_interface() attributes {
   return
 }
 
-#hw_constraint_32_threads = #wave.hardware_constraint<threads_per_wave = 32,
+#hw_constraint_32_threads_explicit = #wave.hardware_constraint<threads_per_wave = 32,
                                                      waves_per_block = [1, 1, 1],
                                                      mma_type = #wave.mma_kind<f32_16x16x16_f16>,
                                                      vector_shapes = {M = 1, N = 1, K = 16},
                                                      max_bits_per_load = 128>
 
-// CHECK-LABEL: @mma_elements_per_thread_32_threads
-func.func @mma_elements_per_thread_32_threads() attributes {
+// CHECK-LABEL: @mma_elements_per_thread_32_threads_explicit
+func.func @mma_elements_per_thread_32_threads_explicit() attributes {
   wave.hyperparameters = #wave.hyperparameters<{M = 16, N = 16, K = 16}>,
-  wave.constraints = [#hw_constraint_32_threads]
+  wave.constraints = [#hw_constraint_32_threads_explicit]
 } {
   %lhs_init = arith.constant 1.0 : f16
   %rhs_init = arith.constant 2.0 : f16
@@ -265,16 +265,16 @@ func.func @mma_elements_per_thread_32_threads() attributes {
   return
 }
 
-#hw_constraint_128_threads = #wave.hardware_constraint<threads_per_wave = 128,
+#hw_constraint_128_threads_explicit = #wave.hardware_constraint<threads_per_wave = 128,
                                                       waves_per_block = [1, 1, 1],
                                                       mma_type = #wave.mma_kind<f32_32x32x8_f16>,
                                                       vector_shapes = {M = 1, N = 1, K = 8},
                                                       max_bits_per_load = 128>
 
-// CHECK-LABEL: @mma_elements_per_thread_128_threads
-func.func @mma_elements_per_thread_128_threads() attributes {
+// CHECK-LABEL: @mma_elements_per_thread_128_threads_explicit
+func.func @mma_elements_per_thread_128_threads_explicit() attributes {
   wave.hyperparameters = #wave.hyperparameters<{M = 32, N = 32, K = 8}>,
-  wave.constraints = [#hw_constraint_128_threads]
+  wave.constraints = [#hw_constraint_128_threads_explicit]
 } {
   %lhs_init = arith.constant 1.0 : f16
   %rhs_init = arith.constant 2.0 : f16
