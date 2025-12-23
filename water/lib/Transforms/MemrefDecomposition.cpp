@@ -517,11 +517,6 @@ struct DecomposeFatRawBufferCast
   }
 };
 
-template <typename OpTy> static bool isDynamicallyLegalOp(OpTy op) {
-  auto memrefType = cast<MemRefType>(op.getMemRefType());
-  return memrefType.getRank() == 0;
-}
-
 class MemrefDecompositionPass
     : public water::impl::WaterMemrefDecompositionPassBase<
           MemrefDecompositionPass> {
@@ -539,15 +534,8 @@ public:
                            memref::MemRefDialect, vector::VectorDialect,
                            amdgpu::AMDGPUDialect, LLVM::LLVMDialect>();
     target.addLegalOp<UnrealizedConversionCastOp>();
-
-    target.addDynamicallyLegalOp<memref::LoadOp>(
-        isDynamicallyLegalOp<memref::LoadOp>);
-    target.addDynamicallyLegalOp<memref::StoreOp>(
-        isDynamicallyLegalOp<memref::StoreOp>);
-    target.addDynamicallyLegalOp<vector::LoadOp>(
-        isDynamicallyLegalOp<vector::LoadOp>);
-    target.addDynamicallyLegalOp<vector::StoreOp>(
-        isDynamicallyLegalOp<vector::StoreOp>);
+    target.addIllegalOp<memref::LoadOp, memref::StoreOp, vector::LoadOp,
+                        vector::StoreOp>();
 
     target.addDynamicallyLegalOp<memref::ReinterpretCastOp,
                                  amdgpu::FatRawBufferCastOp>(
