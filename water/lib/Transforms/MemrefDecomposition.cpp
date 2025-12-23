@@ -56,10 +56,16 @@ static SmallVector<Value> flatten(ArrayRef<ValueRange> values) {
   return result;
 }
 
-static std::tuple<LogicalResult, Value, ValueRange, ValueRange>
+static std::tuple<LogicalResult, Value, SmallVector<OpFoldResult>,
+                  SmallVector<OpFoldResult>>
 unflattenDescriptor(ValueRange values, MemRefType memrefType) {
   unsigned rank = memrefType.getRank();
   if (values.size() != 1 + rank * 2)
+    return {failure(), {}, {}, {}};
+
+  int64_t staticOffset = 0;
+  SmallVector<int64_t> staticStrides;
+  if (failed(memrefType.getStridesAndOffset(staticStrides, staticOffset)))
     return {failure(), {}, {}, {}};
 
   Value buffer = values.front();
@@ -67,7 +73,24 @@ unflattenDescriptor(ValueRange values, MemRefType memrefType) {
   ValueRange sizes = values.take_front(rank);
   values = values.drop_front(rank);
   ValueRange strides = values.take_front(rank);
-  return {success(), buffer, sizes, strides};
+
+  SmallVector<OpFoldResult> mixedSizes;
+  SmallVector<OpFoldResult> mixedStrides;
+  auto intType = IndexType::get(memrefType.getContext());
+  for (auto i : llvm::seq(rank)) {
+    int64_t size = memrefType.getDimSize(i);
+    if (ShapedType::isDynamic(size))
+      mixedSizes.push_back(sizes[i]);
+    else
+      mixedSizes.push_back(IntegerAttr::get(intType, size));
+
+    if (ShapedType::isDynamic(staticStrides[i]))
+      mixedStrides.push_back(strides[i]);
+    else
+      mixedStrides.push_back(IntegerAttr::get(intType, staticStrides[i]));
+  }
+
+  return {success(), buffer, mixedSizes, mixedStrides};
 }
 
 static MemRefType make0DMemRefType(MemRefType type) {
@@ -143,16 +166,32 @@ static Value GEP(OpBuilder &builder, Location loc, Value buffer, Value offset) {
                              buffer, offset, flags);
 }
 
-/// Type converter for memref decomposition.
-/// Converts memref<NxMx...xT> to (memref<?xi8>, sizes..., strides...)
+static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
+                              Type loadType, ArrayRef<OpFoldResult> sizes,
+                              unsigned typeBit, ArrayRef<OpFoldResult> strides,
+                              ValueRange indices) {
+  OpFoldResult zero = rewriter.getIndexAttr(0);
+  OpFoldResult linearizedIndices;
+  memref::LinearizedMemRefInfo linearizedInfo;
+  std::tie(linearizedInfo, linearizedIndices) =
+      memref::getLinearizedMemRefOffsetAndSize(rewriter, loc, typeBit, typeBit,
+                                               zero, sizes, strides,
+                                               getAsOpFoldResult(indices));
+
+  AffineExpr mul = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
+  linearizedIndices = affine::makeComposedFoldedAffineApply(rewriter, loc, mul,
+                                                            linearizedIndices);
+
+  Value offset = getValue(rewriter, loc, linearizedIndices);
+  return GEP(rewriter, loc, source, offset);
+}
+
 class MemrefDecompositionTypeConverter : public TypeConverter {
 public:
   MemrefDecompositionTypeConverter() {
     // Keep all other types unchanged.
     addConversion([](Type type) { return type; });
 
-    // Convert memref types to memref<?xi8> + sizes + strides (1-to-N
-    // conversion).
     addConversion(
         [this](MemRefType type,
                SmallVectorImpl<Type> &results) -> std::optional<LogicalResult> {
@@ -188,7 +227,6 @@ public:
     /// Source materialization to reconstruct memref from components.
     addSourceMaterialization([](OpBuilder &builder, MemRefType resultType,
                                 ValueRange inputs, Location loc) -> Value {
-      unsigned rank = resultType.getRank();
       auto [valid, buffer, sizes, strides] =
           unflattenDescriptor(inputs, resultType);
       if (failed(valid))
@@ -202,34 +240,14 @@ public:
           }))
         return {};
 
-      int64_t staticOffset = 0;
-      SmallVector<int64_t> staticStrides;
-      if (failed(resultType.getStridesAndOffset(staticStrides, staticOffset)))
-        return {};
-
       auto memrefType = MemRefType::get({}, resultType.getElementType(),
                                         MemRefLayoutAttrInterface{},
                                         resultType.getMemorySpace());
       buffer = fromPtr(builder, loc, memrefType, buffer);
 
       OpFoldResult offset = builder.getIndexAttr(0);
-      SmallVector<OpFoldResult> mixedSizes;
-      SmallVector<OpFoldResult> mixedStrides;
-      for (auto i : llvm::seq(rank)) {
-        if (ShapedType::isDynamic(staticStrides[i]))
-          mixedStrides.push_back(strides[i]);
-        else
-          mixedStrides.push_back(builder.getIndexAttr(staticStrides[i]));
-
-        int64_t size = resultType.getDimSize(i);
-        if (ShapedType::isDynamic(size))
-          mixedSizes.push_back(sizes[i]);
-        else
-          mixedSizes.push_back(builder.getIndexAttr(size));
-      }
-
-      return memref::ReinterpretCastOp::create(
-          builder, loc, resultType, buffer, offset, mixedSizes, mixedStrides);
+      return memref::ReinterpretCastOp::create(builder, loc, resultType, buffer,
+                                               offset, sizes, strides);
     });
 
     /// Target materialization to decompose memref into components.
@@ -302,27 +320,6 @@ public:
     });
   }
 };
-
-/// Returns a collapsed memref and the linearized index to access the element
-/// at the specified indices.
-static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
-                              Type loadType, ValueRange sizes, unsigned typeBit,
-                              ValueRange strides, ValueRange indices) {
-  OpFoldResult zero = rewriter.getIndexAttr(0);
-  OpFoldResult linearizedIndices;
-  memref::LinearizedMemRefInfo linearizedInfo;
-  std::tie(linearizedInfo, linearizedIndices) =
-      memref::getLinearizedMemRefOffsetAndSize(
-          rewriter, loc, typeBit, typeBit, zero, getAsOpFoldResult(sizes),
-          getAsOpFoldResult(strides), getAsOpFoldResult(indices));
-
-  AffineExpr mul = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
-  linearizedIndices = affine::makeComposedFoldedAffineApply(rewriter, loc, mul,
-                                                            linearizedIndices);
-
-  Value offset = getValue(rewriter, loc, linearizedIndices);
-  return GEP(rewriter, loc, source, offset);
-}
 
 template <typename OpTy>
 struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
@@ -421,9 +418,7 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
 
 struct DecomposeReinterpretCast
     : public OpConversionPattern<memref::ReinterpretCastOp> {
-  using OpConversionPattern::OpConversionPattern;
-  using OneToNOpAdaptor =
-      memref::ReinterpretCastOp::GenericAdaptor<ArrayRef<ValueRange>>;
+  using Base::Base;
 
   LogicalResult
   matchAndRewrite(memref::ReinterpretCastOp castOp, OneToNOpAdaptor adaptor,
@@ -484,9 +479,7 @@ struct DecomposeReinterpretCast
 
 struct DecomposeFatRawBufferCast
     : public OpConversionPattern<amdgpu::FatRawBufferCastOp> {
-  using OpConversionPattern::OpConversionPattern;
-  using OneToNOpAdaptor =
-      amdgpu::FatRawBufferCastOp::GenericAdaptor<ArrayRef<ValueRange>>;
+  using Base::Base;
 
   LogicalResult
   matchAndRewrite(amdgpu::FatRawBufferCastOp castOp, OneToNOpAdaptor adaptor,
@@ -534,8 +527,8 @@ struct DecomposeFatRawBufferCast
     // Build result as decomposed memref (buffer, sizes, strides).
     SmallVector<Value> decomposedResult;
     decomposedResult.push_back(fatBuffer);
-    llvm::append_range(decomposedResult, sizes);
-    llvm::append_range(decomposedResult, strides);
+    llvm::append_range(decomposedResult, getValues(rewriter, loc, sizes));
+    llvm::append_range(decomposedResult, getValues(rewriter, loc, strides));
 
     rewriter.replaceOpWithMultiple(castOp, {decomposedResult});
     return success();
