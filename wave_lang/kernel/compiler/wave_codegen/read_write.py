@@ -869,7 +869,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
     v16i1 = VectorType.get([16], i1)
 
     ir_type = IrType.parse(element_type.dtype.ir_type_asm())
-    dmaType = amdgpu_d.TDMBaseType.get(ir_type)
+    dma_type = amdgpu_d.TDMBaseType.get(ir_type)
 
     results = []
 
@@ -912,7 +912,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         shared_index, _, _ = _build_start_indices(emitter, shared_tile_index_current)
 
         base = amdgpu_d.make_dma_base(
-            dmaType,
+            dma_type,
             global_value,
             index,
             shared_value,
