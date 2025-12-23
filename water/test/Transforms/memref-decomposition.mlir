@@ -10,8 +10,8 @@
 // CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
 func.func @load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX:.*]] = affine.apply #map()[%[[ARG1]], %[[ARG2]]]
@@ -27,8 +27,8 @@ func.func @load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {
 // CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: f32)
 func.func @store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val: f32) {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX:.*]] = affine.apply #map()[%[[ARG1]], %[[ARG2]]]
@@ -43,8 +43,8 @@ func.func @store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val: f32) {
 // CHECK-SAME: (%[[ARG0:.*]]: memref<4x8x16xf16>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: index)
 func.func @load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: index) -> f16 {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<4x8x16xf16> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<4x8x16xf16> to !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX:.*]] = affine.apply #map1()[%[[ARG1]], %[[ARG2]], %[[ARG3]]]
@@ -60,8 +60,8 @@ func.func @load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: index) -
 // CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
 func.func @vector_load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> vector<4xf32> {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX:.*]] = affine.apply #map()[%[[ARG1]], %[[ARG2]]]
@@ -77,8 +77,8 @@ func.func @vector_load_2d(%arg0: memref<10x20xf32>, %i: index, %j: index) -> vec
 // CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: vector<4xf32>)
 func.func @vector_store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val: vector<4xf32>) {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX:.*]] = affine.apply #map()[%[[ARG1]], %[[ARG2]]]
@@ -93,8 +93,8 @@ func.func @vector_store_2d(%arg0: memref<10x20xf32>, %i: index, %j: index, %val:
 // CHECK-SAME: (%[[ARG0:.*]]: memref<4x8x16xf16>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index, %[[ARG3:.*]]: index)
 func.func @vector_load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: index) -> vector<8xf16> {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<4x8x16xf16> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<4x8x16xf16> to !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX:.*]] = affine.apply #map1()[%[[ARG1]], %[[ARG2]], %[[ARG3]]]
@@ -110,8 +110,8 @@ func.func @vector_load_3d(%arg0: memref<4x8x16xf16>, %i: index, %j: index, %k: i
 // CHECK-SAME: (%[[ARG0:.*]]: memref<10x20xf32>, %[[ARG1:.*]]: index, %[[ARG2:.*]]: index)
 func.func @multiple_loads(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32 {
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX0:.*]] = affine.apply #map()[%[[ARG1]], %[[ARG2]]]
@@ -137,13 +137,13 @@ func.func @multiple_loads(%arg0: memref<10x20xf32>, %i: index, %j: index) -> f32
 func.func @different_types(%arg0: memref<8x16xi32>, %arg1: memref<4x8xf64>, %i: index, %j: index) -> (i32, f64) {
   // Canonicalizer processes arg1 first
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG1]] : memref<4x8xf64> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT0:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG1]] : memref<4x8xf64> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT0:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT0]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // Then arg0
-  // CHECK: %[[CAST2:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<8x16xi32> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT1:.*]] = llvm.extractvalue %[[CAST2]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST2:.*]] = builtin.unrealized_conversion_cast %[[ARG0]] : memref<8x16xi32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT1:.*]] = llvm.extractvalue %[[CAST2]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST3:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP1:.*]] = llvm.getelementptr nusw %[[EXTRACT1]][%[[CAST3]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[IDX0:.*]] = affine.apply #map2()[%[[ARG2]], %[[ARG3]]]
@@ -191,8 +191,8 @@ func.func @reinterpret_cast(%base: memref<100xf32>, %offset: index, %size0: inde
   // CHECK: %[[C0_I64:.*]] = llvm.mlir.constant(0 : index) : i64
   // CHECK: %[[POISON:.*]] = llvm.mlir.poison : !llvm.struct<(ptr, ptr, i64)>
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<100xf32> to !llvm.struct<(ptr, ptr, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[BASE]] : memref<100xf32> to !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[OFF:.*]] = affine.apply #map4()[%[[OFFSET]]]
@@ -215,8 +215,8 @@ func.func @fat_raw_buffer_cast(%arg0: memref<10x20xf32>) -> memref<10x20xf32, #a
   // CHECK: %[[C0_I64:.*]] = llvm.mlir.constant(0 : index) : i64
   // CHECK: %[[POISON1:.*]] = llvm.mlir.poison : !llvm.struct<(ptr, ptr, i64)>
   // CHECK: %[[C0:.*]] = arith.constant 0 : index
-  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
-  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, i64, i64, i64, i64)>
+  // CHECK: %[[CAST0:.*]] = builtin.unrealized_conversion_cast %[[ARG]] : memref<10x20xf32> to !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
+  // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[CAST0]][1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
   // CHECK: %[[CAST1:.*]] = builtin.unrealized_conversion_cast %[[C0]] : index to i64
   // CHECK: %[[GEP0:.*]] = llvm.getelementptr nusw %[[EXTRACT]][%[[CAST1]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK: %[[INSERT0:.*]] = llvm.insertvalue %[[GEP0]], %[[POISON1]][0] : !llvm.struct<(ptr, ptr, i64)>

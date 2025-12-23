@@ -73,9 +73,14 @@ static MemRefType make0DMemRefType(MemRefType type) {
 static Type getMemrefStructType(OpBuilder &builder, Location loc, Type ptrType,
                                 unsigned rank) {
   auto i64 = builder.getIntegerType(64);
-  SmallVector<Type> types{ptrType, ptrType, i64};
-  types.resize(types.size() + rank * 2, i64);
-  return LLVM::LLVMStructType::getLiteral(builder.getContext(), types);
+  if (rank == 0)
+    return LLVM::LLVMStructType::getLiteral(builder.getContext(),
+                                            {ptrType, ptrType, i64});
+
+  auto arrayType = LLVM::LLVMArrayType::get(i64, rank);
+
+  return LLVM::LLVMStructType::getLiteral(
+      builder.getContext(), {ptrType, ptrType, i64, arrayType, arrayType});
 }
 
 static Value toPtr(OpBuilder &builder, Location loc,
