@@ -7,6 +7,7 @@
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Conversion/AMDGPUToROCDL/AMDGPUToROCDL.h"
+#include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Utils.h"
@@ -14,8 +15,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
-#include "mlir/Dialect/Ptr/IR/PtrOps.h"
-#include "mlir/Dialect/Ptr/IR/PtrTypes.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
@@ -71,40 +70,48 @@ static MemRefType make0DMemRefType(MemRefType type) {
                          type.getMemorySpace());
 }
 
-static Value toPtr(OpBuilder &builder, Location loc, ptr::PtrType ptrType,
-                   Value value) {
+static Type getMemrefStructType(OpBuilder &builder, Location loc, Type ptrType,
+                                unsigned rank) {
+  auto i64 = builder.getIntegerType(64);
+  SmallVector<Type> types{ptrType, ptrType, i64};
+  types.resize(types.size() + rank * 2, i64);
+  return LLVM::LLVMStructType::getLiteral(builder.getContext(), types);
+}
+
+static Value toPtr(OpBuilder &builder, Location loc,
+                   LLVM::LLVMPointerType ptrType, Value value) {
   auto memrefType = cast<MemRefType>(value.getType());
-  auto ptrSpace = ptrType.getMemorySpace();
-  if (memrefType.getMemorySpace() != ptrSpace) {
-    auto newMemrefType =
-        MemRefType::get(memrefType.getShape(), memrefType.getElementType(),
-                        memrefType.getLayout(), ptrSpace);
-    value =
-        memref::MemorySpaceCastOp::create(builder, loc, newMemrefType, value);
-  }
-  return ptr::ToPtrOp::create(builder, loc, ptrType, value);
+  auto memrefStructType =
+      getMemrefStructType(builder, loc, ptrType, memrefType.getRank());
+  value =
+      UnrealizedConversionCastOp::create(builder, loc, memrefStructType, value)
+          .getResult(0);
+  return MemRefDescriptor(value).alignedPtr(builder, loc);
 }
 
 static Value fromPtr(OpBuilder &builder, Location loc, MemRefType memrefType,
                      Value value) {
-  auto ptrType = cast<ptr::PtrType>(value.getType());
-  auto ptrSpace = ptrType.getMemorySpace();
-  auto newMemrefType = memrefType;
-  if (memrefType.getMemorySpace() != ptrSpace)
-    newMemrefType =
-        MemRefType::get(memrefType.getShape(), memrefType.getElementType(),
-                        memrefType.getLayout(), ptrSpace);
+  auto ptrType = cast<LLVM::LLVMPointerType>(value.getType());
+  assert(memrefType.getRank() == 0 && "only 0D memrefs supported");
 
-  Value result = ptr::FromPtrOp::create(builder, loc, newMemrefType, value);
-  if (newMemrefType != memrefType)
-    result =
-        memref::MemorySpaceCastOp::create(builder, loc, memrefType, result);
-
-  return result;
+  auto memrefStructType = getMemrefStructType(builder, loc, ptrType, 0);
+  auto descriptor = MemRefDescriptor::poison(builder, loc, memrefStructType);
+  descriptor.setAllocatedPtr(builder, loc, value);
+  descriptor.setAlignedPtr(builder, loc, value);
+  descriptor.setConstantOffset(builder, loc, 0);
+  return UnrealizedConversionCastOp::create(builder, loc, memrefType,
+                                            (Value)descriptor)
+      .getResult(0);
 }
 
 static Value GEP(OpBuilder &builder, Location loc, Value buffer, Value offset) {
-  return ptr::PtrAddOp::create(builder, loc, buffer, offset);
+  Type elementType = builder.getIntegerType(8);
+  Type i64 = builder.getIntegerType(64);
+  auto flags = LLVM::GEPNoWrapFlags::nusw;
+  offset = UnrealizedConversionCastOp::create(builder, loc, i64, offset)
+               .getResult(0);
+  return LLVM::GEPOp::create(builder, loc, buffer.getType(), elementType,
+                             buffer, offset, flags);
 }
 
 /// Type converter for memref decomposition.
@@ -139,8 +146,7 @@ public:
           }
 
           MLIRContext *ctx = type.getContext();
-          Type ptrType =
-              ptr::PtrType::get(LLVM::AddressSpaceAttr::get(ctx, addressSpace));
+          Type ptrType = LLVM::LLVMPointerType::get(ctx, addressSpace);
 
           unsigned rank = type.getRank();
           auto indexType = IndexType::get(ctx);
@@ -157,7 +163,7 @@ public:
       if (inputs.size() != 1 + rank * 2)
         return {};
 
-      if (!isa<ptr::PtrType>(inputs.front().getType()))
+      if (!isa<LLVM::LLVMPointerType>(inputs.front().getType()))
         return {};
 
       if (!llvm::all_of(inputs.drop_front(), [](Value value) {
@@ -213,7 +219,7 @@ public:
       if (resultType.size() != 1 + rank * 2)
         return {};
 
-      if (!isa<ptr::PtrType>(resultType.front()))
+      if (!isa<LLVM::LLVMPointerType>(resultType.front()))
         return {};
 
       if (!llvm::all_of(resultType.drop_front(),
@@ -250,8 +256,8 @@ public:
           strides[i] =
               arith::ConstantIndexOp::create(builder, loc, staticStrides[i]);
 
-      input =
-          toPtr(builder, loc, cast<ptr::PtrType>(resultType.front()), input);
+      input = toPtr(builder, loc,
+                    cast<LLVM::LLVMPointerType>(resultType.front()), input);
       Value base = GEP(builder, loc, input, offset);
 
       SmallVector<Value> result;
@@ -321,9 +327,9 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
                                  typeBit, strides, indices);
 
     unsigned alignment = loadOp.getAlignment().value_or(0);
-    rewriter.replaceOpWithNewOp<ptr::LoadOp>(loadOp, loadType, ptr, alignment,
-                                             /*volatile_*/ false,
-                                             loadOp.getNontemporal());
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(loadOp, loadType, ptr, alignment,
+                                              /*volatile_*/ false,
+                                              loadOp.getNontemporal());
     return success();
   }
 };
@@ -370,9 +376,9 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
                                  typeBit, strides, indices);
 
     unsigned alignment = storeOp.getAlignment().value_or(0);
-    rewriter.replaceOpWithNewOp<ptr::StoreOp>(storeOp, valueToStore, ptr,
-                                              alignment, /*volatile_*/ false,
-                                              storeOp.getNontemporal());
+    rewriter.replaceOpWithNewOp<LLVM::StoreOp>(storeOp, valueToStore, ptr,
+                                               alignment, /*volatile_*/ false,
+                                               storeOp.getNontemporal());
     return success();
   }
 };
@@ -465,7 +471,8 @@ struct DecomposeFatRawBufferCast
     sourceType = make0DMemRefType(sourceType);
     resultType = make0DMemRefType(resultType);
 
-    auto resultPtrType = typeConverter->convertType<ptr::PtrType>(resultType);
+    auto resultPtrType =
+        typeConverter->convertType<LLVM::LLVMPointerType>(resultType);
     if (!resultPtrType)
       return rewriter.notifyMatchFailure(castOp,
                                          "failed to convert result type");
@@ -479,7 +486,7 @@ struct DecomposeFatRawBufferCast
     auto [buffer, sizes, strides] =
         unflattenDescriptor(sourceDecomposed, sourceRank);
 
-    auto sourcePtrType = dyn_cast<ptr::PtrType>(buffer.getType());
+    auto sourcePtrType = dyn_cast<LLVM::LLVMPointerType>(buffer.getType());
     if (!sourcePtrType)
       return rewriter.notifyMatchFailure(castOp,
                                          "failed to convert source type");
@@ -491,7 +498,8 @@ struct DecomposeFatRawBufferCast
         castOp.getCacheSwizzleStride(), castOp.getBoundsCheck(),
         castOp.getResetOffset());
 
-    fatBuffer = toPtr(rewriter, loc, resultPtrType, fatBuffer);
+    fatBuffer = toPtr(rewriter, loc, cast<LLVM::LLVMPointerType>(resultPtrType),
+                      fatBuffer);
 
     // Build result as decomposed memref (buffer, sizes, strides).
     SmallVector<Value> decomposedResult;
@@ -524,7 +532,8 @@ public:
     ConversionTarget target(*ctx);
     target.addLegalDialect<arith::ArithDialect, affine::AffineDialect,
                            memref::MemRefDialect, vector::VectorDialect,
-                           amdgpu::AMDGPUDialect, ptr::PtrDialect>();
+                           amdgpu::AMDGPUDialect, LLVM::LLVMDialect>();
+    target.addLegalOp<UnrealizedConversionCastOp>();
 
     target.addDynamicallyLegalOp<memref::LoadOp>(
         isDynamicallyLegalOp<memref::LoadOp>);

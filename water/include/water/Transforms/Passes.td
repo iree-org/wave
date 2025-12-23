@@ -165,7 +165,7 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
     "::mlir::affine::AffineDialect",
     "::mlir::arith::ArithDialect",
     "::mlir::memref::MemRefDialect",
-    "::mlir::ptr::PtrDialect",
+    "::mlir::LLVM::LLVMDialect",
   ];
 }
 
