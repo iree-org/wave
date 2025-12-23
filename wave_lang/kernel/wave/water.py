@@ -432,7 +432,6 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         ("water-alloc-to-alloca", {}, "gpu.module"),
         # add_transform(alloc_to_alloca, "__transform_alloc_to_alloca"),
         add_transform(alloca_to_global, "__transform_alloca_to_global"),
-        "water-memref-lowering",
         "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),
