@@ -44,51 +44,12 @@ from .mlir_walker import IRWalker
 from .asm_emitter import AsmEmitter
 from .kernel_pipeline import KernelCompilationContext
 from .metadata_emitter import MetadataEmitter, KernelMetadata, create_metadata
-
-
-def walk_ops_recursively(operation: Operation) -> Iterable[Operation]:
-    """Recursively walk all operations in an MLIR module."""
-    for region in operation.regions:
-        for block in region.blocks:
-            for inner_operation in block.operations:
-                yield inner_operation
-                yield from walk_ops_recursively(inner_operation)
-
-
-def detect_needed_workgroup_ids(fn) -> Tuple[bool, bool, bool]:
-    """
-    Scan MLIR function to detect which workgroup IDs are needed.
-
-    Returns:
-        (needs_wgid_x, needs_wgid_y, needs_wgid_z) tuple
-    """
-    from wave_lang.support.ir_imports import gpu_d
-
-    needs_x, needs_y, needs_z = False, False, False
-
-    def walk_ops(op):
-        nonlocal needs_x, needs_y, needs_z
-
-        # Check if this is a gpu.block_id operation
-        if isinstance(op, gpu_d.BlockIdOp):
-            dim_str = str(op.dimension)
-            if "dim x" in dim_str:
-                needs_x = True
-            elif "dim y" in dim_str:
-                needs_y = True
-            elif "dim z" in dim_str:
-                needs_z = True
-
-        # Recurse into regions
-        if hasattr(op, "regions"):
-            for region in op.regions:
-                for block in region.blocks:
-                    for inner_op in block.operations:
-                        walk_ops(inner_op)
-
-    walk_ops(fn)
-    return (needs_x, needs_y, needs_z)
-
+from .mlir_analysis import (
+    walk_ops_recursively,
+    detect_needed_workgroup_ids,
+    extract_translation_info,
+    should_skip_function,
+)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -115,31 +76,13 @@ def main():
             if isinstance(function_operation, func_d.FuncOp):
                 # Extract basic info directly from MLIR function
                 kernel_name = function_operation.sym_name.value
+                if should_skip_function(function_operation):
+                    continue
                 num_args = len(function_operation.entry_block.arguments)
 
-                # Extract workgroup size from function attributes
-                from .utils import parse_wg_and_subgroup
-                from wave_lang.support.ir_imports import OpAttributeMap
-
-                wg_size = None
-                subgroup_size = 64
-                function_attributes = (
-                    dict(function_operation.attributes)
-                    if isinstance(function_operation.attributes, OpAttributeMap)
-                    else {}
-                )
-                translation_info = function_attributes.get("translation_info")
-                if translation_info is not None:
-                    workgroup_size_tuple, sg_size = parse_wg_and_subgroup(translation_info)
-                    if workgroup_size_tuple:
-                        wg_size = workgroup_size_tuple
-                    if sg_size:
-                        subgroup_size = sg_size
-
-                # Workgroup size is required for code generation
-                assert (
-                    wg_size is not None
-                ), "translation_info with workgroup_size must be present in MLIR function attributes"
+                ti = extract_translation_info(function_operation)
+                wg_size = ti.wg_size
+                subgroup_size = ti.subgroup_size
 
                 # Detect which workgroup IDs are needed
                 needs_wgid_x, needs_wgid_y, needs_wgid_z = detect_needed_workgroup_ids(function_operation)

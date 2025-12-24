@@ -38,27 +38,17 @@ Architecture:
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 
-
-def normalize_wg_size(wg_size) -> Tuple[int, int, int]:
-    """Normalize workgroup size to (x, y, z) tuple."""
-    if isinstance(wg_size, int):
-        return (wg_size, 1, 1)
-    elif isinstance(wg_size, (list, tuple)):
-        if len(wg_size) == 1:
-            return (wg_size[0], 1, 1)
-        elif len(wg_size) == 2:
-            return (wg_size[0], wg_size[1], 1)
-        else:
-            return (wg_size[0], wg_size[1], wg_size[2])
-    return (64, 1, 1)
+from .utils import normalize_wg_size
+from .abi import system_vgpr_workitem_id_from_wg_size
 
 
 def get_register_granularity(targetid: str) -> Tuple[int, int]:
     """Get VGPR and SGPR allocation granularity for target."""
-    # MI300 (gfx940, gfx942): VGPRs allocated in groups of 8, SGPRs in groups of 8
+    # Canonical rule for current targets:
+    # - gfx94x/gfx95x: VGPRs allocated in groups of 8, SGPRs in groups of 8
+    # - older GFX9: VGPRs in groups of 4, SGPRs in groups of 8
     if any(t in targetid for t in ["gfx940", "gfx942", "gfx950"]):
         return 8, 8
-    # Default (older GFX9): VGPRs in groups of 4, SGPRs in groups of 8
     return 4, 8
 
 
@@ -126,9 +116,6 @@ class MetadataEmitter:
         lines.append(".p2align 6")
         lines.append(f".amdhsa_kernel {m.name}")
         lines.append("  .amdhsa_user_sgpr_kernarg_segment_ptr 1")
-        
-        # Workgroup ID SGPRs
-        self._emit_workgroup_id_sgprs(lines)
         
         # User SGPR count
         lines.append("  .amdhsa_user_sgpr_count 2")
@@ -231,14 +218,7 @@ amdhsa.kernels:
     
     def _get_system_vgpr_workitem_id(self) -> int:
         """Determine system VGPR workitem ID mode based on workgroup size."""
-        wg_x, wg_y, wg_z = normalize_wg_size(self.metadata.wg_size)
-        
-        if wg_z > 1:
-            return 2  # Need X, Y, Z
-        elif wg_y > 1:
-            return 1  # Need X, Y
-        else:
-            return 0  # Need only X (flat tid)
+        return system_vgpr_workitem_id_from_wg_size(self.metadata.wg_size)
     
     @staticmethod
     def patch_resource_usage(

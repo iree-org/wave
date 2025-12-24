@@ -2625,9 +2625,13 @@ class KernelModuleCompiler:
         """
         from wave_lang.support.ir_imports import Context, Module, func_d
         from .mlir_walker import IRWalker
-        from .utils import parse_wg_and_subgroup
         from .metadata_emitter import MetadataEmitter, create_metadata
-        from .driver import detect_needed_workgroup_ids, walk_ops_recursively
+        from .mlir_analysis import (
+            walk_ops_recursively,
+            detect_needed_workgroup_ids,
+            extract_translation_info,
+            should_skip_function,
+        )
         
         all_lines: List[str] = []
         
@@ -2642,13 +2646,14 @@ class KernelModuleCompiler:
                 kernel_name = fn.sym_name.value
                 
                 # Skip non-kernel functions (async wrappers, benchmark scaffolding)
-                if kernel_name.startswith("isolated_benchmark") or kernel_name.endswith("$async"):
+                if should_skip_function(fn):
                     continue
                 
                 num_args = len(list(fn.entry_block.arguments))
                 
                 # Extract kernel metadata
-                wg_size, subgroup_size = self._extract_kernel_metadata(fn)
+                ti = extract_translation_info(fn)
+                wg_size, subgroup_size = ti.wg_size, ti.subgroup_size
                 
                 # Detect workgroup ID needs
                 needs_wgid_x, needs_wgid_y, needs_wgid_z = detect_needed_workgroup_ids(fn)
@@ -2726,24 +2731,7 @@ class KernelModuleCompiler:
         return "\n".join(all_lines)
     
     def _extract_kernel_metadata(self, fn) -> Tuple[Tuple[int, int, int], int]:
-        """Extract workgroup size and subgroup size from function attributes."""
-        from wave_lang.support.ir_imports import OpAttributeMap
-        from .utils import parse_wg_and_subgroup
-        
-        wg_size = (64, 1, 1)
-        subgroup_size = 64
-        
-        function_attributes = (
-            dict(fn.attributes)
-            if isinstance(fn.attributes, OpAttributeMap)
-            else {}
-        )
-        translation_info = function_attributes.get("translation_info")
-        if translation_info is not None:
-            workgroup_size_tuple, sg_size = parse_wg_and_subgroup(translation_info)
-            if workgroup_size_tuple:
-                wg_size = workgroup_size_tuple
-            if sg_size:
-                subgroup_size = sg_size
-        
-        return wg_size, subgroup_size
+        """Deprecated: use mlir_analysis.extract_translation_info instead."""
+        from .mlir_analysis import extract_translation_info
+        ti = extract_translation_info(fn)
+        return ti.wg_size, ti.subgroup_size
