@@ -1,5 +1,5 @@
 
-/tmp/tmpp5kolzul/isolated_benchmark.hsaco:	file format elf64-amdgpu
+/tmp/tmpngifp_st/isolated_benchmark.hsaco:	file format elf64-amdgpu
 
 Disassembly of section .text:
 
@@ -98,18 +98,19 @@ Disassembly of section .text:
 	v_lshlrev_b32_e32 v8, 3, v10                               // 0000000017D0: 24101483
 	v_and_b32_e32 v11, 15, v2                                  // 0000000017D4: 2616048F
 	v_lshlrev_b32_e32 v2, 7, v11                               // 0000000017D8: 24041687
-	v_add_u32_e32 v12, v8, v2                                  // 0000000017DC: 68180508
-	v_add_u32_e32 v13, v12, v16                                // 0000000017E0: 681A210C
+	v_or_b32_e32 v12, v8, v2                                   // 0000000017DC: 28180508
+	v_or_b32_e32 v13, v12, v16                                 // 0000000017E0: 281A210C
 	ds_read_b64 v[16:17], v13                                  // 0000000017E4: D8EC0000 1000000D
 	ds_read_b64 v[18:19], v13 offset:32                        // 0000000017EC: D8EC0020 1200000D
 	ds_read_b64 v[20:21], v13 offset:64                        // 0000000017F4: D8EC0040 1400000D
 	ds_read_b64 v[22:23], v13 offset:96                        // 0000000017FC: D8EC0060 1600000D
-	v_add_u32_e32 v12, v8, v2                                  // 000000001804: 68180508
-	v_lshl_add_u32 v2, v15, 11, v12                            // 000000001808: D1FD0002 0431170F
-	ds_read_b64 v[12:13], v2 offset:4096                       // 000000001810: D8EC1000 0C000002
-	ds_read_b64 v[24:25], v2 offset:4128                       // 000000001818: D8EC1020 18000002
-	ds_read_b64 v[26:27], v2 offset:4160                       // 000000001820: D8EC1040 1A000002
-	ds_read_b64 v[28:29], v2 offset:4192                       // 000000001828: D8EC1060 1C000002
+	v_or_b32_e32 v12, v8, v2                                   // 000000001804: 28180508
+	v_lshlrev_b32_e32 v2, 11, v15                              // 000000001808: 24041E8B
+	v_or_b32_e32 v8, v12, v2                                   // 00000000180C: 2810050C
+	ds_read_b64 v[12:13], v8 offset:4096                       // 000000001810: D8EC1000 0C000008
+	ds_read_b64 v[24:25], v8 offset:4128                       // 000000001818: D8EC1020 18000008
+	ds_read_b64 v[26:27], v8 offset:4160                       // 000000001820: D8EC1040 1A000008
+	ds_read_b64 v[28:29], v8 offset:4192                       // 000000001828: D8EC1060 1C000008
 	s_waitcnt lgkmcnt(0)                                       // 000000001830: BF8CC07F
 	v_mfma_f32_16x16x16_f16 v[4:7], v[12:13], v[16:17], v[4:7] // 000000001834: D3CD0004 0412210C
 	s_waitcnt lgkmcnt(0)                                       // 00000000183C: BF8CC07F
@@ -125,7 +126,7 @@ Disassembly of section .text:
 
 0000000000001868 <loop_0_exit>:
 	v_lshlrev_b32_e32 v2, 6, v1                                // 000000001868: 24040286
-	v_lshl_add_u32 v1, v11, 2, v2                              // 00000000186C: D1FD0001 0409050B
+	v_lshl_or_b32 v1, v11, 2, v2                               // 00000000186C: D2000001 0409050B
 	v_lshl_add_u32 v2, v9, 7, v1                               // 000000001874: D1FD0002 04050F09
 	v_lshl_add_u32 v1, v10, 12, v2                             // 00000000187C: D1FD0001 0409190A
 	v_lshl_add_u32 v2, v15, 14, v1                             // 000000001884: D1FD0002 04051D0F
