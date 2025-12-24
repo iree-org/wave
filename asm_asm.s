@@ -70,26 +70,26 @@ loop_0_body:
     v_lshrrev_b32 v3, 3, v2  // floor div by 8 (shift)
     v_lshl_add_u32 v8, v1, 4, v3  // fused: (kv4 << 4) + kv7
     v_lshrrev_b32 v9, 5, v8  // floor add by 32 (shift)
-    v_mov_b32 v8, 0xffffe000  // materialize -8192
-    v_mul_lo_u32 v10, v9, v8  // floor(tid_y/2 + floor(tid_x/8)/32) * -8192
+    v_lshlrev_b32 v8, 13, v9  // floor(tid_y/2 + floor(tid_x/8)/32) << 13
+    v_sub_u32 v9, 0, v8  // negate (multiply by -8192)
     v_lshlrev_b32 v8, 4, v2  // tid_x << 4
-    v_add_u32 v9, v10, v8  // add
+    v_add_u32 v10, v9, v8  // add
     v_mov_b32 v11, s24  // broadcast s24 to VGPR
     v_lshlrev_b32 v12, 7, v11  // s24 << 7
-    v_add_u32 v11, v9, v12  // add
-    v_lshlrev_b32 v9, 7, v3  // floor(tid_x/8) << 7
-    v_add_u32 v3, v11, v9  // add
+    v_add_u32 v11, v10, v12  // add
+    v_lshlrev_b32 v10, 7, v3  // floor(tid_x/8) << 7
+    v_add_u32 v3, v11, v10  // add
     v_lshlrev_b32 v11, 12, v1  // tid_y << 12
     v_add_u32 v13, v3, v11  // add
     v_mov_b32 v3, s2  // wgid_x from s2
     v_lshl_add_u32 v14, v3, 13, v13  // fused: (kv21 << 13) + kv20
-    v_mov_b32 v13, 0x1000  // imm = 4096
+    v_mov_b32 v13, 0x1000  // materialize 4096
     v_lshrrev_b32 v15, 6, v2  // floor div by 64 (shift)
     v_lshl_add_u32 v16, v1, 1, v15  // fused: (kv4 << 1) + kv26
     v_lshrrev_b32 v17, 2, v16  // floor add by 4 (shift)
-    v_mov_b32 v16, 0xfffff000  // materialize -4096
-    v_mul_lo_u32 v18, v17, v16  // floor(tid_y/2 + floor(tid_x/64)/4) * -4096
-    v_add_u32 v16, v13, v18  // add
+    v_lshlrev_b32 v16, 12, v17  // floor(tid_y/2 + floor(tid_x/64)/4) << 12
+    v_sub_u32 v17, 0, v16  // negate (multiply by -4096)
+    v_add_u32 v16, v13, v17  // add
     v_lshlrev_b32 v13, 10, v15  // floor(tid_x/64) << 10
     v_add_u32 v17, v16, v13  // add
     v_lshlrev_b32 v16, 11, v1  // tid_y << 11
@@ -99,10 +99,10 @@ loop_0_body:
     s_mov_b32 m0, s8
     buffer_load_dwordx4 v14, s[16:19], 0 offen lds  // gather 16B
     // gather_to_lds: 16B from Value(%reinterpret_cast_2 = memref.reinterpret_cast %1 to offset: [0], sizes: [1073741822], strides: [1] : memref<f16> to memref<1073741822xf16, strided<[1]>>) to LDS
-    v_add_u32 v14, v10, v8  // add
+    v_add_u32 v14, v9, v8  // add
     v_add_u32 v8, v14, v12  // add
-    v_add_u32 v10, v8, v9  // add
-    v_add_u32 v8, v10, v11  // add
+    v_add_u32 v9, v8, v10  // add
+    v_add_u32 v8, v9, v11  // add
     v_mov_b32 v9, s3  // wgid_y from s3
     v_lshl_add_u32 v10, v9, 13, v8  // fused: (kv40 << 13) + kv39
     v_add_u32 v8, v13, v16  // add
