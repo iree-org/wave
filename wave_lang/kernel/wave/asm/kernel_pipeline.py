@@ -188,6 +188,9 @@ class KernelIRExprEmitter:
         # Recursion depth counter for get_or_emit
         # Used to only run simplification at top-level (depth=0)
         self._emit_depth: int = 0
+        # Constant cache: maps large constant value -> KVReg
+        # This avoids materializing the same constant multiple times
+        self._const_cache: Dict[int, KVReg] = {}
     
     @property
     def _global_scope(self) -> Dict[tuple, KVReg]:
@@ -242,6 +245,38 @@ class KernelIRExprEmitter:
             self._global_scope[key] = reg
         else:
             self._current_scope[key] = reg
+    
+    def _get_or_materialize_const(self, value: int) -> KVReg:
+        """
+        Get or materialize a large constant, using cache to avoid duplicates.
+        
+        For small constants (-16 to 64), just creates a new mov each time.
+        For large constants, caches the result for reuse.
+        
+        Returns:
+            KVReg containing the constant value
+        """
+        # Small constants don't need caching - inline is fine
+        if -16 <= value <= 64:
+            result = self.ctx.vreg()
+            self.ctx.program.emit(KInstr(
+                "v_mov_b32", (result,), (KImm(value),),
+                comment=f"imm = {value}"
+            ))
+            return result
+        
+        # Large constants - check cache first
+        if value in self._const_cache:
+            return self._const_cache[value]
+        
+        # Materialize and cache
+        result = self.ctx.vreg()
+        self.ctx.program.emit(KInstr(
+            "v_mov_b32", (result,), (KImm(value),),
+            comment=f"materialize {value}"
+        ))
+        self._const_cache[value] = result
+        return result
     
     # Known loop-invariant symbols (thread IDs and workgroup IDs)
     _LOOP_INVARIANT_SYMBOLS = frozenset([
@@ -536,11 +571,15 @@ class KernelIRExprEmitter:
         # Handle immediate integers
         if isinstance(expr, (int, Integer)):
             val = int(expr)
-            result = self.ctx.vreg()
-            self.ctx.program.emit(KInstr(
-                "v_mov_b32", (result,), (KImm(val),),
-                comment=f"imm = {val}"
-            ))
+            # For large constants, use the constant cache for better reuse
+            if val < -16 or val > 64:
+                result = self._get_or_materialize_const(val)
+            else:
+                result = self.ctx.vreg()
+                self.ctx.program.emit(KInstr(
+                    "v_mov_b32", (result,), (KImm(val),),
+                    comment=f"imm = {val}"
+                ))
             self._insert_cache(cache_key, result, global_scope=is_invariant)
             return result
         
@@ -701,14 +740,29 @@ class KernelIRExprEmitter:
                     return var_reg
                 
                 result = self.ctx.vreg()
+                abs_const = abs(const_part)
+                is_negative = const_part < 0
                 
-                # Check if const is power of 2 for shift
-                if const_part > 0 and (const_part & (const_part - 1)) == 0:
-                    shift = const_part.bit_length() - 1
-                    self.ctx.program.emit(KInstr(
-                        "v_lshlrev_b32", (result,), (KImm(shift), var_reg),
-                        comment=f"{var_parts[0]} << {shift}"
-                    ))
+                # Check if |const| is power of 2 for shift optimization
+                if abs_const > 0 and (abs_const & (abs_const - 1)) == 0:
+                    shift = abs_const.bit_length() - 1
+                    if is_negative:
+                        # Negative power of 2: shift then negate
+                        # var * -2^n = -(var << n) = 0 - (var << n)
+                        shifted = self.ctx.vreg()
+                        self.ctx.program.emit(KInstr(
+                            "v_lshlrev_b32", (shifted,), (KImm(shift), var_reg),
+                            comment=f"{var_parts[0]} << {shift}"
+                        ))
+                        self.ctx.program.emit(KInstr(
+                            "v_sub_u32", (result,), (KImm(0), shifted),
+                            comment=f"negate (multiply by {const_part})"
+                        ))
+                    else:
+                        self.ctx.program.emit(KInstr(
+                            "v_lshlrev_b32", (result,), (KImm(shift), var_reg),
+                            comment=f"{var_parts[0]} << {shift}"
+                        ))
                 elif -16 <= const_part <= 64:
                     # Inline constant range - can use immediate
                     self.ctx.program.emit(KInstr(
@@ -716,12 +770,8 @@ class KernelIRExprEmitter:
                         comment=f"{var_parts[0]} * {const_part}"
                     ))
                 else:
-                    # Large constant - need to materialize in a register first
-                    const_reg = self.ctx.vreg()
-                    self.ctx.program.emit(KInstr(
-                        "v_mov_b32", (const_reg,), (KImm(const_part),),
-                        comment=f"materialize {const_part}"
-                    ))
+                    # Large constant - use cached materialization
+                    const_reg = self._get_or_materialize_const(const_part)
                     self.ctx.program.emit(KInstr(
                         "v_mul_lo_u32", (result,), (var_reg, const_reg),
                         comment=f"{var_parts[0]} * {const_part}"
@@ -744,17 +794,36 @@ class KernelIRExprEmitter:
             
             if const_part != 1:
                 final = self.ctx.vreg()
-                if -16 <= const_part <= 64:
+                abs_const = abs(const_part)
+                is_negative = const_part < 0
+                
+                # Check if |const| is power of 2 for shift optimization
+                if abs_const > 0 and (abs_const & (abs_const - 1)) == 0:
+                    shift = abs_const.bit_length() - 1
+                    if is_negative:
+                        # Negative power of 2: shift then negate
+                        shifted = self.ctx.vreg()
+                        self.ctx.program.emit(KInstr(
+                            "v_lshlrev_b32", (shifted,), (KImm(shift), result),
+                            comment=f"<< {shift}"
+                        ))
+                        self.ctx.program.emit(KInstr(
+                            "v_sub_u32", (final,), (KImm(0), shifted),
+                            comment=f"negate (multiply by {const_part})"
+                        ))
+                    else:
+                        self.ctx.program.emit(KInstr(
+                            "v_lshlrev_b32", (final,), (KImm(shift), result),
+                            comment=f"<< {shift}"
+                        ))
+                elif -16 <= const_part <= 64:
                     self.ctx.program.emit(KInstr(
                         "v_mul_lo_u32", (final,), (result, KImm(const_part)),
                         comment=f"* {const_part}"
                     ))
                 else:
-                    const_reg = self.ctx.vreg()
-                    self.ctx.program.emit(KInstr(
-                        "v_mov_b32", (const_reg,), (KImm(const_part),),
-                        comment=f"materialize {const_part}"
-                    ))
+                    # Large constant - use cached materialization
+                    const_reg = self._get_or_materialize_const(const_part)
                     self.ctx.program.emit(KInstr(
                         "v_mul_lo_u32", (final,), (result, const_reg),
                         comment=f"* {const_part}"
@@ -767,12 +836,25 @@ class KernelIRExprEmitter:
         
         # Handle addition
         if isinstance(expr, Add):
-            # Emit first term and track its bit range
-            result = self.get_or_emit(expr.args[0])
-            result_range = self._get_bit_range(expr.args[0])
+            # Separate constant and non-constant terms
+            const_sum = 0
+            var_args = []
+            for arg in expr.args:
+                if isinstance(arg, (int, Integer)):
+                    const_sum += int(arg)
+                else:
+                    var_args.append(arg)
             
-            # Add/OR remaining terms based on bit overlap
-            for arg in expr.args[1:]:
+            # Handle pure constant case
+            if not var_args:
+                return self.get_or_emit(Integer(const_sum))
+            
+            # Emit first variable term
+            result = self.get_or_emit(var_args[0])
+            result_range = self._get_bit_range(var_args[0])
+            
+            # Add remaining variable terms based on bit overlap
+            for arg in var_args[1:]:
                 arg_reg = self.get_or_emit(arg)
                 arg_range = self._get_bit_range(arg)
                 new_result = self.ctx.vreg()
@@ -793,13 +875,21 @@ class KernelIRExprEmitter:
                 result = new_result
                 # Update result range (conservative: union of ranges for OR, expanded for ADD)
                 if not self._bits_overlap(result_range, arg_range):
-                    # OR: result uses union of bit ranges
                     result_range = (min(result_range[0], arg_range[0]), 
                                    max(result_range[1], arg_range[1]))
                 else:
-                    # ADD: result might carry, expand by 1 bit
                     result_range = (min(result_range[0], arg_range[0]),
                                    max(result_range[1], arg_range[1]) + 1)
+            
+            # Add the constant sum if non-zero, using inline literal
+            if const_sum != 0:
+                new_result = self.ctx.vreg()
+                # Use inline literal for the constant (v_add_u32 supports 32-bit literals)
+                self.ctx.program.emit(KInstr(
+                    "v_add_u32", (new_result,), (KImm(const_sum), result),
+                    comment=f"+ {const_sum} (inline literal)"
+                ))
+                result = new_result
             
             # Cache result (global scope if loop-invariant)
             self._insert_cache(cache_key, result, global_scope=is_invariant)

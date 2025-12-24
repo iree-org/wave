@@ -43,9 +43,9 @@ Resource Usage Comparison
 ======================================================================
 Resource                        LLVM        ASM       Diff
 ----------------------------------------------------------------------
-VGPRs                              0         32        +32
-SGPRs                              0         32        +32
-LDS (bytes)                        0       8192      +8192
+VGPRs                             27         32         +5
+SGPRs                             16         32        +16
+LDS (bytes)                     8192       8192          0
 ======================================================================
 
 ======================================================================
@@ -57,6 +57,6 @@ Likely causes of overhead:
 - Extra waits: +5 s_waitcnt (conservative scheduling?)
 - Extra VALU: +30 (index computation overhead?)
 - Extra readfirstlane: +1 (scalar extraction overhead?)
-- Higher VGPR usage: +32 (may reduce occupancy)
+- Higher VGPR usage: +5 (may reduce occupancy)
 
 ======================================================================
