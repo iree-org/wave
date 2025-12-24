@@ -957,17 +957,6 @@ def wave_compile(
                 if options.print_mlir:
                     print(cached_kernel.asm)
 
-                # Optional debug: dump cached ASM for offline inspection
-                if os.environ.get("WAVE_DUMP_ASM", "0") == "1":
-                    dump_dir = os.environ.get("WAVE_DUMP_ASM_DIR", "/tmp/wave_asm")
-                    os.makedirs(dump_dir, exist_ok=True)
-                    func_name = getattr(options.kernel_launch_info, "func_name", None) or options.func_name
-                    safe_name = "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(func_name))
-                    suffix = f"cached.pid{os.getpid()}.s"
-                    dump_path = os.path.join(dump_dir, f"{safe_name}.{suffix}")
-                    write_file(dump_path, "w", cached_kernel.asm)
-                    print(f"[wave] dumped cached asm to: {dump_path}")
-
                 return cls(
                     options,
                     cached_kernel.vmfb,
@@ -1095,17 +1084,6 @@ def wave_compile(
         if options.compile_to_asm or options.backend == "asm":
             # ASM flow: generate AMDGCN assembly; optionally build a binary
             asm = _generate_asm_code(mb, options)
-
-            # Optional debug: dump generated ASM for offline inspection
-            if os.environ.get("WAVE_DUMP_ASM", "0") == "1":
-                dump_dir = os.environ.get("WAVE_DUMP_ASM_DIR", "/tmp/wave_asm")
-                os.makedirs(dump_dir, exist_ok=True)
-                func_name = getattr(options.kernel_launch_info, "func_name", None) or options.func_name
-                safe_name = "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(func_name))
-                suffix = f"pid{os.getpid()}.s"
-                dump_path = os.path.join(dump_dir, f"{safe_name}.{suffix}")
-                write_file(dump_path, "w", asm)
-                print(f"[wave] dumped asm to: {dump_path}")
 
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
