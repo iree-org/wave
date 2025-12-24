@@ -18,7 +18,7 @@ All physical instruction formatting goes through InstructionFormatter.
 """
 
 from .driver import main
-from .asm_emitter import AsmEmitter  # Legacy, will be removed
+from .asm_emitter import AsmEmitter  # Legacy, wrapper around KernelModuleCompiler
 from .mlir_walker import IRWalker
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
 from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator

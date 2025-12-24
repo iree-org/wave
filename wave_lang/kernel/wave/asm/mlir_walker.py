@@ -98,17 +98,14 @@ class _SSAToVGPRAdapter(dict):
 
 
 class IRWalker:
-    def __init__(self, emitter=None, kernel_ctx: KernelCompilationContext = None):
+    def __init__(self, kernel_ctx: KernelCompilationContext):
         """
         Initialize IRWalker with kernel compilation context.
         
         Args:
-            emitter: Legacy AsmEmitter (kept for compatibility during migration,
-                     but will be removed once kernel IR owns everything).
             kernel_ctx: KernelCompilationContext - the source of truth for
                         instruction emission and register allocation.
         """
-        self.emitter = emitter
         self.kernel_ctx = kernel_ctx
 
         # Supporting fields
@@ -137,9 +134,7 @@ class IRWalker:
     @property
     def unified(self):
         """Return the unified emitter for instruction emission."""
-        if self.kernel_ctx is not None:
-            return self.kernel_ctx.unified
-        return self.emitter.unified
+        return self.kernel_ctx.unified
 
     def interpret_func(self, fn: func_d.FuncOp) -> KernelInfo:
         kernel_info = KernelInfo(name=fn.sym_name.value)

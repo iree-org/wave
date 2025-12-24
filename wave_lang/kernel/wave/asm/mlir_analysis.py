@@ -8,7 +8,7 @@ Shared MLIR analysis helpers for the ASM backend.
 
 Goal: keep MLIR scanning logic (function selection, translation_info parsing,
 and workgroup-id detection) in ONE place to avoid drift across:
-- `AsmEmitter.from_mlir_string`
+- `AsmEmitter.from_mlir_string` (legacy wrapper)
 - `driver.py`
 - `KernelModuleCompiler.compile_mlir_string`
 """

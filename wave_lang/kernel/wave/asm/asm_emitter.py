@@ -240,94 +240,9 @@ class AsmEmitter:
     def from_mlir_string(
         cls, mlir_string: str, targetid: str = "gfx942", codeobj: str = "5"
     ) -> str:
-        """
-        Process MLIR string and return AMDGCN assembly.
-
-        Args:
-            mlir_string: MLIR code as string
-            targetid: Target GPU (e.g., "gfx942")
-            codeobj: Code object version ("4" or "5")
-
-        Returns:
-            AMDGCN assembly code as string
-        """
-        emitter = cls(targetid=targetid, codeobj=codeobj)
-
-        with Context() as ctx:
-            module = Module.parse(mlir_string, ctx)
-
-            for fn in walk_ops_recursively(module.operation):
-                if isinstance(fn, func_d.FuncOp):
-                    # Skip async functions and other non-kernel functions
-                    if should_skip_function(fn):
-                        continue
-
-                    # Extract basic info directly from MLIR function
-                    kernel_name = fn.sym_name.value
-                    num_args = len(fn.entry_block.arguments)
-
-                    ti = extract_translation_info(fn)
-                    wg_size = ti.wg_size
-                    subgroup_size = ti.subgroup_size
-
-                    # Detect which workgroup IDs are needed
-                    needs_wgid_x, needs_wgid_y, needs_wgid_z = (
-                        detect_needed_workgroup_ids(fn)
-                    )
-                    emitter.needs_wgid_x = needs_wgid_x
-                    emitter.needs_wgid_y = needs_wgid_y
-                    emitter.needs_wgid_z = needs_wgid_z
-
-                    # Emit prologue via MetadataEmitter (single source of truth)
-                    metadata = create_metadata(
-                        name=kernel_name,
-                        targetid=targetid,
-                        codeobj=codeobj,
-                        wg_size=wg_size,
-                        subgroup_size=subgroup_size,
-                        needs_wgid=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
-                        num_args=num_args,
-                    )
-                    meta_emitter = MetadataEmitter(metadata)
-                    prologue_lines = meta_emitter.emit_prologue()
-                    emitter.lines.extend(prologue_lines)
-                    
-                    # Walk MLIR and emit instructions via kernel IR
-                    from .kernel_pipeline import KernelCompilationContext
-                    
-                    # Check if multi-wave (need flat_tid from system VGPR)
-                    wg_x, wg_y, wg_z = normalize_wg_size(wg_size)
-                    is_multi_wave = wg_y > 1 or wg_z > 1
-                    kernel_ctx = KernelCompilationContext(
-                        use_flat_tid=is_multi_wave,
-                        use_workgroup_ids=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
-                    )
-                    walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
-                    kernel_info = walker.interpret_func(fn)
-                    body_lines, allocation_stats = kernel_ctx.finalize()
-                    emitter.lines.extend(body_lines)
-
-                    # Patch prologue with actual resource values
-                    patched_prologue = MetadataEmitter.patch_resource_usage(
-                        prologue_lines,
-                        allocation_stats.peak_vgprs,
-                        allocation_stats.peak_sgprs,
-                        getattr(allocation_stats, "peak_agprs", 0),
-                        kernel_info.lds_size_bytes,
-                        targetid,
-                    )
-                    # Replace the prologue at the front of lines
-                    emitter.lines[: len(prologue_lines)] = patched_prologue
-
-                    # Emit epilogue via MetadataEmitter
-                    metadata.vgprs_used = allocation_stats.peak_vgprs
-                    metadata.sgprs_used = allocation_stats.peak_sgprs
-                    metadata.agprs_used = getattr(allocation_stats, "peak_agprs", 0)
-                    metadata.lds_size_bytes = kernel_info.lds_size_bytes
-                    epilogue_lines = meta_emitter.emit_epilogue()
-                    emitter.lines.extend(epilogue_lines)
-
-        return "\n".join(emitter.lines)
+        """Legacy entry point: delegate to the canonical KernelModuleCompiler pipeline."""
+        from .kernel_pipeline import KernelModuleCompiler
+        return KernelModuleCompiler(targetid=targetid, codeobj=codeobj).compile_mlir_string(mlir_string)
 
     # ---- Unified Emitter Integration ----
     
