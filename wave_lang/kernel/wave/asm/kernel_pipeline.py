@@ -2337,7 +2337,7 @@ class KernelCompilationContext:
         """
         Get the unified emitter for this context.
         
-        This provides a consistent API with AsmEmitter.unified, allowing
+        This provides a consistent API with the legacy unified-emission surface, allowing
         callers to use kernel_ctx.unified.v_add_u32(...) syntax.
         
         When using the unified emitter:
