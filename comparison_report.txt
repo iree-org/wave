@@ -16,10 +16,10 @@ Instruction Metrics Comparison
 ======================================================================
 Category                        LLVM        ASM       Diff      Ratio
 ----------------------------------------------------------------------
-Total Instructions               420        137       -283      0.33x
+Total Instructions               420        136       -284      0.32x
 ----------------------------------------------------------------------
 Scalar ALU (SALU)                 18         23         +5      1.28x
-Vector ALU (VALU)                 33         63        +30      1.91x
+Vector ALU (VALU)                 33         62        +29      1.88x
 Vector Memory (VMEM)               8          6         -2      0.75x
 Scalar Memory (SMEM)               2          3         +1      1.50x
 LDS/GDS (DS)                       8          8          0      1.00x
@@ -51,11 +51,11 @@ LDS (bytes)                     8192       8192          0
 ======================================================================
 Preliminary Analysis
 ======================================================================
-Instruction overhead: 0.33x (-283 instructions)
+Instruction overhead: 0.32x (-284 instructions)
 
 Likely causes of overhead:
 - Extra waits: +5 s_waitcnt (conservative scheduling?)
-- Extra VALU: +30 (index computation overhead?)
+- Extra VALU: +29 (index computation overhead?)
 - Extra readfirstlane: +1 (scalar extraction overhead?)
 - Higher VGPR usage: +5 (may reduce occupancy)
 

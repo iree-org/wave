@@ -78,13 +78,13 @@ def use_kernel_lsra() -> bool:
 
 def use_kernel_ir() -> bool:
     """
-    Check if full kernel IR path is enabled (default: False).
+    Check if kernel IR path is enabled.
     
-    The kernel IR path supports simple kernels like copy.
-    GEMM/MFMA support is still being debugged.
-    Set WAVE_KERNEL_IR=1 to opt-in.
+    The kernel IR path is the only compilation path. Legacy mode has been removed.
+    This function always returns True for backward compatibility with any code
+    that still calls it.
     """
-    return os.environ.get(WAVE_KERNEL_IR_ENV, "0") == "1"
+    return True
 
 
 # =============================================================================

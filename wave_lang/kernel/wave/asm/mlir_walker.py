@@ -30,7 +30,7 @@ from .utils import (
 
 from .kernel_model import KernelInfo
 from .handlers import OperationHandlers
-from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds, precompute_m0_values_legacy
+from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds
 from .kernel_pipeline import KernelCompilationContext
 
 
@@ -188,15 +188,10 @@ class IRWalker:
             for i in range(schedule.first_g2s_idx):
                 self._dispatch_operation(ops[i], kernel_info)
 
-            # Legacy-only optimization: precompute M0 values for gather_to_lds ops.
-            if self.kernel_ctx is None:
-                precompute_m0_values_legacy(schedule, kernel_info, self.handlers)
-            
             # Pre-create G2S SRD copies to ensure they're allocated before the loop
             # This prevents the second SRD copy from overwriting the first's source
-            # NOTE: Only do this in kernel IR mode; legacy mode handles SRDs lazily
-            # Also skip if already inside a loop (handled by handle_scf_for_op)
-            if self.kernel_ctx is not None and not getattr(self, '_inside_loop', False):
+            # Skip if already inside a loop (handled by handle_scf_for_op)
+            if not getattr(self, '_inside_loop', False):
                 precreate_g2s_srds(schedule, kernel_info, self.handlers)
 
             # Dispatch remaining ops
