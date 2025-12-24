@@ -1,5 +1,5 @@
 # REQUIRES: water
-# RUN: python %s | FileCheck %s
+# RUN: python -v %s | FileCheck %s
 
 
 import sys

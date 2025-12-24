@@ -80,15 +80,22 @@ print("past iree assertion", file=sys.stderr)
 try:
     import sys
     import os
+    import hashlib
 
     for p in sys.path:
         print(f"walking {p}", file=sys.stderr)
         for root, dirs, files in os.walk(p):
-            if not "water" in root and not "mlir" in root:
-                continue
-            print(f"walking {root}", file=sys.stderr)
             for file in files:
-                print(f"file: {file}", file=sys.stderr)
+                if not file.endswith(".so"):
+                    continue
+                path = (Path(root) / file).resolve()
+                with open(path, "rb") as f:
+                    contents = f.read()
+                    h = hashlib.sha256(contents).hexdigest()
+                print(
+                    f"file: {root}/{file}, actual {str(path)}, {os.path.getsize(root + os.sep + file)}, hash={h}",
+                    file=sys.stderr,
+                )
     from water_mlir.water_mlir import ir
 
     print("past water_mlir import", file=sys.stderr)
