@@ -429,6 +429,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         *add_opt(canonicalize_cse),
         *add_opt("loop-invariant-code-motion"),
         *add_opt("int-range-optimizations"),
+        *add_opt(("arith-int-range-narrowing", {"int-bitwidths-supported": "8,16,32"})),
         ("water-alloc-to-alloca", {}, "gpu.module"),
         # add_transform(alloc_to_alloca, "__transform_alloc_to_alloca"),
         add_transform(alloca_to_global, "__transform_alloca_to_global"),
