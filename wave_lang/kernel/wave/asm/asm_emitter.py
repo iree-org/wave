@@ -17,7 +17,7 @@ from wave_lang.support.ir_imports import (
 )
 
 from .kernel_model import KernelInfo, MemRefInfo
-from .utils import emit_expression_asm, normalize_wg_size
+from .utils import normalize_wg_size
 from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator, AGPRAllocator
 from .mlir_walker import IRWalker
 # Instructions removed - using unified emitter directly
@@ -1229,123 +1229,6 @@ amdhsa.kernels:
         self.unified.s_mov_b32(f"s{srd_register_1}", f"s{base_high_register}")
         self.unified.s_mov_b32(f"s{srd_register_2}", limit_bytes)
         self.unified.s_mov_b32(f"s{srd_register_3}", "Srd127_96")
-
-    def compute_voffset_and_instoffset_expr(
-        self,
-        kernel_info: KernelInfo,
-        byte_offset_expr,
-    ) -> Tuple[int, int]:
-        """
-        Compute voffset and instoffset from a prebuilt SymPy byte-offset expression.
-
-        Args:
-            kernel_info: Kernel information (for subgroup_size, etc.)
-            byte_offset_expr: SymPy expression representing the byte offset
-
-        Returns:
-            Tuple of (voffset_vgpr, instoffset)
-            - voffset_vgpr: VGPR index allocated for dynamic offset (caller owns lifetime)
-            - instoffset: Integer constant offset for instruction immediate
-        """
-        from .utils import split_const_dynamic
-
-        # Split into constant and dynamic parts
-        const_offset, dynamic_expr = split_const_dynamic(byte_offset_expr)
-
-        # If entirely constant, use zero VGPR
-        if dynamic_expr == 0 or (
-            hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
-        ):
-            voffset_v = self.vgpr_allocator.alloc_v()
-            self.unified.v_mov_b32(f"v{voffset_v}", 0)
-            return voffset_v, const_offset
-
-        # Materialize dynamic expression into a VGPR
-        voffset_v = self.vgpr_allocator.alloc_v()
-        emit_expression_asm(dynamic_expr, self, kernel_info, dst_reg=f"v{voffset_v}")
-
-        return voffset_v, const_offset
-
-    def materialize_byte_offset_expr(
-        self,
-        kernel_info: KernelInfo,
-        byte_offset_expr,
-    ) -> int:
-        """
-        Materialize a byte-offset expression into a VGPR for LDS addressing.
-
-        Unlike compute_voffset_and_instoffset_expr, this does not split into
-        constant/dynamic parts - it materializes the full expression into a VGPR.
-
-        Args:
-            kernel_info: Kernel information (for subgroup_size, etc.)
-            byte_offset_expr: SymPy expression representing the byte offset
-
-        Returns:
-            VGPR index containing the computed address (caller owns lifetime)
-        """
-        # If expression is a constant, just materialize it
-        if isinstance(byte_offset_expr, int) or (
-            hasattr(byte_offset_expr, "is_number") and byte_offset_expr.is_number
-        ):
-            addr_v = self.vgpr_allocator.alloc_v()
-            const_val = int(byte_offset_expr)
-            self.unified.v_mov_b32(f"v{addr_v}", const_val)
-            return addr_v
-
-        # Materialize the full expression into a VGPR
-        addr_v = self.vgpr_allocator.alloc_v()
-        emit_expression_asm(byte_offset_expr, self, kernel_info, dst_reg=f"v{addr_v}")
-
-        return addr_v
-
-    def compute_voffset_and_instoffset_list(
-        self,
-        kernel_info: KernelInfo,
-        byte_exprs: List,
-    ) -> List[Tuple[int, int]]:
-        """
-        Compute voffset and instoffset for multiple byte-offset expressions.
-
-        Args:
-            kernel_info: Kernel information (for subgroup_size, etc.)
-            byte_exprs: List of SymPy expressions representing byte offsets
-
-        Returns:
-            List of (voffset_vgpr, instoffset) tuples, one per expression.
-            Caller owns lifetime of all allocated VGPRs.
-        """
-        results = []
-        for expr in byte_exprs:
-            voffset_v, instoffset = self.compute_voffset_and_instoffset_expr(
-                kernel_info, expr
-            )
-            results.append((voffset_v, instoffset))
-        return results
-
-    def compute_voffset_and_instoffset(
-        self,
-        kernel_info: KernelInfo,
-        memref_info: MemRefInfo,
-        indices: List[str],
-    ) -> Tuple[int, int]:
-        """
-        Compute:
-          - an allocated VGPR index to use as voffset (caller owns lifetime),
-          - an instoffset immediate (folded constant byte part).
-
-        This is a convenience wrapper that builds the byte offset expression
-        from indices and forwards to compute_voffset_and_instoffset_expr.
-        """
-        from .utils import build_memref_byte_offset_expr
-
-        # Build byte offset expression from indices
-        byte_offset_expr = build_memref_byte_offset_expr(
-            indices, kernel_info, memref_info
-        )
-
-        # Use the expression-based method
-        return self.compute_voffset_and_instoffset_expr(kernel_info, byte_offset_expr)
 
     def chunk_offsets(self, vector_bytes: int) -> List[int]:
         """

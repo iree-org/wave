@@ -27,7 +27,6 @@ from .utils import (
     parse_wg_and_subgroup,
     tid_upper_bound_from_thread_id,
     simplify_expression,
-    emit_expression_asm,
 )
 
 __all__ = [
@@ -58,5 +57,4 @@ __all__ = [
     "parse_wg_and_subgroup",
     "tid_upper_bound_from_thread_id",
     "simplify_expression",
-    "emit_expression_asm",
 ]
