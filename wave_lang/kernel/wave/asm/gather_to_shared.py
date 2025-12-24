@@ -81,60 +81,6 @@ def analyze_g2s_region(ops: List[Any]) -> Optional[G2SSchedule]:
     return G2SSchedule(first_g2s_idx=first_g2s_idx, g2s_ops=g2s_ops)
 
 
-def precompute_m0_values_legacy(
-    schedule: G2SSchedule,
-    kernel_info: "KernelInfo",
-    handlers: "OperationHandlers",
-) -> None:
-    """
-    Legacy-only optimization: precompute M0 into temporary SGPRs for each
-    gather_to_lds op and stash them on the walker.
-
-    Kernel IR mode intentionally computes M0 inline and relies on its own
-    hazard mitigation / allocation pipeline.
-    """
-    walker = handlers.walker
-    if walker.kernel_ctx is not None:
-        return
-
-    if not hasattr(walker, "_m0_sgprs"):
-        walker._m0_sgprs = {}
-
-    emitter = walker.emitter
-    unified = walker.unified
-
-    for g2s_op in schedule.g2s_ops:
-        dst_memref_ssa = str(g2s_op.operands[2])
-        lds_base_bytes = walker._lds_view_base_bytes.get(dst_memref_ssa, 0)
-        lds_cols, elem_bytes = handlers.g2s._get_lds_layout(g2s_op.operands[2].type)
-
-        dst_row = kernel_info.index_env.get(str(g2s_op.operands[3]))
-        dst_col = kernel_info.index_env.get(str(g2s_op.operands[4]))
-        if dst_row is None or dst_col is None:
-            continue
-
-        row = dst_row if isinstance(dst_row, sympy.Expr) else sympy.Integer(dst_row)
-        col = dst_col if isinstance(dst_col, sympy.Expr) else sympy.Integer(dst_col)
-        m0_expr = sympy.simplify(lds_base_bytes + (row * lds_cols + col) * elem_bytes)
-
-        s_m0 = emitter.sgpr_allocator.alloc_s()
-        if m0_expr.is_number:
-            unified.s_mov_b32(f"s{s_m0}", int(m0_expr), comment="Pre-compute M0")
-        else:
-            m0_vreg = int(
-                handlers._get_expr_emitter(kernel_info).get_or_emit(m0_expr)[1:]
-            )
-            # gfx94x/95x VALU->readfirstlane hazard: insert 1 wait state.
-            unified.s_nop(0, comment="hazard mitigation")
-            unified.v_readfirstlane_b32(
-                f"s{s_m0}", f"v{m0_vreg}", comment="Pre-compute M0"
-            )
-
-        # Key by wrapper object identity; this is safe within a single walk where
-        # the same wrapper objects are dispatched.
-        walker._m0_sgprs[id(g2s_op)] = s_m0
-
-
 def precreate_g2s_srds(
     schedule: G2SSchedule,
     kernel_info: "KernelInfo",
@@ -191,10 +137,6 @@ class G2SHandler:
         self.handlers = handlers
         self.walker = handlers.walker
     
-    def _use_kernel_ir(self) -> bool:
-        """Check if we should use kernel IR path."""
-        return self.walker.kernel_ctx is not None
-
     # -------------------------------------------------------------------------
     # SRD tracing
     # -------------------------------------------------------------------------
@@ -205,74 +147,43 @@ class G2SHandler:
         """Trace through cast chain to find the original memref with an SRD.
         
         Returns:
-            In legacy mode: (Tuple[int, int, int, int], original_ssa) - physical SGPR indices
-            In kernel IR mode: (KRegRange, original_ssa) - virtual SGPR range
+            (KRegRange, original_ssa) - virtual SGPR range
         """
-        # In kernel IR mode, use kernel_ctx's SRD tracking
-        if self._use_kernel_ir():
-            ctx = self.walker.kernel_ctx
-            srd_range = ctx.get_srd(memref_ssa)
-            if srd_range is not None:
-                return srd_range, memref_ssa
-            
-            # Trace through cast chain to find original memref
-            fat_sources = getattr(self.walker, "_fat_buffer_sources", {})
-            cast_sources = getattr(self.walker, "_memref_cast_sources", {})
-            current = memref_ssa
-            visited = set()
-            while current and current not in visited:
-                visited.add(current)
-                
-                # Check if we have an SRD for this memref
-                srd_range = ctx.get_srd(current)
-                if srd_range is not None:
-                    return srd_range, current
-                
-                # Check if this is a kernel argument that needs SRD setup
-                if current in kernel_info.subspans:
-                    binding = kernel_info.subspans[current]
-                    if binding.arg_index >= 0 and binding.memref_info:
-                        # Set up SRD for this kernel argument
-                        limit_bytes = self.handlers._compute_buffer_size(binding.memref_info)
-                        srd_range = ctx.ensure_srd(current, binding.arg_index, limit_bytes)
-                        return srd_range, current
-                
-                # Follow cast chain
-                if current in fat_sources:
-                    info = fat_sources[current]
-                    current = info.get("source_ssa", current) if isinstance(info, dict) else info
-                elif current in cast_sources:
-                    current = cast_sources[current]
-                else:
-                    break
-            return None, None
+        ctx = self.walker.kernel_ctx
+        srd_range = ctx.get_srd(memref_ssa)
+        if srd_range is not None:
+            return srd_range, memref_ssa
         
-        # Legacy mode
-        srds = self.walker.emitter.srds
+        # Trace through cast chain to find original memref
         fat_sources = getattr(self.walker, "_fat_buffer_sources", {})
         cast_sources = getattr(self.walker, "_memref_cast_sources", {})
-
         current = memref_ssa
         visited = set()
-
         while current and current not in visited:
             visited.add(current)
-
-            # Found SRD
-            if current in srds:
-                return srds[current], current
-
+            
+            # Check if we have an SRD for this memref
+            srd_range = ctx.get_srd(current)
+            if srd_range is not None:
+                return srd_range, current
+            
+            # Check if this is a kernel argument that needs SRD setup
+            if current in kernel_info.subspans:
+                binding = kernel_info.subspans[current]
+                if binding.arg_index >= 0 and binding.memref_info:
+                    # Set up SRD for this kernel argument
+                    limit_bytes = self.handlers._compute_buffer_size(binding.memref_info)
+                    srd_range = ctx.ensure_srd(current, binding.arg_index, limit_bytes)
+                    return srd_range, current
+            
             # Follow cast chain
             if current in fat_sources:
                 info = fat_sources[current]
-                current = (
-                    info.get("source_ssa", current) if isinstance(info, dict) else info
-                )
+                current = info.get("source_ssa", current) if isinstance(info, dict) else info
             elif current in cast_sources:
                 current = cast_sources[current]
             else:
                 break
-
         return None, None
 
     # -------------------------------------------------------------------------
@@ -283,32 +194,10 @@ class G2SHandler:
         """Allocate 4-aligned SGPRs for an SRD.
         
         Returns:
-            In legacy mode: Tuple[int, int, int, int] of physical SGPR indices
-            In kernel IR mode: KRegRange of 4 virtual SGPRs
+            KRegRange of 4 virtual SGPRs
         """
-        if self._use_kernel_ir():
-            # In kernel IR mode, allocate a virtual SGPR range
-            # The register allocator will ensure 4-alignment
-            ctx = self.walker.kernel_ctx
-            return ctx.program.alloc_sreg_range(4, alignment=4)
-        
-        # Legacy mode: allocate physical SGPRs
-        emitter = self.walker.emitter
-        temp_sgprs = []
-        while True:
-            s = emitter.sgpr_allocator.alloc_s()
-            if s % 4 == 0:
-                srd = (
-                    s,
-                    emitter.sgpr_allocator.alloc_s(),
-                    emitter.sgpr_allocator.alloc_s(),
-                    emitter.sgpr_allocator.alloc_s(),
-                )
-                break
-            temp_sgprs.append(s)
-        for s in temp_sgprs:
-            emitter.sgpr_allocator.free_s(s)
-        return srd
+        ctx = self.walker.kernel_ctx
+        return ctx.program.alloc_sreg_range(4, alignment=4)
 
     def _compute_cache_swizzle_bits(self, src_memref_ssa: str) -> int:
         """Compute cache swizzle bits from fat_raw_buffer_cast info."""
@@ -326,32 +215,6 @@ class G2SHandler:
         return 0
 
     def _emit_srd_copy(
-        self,
-        srd_regs,  # Tuple[int, ...] or KRegRange
-        orig_srd_regs: tuple,
-        cache_swizzle_bits: int,
-    ) -> None:
-        """Emit SRD copy with cache swizzle modifications."""
-        if self._use_kernel_ir():
-            self._emit_srd_copy_kernel_ir(srd_regs, orig_srd_regs, cache_swizzle_bits)
-            return
-        
-        # Legacy mode
-        s0, s1, s2, s3 = srd_regs
-        unified = self.walker.unified
-
-        unified.s_mov_b32(f"s{s0}", f"s{orig_srd_regs[0]}", comment="SRD word0")
-
-        if cache_swizzle_bits == 0:
-            unified.s_mov_b32(f"s{s1}", f"s{orig_srd_regs[1]}", comment="SRD word1")
-        else:
-            unified.s_and_b32(f"s{s1}", f"s{orig_srd_regs[1]}", hex(0xFFFF))
-            unified.s_or_b32(f"s{s1}", f"s{s1}", hex(cache_swizzle_bits), comment="cache swizzle")
-
-        unified.s_mov_b32(f"s{s2}", _SRD_MAX_BUFFER_SIZE, comment="SRD word2")
-        unified.s_mov_b32(f"s{s3}", _SRD_WORD3_LDS, comment="SRD word3")
-    
-    def _emit_srd_copy_kernel_ir(
         self,
         new_srd_range,  # KRegRange - new SRD to fill
         orig_srd_range,  # KRegRange - original SRD to copy from
@@ -411,43 +274,25 @@ class G2SHandler:
         """Compute a VGPR containing the offset value, scaled to bytes.
         
         Returns:
-            In legacy mode: int (VGPR index)
-            In kernel IR mode: KVReg (virtual VGPR)
+            KVReg (virtual VGPR)
         """
-        value = kernel_info.index_env.get(index_ssa)
-
-        if self._use_kernel_ir():
-            from .kernel_ir import KInstr, KImm
-            ctx = self.walker.kernel_ctx
-            
-            if isinstance(value, int):
-                voffset = ctx.vreg()
-                ctx.program.emit(KInstr(
-                    "v_mov_b32", (voffset,), (KImm(value * scale_bytes),),
-                    comment="offset"
-                ))
-                return voffset
-            
-            if isinstance(value, sympy.Expr):
-                scaled_expr = value * scale_bytes if scale_bytes != 1 else value
-                return ctx.expr_emitter.get_or_emit(scaled_expr)
-            
-            raise ValueError(f"Cannot compute offset for {index_ssa}: value={value}")
+        from .kernel_ir import KInstr, KImm
         
-        # Legacy mode
+        value = kernel_info.index_env.get(index_ssa)
+        ctx = self.walker.kernel_ctx
+        
         if isinstance(value, int):
-            voffset = self.walker.emitter.vgpr_allocator.alloc_v()
-            self.walker.unified.v_mov_b32(f"v{voffset}", value * scale_bytes, comment="offset")
+            voffset = ctx.vreg()
+            ctx.program.emit(KInstr(
+                "v_mov_b32", (voffset,), (KImm(value * scale_bytes),),
+                comment="offset"
+            ))
             return voffset
-
+        
         if isinstance(value, sympy.Expr):
             scaled_expr = value * scale_bytes if scale_bytes != 1 else value
-            return int(
-                self.handlers._get_expr_emitter(kernel_info).get_or_emit(scaled_expr)[
-                    1:
-                ]
-            )
-
+            return ctx.expr_emitter.get_or_emit(scaled_expr)
+        
         raise ValueError(f"Cannot compute offset for {index_ssa}: value={value}")
 
     def _compute_vaddr(self, src_index_ssa: str, kernel_info: "KernelInfo") -> int:
@@ -477,47 +322,7 @@ class G2SHandler:
         elem_bytes: int,
     ) -> None:
         """Emit M0 register setup for LDS destination."""
-        if self._use_kernel_ir():
-            self._emit_m0_kernel_ir(operation, kernel_info, lds_base_bytes, lds_cols, elem_bytes)
-            return
-        
-        # Legacy mode
-        emitter = self.walker.emitter
-        unified = self.walker.unified
-
-        # Optional legacy optimization: use precomputed M0 if available
-        m0_sgprs = getattr(self.walker, "_m0_sgprs", None)
-        if m0_sgprs is not None:
-            s_m0 = m0_sgprs.pop(id(operation), None)
-            if s_m0 is not None:
-                unified.s_mov_b32("m0", f"s{s_m0}", comment="Pre-computed M0")
-                emitter.sgpr_allocator.free_s(s_m0)
-                return
-
-        # Compute M0 inline from row/col indices
-        dst_row = kernel_info.index_env.get(str(operation.operands[3]))
-        dst_col = kernel_info.index_env.get(str(operation.operands[4]))
-
-        # Build M0 expression: lds_base + (row * cols + col) * elem_bytes
-        row = (
-            dst_row if isinstance(dst_row, sympy.Expr) else sympy.Integer(dst_row or 0)
-        )
-        col = (
-            dst_col if isinstance(dst_col, sympy.Expr) else sympy.Integer(dst_col or 0)
-        )
-        m0_expr = sympy.simplify(lds_base_bytes + (row * lds_cols + col) * elem_bytes)
-
-        # Emit: either constant or expression -> readfirstlane -> M0
-        if m0_expr.is_number:
-            unified.s_mov_b32("m0", int(m0_expr), comment="LDS offset")
-        else:
-            m0_vreg = int(
-                self.handlers._get_expr_emitter(kernel_info).get_or_emit(m0_expr)[1:]
-            )
-            s_tmp = emitter.sgpr_allocator.alloc_s()
-            unified.v_readfirstlane_b32(f"s{s_tmp}", f"v{m0_vreg}")
-            unified.s_mov_b32("m0", f"s{s_tmp}")
-            emitter.sgpr_allocator.free_s(s_tmp)
+        self._emit_m0_kernel_ir(operation, kernel_info, lds_base_bytes, lds_cols, elem_bytes)
     
     def _emit_m0_kernel_ir(
         self,
@@ -557,41 +362,15 @@ class G2SHandler:
             program.emit(KInstr("s_mov_b32", (M0,), (s_tmp,)))
 
     def _emit_buffer_load(
-        self, transfer_bytes: int, voffset, srd_regs
+        self, transfer_bytes: int, voffset, srd_range
     ) -> None:
         """Emit buffer_load...lds instruction.
         
         Args:
             transfer_bytes: Number of bytes to transfer (4 or 16)
-            voffset: VGPR index (legacy) or KVReg (kernel IR)
-            srd_regs: Tuple of SGPR indices (legacy) or KRegRange (kernel IR)
+            voffset: KVReg (virtual VGPR)
+            srd_range: KRegRange (virtual SGPR range)
         """
-        if self._use_kernel_ir():
-            self._emit_buffer_load_kernel_ir(transfer_bytes, voffset, srd_regs)
-            return
-        
-        # Legacy mode
-        unified = self.walker.unified
-        srd_str = f"s[{srd_regs[0]}:{srd_regs[3]}]"
-
-        if transfer_bytes == 4:
-            unified.buffer_load_dword_lds(
-                f"v{voffset}", srd_str, "0", comment=f"gather {transfer_bytes}B"
-            )
-        elif transfer_bytes == 16:
-            unified.buffer_load_dwordx4_lds(
-                f"v{voffset}", srd_str, "0", comment=f"gather {transfer_bytes}B"
-            )
-        else:
-            raise NotImplementedError(
-                f"gather_to_lds: transfer_bytes={transfer_bytes} not supported. "
-                f"Only 4B (buffer_load_dword) and 16B (buffer_load_dwordx4) are valid."
-            )
-    
-    def _emit_buffer_load_kernel_ir(
-        self, transfer_bytes: int, voffset, srd_range
-    ) -> None:
-        """Emit buffer_load...lds instruction using kernel IR."""
         from .kernel_ir import KInstr, KImm
         
         ctx = self.walker.kernel_ctx
@@ -642,23 +421,15 @@ class G2SHandler:
             src_memref_ssa, kernel_info
         )
         if orig_srd_regs is None:
-            if self._use_kernel_ir():
-                self.walker.kernel_ctx.comment(f"ERROR: no SRD found for {src_memref_ssa}")
-            else:
-                self.walker.emitter.emit(f"    # ERROR: no SRD found for {src_memref_ssa}")
+            self.walker.kernel_ctx.comment(f"ERROR: no SRD found for {src_memref_ssa}")
             return
 
         srd_regs = self._get_or_create_srd(orig_srd_regs, src_memref_ssa)
         
         # Emit comment
-        if self._use_kernel_ir():
-            self.walker.kernel_ctx.comment(
-                f"gather_to_lds: {transfer_bytes}B from {original_ssa} to LDS"
-            )
-        else:
-            self.walker.emitter.emit(
-                f"    # gather_to_lds: {transfer_bytes}B from {original_ssa} to LDS"
-            )
+        self.walker.kernel_ctx.comment(
+            f"gather_to_lds: {transfer_bytes}B from {original_ssa} to LDS"
+        )
 
         # Compute vaddr
         voffset = self._compute_vaddr(src_index_ssa, kernel_info)

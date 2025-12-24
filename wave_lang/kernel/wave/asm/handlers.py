@@ -34,7 +34,6 @@ from .utils import (
     simplify_expression,
     split_const_dynamic,
 )
-from .kernel_emitter import create_emitter
 from .gather_to_shared import G2SHandler
 
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
@@ -56,46 +55,8 @@ class OperationHandlers:
             walker: The IRWalker instance that owns this handler
         """
         self.walker = walker
-        # Per-kernel expression emitters with CSE (one per kernel)
-        self._expr_emitters_by_kernel = {}
         # Gather-to-LDS handler (composition)
         self.g2s = G2SHandler(self)
-
-    def _get_expr_emitter(self, kernel_info: KernelInfo):
-        """
-        Get or create expression emitter for this kernel (with CSE).
-
-        Uses KernelEmitter with whole-kernel register allocation, providing
-        global CSE and better register reuse.
-
-        Binds workgroup ID and thread ID symbols if they are available.
-        """
-        key = id(kernel_info)
-        if key not in self._expr_emitters_by_kernel:
-            expr_emitter = create_emitter(self.walker.emitter, kernel_info)
-
-            emitter = self.walker.emitter
-
-            # Bind workgroup ID symbols to their SGPRs
-            if emitter.sgpr_workgroup_id_x is not None:
-                expr_emitter.bind_symbol("wgid_x", f"s{emitter.sgpr_workgroup_id_x}")
-            if emitter.sgpr_workgroup_id_y is not None:
-                expr_emitter.bind_symbol("wgid_y", f"s{emitter.sgpr_workgroup_id_y}")
-            if emitter.sgpr_workgroup_id_z is not None:
-                expr_emitter.bind_symbol("wgid_z", f"s{emitter.sgpr_workgroup_id_z}")
-
-            # Bind thread/workitem ID symbols to their VGPRs (for multi-wave support)
-            # Note: ExprEmitter auto-binds ABI registers, but we still bind here
-            # for legacy emitter compatibility
-            if emitter.vgpr_tid_x is not None:
-                expr_emitter.bind_symbol("tid_x", f"v{emitter.vgpr_tid_x}")
-            if emitter.vgpr_tid_y is not None:
-                expr_emitter.bind_symbol("tid_y", f"v{emitter.vgpr_tid_y}")
-            if emitter.vgpr_tid_z is not None:
-                expr_emitter.bind_symbol("tid_z", f"v{emitter.vgpr_tid_z}")
-
-            self._expr_emitters_by_kernel[key] = expr_emitter
-        return self._expr_emitters_by_kernel[key]
 
     def handle_arith_constant_op(
         self, operation: arith_d.ConstantOp, kernel_info: KernelInfo
@@ -529,14 +490,9 @@ class OperationHandlers:
 
         limit_bytes = self._compute_buffer_size(binding_use.memref_info)
         
-        if self.walker.kernel_ctx is not None:
-            # In kernel IR mode, SRD setup is deferred to actual load/store operations
-            # Just record the subspan info, SRD will be set up lazily
-            return
-        
-        self.walker.emitter.ensure_srd_for_subspan(
-            memref_ssa, argument_index, limit_bytes
-        )
+        # In kernel IR mode, SRD setup is deferred to actual load/store operations
+        # Just record the subspan info, SRD will be set up lazily
+        pass
 
     def handle_mfma_op(self, operation: amdgpu_d.MFMAOp, kernel_info: KernelInfo):
         """Handle amdgpu.mfma operations - emit MFMA instruction with proper input sourcing."""
@@ -547,85 +503,34 @@ class OperationHandlers:
             rhs_ssa = str(operation.operands[1])  # Second operand (RHS of multiply)
             acc_ssa = str(operation.operands[2])  # Third operand (accumulator)
 
-            if self.walker.kernel_ctx is not None:
-                # Kernel IR mode: use virtual registers
-                from .kernel_ir import KVReg, KRegRange
-                
-                ctx = self.walker.kernel_ctx
-                
-                # Get operand registers from kernel context
-                lhs_regs = ctx.ssa_to_reg.get(lhs_ssa)
-                rhs_regs = ctx.ssa_to_reg.get(rhs_ssa)
-                acc_regs = ctx.ssa_to_reg.get(acc_ssa)
-                
-                if lhs_regs and rhs_regs:
-                    # Call kernel context MFMA emission
-                    result_regs = ctx.emit_mfma_f32_16x16x16_f16(
-                        lhs_regs,
-                        rhs_regs,
-                        acc_regs if acc_regs and len(acc_regs) == 4 else None,
-                    )
-                    
-                    # Track result in SSA mapping
-                    result_ssa = str(operation.result)
-                    ctx.ssa_to_reg[result_ssa] = result_regs
-                    
-                    return
-                
-                raise RuntimeError(
-                    f"MFMA operation in kernel IR mode but inputs not available. "
-                    f"lhs={lhs_ssa} ({lhs_regs}), rhs={rhs_ssa} ({rhs_regs})"
-                )
+            # Kernel IR mode: use virtual registers
+            from .kernel_ir import KVReg, KRegRange
             
-            # Legacy mode: use physical registers via emitter
-            lhs_pair = self.walker.ssa_to_vgpr.get(lhs_ssa)
-            rhs_pair = self.walker.ssa_to_vgpr.get(rhs_ssa)
-
-            if lhs_pair and rhs_pair:
-                # Determine which accumulator to use
-                acc_quad = None
-
-                # Check if accumulator is from a previous MFMA result or vector
-                acc_regs = self.walker.ssa_to_vgpr.get(acc_ssa)
-                if acc_regs:
-                    # Accumulator from a previous operation
-                    if len(acc_regs) == 2:
-                        # Pair - extend to quad
-                        acc_quad = (
-                            acc_regs[0],
-                            acc_regs[0] + 1,
-                            acc_regs[0] + 2,
-                            acc_regs[0] + 3,
-                        )
-                    elif len(acc_regs) == 4:
-                        # Already a quad
-                        acc_quad = acc_regs
-
-                self.walker.emitter.emit_mfma_16x16x16_f16(lhs_pair, rhs_pair, acc_quad)
-
-                # MFMA now writes directly to VGPRs (not AGPRs), so result is already in VGPRs
-                result_quad = self.walker.emitter.current_vgpr_quad
-
-                # Track this MFMA result in unified SSA→VGPR map
+            ctx = self.walker.kernel_ctx
+            
+            # Get operand registers from kernel context
+            lhs_regs = ctx.ssa_to_reg.get(lhs_ssa)
+            rhs_regs = ctx.ssa_to_reg.get(rhs_ssa)
+            acc_regs = ctx.ssa_to_reg.get(acc_ssa)
+            
+            if lhs_regs and rhs_regs:
+                # Call kernel context MFMA emission
+                result_regs = ctx.emit_mfma_f32_16x16x16_f16(
+                    lhs_regs,
+                    rhs_regs,
+                    acc_regs if acc_regs and len(acc_regs) == 4 else None,
+                )
+                
+                # Track result in SSA mapping
                 result_ssa = str(operation.result)
-                self.walker.ssa_to_vgpr[result_ssa] = result_quad
-
-                # Free input pairs (unless they're from a previous MFMA or loop accumulator)
-                # Check if lhs/rhs are from loop accumulator or MFMA results (v4-v7 range)
-                if lhs_pair[0] < 4 or lhs_pair[0] > 7:
-                    self.walker.emitter.vgpr_allocator.free_v_pair(lhs_pair)
-                if rhs_pair[0] < 4 or rhs_pair[0] > 7:
-                    self.walker.emitter.vgpr_allocator.free_v_pair(rhs_pair)
-
-                self.walker.last_vmem_ticket = None  # Data now from MFMA, not VMEM
+                ctx.ssa_to_reg[result_ssa] = result_regs
+                
                 return
-
-        # If we reach here, MFMA inputs weren't properly set up
-        raise RuntimeError(
-            f"MFMA operation encountered but inputs not available. "
-            f"Operands: {[str(op) for op in operation.operands]}, "
-            f"Available SSA→VGPR mappings: {list(self.walker.ssa_to_vgpr.keys())}"
-        )
+            
+            raise RuntimeError(
+                f"MFMA operation inputs not available. "
+                f"lhs={lhs_ssa} ({lhs_regs}), rhs={rhs_ssa} ({rhs_regs})"
+            )
 
     def handle_barrier_op(self, operation: gpu_d.BarrierOp, kernel_info: KernelInfo):
         """Handle gpu.barrier operations - emit synchronization barrier."""
@@ -733,115 +638,60 @@ class OperationHandlers:
             print(f"[DS_OFFSET_DEBUG]   after_vbase_expr={byte_offset_expr}")
             print(f"[DS_OFFSET_DEBUG]   const_offset={const_offset}, base_expr={base_expr}")
         
-        if self.walker.kernel_ctx is not None:
-            # Kernel IR mode: emit LDS load with virtual registers
-            from .kernel_ir import KInstr, KImm, KVReg, KRegRange, KPhysVReg
-            
-            ctx = self.walker.kernel_ctx
-            
-            # Determine if we can use the offset field
-            has_dynamic_base = len(base_expr.free_symbols) > 0
-            
-            if not has_dynamic_base:
-                # Pure constant address - materialize it
-                addr_vreg = ctx.vreg()
-                ctx.program.emit(KInstr(
-                    "v_mov_b32", (addr_vreg,), (KImm(int(byte_offset_expr)),),
-                    comment=f"LDS addr = {byte_offset_expr}"
-                ))
-                lds_offset = 0
-            elif 0 <= const_offset <= DS_MAX_OFFSET and const_offset % DS_ALIGN == 0:
-                # Can use offset field - compute only the base expression
-                # Use a fresh scope to avoid CSE issues with different memrefs
-                with ctx.expr_emitter.scope("lds_base"):
-                    addr_vreg = ctx.expr_emitter.get_or_emit(base_expr)
-                lds_offset = const_offset
-                if DEBUG_DS_OFFSET:
-                    print(f"[DS_OFFSET_DEBUG]   -> USING_OFFSET: addr={addr_vreg}, offset={lds_offset}")
-            else:
-                # Offset out of range or not aligned - compute full address
-                addr_vreg = ctx.expr_emitter.get_or_emit(byte_offset_expr)
-                lds_offset = 0
-            
-            # Allocate destination pair and emit ds_read_b64
-            dst_range = ctx.vreg_pair()
-            ctx.emit_lds_read_b64(dst_range, addr_vreg, lds_offset)
-            
-            # Track in SSA mapping as tuple of KVReg
-            result_ssa = str(operation.results[0])
-            result_regs = (KVReg(dst_range.base_reg.id), KVReg(dst_range.base_reg.id + 1))
-            ctx.ssa_to_reg[result_ssa] = result_regs
-            return
+        # Kernel IR mode: emit LDS load with virtual registers
+        from .kernel_ir import KInstr, KImm, KVReg, KRegRange, KPhysVReg
         
-        # Legacy mode: emit LDS load with physical registers
-        # Determine if we can use the offset field and how
+        ctx = self.walker.kernel_ctx
+        
+        # Determine if we can use the offset field
         has_dynamic_base = len(base_expr.free_symbols) > 0
         
         if not has_dynamic_base:
-            # Pure constant address - just emit it directly
-            addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
-            addr_v = int(addr_reg[1:])
+            # Pure constant address - materialize it
+            addr_vreg = ctx.vreg()
+            ctx.program.emit(KInstr(
+                "v_mov_b32", (addr_vreg,), (KImm(int(byte_offset_expr)),),
+                comment=f"LDS addr = {byte_offset_expr}"
+            ))
             lds_offset = 0
-            if DEBUG_DS_OFFSET:
-                print(f"[DS_OFFSET_DEBUG]   -> PURE_CONST: addr_reg={addr_reg}, lds_offset=0")
-        elif const_offset >= DS_ALIGN and const_offset <= DS_MAX_OFFSET and const_offset % DS_ALIGN == 0:
-            # Offset fits directly within limit - use it
-            addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(base_expr)
-            addr_v = int(addr_reg[1:])
+        elif 0 <= const_offset <= DS_MAX_OFFSET and const_offset % DS_ALIGN == 0:
+            # Can use offset field - compute only the base expression
+            # Use a fresh scope to avoid CSE issues with different memrefs
+            with ctx.expr_emitter.scope("lds_base"):
+                addr_vreg = ctx.expr_emitter.get_or_emit(base_expr)
             lds_offset = const_offset
             if DEBUG_DS_OFFSET:
-                print(f"[DS_OFFSET_DEBUG]   -> DIRECT_OFFSET: addr_reg={addr_reg}, lds_offset={lds_offset}")
+                print(f"[DS_OFFSET_DEBUG]   -> USING_OFFSET: addr={addr_vreg}, offset={lds_offset}")
         else:
-            # Offset is 0, negative, or unaligned - compute full address
-            addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
-            addr_v = int(addr_reg[1:])
+            # Offset out of range or not aligned - compute full address
+            addr_vreg = ctx.expr_emitter.get_or_emit(byte_offset_expr)
             lds_offset = 0
-            if DEBUG_DS_OFFSET:
-                print(f"[DS_OFFSET_DEBUG]   -> FALLBACK: addr_reg={addr_reg}, lds_offset=0")
-
-        # Emit LDS read into allocated VGPR pairs
-        pair = self.walker.emitter.vgpr_allocator.alloc_v_pair()
-        if DEBUG_DS_OFFSET:
-            print(f"[DS_OFFSET_DEBUG]   -> ds_read: addr=v{addr_v}, offset={lds_offset}, dest=v[{pair[0]}:{pair[1]}]")
-        self.walker.emitter.emit_lds_read_b64(pair, addr_v, offset=lds_offset)
-
-        # Track the loaded data in unified SSA→VGPR map
+        
+        # Allocate destination pair and emit ds_read_b64
+        dst_range = ctx.vreg_pair()
+        ctx.emit_lds_read_b64(dst_range, addr_vreg, lds_offset)
+        
+        # Track in SSA mapping as tuple of KVReg
         result_ssa = str(operation.results[0])
-        self.walker.ssa_to_vgpr[result_ssa] = pair
+        result_regs = (KVReg(dst_range.base_reg.id), KVReg(dst_range.base_reg.id + 1))
+        ctx.ssa_to_reg[result_ssa] = result_regs
 
     def _ensure_global_load_srd(self, kernel_info, memref_ssa):
         """Ensure SRD is set up for a global load."""
-        if self.walker.kernel_ctx is not None:
-            # Kernel IR mode: use kernel_ctx SRD tracking
-            if memref_ssa in self.walker.kernel_ctx.srd_ranges:
-                return
-            
-            binding_use = kernel_info.subspans[memref_ssa]
-            if not binding_use.memref_info:
-                raise ValueError(
-                    f"Cannot determine memref information for {memref_ssa}. "
-                    f"SRD setup requires memref shape and element size."
-                )
-            
-            limit_bytes = self._compute_buffer_size(binding_use.memref_info)
-            arg_idx = binding_use.arg_index if binding_use.arg_index >= 0 else 0
-            self.walker.kernel_ctx.ensure_srd(memref_ssa, arg_idx, limit_bytes)
+        # Kernel IR mode: use kernel_ctx SRD tracking
+        if memref_ssa in self.walker.kernel_ctx.srd_ranges:
             return
         
-        # Legacy mode: use emitter SRD tracking
-        if memref_ssa in self.walker.emitter.srds:
-            return
-
         binding_use = kernel_info.subspans[memref_ssa]
         if not binding_use.memref_info:
             raise ValueError(
                 f"Cannot determine memref information for {memref_ssa}. "
                 f"SRD setup requires memref shape and element size."
             )
-
+        
         limit_bytes = self._compute_buffer_size(binding_use.memref_info)
         arg_idx = binding_use.arg_index if binding_use.arg_index >= 0 else 0
-        self.walker.emitter.ensure_srd_for_subspan(memref_ssa, arg_idx, limit_bytes)
+        self.walker.kernel_ctx.ensure_srd(memref_ssa, arg_idx, limit_bytes)
 
     def _parse_vector_load_type(self, operation):
         """Parse vector type from load operation result."""
@@ -859,57 +709,33 @@ class OperationHandlers:
         """Emit buffer load instruction and track loaded registers and ticket."""
         result_ssa = str(operation.results[0])
         
-        if self.walker.kernel_ctx is not None:
-            # Kernel IR mode: emit via kernel_ctx with virtual registers
-            from .kernel_ir import KVReg
-            # voffset_v might be a physical index; convert to virtual reg
-            if isinstance(voffset_v, int):
-                voffset = KVReg(voffset_v)  # Treat as virtual for now
-            else:
-                voffset = voffset_v
-            
-            loaded_ranges = self.walker.kernel_ctx.emit_buffer_load(
-                memref_ssa, vector_bytes, voffset, instoffset
-            )
-            
-            # Convert ranges to tuple of register IDs for ssa_to_vgpr compatibility
-            if len(loaded_ranges) == 1:
-                # Single range (pair or quad)
-                base = loaded_ranges[0].base_reg
-                count = loaded_ranges[0].count
-                regs_tuple = tuple(KVReg(base.id + i) for i in range(count))
-            else:
-                # Multiple ranges - flatten into single tuple
-                regs_tuple = []
-                for rng in loaded_ranges:
-                    base = rng.base_reg
-                    regs_tuple.extend(KVReg(base.id + i) for i in range(rng.count))
-                regs_tuple = tuple(regs_tuple)
-            
-            self.walker.kernel_ctx.ssa_to_reg[result_ssa] = regs_tuple
-            # Note: vmem ticket tracking deferred to ticketing integration
-            return
-        
-        # Legacy mode: emit via emitter with physical registers
-        loaded_regs, vmem_ticket = self.walker.emitter.emit_load(
-            memref_ssa, vector_bytes, voffset_v, instoffset
-        )
-
-        # emit_load returns a list of register tuples
-        # For single load (8/16 bytes), extract the tuple from the list
-        if isinstance(loaded_regs, list) and len(loaded_regs) == 1:
-            regs_tuple = loaded_regs[0]
-        elif isinstance(loaded_regs, list):
-            # Multiple loads - keep as list for now
-            regs_tuple = loaded_regs
+        # Kernel IR mode: emit via kernel_ctx with virtual registers
+        from .kernel_ir import KVReg
+        # voffset_v might be a physical index; convert to virtual reg
+        if isinstance(voffset_v, int):
+            voffset = KVReg(voffset_v)  # Treat as virtual for now
         else:
-            regs_tuple = loaded_regs
-
-        # Store in unified SSA→VGPR tracking
-        self.walker.ssa_to_vgpr[result_ssa] = regs_tuple
-
-        # Keep vmem_ticket for wait count computation
-        self.walker.last_vmem_ticket = vmem_ticket
+            voffset = voffset_v
+        
+        loaded_ranges = self.walker.kernel_ctx.emit_buffer_load(
+            memref_ssa, vector_bytes, voffset, instoffset
+        )
+        
+        # Convert ranges to tuple of register IDs for ssa_to_vgpr compatibility
+        if len(loaded_ranges) == 1:
+            # Single range (pair or quad)
+            base = loaded_ranges[0].base_reg
+            count = loaded_ranges[0].count
+            regs_tuple = tuple(KVReg(base.id + i) for i in range(count))
+        else:
+            # Multiple ranges - flatten into single tuple
+            regs_tuple = []
+            for rng in loaded_ranges:
+                base = rng.base_reg
+                regs_tuple.extend(KVReg(base.id + i) for i in range(rng.count))
+            regs_tuple = tuple(regs_tuple)
+        
+        self.walker.kernel_ctx.ssa_to_reg[result_ssa] = regs_tuple
 
     def _emit_global_load(self, operation, kernel_info, memref_ssa, byte_offset_expr):
         """Emit a global buffer load operation."""
@@ -918,61 +744,32 @@ class OperationHandlers:
         # Split constant/dynamic and materialize dynamic part via cached emitter (CSE)
         const_offset, dynamic_expr = split_const_dynamic(byte_offset_expr)
         
-        if self.walker.kernel_ctx is not None:
-            # Kernel IR mode: allocate virtual registers
-            from .kernel_ir import KInstr, KImm, KVReg, KPhysVReg
-            
-            # Compute voffset in kernel IR
-            voffset_v = self.walker.kernel_ctx.vreg()
-            
-            if dynamic_expr == 0 or (
-                hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
-            ):
-                # No dynamic part: set voffset to 0
-                self.walker.kernel_ctx.program.emit(KInstr(
-                    "v_mov_b32", (voffset_v,), (KImm(0),), comment="voffset = 0"
-                ))
-                instoffset = const_offset
-            else:
-                # Dynamic part: use expression emitter to compute voffset
-                # The expression emitter caches results so the same expression
-                # returns the same vreg (CSE)
-                expr_emitter = self.walker.kernel_ctx.expr_emitter
-                voffset_v = expr_emitter.get_or_emit(dynamic_expr)
-                instoffset = const_offset
-            
-            vector_bytes = self._parse_vector_load_type(operation)
-            self._emit_buffer_load_and_track(
-                operation, kernel_info, memref_ssa, vector_bytes, voffset_v, instoffset
-            )
-            # No freeing needed in kernel IR mode (handled by liveness)
-            return
+        # Kernel IR mode: allocate virtual registers
+        from .kernel_ir import KInstr, KImm, KVReg, KPhysVReg
         
-        # Legacy mode: allocate physical registers
+        # Compute voffset in kernel IR
+        voffset_v = self.walker.kernel_ctx.vreg()
+        
         if dynamic_expr == 0 or (
             hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
         ):
-            # No dynamic part: use a zero VGPR
-            voffset_v, instoffset = (
-                self.walker.emitter.vgpr_allocator.alloc_v(),
-                const_offset,
-            )
-            self.walker.unified.v_mov_b32(f"v{voffset_v}", 0)
-            voffset_is_temp = True
+            # No dynamic part: set voffset to 0
+            self.walker.kernel_ctx.program.emit(KInstr(
+                "v_mov_b32", (voffset_v,), (KImm(0),), comment="voffset = 0"
+            ))
+            instoffset = const_offset
         else:
-            voffset_reg = self._get_expr_emitter(kernel_info).get_or_emit(dynamic_expr)
-            voffset_v, instoffset = int(voffset_reg[1:]), const_offset
-            voffset_is_temp = False
-
+            # Dynamic part: use expression emitter to compute voffset
+            # The expression emitter caches results so the same expression
+            # returns the same vreg (CSE)
+            expr_emitter = self.walker.kernel_ctx.expr_emitter
+            voffset_v = expr_emitter.get_or_emit(dynamic_expr)
+            instoffset = const_offset
+        
         vector_bytes = self._parse_vector_load_type(operation)
-
         self._emit_buffer_load_and_track(
             operation, kernel_info, memref_ssa, vector_bytes, voffset_v, instoffset
         )
-
-        # Free voffset only if it was a temporary (not from cache)
-        if voffset_is_temp:
-            self.walker.emitter.vgpr_allocator.free_v(voffset_v)
 
     def _is_lds_memref(self, operation):
         """Check if the memref has LDS (workgroup) address space."""
@@ -1028,76 +825,6 @@ class OperationHandlers:
 
         return memref_info, value_vector_type, num_elements, vector_bytes
 
-    def _compute_lds_address(
-        self, kernel_info, memref_ssa, value_vector_type, indices, memref_info
-    ):
-        """Compute LDS address using MLIR's 2D memref indices and strides.
-
-        Uses the actual indices from vector.store and the memref's stride information
-        to compute the byte offset, rather than forcing lane-linear packing.
-        """
-        import sympy
-        from .utils import build_memref_byte_offset_expr
-
-        # Use MLIR's actual indices with memref strides
-        byte_offset_expr = build_memref_byte_offset_expr(
-            indices, kernel_info, memref_info
-        )
-
-        # Add view base offset (use MLIR offsets directly)
-        vbase_val = self.walker._lds_view_base_bytes.get(memref_ssa, 0)
-        if vbase_val:
-            byte_offset_expr = byte_offset_expr + sympy.Integer(vbase_val)
-
-        addr_reg = self._get_expr_emitter(kernel_info).get_or_emit(byte_offset_expr)
-        return int(addr_reg[1:])
-
-    def _extract_source_registers(self, vector_bytes):
-        """Extract source registers from current store value based on vector size."""
-        regs = self._current_store_regs
-
-        # regs should already be a tuple of register indices from ssa_to_vgpr
-        # e.g., (8, 9) for a pair, (4, 5, 6, 7) for a quad
-
-        if vector_bytes == 4:
-            # Single register (4 bytes) - extract first element
-            if isinstance(regs, (tuple, list)) and len(regs) > 0:
-                return regs[0]
-            elif isinstance(regs, int):
-                return regs
-            else:
-                raise ValueError(f"Expected register(s) for 4-byte store, got: {regs}")
-        elif vector_bytes == 8:
-            # Register pair (8 bytes)
-            if isinstance(regs, (tuple, list)) and len(regs) == 2:
-                return regs  # Already a pair
-            else:
-                raise ValueError(
-                    f"Expected 2-element tuple for 8-byte store, got {len(regs) if isinstance(regs, (tuple, list)) else 'non-tuple'}: {regs}"
-                )
-        elif vector_bytes == 16:
-            # Register quad (16 bytes)
-            if isinstance(regs, (tuple, list)) and len(regs) == 4:
-                return regs  # Already a quad
-            else:
-                raise ValueError(
-                    f"Expected 4-element tuple for 16-byte store, got {len(regs) if isinstance(regs, (tuple, list)) else 'non-tuple'}: {regs}"
-                )
-        else:
-            raise NotImplementedError(
-                f"LDS stores of {vector_bytes} bytes not yet supported. "
-                f"Supported sizes: 4 (ds_write_b32), 8 (ds_write_b64), 16 (ds_write_b128)"
-            )
-
-    def _emit_ds_write(self, memref_ssa, addr_v, src_regs, vector_bytes):
-        """Emit ds_write instruction for LDS stores."""
-        if vector_bytes == 4:
-            self.walker.emitter.emit_lds_write_b32(addr_v, src_regs)
-        elif vector_bytes == 8:
-            self.walker.emitter.emit_lds_write_b64(addr_v, src_regs)
-        elif vector_bytes == 16:
-            self.walker.emitter.emit_lds_write_b128(addr_v, src_regs)
-
     def _emit_lds_store(
         self,
         kernel_info,
@@ -1108,141 +835,75 @@ class OperationHandlers:
         vector_bytes,
     ):
         """Emit an LDS store operation."""
-        # Check for kernel IR mode
-        ctx = self.walker.kernel_ctx
-        if ctx is not None:
-            # Kernel IR mode: emit via ctx with proper alignment
-            import sympy
-            from .kernel_ir import KVReg, KRegRange, KInstr, KImm, KMemOffset
-            from .utils import build_memref_byte_offset_expr
-            
-            # Compute LDS address, adding view base offset if present
-            byte_offset_expr = build_memref_byte_offset_expr(
-                indices, kernel_info, memref_info
-            )
-            # Add view base offset for this specific memref (each matrix has different base)
-            vbase_val = self.walker._lds_view_base_bytes.get(memref_ssa, 0)
-            if vbase_val:
-                byte_offset_expr = byte_offset_expr + sympy.Integer(vbase_val)
-            addr_vreg = ctx.expr_emitter.get_or_emit(byte_offset_expr)
-            
-            # Wait for any pending VMEM loads
-            ctx.program.emit(KInstr(
-                "s_waitcnt", (), ("vmcnt(0)",), comment="wait for VMEM before LDS store"
-            ))
-            
-            # Get source registers from SSA mapping (these are KVReg objects)
-            src_regs = self._current_store_regs
-            
-            # Build a properly aligned KRegRange for the source
-            if vector_bytes == 4:
-                # Single register
-                src_vreg = src_regs[0] if isinstance(src_regs, (tuple, list)) else src_regs
-                ctx.program.emit(KInstr(
-                    "ds_write_b32", (), (addr_vreg, src_vreg), 
-                    comment=f"LDS store 4B to {memref_ssa}"
-                ))
-            elif vector_bytes == 8:
-                # Register pair (must be 64-bit aligned)
-                if isinstance(src_regs, (tuple, list)) and len(src_regs) >= 2:
-                    # Create aligned range from the source registers
-                    base_id = src_regs[0].id if isinstance(src_regs[0], KVReg) else src_regs[0]
-                    src_range = KRegRange(KVReg(base_id), 2, alignment=2)
-                else:
-                    raise ValueError(f"Expected 2 registers for ds_write_b64, got {src_regs}")
-                ctx.emit_lds_write_b64(addr_vreg, src_range)
-            elif vector_bytes == 16:
-                # Register quad (must be 128-bit aligned)
-                if isinstance(src_regs, (tuple, list)) and len(src_regs) >= 4:
-                    base_id = src_regs[0].id if isinstance(src_regs[0], KVReg) else src_regs[0]
-                    src_range = KRegRange(KVReg(base_id), 4, alignment=4)
-                else:
-                    raise ValueError(f"Expected 4 registers for ds_write_b128, got {src_regs}")
-                ctx.emit_lds_write_b128(addr_vreg, src_range)
-            else:
-                raise NotImplementedError(f"Kernel IR LDS stores of {vector_bytes} bytes not supported")
-            return
+        import sympy
+        from .kernel_ir import KVReg, KRegRange, KInstr, KImm, KMemOffset
+        from .utils import build_memref_byte_offset_expr
         
-        # Legacy mode
-        addr_v = self._compute_lds_address(
-            kernel_info, memref_ssa, value_vector_type, indices, memref_info
+        ctx = self.walker.kernel_ctx
+        
+        # Compute LDS address, adding view base offset if present
+        byte_offset_expr = build_memref_byte_offset_expr(
+            indices, kernel_info, memref_info
         )
-        # Wait for VMEM load to complete before extracting/using loaded data
-        if self.walker.last_vmem_ticket is not None:
-            threshold = self.walker.emitter.ticketing.compute_vmem_wait(
-                self.walker.last_vmem_ticket
-            )
-            if threshold is not None:
-                self.walker.unified.s_waitcnt(f"vmcnt({threshold})")
-        src_regs = self._extract_source_registers(vector_bytes)
-        self._emit_ds_write(memref_ssa, addr_v, src_regs, vector_bytes)
+        # Add view base offset for this specific memref (each matrix has different base)
+        vbase_val = self.walker._lds_view_base_bytes.get(memref_ssa, 0)
+        if vbase_val:
+            byte_offset_expr = byte_offset_expr + sympy.Integer(vbase_val)
+        addr_vreg = ctx.expr_emitter.get_or_emit(byte_offset_expr)
+        
+        # Wait for any pending VMEM loads
+        ctx.program.emit(KInstr(
+            "s_waitcnt", (), ("vmcnt(0)",), comment="wait for VMEM before LDS store"
+        ))
+        
+        # Get source registers from SSA mapping (these are KVReg objects)
+        src_regs = self._current_store_regs
+        
+        # Build a properly aligned KRegRange for the source
+        if vector_bytes == 4:
+            # Single register
+            src_vreg = src_regs[0] if isinstance(src_regs, (tuple, list)) else src_regs
+            ctx.program.emit(KInstr(
+                "ds_write_b32", (), (addr_vreg, src_vreg), 
+                comment=f"LDS store 4B to {memref_ssa}"
+            ))
+        elif vector_bytes == 8:
+            # Register pair (must be 64-bit aligned)
+            if isinstance(src_regs, (tuple, list)) and len(src_regs) >= 2:
+                # Create aligned range from the source registers
+                base_id = src_regs[0].id if isinstance(src_regs[0], KVReg) else src_regs[0]
+                src_range = KRegRange(KVReg(base_id), 2, alignment=2)
+            else:
+                raise ValueError(f"Expected 2 registers for ds_write_b64, got {src_regs}")
+            ctx.emit_lds_write_b64(addr_vreg, src_range)
+        elif vector_bytes == 16:
+            # Register quad (must be 128-bit aligned)
+            if isinstance(src_regs, (tuple, list)) and len(src_regs) >= 4:
+                base_id = src_regs[0].id if isinstance(src_regs[0], KVReg) else src_regs[0]
+                src_range = KRegRange(KVReg(base_id), 4, alignment=4)
+            else:
+                raise ValueError(f"Expected 4 registers for ds_write_b128, got {src_regs}")
+            ctx.emit_lds_write_b128(addr_vreg, src_range)
+        else:
+            raise NotImplementedError(f"LDS stores of {vector_bytes} bytes not supported")
 
     def _ensure_global_store_srd(self, kernel_info, memref_ssa):
         """Ensure SRD is set up for a global store."""
         binding_use = kernel_info.subspans[memref_ssa]
         
-        if self.walker.kernel_ctx is not None:
-            # Kernel IR mode: use kernel_ctx SRD tracking
-            if memref_ssa in self.walker.kernel_ctx.srd_ranges:
-                return
-            
-            if not binding_use.memref_info:
-                raise ValueError(
-                    f"Cannot determine memref information for {memref_ssa}. "
-                    f"SRD setup requires memref shape and element size."
-                )
-            
-            limit_bytes = self._compute_buffer_size(binding_use.memref_info)
-            arg_idx = binding_use.arg_index if binding_use.arg_index >= 0 else 0
-            self.walker.kernel_ctx.ensure_srd(memref_ssa, arg_idx, limit_bytes)
+        # Kernel IR mode: use kernel_ctx SRD tracking
+        if memref_ssa in self.walker.kernel_ctx.srd_ranges:
             return
         
-        # Legacy mode
-        if memref_ssa not in self.walker.emitter.srds:
-            if not binding_use.memref_info:
-                raise ValueError(
-                    f"Cannot determine memref information for {memref_ssa}. "
-                    f"SRD setup requires memref shape and element size."
-                )
-
-            limit_bytes = self._compute_buffer_size(binding_use.memref_info)
-            arg_idx = binding_use.arg_index if binding_use.arg_index >= 0 else 0
-            self.walker.emitter.ensure_srd_for_subspan(memref_ssa, arg_idx, limit_bytes)
-
-    def _get_scalar_register_for_store(self):
-        """Get the scalar register to store (first element of current store value)."""
-        src_regs = self._current_store_regs
-
-        # Get first element
-        src_v = src_regs[0]
-        if not isinstance(src_v, int):
-            src_v = src_v[0] if isinstance(src_v, tuple) else src_v
-
-        return src_v
-
-    def _compute_store_address(
-        self, value_vector_type, indices, kernel_info, memref_info
-    ):
-        """Compute voffset and instoffset for a store operation.
-
-        Returns (voffset_v, instoffset, voffset_is_temp)
-        """
-        from .utils import build_element_byte_offset_exprs
-
-        byte_exprs = build_element_byte_offset_exprs(
-            value_vector_type, indices, kernel_info, memref_info
-        )
-        const_offset, dynamic_expr = split_const_dynamic(byte_exprs[0])
-        if dynamic_expr == 0 or (
-            hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
-        ):
-            voffset_v = self.walker.emitter.vgpr_allocator.alloc_v()
-            self.walker.unified.v_mov_b32(f"v{voffset_v}", 0)
-            return voffset_v, const_offset, True
-        else:
-            voffset_reg = self._get_expr_emitter(kernel_info).get_or_emit(dynamic_expr)
-            voffset_v = int(voffset_reg[1:])
-            return voffset_v, const_offset, False
+        if not binding_use.memref_info:
+            raise ValueError(
+                f"Cannot determine memref information for {memref_ssa}. "
+                f"SRD setup requires memref shape and element size."
+            )
+        
+        limit_bytes = self._compute_buffer_size(binding_use.memref_info)
+        arg_idx = binding_use.arg_index if binding_use.arg_index >= 0 else 0
+        self.walker.kernel_ctx.ensure_srd(memref_ssa, arg_idx, limit_bytes)
 
     def _emit_global_store(
         self,
@@ -1255,124 +916,86 @@ class OperationHandlers:
         vector_bytes,
     ):
         """Emit a global buffer store operation."""
-        if self.walker.kernel_ctx is not None:
-            # Kernel IR mode: use virtual registers
-            from .kernel_ir import KInstr, KImm, KVReg, KPhysVReg, KRegRange
-            from .utils import build_element_byte_offset_exprs
-            
-            # Get expression emitter - loop-invariant expressions are cached globally,
-            # loop-varying expressions are never cached, so no cache clearing needed.
-            expr_emitter = self.walker.kernel_ctx.expr_emitter
-            
-            # Compute address - allocate virtual voffset
-            byte_exprs = build_element_byte_offset_exprs(
-                value_vector_type, indices, kernel_info, memref_info
-            )
-            const_offset, dynamic_expr = split_const_dynamic(byte_exprs[0])
-            
-            # Compute voffset in kernel IR (store path)
-            voffset_v = self.walker.kernel_ctx.vreg()
-            
-            if dynamic_expr == 0 or (
-                hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
-            ):
-                self.walker.kernel_ctx.program.emit(KInstr(
-                    "v_mov_b32", (voffset_v,), (KImm(0),), comment="voffset = 0"
-                ))
-                instoffset = const_offset
-            else:
-                # Dynamic part: use expression emitter to compute voffset
-                voffset_v = expr_emitter.get_or_emit(dynamic_expr)
-                instoffset = const_offset
-            
-            # IMPORTANT: Wait for pending loads BEFORE setting up store SRD
-            # Otherwise we overwrite the load SRD while loads are still in flight
-            self.walker.kernel_ctx.program.emit(KInstr(
-                "s_waitcnt", (), ("vmcnt(0)",), comment="MARKER: wait for loads before store SRD setup"
-            ))
-            
-            # Now it's safe to set up the store SRD (may reuse same physical regs)
-            self._ensure_global_store_srd(kernel_info, memref_ssa)
-            
-            # Get source registers from ssa_to_reg
-            src_regs = self._current_store_regs
-            if isinstance(src_regs, tuple) and len(src_regs) > 0:
-                # Convert to KRegRange(s) for the store
-                # Group registers into quads (16 bytes each) for vectorized stores
-                num_regs = len(src_regs)
-                
-                if vector_bytes <= 4:
-                    # Single dword
-                    first_reg = src_regs[0]
-                    if isinstance(first_reg, KVReg):
-                        src_range = KRegRange(first_reg, 1)
-                    else:
-                        src_range = KRegRange(KVReg(first_reg), 1)
-                    src_ranges = (src_range,)
-                elif vector_bytes == 8:
-                    # Pair (dwordx2)
-                    first_reg = src_regs[0]
-                    if isinstance(first_reg, KVReg):
-                        src_range = KRegRange(first_reg, 2)
-                    else:
-                        src_range = KRegRange(KVReg(first_reg), 2)
-                    src_ranges = (src_range,)
-                else:
-                    # Multiple quads (16+ bytes)
-                    # Each quad is 4 VGPRs = 16 bytes
-                    num_quads = (vector_bytes + 15) // 16
-                    src_ranges = []
-                    for q in range(num_quads):
-                        base_idx = q * 4
-                        if base_idx < num_regs:
-                            first_reg = src_regs[base_idx]
-                            if isinstance(first_reg, KVReg):
-                                src_range = KRegRange(first_reg, 4)
-                            else:
-                                src_range = KRegRange(KVReg(first_reg), 4)
-                            src_ranges.append(src_range)
-                    src_ranges = tuple(src_ranges)
-                
-                self.walker.kernel_ctx.emit_buffer_store(
-                    memref_ssa, src_ranges, voffset_v, instoffset
-                )
-            return
+        # Kernel IR mode: use virtual registers
+        from .kernel_ir import KInstr, KImm, KVReg, KPhysVReg, KRegRange
+        from .utils import build_element_byte_offset_exprs
         
-        # Legacy mode: use physical registers
-        voffset_v, instoffset, voffset_is_temp = self._compute_store_address(
+        # Get expression emitter - loop-invariant expressions are cached globally,
+        # loop-varying expressions are never cached, so no cache clearing needed.
+        expr_emitter = self.walker.kernel_ctx.expr_emitter
+        
+        # Compute address - allocate virtual voffset
+        byte_exprs = build_element_byte_offset_exprs(
             value_vector_type, indices, kernel_info, memref_info
         )
-
-        # Wait for VMEM load to complete before using loaded data
-        # (stores may come from prior loads, e.g., copy kernels)
-        if self.walker.last_vmem_ticket is not None:
-            threshold = self.walker.emitter.ticketing.compute_vmem_wait(
-                self.walker.last_vmem_ticket
-            )
-            if threshold is not None:
-                self.walker.unified.s_waitcnt(f"vmcnt({threshold})")
-
-        if num_elements == 1:
-            # Scalar store: get first register, emit, free
-            src_v = self._get_scalar_register_for_store()
-            self.walker.emitter.emit_store_scalar_with_vindex(
-                memref_ssa, src_v, voffset_v, instoffset
-            )
-            if voffset_is_temp:
-                self.walker.emitter.vgpr_allocator.free_v(voffset_v)
-            if isinstance(src_v, int):
-                self.walker.emitter.vgpr_allocator.free_v(src_v)
+        const_offset, dynamic_expr = split_const_dynamic(byte_exprs[0])
+        
+        # Compute voffset in kernel IR (store path)
+        voffset_v = self.walker.kernel_ctx.vreg()
+        
+        if dynamic_expr == 0 or (
+            hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
+        ):
+            self.walker.kernel_ctx.program.emit(KInstr(
+                "v_mov_b32", (voffset_v,), (KImm(0),), comment="voffset = 0"
+            ))
+            instoffset = const_offset
         else:
-            # Vectorized store: emit all elements at once
-            self.walker.emitter.emit_store_with_regs(
-                memref_ssa,
-                self._current_store_regs,
-                vector_bytes,
-                voffset_v,
-                instoffset,
+            # Dynamic part: use expression emitter to compute voffset
+            voffset_v = expr_emitter.get_or_emit(dynamic_expr)
+            instoffset = const_offset
+        
+        # IMPORTANT: Wait for pending loads BEFORE setting up store SRD
+        # Otherwise we overwrite the load SRD while loads are still in flight
+        self.walker.kernel_ctx.program.emit(KInstr(
+            "s_waitcnt", (), ("vmcnt(0)",), comment="MARKER: wait for loads before store SRD setup"
+        ))
+        
+        # Now it's safe to set up the store SRD (may reuse same physical regs)
+        self._ensure_global_store_srd(kernel_info, memref_ssa)
+        
+        # Get source registers from ssa_to_reg
+        src_regs = self._current_store_regs
+        if isinstance(src_regs, tuple) and len(src_regs) > 0:
+            # Convert to KRegRange(s) for the store
+            # Group registers into quads (16 bytes each) for vectorized stores
+            num_regs = len(src_regs)
+            
+            if vector_bytes <= 4:
+                # Single dword
+                first_reg = src_regs[0]
+                if isinstance(first_reg, KVReg):
+                    src_range = KRegRange(first_reg, 1)
+                else:
+                    src_range = KRegRange(KVReg(first_reg), 1)
+                src_ranges = (src_range,)
+            elif vector_bytes == 8:
+                # Pair (dwordx2)
+                first_reg = src_regs[0]
+                if isinstance(first_reg, KVReg):
+                    src_range = KRegRange(first_reg, 2)
+                else:
+                    src_range = KRegRange(KVReg(first_reg), 2)
+                src_ranges = (src_range,)
+            else:
+                # Multiple quads (16+ bytes)
+                # Each quad is 4 VGPRs = 16 bytes
+                num_quads = (vector_bytes + 15) // 16
+                src_ranges = []
+                for q in range(num_quads):
+                    base_idx = q * 4
+                    if base_idx < num_regs:
+                        first_reg = src_regs[base_idx]
+                        if isinstance(first_reg, KVReg):
+                            src_range = KRegRange(first_reg, 4)
+                        else:
+                            src_range = KRegRange(KVReg(first_reg), 4)
+                        src_ranges.append(src_range)
+                src_ranges = tuple(src_ranges)
+            
+            self.walker.kernel_ctx.emit_buffer_store(
+                memref_ssa, src_ranges, voffset_v, instoffset
             )
-            if voffset_is_temp:
-                self.walker.emitter.vgpr_allocator.free_v(voffset_v)
 
     def _is_lds_store_memref(self, operation):
         """Check if the store destination memref has LDS (workgroup) address space."""
@@ -1398,22 +1021,12 @@ class OperationHandlers:
         value_ssa = str(operation.operands[0])
 
         # Look up the registers containing the value to store
-        # In kernel IR mode, use kernel_ctx.ssa_to_reg
-        if self.walker.kernel_ctx is not None:
-            value_regs = self.walker.kernel_ctx.ssa_to_reg.get(value_ssa)
-            if not value_regs:
-                raise RuntimeError(
-                    f"Store operation references SSA value {value_ssa} but it's not in kernel_ctx.ssa_to_reg. "
-                    f"Available: {list(self.walker.kernel_ctx.ssa_to_reg.keys())}"
-                )
-        else:
-            # Legacy mode
-            value_regs = self.walker.ssa_to_vgpr.get(value_ssa)
-            if not value_regs:
-                raise RuntimeError(
-                    f"Store operation references SSA value {value_ssa} but it's not in ssa_to_vgpr. "
-                    f"Available: {list(self.walker.ssa_to_vgpr.keys())}"
-                )
+        value_regs = self.walker.kernel_ctx.ssa_to_reg.get(value_ssa)
+        if not value_regs:
+            raise RuntimeError(
+                f"Store operation references SSA value {value_ssa} but it's not in kernel_ctx.ssa_to_reg. "
+                f"Available: {list(self.walker.kernel_ctx.ssa_to_reg.keys())}"
+            )
 
         # Store value_regs for extraction in subsequent methods
         self._current_store_regs = value_regs
@@ -1432,9 +1045,7 @@ class OperationHandlers:
             return
 
         # Global buffer store path
-        # In kernel IR mode, SRD setup happens inside _emit_global_store after waitcnt
-        if self.walker.kernel_ctx is None:
-            self._ensure_global_store_srd(kernel_info, memref_ssa)
+        # SRD setup happens inside _emit_global_store after waitcnt
         self._emit_global_store(
             kernel_info,
             memref_ssa,
@@ -1473,133 +1084,74 @@ class OperationHandlers:
         upper_bound = kernel_info.index_env[upper_bound_ssa]
         step = kernel_info.index_env[step_ssa]
         
-        # Pre-create G2S SRDs BEFORE the loop starts (in kernel IR mode)
+        # Pre-create G2S SRDs BEFORE the loop starts
         # This is critical for correctness: if G2S operations are in the loop body,
         # we need to create all SRD copies before the loop header is emitted.
         # Otherwise, the SRD copy for matrix B can overwrite the original SRD for
         # matrix A, causing incorrect memory accesses in subsequent loop iterations.
-        if self.walker.kernel_ctx is not None:
-            from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds
-            loop_body = operation.body
-            loop_ops = list(loop_body.operations)
-            g2s_schedule = analyze_g2s_region(loop_ops)
-            if g2s_schedule is not None:
-                # Pre-create G2S SRDs (these must be created before the loop)
-                precreate_g2s_srds(g2s_schedule, kernel_info, self)
+        from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds
+        loop_body = operation.body
+        loop_ops = list(loop_body.operations)
+        g2s_schedule = analyze_g2s_region(loop_ops)
+        if g2s_schedule is not None:
+            # Pre-create G2S SRDs (these must be created before the loop)
+            precreate_g2s_srds(g2s_schedule, kernel_info, self)
 
-        if self.walker.kernel_ctx is not None:
-            # Kernel IR mode: use virtual registers
-            from .kernel_ir import KVReg, KRegRange
-            
-            ctx = self.walker.kernel_ctx
-            
-            # Begin loop structure with virtual registers
-            loop_ctx = ctx.begin_loop(lower_bound, upper_bound, step)
-            
-            # Get induction variable and map it to the loop counter SGPR
-            loop_body = operation.body
-            induction_var = loop_body.arguments[0]
-            induction_var_ssa = str(induction_var)
-            counter_sreg = loop_ctx["counter_sreg"]
-            
-            # Store mapping from SSA induction variable to SGPR
-            # Use string format "s{idx}" for compatibility with expression simplification
-            # The KPhysSReg has an index attribute we can use
-            kernel_info.index_env[induction_var_ssa] = f"s{counter_sreg.index}"
-            loop_ctx["induction_var_ssa"] = induction_var_ssa
-            
-            # Allocate and initialize VGPRs for iter_args (accumulators)
-            num_iter_args = len(loop_body.arguments) - 1  # Exclude induction var
-            iter_arg_ranges = ctx.alloc_accumulators(num_iter_args)
-            
-            # Track in SSA->reg map
-            for i, arg in enumerate(loop_body.arguments[1:]):
-                arg_ssa = str(arg)
-                quad = iter_arg_ranges[i]
-                # Store as tuple of individual regs for compatibility
-                regs = tuple(KVReg(quad.base_reg.id + j) for j in range(4))
-                ctx.ssa_to_reg[arg_ssa] = regs
-            
-            loop_ctx["iter_arg_ranges"] = iter_arg_ranges
-            
-            # Emit loop header
-            ctx.emit_loop_header(loop_ctx)
-            
-            # Walk loop body (mark as inside loop to prevent duplicate M0/SRD setup)
-            self.walker._inside_loop = True
-            self.walker._walk_block(loop_body, kernel_info)
-            self.walker._inside_loop = False
-            
-            # Emit loop latch
-            ctx.emit_loop_latch(loop_ctx)
-            
-            # End loop
-            ctx.end_loop()
-            
-            # Map scf.for results to final values of iter_args
-            for i, result in enumerate(operation.results):
-                result_ssa = str(result)
-                if i < len(iter_arg_ranges):
-                    quad = iter_arg_ranges[i]
-                    regs = tuple(KVReg(quad.base_reg.id + j) for j in range(4))
-                    ctx.ssa_to_reg[result_ssa] = regs
-            
-            return
+        # Kernel IR mode: use virtual registers
+        from .kernel_ir import KVReg, KRegRange
         
-        # Legacy mode: use physical registers via emitter
-        emitter = self.walker.emitter
-
-        # Begin loop structure
-        loop_ctx = emitter.begin_loop(lower_bound, upper_bound, step)
-
+        ctx = self.walker.kernel_ctx
+        
+        # Begin loop structure with virtual registers
+        loop_ctx = ctx.begin_loop(lower_bound, upper_bound, step)
+        
         # Get induction variable and map it to the loop counter SGPR
         loop_body = operation.body
         induction_var = loop_body.arguments[0]
         induction_var_ssa = str(induction_var)
-        loop_counter_sgpr = loop_ctx["counter_sgpr"]
-
-        # Store mapping from SSA induction variable to SGPR counter for use in expressions
-        # This will be used when affine.apply operations reference the induction variable
-        kernel_info.index_env[induction_var_ssa] = f"s{loop_counter_sgpr}"
+        counter_sreg = loop_ctx["counter_sreg"]
+        
+        # Store mapping from SSA induction variable to SGPR
+        # Use string format "s{idx}" for compatibility with expression simplification
+        # The KPhysSReg has an index attribute we can use
+        kernel_info.index_env[induction_var_ssa] = f"s{counter_sreg.index}"
         loop_ctx["induction_var_ssa"] = induction_var_ssa
-
+        
         # Allocate and initialize VGPRs for iter_args (accumulators)
-        iter_arg_vgprs = []
-
-        for i, arg in enumerate(loop_body.arguments[1:]):  # Skip induction variable
-            # Allocate quad for accumulator (MFMA result)
-            quad = emitter.vgpr_allocator.alloc_v_quad()
-            iter_arg_vgprs.append(quad)
-
-            # Track in unified SSA→VGPR map
+        num_iter_args = len(loop_body.arguments) - 1  # Exclude induction var
+        iter_arg_ranges = ctx.alloc_accumulators(num_iter_args)
+        
+        # Track in SSA->reg map
+        for i, arg in enumerate(loop_body.arguments[1:]):
             arg_ssa = str(arg)
-            self.walker.ssa_to_vgpr[arg_ssa] = quad
-
-            # Initialize accumulator to 0.0 before loop
-            emitter.emit(f"    # Initialize accumulator {i} to 0.0")
-            for vreg in quad:
-                self.walker.unified.v_mov_b32(f"v{vreg}", 0)
-
-        loop_ctx["iter_arg_vgprs"] = iter_arg_vgprs
-
-        # Emit loop header and conditional branch
-        emitter.emit_loop_header(loop_ctx)
-
-        # Walk loop body
+            quad = iter_arg_ranges[i]
+            # Store as tuple of individual regs for compatibility
+            regs = tuple(KVReg(quad.base_reg.id + j) for j in range(4))
+            ctx.ssa_to_reg[arg_ssa] = regs
+        
+        loop_ctx["iter_arg_ranges"] = iter_arg_ranges
+        
+        # Emit loop header
+        ctx.emit_loop_header(loop_ctx)
+        
+        # Walk loop body (mark as inside loop to prevent duplicate M0/SRD setup)
+        self.walker._inside_loop = True
         self.walker._walk_block(loop_body, kernel_info)
-
-        # Emit loop latch (increment and branch back)
-        emitter.emit_loop_latch(loop_ctx)
-
+        self.walker._inside_loop = False
+        
+        # Emit loop latch
+        ctx.emit_loop_latch(loop_ctx)
+        
         # End loop
-        emitter.end_loop()
-
-        # Map scf.for results to the final values of iter_args
-        # The results of scf.for are the final values after the loop completes
+        ctx.end_loop()
+        
+        # Map scf.for results to final values of iter_args
         for i, result in enumerate(operation.results):
             result_ssa = str(result)
-            if i < len(iter_arg_vgprs):
-                self.walker.ssa_to_vgpr[result_ssa] = iter_arg_vgprs[i]
+            if i < len(iter_arg_ranges):
+                quad = iter_arg_ranges[i]
+                regs = tuple(KVReg(quad.base_reg.id + j) for j in range(4))
+                ctx.ssa_to_reg[result_ssa] = regs
 
     # Note: gather_to_lds handlers moved to gather_to_shared.py (G2SMixin)
 

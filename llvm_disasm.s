@@ -1,5 +1,5 @@
 
-/tmp/tmpmhmejk5n/module_gemm_kernel_rocm_hsaco_fb.hsaco:	file format elf64-amdgpu
+/tmp/tmp7zyix74l/module_gemm_kernel_rocm_hsaco_fb.hsaco:	file format elf64-amdgpu
 
 Disassembly of section .text:
 
