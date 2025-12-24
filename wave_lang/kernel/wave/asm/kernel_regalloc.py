@@ -259,6 +259,8 @@ class KernelRegAlloc:
         # Initialize mapping with precolored registers
         vreg_map: Dict[int, int] = {}
         sreg_map: Dict[int, int] = {}
+        vreg_ranges: Dict[int, Tuple[int, int]] = {}  # component_id -> (base_id, size)
+        sreg_ranges: Dict[int, Tuple[int, int]] = {}
         
         for vreg, phys in self.precolored_vregs.items():
             vreg_map[vreg.id] = phys
@@ -289,6 +291,12 @@ class KernelRegAlloc:
                 raise
             
             vreg_map[lr.reg.id] = phys
+            
+            # For ranges, track all component registers
+            if lr.size > 1:
+                for i in range(lr.size):
+                    vreg_ranges[lr.reg.id + i] = (lr.reg.id, lr.size)
+            
             active_vranges.append((lr.end, lr, phys))
             active_vranges.sort(key=lambda x: x[0])
             self._stats.ranges_allocated += 1
@@ -313,17 +321,51 @@ class KernelRegAlloc:
                 raise
             
             sreg_map[lr.reg.id] = phys
+            
+            # For ranges, track all component registers
+            if lr.size > 1:
+                for i in range(lr.size):
+                    sreg_ranges[lr.reg.id + i] = (lr.reg.id, lr.size)
+            
             active_sranges.append((lr.end, lr, phys))
             active_sranges.sort(key=lambda x: x[0])
             self._stats.ranges_allocated += 1
         
-        # Record stats
-        self._stats.peak_vgprs = self._vgpr_pool.peak_usage
-        self._stats.peak_sgprs = self._sgpr_pool.peak_usage
+        # Record stats - include BOTH reserved and dynamically allocated registers
+        # We need the highest register index used + 1 to get the count
+        
+        # Calculate highest VGPR index used (including reserved and ranges)
+        max_vgpr = -1
+        for phys_base in vreg_map.values():
+            max_vgpr = max(max_vgpr, phys_base)
+        # Account for ranges (vreg_ranges maps individual component to (base, size))
+        for vreg_id, (base, size) in vreg_ranges.items():
+            phys_base = vreg_map.get(KVReg(base))
+            if phys_base is not None:
+                max_vgpr = max(max_vgpr, phys_base + size - 1)
+        # Include reserved
+        if self.reserved_vgprs:
+            max_vgpr = max(max_vgpr, max(self.reserved_vgprs))
+        self._stats.peak_vgprs = max_vgpr + 1 if max_vgpr >= 0 else 0
+        
+        # Calculate highest SGPR index used (including reserved and ranges)
+        max_sgpr = -1
+        for phys_base in sreg_map.values():
+            max_sgpr = max(max_sgpr, phys_base)
+        # Account for ranges (sreg_ranges maps individual component to (base, size))
+        for sreg_id, (base, size) in sreg_ranges.items():
+            phys_base = sreg_map.get(KSReg(base))
+            if phys_base is not None:
+                max_sgpr = max(max_sgpr, phys_base + size - 1)
+        # Include reserved
+        if self.reserved_sgprs:
+            max_sgpr = max(max_sgpr, max(self.reserved_sgprs))
+        self._stats.peak_sgprs = max_sgpr + 1 if max_sgpr >= 0 else 0
+        
         self._stats.total_vregs = len(vreg_map)
         self._stats.total_sregs = len(sreg_map)
         
-        return PhysicalMapping(vreg_map, sreg_map)
+        return PhysicalMapping(vreg_map, sreg_map, vreg_ranges, sreg_ranges)
     
     def _expire_ranges(
         self,

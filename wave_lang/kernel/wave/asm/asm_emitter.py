@@ -408,26 +408,45 @@ class AsmEmitter:
 
                     # Emit kernel preamble with workgroup size
                     emitter.emit_prologue(kernel_name, wg_size)
-                    emitter.emit_kernargs(num_args)
-
-                    # Walk MLIR and emit instructions via kernel IR
+                    
                     # Walk MLIR and emit instructions
                     from .kernel_pipeline import KernelCompilationContext, use_kernel_ir
                     
                     if use_kernel_ir():
-                        # Full kernel IR mode: all instructions via KernelProgram
+                        # In kernel IR mode, kernarg loading is handled inside the IR path
+                        pass
+                    else:
+                        # Legacy mode needs explicit kernarg loading upfront
+                        emitter.emit_kernargs(num_args)
+                    
+                    if use_kernel_ir():
+                        # Full kernel IR mode
+                        # Check if multi-wave (need flat_tid from system VGPR)
+                        wg_x, wg_y, wg_z = normalize_wg_size(wg_size)
+                        is_multi_wave = wg_y > 1 or wg_z > 1
                         kernel_ctx = KernelCompilationContext(
-                            use_flat_tid=True,
+                            use_flat_tid=is_multi_wave,
                             use_workgroup_ids=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
                         )
                         walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
                         kernel_info = walker.interpret_func(fn)
-                        body_lines, _stats = kernel_ctx.finalize()
+                        body_lines, allocation_stats = kernel_ctx.finalize()
                         emitter.lines.extend(body_lines)
+                        
+                        # Update register file with kernel IR allocation info
+                        # This ensures emit_epilogue uses correct register counts
+                        if allocation_stats.peak_vgprs > 0:
+                            emitter.register_file.v_used.add(allocation_stats.peak_vgprs - 1)
+                        if allocation_stats.peak_sgprs > 0:
+                            emitter.register_file.s_max = max(
+                                emitter.register_file.s_max,
+                                allocation_stats.peak_sgprs - 1
+                            )
                     else:
-                        # Legacy mode: direct emission via AsmEmitter
+                        # Legacy mode: direct emission
                         walker = IRWalker(emitter, kernel_ctx=None)
                         kernel_info = walker.interpret_func(fn)
+
                     emitter.emit_epilogue(
                         kernel_info.name,
                         kernel_info.wg_size,
