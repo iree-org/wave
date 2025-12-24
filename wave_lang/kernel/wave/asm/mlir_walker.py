@@ -158,6 +158,11 @@ class IRWalker:
             if subgroup_size:
                 kernel_info.subgroup_size = subgroup_size
 
+        # Update kernel context with actual bounds from MLIR
+        # This enables correct algebraic simplifications based on workgroup size
+        if self.kernel_ctx is not None:
+            self.kernel_ctx.update_bounds_from_kernel_info(kernel_info)
+
         # Walk operations and fill environment + accesses
         self._walk_block(fn.entry_block, kernel_info)
 

@@ -331,6 +331,44 @@ class KernelIRExprEmitter:
         # Fallback: use string representation (less efficient but always works)
         return ('expr', str(expr))
     
+    def _get_symbol_bounds(self) -> Dict[Any, Tuple[int, int]]:
+        """
+        Get bounds for thread/workgroup ID symbols.
+        
+        These bounds enable algebraic simplifications like:
+        - floor(tid_x / 64) → 0 when tid_x < 64
+        - Mod(tid_x, 64) → tid_x when tid_x < 64
+        
+        Bounds are derived from the kernel's configuration:
+        - tid_x/tid_y/tid_z: Upper bounded by workgroup dimensions
+        - lane_id: Bounded by subgroup_size
+        - wgid_*: Large upper bound (grid dimensions unknown at compile time)
+        """
+        import sympy
+        bounds = {}
+        
+        # Use actual bounds from kernel configuration
+        # tid_ub_* are exclusive upper bounds, so max value is tid_ub_* - 1
+        tid_ub_x = getattr(self.ctx, 'tid_ub_x', 64)
+        tid_ub_y = getattr(self.ctx, 'tid_ub_y', 1)
+        tid_ub_z = getattr(self.ctx, 'tid_ub_z', 1)
+        subgroup_size = getattr(self.ctx, 'subgroup_size', 64)
+        
+        # Thread IDs - bounded by workgroup dimensions
+        bounds[sympy.Symbol('tid_x')] = (0, tid_ub_x - 1)
+        bounds[sympy.Symbol('tid_y')] = (0, max(0, tid_ub_y - 1))
+        bounds[sympy.Symbol('tid_z')] = (0, max(0, tid_ub_z - 1))
+        
+        # Lane ID bounded by subgroup size
+        bounds[sympy.Symbol('lane_id')] = (0, subgroup_size - 1)
+        
+        # Workgroup IDs - bounded by grid dimensions (large upper bound)
+        bounds[sympy.Symbol('wgid_x')] = (0, 65535)
+        bounds[sympy.Symbol('wgid_y')] = (0, 65535)
+        bounds[sympy.Symbol('wgid_z')] = (0, 65535)
+        
+        return bounds
+    
     def get_or_emit(self, expr, cache_in_global: bool = False) -> KVReg:
         """
         Get a VGPR containing the value of expr, emitting instructions if needed.
@@ -343,6 +381,12 @@ class KernelIRExprEmitter:
         """
         import sympy
         from sympy import Symbol, Mul, Add, Integer, floor, Mod
+        
+        # NOTE: Algebraic simplification (simplify_for_emission) is disabled for now.
+        # The sympy pattern matching is too expensive for complex expressions,
+        # causing timeouts. The loop-invariant caching already provides most of
+        # the benefit by reusing tid_x, tid_y, etc. across loop iterations.
+        # TODO: Re-enable with a lighter-weight simplification strategy.
         
         # Handle immediate integers
         if isinstance(expr, (int, Integer)):
@@ -970,6 +1014,14 @@ class KernelCompilationContext:
     use_flat_tid: bool = True
     use_workgroup_ids: Tuple[bool, bool, bool] = (True, True, True)  # x, y, z
     
+    # Thread ID bounds for algebraic simplification
+    # These are set from kernel_info when the context is created
+    tid_ub_x: int = 64  # Upper bound for tid_x (exclusive)
+    tid_ub_y: int = 1   # Upper bound for tid_y (exclusive)
+    tid_ub_z: int = 1   # Upper bound for tid_z (exclusive)
+    subgroup_size: int = 64
+    wg_size: Tuple[int, int, int] = (64, 1, 1)
+    
     # Internal state
     program: KernelProgram = field(init=False)
     builder: KernelBuilder = field(init=False)
@@ -1052,6 +1104,40 @@ class KernelCompilationContext:
         if self._expr_emitter is None:
             self._expr_emitter = KernelIRExprEmitter(self)
         return self._expr_emitter
+    
+    def update_bounds_from_kernel_info(self, kernel_info: "KernelInfo") -> None:
+        """
+        Update thread ID bounds from kernel_info after MLIR parsing.
+        
+        This should be called after interpret_func() returns, as that's when
+        we know the actual workgroup_size and subgroup_size from the MLIR.
+        
+        Args:
+            kernel_info: KernelInfo populated by interpret_func()
+        """
+        wg_size = getattr(kernel_info, 'wg_size', (64, 1, 1))
+        subgroup_size = getattr(kernel_info, 'subgroup_size', 64)
+        
+        self.wg_size = wg_size
+        self.subgroup_size = subgroup_size
+        
+        # Update use_flat_tid based on actual num_waves
+        num_waves = max(1, wg_size[0] * wg_size[1] * wg_size[2] // subgroup_size)
+        self.use_flat_tid = (num_waves > 1)
+        
+        # In multi-wave mode, tid_x/tid_y/tid_z are extracted from flat_tid
+        # and bounded by the workgroup dimensions wg_size = (x, y, z)
+        # In single-wave mode, tid_x = lane_id (0 to subgroup_size-1) and tid_y/z = 0
+        if self.use_flat_tid:
+            # Multi-wave: unpack wg_size tuple for tid bounds
+            self.tid_ub_x = wg_size[0]
+            self.tid_ub_y = wg_size[1]
+            self.tid_ub_z = wg_size[2] if len(wg_size) > 2 else 1
+        else:
+            # Single-wave: tid_x = lane_id (bounded by subgroup_size), tid_y/z = 0
+            self.tid_ub_x = subgroup_size
+            self.tid_ub_y = 1
+            self.tid_ub_z = 1
     
     # =========================================================================
     # Dynamic instruction dispatch
@@ -2060,14 +2146,25 @@ def create_kernel_context(
         Configured KernelCompilationContext
     """
     # Determine ABI configuration from kernel_info
-    wg_size = getattr(kernel_info, 'workgroup_size', (256, 1, 1))
-    num_waves = max(1, wg_size[0] * wg_size[1] * wg_size[2] // 64)
+    wg_size = getattr(kernel_info, 'wg_size', (256, 1, 1))
+    subgroup_size = getattr(kernel_info, 'subgroup_size', 64)
+    num_waves = max(1, wg_size[0] * wg_size[1] * wg_size[2] // subgroup_size)
+    
+    # Get thread ID bounds from kernel_info
+    tid_ub_x = getattr(kernel_info, 'tid_ub_x', wg_size[0])
+    tid_ub_y = getattr(kernel_info, 'tid_ub_y', wg_size[1])
+    tid_ub_z = getattr(kernel_info, 'tid_ub_z', wg_size[2]) if len(wg_size) > 2 else 1
     
     ctx = KernelCompilationContext(
         max_vgprs=max_vgprs,
         max_sgprs=max_sgprs,
         use_flat_tid=(num_waves > 1),
         use_workgroup_ids=(True, True, True),
+        tid_ub_x=tid_ub_x,
+        tid_ub_y=tid_ub_y,
+        tid_ub_z=tid_ub_z,
+        subgroup_size=subgroup_size,
+        wg_size=wg_size,
     )
     
     return ctx
@@ -2130,10 +2227,16 @@ class KernelModuleCompiler:
                 # Detect workgroup ID needs
                 needs_wgid_x, needs_wgid_y, needs_wgid_z = self._detect_workgroup_ids(fn)
                 
-                # Create kernel context
+                # Create kernel context with proper thread ID bounds
+                num_waves = max(1, wg_size[0] * wg_size[1] * wg_size[2] // subgroup_size)
                 kernel_ctx = KernelCompilationContext(
-                    use_flat_tid=True,
+                    use_flat_tid=(num_waves > 1),
                     use_workgroup_ids=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                    tid_ub_x=wg_size[0],
+                    tid_ub_y=wg_size[1],
+                    tid_ub_z=wg_size[2] if len(wg_size) > 2 else 1,
+                    subgroup_size=subgroup_size,
+                    wg_size=wg_size,
                 )
                 
                 # Emit kernarg loading
