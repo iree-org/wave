@@ -66,6 +66,10 @@ WAVE_KERNEL_LSRA_ENV = "WAVE_KERNEL_LSRA"
 # Set to "1" to use kernel IR path for simple kernels (copy works)
 WAVE_KERNEL_IR_ENV = "WAVE_KERNEL_IR"
 
+# Flag to enable algebraic simplification in kernel IR mode
+# Enabled by default - the depth-tracking fix prevents O(n^2) behavior
+_ENABLE_KERNEL_IR_SIMPLIFY = os.environ.get("WAVE_KERNEL_IR_SIMPLIFY", "1") == "1"
+
 
 def use_kernel_lsra() -> bool:
     """Check if kernel-level LSRA is enabled."""
@@ -181,6 +185,9 @@ class KernelIRExprEmitter:
         self._scope_stack: List[Dict[tuple, KVReg]] = [{}]  # Start with global scope
         # Symbol bindings: name -> register (string like "v0" or KVReg)
         self._bindings: Dict[str, Any] = {}
+        # Recursion depth counter for get_or_emit
+        # Used to only run simplification at top-level (depth=0)
+        self._emit_depth: int = 0
     
     @property
     def _global_scope(self) -> Dict[tuple, KVReg]:
@@ -382,26 +389,46 @@ class KernelIRExprEmitter:
         import sympy
         from sympy import Symbol, Mul, Add, Integer, floor, Mod
         
-        # NOTE: Algebraic simplification (simplify_for_emission) is disabled for now.
-        # The sympy pattern matching is too expensive for complex expressions,
-        # causing timeouts. The loop-invariant caching already provides most of
-        # the benefit by reusing tid_x, tid_y, etc. across loop iterations.
-        # TODO: Re-enable with a lighter-weight simplification strategy.
+        # Track recursion depth
+        self._emit_depth += 1
+        try:
+            return self._get_or_emit_impl(expr, cache_in_global)
+        finally:
+            self._emit_depth -= 1
+    
+    def _get_or_emit_impl(self, expr, cache_in_global: bool = False) -> KVReg:
+        """Internal implementation of get_or_emit."""
+        import sympy
+        from sympy import Symbol, Mul, Add, Integer, floor, Mod
+        
+        # Algebraic simplification (disabled by default)
+        # Enable via WAVE_KERNEL_IR_SIMPLIFY=1 or _ENABLE_KERNEL_IR_SIMPLIFY=True
+        # IMPORTANT: Only simplify at top-level (depth=1), not during recursive calls.
+        # This prevents the O(n^2) behavior where each sub-expression is simplified.
+        if _ENABLE_KERNEL_IR_SIMPLIFY and self._emit_depth == 1:
+            from .expr_simplify import simplify_for_emission
+            bounds = self._get_symbol_bounds()
+            expr = simplify_for_emission(expr, bounds)
+        
+        # Check cache for ALL expressions (after simplification)
+        # This avoids re-emitting the same expression multiple times
+        cache_key = self._expr_key(expr)
+        cached = self._lookup_cache(cache_key)
+        if cached is not None:
+            return cached
+        
+        # Determine if this expression is loop-invariant (for global caching)
+        is_invariant = self._is_loop_invariant(expr)
         
         # Handle immediate integers
         if isinstance(expr, (int, Integer)):
             val = int(expr)
-            cache_key = ('imm', val)
-            cached = self._lookup_cache(cache_key)
-            if cached is not None:
-                return cached
-            
             result = self.ctx.vreg()
             self.ctx.program.emit(KInstr(
                 "v_mov_b32", (result,), (KImm(val),),
                 comment=f"imm = {val}"
             ))
-            self._insert_cache(cache_key, result, global_scope=cache_in_global)
+            self._insert_cache(cache_key, result, global_scope=is_invariant)
             return result
         
         # Handle symbols
@@ -416,26 +443,17 @@ class KernelIRExprEmitter:
                 # String like "v0" - need to copy to virtual reg
                 if isinstance(reg, str) and reg.startswith('v'):
                     phys_idx = int(reg[1:])
-                    cache_key = ('sym', name)
-                    cached = self._lookup_cache(cache_key)
-                    if cached is not None:
-                        return cached
                     result = self.ctx.vreg()
                     self.ctx.program.emit(KInstr(
                         "v_mov_b32", (result,), (KPhysVReg(phys_idx),),
                         comment=f"copy {name} from {reg}"
                     ))
-                    self._insert_cache(cache_key, result, global_scope=cache_in_global)
+                    self._insert_cache(cache_key, result, global_scope=is_invariant)
                     return result
             
             # Common thread ID symbols - emit inline on first use, cache in GLOBAL scope
-            # The global scope cache survives clear_cache() calls, ensuring single emission
+            # (Cache check already done at top of function)
             if name == 'tid_x':
-                cache_key = ('sym', 'tid_x')
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
-                
                 if self.ctx.use_flat_tid:
                     # Multi-wave: extract tid_x from flat_tid (v0[0:9])
                     result = self.ctx.vreg()
@@ -461,11 +479,6 @@ class KernelIRExprEmitter:
                 return result
             
             if name == 'tid_y':
-                cache_key = ('sym', 'tid_y')
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
-                
                 if self.ctx.use_flat_tid:
                     # Multi-wave: extract tid_y from flat_tid (v0[10:19])
                     result = self.ctx.vreg()
@@ -481,16 +494,12 @@ class KernelIRExprEmitter:
                         comment="tid_y = 0 for single-wave"
                     ))
                 
-                # Cache in GLOBAL scope
+                # Cache in GLOBAL scope (loop-invariant)
                 self._insert_cache(cache_key, result, global_scope=True)
                 return result
             
             # Handle workgroup ID symbols - also cache in global scope
             if name == 'wgid_x':
-                cache_key = ('sym', 'wgid_x')
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
                 result = self.ctx.vreg()
                 self.ctx.program.emit(KInstr(
                     "v_mov_b32", (result,), (KPhysSReg(2),),
@@ -500,10 +509,6 @@ class KernelIRExprEmitter:
                 return result
             
             if name == 'wgid_y':
-                cache_key = ('sym', 'wgid_y')
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
                 result = self.ctx.vreg()
                 self.ctx.program.emit(KInstr(
                     "v_mov_b32", (result,), (KPhysSReg(3),),
@@ -513,10 +518,6 @@ class KernelIRExprEmitter:
                 return result
             
             if name == 'wgid_z':
-                cache_key = ('sym', 'wgid_z')
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
                 result = self.ctx.vreg()
                 self.ctx.program.emit(KInstr(
                     "v_mov_b32", (result,), (KPhysSReg(4),),
@@ -540,32 +541,50 @@ class KernelIRExprEmitter:
         
         # Handle multiplication
         if isinstance(expr, Mul):
-            # Check if this expression is loop-invariant and already cached
-            is_invariant = self._is_loop_invariant(expr)
-            if is_invariant:
-                cache_key = self._expr_key(expr)
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
-            
-            # Separate constant and variable parts
+            # Separate constant, rational, and variable parts
             const_part = 1
+            divisor = 1  # For handling rational coefficients like 1/2
             var_parts = []
             for arg in expr.args:
-                if arg.is_number:
+                if isinstance(arg, Integer):
+                    const_part *= int(arg)
+                elif isinstance(arg, sympy.Rational) and not isinstance(arg, Integer):
+                    # Handle rational like 1/2, 1/4, etc.
+                    const_part *= int(arg.p)  # numerator
+                    divisor *= int(arg.q)     # denominator
+                elif arg.is_number and isinstance(arg, (int, float)):
                     const_part *= int(arg)
                 else:
                     var_parts.append(arg)
             
             if len(var_parts) == 0:
-                # Pure constant
+                # Pure constant (possibly with division)
+                if divisor > 1:
+                    return self.get_or_emit(Integer(const_part // divisor))
                 return self.get_or_emit(Integer(const_part))
             
             if len(var_parts) == 1:
-                # const * var - common case
+                # const * var / divisor - common case
                 var_reg = self.get_or_emit(var_parts[0])
                 
+                # Handle divisor first if present (represents rational coefficient)
+                if divisor > 1:
+                    # This is a division like var/2 -> shift right
+                    if divisor > 0 and (divisor & (divisor - 1)) == 0:
+                        shift = divisor.bit_length() - 1
+                        div_result = self.ctx.vreg()
+                        self.ctx.program.emit(KInstr(
+                            "v_lshrrev_b32", (div_result,), (KImm(shift), var_reg),
+                            comment=f"{var_parts[0]} >> {shift} (div by {divisor})"
+                        ))
+                        var_reg = div_result
+                    else:
+                        raise NotImplementedError(f"Non-power-of-2 divisor in Mul: {divisor}")
+                
                 if const_part == 1:
+                    # No multiplication needed, just return the (possibly divided) result
+                    if divisor > 1:
+                        self._insert_cache(cache_key, var_reg, global_scope=is_invariant)
                     return var_reg
                 
                 result = self.ctx.vreg()
@@ -595,9 +614,8 @@ class KernelIRExprEmitter:
                         comment=f"{var_parts[0]} * {const_part}"
                     ))
                 
-                # Cache if loop-invariant
-                if is_invariant:
-                    self._insert_cache(cache_key, result, global_scope=True)
+                # Cache result (global scope if loop-invariant)
+                self._insert_cache(cache_key, result, global_scope=is_invariant)
                 return result
             
             # Multiple variable parts - emit sequentially
@@ -630,21 +648,12 @@ class KernelIRExprEmitter:
                     ))
                 result = final
             
-            # Cache if loop-invariant
-            if is_invariant:
-                self._insert_cache(cache_key, result, global_scope=True)
+            # Cache result (global scope if loop-invariant)
+            self._insert_cache(cache_key, result, global_scope=is_invariant)
             return result
         
         # Handle addition
         if isinstance(expr, Add):
-            # Check if this expression is loop-invariant and already cached
-            is_invariant = self._is_loop_invariant(expr)
-            if is_invariant:
-                cache_key = self._expr_key(expr)
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
-            
             # Emit first term
             result = self.get_or_emit(expr.args[0])
             
@@ -658,38 +667,20 @@ class KernelIRExprEmitter:
                 ))
                 result = new_result
             
-            # Cache if loop-invariant
-            if is_invariant:
-                self._insert_cache(cache_key, result, global_scope=True)
+            # Cache result (global scope if loop-invariant)
+            self._insert_cache(cache_key, result, global_scope=is_invariant)
             return result
         
         # Handle floor expressions
         if isinstance(expr, floor):
-            # Check if this expression is loop-invariant and already cached
-            is_invariant = self._is_loop_invariant(expr)
-            if is_invariant:
-                cache_key = self._expr_key(expr)
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
-            
             result = self._emit_floor(expr)
             
-            # Cache if loop-invariant
-            if is_invariant:
-                self._insert_cache(cache_key, result, global_scope=True)
+            # Cache result (global scope if loop-invariant)
+            self._insert_cache(cache_key, result, global_scope=is_invariant)
             return result
         
         # Handle modulo
         if isinstance(expr, Mod):
-            # Check if this expression is loop-invariant and already cached
-            is_invariant = self._is_loop_invariant(expr)
-            if is_invariant:
-                cache_key = self._expr_key(expr)
-                cached = self._lookup_cache(cache_key)
-                if cached is not None:
-                    return cached
-            
             x, n = expr.args
             x_reg = self.get_or_emit(x)
             n_val = int(n)
@@ -707,10 +698,22 @@ class KernelIRExprEmitter:
                 # TODO: Implement general modulo
                 raise NotImplementedError(f"modulo by {n_val} not yet implemented")
             
-            # Cache if loop-invariant
-            if is_invariant:
-                self._insert_cache(cache_key, result, global_scope=True)
+            # Cache result (global scope if loop-invariant)
+            self._insert_cache(cache_key, result, global_scope=is_invariant)
             return result
+        
+        # Handle rational numbers (like Half = 1/2)
+        # These can appear when simplification extracts common factors from expressions
+        # In our integer-only arithmetic, rationals are handled via floor semantics:
+        # - Standalone rational like 1/2: floor(1/2) = 0
+        # - Multiplication like tid_y * 1/2: handled in Mul case as tid_y >> 1
+        if isinstance(expr, sympy.Rational) and not isinstance(expr, Integer):
+            if expr.q == 1:  # Integer in disguise (like 3/1)
+                return self.get_or_emit(Integer(expr.p))
+            # Pure fractional rational: use floor semantics
+            # This is correct because all our intermediate values are integers
+            floor_val = int(expr.p) // int(expr.q)
+            return self.get_or_emit(Integer(floor_val))
         
         raise NotImplementedError(f"Expression type not supported: {type(expr).__name__}: {expr}")
     

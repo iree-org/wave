@@ -737,7 +737,7 @@ class OperationHandlers:
             
             ctx = self.walker.kernel_ctx
             
-            # Determine if we can use the offset field and how
+            # Determine if we can use the offset field
             has_dynamic_base = len(base_expr.free_symbols) > 0
             
             if not has_dynamic_base:
@@ -748,11 +748,16 @@ class OperationHandlers:
                     comment=f"LDS addr = {byte_offset_expr}"
                 ))
                 lds_offset = 0
+            elif 0 <= const_offset <= DS_MAX_OFFSET and const_offset % DS_ALIGN == 0:
+                # Can use offset field - compute only the base expression
+                # Use a fresh scope to avoid CSE issues with different memrefs
+                with ctx.expr_emitter.scope("lds_base"):
+                    addr_vreg = ctx.expr_emitter.get_or_emit(base_expr)
+                lds_offset = const_offset
+                if DEBUG_DS_OFFSET:
+                    print(f"[DS_OFFSET_DEBUG]   -> USING_OFFSET: addr={addr_vreg}, offset={lds_offset}")
             else:
-                # Always compute full address in kernel IR mode to ensure consistency
-                # with LDS writes (which also compute full address). This avoids issues
-                # where different memrefs with different vbase values would share the
-                # same base_expr address register but expect different offsets.
+                # Offset out of range or not aligned - compute full address
                 addr_vreg = ctx.expr_emitter.get_or_emit(byte_offset_expr)
                 lds_offset = 0
             
