@@ -1,0 +1,61 @@
+================================================================================
+LLVM vs ASM Backend Assembly Comparison Report
+================================================================================
+
+Configuration:
+  Name: gemm-asm-benchmark
+  Shape: M=256, N=256, K=128
+  Blocks: BLOCK_M=32, BLOCK_N=32, BLOCK_K=64
+  Waves: WAVE_M=16, WAVE_N=16
+  Waves per WG: 2x2 = 4
+  global_to_shared: True
+  Architecture: gfx950
+
+======================================================================
+Instruction Metrics Comparison
+======================================================================
+Category                        LLVM        ASM       Diff      Ratio
+----------------------------------------------------------------------
+Total Instructions               420        150       -270      0.36x
+----------------------------------------------------------------------
+Scalar ALU (SALU)                  8          6         -2      0.75x
+Vector ALU (VALU)                 43         93        +50      2.16x
+Vector Memory (VMEM)               8          6         -2      0.75x
+Scalar Memory (SMEM)               2          3         +1      1.50x
+LDS/GDS (DS)                       8          8          0      1.00x
+Matrix Ops (MFMA)                  8          4         -4      0.50x
+Branch/Control                     2          4         +2      2.00x
+Waits (s_waitcnt)                  8         13         +5      1.62x
+Barriers (s_barrier)               4          2         -2      0.50x
+NOPs (s_nop)                     329          2       -327      0.01x
+Other                              0          9         +9        N/A
+----------------------------------------------------------------------
+Specific Patterns:
+  buffer_load...lds                4          2         -2      0.50x
+  ds_read*                         8          8          0      1.00x
+  ds_write*                        0          0          0        N/A
+  M0 setup (s_mov m0)              4          2         -2      0.50x
+  v_readfirstlane                  1          2         +1      2.00x
+======================================================================
+
+======================================================================
+Resource Usage Comparison
+======================================================================
+Resource                        LLVM        ASM       Diff
+----------------------------------------------------------------------
+VGPRs                              0          0          0
+SGPRs                              0          0          0
+LDS (bytes)                        0          0          0
+======================================================================
+
+======================================================================
+Preliminary Analysis
+======================================================================
+Instruction overhead: 0.36x (-270 instructions)
+
+Likely causes of overhead:
+- Extra waits: +5 s_waitcnt (conservative scheduling?)
+- Extra VALU: +50 (index computation overhead?)
+- Extra readfirstlane: +1 (scalar extraction overhead?)
+
+======================================================================

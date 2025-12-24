@@ -2030,6 +2030,9 @@ class KernelCompilationContext:
         # Emit SRD prologue - moves all SRD setup to program start
         self._emit_srd_prologue()
         
+        # Apply peephole optimizations (fuse lshl+add, lshl+or, etc.)
+        self._apply_peephole_optimizations()
+        
         # Apply hazard mitigation pass
         self._apply_hazard_mitigation()
         
@@ -2152,6 +2155,168 @@ class KernelCompilationContext:
                     return True
         
         return False
+    
+    def _apply_peephole_optimizations(self):
+        """
+        Apply peephole optimizations to fuse instruction sequences.
+        
+        Fuses patterns like:
+        - v_lshlrev_b32 + v_add_u32 -> v_lshl_add_u32
+        - v_lshlrev_b32 + v_or_b32 -> v_lshl_or_b32
+        
+        These fused instructions are supported on gfx9+ and save VALU cycles.
+        """
+        instructions = self.program.instructions
+        if not instructions:
+            return
+        
+        # Track which registers are written by which instruction index
+        # This helps us find the producer of a register
+        reg_writers: Dict[int, int] = {}  # vreg_id -> instruction_index
+        
+        # First pass: build def map
+        for i, instr in enumerate(instructions):
+            for def_reg in instr.defs:
+                if isinstance(def_reg, KVReg):
+                    reg_writers[def_reg.id] = i
+        
+        # Second pass: find fusion opportunities
+        # We'll mark instructions to delete and create replacements
+        to_delete = set()
+        replacements = []  # (index, new_instr)
+        
+        for i, instr in enumerate(instructions):
+            if i in to_delete:
+                continue
+            
+            # Pattern: v_add_u32 vD, vA, vB where vA was produced by v_lshlrev_b32
+            # Fuse to: v_lshl_add_u32 vD, src, shift, vB
+            if instr.name == "v_add_u32" and len(instr.uses) == 2 and len(instr.defs) == 1:
+                dst = instr.defs[0]
+                src_a, src_b = instr.uses
+                
+                # Check if src_a is a VGPR produced by a v_lshlrev_b32
+                if isinstance(src_a, KVReg) and src_a.id in reg_writers:
+                    shift_idx = reg_writers[src_a.id]
+                    shift_instr = instructions[shift_idx]
+                    
+                    if (shift_instr.name == "v_lshlrev_b32" and 
+                        len(shift_instr.uses) == 2 and
+                        isinstance(shift_instr.uses[0], KImm) and
+                        shift_idx not in to_delete):
+                        
+                        shift_amt = shift_instr.uses[0]
+                        shift_src = shift_instr.uses[1]
+                        
+                        # Check that the shift result isn't used elsewhere
+                        # (for simplicity, we only fuse if the shift result is used once)
+                        shift_result = shift_instr.defs[0]
+                        uses_of_shift = sum(
+                            1 for j, other in enumerate(instructions) 
+                            if j != i and j not in to_delete
+                            for u in other.uses 
+                            if isinstance(u, KVReg) and u.id == shift_result.id
+                        )
+                        
+                        if uses_of_shift == 0:
+                            # Can fuse!
+                            # v_lshl_add_u32 vD, src, shift, addend
+                            fused = KInstr(
+                                "v_lshl_add_u32",
+                                (dst,),
+                                (shift_src, shift_amt, src_b),
+                                comment=f"fused: ({shift_src} << {shift_amt.value}) + {src_b}"
+                            )
+                            to_delete.add(shift_idx)
+                            replacements.append((i, fused))
+                            continue
+                
+                # Check if src_b is a VGPR produced by a v_lshlrev_b32 (commutative)
+                if isinstance(src_b, KVReg) and src_b.id in reg_writers:
+                    shift_idx = reg_writers[src_b.id]
+                    shift_instr = instructions[shift_idx]
+                    
+                    if (shift_instr.name == "v_lshlrev_b32" and 
+                        len(shift_instr.uses) == 2 and
+                        isinstance(shift_instr.uses[0], KImm) and
+                        shift_idx not in to_delete):
+                        
+                        shift_amt = shift_instr.uses[0]
+                        shift_src = shift_instr.uses[1]
+                        
+                        shift_result = shift_instr.defs[0]
+                        uses_of_shift = sum(
+                            1 for j, other in enumerate(instructions) 
+                            if j != i and j not in to_delete
+                            for u in other.uses 
+                            if isinstance(u, KVReg) and u.id == shift_result.id
+                        )
+                        
+                        if uses_of_shift == 0:
+                            # Can fuse!
+                            fused = KInstr(
+                                "v_lshl_add_u32",
+                                (dst,),
+                                (shift_src, shift_amt, src_a),
+                                comment=f"fused: ({shift_src} << {shift_amt.value}) + {src_a}"
+                            )
+                            to_delete.add(shift_idx)
+                            replacements.append((i, fused))
+                            continue
+            
+            # Pattern: v_or_b32 vD, vA, vB where vA was produced by v_lshlrev_b32
+            # Fuse to: v_lshl_or_b32 vD, src, shift, vB
+            if instr.name == "v_or_b32" and len(instr.uses) == 2 and len(instr.defs) == 1:
+                dst = instr.defs[0]
+                src_a, src_b = instr.uses
+                
+                # Check if src_a is a VGPR produced by a v_lshlrev_b32
+                if isinstance(src_a, KVReg) and src_a.id in reg_writers:
+                    shift_idx = reg_writers[src_a.id]
+                    shift_instr = instructions[shift_idx]
+                    
+                    if (shift_instr.name == "v_lshlrev_b32" and 
+                        len(shift_instr.uses) == 2 and
+                        isinstance(shift_instr.uses[0], KImm) and
+                        shift_idx not in to_delete):
+                        
+                        shift_amt = shift_instr.uses[0]
+                        shift_src = shift_instr.uses[1]
+                        
+                        shift_result = shift_instr.defs[0]
+                        uses_of_shift = sum(
+                            1 for j, other in enumerate(instructions) 
+                            if j != i and j not in to_delete
+                            for u in other.uses 
+                            if isinstance(u, KVReg) and u.id == shift_result.id
+                        )
+                        
+                        if uses_of_shift == 0:
+                            fused = KInstr(
+                                "v_lshl_or_b32",
+                                (dst,),
+                                (shift_src, shift_amt, src_b),
+                                comment=f"fused: ({shift_src} << {shift_amt.value}) | {src_b}"
+                            )
+                            to_delete.add(shift_idx)
+                            replacements.append((i, fused))
+                            continue
+        
+        # Apply replacements and deletions
+        if replacements or to_delete:
+            # Build new instruction list
+            new_instructions = []
+            replace_map = {idx: instr for idx, instr in replacements}
+            
+            for i, instr in enumerate(instructions):
+                if i in to_delete:
+                    continue
+                if i in replace_map:
+                    new_instructions.append(replace_map[i])
+                else:
+                    new_instructions.append(instr)
+            
+            self.program.instructions = new_instructions
     
     def finalize_to_string(self) -> str:
         """Finalize and return assembly as a single string."""
