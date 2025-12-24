@@ -6,28 +6,21 @@
 """
 Kernel-level compilation pipeline with whole-program register allocation.
 
-This module provides the integration point for the new kernel-level linear scan
-register allocator. It can be enabled via the WAVE_KERNEL_LSRA environment variable.
-
-When enabled:
+This module provides the kernel IR compilation pipeline:
 1. Expression emission goes to KernelProgram with virtual registers
 2. After all instructions are emitted, liveness is computed
 3. Linear scan allocator assigns physical registers
 4. Renderer generates final assembly
 
-When disabled (default):
-- The original per-expression allocation path is used
-
 Usage:
-    from kernel_pipeline import use_kernel_lsra, KernelCompilationContext
+    from kernel_pipeline import KernelCompilationContext
     
-    if use_kernel_lsra():
-        ctx = KernelCompilationContext(kernel_info)
-        # Emit instructions via dynamic dispatch
-        v1 = ctx.v_mov_b32(42)
-        v2 = ctx.v_add_u32(v1, 100)
-        # Finalize and get assembly
-        asm = ctx.finalize()
+    ctx = KernelCompilationContext(kernel_info)
+    # Emit instructions via dynamic dispatch
+    v1 = ctx.v_mov_b32(42)
+    v2 = ctx.v_add_u32(v1, 100)
+    # Finalize and get assembly
+    asm = ctx.finalize()
 """
 
 import os
@@ -57,91 +50,34 @@ from .instruction_registry import (
 )
 
 
-# Environment variable to enable kernel-level LSRA (advanced allocation)
-# Default is "0" (disabled) during development
-WAVE_KERNEL_LSRA_ENV = "WAVE_KERNEL_LSRA"
-
-# Environment variable to enable kernel IR path
-# Default is "0" (disabled) - GEMM/MFMA support still being debugged
-# Set to "1" to use kernel IR path for simple kernels (copy works)
-WAVE_KERNEL_IR_ENV = "WAVE_KERNEL_IR"
-
 # Flag to enable algebraic simplification in kernel IR mode
 # Enabled by default - the depth-tracking fix prevents O(n^2) behavior
 _ENABLE_KERNEL_IR_SIMPLIFY = os.environ.get("WAVE_KERNEL_IR_SIMPLIFY", "1") == "1"
 
 
-def use_kernel_lsra() -> bool:
-    """Check if kernel-level LSRA is enabled."""
-    return os.environ.get(WAVE_KERNEL_LSRA_ENV, "0") == "1"
-
-
-def use_kernel_ir() -> bool:
-    """
-    Check if kernel IR path is enabled.
+class _NoOpTicketing:
+    """No-op ticketing for kernel IR path.
     
-    The kernel IR path is the only compilation path. Legacy mode has been removed.
-    This function always returns True for backward compatibility with any code
-    that still calls it.
+    The kernel IR path handles waitcnts via the instruction stream directly,
+    so ticketing operations are no-ops. This provides a compatible interface
+    for handlers that still reference ticketing.
     """
-    return True
-
-
-# =============================================================================
-# Structural Expression Key (for CSE)
-# =============================================================================
-
-
-def _expr_key(expr) -> tuple:
-    """
-    Build a structural, hashable key for an expression.
     
-    Uses a direct structural walk to create a hashable key that identifies
-    semantically identical expressions, enabling proper CSE caching.
-    The key is commutative-aware (Add and Mul args are sorted).
-    """
-    import sympy
+    def observe_vmem_wait(self, threshold: int) -> None:
+        """No-op: waitcnts are handled in the instruction stream."""
+        pass
     
-    def to_key(e):
-        if e is None:
-            return ("none",)
-        if isinstance(e, sympy.Integer):
-            return ("int", int(e))
-        if isinstance(e, sympy.Rational) and not isinstance(e, sympy.Integer):
-            return ("rat", int(e.p), int(e.q))
-        if isinstance(e, sympy.Symbol):
-            return ("sym", str(e))
-        if isinstance(e, sympy.Add):
-            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
-            return ("add", arg_keys)
-        if isinstance(e, sympy.Mul):
-            arg_keys = tuple(sorted([to_key(a) for a in e.args], key=str))
-            return ("mul", arg_keys)
-        if isinstance(e, sympy.Mod):
-            return ("mod", to_key(e.args[0]), to_key(e.args[1]))
-        if getattr(e, "func", None) == sympy.floor:
-            return ("floor", to_key(e.args[0]))
-        if isinstance(e, sympy.Pow):
-            return ("pow", to_key(e.args[0]), to_key(e.args[1]))
-        return ("raw", repr(e))
+    def observe_lgkm_wait(self, threshold: int) -> None:
+        """No-op: waitcnts are handled in the instruction stream."""
+        pass
     
-    return to_key(expr)
-
-
-def _contains_loop_sgpr(expr) -> bool:
-    """
-    Check if expression contains an SGPR symbol (loop counter like s24).
+    def next_vmem_ticket(self) -> int:
+        """No-op: returns 0."""
+        return 0
     
-    Expressions containing loop counters must not be cached because the
-    loop counter changes each iteration.
-    """
-    if not hasattr(expr, 'free_symbols'):
-        return False
-    for sym in expr.free_symbols:
-        name = str(sym)
-        if name.startswith('s') and len(name) > 1 and name[1:].isdigit():
-            return True
-    return False
+    def next_lgkm_ticket(self) -> int:
+        """No-op: returns 0."""
+        return 0
 
 
 class _ScopeContext:
@@ -1336,6 +1272,18 @@ class KernelCompilationContext:
             self._expr_emitter = KernelIRExprEmitter(self)
         return self._expr_emitter
     
+    @property
+    def ticketing(self) -> _NoOpTicketing:
+        """Return a no-op ticketing interface.
+        
+        The kernel IR path handles waitcnts via the instruction stream directly,
+        so ticketing operations are no-ops. This property allows handlers to
+        call ticketing methods without needing a full AsmEmitter.
+        """
+        if not hasattr(self, '_ticketing'):
+            self._ticketing = _NoOpTicketing()
+        return self._ticketing
+    
     def update_bounds_from_kernel_info(self, kernel_info: "KernelInfo") -> None:
         """
         Update thread ID bounds from kernel_info after MLIR parsing.
@@ -1416,7 +1364,7 @@ class KernelCompilationContext:
             ))
             
             # Emit empty line for readability
-            self.program.emit(KInstr("_comment", comment=""))
+            self.program.emit(KInstr("_comment", defs=(), uses=(), comment=""))
         
         self._kernargs_emitted = True
     
@@ -2640,51 +2588,6 @@ class KernelCompilationContext:
 
 
 # =============================================================================
-# Integration helpers
-# =============================================================================
-
-def create_kernel_context(
-    kernel_info: "KernelInfo",
-    max_vgprs: int = 256,
-    max_sgprs: int = 104,
-) -> KernelCompilationContext:
-    """
-    Create a kernel compilation context configured for the given kernel.
-    
-    Args:
-        kernel_info: KernelInfo describing the kernel
-        max_vgprs: Maximum VGPRs available
-        max_sgprs: Maximum SGPRs available
-        
-    Returns:
-        Configured KernelCompilationContext
-    """
-    # Determine ABI configuration from kernel_info
-    wg_size = getattr(kernel_info, 'wg_size', (256, 1, 1))
-    subgroup_size = getattr(kernel_info, 'subgroup_size', 64)
-    num_waves = max(1, wg_size[0] * wg_size[1] * wg_size[2] // subgroup_size)
-    
-    # Get thread ID bounds from kernel_info
-    tid_ub_x = getattr(kernel_info, 'tid_ub_x', wg_size[0])
-    tid_ub_y = getattr(kernel_info, 'tid_ub_y', wg_size[1])
-    tid_ub_z = getattr(kernel_info, 'tid_ub_z', wg_size[2]) if len(wg_size) > 2 else 1
-    
-    ctx = KernelCompilationContext(
-        max_vgprs=max_vgprs,
-        max_sgprs=max_sgprs,
-        use_flat_tid=(num_waves > 1),
-        use_workgroup_ids=(True, True, True),
-        tid_ub_x=tid_ub_x,
-        tid_ub_y=tid_ub_y,
-        tid_ub_z=tid_ub_z,
-        subgroup_size=subgroup_size,
-        wg_size=wg_size,
-    )
-    
-    return ctx
-
-
-# =============================================================================
 # Module-level Kernel Compiler
 # =============================================================================
 
@@ -2699,6 +2602,8 @@ class KernelModuleCompiler:
     3. Walk MLIR operations and emit to kernel IR
     4. Run register allocation
     5. Generate complete assembly (prologue + body + epilogue + metadata)
+    
+    Uses MetadataEmitter for prologue/epilogue generation (single source of truth).
     
     Usage:
         compiler = KernelModuleCompiler(targetid="gfx942", codeobj="5")
@@ -2721,25 +2626,47 @@ class KernelModuleCompiler:
         from wave_lang.support.ir_imports import Context, Module, func_d
         from .mlir_walker import IRWalker
         from .utils import parse_wg_and_subgroup
+        from .metadata_emitter import MetadataEmitter, create_metadata
+        from .driver import detect_needed_workgroup_ids, walk_ops_recursively
         
-        lines: List[str] = []
+        all_lines: List[str] = []
         
         with Context() as ctx:
             ctx.allow_unregistered_dialects = True
             module = Module.parse(mlir_text)
             
-            for fn in module.body:
+            for fn in walk_ops_recursively(module.operation):
                 if not isinstance(fn, func_d.FuncOp):
                     continue
                 
                 kernel_name = fn.sym_name.value
                 
-                # Extract kernel metadata
-                wg_size, subgroup_size = self._extract_kernel_metadata(fn)
+                # Skip non-kernel functions (async wrappers, benchmark scaffolding)
+                if kernel_name.startswith("isolated_benchmark") or kernel_name.endswith("$async"):
+                    continue
+                
                 num_args = len(list(fn.entry_block.arguments))
                 
+                # Extract kernel metadata
+                wg_size, subgroup_size = self._extract_kernel_metadata(fn)
+                
                 # Detect workgroup ID needs
-                needs_wgid_x, needs_wgid_y, needs_wgid_z = self._detect_workgroup_ids(fn)
+                needs_wgid_x, needs_wgid_y, needs_wgid_z = detect_needed_workgroup_ids(fn)
+                
+                # Create metadata for prologue/epilogue (via MetadataEmitter)
+                metadata = create_metadata(
+                    name=kernel_name,
+                    targetid=self.targetid,
+                    codeobj=self.codeobj,
+                    wg_size=wg_size,
+                    subgroup_size=subgroup_size,
+                    needs_wgid=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                    num_args=num_args,
+                )
+                
+                # Emit prologue (assembler directives)
+                meta_emitter = MetadataEmitter(metadata)
+                prologue_lines = meta_emitter.emit_prologue()
                 
                 # Create kernel context with proper thread ID bounds
                 num_waves = max(1, wg_size[0] * wg_size[1] * wg_size[2] // subgroup_size)
@@ -2753,8 +2680,8 @@ class KernelModuleCompiler:
                     wg_size=wg_size,
                 )
                 
-                # Emit kernarg loading
-                self._emit_kernarg_loads(kernel_ctx, num_args)
+                # Emit kernarg loading at the start of kernel IR
+                kernel_ctx.emit_kernargs(num_args)
                 
                 # Walk MLIR and emit to kernel IR
                 # Note: We still need the AsmEmitter for some legacy operations
@@ -2768,27 +2695,35 @@ class KernelModuleCompiler:
                 walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
                 kernel_info = walker.interpret_func(fn)
                 
-                # Finalize kernel IR and get body lines
-                body_lines, allocation_stats = kernel_ctx.finalize()
+                # Finalize kernel IR (adds s_endpgm, runs allocation, renders)
+                body_lines, stats = kernel_ctx.finalize()
                 
                 # Get LDS size from kernel_info
                 lds_size_bytes = getattr(kernel_info, 'lds_size_bytes', 0)
                 
-                # Generate complete assembly
-                asm = self._generate_complete_asm(
-                    kernel_name=kernel_name,
-                    wg_size=wg_size,
-                    subgroup_size=subgroup_size,
-                    num_args=num_args,
-                    body_lines=body_lines,
-                    allocation_stats=allocation_stats,
-                    lds_size_bytes=lds_size_bytes,
-                    needs_wgid=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                # Patch prologue with actual resource values
+                patched_prologue = MetadataEmitter.patch_resource_usage(
+                    prologue_lines,
+                    stats.peak_vgprs,
+                    stats.peak_sgprs,
+                    getattr(stats, 'peak_agprs', 0),
+                    lds_size_bytes,
+                    self.targetid,
                 )
                 
-                lines.append(asm)
+                # Emit epilogue (YAML metadata)
+                metadata.vgprs_used = stats.peak_vgprs
+                metadata.sgprs_used = stats.peak_sgprs
+                metadata.agprs_used = getattr(stats, 'peak_agprs', 0)
+                metadata.lds_size_bytes = lds_size_bytes
+                epilogue_lines = meta_emitter.emit_epilogue()
+                
+                # Combine all lines: prologue + body + epilogue
+                all_lines.extend(patched_prologue)
+                all_lines.extend(body_lines)
+                all_lines.extend(epilogue_lines)
         
-        return "\n".join(lines)
+        return "\n".join(all_lines)
     
     def _extract_kernel_metadata(self, fn) -> Tuple[Tuple[int, int, int], int]:
         """Extract workgroup size and subgroup size from function attributes."""
@@ -2812,182 +2747,3 @@ class KernelModuleCompiler:
                 subgroup_size = sg_size
         
         return wg_size, subgroup_size
-    
-    def _detect_workgroup_ids(self, fn) -> Tuple[bool, bool, bool]:
-        """Detect which workgroup ID dimensions are needed."""
-        needs_x = False
-        needs_y = False
-        needs_z = False
-        
-        for region in fn.regions:
-            for block in region.blocks:
-                for op in block.operations:
-                    op_name = op.operation.name
-                    if "workgroup_id" in op_name:
-                        # Check dimension from operation attributes if available
-                        str_repr = str(op)
-                        if "dim = 0" in str_repr or "x" in str_repr.lower():
-                            needs_x = True
-                        elif "dim = 1" in str_repr or "y" in str_repr.lower():
-                            needs_y = True
-                        elif "dim = 2" in str_repr or "z" in str_repr.lower():
-                            needs_z = True
-        
-        return needs_x, needs_y, needs_z
-    
-    def _emit_kernarg_loads(self, ctx: KernelCompilationContext, num_args: int):
-        """Emit kernarg pointer loading instructions."""
-        # Kernarg pointer is in s[0:1]
-        # For now, we assume handlers will use ensure_srd which handles kernarg loading
-        pass
-    
-    def _generate_complete_asm(
-        self,
-        kernel_name: str,
-        wg_size: Tuple[int, int, int],
-        subgroup_size: int,
-        num_args: int,
-        body_lines: List[str],
-        allocation_stats: AllocationStats,
-        lds_size_bytes: int,
-        needs_wgid: Tuple[bool, bool, bool],
-    ) -> str:
-        """Generate complete assembly with prologue, body, and epilogue."""
-        lines = []
-        
-        # Normalize workgroup size
-        wg_x = wg_size[0] if len(wg_size) > 0 else 64
-        wg_y = wg_size[1] if len(wg_size) > 1 else 1
-        wg_z = wg_size[2] if len(wg_size) > 2 else 1
-        
-        # === Prologue ===
-        lines.append(f'.amdgcn_target "amdgcn-amd-amdhsa--{self.targetid}"')
-        lines.append(".text")
-        lines.append(f".protected {kernel_name}")
-        lines.append(f".globl {kernel_name}")
-        lines.append(".p2align 8")
-        lines.append(f".type {kernel_name},@function\n")
-        lines.append(".section .rodata,#alloc")
-        lines.append(".p2align 6")
-        lines.append(f".amdhsa_kernel {kernel_name}")
-        lines.append("  .amdhsa_user_sgpr_kernarg_segment_ptr 1")
-        
-        # Workgroup ID SGPRs
-        if needs_wgid[0]:
-            lines.append("  .amdhsa_system_sgpr_workgroup_id_x 1")
-        if needs_wgid[1]:
-            lines.append("  .amdhsa_system_sgpr_workgroup_id_y 1")
-        if needs_wgid[2]:
-            lines.append("  .amdhsa_system_sgpr_workgroup_id_z 1")
-        
-        lines.append("  .amdhsa_user_sgpr_count 2")
-        
-        # Compute register usage
-        vgpr_granularity, sgpr_granularity = self._get_register_granularity()
-        
-        vgprs_used = allocation_stats.peak_vgprs
-        sgprs_used = allocation_stats.peak_sgprs
-        
-        # Round up to granularity
-        vgprs_used = ((vgprs_used + vgpr_granularity - 1) // vgpr_granularity) * vgpr_granularity
-        sgprs_used = ((sgprs_used + sgpr_granularity - 1) // sgpr_granularity) * sgpr_granularity
-        
-        # Ensure minimums
-        vgprs_used = max(4, vgprs_used)  # Minimum 4 VGPRs
-        sgprs_used = max(2, sgprs_used)  # Minimum 2 SGPRs (kernarg ptr)
-        
-        accum_offset = max(4, vgprs_used)
-        
-        lines.append(f"  .amdhsa_accum_offset {accum_offset}")
-        lines.append(f"  .amdhsa_next_free_vgpr {vgprs_used}")
-        lines.append(f"  .amdhsa_next_free_sgpr {sgprs_used}")
-        lines.append(f"  .amdhsa_group_segment_fixed_size {lds_size_bytes}")
-        lines.append("  .amdhsa_private_segment_fixed_size 0")
-        lines.append(f"  .amdhsa_wavefront_size{subgroup_size} 1")
-        lines.append(".end_amdhsa_kernel")
-        lines.append(f".size {kernel_name}, .Lfunc_end0-{kernel_name}\n")
-        
-        # === Body ===
-        lines.append(f"{kernel_name}:")
-        lines.extend(body_lines)
-        lines.append("    s_endpgm")
-        lines.append("")
-        lines.append(".Lfunc_end0:")
-        
-        # === Metadata ===
-        amdhsa_minor = "2" if self.codeobj == "5" else "1"
-        
-        args_yaml = []
-        for i in range(num_args):
-            args_yaml.append(
-                f"""      - .name: arg{i}_ptr
-        .size: 8
-        .offset: {i*8}
-        .value_kind: global_buffer
-        .value_type: i8*"""
-            )
-        args_yaml_string = "\n".join(args_yaml)
-        
-        metadata = f"""
-.amdgpu_metadata
----
-amdhsa.version:
-  - 1
-  - {amdhsa_minor}
-amdhsa.kernels:
-  - .name: {kernel_name}
-    .symbol: '{kernel_name}.kd'
-    .language:                   OpenCL C
-    .language_version:
-      - 2
-      - 0
-    .args:
-{args_yaml_string}
-    .group_segment_fixed_size:   {lds_size_bytes}
-    .kernarg_segment_align:      8
-    .kernarg_segment_size:       {num_args*8}
-    .max_flat_workgroup_size:    {wg_x * wg_y * wg_z}
-    .private_segment_fixed_size: 0
-    .reqd_workgroup_size:
-      - {wg_x}
-      - {wg_y}
-      - {wg_z}
-    .sgpr_count:                 {sgprs_used}
-    .sgpr_spill_count:           0
-    .vgpr_count:                 {vgprs_used}
-    .vgpr_spill_count:           0
-    .wavefront_size:             {subgroup_size}
-...
-.end_amdgpu_metadata
-"""
-        lines.append(metadata)
-        
-        return "\n".join(lines)
-    
-    def _get_register_granularity(self) -> Tuple[int, int]:
-        """Get VGPR and SGPR allocation granularity for target."""
-        # gfx940+ has different granularity
-        if "gfx94" in self.targetid or "gfx95" in self.targetid:
-            return 8, 8  # VGPRs and SGPRs allocated in blocks of 8
-        elif "gfx90" in self.targetid:
-            return 4, 8  # gfx90x: VGPRs in 4s, SGPRs in 8s
-        else:
-            return 4, 8  # Default
-
-
-def compile_kernel_ir(mlir_text: str, targetid: str = "gfx942", codeobj: str = "5") -> str:
-    """
-    Compile MLIR text to AMDGCN assembly using the kernel IR path.
-    
-    This is the main entry point for kernel IR compilation.
-    
-    Args:
-        mlir_text: MLIR module text
-        targetid: Target GPU (e.g., "gfx942")
-        codeobj: Code object version (e.g., "5")
-        
-    Returns:
-        Complete assembly text
-    """
-    compiler = KernelModuleCompiler(targetid=targetid, codeobj=codeobj)
-    return compiler.compile_mlir_string(mlir_text)

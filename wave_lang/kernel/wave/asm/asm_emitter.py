@@ -297,10 +297,6 @@ class AsmEmitter:
         self.needs_wgid_y = False
         self.needs_wgid_z = False
 
-        # Loop management for scf.for lowering
-        self.loop_counter = 0  # Counter for generating unique loop labels
-        self.loop_stack = []  # Stack of active loop contexts
-
         # Hazard detector for gfx950 VALU hazards
         # See hazards.py for details on the hazard types and mitigations
         self.hazard_detector = HazardDetector()
@@ -409,43 +405,30 @@ class AsmEmitter:
                     # Emit kernel preamble with workgroup size
                     emitter.emit_prologue(kernel_name, wg_size)
                     
-                    # Walk MLIR and emit instructions
-                    from .kernel_pipeline import KernelCompilationContext, use_kernel_ir
+                    # Walk MLIR and emit instructions via kernel IR
+                    from .kernel_pipeline import KernelCompilationContext
                     
-                    if use_kernel_ir():
-                        # In kernel IR mode, kernarg loading is handled inside the IR path
-                        pass
-                    else:
-                        # Legacy mode needs explicit kernarg loading upfront
-                        emitter.emit_kernargs(num_args)
+                    # Check if multi-wave (need flat_tid from system VGPR)
+                    wg_x, wg_y, wg_z = normalize_wg_size(wg_size)
+                    is_multi_wave = wg_y > 1 or wg_z > 1
+                    kernel_ctx = KernelCompilationContext(
+                        use_flat_tid=is_multi_wave,
+                        use_workgroup_ids=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                    )
+                    walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
+                    kernel_info = walker.interpret_func(fn)
+                    body_lines, allocation_stats = kernel_ctx.finalize()
+                    emitter.lines.extend(body_lines)
                     
-                    if use_kernel_ir():
-                        # Full kernel IR mode
-                        # Check if multi-wave (need flat_tid from system VGPR)
-                        wg_x, wg_y, wg_z = normalize_wg_size(wg_size)
-                        is_multi_wave = wg_y > 1 or wg_z > 1
-                        kernel_ctx = KernelCompilationContext(
-                            use_flat_tid=is_multi_wave,
-                            use_workgroup_ids=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                    # Update register file with kernel IR allocation info
+                    # This ensures emit_epilogue uses correct register counts
+                    if allocation_stats.peak_vgprs > 0:
+                        emitter.register_file.v_used.add(allocation_stats.peak_vgprs - 1)
+                    if allocation_stats.peak_sgprs > 0:
+                        emitter.register_file.s_max = max(
+                            emitter.register_file.s_max,
+                            allocation_stats.peak_sgprs - 1
                         )
-                        walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
-                        kernel_info = walker.interpret_func(fn)
-                        body_lines, allocation_stats = kernel_ctx.finalize()
-                        emitter.lines.extend(body_lines)
-                        
-                        # Update register file with kernel IR allocation info
-                        # This ensures emit_epilogue uses correct register counts
-                        if allocation_stats.peak_vgprs > 0:
-                            emitter.register_file.v_used.add(allocation_stats.peak_vgprs - 1)
-                        if allocation_stats.peak_sgprs > 0:
-                            emitter.register_file.s_max = max(
-                                emitter.register_file.s_max,
-                                allocation_stats.peak_sgprs - 1
-                            )
-                    else:
-                        # Legacy mode: direct emission
-                        walker = IRWalker(emitter, kernel_ctx=None)
-                        kernel_info = walker.interpret_func(fn)
 
                     emitter.emit_epilogue(
                         kernel_info.name,
@@ -741,64 +724,6 @@ class AsmEmitter:
         self.emit("# SRD upper word (gfx9xx): data_format=4 => 0x20000")
         self.emit(f".set Srd127_96, {self.SRD127_96}\n")
         self.emit(f"{kernel_name}:")
-
-    def begin_loop(self, lower_bound, upper_bound, step):
-        """Begin a loop structure. Returns loop context dict."""
-        loop_id = self.loop_counter
-        self.loop_counter += 1
-
-        # Allocate SGPR for loop counter
-        counter_sgpr = self.sgpr_allocator.alloc_s()
-        step_sgpr = self.sgpr_allocator.alloc_s()
-        upper_bound_sgpr = self.sgpr_allocator.alloc_s()
-
-        # Initialize loop counter
-        self.emit(f"    # Initialize loop {loop_id} counter and bounds")
-        self.unified.s_mov_b32(f"s{counter_sgpr}", lower_bound)
-        self.unified.s_mov_b32(f"s{step_sgpr}", step)
-        self.unified.s_mov_b32(f"s{upper_bound_sgpr}", upper_bound)
-
-        loop_ctx = {
-            "loop_id": loop_id,
-            "counter_sgpr": counter_sgpr,
-            "step_sgpr": step_sgpr,
-            "upper_bound_sgpr": upper_bound_sgpr,
-            "lower_bound": lower_bound,
-            "upper_bound": upper_bound,
-            "step": step,
-        }
-
-        self.loop_stack.append(loop_ctx)
-        return loop_ctx
-
-    def emit_loop_header(self, loop_ctx):
-        """Emit loop header with comparison and conditional branch."""
-        loop_id = loop_ctx["loop_id"]
-        counter = loop_ctx["counter_sgpr"]
-        upper = loop_ctx["upper_bound_sgpr"]
-
-        self.emit(f"loop_{loop_id}_header:    # Loop {loop_id} header")
-        # Use s_cmp_lt_u32 (less than, not equal) for scf.for semantics [lower, upper)
-        self.unified.s_cmp_lt_u32(f"s{counter}", f"s{upper}")
-        self.unified.s_cbranch_scc1(f"loop_{loop_id}_body")
-        self.emit(f"    s_branch loop_{loop_id}_exit")
-        self.emit(f"loop_{loop_id}_body:    # Loop {loop_id} body")
-
-    def emit_loop_latch(self, loop_ctx):
-        """Emit loop latch with increment and branch back."""
-        loop_id = loop_ctx["loop_id"]
-        counter = loop_ctx["counter_sgpr"]
-        step = loop_ctx["step_sgpr"]
-
-        self.emit(f"loop_{loop_id}_latch:    # Loop {loop_id} latch")
-        self.unified.s_add_u32(f"s{counter}", f"s{counter}", f"s{step}")
-        self.unified.s_branch(f"loop_{loop_id}_header")
-
-    def end_loop(self):
-        """End loop and emit exit label."""
-        loop_ctx = self.loop_stack.pop()
-        loop_id = loop_ctx["loop_id"]
-        self.emit(f"loop_{loop_id}_exit:    # Loop {loop_id} exit")
 
     def emit_epilogue(
         self,
@@ -1184,193 +1109,3 @@ amdhsa.kernels:
         else:
             self.unified.s_mov_b32(f"s{sreg}", int(literal))
         self.register_file.s_max = max(self.register_file.s_max, sreg)
-
-    def emit_kernargs(self, num_args: int):
-        """Emit kernel argument loading code."""
-        # Kernarg pointer is ALWAYS at s[0:1] (user SGPR, comes before system SGPRs)
-        kernarg_ptr_low = 0
-        kernarg_ptr_high = 1
-
-        for i in range(num_args):
-            # Allocate SGPR pair for this kernel argument
-            low_register, high_register = self.sgpr_allocator.pair()
-            self.ptr_pairs[i] = (low_register, high_register)
-
-            # Emit load instruction using unified emitter
-            self.unified.s_load_dwordx2(
-                f"s[{low_register}:{high_register}]",
-                f"s[{kernarg_ptr_low}:{kernarg_ptr_high}]",
-                f"0x{i * 8:x}",
-                comment=f"Load kernarg at offset {i * 8}"
-            )
-        
-        # Wait for all kernel argument loads
-        self.unified.s_waitcnt("lgkmcnt(0)", comment="wait for all kernarg loads")
-        self.emit("")  # Add empty line
-
-    def ensure_srd_for_subspan(self, memref_ssa: str, arg_index: int, limit_bytes: int):
-        # Check if SRD already allocated
-        if memref_ssa in self.srds:
-            return
-
-        base_low_register, base_high_register = self.ptr_pairs[arg_index]
-        srd_register_0, srd_register_1, srd_register_2, srd_register_3 = (
-            self.sgpr_allocator.quad()
-        )
-        self.srds[memref_ssa] = (
-            srd_register_0,
-            srd_register_1,
-            srd_register_2,
-            srd_register_3,
-        )
-
-        self.emit(f"    # SRD for {memref_ssa} (arg{arg_index})")
-        self.unified.s_mov_b32(f"s{srd_register_0}", f"s{base_low_register}")
-        self.unified.s_mov_b32(f"s{srd_register_1}", f"s{base_high_register}")
-        self.unified.s_mov_b32(f"s{srd_register_2}", limit_bytes)
-        self.unified.s_mov_b32(f"s{srd_register_3}", "Srd127_96")
-
-    def chunk_offsets(self, vector_bytes: int) -> List[int]:
-        """
-        Split vector bytes into 16-byte chunks for AMDGCN buffer instructions.
-
-        The 16-byte chunk size is hardcoded because:
-        - buffer_load_dwordx4 loads 4 dwords (4 × 4 bytes = 16 bytes)
-        - buffer_store_dwordx4 stores 4 dwords (4 × 4 bytes = 16 bytes)
-        - Each AMDGCN buffer instruction can handle exactly 16 bytes at a time
-
-        This is a hardware limitation of the AMDGCN instruction set, not a configurable parameter.
-        """
-        if vector_bytes % 16 != 0:
-            raise ValueError(f"Tail not supported (remaining {vector_bytes} bytes).")
-        return list(map(lambda x: x * 16, range(vector_bytes // 16)))
-
-    def emit_load(
-        self,
-        memref_ssa: str,
-        vector_bytes: int,
-        vector_index_register: Union[str, int],
-        instruction_offset_base: int,
-    ):
-        srd_register_0, srd_register_1, srd_register_2, srd_register_3 = self.srds[
-            memref_ssa
-        ]
-        register_list = []
-        self.emit(f"    # load {vector_bytes}B from {memref_ssa}")
-        
-        # Format vindex_reg if it's an integer
-        vindex_str = f"v{vector_index_register}" if isinstance(vector_index_register, int) else vector_index_register
-        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
-        
-        if vector_bytes == 8:
-            # Allocate a pair of VGPRs using the allocator
-            vpair = self.vgpr_allocator.alloc_v_pair()
-            register_list.append(vpair)
-            self.unified.buffer_load_dwordx2(
-                f"v[{vpair[0]}:{vpair[1]}]",
-                vindex_str,
-                srd_str,
-                "0",
-                instruction_offset_base
-            )
-            # Don't wait immediately - let caller decide when to wait
-        else:
-            for offset in self.chunk_offsets(vector_bytes):
-                vector_quad = self.vgpr_allocator.quad()
-                register_list.append(vector_quad)
-                total_offset = instruction_offset_base + offset
-                self.unified.buffer_load_dwordx4(
-                    f"v[{vector_quad[0]}:{vector_quad[3]}]",
-                    vindex_str,
-                    srd_str,
-                    "0",
-                    total_offset
-                )
-                # Don't wait immediately - let caller decide when to wait
-        # Return the current VMEM ticket (the last one issued by the loads above)
-        ticket = self.ticketing._vmem_last_ticket
-        return register_list, ticket
-
-    def emit_store_with_regs(
-        self,
-        memref_ssa: str,
-        register_list: List[Tuple[int, int, int, int]],
-        vector_bytes: int,
-        vector_index_register: Union[str, int],
-        instruction_offset_base: int,
-    ):
-        srd_register_0, srd_register_1, srd_register_2, srd_register_3 = self.srds[
-            memref_ssa
-        ]
-        self.emit(f"    # store {vector_bytes}B to {memref_ssa}")
-        
-        # Format vindex_reg if it's an integer
-        vindex_str = f"v{vector_index_register}" if isinstance(vector_index_register, int) else vector_index_register
-        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
-        
-        if vector_bytes == 4:
-            # Treat register_list[0] as a scalar VGPR
-            src_reg = (
-                register_list[0]
-                if isinstance(register_list[0], int)
-                else register_list[0][0]
-            )
-            self.unified.buffer_store_dword(
-                f"v{src_reg}",
-                vindex_str,
-                srd_str,
-                "0",
-                instruction_offset_base
-            )
-        else:
-            for vector_quad, offset in zip(
-                register_list, self.chunk_offsets(vector_bytes)
-            ):
-                total_offset = instruction_offset_base + offset
-                self.unified.buffer_store_dwordx4(
-                    f"v[{vector_quad[0]}:{vector_quad[3]}]",
-                    vindex_str,
-                    srd_str,
-                    "0",
-                    total_offset
-                )
-
-    def emit_store_scalar(
-        self,
-        memref_ssa: str,
-        src_vreg: int,
-        vector_index_register: str,
-        instruction_offset: int,
-    ):
-        srd_register_0, srd_register_1, srd_register_2, srd_register_3 = self.srds[
-            memref_ssa
-        ]
-        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
-        self.emit(f"    # store 4B to {memref_ssa}")
-        self.unified.buffer_store_dword(
-            f"v{src_vreg}",
-            vector_index_register,
-            srd_str,
-            "0",
-            instruction_offset
-        )
-
-    def emit_store_scalar_with_vindex(
-        self,
-        memref_ssa: str,
-        src_vreg: int,
-        vindex_vreg: int,
-        instoffset: int = 0,
-    ):
-        srd_register_0, srd_register_1, srd_register_2, srd_register_3 = self.srds[
-            memref_ssa
-        ]
-        srd_str = f"s[{srd_register_0}:{srd_register_3}]"
-        self.emit(f"    # store 4B to {memref_ssa}")
-        self.unified.buffer_store_dword(
-            f"v{src_vreg}",
-            f"v{vindex_vreg}",
-            srd_str,
-            "0",
-            instoffset
-        )
