@@ -29,23 +29,13 @@ from .scoreboard import Scoreboard
 from .ticketing import Ticketing
 from .hazards import HazardDetector
 from .unified_emitter import UnifiedEmitter, EmissionMode
-
-
-def get_register_granularity(target: str) -> Tuple[int, int]:
-    """
-    Get VGPR and SGPR allocation granularities for a target architecture.
-
-    Args:
-        target: Target GPU architecture (e.g., "gfx942", "gfx90a", "gfx1100")
-
-    Returns:
-        Tuple of (vgpr_granularity, sgpr_granularity)
-
-    Architecture-specific granularities:
-        - CDNA2/CDNA3 (gfx90a, gfx940, gfx941, gfx942): VGPRs in blocks of 4, SGPRs in blocks of 8
-    """
-    return (4, 8)
-
+from .metadata_emitter import MetadataEmitter, create_metadata, get_register_granularity
+from .mlir_analysis import (
+    walk_ops_recursively,
+    detect_needed_workgroup_ids,
+    extract_translation_info,
+    should_skip_function,
+)
 
 class TicketingEmitterWrapper:
     """
@@ -301,44 +291,6 @@ class AsmEmitter:
         # See hazards.py for details on the hazard types and mitigations
         self.hazard_detector = HazardDetector()
 
-    @staticmethod
-    def _detect_needed_workgroup_ids(fn) -> tuple[bool, bool, bool]:
-        """
-        Scan MLIR function to detect which workgroup IDs are needed.
-
-        Returns:
-            (needs_wgid_x, needs_wgid_y, needs_wgid_z) tuple
-        """
-        from wave_lang.support.ir_imports import gpu_d
-
-        needs_x, needs_y, needs_z = False, False, False
-
-        # Recursively walk all operations
-        def walk_ops(op):
-            nonlocal needs_x, needs_y, needs_z
-
-            # Check if this is a gpu.block_id operation
-            if isinstance(op, gpu_d.BlockIdOp):
-                # Extract dimension from the operation
-                # dimension is an Attribute, convert to string for comparison
-                dim_str = str(op.dimension)
-                if "dim x" in dim_str:
-                    needs_x = True
-                elif "dim y" in dim_str:
-                    needs_y = True
-                elif "dim z" in dim_str:
-                    needs_z = True
-
-            # Recurse into regions
-            if hasattr(op, "regions"):
-                for region in op.regions:
-                    for block in region.blocks:
-                        for inner in block.operations:
-                            walk_ops(inner)
-
-        walk_ops(fn)
-        return needs_x, needs_y, needs_z
-
     @classmethod
     def from_mlir_string(
         cls, mlir_string: str, targetid: str = "gfx942", codeobj: str = "5"
@@ -359,51 +311,41 @@ class AsmEmitter:
         with Context() as ctx:
             module = Module.parse(mlir_string, ctx)
 
-            for fn in emitter._walk_ops_recursively(module.operation):
+            for fn in walk_ops_recursively(module.operation):
                 if isinstance(fn, func_d.FuncOp):
                     # Skip async functions and other non-kernel functions
-                    if fn.name.value.startswith(
-                        "isolated_benchmark"
-                    ) or fn.name.value.endswith("$async"):
+                    if should_skip_function(fn):
                         continue
 
                     # Extract basic info directly from MLIR function
                     kernel_name = fn.sym_name.value
                     num_args = len(fn.entry_block.arguments)
 
-                    # Extract workgroup size from function attributes
-                    from .utils import parse_wg_and_subgroup
-                    from wave_lang.support.ir_imports import OpAttributeMap
-
-                    wg_size = None
-                    function_attributes = (
-                        dict(fn.attributes)
-                        if isinstance(fn.attributes, OpAttributeMap)
-                        else {}
-                    )
-                    translation_info = function_attributes.get("translation_info")
-                    if translation_info is not None:
-                        workgroup_size_tuple, _ = parse_wg_and_subgroup(
-                            translation_info
-                        )
-                        if workgroup_size_tuple:
-                            wg_size = workgroup_size_tuple
-
-                    # Workgroup size is required for code generation
-                    assert (
-                        wg_size is not None
-                    ), "translation_info with workgroup_size must be present in MLIR function attributes"
+                    ti = extract_translation_info(fn)
+                    wg_size = ti.wg_size
+                    subgroup_size = ti.subgroup_size
 
                     # Detect which workgroup IDs are needed
                     needs_wgid_x, needs_wgid_y, needs_wgid_z = (
-                        cls._detect_needed_workgroup_ids(fn)
+                        detect_needed_workgroup_ids(fn)
                     )
                     emitter.needs_wgid_x = needs_wgid_x
                     emitter.needs_wgid_y = needs_wgid_y
                     emitter.needs_wgid_z = needs_wgid_z
 
-                    # Emit kernel preamble with workgroup size
-                    emitter.emit_prologue(kernel_name, wg_size)
+                    # Emit prologue via MetadataEmitter (single source of truth)
+                    metadata = create_metadata(
+                        name=kernel_name,
+                        targetid=targetid,
+                        codeobj=codeobj,
+                        wg_size=wg_size,
+                        subgroup_size=subgroup_size,
+                        needs_wgid=(needs_wgid_x, needs_wgid_y, needs_wgid_z),
+                        num_args=num_args,
+                    )
+                    meta_emitter = MetadataEmitter(metadata)
+                    prologue_lines = meta_emitter.emit_prologue()
+                    emitter.lines.extend(prologue_lines)
                     
                     # Walk MLIR and emit instructions via kernel IR
                     from .kernel_pipeline import KernelCompilationContext
@@ -419,34 +361,28 @@ class AsmEmitter:
                     kernel_info = walker.interpret_func(fn)
                     body_lines, allocation_stats = kernel_ctx.finalize()
                     emitter.lines.extend(body_lines)
-                    
-                    # Update register file with kernel IR allocation info
-                    # This ensures emit_epilogue uses correct register counts
-                    if allocation_stats.peak_vgprs > 0:
-                        emitter.register_file.v_used.add(allocation_stats.peak_vgprs - 1)
-                    if allocation_stats.peak_sgprs > 0:
-                        emitter.register_file.s_max = max(
-                            emitter.register_file.s_max,
-                            allocation_stats.peak_sgprs - 1
-                        )
 
-                    emitter.emit_epilogue(
-                        kernel_info.name,
-                        kernel_info.wg_size,
-                        kernel_info.subgroup_size,
-                        len(kernel_info.arg_ssa_order),
+                    # Patch prologue with actual resource values
+                    patched_prologue = MetadataEmitter.patch_resource_usage(
+                        prologue_lines,
+                        allocation_stats.peak_vgprs,
+                        allocation_stats.peak_sgprs,
+                        getattr(allocation_stats, "peak_agprs", 0),
                         kernel_info.lds_size_bytes,
+                        targetid,
                     )
+                    # Replace the prologue at the front of lines
+                    emitter.lines[: len(prologue_lines)] = patched_prologue
+
+                    # Emit epilogue via MetadataEmitter
+                    metadata.vgprs_used = allocation_stats.peak_vgprs
+                    metadata.sgprs_used = allocation_stats.peak_sgprs
+                    metadata.agprs_used = getattr(allocation_stats, "peak_agprs", 0)
+                    metadata.lds_size_bytes = kernel_info.lds_size_bytes
+                    epilogue_lines = meta_emitter.emit_epilogue()
+                    emitter.lines.extend(epilogue_lines)
 
         return "\n".join(emitter.lines)
-
-    def _walk_ops_recursively(self, op):
-        """Helper method to walk operations recursively."""
-        for region in op.regions:
-            for block in region.blocks:
-                for inner in block.operations:
-                    yield inner
-                    yield from self._walk_ops_recursively(inner)
 
     # ---- Unified Emitter Integration ----
     
@@ -679,51 +615,19 @@ class AsmEmitter:
             kernel_name: Name of the kernel function
             wg_size: Workgroup size tuple (x, y, z) from MLIR attributes
         """
-        self.emit(f'.amdgcn_target "amdgcn-amd-amdhsa--{self.targetid}"')
-        self.emit(".text")
-        self.emit(f".protected {kernel_name}")
-        self.emit(f".globl {kernel_name}")
-        self.emit(".p2align 8")
-        self.emit(f".type {kernel_name},@function\n")
-        self.emit(".section .rodata,#alloc")
-        self.emit(".p2align 6")
-        self.emit(f".amdhsa_kernel {kernel_name}")
-        self.emit("  .amdhsa_user_sgpr_kernarg_segment_ptr 1")
-
-        # Set up workgroup ID SGPRs - use system SGPRs (the assembler recognizes these)
-        self._setup_workgroup_id_sgprs()
-
-        # Emit user SGPR count - this tells the hardware where to place system SGPRs
-        # With count=2 (just kernarg ptr), system SGPRs will be at s2, s3, s4...
-        self.emit("  .amdhsa_user_sgpr_count 2")
-
-        self.emit("  .amdhsa_accum_offset 0")  # patched later
-        self.emit("  .amdhsa_next_free_vgpr 0")  # patched later
-        self.emit("  .amdhsa_next_free_sgpr 0")  # patched later
-        self.emit("  .amdhsa_group_segment_fixed_size 0")
-        self.emit("  .amdhsa_private_segment_fixed_size 0")
-        # Request workgroup IDs as system SGPRs (based on MLIR analysis)
-        self.emit(
-            f"  .amdhsa_system_sgpr_workgroup_id_x {1 if self.needs_wgid_x else 0}"
+        # Delegate to MetadataEmitter (single source of truth).
+        # Note: subgroup_size/num_args are not always known here; callers should
+        # prefer using MetadataEmitter directly in the compilation path.
+        metadata = create_metadata(
+            name=kernel_name,
+            targetid=self.targetid,
+            codeobj=self.codeobj,
+            wg_size=wg_size,
+            subgroup_size=64,
+            needs_wgid=(self.needs_wgid_x, self.needs_wgid_y, self.needs_wgid_z),
+            num_args=0,
         )
-        self.emit(
-            f"  .amdhsa_system_sgpr_workgroup_id_y {1 if self.needs_wgid_y else 0}"
-        )
-        self.emit(
-            f"  .amdhsa_system_sgpr_workgroup_id_z {1 if self.needs_wgid_z else 0}"
-        )
-
-        # Set up workitem ID VGPRs and emit directive based on workgroup size
-        system_vgpr_workitem_id = self._setup_workitem_id_vgprs(wg_size)
-        self.emit(f"  .amdhsa_system_vgpr_workitem_id {system_vgpr_workitem_id}")
-
-        self.emit("  .amdhsa_float_denorm_mode_32 3")
-        self.emit("  .amdhsa_float_denorm_mode_16_64 3")
-        self.emit(".end_amdhsa_kernel")
-        self.emit(".text\n")
-        self.emit("# SRD upper word (gfx9xx): data_format=4 => 0x20000")
-        self.emit(f".set Srd127_96, {self.SRD127_96}\n")
-        self.emit(f"{kernel_name}:")
+        self.lines.extend(MetadataEmitter(metadata).emit_prologue())
 
     def emit_epilogue(
         self,
@@ -733,112 +637,19 @@ class AsmEmitter:
         num_args: int,
         lds_size_bytes: int = 0,
     ):
-        self.unified.s_endpgm()
-        self.emit("")
-
-        # Extract workgroup dimensions
-        wg_size_x, wg_size_y, wg_size_z = normalize_wg_size(wg_size)
-
-        # Compute actual register usage
-        vgprs_used = (
-            max(self.register_file.v_used) + 1 if self.register_file.v_used else 0
+        # Delegate to MetadataEmitter (single source of truth). Note: callers in
+        # the kernel-IR path should patch resource usage via patch_resource_usage.
+        metadata = create_metadata(
+            name=kernel_name,
+            targetid=self.targetid,
+            codeobj=self.codeobj,
+            wg_size=wg_size,
+            subgroup_size=subgroup_size,
+            needs_wgid=(self.needs_wgid_x, self.needs_wgid_y, self.needs_wgid_z),
+            num_args=num_args,
         )
-        sgprs_used = self.register_file.s_max + 1
-
-        # Get architecture-specific granularities
-        vgpr_granularity, sgpr_granularity = get_register_granularity(self.targetid)
-
-        # Round up to allocation granularity
-        vgprs_used = (
-            (vgprs_used + vgpr_granularity - 1) // vgpr_granularity
-        ) * vgpr_granularity
-        sgprs_used = (
-            (sgprs_used + sgpr_granularity - 1) // sgpr_granularity
-        ) * sgpr_granularity
-
-        # Compute accum_offset (must be in range [4..256] in increments of 4)
-        # For MFMA kernels with AGPRs, accum_offset indicates where AGPRs are mapped in VGPR space
-        # For non-MFMA kernels, accum_offset still needs to be valid but AGPRs aren't used
-        accum_offset = max(4, vgprs_used)
-
-        # For MFMA kernels, reserve space for AGPRs beyond VGPRs
-        # Compute AGPRs used dynamically from actual allocations
-        if self.register_file.a_used:
-            # AGPRs are allocated, compute how many we need
-            agprs_used = max(self.register_file.a_used) + 1
-            # Round up to AGPR granularity (same as VGPR granularity)
-            agprs_used = (
-                (agprs_used + vgpr_granularity - 1) // vgpr_granularity
-            ) * vgpr_granularity
-            # Total arch VGPRs must accommodate both VGPRs and AGPRs
-            total_arch_vgprs = accum_offset + agprs_used
-            vgprs_used = max(vgprs_used, total_arch_vgprs)
-
-        txt = "\n".join(self.lines)
-        txt = txt.replace(
-            "  .amdhsa_next_free_vgpr 0", f"  .amdhsa_next_free_vgpr {vgprs_used}"
-        )
-        txt = txt.replace(
-            "  .amdhsa_accum_offset 0", f"  .amdhsa_accum_offset {accum_offset}"
-        )
-        txt = txt.replace(
-            "  .amdhsa_next_free_sgpr 0", f"  .amdhsa_next_free_sgpr {sgprs_used}"
-        )
-        txt = txt.replace(
-            "  .amdhsa_group_segment_fixed_size 0",
-            f"  .amdhsa_group_segment_fixed_size {lds_size_bytes}",
-        )
-        self.lines = txt.splitlines()
-
-        amdhsa_minor = "2" if self.codeobj == "5" else "1"
-        # Build YAML args with generic names (arg0_ptr, arg1_ptr, ...)
-        args_yaml = []
-        for i in range(num_args):
-            args_yaml.append(
-                f"""      - .name: arg{i}_ptr
-        .size: 8
-        .offset: {i*8}
-        .value_kind: global_buffer
-        .value_type: i8*"""
-            )
-        args_yaml_string = "\n".join(args_yaml)
-
-        metadata = f"""
-.amdgpu_metadata
----
-amdhsa.version:
-  - 1
-  - {amdhsa_minor}
-amdhsa.kernels:
-  - .name: {kernel_name}
-    .symbol: '{kernel_name}.kd'
-    .language:                   OpenCL C
-    .language_version:
-      - 2
-      - 0
-    .args:
-{args_yaml_string}
-    .group_segment_fixed_size:   {lds_size_bytes}
-    .kernarg_segment_align:      8
-    .kernarg_segment_size:       {num_args*8}
-    .max_flat_workgroup_size:    {wg_size_x * wg_size_y * wg_size_z}
-    .private_segment_fixed_size: 0
-    .reqd_workgroup_size:
-      - {wg_size_x}
-      - {wg_size_y}
-      - {wg_size_z}
-    .sgpr_count:                 {sgprs_used}
-    .sgpr_spill_count:           0
-    .uniform_work_group_size:    1
-    .vgpr_count:                 {vgprs_used}
-    .vgpr_spill_count:           0
-    .wavefront_size:             {subgroup_size}
-...
-.end_amdgpu_metadata
-""".rstrip(
-            "\n"
-        )
-        self.emit(metadata)
+        metadata.lds_size_bytes = lds_size_bytes
+        self.lines.extend(MetadataEmitter(metadata).emit_epilogue())
 
     # ---- helpers used during per-op emission ----
     def ensure_lane_id(self, subgroup_size: int) -> int:
