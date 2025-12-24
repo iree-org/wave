@@ -57,7 +57,9 @@ _ENABLE_KERNEL_IR_SIMPLIFY = os.environ.get("WAVE_KERNEL_IR_SIMPLIFY", "1") == "
 
 
 def _kernel_ticketing_enabled() -> bool:
-    return os.environ.get("WAVE_KERNEL_TICKETING", "0") == "1"
+    # Ticketing-driven waitcnt placement is enabled by default.
+    # Set WAVE_KERNEL_TICKETING=0 to disable.
+    return os.environ.get("WAVE_KERNEL_TICKETING", "1") == "1"
 
 
 def _parse_waitcnt_threshold(op: Any) -> Optional[Tuple[str, int]]:
@@ -1538,7 +1540,7 @@ class KernelCompilationContext:
         - It respects existing s_waitcnt instructions by updating ticketing
           coalescing state via observe_* calls.
 
-        Enabled via WAVE_KERNEL_TICKETING=1.
+        Enabled by default; set WAVE_KERNEL_TICKETING=0 to disable.
         """
         if not _kernel_ticketing_enabled():
             return
