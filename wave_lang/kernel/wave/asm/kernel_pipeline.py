@@ -1292,6 +1292,10 @@ class KernelCompilationContext:
     _vmem_ticket: int = field(default=0, init=False)
     _lgkm_ticket: int = field(default=0, init=False)
     
+    # Kernarg management: arg_index -> (low_sgpr_reg, high_sgpr_reg) as KRegRange
+    _kernarg_pairs: Dict[int, KRegRange] = field(default_factory=dict, init=False)
+    _kernargs_emitted: bool = field(default=False, init=False)
+    
     # Statistics
     _cse_hits: int = field(default=0, init=False)
     
@@ -1365,6 +1369,68 @@ class KernelCompilationContext:
             self.tid_ub_x = subgroup_size
             self.tid_ub_y = 1
             self.tid_ub_z = 1
+    
+    # =========================================================================
+    # Kernarg Loading
+    # =========================================================================
+    
+    def emit_kernargs(self, num_args: int) -> None:
+        """
+        Emit kernel argument loading code at the start of the kernel.
+        
+        This emits s_load_dwordx2 instructions for each kernel argument,
+        loading the pointer from the kernarg segment.
+        
+        Args:
+            num_args: Number of kernel arguments
+        """
+        if self._kernargs_emitted:
+            return
+        
+        # Kernarg pointer is always at s[0:1] (user SGPR)
+        kernarg_ptr = KRegRange(KPhysSReg(0), 2)
+        
+        for i in range(num_args):
+            # Allocate SGPR pair for this kernel argument
+            pair = self.program.alloc_sreg_range(2, alignment=2)
+            self._kernarg_pairs[i] = pair
+            
+            # Emit s_load_dwordx2 to load the pointer
+            offset = i * 8
+            self.program.emit(KInstr(
+                "s_load_dwordx2",
+                defs=(pair,),
+                uses=(kernarg_ptr, KImm(offset)),
+                comment=f"Load kernarg at offset {offset}"
+            ))
+        
+        # Emit s_waitcnt to wait for all kernarg loads
+        if num_args > 0:
+            # Encode lgkmcnt(0) as immediate: lgkmcnt is bits [11:8]
+            # lgkmcnt(0) = 0 in bits [11:8] 
+            self.program.emit(KInstr(
+                "s_waitcnt",
+                defs=(),
+                uses=("lgkmcnt(0)",),
+                comment="wait for all kernarg loads"
+            ))
+            
+            # Emit empty line for readability
+            self.program.emit(KInstr("_comment", comment=""))
+        
+        self._kernargs_emitted = True
+    
+    def get_kernarg_pair(self, arg_index: int) -> Optional[KRegRange]:
+        """
+        Get the SGPR pair holding the kernel argument pointer.
+        
+        Args:
+            arg_index: Kernel argument index
+            
+        Returns:
+            KRegRange for the SGPR pair, or None if not yet emitted
+        """
+        return self._kernarg_pairs.get(arg_index)
     
     # =========================================================================
     # Dynamic instruction dispatch
@@ -2242,15 +2308,20 @@ class KernelCompilationContext:
         Finalize the kernel program and generate assembly.
         
         This:
-        1. Emits SRD prologue (all SRD setup at program start)
-        2. Applies hazard mitigation (inserts s_nop where needed)
-        3. Computes liveness for all virtual registers
-        4. Runs linear scan allocation
-        5. Renders to assembly
+        1. Emits s_endpgm at the end
+        2. Emits SRD prologue (all SRD setup at program start)
+        3. Applies hazard mitigation (inserts s_nop where needed)
+        4. Computes liveness for all virtual registers
+        5. Runs linear scan allocation
+        6. Renders to assembly
         
         Returns:
             Tuple of (assembly lines, allocation statistics)
         """
+        # Emit s_endpgm at the end of the program (if not already there)
+        if not self.program.instructions or self.program.instructions[-1].name != "s_endpgm":
+            self.program.emit(KInstr("s_endpgm", defs=(), uses=()))
+        
         # Emit SRD prologue - moves all SRD setup to program start
         self._emit_srd_prologue()
         

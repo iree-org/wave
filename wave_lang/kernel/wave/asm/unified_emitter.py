@@ -8,37 +8,37 @@ Unified instruction emitter for AMDGCN kernels.
 
 This module provides a single class that owns instruction definitions
 and emission, supporting both:
-- Direct assembly emission (legacy mode)
+- Direct assembly emission (legacy mode - deprecated)
 - Kernel IR emission (for whole-program register allocation)
 
 The emitter generates methods dynamically from instruction definitions,
 ensuring consistency between the instruction registry and emission API.
 
+All instruction formatting goes through InstructionFormatter, which is
+the SINGLE point for physical instruction rendering.
+
 Usage:
-    # Direct assembly emission
+    # Direct assembly emission (deprecated - use kernel IR instead)
     emitter = UnifiedEmitter(architecture="gfx942", mode="direct")
     emitter.v_add_u32(dst="v0", src0="v1", src1="v2")
     print(emitter.get_lines())
     
-    # Kernel IR emission
+    # Kernel IR emission (preferred)
     from kernel_pipeline import KernelCompilationContext
     ctx = KernelCompilationContext()
     emitter = UnifiedEmitter(architecture="gfx942", mode="kernel_ir", context=ctx)
     result = emitter.v_add_u32(src0=v1, src1=v2)  # Returns virtual register
 """
 
-from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Dict, List, Optional, Set, Tuple, Union, Any, Callable
-import os
+from typing import Dict, List, Optional, Any, Callable
 
 from .instruction_registry import (
     InstructionRegistry,
     InstructionDef,
-    OperandType,
-    InstructionCategory,
     get_registry,
 )
+from .instruction_formatter import InstructionFormatter, get_formatter
 
 
 # ==============================================================================
@@ -86,236 +86,8 @@ class Imm:
 
 class EmissionMode(Enum):
     """Mode of instruction emission."""
-    DIRECT = auto()      # Emit directly to assembly lines
+    DIRECT = auto()      # Emit directly to assembly lines (deprecated)
     KERNEL_IR = auto()   # Emit to KernelProgram via KernelCompilationContext
-
-
-# ==============================================================================
-# Operand Formatting
-# ==============================================================================
-
-def format_operand(value: Any, operand_types: Tuple[OperandType, ...], is_use: bool = True) -> str:
-    """
-    Format an operand value to its assembly string representation.
-    
-    Handles:
-    - VReg/SReg/Imm wrappers for explicit typing
-    - Physical register indices (int -> vN or sN)
-    - Register strings (passthrough)
-    - Immediate values (hex for large values)
-    - Kernel IR register objects
-    
-    Args:
-        value: The operand value
-        operand_types: Allowed types for this operand
-        is_use: True if this is a use (source), False if definition (dest)
-    """
-    if value is None:
-        return ""
-    
-    # Handle explicit wrappers
-    if isinstance(value, VReg):
-        return f"v{value.index}"
-    if isinstance(value, SReg):
-        return f"s{value.index}"
-    if isinstance(value, Imm):
-        return repr(value)
-    
-    # Handle kernel IR register types (imported lazily to avoid circular deps)
-    if hasattr(value, '__class__'):
-        class_name = value.__class__.__name__
-        if class_name in ('KVReg', 'KSReg', 'KPhysVReg', 'KPhysSReg', 'KSpecialReg', 'KRegRange'):
-            # These will be resolved later by the kernel generator
-            return str(value)
-    
-    # String operand (register name, label, etc.)
-    if isinstance(value, str):
-        return value
-    
-    # Tuple - register range (must check before int since (1,2) would iterate)
-    if isinstance(value, tuple) and len(value) >= 2 and all(isinstance(v, int) for v in value):
-        if OperandType.VGPR_PAIR in operand_types or OperandType.VGPR_QUAD in operand_types or OperandType.VGPR_16 in operand_types:
-            return f"v[{value[0]}:{value[-1]}]"
-        elif OperandType.SGPR_PAIR in operand_types or OperandType.SGPR_QUAD in operand_types:
-            return f"s[{value[0]}:{value[-1]}]"
-        # Default to VGPR for unknown tuple
-        return f"v[{value[0]}:{value[-1]}]"
-    
-    # Integer - could be register index or immediate
-    if isinstance(value, int):
-        # For definitions, always treat as register index
-        if not is_use:
-            if OperandType.SGPR in operand_types or OperandType.SGPR_PAIR in operand_types:
-                return f"s{value}"
-            else:
-                return f"v{value}"
-        
-        # For uses, check if immediate is allowed
-        has_imm = OperandType.IMM in operand_types or OperandType.IMM16 in operand_types
-        only_reg = not has_imm and (
-            OperandType.VGPR in operand_types or 
-            OperandType.SGPR in operand_types or
-            OperandType.VGPR_PAIR in operand_types or
-            OperandType.SGPR_PAIR in operand_types
-        )
-        
-        if only_reg:
-            # Must be a register
-            if OperandType.SGPR in operand_types or OperandType.SGPR_PAIR in operand_types:
-                return f"s{value}"
-            else:
-                return f"v{value}"
-        else:
-            # Can be immediate - format as immediate
-            if abs(value) > 0xFFFF:
-                return f"0x{value & 0xFFFFFFFF:x}"
-            elif value < 0:
-                return str(value)
-            else:
-                return str(value)
-    
-    return str(value)
-
-
-def format_offset(value: int) -> str:
-    """Format an offset value."""
-    if value == 0:
-        return ""
-    return f"offset:{value}"
-
-
-# ==============================================================================
-# Instruction Builder
-# ==============================================================================
-
-@dataclass
-class InstructionBuilder:
-    """
-    Builds assembly line for a single instruction.
-    
-    Uses instruction definition to properly format operands.
-    """
-    instr_def: InstructionDef
-    
-    def build(
-        self,
-        defs: List[Any] = None,
-        uses: List[Any] = None,
-        comment: str = None,
-    ) -> str:
-        """Build assembly line for the instruction."""
-        defs = defs or []
-        uses = uses or []
-        
-        # Handle pseudo-ops
-        if self.instr_def.category == InstructionCategory.PSEUDO:
-            return self._build_pseudo(defs, uses, comment)
-        
-        # Build operand strings
-        operands = []
-        
-        # Add destinations (is_use=False)
-        for i, def_op in enumerate(self.instr_def.defs):
-            if i < len(defs):
-                operands.append(format_operand(defs[i], def_op.types, is_use=False))
-        
-        # Add sources (is_use=True)
-        for i, use_op in enumerate(self.instr_def.uses):
-            if i < len(uses):
-                value = uses[i]
-                
-                # Handle offset specially
-                if OperandType.OFFSET in use_op.types:
-                    if value and value != 0:
-                        # Offset formatting depends on instruction
-                        if self.instr_def.offset_format == "space_separated":
-                            # Will be handled in post-processing
-                            operands.append(f"offset:{value}")
-                        else:
-                            operands.append(f"offset:{value}")
-                    # Skip if offset is 0 and optional
-                    elif use_op.optional:
-                        continue
-                    else:
-                        operands.append(format_operand(value, use_op.types, is_use=True))
-                else:
-                    operands.append(format_operand(value, use_op.types, is_use=True))
-        
-        # Build line
-        mnemonic = self.instr_def.mnemonic
-        
-        if not operands:
-            line = f"    {mnemonic}"
-        else:
-            line = f"    {mnemonic} {', '.join(operands)}"
-        
-        # Apply special formatting
-        line = self._apply_special_formatting(line, operands)
-        
-        # Add LDS modifier if needed
-        if self.instr_def.lds_modifier:
-            if "  //" in line:
-                parts = line.split("  //")
-                line = parts[0] + " lds  //" + parts[1]
-            else:
-                line = line + " lds"
-        
-        # Add comment
-        if comment:
-            line += f"  // {comment}"
-        
-        return line
-    
-    def _build_pseudo(self, defs: List[Any], uses: List[Any], comment: str) -> str:
-        """Build pseudo-op line."""
-        if self.instr_def.name == "_comment":
-            return f"    // {comment or uses[0] if uses else ''}"
-        elif self.instr_def.name == "_label":
-            label = uses[0] if uses else comment
-            return f"{label}:"
-        elif self.instr_def.name == "_raw_asm":
-            return uses[0] if uses else comment
-        return ""
-    
-    def _apply_special_formatting(self, line: str, operands: List[str]) -> str:
-        """Apply instruction-specific formatting rules."""
-        # DS instructions: offset is space-separated
-        if self.instr_def.offset_format == "space_separated":
-            if ", offset:" in line:
-                parts = line.split(", offset:")
-                if len(parts) == 2:
-                    line = parts[0] + " offset:" + parts[1]
-        
-        # Buffer instructions: special formatting
-        # For loads: mnemonic dst, vaddr, srd, soffset offen [offset:N]
-        # For stores: mnemonic src, vaddr, srd, soffset offen [offset:N]
-        # For lds loads: mnemonic vaddr, srd, soffset offen [offset:N] lds
-        if self.instr_def.mnemonic.startswith("buffer_"):
-            # Split into mnemonic and operands
-            if " " in line:
-                prefix, rest = line.split(" ", 1)
-                parts = rest.split(", ")
-                
-                # Find where comma-separated operands end and modifiers begin
-                # LDS loads have 3 operands, regular have 4
-                is_lds = self.instr_def.lds_modifier
-                min_parts = 3 if is_lds else 4
-                
-                if len(parts) >= min_parts:
-                    # First min_parts comma-separated, then add offen and offset
-                    base = ", ".join(parts[:min_parts])
-                    modifiers = ["offen"]
-                    for part in parts[min_parts:]:
-                        if part.startswith("offset:"):
-                            modifiers.append(part)
-                    line = f"{prefix} {base} {' '.join(modifiers)}"
-        
-        # Branch instructions: label from comment
-        if self.instr_def.is_branch and not operands:
-            # Label might be in operands or needs special handling
-            pass
-        
-        return line
 
 
 # ==============================================================================
@@ -329,13 +101,15 @@ class UnifiedEmitter:
     This class dynamically generates emission methods from the instruction
     registry, providing a consistent API regardless of emission mode.
     
-    In DIRECT mode:
+    In DIRECT mode (deprecated):
         - Methods append assembly lines to internal buffer
         - Caller retrieves lines with get_lines()
     
-    In KERNEL_IR mode:
+    In KERNEL_IR mode (preferred):
         - Methods emit to a KernelCompilationContext
         - Methods return virtual register results
+    
+    All physical instruction formatting goes through InstructionFormatter.
     """
     
     def __init__(
@@ -348,6 +122,7 @@ class UnifiedEmitter:
         self.mode = mode
         self.context = context
         self._registry = get_registry(architecture)
+        self._formatter = get_formatter(architecture)
         self._lines: List[str] = []
         
         # Generate emission methods
@@ -381,6 +156,40 @@ class UnifiedEmitter:
         
         return emit_method
     
+    def _parse_args(self, instr: InstructionDef, args: tuple, kwargs: dict):
+        """Parse positional and keyword args into defs and uses."""
+        defs = []
+        uses = []
+        
+        arg_idx = 0
+        for def_op in instr.defs:
+            if arg_idx < len(args):
+                defs.append(self._format_arg(args[arg_idx]))
+                arg_idx += 1
+            elif def_op.name in kwargs:
+                defs.append(self._format_arg(kwargs[def_op.name]))
+        
+        for use_op in instr.uses:
+            if arg_idx < len(args):
+                uses.append(self._format_arg(args[arg_idx]))
+                arg_idx += 1
+            elif use_op.name in kwargs:
+                uses.append(self._format_arg(kwargs[use_op.name]))
+            elif use_op.optional:
+                uses.append(None)
+        
+        return defs, uses
+    
+    def _format_arg(self, value: Any) -> Any:
+        """Format an argument value, handling wrappers."""
+        if isinstance(value, VReg):
+            return f"v{value.index}"
+        if isinstance(value, SReg):
+            return f"s{value.index}"
+        if isinstance(value, Imm):
+            return repr(value)
+        return value
+    
     def _emit_direct(
         self,
         instr: InstructionDef,
@@ -388,31 +197,11 @@ class UnifiedEmitter:
         kwargs: dict,
         comment: str,
     ) -> None:
-        """Emit instruction directly to assembly lines."""
-        # Parse positional args into defs and uses
-        defs = []
-        uses = []
+        """Emit instruction directly to assembly lines using InstructionFormatter."""
+        defs, uses = self._parse_args(instr, args, kwargs)
         
-        arg_idx = 0
-        for def_op in instr.defs:
-            if arg_idx < len(args):
-                defs.append(args[arg_idx])
-                arg_idx += 1
-            elif def_op.name in kwargs:
-                defs.append(kwargs[def_op.name])
-        
-        for use_op in instr.uses:
-            if arg_idx < len(args):
-                uses.append(args[arg_idx])
-                arg_idx += 1
-            elif use_op.name in kwargs:
-                uses.append(kwargs[use_op.name])
-            elif use_op.optional:
-                uses.append(None)
-        
-        # Build and emit
-        builder = InstructionBuilder(instr)
-        line = builder.build(defs, uses, comment)
+        # Use InstructionFormatter for all formatting
+        line = self._formatter.format(instr.name, defs=defs, uses=uses, comment=comment)
         if line:
             self._lines.append(line)
     
@@ -434,30 +223,9 @@ class UnifiedEmitter:
             # Call context method with provided args
             return ctx_method(*args, comment=comment, **kwargs)
         
-        # Fallback: emit raw if method not available
-        builder = InstructionBuilder(instr)
-        
-        # Parse args
-        defs = []
-        uses = []
-        arg_idx = 0
-        for def_op in instr.defs:
-            if arg_idx < len(args):
-                defs.append(args[arg_idx])
-                arg_idx += 1
-            elif def_op.name in kwargs:
-                defs.append(kwargs[def_op.name])
-        
-        for use_op in instr.uses:
-            if arg_idx < len(args):
-                uses.append(args[arg_idx])
-                arg_idx += 1
-            elif use_op.name in kwargs:
-                uses.append(kwargs[use_op.name])
-            elif use_op.optional:
-                uses.append(None)
-        
-        line = builder.build(defs, uses, comment)
+        # Fallback: emit raw using InstructionFormatter
+        defs, uses = self._parse_args(instr, args, kwargs)
+        line = self._formatter.format(instr.name, defs=defs, uses=uses, comment=comment)
         if line:
             self.context.emit_raw(line)
         
@@ -481,11 +249,11 @@ class UnifiedEmitter:
     
     def emit_comment(self, text: str) -> None:
         """Emit a comment line."""
-        self._lines.append(f"    // {text}")
+        self._lines.append(self._formatter.format_comment(text))
     
     def emit_label(self, name: str) -> None:
         """Emit a label."""
-        self._lines.append(f"{name}:")
+        self._lines.append(self._formatter.format_label(name))
     
     def emit_blank(self) -> None:
         """Emit a blank line."""
@@ -508,6 +276,11 @@ class UnifiedEmitter:
     def registry(self) -> InstructionRegistry:
         """Get the underlying instruction registry."""
         return self._registry
+    
+    @property
+    def formatter(self) -> InstructionFormatter:
+        """Get the underlying instruction formatter."""
+        return self._formatter
 
 
 # ==============================================================================
@@ -529,4 +302,3 @@ def create_kernel_ir_emitter(
         mode=EmissionMode.KERNEL_IR,
         context=context,
     )
-
