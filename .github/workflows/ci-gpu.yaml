@@ -126,6 +126,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Print env
+        run: |
+          echo "IS_CDNA3=$IS_CDNA3"
+          echo "IS_CDNA4=$IS_CDNA4"
+          echo "IS_RDNA4=$IS_RDNA4"
+          echo "HAS_GPU=$HAS_GPU"
+
       - name: Setup Cache Vars
         if: ${{ env.IS_CDNA3 == 'true' || env.IS_CDNA4 == 'true' }}
         run: |
