@@ -696,7 +696,7 @@ class OperationHandlers:
         the hardware limit (DS_MAX_OFFSET), we use the ds_read offset field instead of
         computing the full address. This saves a v_add_u32 instruction.
         
-        For offsets exceeding DS_MAX_OFFSET (~2040 bytes on CDNA3/4), we fall back to
+        For offsets exceeding DS_MAX_OFFSET (~8192 bytes on CDNA3/4), we fall back to
         computing the full address without using the offset field.
         """
         import os
@@ -719,9 +719,11 @@ class OperationHandlers:
         const_offset, base_expr = split_const_dynamic(byte_offset_expr, max_immediate=65528)
         
         # Max offset for ds_read_b64 on CDNA3/CDNA4
-        # Empirically, large offsets (>= ~2048) seem to cause issues
-        # The ISA spec says 16-bit unsigned, but we use a conservative limit
-        DS_MAX_OFFSET = 2040  # Conservative limit, 8-byte aligned
+        # The ISA spec says 16-bit unsigned (0-65535), which is correct.
+        # Previous conservative limit (2040) was causing excessive constant
+        # materialization for LDS addresses in the 4096+ range.
+        # Testing shows 8192 works correctly for GEMM kernels.
+        DS_MAX_OFFSET = 8192  # Increased to cover typical LDS offset ranges
         DS_ALIGN = 8  # ds_read_b64 requires 8-byte alignment
         
         if DEBUG_DS_OFFSET:
