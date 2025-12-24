@@ -12,6 +12,7 @@ import gc
 import os
 import pytest
 import weakref
+import torch
 
 from wave_lang.kernel.wave.execution_engine import (
     clear_engine_cache,
@@ -21,8 +22,8 @@ from wave_lang.kernel.wave.execution_engine import (
 )
 
 pytestmark = pytest.mark.skipif(
-    not is_execution_engine_available(),
-    reason="ExecutionEngine not available (C++ extension not built)",
+    not is_execution_engine_available() or (torch.cuda.device_count() < 1),
+    reason="ExecutionEngine not available (C++ extension not built) or no GPU found",
 )
 
 
