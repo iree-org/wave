@@ -198,6 +198,7 @@ def compile_backend(
     raw_asm = ""
     hsaco_path = None
     disasm = None
+    rocmasm_content = None
     
     if backend == "asm":
         raw_asm = getattr(result, 'asm', "") or ""
@@ -205,6 +206,18 @@ def compile_backend(
     else:
         # LLVM backend - try to get disassembly from HSACO
         hsaco_path = getattr(result, 'gpu_binary_path', None)
+        
+        # Look for .rocmasm file in the output directory (intermediates)
+        # The caller passes output_dir as the intermediates directory itself
+        if output_dir:
+            intermediates_dir = Path(output_dir)
+            if intermediates_dir.exists():
+                rocmasm_files = list(intermediates_dir.glob("*.rocmasm"))
+                if rocmasm_files:
+                    try:
+                        rocmasm_content = rocmasm_files[0].read_text()
+                    except Exception as e:
+                        print(f"  Warning: Could not read {rocmasm_files[0]}: {e}")
     
     # Disassemble HSACO if available
     if hsaco_path and Path(hsaco_path).exists():
@@ -222,9 +235,12 @@ def compile_backend(
         raw_asm = disasm
     
     # Extract register/LDS metadata
-    # Prefer raw_asm for ASM backend (has HSA metadata), disasm for LLVM
+    # For ASM backend: use raw_asm (has HSA metadata)
+    # For LLVM backend: prefer rocmasm file (has YAML metadata), fallback to disasm
     if backend == "asm" and raw_asm:
         vgpr_count, sgpr_count, lds_size = extract_resource_usage(raw_asm)
+    elif backend == "llvm" and rocmasm_content:
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage(rocmasm_content)
     else:
         vgpr_count, sgpr_count, lds_size = extract_resource_usage(disasm or raw_asm)
     
@@ -240,7 +256,13 @@ def compile_backend(
 
 
 def extract_resource_usage(asm_text: str) -> Tuple[int, int, int]:
-    """Extract VGPR, SGPR, and LDS usage from assembly/disassembly."""
+    """Extract VGPR, SGPR, and LDS usage from assembly/disassembly.
+    
+    Handles multiple formats:
+    1. AMD HSA directives: .amdhsa_next_free_vgpr N
+    2. YAML metadata (from .rocmasm): .vgpr_count:     27
+    3. Generic patterns: vgpr_count = N
+    """
     vgpr = 0
     sgpr = 0
     lds = 0
@@ -254,9 +276,15 @@ def extract_resource_usage(asm_text: str) -> Tuple[int, int, int]:
     if vgpr_match:
         vgpr = int(vgpr_match.group(1))
     
-    # Fallback: .vgpr_count: N or vgpr_count = N
+    # Fallback: YAML format .vgpr_count:  N (with optional spaces)
     if not vgpr:
-        vgpr_match = re.search(r'\.?vgpr_count[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+        vgpr_match = re.search(r'\.vgpr_count:\s+(\d+)', asm_text)
+        if vgpr_match:
+            vgpr = int(vgpr_match.group(1))
+    
+    # Fallback: vgpr_count = N
+    if not vgpr:
+        vgpr_match = re.search(r'vgpr_count\s*[=:]\s*(\d+)', asm_text, re.IGNORECASE)
         if vgpr_match:
             vgpr = int(vgpr_match.group(1))
     
@@ -265,9 +293,15 @@ def extract_resource_usage(asm_text: str) -> Tuple[int, int, int]:
     if sgpr_match:
         sgpr = int(sgpr_match.group(1))
     
-    # Fallback: .sgpr_count: N
+    # Fallback: YAML format .sgpr_count:  N
     if not sgpr:
-        sgpr_match = re.search(r'\.?sgpr_count[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+        sgpr_match = re.search(r'\.sgpr_count:\s+(\d+)', asm_text)
+        if sgpr_match:
+            sgpr = int(sgpr_match.group(1))
+    
+    # Fallback: sgpr_count = N
+    if not sgpr:
+        sgpr_match = re.search(r'sgpr_count\s*[=:]\s*(\d+)', asm_text, re.IGNORECASE)
         if sgpr_match:
             sgpr = int(sgpr_match.group(1))
     
@@ -276,9 +310,15 @@ def extract_resource_usage(asm_text: str) -> Tuple[int, int, int]:
     if lds_match:
         lds = int(lds_match.group(1))
     
-    # Fallback: .lds_size: N
+    # Fallback: YAML format .group_segment_fixed_size: N
     if not lds:
-        lds_match = re.search(r'\.?lds_size[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+        lds_match = re.search(r'\.group_segment_fixed_size:\s+(\d+)', asm_text)
+        if lds_match:
+            lds = int(lds_match.group(1))
+    
+    # Fallback: lds_size = N
+    if not lds:
+        lds_match = re.search(r'lds_size\s*[=:]\s*(\d+)', asm_text, re.IGNORECASE)
         if lds_match:
             lds = int(lds_match.group(1))
     

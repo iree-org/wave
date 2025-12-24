@@ -1,5 +1,5 @@
 
-/tmp/tmp2_bniv0e/isolated_benchmark.hsaco:	file format elf64-amdgpu
+/tmp/tmpzyubf3d7/isolated_benchmark.hsaco:	file format elf64-amdgpu
 
 Disassembly of section .text:
 
