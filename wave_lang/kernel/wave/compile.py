@@ -1177,12 +1177,9 @@ def _generate_asm_code(mb, options):
         use_local_scope=options.use_local_scope,
     )
 
-    # Use AsmEmitter.from_mlir_string as the MLIR->ASM entry point
-    # Note: AsmEmitter internally uses KernelCompilationContext for the body
-    from .asm.asm_emitter import AsmEmitter
-    return AsmEmitter.from_mlir_string(
-        mlir_asm, targetid=options.target, codeobj=options.codeobj
-    )
+    # Canonical MLIR->ASM entry point (single-path kernel IR backend).
+    from .asm.kernel_pipeline import KernelModuleCompiler
+    return KernelModuleCompiler(targetid=options.target, codeobj=options.codeobj).compile_mlir_string(mlir_asm)
 
 
 def _compile_asm_to_binary(asm_code, options):

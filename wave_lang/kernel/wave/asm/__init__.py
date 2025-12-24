@@ -18,7 +18,6 @@ All physical instruction formatting goes through InstructionFormatter.
 """
 
 from .driver import main
-from .asm_emitter import AsmEmitter  # Legacy, wrapper around KernelModuleCompiler
 from .mlir_walker import IRWalker
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
 from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator
@@ -73,7 +72,6 @@ __all__ = [
     "SGPRAllocator",
     "VGPRAllocator",
     # Legacy (deprecated)
-    "AsmEmitter",
     "Instruction",
     # Utilities
     "parse_vector_type",
