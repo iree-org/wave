@@ -296,10 +296,175 @@ def _add_edge(from_block: BasicBlock, to_block: BasicBlock):
 
 
 # =============================================================================
+# CFG-Based Liveness Analysis (Backward Dataflow)
+# =============================================================================
+
+def _get_regs_from_operand(op: KOperand) -> Set[KReg]:
+    """Extract virtual registers from an operand."""
+    regs = set()
+    if isinstance(op, KRegRange):
+        if is_virtual(op.base_reg):
+            regs.add(op.base_reg)
+    elif isinstance(op, (KVReg, KSReg)):
+        if is_virtual(op):
+            regs.add(op)
+    return regs
+
+
+def compute_block_local_info(
+    block: BasicBlock,
+    instructions: List[KInstr]
+) -> None:
+    """
+    Compute local use/def sets for a basic block.
+    
+    use[B] = registers used in B before any local definition
+    def[B] = registers defined in B
+    
+    This is the first step of dataflow analysis.
+    """
+    block.use_set = set()
+    block.def_set = set()
+    
+    # Process instructions in order
+    for idx in range(block.start_idx, block.end_idx + 1):
+        if idx >= len(instructions):
+            break
+        instr = instructions[idx]
+        
+        # Skip labels and comments
+        if instr.is_label or instr.is_comment:
+            continue
+        
+        # Uses: add to use_set if not already defined locally
+        for u in instr.uses:
+            for reg in _get_regs_from_operand(u):
+                if reg not in block.def_set:
+                    block.use_set.add(reg)
+        
+        # Defs: add to def_set
+        for d in instr.defs:
+            for reg in _get_regs_from_operand(d):
+                block.def_set.add(reg)
+
+
+def compute_cfg_liveness(cfg: CFG, instructions: List[KInstr]) -> None:
+    """
+    Compute live-in and live-out sets for all blocks using backward dataflow.
+    
+    The classic dataflow equations:
+        live_out[B] = ∪ live_in[S] for all successors S of B
+        live_in[B] = use[B] ∪ (live_out[B] - def[B])
+    
+    This properly handles loops by iterating until fixed point.
+    """
+    # Step 1: Compute local use/def sets for each block
+    for block in cfg.blocks:
+        compute_block_local_info(block, instructions)
+    
+    # Step 2: Iterate until fixed point
+    changed = True
+    iterations = 0
+    max_iterations = len(cfg.blocks) * 10  # Safety limit
+    
+    while changed and iterations < max_iterations:
+        changed = False
+        iterations += 1
+        
+        # Process blocks in reverse order (more efficient for backward analysis)
+        for block in reversed(cfg.blocks):
+            old_live_in = block.live_in.copy()
+            old_live_out = block.live_out.copy()
+            
+            # live_out = union of live_in of all successors
+            new_live_out: Set[KReg] = set()
+            for succ in block.successors:
+                new_live_out |= succ.live_in
+            
+            # live_in = use ∪ (live_out - def)
+            new_live_in = block.use_set | (new_live_out - block.def_set)
+            
+            # Update and check for changes
+            if new_live_in != old_live_in or new_live_out != old_live_out:
+                block.live_in = new_live_in
+                block.live_out = new_live_out
+                changed = True
+
+
+def compute_live_ranges_from_cfg(
+    cfg: CFG,
+    instructions: List[KInstr],
+    info: "LivenessInfo"
+) -> None:
+    """
+    Compute live ranges using CFG-based liveness information.
+    
+    For each register:
+    - start = definition point
+    - end = max of (last use, any block exit where it's live-out)
+    
+    This properly extends live ranges for loop-invariant values.
+    """
+    # Track which instruction indices are in which blocks
+    idx_to_block: Dict[int, BasicBlock] = {}
+    for block in cfg.blocks:
+        for idx in range(block.start_idx, block.end_idx + 1):
+            idx_to_block[idx] = block
+    
+    # For each defined register, find its extended live range
+    for reg, def_point in list(info.def_points.items()):
+        uses = info.use_points.get(reg, [])
+        
+        # Start with basic last use
+        if uses:
+            last_use = max(uses)
+        else:
+            last_use = def_point
+        
+        # Extend if register is live-out of any block
+        for block in cfg.blocks:
+            if reg in block.live_out:
+                # Register is live at end of this block - extend to block end
+                last_use = max(last_use, block.end_idx)
+            if reg in block.live_in:
+                # Register is live at start of this block
+                # This matters for loop back-edges
+                for pred in block.predecessors:
+                    if pred.end_idx >= def_point:
+                        last_use = max(last_use, pred.end_idx)
+        
+        # Update the live range if it exists
+        if reg in info.live_ranges:
+            old_range = info.live_ranges[reg]
+            if last_use > old_range.end:
+                info.live_ranges[reg] = LiveRange(
+                    reg=old_range.reg,
+                    start=old_range.start,
+                    end=last_use,
+                    size=old_range.size,
+                    alignment=old_range.alignment,
+                    reg_class=old_range.reg_class,
+                )
+
+
+def has_loops(cfg: CFG) -> bool:
+    """Check if CFG contains any loops (back-edges)."""
+    if not cfg.blocks:
+        return False
+    
+    # A CFG has loops if any block has a successor with a lower or equal index
+    for block in cfg.blocks:
+        for succ in block.successors:
+            if succ.id <= block.id:
+                return True
+    return False
+
+
+# =============================================================================
 # Liveness Analysis (Simple Linear)
 # =============================================================================
 
-def compute_liveness(program: KernelProgram) -> LivenessInfo:
+def compute_liveness(program: KernelProgram, use_cfg: bool = True) -> LivenessInfo:
     """
     Compute liveness information for a kernel program.
     
@@ -307,8 +472,13 @@ def compute_liveness(program: KernelProgram) -> LivenessInfo:
     has exactly one definition point, and the live range extends from def
     to last use.
     
+    When use_cfg=True (default), uses CFG-based backward dataflow analysis
+    to properly handle loops. This extends live ranges for values that are
+    used across loop iterations (loop-invariant values).
+    
     Args:
         program: The kernel program to analyze
+        use_cfg: Whether to use CFG-based analysis (default: True)
         
     Returns:
         LivenessInfo containing all computed live ranges and statistics
@@ -357,7 +527,7 @@ def compute_liveness(program: KernelProgram) -> LivenessInfo:
                 elif is_virtual(u):
                     info.use_points[u].append(idx)
     
-    # Build live ranges
+    # Build initial live ranges (basic def-to-last-use)
     for reg, def_point in info.def_points.items():
         uses = info.use_points.get(reg, [])
         if uses:
@@ -375,12 +545,42 @@ def compute_liveness(program: KernelProgram) -> LivenessInfo:
             reg_class=get_reg_class(reg),
         )
         info.live_ranges[reg] = live_range
-        
-        # Categorize by register class
+    
+    # Use CFG-based analysis to extend live ranges for loops
+    if use_cfg:
+        cfg = build_cfg(program)
+        if has_loops(cfg):
+            # Run backward dataflow to compute live-in/live-out
+            compute_cfg_liveness(cfg, program.instructions)
+            # Extend live ranges based on liveness at block boundaries
+            compute_live_ranges_from_cfg(cfg, program.instructions, info)
+            # Rebuild the live range dict with updated ranges
+            for reg in list(info.live_ranges.keys()):
+                lr = info.live_ranges[reg]
+                # Re-fetch from use_points in case it was extended
+                uses = info.use_points.get(reg, [])
+                if uses:
+                    extended_end = max(lr.end, max(uses))
+                else:
+                    extended_end = lr.end
+                if extended_end != lr.end:
+                    info.live_ranges[reg] = LiveRange(
+                        reg=lr.reg,
+                        start=lr.start,
+                        end=extended_end,
+                        size=lr.size,
+                        alignment=lr.alignment,
+                        reg_class=lr.reg_class,
+                    )
+    
+    # Categorize ranges by register class
+    info.vreg_ranges = []
+    info.sreg_ranges = []
+    for reg, lr in info.live_ranges.items():
         if isinstance(reg, KVReg):
-            info.vreg_ranges.append(live_range)
+            info.vreg_ranges.append(lr)
         elif isinstance(reg, KSReg):
-            info.sreg_ranges.append(live_range)
+            info.sreg_ranges.append(lr)
     
     # Sort ranges by start point (for linear scan)
     info.vreg_ranges.sort(key=lambda r: (r.start, r.end))
