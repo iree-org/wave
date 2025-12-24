@@ -221,8 +221,12 @@ def compile_backend(
     if backend == "llvm" and not raw_asm and disasm:
         raw_asm = disasm
     
-    # Extract register/LDS metadata from disasm header or raw asm
-    vgpr_count, sgpr_count, lds_size = extract_resource_usage(disasm or raw_asm)
+    # Extract register/LDS metadata
+    # Prefer raw_asm for ASM backend (has HSA metadata), disasm for LLVM
+    if backend == "asm" and raw_asm:
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage(raw_asm)
+    else:
+        vgpr_count, sgpr_count, lds_size = extract_resource_usage(disasm or raw_asm)
     
     return BackendResult(
         backend=backend,
@@ -244,25 +248,39 @@ def extract_resource_usage(asm_text: str) -> Tuple[int, int, int]:
     if not asm_text:
         return vgpr, sgpr, lds
     
-    # Common patterns in AMD GPU assembly metadata
-    # .vgpr_count: N or vgpr_count = N
-    vgpr_match = re.search(r'\.?vgpr_count[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+    # AMD HSA kernel metadata patterns
+    # .amdhsa_next_free_vgpr N
+    vgpr_match = re.search(r'\.amdhsa_next_free_vgpr\s+(\d+)', asm_text)
     if vgpr_match:
         vgpr = int(vgpr_match.group(1))
     
-    sgpr_match = re.search(r'\.?sgpr_count[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+    # Fallback: .vgpr_count: N or vgpr_count = N
+    if not vgpr:
+        vgpr_match = re.search(r'\.?vgpr_count[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+        if vgpr_match:
+            vgpr = int(vgpr_match.group(1))
+    
+    # .amdhsa_next_free_sgpr N
+    sgpr_match = re.search(r'\.amdhsa_next_free_sgpr\s+(\d+)', asm_text)
     if sgpr_match:
         sgpr = int(sgpr_match.group(1))
     
-    # LDS size patterns
-    lds_match = re.search(r'\.?lds_size[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+    # Fallback: .sgpr_count: N
+    if not sgpr:
+        sgpr_match = re.search(r'\.?sgpr_count[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+        if sgpr_match:
+            sgpr = int(sgpr_match.group(1))
+    
+    # LDS: .amdhsa_group_segment_fixed_size N
+    lds_match = re.search(r'\.amdhsa_group_segment_fixed_size\s+(\d+)', asm_text)
     if lds_match:
         lds = int(lds_match.group(1))
     
-    # Alternative: look for .amdhsa_group_segment_fixed_size
-    lds_match2 = re.search(r'\.amdhsa_group_segment_fixed_size\s+(\d+)', asm_text)
-    if lds_match2 and not lds:
-        lds = int(lds_match2.group(1))
+    # Fallback: .lds_size: N
+    if not lds:
+        lds_match = re.search(r'\.?lds_size[:\s=]+(\d+)', asm_text, re.IGNORECASE)
+        if lds_match:
+            lds = int(lds_match.group(1))
     
     return vgpr, sgpr, lds
 
@@ -307,12 +325,12 @@ def classify_instruction(line: str) -> str:
     if any(x in line_lower for x in ['s_load', 's_store', 's_buffer_load']):
         return "smem"
     
-    # Vector ALU
-    if line_lower.startswith('v_') or 'v_' in line_lower.split()[0] if line_lower.split() else False:
+    # Vector ALU - check if first word starts with v_
+    if line_lower.split() and line_lower.split()[0].startswith('v_'):
         return "valu"
     
-    # Scalar ALU
-    if line_lower.startswith('s_') or (line_lower.split() and line_lower.split()[0].startswith('s_')):
+    # Scalar ALU - check if first word starts with s_
+    if line_lower.split() and line_lower.split()[0].startswith('s_'):
         return "salu"
     
     return "other"
