@@ -173,6 +173,23 @@ class KRegRange:
         if self.count == 1:
             return base
         return f"{base}..+{self.count}"
+    
+    def __getitem__(self, idx: int) -> "KReg":
+        """Get individual register from range by index."""
+        if idx < 0 or idx >= self.count:
+            raise IndexError(f"Index {idx} out of range for KRegRange of count {self.count}")
+        
+        base = self.base_reg
+        if isinstance(base, KVReg):
+            return KVReg(base.id + idx)
+        elif isinstance(base, KSReg):
+            return KSReg(base.id + idx)
+        elif isinstance(base, KPhysVReg):
+            return KPhysVReg(base.index + idx)
+        elif isinstance(base, KPhysSReg):
+            return KPhysSReg(base.index + idx)
+        else:
+            raise TypeError(f"Cannot index into KRegRange with base type {type(base)}")
 
 
 # =============================================================================

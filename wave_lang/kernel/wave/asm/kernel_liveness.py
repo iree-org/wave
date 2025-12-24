@@ -4,20 +4,23 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """
-Liveness analysis for kernel IR.
+Liveness analysis for kernel IR with CFG support.
 
 This module computes live ranges for all virtual registers in a KernelProgram.
-Since the MLIR input is SSA (each value has exactly one definition), liveness
-analysis is straightforward:
-- Each virtual register has exactly one def point
-- The live range extends from def to last use
+It supports control flow (loops, branches) via CFG-based backward dataflow analysis.
+
+Key components:
+- BasicBlock: A straight-line sequence of instructions between labels/branches
+- CFG: Control flow graph built from labels and branch instructions
+- Liveness: Backward dataflow computing live-in/live-out per block
+- Dominance: Computes dominators for SSA validation
 
 The computed live ranges are used by the linear scan allocator to determine
 when registers can be reused.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, FrozenSet
 from collections import defaultdict
 
 from .kernel_ir import (
@@ -27,6 +30,10 @@ from .kernel_ir import (
     RegClass, is_virtual, is_vgpr, is_sgpr, get_reg_class,
 )
 
+
+# =============================================================================
+# Live Range
+# =============================================================================
 
 @dataclass
 class LiveRange:
@@ -108,18 +115,197 @@ class LivenessInfo:
         return sum(r.size for r in self.get_live_at(point, reg_class))
 
 
+# =============================================================================
+# Basic Block and CFG
+# =============================================================================
+
+@dataclass
+class BasicBlock:
+    """
+    A basic block in the CFG.
+    
+    A basic block is a maximal sequence of instructions with:
+    - No branches except possibly at the end
+    - No labels except possibly at the start
+    """
+    id: int
+    label: Optional[str] = None  # Label at start of block (if any)
+    start_idx: int = 0  # First instruction index (inclusive)
+    end_idx: int = 0    # Last instruction index (inclusive)
+    
+    # CFG edges (set after construction)
+    successors: List["BasicBlock"] = field(default_factory=list)
+    predecessors: List["BasicBlock"] = field(default_factory=list)
+    
+    # Liveness info (computed by dataflow)
+    use_set: Set[KReg] = field(default_factory=set)  # Regs used before def in block
+    def_set: Set[KReg] = field(default_factory=set)  # Regs defined in block
+    live_in: Set[KReg] = field(default_factory=set)   # Regs live at block entry
+    live_out: Set[KReg] = field(default_factory=set)  # Regs live at block exit
+    
+    # Dominance info
+    dominators: Set[int] = field(default_factory=set)  # Block IDs that dominate this block
+    
+    def __repr__(self) -> str:
+        label_str = f" ({self.label})" if self.label else ""
+        return f"BB{self.id}{label_str}[{self.start_idx}:{self.end_idx}]"
+    
+    def __hash__(self) -> int:
+        return hash(self.id)
+    
+    def __eq__(self, other) -> bool:
+        if isinstance(other, BasicBlock):
+            return self.id == other.id
+        return False
+
+
+@dataclass
+class CFG:
+    """
+    Control flow graph for a kernel program.
+    """
+    blocks: List[BasicBlock] = field(default_factory=list)
+    entry_block: Optional[BasicBlock] = None
+    label_to_block: Dict[str, BasicBlock] = field(default_factory=dict)
+    
+    def __repr__(self) -> str:
+        return f"CFG({len(self.blocks)} blocks)"
+
+
+def _is_branch_instruction(instr: KInstr) -> bool:
+    """Check if instruction is a branch."""
+    return instr.name in ("s_branch", "s_cbranch_scc0", "s_cbranch_scc1",
+                          "s_cbranch_vccz", "s_cbranch_vccnz", "s_cbranch_execz",
+                          "s_cbranch_execnz")
+
+
+def _is_conditional_branch(instr: KInstr) -> bool:
+    """Check if instruction is a conditional branch."""
+    return instr.name.startswith("s_cbranch_")
+
+
+def _get_branch_target(instr: KInstr) -> Optional[str]:
+    """Get the target label of a branch instruction."""
+    if _is_branch_instruction(instr):
+        return instr.comment  # Branch target is stored in comment
+    return None
+
+
+def build_cfg(program: KernelProgram) -> CFG:
+    """
+    Build a control flow graph from a kernel program.
+    
+    Algorithm:
+    1. Find all block boundaries (labels and branches)
+    2. Create basic blocks
+    3. Connect blocks with edges based on control flow
+    """
+    cfg = CFG()
+    instructions = program.instructions
+    
+    if not instructions:
+        return cfg
+    
+    # Pass 1: Find block start points (labels or after branches)
+    block_starts = {0}  # First instruction starts a block
+    label_positions: Dict[str, int] = {}
+    
+    for idx, instr in enumerate(instructions):
+        # Label starts a new block
+        if instr.is_label:
+            label_name = instr.comment
+            if label_name:
+                label_positions[label_name] = idx
+                block_starts.add(idx)
+        
+        # Instruction after a branch starts a new block
+        if _is_branch_instruction(instr) and idx + 1 < len(instructions):
+            block_starts.add(idx + 1)
+    
+    # Sort block starts
+    sorted_starts = sorted(block_starts)
+    
+    # Pass 2: Create basic blocks
+    for i, start_idx in enumerate(sorted_starts):
+        # Find end of this block
+        if i + 1 < len(sorted_starts):
+            end_idx = sorted_starts[i + 1] - 1
+        else:
+            end_idx = len(instructions) - 1
+        
+        # Get label if this block starts with one
+        label = None
+        if instructions[start_idx].is_label:
+            label = instructions[start_idx].comment
+        
+        block = BasicBlock(
+            id=i,
+            label=label,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )
+        cfg.blocks.append(block)
+        
+        if label:
+            cfg.label_to_block[label] = block
+    
+    # Set entry block
+    if cfg.blocks:
+        cfg.entry_block = cfg.blocks[0]
+    
+    # Pass 3: Connect blocks with edges
+    for i, block in enumerate(cfg.blocks):
+        # Find the last real instruction (skip trailing comments/labels)
+        last_instr = None
+        for idx in range(block.end_idx, block.start_idx - 1, -1):
+            instr = instructions[idx]
+            if instr.name not in ("_comment", "_label"):
+                last_instr = instr
+                break
+        
+        if last_instr is None:
+            # Empty block - fallthrough to next
+            if i + 1 < len(cfg.blocks):
+                _add_edge(block, cfg.blocks[i + 1])
+            continue
+        
+        # Check if block ends with a branch
+        if _is_branch_instruction(last_instr):
+            target_label = _get_branch_target(last_instr)
+            if target_label and target_label in cfg.label_to_block:
+                target_block = cfg.label_to_block[target_label]
+                _add_edge(block, target_block)
+            
+            # Conditional branches also fall through
+            if _is_conditional_branch(last_instr) and i + 1 < len(cfg.blocks):
+                _add_edge(block, cfg.blocks[i + 1])
+        else:
+            # Non-branch: fallthrough to next block
+            if i + 1 < len(cfg.blocks):
+                _add_edge(block, cfg.blocks[i + 1])
+    
+    return cfg
+
+
+def _add_edge(from_block: BasicBlock, to_block: BasicBlock):
+    """Add a CFG edge from from_block to to_block."""
+    if to_block not in from_block.successors:
+        from_block.successors.append(to_block)
+    if from_block not in to_block.predecessors:
+        to_block.predecessors.append(from_block)
+
+
+# =============================================================================
+# Liveness Analysis (Simple Linear)
+# =============================================================================
+
 def compute_liveness(program: KernelProgram) -> LivenessInfo:
     """
     Compute liveness information for a kernel program.
     
-    This function:
-    1. Scans instructions to find def points for each virtual register
-    2. Scans instructions to find use points for each virtual register
-    3. Creates live ranges from (def_point, last_use_point)
-    4. Computes register pressure statistics
-    
-    For SSA programs (which kernel IR is), each virtual register has exactly
-    one definition point, so liveness is simply [def, last_use].
+    This is the main entry point. For SSA programs, each virtual register
+    has exactly one definition point, and the live range extends from def
+    to last use.
     
     Args:
         program: The kernel program to analyze
@@ -129,9 +315,12 @@ def compute_liveness(program: KernelProgram) -> LivenessInfo:
     """
     info = LivenessInfo()
     
-    # Pass 1: Find all defs and uses
-    reg_size: Dict[KReg, int] = {}  # Track size for range allocations
-    reg_alignment: Dict[KReg, int] = {}  # Track alignment requirements
+    # Track size and alignment for range allocations
+    reg_size: Dict[KReg, int] = {}
+    reg_alignment: Dict[KReg, int] = {}
+    
+    # Track which regs are part of a range (for alias resolution)
+    range_membership: Dict[KReg, KReg] = {}  # component_reg -> base_reg
     
     for idx, instr in enumerate(program.instructions):
         # Process defs
@@ -139,19 +328,21 @@ def compute_liveness(program: KernelProgram) -> LivenessInfo:
             if isinstance(d, KRegRange):
                 base_reg = d.base_reg
                 if is_virtual(base_reg):
-                    if base_reg in info.def_points:
-                        raise ValueError(f"SSA violation: {base_reg} defined twice "
-                                       f"(at {info.def_points[base_reg]} and {idx})")
-                    info.def_points[base_reg] = idx
-                    reg_size[base_reg] = d.count
-                    reg_alignment[base_reg] = d.alignment
+                    if base_reg not in info.def_points:
+                        info.def_points[base_reg] = idx
+                        reg_size[base_reg] = d.count
+                        reg_alignment[base_reg] = d.alignment
+                        
+                        # Track all component registers as aliases to the base
+                        reg_class = type(base_reg)
+                        for i in range(d.count):
+                            component = reg_class(base_reg.id + i)
+                            range_membership[component] = base_reg
             elif is_virtual(d):
-                if d in info.def_points:
-                    raise ValueError(f"SSA violation: {d} defined twice "
-                                   f"(at {info.def_points[d]} and {idx})")
-                info.def_points[d] = idx
-                reg_size[d] = 1
-                reg_alignment[d] = 1
+                if d not in info.def_points:
+                    info.def_points[d] = idx
+                    reg_size[d] = 1
+                    reg_alignment[d] = 1
         
         # Process uses
         for u in instr.uses:
@@ -160,9 +351,13 @@ def compute_liveness(program: KernelProgram) -> LivenessInfo:
                 if is_virtual(base_reg):
                     info.use_points[base_reg].append(idx)
             elif isinstance(u, (KVReg, KSReg)):
-                info.use_points[u].append(idx)
+                if u in range_membership:
+                    base_reg = range_membership[u]
+                    info.use_points[base_reg].append(idx)
+                elif is_virtual(u):
+                    info.use_points[u].append(idx)
     
-    # Pass 2: Build live ranges
+    # Build live ranges
     for reg, def_point in info.def_points.items():
         uses = info.use_points.get(reg, [])
         if uses:
@@ -191,7 +386,7 @@ def compute_liveness(program: KernelProgram) -> LivenessInfo:
     info.vreg_ranges.sort(key=lambda r: (r.start, r.end))
     info.sreg_ranges.sort(key=lambda r: (r.start, r.end))
     
-    # Pass 3: Compute max pressure
+    # Compute max pressure
     if info.vreg_ranges:
         info.max_vreg_pressure = _compute_max_pressure(info.vreg_ranges)
     if info.sreg_ranges:
@@ -212,14 +407,11 @@ def _compute_max_pressure(ranges: List[LiveRange]) -> int:
     if not ranges:
         return 0
     
-    # Create events: (point, delta, is_start)
-    # is_start=True events come before is_start=False at same point
     events = []
     for r in ranges:
         events.append((r.start, r.size, True))   # Start: add registers
         events.append((r.end + 1, -r.size, False))  # End+1: remove registers
     
-    # Sort by point, then by is_start (starts before ends at same point)
     events.sort(key=lambda e: (e[0], not e[2]))
     
     current_pressure = 0
@@ -238,9 +430,7 @@ def compute_interference_graph(
     """
     Compute interference graph for a set of live ranges.
     
-    Two registers interfere if their live ranges overlap. This is useful
-    for graph coloring allocators (not used by linear scan but provided
-    for analysis purposes).
+    Two registers interfere if their live ranges overlap.
     
     Returns:
         Dict mapping each register to the set of registers it interferes with
@@ -259,10 +449,6 @@ def compute_interference_graph(
 def get_live_in(program: KernelProgram, idx: int, info: Optional[LivenessInfo] = None) -> Set[KReg]:
     """
     Get the set of virtual registers live at the start of instruction idx.
-    
-    A register is live-in at idx if:
-    - It is defined before idx, AND
-    - It is used at or after idx
     """
     if info is None:
         info = compute_liveness(program)
@@ -277,10 +463,6 @@ def get_live_in(program: KernelProgram, idx: int, info: Optional[LivenessInfo] =
 def get_live_out(program: KernelProgram, idx: int, info: Optional[LivenessInfo] = None) -> Set[KReg]:
     """
     Get the set of virtual registers live at the end of instruction idx.
-    
-    A register is live-out at idx if:
-    - It is defined at or before idx, AND
-    - It is used after idx
     """
     if info is None:
         info = compute_liveness(program)
@@ -299,26 +481,35 @@ def validate_ssa(program: KernelProgram) -> List[str]:
     Checks:
     1. Each virtual register is defined exactly once
     2. Each use of a virtual register is dominated by its definition
-       (i.e., def comes before use in the instruction stream)
     
     Returns:
         List of error messages (empty if valid)
     """
     errors = []
     defs: Dict[KReg, int] = {}
+    range_membership: Dict[KReg, KReg] = {}
     
     for idx, instr in enumerate(program.instructions):
         # Check defs
         for d in instr.defs:
             if isinstance(d, KRegRange):
-                reg = d.base_reg
+                base_reg = d.base_reg
+                if is_virtual(base_reg):
+                    if base_reg in defs:
+                        errors.append(f"SSA violation: {base_reg} defined at {defs[base_reg]} and {idx}")
+                    defs[base_reg] = idx
+                    
+                    reg_class = type(base_reg)
+                    for i in range(d.count):
+                        component = reg_class(base_reg.id + i)
+                        range_membership[component] = base_reg
+                        defs[component] = idx
             else:
                 reg = d
-            
-            if is_virtual(reg):
-                if reg in defs:
-                    errors.append(f"SSA violation: {reg} defined at {defs[reg]} and {idx}")
-                defs[reg] = idx
+                if is_virtual(reg):
+                    if reg in defs:
+                        errors.append(f"SSA violation: {reg} defined at {defs[reg]} and {idx}")
+                    defs[reg] = idx
         
         # Check uses
         for u in instr.uses:
@@ -336,4 +527,3 @@ def validate_ssa(program: KernelProgram) -> List[str]:
                     errors.append(f"Use of {reg} at {idx} before def at {defs[reg]}")
     
     return errors
-

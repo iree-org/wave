@@ -20,7 +20,7 @@ from wave_lang.support.ir_imports import (
 
 from .mlir_walker import IRWalker
 from .asm_emitter import AsmEmitter
-from .kernel_pipeline import KernelCompilationContext, use_kernel_ir
+from .kernel_pipeline import use_kernel_ir, KernelCompilationContext
 
 
 def walk_ops_recursively(operation: Operation) -> Iterable[Operation]:
