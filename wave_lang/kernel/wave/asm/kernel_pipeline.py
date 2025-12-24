@@ -2797,15 +2797,7 @@ class KernelModuleCompiler:
                 kernel_ctx.emit_kernargs(num_args)
                 
                 # Walk MLIR and emit to kernel IR
-                # Note: We still need the AsmEmitter for some legacy operations
-                # Create a minimal emitter just for those cases
-                from .asm_emitter import AsmEmitter
-                emitter = AsmEmitter(targetid=self.targetid, codeobj=self.codeobj)
-                emitter.needs_wgid_x = needs_wgid_x
-                emitter.needs_wgid_y = needs_wgid_y
-                emitter.needs_wgid_z = needs_wgid_z
-                
-                walker = IRWalker(emitter, kernel_ctx=kernel_ctx)
+                walker = IRWalker(kernel_ctx)
                 kernel_info = walker.interpret_func(fn)
                 
                 # Finalize kernel IR (adds s_endpgm, runs allocation, renders)
