@@ -212,6 +212,11 @@ jobs:
         run: |
           pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
 
+      - name: Run LIT tests
+        if: ${{ !cancelled() }}
+        run: |
+          WAVE_TEST_DWARFDUMP=1 lit lit_tests/ -v
+
       - name: Test TKW runtime related stack on amdgpu
         if: ${{ env.HAS_GPU == 'true' }}
         run: |
@@ -231,6 +236,7 @@ jobs:
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
 
+<<<<<<< HEAD
       - name: Run LIT tests
         env:
            WAVE_TEST_WATER: ${{ env.IS_CDNA3 == 'true' && '1' || '0'  }}
@@ -242,6 +248,8 @@ jobs:
           echo "WAVE_TEST_DWARFDUMP=$WAVE_TEST_DWARFDUMP"
           lit lit_tests/ -v
 
+=======
+>>>>>>> d3897bb1 (WIP: CI debugging)
       - name: MyPy Type Checking
         run: |
           mypy
