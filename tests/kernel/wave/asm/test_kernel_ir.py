@@ -437,7 +437,8 @@ class TestIntegration:
         # Verify all instructions are present
         asm = "\n".join(asm_lines)
         assert "v_lshlrev_b32" in asm
-        assert "v_add_u32" in asm
+        # v_add_u32 may be fused into v_lshl_add_u32 by peephole optimization
+        assert "v_add_u32" in asm or "v_lshl_add_u32" in asm
         assert "ds_read_b64" in asm
         assert "s_barrier" in asm
         assert "s_endpgm" in asm
