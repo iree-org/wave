@@ -20,8 +20,6 @@ All physical instruction formatting goes through InstructionFormatter.
 from .driver import main
 from .mlir_walker import IRWalker
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
-from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator
-from .instructions import Instruction
 from .unified_emitter import UnifiedEmitter, EmissionMode
 from .instruction_registry import get_registry, InstructionDef, InstructionCategory
 from .instruction_formatter import InstructionFormatter, get_formatter
@@ -67,12 +65,6 @@ __all__ = [
     "MemRefInfo",
     "BindingUse",
     "VecAccess",
-    # Register allocation
-    "RegFile",
-    "SGPRAllocator",
-    "VGPRAllocator",
-    # Legacy (deprecated)
-    "Instruction",
     # Utilities
     "parse_vector_type",
     "parse_memref_type",
