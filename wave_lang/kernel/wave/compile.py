@@ -961,10 +961,9 @@ def wave_compile(
                 if os.environ.get("WAVE_DUMP_ASM", "0") == "1":
                     dump_dir = os.environ.get("WAVE_DUMP_ASM_DIR", "/tmp/wave_asm")
                     os.makedirs(dump_dir, exist_ok=True)
-                    kernel_ir = os.environ.get("WAVE_KERNEL_IR", "0")
                     func_name = getattr(options.kernel_launch_info, "func_name", None) or options.func_name
                     safe_name = "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(func_name))
-                    suffix = f"cached.kernel_ir{kernel_ir}.pid{os.getpid()}.s"
+                    suffix = f"cached.pid{os.getpid()}.s"
                     dump_path = os.path.join(dump_dir, f"{safe_name}.{suffix}")
                     write_file(dump_path, "w", cached_kernel.asm)
                     print(f"[wave] dumped cached asm to: {dump_path}")
@@ -1101,10 +1100,9 @@ def wave_compile(
             if os.environ.get("WAVE_DUMP_ASM", "0") == "1":
                 dump_dir = os.environ.get("WAVE_DUMP_ASM_DIR", "/tmp/wave_asm")
                 os.makedirs(dump_dir, exist_ok=True)
-                kernel_ir = os.environ.get("WAVE_KERNEL_IR", "0")
                 func_name = getattr(options.kernel_launch_info, "func_name", None) or options.func_name
                 safe_name = "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(func_name))
-                suffix = f"kernel_ir{kernel_ir}.pid{os.getpid()}.s"
+                suffix = f"pid{os.getpid()}.s"
                 dump_path = os.path.join(dump_dir, f"{safe_name}.{suffix}")
                 write_file(dump_path, "w", asm)
                 print(f"[wave] dumped asm to: {dump_path}")
@@ -1171,8 +1169,6 @@ def wave_compile(
 
 def _generate_asm_code(mb, options):
     """Generate AMDGCN assembly from MLIR module."""
-    from .asm.kernel_pipeline import use_kernel_ir
-
     # Convert module_op to MLIR string
     mlir_asm = mb.module_op.get_asm(
         enable_debug_info=options.location_capture_config.level
@@ -1181,10 +1177,8 @@ def _generate_asm_code(mb, options):
         use_local_scope=options.use_local_scope,
     )
 
-    # Check if we should use the new kernel IR module compiler
-    # Note: For now, we still go through AsmEmitter which internally uses
-    # kernel IR when WAVE_KERNEL_IR=1. The KernelModuleCompiler is available
-    # for direct use but not yet the default path.
+    # Use AsmEmitter.from_mlir_string as the MLIR->ASM entry point
+    # Note: AsmEmitter internally uses KernelCompilationContext for the body
     from .asm.asm_emitter import AsmEmitter
     return AsmEmitter.from_mlir_string(
         mlir_asm, targetid=options.target, codeobj=options.codeobj

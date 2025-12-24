@@ -1253,4 +1253,9 @@ class OperationHandlers:
         # vmcnt=15 means "no wait" (max 4-bit value), so only emit if < 15
         if vmcnt < 15:
             self.walker.unified.s_waitcnt(f"vmcnt({vmcnt})")
-            self.walker.emitter.ticketing.observe_vmem_wait(vmcnt)
+            # Notify ticketing system about the wait
+            # Use kernel_ctx.ticketing (no-op for kernel IR) or fall back to emitter
+            if self.walker.kernel_ctx is not None:
+                self.walker.kernel_ctx.ticketing.observe_vmem_wait(vmcnt)
+            elif self.walker.emitter is not None:
+                self.walker.emitter.ticketing.observe_vmem_wait(vmcnt)
