@@ -239,6 +239,8 @@ jobs:
         run: |
           # TODO: mlir_converter tests segfault on mi35x
           # TODO: can't sudo to install dwarfdump on rdna4
+          echo "WAVE_TEST_WATER=$WAVE_TEST_WATER"
+          echo "WAVE_TEST_DWARFDUMP=$WAVE_TEST_DWARFDUMP"
           lit lit_tests/ -v
 
       - name: MyPy Type Checking
