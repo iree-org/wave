@@ -34,7 +34,7 @@ from .kernel_ir import (
     KernelProgram, KernelBuilder, KInstr,
     KVReg, KSReg, KPhysVReg, KPhysSReg, KSpecialReg,
     KReg, KRegRange, KImm, KMemOffset,
-    KernelABI, RegClass, M0,
+    KernelABI, RegClass, M0, is_virtual,
 )
 from .kernel_liveness import compute_liveness, LivenessInfo
 from .kernel_regalloc import KernelRegAlloc, allocate_kernel, AllocationStats, AllocationError
@@ -42,6 +42,7 @@ from .kernel_generator import KernelGenerator, PhysicalMapping, generate_program
 from .unified_emitter import UnifiedEmitter, EmissionMode
 from .hazards import HazardDetector
 from .instruction_categories import InstructionCategory, categorize_instruction
+from .ticketing import Ticketing
 from .instruction_registry import (
     InstructionRegistry,
     InstructionDef,
@@ -55,29 +56,38 @@ from .instruction_registry import (
 _ENABLE_KERNEL_IR_SIMPLIFY = os.environ.get("WAVE_KERNEL_IR_SIMPLIFY", "1") == "1"
 
 
-class _NoOpTicketing:
-    """No-op ticketing for kernel IR path.
-    
-    The kernel IR path handles waitcnts via the instruction stream directly,
-    so ticketing operations are no-ops. This provides a compatible interface
-    for handlers that still reference ticketing.
-    """
-    
-    def observe_vmem_wait(self, threshold: int) -> None:
-        """No-op: waitcnts are handled in the instruction stream."""
-        pass
-    
-    def observe_lgkm_wait(self, threshold: int) -> None:
-        """No-op: waitcnts are handled in the instruction stream."""
-        pass
-    
-    def next_vmem_ticket(self) -> int:
-        """No-op: returns 0."""
-        return 0
-    
-    def next_lgkm_ticket(self) -> int:
-        """No-op: returns 0."""
-        return 0
+def _kernel_ticketing_enabled() -> bool:
+    return os.environ.get("WAVE_KERNEL_TICKETING", "0") == "1"
+
+
+def _parse_waitcnt_threshold(op: Any) -> Optional[Tuple[str, int]]:
+    """Parse 'vmcnt(N)' or 'lgkmcnt(N)' from an operand."""
+    if not isinstance(op, str):
+        return None
+    if op.startswith("vmcnt(") and op.endswith(")"):
+        try:
+            return ("vmem", int(op[len("vmcnt(") : -1]))
+        except ValueError:
+            return None
+    if op.startswith("lgkmcnt(") and op.endswith(")"):
+        try:
+            return ("lgkm", int(op[len("lgkmcnt(") : -1]))
+        except ValueError:
+            return None
+    return None
+
+
+def _iter_virtual_regs(operand: Any) -> List[KReg]:
+    """Extract virtual regs referenced by an operand."""
+    regs: List[KReg] = []
+    if isinstance(operand, KRegRange):
+        if is_virtual(operand.base_reg):
+            # Base is enough if we also record components for defs.
+            regs.append(operand.base_reg)
+    elif isinstance(operand, (KVReg, KSReg)):
+        if is_virtual(operand):
+            regs.append(operand)
+    return regs
 
 
 class _ScopeContext:
@@ -1224,9 +1234,8 @@ class KernelCompilationContext:
     _loop_counter: int = field(default=0, init=False)
     _loop_stack: List[dict] = field(default_factory=list, init=False)
     
-    # Ticketing for memory operations
-    _vmem_ticket: int = field(default=0, init=False)
-    _lgkm_ticket: int = field(default=0, init=False)
+    # Ticketing / waitcnt coalescing state
+    _ticketing: Ticketing = field(default_factory=Ticketing, init=False)
     
     # Kernarg management: arg_index -> (low_sgpr_reg, high_sgpr_reg) as KRegRange
     _kernarg_pairs: Dict[int, KRegRange] = field(default_factory=dict, init=False)
@@ -1273,15 +1282,8 @@ class KernelCompilationContext:
         return self._expr_emitter
     
     @property
-    def ticketing(self) -> _NoOpTicketing:
-        """Return a no-op ticketing interface.
-        
-        The kernel IR path handles waitcnts via the instruction stream directly,
-        so ticketing operations are no-ops. This property allows handlers to
-        call ticketing methods without needing a full AsmEmitter.
-        """
-        if not hasattr(self, '_ticketing'):
-            self._ticketing = _NoOpTicketing()
+    def ticketing(self) -> Ticketing:
+        """Ticketing interface for VMEM/LGKM operations (kernel IR path)."""
         return self._ticketing
     
     def update_bounds_from_kernel_info(self, kernel_info: "KernelInfo") -> None:
@@ -1483,13 +1485,13 @@ class KernelCompilationContext:
             uses.append(value)
             arg_idx += 1
         
-        # Issue tickets for memory operations
+        # Issue tickets for memory operations (for later waitcnt placement/coalescing).
         mnemonic = instr_def.mnemonic if instr_def else name
         category = categorize_instruction(mnemonic)
         if category == InstructionCategory.VMEM:
-            self._vmem_ticket += 1
+            self.ticketing.next_vmem_ticket()
         elif category == InstructionCategory.LGKM:
-            self._lgkm_ticket += 1
+            self.ticketing.next_lgkm_ticket()
         
         # Emit the instruction using name string
         self.program.emit(KInstr(name, defs, tuple(uses), comment=comment))
@@ -1501,12 +1503,12 @@ class KernelCompilationContext:
     # =========================================================================
     
     def get_vmem_ticket(self) -> int:
-        """Get the current VMEM ticket (number of outstanding VMEM ops)."""
-        return self._vmem_ticket
+        """Get the last issued VMEM ticket (or -1 if none issued)."""
+        return self.ticketing._vmem_last_ticket
     
     def get_lgkm_ticket(self) -> int:
-        """Get the current LGKM ticket (number of outstanding LDS/scalar ops)."""
-        return self._lgkm_ticket
+        """Get the last issued LGKM ticket (or -1 if none issued)."""
+        return self.ticketing._lgkm_last_ticket
     
     def wait_vmem(self, count: int = 0):
         """Emit s_waitcnt vmcnt(count) to wait for VMEM operations."""
@@ -1521,6 +1523,106 @@ class KernelCompilationContext:
             "s_waitcnt", (), (f"lgkmcnt({count})",),
             comment="wait for LGKM"
         ))
+
+    # =========================================================================
+    # Ticketing-driven waitcnt placement (optional)
+    # =========================================================================
+
+    def _apply_ticketing_waitcnt_placement(self) -> None:
+        """
+        Insert/coalesce s_waitcnt using ticketing across the KernelProgram.
+
+        This pass is intentionally conservative:
+        - It only inserts waits when an instruction *uses* a register defined by
+          a VMEM/LGKM instruction.
+        - It respects existing s_waitcnt instructions by updating ticketing
+          coalescing state via observe_* calls.
+
+        Enabled via WAVE_KERNEL_TICKETING=1.
+        """
+        if not _kernel_ticketing_enabled():
+            return
+
+        ticketing = Ticketing()
+        vmem_def_ticket: Dict[KReg, int] = {}
+        lgkm_def_ticket: Dict[KReg, int] = {}
+
+        def _record_defs(defs: Tuple[Any, ...], ticket: int, table: Dict[KReg, int]) -> None:
+            for d in defs:
+                if isinstance(d, KRegRange):
+                    base = d.base_reg
+                    if is_virtual(base):
+                        table[base] = ticket
+                        # Record components so later scalar uses of range members resolve.
+                        for i in range(d.count):
+                            table[type(base)(base.id + i)] = ticket
+                elif isinstance(d, (KVReg, KSReg)):
+                    if is_virtual(d):
+                        table[d] = ticket
+
+        new_instructions: List[KInstr] = []
+
+        for instr in self.program.instructions:
+            # Respect externally emitted waits (e.g. from rocdl.s.waitcnt lowering).
+            if instr.name == "s_waitcnt":
+                for u in instr.uses:
+                    parsed = _parse_waitcnt_threshold(u)
+                    if parsed is None:
+                        continue
+                    kind, threshold = parsed
+                    if kind == "vmem":
+                        ticketing.observe_vmem_wait(threshold)
+                    elif kind == "lgkm":
+                        ticketing.observe_lgkm_wait(threshold)
+
+            # Insert waits before consumers of ticketed defs.
+            required_vmem: List[int] = []
+            required_lgkm: List[int] = []
+            for u in instr.uses:
+                for reg in _iter_virtual_regs(u):
+                    vt = vmem_def_ticket.get(reg)
+                    if vt is not None:
+                        required_vmem.append(vt)
+                    lt = lgkm_def_ticket.get(reg)
+                    if lt is not None:
+                        required_lgkm.append(lt)
+
+            if required_vmem:
+                # Wait for the newest required op (also implies all earlier).
+                threshold = ticketing.compute_vmem_wait(max(required_vmem))
+                if threshold is not None:
+                    new_instructions.append(KInstr(
+                        "s_waitcnt",
+                        defs=(),
+                        uses=(f"vmcnt({threshold})",),
+                        comment="ticketing: wait for VMEM defs",
+                    ))
+
+            if required_lgkm:
+                threshold = ticketing.compute_lgkm_wait(max(required_lgkm))
+                if threshold is not None:
+                    new_instructions.append(KInstr(
+                        "s_waitcnt",
+                        defs=(),
+                        uses=(f"lgkmcnt({threshold})",),
+                        comment="ticketing: wait for LGKM defs",
+                    ))
+
+            # Keep original instruction.
+            new_instructions.append(instr)
+
+            # Issue tickets for this instruction and record defs.
+            instr_def = self._registry.get(instr.name)
+            mnemonic = instr_def.mnemonic if instr_def else instr.name
+            category = categorize_instruction(mnemonic)
+            if category == InstructionCategory.VMEM:
+                ticket = ticketing.next_vmem_ticket()
+                _record_defs(instr.defs, ticket, vmem_def_ticket)
+            elif category == InstructionCategory.LGKM:
+                ticket = ticketing.next_lgkm_ticket()
+                _record_defs(instr.defs, ticket, lgkm_def_ticket)
+
+        self.program.instructions = new_instructions
     
     # =========================================================================
     # Symbol binding (for MLIR SSA value tracking)
@@ -2275,6 +2377,10 @@ class KernelCompilationContext:
         
         # Apply peephole optimizations (fuse lshl+add, lshl+or, etc.)
         self._apply_peephole_optimizations()
+
+        # Optionally insert/coalesce waitcnt using ticketing.
+        # Must run before hazard mitigation/regalloc so liveness sees the final stream.
+        self._apply_ticketing_waitcnt_placement()
         
         # Apply hazard mitigation pass
         self._apply_hazard_mitigation()

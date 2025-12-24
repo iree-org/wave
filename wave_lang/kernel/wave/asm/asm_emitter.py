@@ -21,13 +21,6 @@ from .utils import normalize_wg_size
 from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator, AGPRAllocator
 from .mlir_walker import IRWalker
 # Instructions removed - using unified emitter directly
-from .instruction_categories import InstructionCategory, categorize_instruction
-
-# Import latency-aware scheduling infrastructure
-from .latency_provider import LatencyProvider
-from .scoreboard import Scoreboard
-from .ticketing import Ticketing
-from .hazards import HazardDetector
 from .unified_emitter import UnifiedEmitter, EmissionMode
 from .metadata_emitter import MetadataEmitter, create_metadata, get_register_granularity
 from .mlir_analysis import (
@@ -36,51 +29,6 @@ from .mlir_analysis import (
     extract_translation_info,
     should_skip_function,
 )
-
-class TicketingEmitterWrapper:
-    """
-    Wrapper around UnifiedEmitter that handles ticketing for memory operations.
-    
-    Intercepts all method calls and issues VMEM/LGKM tickets for memory operations
-    before delegating to the underlying emitter.
-    """
-    
-    def __init__(self, base_emitter: UnifiedEmitter, asm_emitter: "AsmEmitter"):
-        self._base = base_emitter
-        self._asm_emitter = asm_emitter
-        self._registry = base_emitter._registry
-    
-    def __getattr__(self, name: str):
-        """Intercept method calls to add ticketing."""
-        attr = getattr(self._base, name)
-        
-        if callable(attr):
-            # Look up instruction to check category
-            instr_def = self._registry.get(name)
-            if instr_def:
-                mnemonic = instr_def.mnemonic
-                
-                def wrapper(*args, **kwargs):
-                    # Issue tickets for memory operations
-                    category = categorize_instruction(mnemonic)
-                    if category == InstructionCategory.VMEM:
-                        self._asm_emitter.ticketing.next_vmem_ticket()
-                    elif category == InstructionCategory.LGKM:
-                        self._asm_emitter.ticketing.next_lgkm_ticket()
-                    
-                    # Call the actual method
-                    result = attr(*args, **kwargs)
-                    
-                    # Hazard mitigation
-                    mitigation = self._asm_emitter.hazard_detector.get_mitigation(mnemonic)
-                    if mitigation:
-                        self._asm_emitter.lines.append(str(mitigation))
-                    
-                    return result
-                
-                return wrapper
-        
-        return attr
 
 
 @dataclass
@@ -272,24 +220,21 @@ class AsmEmitter:
         self.vgpr_tid_y = None  # Will be v1 when system_vgpr_workitem_id >= 2
         self.vgpr_tid_z = None  # Will be v2 when system_vgpr_workitem_id == 3
 
-        # Ticket-based VMEM/LGKM tracking for optimal wait placement
-        self.ticketing = Ticketing()
-
-        # MFMA tracking (matrix operations have fixed latency)
+        # NOTE: Ticketing-based waitcnt placement is implemented in the kernel IR
+        # pipeline (`KernelCompilationContext`) and is enabled via
+        # WAVE_KERNEL_TICKETING=1. AsmEmitter is a legacy entry point and does not
+        # maintain its own ticketing/scheduling state.
+        self.ticketing = None
         self._mfma_last_cycle = None  # cycle when last MFMA was issued
-
-        # Latency-aware scheduling
-        self.latency_provider = LatencyProvider(arch=targetid)
-        self.scoreboard = Scoreboard(latency_provider=self.latency_provider)
+        self.latency_provider = None
+        self.scoreboard = None
 
         # Track which workgroup IDs are needed (detected from MLIR)
         self.needs_wgid_x = False
         self.needs_wgid_y = False
         self.needs_wgid_z = False
 
-        # Hazard detector for gfx950 VALU hazards
-        # See hazards.py for details on the hazard types and mitigations
-        self.hazard_detector = HazardDetector()
+        self.hazard_detector = None
 
     @classmethod
     def from_mlir_string(
@@ -387,7 +332,7 @@ class AsmEmitter:
     # ---- Unified Emitter Integration ----
     
     @property
-    def unified(self) -> "TicketingEmitterWrapper":
+    def unified(self) -> UnifiedEmitter:
         """
         Get the unified instruction emitter with ticketing support.
         
@@ -406,8 +351,7 @@ class AsmEmitter:
             )
             # Share the lines buffer
             base_emitter._lines = self.lines
-            # Wrap with ticketing support
-            self._unified_emitter = TicketingEmitterWrapper(base_emitter, self)
+            self._unified_emitter = base_emitter
         return self._unified_emitter
     
     def _get_architecture(self) -> str:
@@ -426,31 +370,8 @@ class AsmEmitter:
     def emit_instruction(self, instr):
         """
         Emit an instruction object directly.
-
-        Automatically issues VMEM/LGKM tickets for memory operations based on
-        instruction categorization. This ensures uniform, centralized ticketing
-        for all emitted instructions.
         """
-        from .instruction_categories import InstructionCategory, categorize_instruction
-
-        mnemonic = getattr(instr, "mnemonic", None)
-
-        # Issue tickets for memory operations based on instruction category
-        if mnemonic:
-            category = categorize_instruction(mnemonic)
-
-            if category == InstructionCategory.VMEM:
-                self.ticketing.next_vmem_ticket()
-            elif category == InstructionCategory.LGKM:
-                self.ticketing.next_lgkm_ticket()
-
         self.lines.append(str(instr))
-
-        # Hazard mitigation (pass mnemonic directly, not full instruction string)
-        if mnemonic:
-            mitigation = self.hazard_detector.get_mitigation(mnemonic)
-            if mitigation:
-                self.lines.append(str(mitigation))
 
         # Debug mode: add barriers after every instruction for debugging race conditions
         # Set WAVE_DEBUG_BARRIERS=1 to enable
@@ -458,6 +379,7 @@ class AsmEmitter:
 
         if os.environ.get("WAVE_DEBUG_BARRIERS", "0") == "1":
             skip_mnemonics = {"s_barrier", "s_waitcnt", "s_endpgm", "s_sleep", "s_nop"}
+            mnemonic = getattr(instr, "mnemonic", None)
             if mnemonic and mnemonic.lower() not in skip_mnemonics:
                 self.lines.append("    s_waitcnt vmcnt(0)")
                 self.lines.append("    s_waitcnt lgkmcnt(0)")
@@ -692,7 +614,7 @@ class AsmEmitter:
         Args:
             mfma_instruction: MFMA instruction name (e.g., "v_mfma_f32_16x16x16_f16")
         """
-        if self.scoreboard is not None:
+        if self.scoreboard is not None and self.latency_provider is not None:
             self._mfma_last_cycle = self.scoreboard.current_cycle
             latency = self.latency_provider.get_latency(mfma_instruction)
             if latency:
@@ -704,7 +626,7 @@ class AsmEmitter:
 
         Inserts s_nop if needed based on MFMA→AGPR read latency from database.
         """
-        if self.scoreboard is None or self._mfma_last_cycle is None:
+        if self.scoreboard is None or self.latency_provider is None or self._mfma_last_cycle is None:
             return
 
         # Check if enough cycles have elapsed
@@ -783,31 +705,12 @@ class AsmEmitter:
     # ---- synchronization and LDS helpers ----
     def emit_barrier(self):
         """
-        Emit a shared memory barrier with optimal LGKM wait coalescing.
+        Emit a shared memory barrier.
 
-        This drains all outstanding LGKM operations (lgkmcnt(0)) only if needed,
-        then emits the workgroup barrier (s_barrier).
-
-        Coalescing: If no LGKM operations are outstanding or we've already
-        drained to lgkmcnt(0) since the last LGKM producer, we skip the wait.
+        Note: Ticketing-based wait coalescing now lives in the kernel IR path.
+        For legacy/direct emission, we conservatively drain LGKM before barrier.
         """
-        # Check if there are outstanding LGKM operations that need draining
-        # _lgkm_last_ticket >= 0 means at least one LGKM op has been issued
-        # _lgkm_last_wait_threshold != 0 means we haven't already drained to 0
-        has_outstanding_lgkm = (
-            self.ticketing._lgkm_last_ticket >= 0
-            and self.ticketing._lgkm_last_wait_threshold != 0
-        )
-
-        # Emit lgkmcnt(0) only if there are outstanding LGKM operations
-        if has_outstanding_lgkm:
-            self.unified.s_waitcnt("lgkmcnt(0)")
-
-        # Always record that we've observed an lgkmcnt(0) at this barrier
-        # This prevents redundant waits after the barrier until new LGKM ops occur
-        self.ticketing.observe_lgkm_wait(0)
-
-        # Emit the workgroup synchronization barrier
+        self.unified.s_waitcnt("lgkmcnt(0)")
         self.unified.s_barrier()
 
     def emit_lds_write_b32(self, addr_vreg: int, src_vreg: int):
