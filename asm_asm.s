@@ -90,12 +90,12 @@ loop_0_body:
     v_mov_b32 v16, 0xfffff000  // materialize -4096
     v_mul_lo_u32 v18, v17, v16  // floor(tid_y/2 + floor(tid_x/64)/4) * -4096
     v_add_u32 v16, v13, v18  // add
-    v_lshlrev_b32 v17, 10, v15  // floor(tid_x/64) << 10
-    v_add_u32 v18, v16, v17  // add
+    v_lshlrev_b32 v13, 10, v15  // floor(tid_x/64) << 10
+    v_add_u32 v17, v16, v13  // add
     v_lshlrev_b32 v16, 11, v1  // tid_y << 11
-    v_add_u32 v19, v18, v16  // add
+    v_add_u32 v18, v17, v16  // add
     s_nop 0  // hazard mitigation
-    v_readfirstlane_b32 s8, v19
+    v_readfirstlane_b32 s8, v18
     s_mov_b32 m0, s8
     buffer_load_dwordx4 v14, s[16:19], 0 offen lds  // gather 16B
     // gather_to_lds: 16B from Value(%reinterpret_cast_2 = memref.reinterpret_cast %1 to offset: [0], sizes: [1073741822], strides: [1] : memref<f16> to memref<1073741822xf16, strided<[1]>>) to LDS
@@ -105,11 +105,11 @@ loop_0_body:
     v_add_u32 v8, v10, v11  // add
     v_mov_b32 v9, s3  // wgid_y from s3
     v_lshl_add_u32 v10, v9, 13, v8  // fused: (kv40 << 13) + kv39
-    v_add_u32 v8, v17, v16  // add
+    v_add_u32 v8, v13, v16  // add
     v_lshrrev_b32 v11, 1, v1  // tid_y >> 1 (div by 2)
     v_lshrrev_b32 v12, 2, v15  // floor(tid_x/64) >> 2 (div by 4)
-    v_add_u32 v14, v11, v12  // add
-    v_and_b32 v11, 0, v14  // mod 1 (and)
+    v_add_u32 v13, v11, v12  // add
+    v_and_b32 v11, 0, v13  // mod 1 (and)
     v_lshl_add_u32 v12, v11, 12, v8  // fused: (kv47 << 12) + kv43
     s_nop 0  // hazard mitigation
     v_readfirstlane_b32 s8, v12
@@ -124,49 +124,35 @@ loop_0_body:
     v_and_b32 v11, 15, v2  // mod 16 (and)
     v_lshlrev_b32 v2, 7, v11  // Mod(tid_x, 16) << 7
     v_add_u32 v12, v8, v2  // add
-    v_add_u32 v14, v12, v16  // add
-    ds_read_b64 v[16:17], v14 offset:0  // LDS load 8B @ offset 0
-    ds_read_b64 v[18:19], v14 offset:32  // LDS load 8B @ offset 32
-    ds_read_b64 v[20:21], v14 offset:64  // LDS load 8B @ offset 64
-    ds_read_b64 v[22:23], v14 offset:96  // LDS load 8B @ offset 96
-    v_add_u32 v12, v13, v8  // add
-    v_add_u32 v13, v12, v2  // add
-    v_lshlrev_b32 v12, 11, v15  // floor(tid_x/64) << 11
-    v_add_u32 v14, v13, v12  // add
-    ds_read_b64 v[24:25], v14 offset:0  // LDS load 8B @ offset 0
-    v_mov_b32 v13, 0x1020  // imm = 4128
-    v_add_u32 v14, v13, v8  // add
-    v_add_u32 v13, v14, v2  // add
-    v_add_u32 v14, v13, v12  // add
-    ds_read_b64 v[26:27], v14 offset:0  // LDS load 8B @ offset 0
-    v_mov_b32 v13, 0x1040  // imm = 4160
-    v_add_u32 v14, v13, v8  // add
-    v_add_u32 v13, v14, v2  // add
-    v_add_u32 v14, v13, v12  // add
-    ds_read_b64 v[28:29], v14 offset:0  // LDS load 8B @ offset 0
-    v_mov_b32 v13, 0x1060  // imm = 4192
-    v_add_u32 v14, v13, v8  // add
-    v_add_u32 v8, v14, v2  // add
-    v_add_u32 v2, v8, v12  // add
-    ds_read_b64 v[12:13], v2 offset:0  // LDS load 8B @ offset 0
+    v_add_u32 v13, v12, v16  // add
+    ds_read_b64 v[16:17], v13 offset:0  // LDS load 8B @ offset 0
+    ds_read_b64 v[18:19], v13 offset:32  // LDS load 8B @ offset 32
+    ds_read_b64 v[20:21], v13 offset:64  // LDS load 8B @ offset 64
+    ds_read_b64 v[22:23], v13 offset:96  // LDS load 8B @ offset 96
+    v_add_u32 v12, v8, v2  // add
+    v_lshl_add_u32 v2, v15, 11, v12  // fused: (kv26 << 11) + kv65
+    ds_read_b64 v[12:13], v2 offset:4096  // LDS load 8B @ offset 4096
+    ds_read_b64 v[24:25], v2 offset:4128  // LDS load 8B @ offset 4128
+    ds_read_b64 v[26:27], v2 offset:4160  // LDS load 8B @ offset 4160
+    ds_read_b64 v[28:29], v2 offset:4192  // LDS load 8B @ offset 4192
     s_waitcnt lgkmcnt(0)
-    v_mfma_f32_16x16x16_f16 v[4:7], v[24:25], v[16:17], v[4:7]  // MFMA with accumulator (in-place)
+    v_mfma_f32_16x16x16_f16 v[4:7], v[12:13], v[16:17], v[4:7]  // MFMA with accumulator (in-place)
     s_waitcnt lgkmcnt(0)
-    v_mfma_f32_16x16x16_f16 v[4:7], v[26:27], v[18:19], v[4:7]  // MFMA with accumulator (in-place)
+    v_mfma_f32_16x16x16_f16 v[4:7], v[24:25], v[18:19], v[4:7]  // MFMA with accumulator (in-place)
     s_waitcnt lgkmcnt(0)
-    v_mfma_f32_16x16x16_f16 v[4:7], v[28:29], v[20:21], v[4:7]  // MFMA with accumulator (in-place)
+    v_mfma_f32_16x16x16_f16 v[4:7], v[26:27], v[20:21], v[4:7]  // MFMA with accumulator (in-place)
     s_waitcnt lgkmcnt(0)
-    v_mfma_f32_16x16x16_f16 v[4:7], v[12:13], v[22:23], v[4:7]  // MFMA with accumulator (in-place)
+    v_mfma_f32_16x16x16_f16 v[4:7], v[28:29], v[22:23], v[4:7]  // MFMA with accumulator (in-place)
 loop_0_latch:
     s_add_u32 s24, s24, s25  // loop 0 counter += step
     s_branch loop_0_header
 loop_0_exit:
     v_lshlrev_b32 v2, 6, v1  // tid_y << 6
-    v_lshl_add_u32 v1, v11, 2, v2  // fused: (kv53 << 2) + kv91
-    v_lshl_add_u32 v2, v9, 7, v1  // fused: (kv40 << 7) + kv92
-    v_lshl_add_u32 v1, v10, 12, v2  // fused: (kv51 << 12) + kv94
-    v_lshl_add_u32 v2, v15, 14, v1  // fused: (kv26 << 14) + kv96
-    v_lshl_add_u32 v1, v3, 15, v2  // fused: (kv21 << 15) + kv98
+    v_lshl_add_u32 v1, v11, 2, v2  // fused: (kv53 << 2) + kv78
+    v_lshl_add_u32 v2, v9, 7, v1  // fused: (kv40 << 7) + kv79
+    v_lshl_add_u32 v1, v10, 12, v2  // fused: (kv51 << 12) + kv81
+    v_lshl_add_u32 v2, v15, 14, v1  // fused: (kv26 << 14) + kv83
+    v_lshl_add_u32 v1, v3, 15, v2  // fused: (kv21 << 15) + kv85
     s_waitcnt vmcnt(0)
     buffer_store_dword v[4:4], v1, s[12:15], 0 offen  // store 4B @ offset 0
     s_waitcnt vmcnt(0)
