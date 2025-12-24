@@ -535,6 +535,72 @@ struct DecomposeFatRawBufferCast
   }
 };
 
+struct DecomposeGatherToLDS
+    : public OpConversionPattern<amdgpu::GatherToLDSOp> {
+  using Base::Base;
+
+  LogicalResult
+  matchAndRewrite(amdgpu::GatherToLDSOp gatherOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = gatherOp.getLoc();
+    auto srcType = cast<MemRefType>(gatherOp.getSrc().getType());
+    auto dstType = cast<MemRefType>(gatherOp.getDst().getType());
+    unsigned srcRank = srcType.getRank();
+    unsigned dstRank = dstType.getRank();
+
+    if (srcRank == 0 && dstRank == 0)
+      return rewriter.notifyMatchFailure(gatherOp, "already 0D memrefs");
+
+    // Decompose source memref.
+    ValueRange srcDecomposed = adaptor.getSrc();
+    auto [srcValid, srcBuffer, srcSizes, srcStrides] =
+        unflattenDescriptor(srcDecomposed, srcType);
+    if (failed(srcValid))
+      return rewriter.notifyMatchFailure(gatherOp,
+                                         "expected src to be decomposed");
+
+    // Decompose destination memref.
+    ValueRange dstDecomposed = adaptor.getDst();
+    auto [dstValid, dstBuffer, dstSizes, dstStrides] =
+        unflattenDescriptor(dstDecomposed, dstType);
+    if (failed(dstValid))
+      return rewriter.notifyMatchFailure(gatherOp,
+                                         "expected dst to be decomposed");
+
+    // Get flattened indices.
+    SmallVector<Value> srcIndices = flatten(adaptor.getSrcIndices());
+    SmallVector<Value> dstIndices = flatten(adaptor.getDstIndices());
+
+    // Compute linearized offsets and apply to buffers.
+    unsigned srcTypeBit = srcType.getElementType().getIntOrFloatBitWidth();
+    unsigned dstTypeBit = dstType.getElementType().getIntOrFloatBitWidth();
+
+    Type srcElementType = srcType.getElementType();
+    Type dstElementType = dstType.getElementType();
+
+    Value srcPtr =
+        getFlattenMemref(rewriter, loc, srcBuffer, srcElementType, srcSizes,
+                         srcTypeBit, srcStrides, srcIndices);
+    Value dstPtr =
+        getFlattenMemref(rewriter, loc, dstBuffer, dstElementType, dstSizes,
+                         dstTypeBit, dstStrides, dstIndices);
+
+    // Convert to 0D memrefs.
+    auto src0DType = make0DMemRefType(srcType);
+    auto dst0DType = make0DMemRefType(dstType);
+
+    Value src0D = fromPtr(rewriter, loc, src0DType, srcPtr);
+    Value dst0D = fromPtr(rewriter, loc, dst0DType, dstPtr);
+
+    // Create the gather_to_lds operation with 0D memrefs and no indices.
+    rewriter.replaceOpWithNewOp<amdgpu::GatherToLDSOp>(
+        gatherOp, src0D, ValueRange{}, dst0D, ValueRange{},
+        gatherOp.getTransferTypeAttr());
+
+    return success();
+  }
+};
+
 class MemrefDecompositionPass
     : public water::impl::WaterMemrefDecompositionPassBase<
           MemrefDecompositionPass> {
@@ -562,12 +628,19 @@ public:
           return resultType.getRank() == 0;
         });
 
+    target.addDynamicallyLegalOp<amdgpu::GatherToLDSOp>([&](Operation *op) {
+      auto gatherOp = cast<amdgpu::GatherToLDSOp>(op);
+      auto srcType = cast<MemRefType>(gatherOp.getSrc().getType());
+      auto dstType = cast<MemRefType>(gatherOp.getDst().getType());
+      return srcType.getRank() == 0 && dstType.getRank() == 0;
+    });
+
     RewritePatternSet patterns(ctx);
     patterns
         .add<DecomposeLoadOp<memref::LoadOp>, DecomposeStoreOp<memref::StoreOp>,
              DecomposeLoadOp<vector::LoadOp>, DecomposeStoreOp<vector::StoreOp>,
-             DecomposeReinterpretCast, DecomposeFatRawBufferCast>(typeConverter,
-                                                                  ctx);
+             DecomposeReinterpretCast, DecomposeFatRawBufferCast,
+             DecomposeGatherToLDS>(typeConverter, ctx);
 
     scf::populateSCFStructuralTypeConversionsAndLegality(typeConverter,
                                                          patterns, target);

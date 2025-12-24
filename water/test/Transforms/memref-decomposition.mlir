@@ -193,6 +193,35 @@ func.func @fat_raw_buffer_cast(%arg0: memref<10x20xf32>) -> memref<10x20xf32, #a
   return %0 : memref<10x20xf32, #amdgpu.address_space<fat_raw_buffer>>
 }
 
+// CHECK-LABEL: func.func @gather_to_lds
+// CHECK-SAME: (%[[ARG0:.*]]: memref<128x256xf32>, %[[ARG1:.*]]: memref<64x64xf32, #gpu.address_space<workgroup>>, %[[ARG2:.*]]: index, %[[ARG3:.*]]: index, %[[ARG4:.*]]: index, %[[ARG5:.*]]: index)
+func.func @gather_to_lds(%src: memref<128x256xf32>, %dst: memref<64x64xf32, #gpu.address_space<workgroup>>, %src_i: index, %src_j: index, %dst_i: index, %dst_j: index) {
+  // CHECK-DAG: %[[POISON_DST:.*]] = llvm.mlir.poison : !llvm.struct<(ptr<3>, ptr<3>, i64)>
+  // CHECK-DAG: %[[C0:.*]] = llvm.mlir.constant(0 : index) : i64
+  // CHECK-DAG: %[[POISON_SRC:.*]] = llvm.mlir.poison : !llvm.struct<(ptr, ptr, i64)>
+  // CHECK-DAG: %[[CAST_DST:.*]] = builtin.unrealized_conversion_cast %[[ARG1]]
+  // CHECK-DAG: %[[EXTRACT_DST:.*]] = llvm.extractvalue %[[CAST_DST]][1]
+  // CHECK-DAG: %[[CAST_SRC:.*]] = builtin.unrealized_conversion_cast %[[ARG0]]
+  // CHECK-DAG: %[[EXTRACT_SRC:.*]] = llvm.extractvalue %[[CAST_SRC]][1]
+  // CHECK: %[[SRC_OFF:.*]] = affine.apply #{{.*}}()[%[[ARG2]], %[[ARG3]]]
+  // CHECK: %[[SRC_OFF_CAST:.*]] = arith.index_cast %[[SRC_OFF]]
+  // CHECK: %[[SRC_GEP:.*]] = llvm.getelementptr nusw %[[EXTRACT_SRC]][%[[SRC_OFF_CAST]]]
+  // CHECK: %[[DST_OFF:.*]] = affine.apply #{{.*}}()[%[[ARG4]], %[[ARG5]]]
+  // CHECK: %[[DST_OFF_CAST:.*]] = arith.index_cast %[[DST_OFF]]
+  // CHECK: %[[DST_GEP:.*]] = llvm.getelementptr nusw %[[EXTRACT_DST]][%[[DST_OFF_CAST]]]
+  // CHECK: %[[SRC_INS0:.*]] = llvm.insertvalue %[[SRC_GEP]], %[[POISON_SRC]][0]
+  // CHECK: %[[SRC_INS1:.*]] = llvm.insertvalue %[[SRC_GEP]], %[[SRC_INS0]][1]
+  // CHECK: %[[SRC_INS2:.*]] = llvm.insertvalue %[[C0]], %[[SRC_INS1]][2]
+  // CHECK: %[[SRC_0D:.*]] = builtin.unrealized_conversion_cast %[[SRC_INS2]] : !llvm.struct<(ptr, ptr, i64)> to memref<f32>
+  // CHECK: %[[DST_INS0:.*]] = llvm.insertvalue %[[DST_GEP]], %[[POISON_DST]][0]
+  // CHECK: %[[DST_INS1:.*]] = llvm.insertvalue %[[DST_GEP]], %[[DST_INS0]][1]
+  // CHECK: %[[DST_INS2:.*]] = llvm.insertvalue %[[C0]], %[[DST_INS1]][2]
+  // CHECK: %[[DST_0D:.*]] = builtin.unrealized_conversion_cast %[[DST_INS2]] : !llvm.struct<(ptr<3>, ptr<3>, i64)> to memref<f32, #gpu.address_space<workgroup>>
+  // CHECK: amdgpu.gather_to_lds %[[SRC_0D]][], %[[DST_0D]][] : vector<4xf32>, memref<f32>, memref<f32, #gpu.address_space<workgroup>>
+  amdgpu.gather_to_lds %src[%src_i, %src_j], %dst[%dst_i, %dst_j] : vector<4xf32>, memref<128x256xf32>, memref<64x64xf32, #gpu.address_space<workgroup>>
+  return
+}
+
 func.func private @get_memref() -> memref<10xf32>
 
 // CHECK-LABEL: func.func @scf_for_loop_carried
