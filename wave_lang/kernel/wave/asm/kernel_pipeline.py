@@ -376,6 +376,119 @@ class KernelIRExprEmitter:
         
         return bounds
     
+    def _get_bit_range(self, expr) -> Tuple[int, int]:
+        """
+        Compute the bit range [min_bit, max_bit] of an expression.
+        
+        Returns (min_bit, max_bit) where the expression's value uses bits
+        min_bit through max_bit (inclusive). This enables detecting when
+        two expressions can be combined with OR instead of ADD.
+        
+        For example:
+        - tid_x (0-127) uses bits 0-6
+        - tid_x * 16 (= tid_x << 4) uses bits 4-10
+        - tid_y * 4096 (= tid_y << 12) uses bit 12 only (when tid_y ∈ [0,1])
+        
+        Returns (0, 31) as a conservative fallback when range cannot be determined.
+        """
+        import sympy
+        from sympy import Symbol, Mul, Add, Integer, floor, Mod
+        
+        bounds = self._get_symbol_bounds()
+        
+        def get_max_value(e) -> int:
+            """Get the maximum value of an expression given symbol bounds."""
+            if isinstance(e, (int, Integer)):
+                return abs(int(e))
+            
+            if isinstance(e, Symbol):
+                if e in bounds:
+                    return bounds[e][1]
+                return 65535  # Conservative default
+            
+            if isinstance(e, Mul):
+                result = 1
+                for arg in e.args:
+                    result *= get_max_value(arg)
+                return result
+            
+            if isinstance(e, Add):
+                return sum(get_max_value(arg) for arg in e.args)
+            
+            if isinstance(e, Mod):
+                # Mod(x, n) is in [0, n-1]
+                return int(e.args[1]) - 1
+            
+            if getattr(e, 'func', None) == floor:
+                inner = e.args[0]
+                # floor(x/n) where x has max M gives floor(M/n)
+                if isinstance(inner, Mul):
+                    # Look for pattern like x * (1/n) = x/n
+                    divisor = 1
+                    var_max = 1
+                    for arg in inner.args:
+                        if isinstance(arg, sympy.Rational) and not isinstance(arg, Integer):
+                            divisor = int(arg.q)
+                        else:
+                            var_max *= get_max_value(arg)
+                    return var_max // divisor if divisor > 1 else var_max
+                return get_max_value(inner)
+            
+            return 65535  # Conservative fallback
+        
+        def get_shift_amount(e) -> int:
+            """
+            Get the left shift amount if expression is of form (base << N).
+            Returns 0 if not a pure left-shifted expression.
+            """
+            if isinstance(e, Mul):
+                # Look for power-of-2 multiplier
+                for arg in e.args:
+                    if isinstance(arg, (int, Integer)):
+                        val = int(arg)
+                        if val > 0 and (val & (val - 1)) == 0:
+                            return val.bit_length() - 1
+            return 0
+        
+        def get_base_max(e, shift: int) -> int:
+            """Get max value of base when expression is base << shift."""
+            if shift == 0:
+                return get_max_value(e)
+            
+            if isinstance(e, Mul):
+                # Remove the shift multiplier and compute max of remaining
+                base_max = 1
+                shift_val = 1 << shift
+                found_shift = False
+                for arg in e.args:
+                    if isinstance(arg, (int, Integer)) and int(arg) == shift_val and not found_shift:
+                        found_shift = True
+                        continue
+                    base_max *= get_max_value(arg)
+                return base_max
+            
+            return get_max_value(e) >> shift
+        
+        # Compute bit range
+        shift = get_shift_amount(expr)
+        if shift > 0:
+            base_max = get_base_max(expr, shift)
+            if base_max == 0:
+                return (shift, shift)
+            max_bit = shift + (base_max.bit_length() - 1)
+            return (shift, max_bit)
+        
+        # No shift - starts at bit 0
+        max_val = get_max_value(expr)
+        if max_val == 0:
+            return (0, 0)
+        max_bit = max_val.bit_length() - 1
+        return (0, max_bit)
+    
+    def _bits_overlap(self, range1: Tuple[int, int], range2: Tuple[int, int]) -> bool:
+        """Check if two bit ranges overlap."""
+        return range1[1] >= range2[0] and range2[1] >= range1[0]
+    
     def get_or_emit(self, expr, cache_in_global: bool = False) -> KVReg:
         """
         Get a VGPR containing the value of expr, emitting instructions if needed.
@@ -654,18 +767,39 @@ class KernelIRExprEmitter:
         
         # Handle addition
         if isinstance(expr, Add):
-            # Emit first term
+            # Emit first term and track its bit range
             result = self.get_or_emit(expr.args[0])
+            result_range = self._get_bit_range(expr.args[0])
             
-            # Add remaining terms
+            # Add/OR remaining terms based on bit overlap
             for arg in expr.args[1:]:
                 arg_reg = self.get_or_emit(arg)
+                arg_range = self._get_bit_range(arg)
                 new_result = self.ctx.vreg()
-                self.ctx.program.emit(KInstr(
-                    "v_add_u32", (new_result,), (result, arg_reg),
-                    comment="add"
-                ))
+                
+                # Check if we can use OR instead of ADD
+                # OR is valid when bit ranges don't overlap
+                if not self._bits_overlap(result_range, arg_range):
+                    self.ctx.program.emit(KInstr(
+                        "v_or_b32", (new_result,), (result, arg_reg),
+                        comment=f"or (bits {result_range[0]}-{result_range[1]} + {arg_range[0]}-{arg_range[1]})"
+                    ))
+                else:
+                    self.ctx.program.emit(KInstr(
+                        "v_add_u32", (new_result,), (result, arg_reg),
+                        comment="add"
+                    ))
+                
                 result = new_result
+                # Update result range (conservative: union of ranges for OR, expanded for ADD)
+                if not self._bits_overlap(result_range, arg_range):
+                    # OR: result uses union of bit ranges
+                    result_range = (min(result_range[0], arg_range[0]), 
+                                   max(result_range[1], arg_range[1]))
+                else:
+                    # ADD: result might carry, expand by 1 bit
+                    result_range = (min(result_range[0], arg_range[0]),
+                                   max(result_range[1], arg_range[1]) + 1)
             
             # Cache result (global scope if loop-invariant)
             self._insert_cache(cache_key, result, global_scope=is_invariant)

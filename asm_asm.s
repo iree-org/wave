@@ -123,18 +123,19 @@ loop_0_body:
     v_lshlrev_b32 v8, 3, v10  // floor((Mod(tid_x, 64))/16) << 3
     v_and_b32 v11, 15, v2  // mod 16 (and)
     v_lshlrev_b32 v2, 7, v11  // Mod(tid_x, 16) << 7
-    v_add_u32 v12, v8, v2  // add
-    v_add_u32 v13, v12, v16  // add
+    v_or_b32 v12, v8, v2  // or (bits 3-4 + 7-10)
+    v_or_b32 v13, v12, v16  // or (bits 3-10 + 11-26)
     ds_read_b64 v[16:17], v13 offset:0  // LDS load 8B @ offset 0
     ds_read_b64 v[18:19], v13 offset:32  // LDS load 8B @ offset 32
     ds_read_b64 v[20:21], v13 offset:64  // LDS load 8B @ offset 64
     ds_read_b64 v[22:23], v13 offset:96  // LDS load 8B @ offset 96
-    v_add_u32 v12, v8, v2  // add
-    v_lshl_add_u32 v2, v15, 11, v12  // fused: (kv26 << 11) + kv65
-    ds_read_b64 v[12:13], v2 offset:4096  // LDS load 8B @ offset 4096
-    ds_read_b64 v[24:25], v2 offset:4128  // LDS load 8B @ offset 4128
-    ds_read_b64 v[26:27], v2 offset:4160  // LDS load 8B @ offset 4160
-    ds_read_b64 v[28:29], v2 offset:4192  // LDS load 8B @ offset 4192
+    v_or_b32 v12, v8, v2  // or (bits 3-4 + 7-10)
+    v_lshlrev_b32 v2, 11, v15  // floor(tid_x/64) << 11
+    v_or_b32 v8, v12, v2  // or (bits 3-10 + 11-20)
+    ds_read_b64 v[12:13], v8 offset:4096  // LDS load 8B @ offset 4096
+    ds_read_b64 v[24:25], v8 offset:4128  // LDS load 8B @ offset 4128
+    ds_read_b64 v[26:27], v8 offset:4160  // LDS load 8B @ offset 4160
+    ds_read_b64 v[28:29], v8 offset:4192  // LDS load 8B @ offset 4192
     s_waitcnt lgkmcnt(0)
     v_mfma_f32_16x16x16_f16 v[4:7], v[12:13], v[16:17], v[4:7]  // MFMA with accumulator (in-place)
     s_waitcnt lgkmcnt(0)
@@ -148,7 +149,7 @@ loop_0_latch:
     s_branch loop_0_header
 loop_0_exit:
     v_lshlrev_b32 v2, 6, v1  // tid_y << 6
-    v_lshl_add_u32 v1, v11, 2, v2  // fused: (kv53 << 2) + kv78
+    v_lshl_or_b32 v1, v11, 2, v2  // fused: (kv53 << 2) | kv78
     v_lshl_add_u32 v2, v9, 7, v1  // fused: (kv40 << 7) + kv79
     v_lshl_add_u32 v1, v10, 12, v2  // fused: (kv51 << 12) + kv81
     v_lshl_add_u32 v2, v15, 14, v1  // fused: (kv26 << 14) + kv83
