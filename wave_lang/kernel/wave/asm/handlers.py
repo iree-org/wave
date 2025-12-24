@@ -1253,14 +1253,9 @@ class OperationHandlers:
             from .kernel_ir import KInstr, KImm, KVReg, KPhysVReg, KRegRange
             from .utils import build_element_byte_offset_exprs
             
-            # IMPORTANT: Clear the expression cache before computing store addresses.
-            # When there are multiple store operations (one per element), each store's
-            # address computation uses the expression emitter. Without clearing the cache,
-            # subsequent stores might return cached virtual registers that were already
-            # allocated to physical registers that hold accumulator values, causing
-            # the address computation to clobber accumulator data before it's stored.
+            # Get expression emitter - loop-invariant expressions are cached globally,
+            # loop-varying expressions are never cached, so no cache clearing needed.
             expr_emitter = self.walker.kernel_ctx.expr_emitter
-            expr_emitter.clear_cache()
             
             # Compute address - allocate virtual voffset
             byte_exprs = build_element_byte_offset_exprs(
