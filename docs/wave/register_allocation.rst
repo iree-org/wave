@@ -15,16 +15,20 @@ Overview
 ========
 
 The ASM backend uses a structured IR to represent entire kernels before physical
-register allocation. This enables:
+register allocation. This is the only compilation path - there is no legacy streaming
+allocation mode. This enables:
 
 1. **Global register allocation**: A single allocator manages all VGPRs and SGPRs
    across the entire kernel, enabling optimal register reuse.
 
-2. **Liveness analysis**: SSA-based live range computation determines when 
-   registers can be safely reused.
+2. **CFG-based liveness analysis**: Control flow graph construction with backward
+   dataflow analysis correctly handles loops and live ranges across iterations.
 
 3. **Constraint-aware allocation**: The allocator respects alignment requirements,
-   contiguous range needs (for MFMA accumulators), and ABI-mandated precoloring.
+   contiguous range needs (for MFMA accumulators), loop SGPR reservation, and 
+   ABI-mandated precoloring.
+
+4. **Peephole optimization**: Post-allocation instruction fusion for reduced VALU count.
 
 Architecture
 ============
@@ -34,24 +38,89 @@ The register allocation pipeline follows this flow::
     MLIR Operations
          │
          ▼
+    ┌─────────────────────────┐
+    │  kernel_pipeline.py     │  KernelCompilationContext, KernelIRExprEmitter
+    └────────┬────────────────┘
+             │
+             ▼
     ┌─────────────────┐
     │  kernel_ir.py   │  Virtual register IR (KVReg, KSReg, KInstr)
     └────────┬────────┘
              │
              ▼
     ┌─────────────────────┐
-    │ kernel_liveness.py  │  Compute live ranges from SSA defs/uses
+    │ kernel_liveness.py  │  CFG-based backward dataflow liveness analysis
     └────────┬────────────┘
              │
              ▼
     ┌─────────────────────┐
-    │ kernel_regalloc.py  │  Linear scan allocation
+    │ kernel_regalloc.py  │  Linear scan allocation with constraints
+    └────────┬────────────┘
+             │
+             ▼
+    ┌─────────────────────┐
+    │ kernel_pipeline.py  │  Peephole optimization and hazard mitigation
     └────────┬────────────┘
              │
              ▼
     ┌─────────────────────┐
     │ kernel_generator.py │  Substitute physical registers, emit assembly
     └─────────────────────┘
+
+Kernel Compilation Context (kernel_pipeline.py)
+===============================================
+
+The ``KernelCompilationContext`` is the central orchestration point for kernel IR
+compilation. It manages the entire compilation flow from MLIR to assembly.
+
+Key Components
+--------------
+
+- **KernelIRExprEmitter**: Expression emitter with scoped CSE and algebraic simplification
+- **KernelProgram**: Container for all kernel IR instructions
+- **Symbol bounds tracking**: Provides bounds for tid_x, tid_y, wgid_x, etc. for simplification
+- **Loop management**: begin_loop/end_loop with SGPR reservation
+
+Expression Emitter
+------------------
+
+The ``KernelIRExprEmitter`` converts SymPy expressions to kernel IR instructions with
+several key optimizations:
+
+**Scoped CSE (Common Subexpression Elimination)**::
+
+    # Global scope for loop-invariant expressions
+    with emitter.scope("loop_body"):
+        # Local scope that gets cleared after the loop
+        addr = emitter.get_or_emit(base + tid_x * stride)
+    # Loop-invariant expressions (tid_x, wgid_x) remain cached
+
+**Loop-Invariant Detection**:
+
+Expressions containing only these symbols are considered loop-invariant and cached globally:
+
+- Thread IDs: ``tid_x``, ``tid_y``, ``tid_z``
+- Workgroup IDs: ``wgid_x``, ``wgid_y``, ``wgid_z``
+- Integer constants
+
+**Algebraic Simplification**:
+
+Uses symbol bounds from kernel info to simplify expressions::
+
+    # When tid_x < 64 (single wave):
+    floor(tid_x / 64) → 0  # Eliminated entirely
+    
+    # When bit ranges don't overlap:
+    (row * 256) + col → (row << 8) | col  # ADD becomes OR
+
+**Bit Range Analysis**:
+
+The emitter tracks the effective bit range of expressions to detect non-overlapping
+additions that can be converted to OR operations::
+
+    # If tid_x uses bits 0-5 and (row * 256) uses bits 8+:
+    # The addition can use v_or_b32 instead of v_add_u32
+    # Or fuse into v_lshl_or_b32 if preceded by a shift
 
 Kernel IR (kernel_ir.py)
 ========================
@@ -127,16 +196,19 @@ The ``KOpcode`` enum covers all instructions needed by the ASM backend:
     V_LSHLREV_B32, V_LSHRREV_B32, V_ASHRREV_I32
     V_LSHL_ADD_U32, V_LSHL_OR_B32, V_ADD_LSHL_U32, V_OR3_B32
     V_BFE_U32
+    V_READFIRSTLANE_B32
 
 **Scalar Arithmetic**::
 
     S_ADD_U32, S_MUL_I32, S_LSHL_B32, S_LSHR_B32, S_AND_B32, S_OR_B32
     S_ADD_U64, S_LSHL_B64
+    S_CMP_LT_U32
 
 **Memory Operations**::
 
     S_LOAD_DWORD, S_LOAD_DWORDX2, S_LOAD_DWORDX4
     BUFFER_LOAD_DWORD, BUFFER_LOAD_DWORDX2, BUFFER_LOAD_DWORDX4
+    BUFFER_STORE_DWORD, BUFFER_STORE_DWORDX2, BUFFER_STORE_DWORDX4
     GLOBAL_LOAD_DWORD, GLOBAL_LOAD_DWORDX2, GLOBAL_LOAD_DWORDX4
     DS_READ_B32, DS_READ_B64, DS_READ_B128
     DS_WRITE_B32, DS_WRITE_B64, DS_WRITE_B128
@@ -149,6 +221,8 @@ The ``KOpcode`` enum covers all instructions needed by the ASM backend:
 **Control Flow**::
 
     S_WAITCNT, S_BARRIER, S_NOP, S_ENDPGM
+    S_CBRANCH_SCC1, S_BRANCH
+    LABEL
 
 Kernel ABI
 ----------
@@ -158,6 +232,7 @@ The ``KernelABI`` class defines precolored registers mandated by the GPU ABI:
 - ``v0``: Contains packed flat thread ID (tid_x, tid_y, tid_z)
 - ``s[0:1]``: Kernarg pointer (64-bit address)
 - ``s2, s3, s4``: Workgroup IDs (optional, depends on kernel)
+- ``s24+``: Reserved for loop counter SGPRs
 
 These registers cannot be allocated to other values.
 
@@ -181,8 +256,62 @@ instruction patterns::
 Liveness Analysis (kernel_liveness.py)
 ======================================
 
-Since MLIR input is SSA (each value defined exactly once), liveness analysis
-is straightforward.
+The liveness analysis uses CFG-based backward dataflow analysis to correctly
+handle loops and compute accurate live ranges.
+
+Control Flow Graph
+------------------
+
+The ``CFG`` class represents the control flow graph:
+
+- **BasicBlock**: A straight-line sequence of instructions with a single entry/exit
+- **Edges**: Successors and predecessors between blocks
+- **Loop detection**: Identifies back-edges that indicate loop structures
+
+CFG Construction::
+
+    cfg = build_cfg(program.instructions)
+    
+    # cfg.blocks: List of BasicBlock
+    # Each block has: start_idx, end_idx, successors, predecessors
+
+Backward Dataflow Analysis
+--------------------------
+
+For each basic block B, the analysis computes:
+
+- **use[B]**: Registers used before being defined in B
+- **def[B]**: Registers defined in B
+- **live_in[B]**: Registers live at the entry of B
+- **live_out[B]**: Registers live at the exit of B
+
+The dataflow equations::
+
+    live_in[B] = use[B] ∪ (live_out[B] - def[B])
+    live_out[B] = ∪ live_in[S] for all successors S of B
+
+The algorithm iterates until a fixed point is reached.
+
+Loop Handling
+-------------
+
+For loops, the analysis correctly extends live ranges:
+
+1. **Back-edge detection**: Identifies edges from loop latch to loop header
+2. **Live range extension**: Values live at the loop header are extended through all loop iterations
+3. **Loop-carried values**: Accumulators and induction variables stay live across the entire loop
+
+Example::
+
+    # tid_x defined before loop, used in loop body
+    # The live range extends from definition through all loop iterations
+    
+    loop_header:
+        # tid_x is in live_in[loop_header]
+        # ... use tid_x ...
+    loop_latch:
+        s_branch loop_header
+        # tid_x is in live_out[loop_latch]
 
 Live Range
 ----------
@@ -190,24 +319,27 @@ Live Range
 A ``LiveRange`` represents when a virtual register is "alive":
 
 - **start**: Instruction index where the register is defined
-- **end**: Instruction index of the last use
+- **end**: Instruction index of the last use (extended for loops)
 - **size**: Number of consecutive registers (for ranges)
 - **alignment**: Required alignment (for ranges)
 
 Example::
 
     # kv0 defined at instruction 5, last used at instruction 12
-    LiveRange(reg=KVReg(0), start=5, end=12, size=1, alignment=1)
+    # But if inside a loop from 8-15, extended to 15
+    LiveRange(reg=KVReg(0), start=5, end=15, size=1, alignment=1)
 
 Computing Liveness
 ------------------
 
 The ``compute_liveness()`` function:
 
-1. Scans instructions to find definition points for each virtual register
-2. Scans instructions to find use points for each virtual register
-3. Creates live ranges from ``(def_point, last_use_point)``
-4. Computes register pressure statistics
+1. Builds the CFG from the instruction stream
+2. Detects if loops are present using back-edge analysis
+3. Computes block-local use/def sets
+4. Runs iterative dataflow to compute live_in/live_out
+5. Extends live ranges based on CFG liveness
+6. Computes register pressure statistics
 
 Example::
 
@@ -239,7 +371,7 @@ SSA Validation
 The ``validate_ssa()`` function verifies:
 
 1. Each virtual register is defined exactly once
-2. Each use is dominated by its definition (def comes before use)
+2. Each use is dominated by its definition (CFG-dominance aware)
 
 Register Allocation (kernel_regalloc.py)
 ========================================
@@ -266,6 +398,7 @@ The ``RegPool`` class manages available physical registers:
 - **Single allocation**: Allocate one register from the free list
 - **Range allocation**: Find contiguous block with required alignment
 - **Free**: Return register(s) to the free list
+- **Reserved registers**: s24+ reserved for loop SGPRs, v0 for flat tid
 
 Example::
 
@@ -290,7 +423,20 @@ The allocator respects several types of constraints:
 2. **Alignment**: Some instructions require aligned register bases
 3. **Size**: Range allocations need contiguous blocks
 4. **Precoloring**: ABI registers must use specific physical registers
-5. **Reserved**: Some registers cannot be allocated (already in use)
+5. **Reserved**: Some registers cannot be allocated (v0, s0-s1, s24+)
+
+Loop SGPR Reservation
+---------------------
+
+Loop control SGPRs are reserved at s24 and above to prevent conflicts::
+
+    s24: loop counter
+    s25: loop step
+    s26: loop upper bound
+    s27+: additional loop state for nested loops
+
+This reservation happens in ``KernelCompilationContext.finalize()`` before
+register allocation.
 
 No Spilling
 -----------
@@ -317,12 +463,45 @@ Usage
     
     mapping, stats = allocate_kernel(
         program,
-        reserved_vgprs={0},      # v0 for flat tid
-        reserved_sgprs={0, 1},   # s[0:1] for kernarg
+        reserved_vgprs={0},           # v0 for flat tid
+        reserved_sgprs={0, 1} | set(range(24, 32)),  # s[0:1] for kernarg, s24+ for loops
     )
     
     print(f"Peak VGPRs: {stats.peak_vgprs}")
     print(f"Peak SGPRs: {stats.peak_sgprs}")
+
+Peephole Optimization (kernel_pipeline.py)
+==========================================
+
+After register allocation, the ``_apply_peephole_optimizations()`` pass
+performs local instruction fusion.
+
+Instruction Fusion
+------------------
+
+**Shift + Add → Fused**::
+
+    # Before:
+    v_lshlrev_b32 v5, 8, v3
+    v_add_u32 v6, v5, v4
+    
+    # After:
+    v_lshl_add_u32 v6, v3, 8, v4
+
+**Shift + Or → Fused**::
+
+    # Before:
+    v_lshlrev_b32 v5, 8, v3
+    v_or_b32 v6, v5, v4
+    
+    # After:
+    v_lshl_or_b32 v6, v3, 8, v4
+
+These fusions are applied when:
+
+1. The shift result is only used by the subsequent add/or
+2. The shift amount is an immediate value
+3. The instructions are adjacent after hazard mitigation
 
 Code Generation (kernel_generator.py)
 =====================================
@@ -356,6 +535,37 @@ Special formatting rules are applied for certain instructions:
 
 - LDS operations use space-separated offsets (``offset:N``)
 - Register ranges use bracket notation (``v[4:7]``)
+- s_waitcnt uses combined vmcnt/lgkmcnt format
+
+Pseudo-Instruction Expansion
+----------------------------
+
+Some pseudo-instructions are expanded during generation:
+
+- ``_g2s_srd_copy``: Expands to 4 s_mov_b32 + s_and_b32 + s_or_b32 for G2S SRD setup
+- ``_init_acc_quad``: Expands to 4 v_mov_b32 for MFMA accumulator initialization
+- ``LABEL``: Emits assembly label (e.g., ``loop_0_header:``)
+
+Hazard Mitigation
+=================
+
+The ``_apply_hazard_mitigation()`` pass inserts s_nop instructions to prevent
+hardware hazards.
+
+gfx94x/gfx95x VALU Hazard
+-------------------------
+
+On these architectures, ``v_readfirstlane_b32`` reading a VGPR written by the
+immediately preceding VALU instruction requires a 1-cycle wait.
+
+The hazard detection is precise:
+
+1. Checks if the previous instruction is a VALU (starts with ``v_``)
+2. Checks if the current instruction is ``v_readfirstlane_b32``
+3. Checks if the VGPR written by the VALU is read by readfirstlane
+4. Only inserts ``s_nop 0`` if all conditions are met
+
+This reduces s_nop count from ~46 (blanket insertion) to ~2 (precise insertion).
 
 Debugging
 =========
@@ -366,6 +576,9 @@ Environment Variables
 - ``WAVE_KERNEL_ALLOC_DEBUG=1``: Print allocation/free operations
 - ``WAVE_KERNEL_EMITTER_DEBUG=1``: Print emitter operations
 - ``WAVE_KERNEL_CSE_DEBUG=1``: Print CSE cache hits/misses
+- ``WAVE_DEBUG_LIVENESS=1``: Print liveness analysis results
+- ``WAVE_DEBUG_REGALLOC=1``: Print register allocation decisions
+- ``WAVE_LDS_DSREAD_OFFSET_DEBUG=1``: Print ds_read offset optimization decisions
 
 Example Debug Output
 --------------------
@@ -378,21 +591,12 @@ With ``WAVE_KERNEL_ALLOC_DEBUG=1``::
     [FREE] v1
     [ALLOC] v1 (single)  # Reused!
 
-Integration with KernelEmitter
-==============================
+With ``WAVE_DEBUG_LIVENESS=1``::
 
-The ``KernelEmitter`` (in ``kernel_emitter.py``) uses the kernel IR infrastructure
-indirectly by emitting physical instructions directly with streaming allocation.
-For complex kernels that need full kernel-level allocation, the pipeline would:
-
-1. Build a ``KernelProgram`` using ``KernelBuilder``
-2. Run ``compute_liveness()`` to get live ranges
-3. Run ``allocate_kernel()`` to get physical mapping
-4. Run ``render_program()`` to emit final assembly
-
-The current implementation uses a simpler streaming approach where physical
-registers are allocated immediately during emission, which works well for
-expression-level code.
+    [LIVENESS] Building CFG...
+    [LIVENESS] Found 5 basic blocks
+    [LIVENESS] Detected loop: blocks 2-4
+    [LIVENESS] Extending live range for kv3: 10 -> 45 (loop-carried)
 
 Future Work
 ===========
@@ -411,6 +615,5 @@ Potential enhancements to the register allocation infrastructure:
 4. **AGPR support**: Add accumulator GPR (AGPR) class for MFMA operations
    on architectures that support it
 
-5. **Integration with kernel pipeline**: Use full kernel-level allocation
-   for entire kernels instead of expression-level streaming allocation
-
+5. **Three-operand fusion**: Emit ``v_or3_b32`` when three OR operands
+   are available to further reduce VALU instructions
