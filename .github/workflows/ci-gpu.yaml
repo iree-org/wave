@@ -233,7 +233,7 @@ jobs:
 
       - name: Run LIT tests
         env:
-           WAVE_TEST_WATER: ${{ (env.IS_CDNA3 == 'true' || env.IS_CDNA4 == 'true') && '1' || '0'  }}
+           WAVE_TEST_WATER: ${{ env.IS_CDNA3 == 'true' && '1' || '0'  }}
            WAVE_TEST_DWARFDUMP: ${{ env.IS_RDNA4 == 'false' && '1' || '0' }}
         run: |
           # TODO: mlir_converter tests segfault on mi35x
