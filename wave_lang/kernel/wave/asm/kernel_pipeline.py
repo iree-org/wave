@@ -2072,35 +2072,86 @@ class KernelCompilationContext:
     
     def _apply_hazard_mitigation(self):
         """
-        Apply hazard mitigation to the program.
+        Apply precise hazard mitigation to the program.
         
-        Scans for instruction sequences that may cause hardware hazards
-        on gfx940+ and inserts s_nop instructions to mitigate them.
+        On gfx940+ (CDNA3/4), there's a hazard when v_readfirstlane_b32
+        immediately reads a VGPR that was just written by a VALU instruction.
+        This requires 1 wait state (s_nop 0) between them.
         
-        Primary hazards handled:
-        - VALU->readfirstlane: Requires 1 wait state after v_add before v_readfirstlane
-        - VALU->SGPR->VALU: Requires 2 wait states for SGPR forwarding
+        This implementation is precise: it only inserts s_nop when:
+        1. Current instruction is a VALU that writes a VGPR
+        2. Next instruction is v_readfirstlane_b32
+        3. v_readfirstlane reads the VGPR that the VALU just wrote
         """
-        detector = HazardDetector()
+        instructions = self.program.instructions
+        if not instructions:
+            return
         
-        # Scan through instructions and build list with mitigations
-        new_instructions = []
+        # Find positions where we need to insert s_nop
+        insertions = []
         
-        for instr in self.program.instructions:
-            new_instructions.append(instr)
+        for i in range(len(instructions) - 1):
+            instr = instructions[i]
+            next_instr = instructions[i + 1]
             
-            # Check if this instruction needs hazard mitigation
-            name = instr.name
-            if detector.check_valu_hazard(name):
-                # Insert s_nop 0 after hazardous VALU instructions
-                # This provides the 1 wait cycle needed before v_readfirstlane
-                new_instructions.append(KInstr(
-                    "s_nop", (), (KImm(0),),
-                    comment="hazard mitigation"
-                ))
+            # Check if next instruction is v_readfirstlane_b32
+            if next_instr.name != "v_readfirstlane_b32":
+                continue
+            
+            # Check if current instruction is a VALU that writes a VGPR
+            if not self._is_valu_vgpr_write(instr):
+                continue
+            
+            # Check if the VALU writes to a register that readfirstlane reads
+            if self._writes_to_readfirstlane_src(instr, next_instr):
+                insertions.append(i + 1)
         
-        # Replace program instructions
-        self.program.instructions = new_instructions
+        # Insert s_nop instructions in reverse order to preserve indices
+        for idx in reversed(insertions):
+            instructions.insert(idx, KInstr(
+                "s_nop", (), (KImm(0),),
+                comment="hazard mitigation"
+            ))
+    
+    def _is_valu_vgpr_write(self, instr: KInstr) -> bool:
+        """Check if instruction is a VALU that writes a VGPR."""
+        # Must be a vector instruction
+        if not instr.name.startswith("v_"):
+            return False
+        # Must have at least one def (destination)
+        if not instr.defs:
+            return False
+        # Exclude v_readfirstlane (reads VGPR, writes SGPR)
+        if instr.name.startswith("v_readfirstlane"):
+            return False
+        return True
+    
+    def _writes_to_readfirstlane_src(self, valu_instr: KInstr, readfirstlane_instr: KInstr) -> bool:
+        """Check if VALU writes to a VGPR that v_readfirstlane reads."""
+        if not valu_instr.defs or not readfirstlane_instr.uses:
+            return False
+        
+        # Get the VGPR(s) written by the VALU
+        written_regs = set()
+        for def_reg in valu_instr.defs:
+            if isinstance(def_reg, KVReg):
+                written_regs.add(def_reg.id)
+            elif isinstance(def_reg, KRegRange) and isinstance(def_reg.base_reg, KVReg):
+                for i in range(def_reg.count):
+                    written_regs.add(def_reg.base_reg.id + i)
+        
+        # Get the VGPR read by v_readfirstlane (first use operand)
+        for use_op in readfirstlane_instr.uses:
+            if isinstance(use_op, KVReg):
+                if use_op.id in written_regs:
+                    return True
+            elif isinstance(use_op, KPhysVReg):
+                # Physical VGPR - would need physical mapping to check
+                # Conservative: return True if any VGPR was written
+                if written_regs:
+                    return True
+        
+        return False
     
     def finalize_to_string(self) -> str:
         """Finalize and return assembly as a single string."""
