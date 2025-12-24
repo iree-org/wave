@@ -10,12 +10,6 @@ Assembly emitter for generating AMDGCN assembly instructions.
 from typing import Dict, List, Tuple, Union, Optional, Set
 from dataclasses import dataclass, field
 
-from wave_lang.support.ir_imports import (
-    func_d,
-    Context,
-    Module,
-)
-
 from .kernel_model import KernelInfo, MemRefInfo
 from .utils import normalize_wg_size
 from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator, AGPRAllocator
@@ -23,12 +17,6 @@ from .mlir_walker import IRWalker
 # Instructions removed - using unified emitter directly
 from .unified_emitter import UnifiedEmitter, EmissionMode
 from .metadata_emitter import MetadataEmitter, create_metadata, get_register_granularity
-from .mlir_analysis import (
-    walk_ops_recursively,
-    detect_needed_workgroup_ids,
-    extract_translation_info,
-    should_skip_function,
-)
 
 
 @dataclass

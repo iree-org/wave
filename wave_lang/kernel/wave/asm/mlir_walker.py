@@ -21,11 +21,6 @@ from wave_lang.support.ir_imports import (
     scf_d,
     stream_d,
     vector_d,
-    OpAttributeMap,
-)
-
-from .utils import (
-    parse_wg_and_subgroup,
 )
 
 from .kernel_model import KernelInfo
@@ -142,16 +137,14 @@ class IRWalker:
         entry_block = fn.entry_block
         kernel_info.arg_ssa_order = [str(arg) for arg in entry_block.arguments]
 
-        # Extract translation_info from function attributes
-        assert isinstance(fn.attributes, OpAttributeMap)
-        function_attributes = dict(fn.attributes)
-        translation_info = function_attributes.get("translation_info")
-        if translation_info is not None:
-            workgroup_size, subgroup_size = parse_wg_and_subgroup(translation_info)
-            if workgroup_size:
-                kernel_info.wg_size = workgroup_size
-            if subgroup_size:
-                kernel_info.subgroup_size = subgroup_size
+        # NOTE: translation_info parsing is centralized in mlir_analysis and used
+        # by KernelModuleCompiler. Avoid re-parsing here to prevent duplication.
+        #
+        # Source wg/subgroup from the kernel compilation context (single source of truth).
+        if getattr(self.kernel_ctx, "wg_size", None):
+            kernel_info.wg_size = tuple(self.kernel_ctx.wg_size)
+        if getattr(self.kernel_ctx, "subgroup_size", None):
+            kernel_info.subgroup_size = int(self.kernel_ctx.subgroup_size)
 
         # Update kernel context with actual bounds from MLIR
         # This enables correct algebraic simplifications based on workgroup size

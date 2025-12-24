@@ -40,7 +40,6 @@ from .kernel_liveness import compute_liveness, LivenessInfo
 from .kernel_regalloc import KernelRegAlloc, allocate_kernel, AllocationStats, AllocationError
 from .kernel_generator import KernelGenerator, PhysicalMapping, generate_program
 from .unified_emitter import UnifiedEmitter, EmissionMode
-from .hazards import HazardDetector
 from .instruction_categories import InstructionCategory, categorize_instruction
 from .ticketing import Ticketing
 from .instruction_registry import (
