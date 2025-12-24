@@ -67,11 +67,15 @@ from wave_lang.kernel.lang.global_symbols import (
     SHARED_ADDRESS_SPACE,
 )
 
+print("water_emitter imported", file=sys.stderr)
+
 assert "iree" not in sys.modules, (
     "IREE was transitively imported into the water emitter, "
     + "which will lead to MLIR library clashes. "
     + "Please clean up the import list so as not to import IREE."
 )
+
+print("past iree assertion", file=sys.stderr)
 
 try:
     from water_mlir.water_mlir import ir
@@ -109,6 +113,8 @@ try:
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
+
+print("past water_mlir imports", file=sys.stderr)
 
 # Mapping from tkw_op_name to actual op constructors
 WAVE_OP_CONSTRUCTORS = {
@@ -830,6 +836,8 @@ def _emit_from_captured_trace(
     if enable_debug_info and not trace.location:
         diagnostics.append("Missing debug location for wave trace")
 
+    print("inside emission", file=sys.stderr)
+
     with ir.Context() as ctx, (
         trace.location.to_water() if trace.location else ir.Location.unknown()
     ):
@@ -895,6 +903,7 @@ if __name__ == "__main__":
         help="Test diagnostic serialization and deserialization through stdin and stdout",
     )
 
+    print("emitter initialized", file=sys.stderr)
     args = parser.parse_args()
 
     trace, constraints, options, pipeline = _parse_input()

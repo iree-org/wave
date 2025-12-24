@@ -46,7 +46,7 @@ def emit_wave_dialect(
     errors produced by MLIR.
     """
 
-    child = Path(__file__).with_name("water_emitter.py")
+    child = Path(__file__).with_name("water_emitter.py").resolve()
     if not child.exists():
         raise RuntimeError(f"water emitter helper not found: {child}")
 
@@ -75,6 +75,9 @@ def emit_wave_dialect(
             }
         )
     )
+
+    print(output.decode("utf-8", errors="replace"), file=sys.stderr)
+    print(err.decode("utf-8", errors="replace"), file=sys.stderr)
 
     if proc.returncode != 0:
         raise RuntimeError(
