@@ -1,6 +1,5 @@
 # Development requirements for building Python bindings
 nanobind~=2.9.2
-pybind11>=2.10.0, <=2.13.6
 numpy
 lit
 pytest
