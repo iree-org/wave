@@ -36,7 +36,6 @@ if (WATER_ENABLE_PYTHON)
       WaterExtensionNanobind.cpp
     EMBED_CAPI_LINK_LIBS
       WaterCAPI
-    PYTHON_BINDINGS_LIBRARY nanobind
   )
 
   add_mlir_python_common_capi_library(WaterPythonCAPI
