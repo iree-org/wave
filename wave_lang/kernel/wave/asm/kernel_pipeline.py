@@ -236,6 +236,101 @@ class KernelIRExprEmitter:
         else:
             self._current_scope[key] = reg
     
+    # Known loop-invariant symbols (thread IDs and workgroup IDs)
+    _LOOP_INVARIANT_SYMBOLS = frozenset([
+        'tid_x', 'tid_y', 'tid_z',
+        'wgid_x', 'wgid_y', 'wgid_z',
+        'lane_id',
+    ])
+    
+    def _is_loop_invariant(self, expr) -> bool:
+        """
+        Check if an expression is loop-invariant.
+        
+        An expression is loop-invariant if ALL its free symbols are known
+        loop-invariant values (tid_x, tid_y, wgid_x, etc.).
+        
+        Loop-varying values (like SGPR loop counters: s24, s25) make
+        an expression loop-varying, so it should NOT be cached.
+        
+        Returns:
+            True if the expression is loop-invariant and safe to cache globally
+        """
+        import sympy
+        from sympy import Integer
+        
+        # Constants are always loop-invariant
+        if isinstance(expr, (int, Integer)):
+            return True
+        
+        # Check all free symbols in the expression
+        if hasattr(expr, 'free_symbols'):
+            for sym in expr.free_symbols:
+                name = str(sym)
+                # Check if it's a known invariant symbol
+                if name in self._LOOP_INVARIANT_SYMBOLS:
+                    continue
+                # Check if it's bound to a physical SGPR (loop counter)
+                # SGPR references like s24, s25 are loop counters - NOT invariant
+                if name.startswith('s') and name[1:].isdigit():
+                    return False
+                # Check bindings
+                if name in self._bindings:
+                    binding = self._bindings[name]
+                    # If bound to a physical SGPR reference, it's loop-varying
+                    if isinstance(binding, str) and binding.startswith('s'):
+                        return False
+                    # If bound to a KVReg or physical VGPR string, treat as invariant
+                    # (VGPRs are per-thread, not loop-varying)
+                    continue
+                # Unknown symbols - conservatively treat as NOT loop-invariant
+                return False
+            return True
+        
+        # Single symbol
+        if isinstance(expr, sympy.Symbol):
+            name = str(expr)
+            if name in self._LOOP_INVARIANT_SYMBOLS:
+                return True
+            if name.startswith('s') and name[1:].isdigit():
+                return False
+            # Unknown - conservative
+            return False
+        
+        # Default: conservative
+        return False
+    
+    def _expr_key(self, expr) -> tuple:
+        """
+        Create a structural cache key for an expression.
+        
+        This enables CSE across structurally identical expressions.
+        """
+        import sympy
+        from sympy import Symbol, Mul, Add, Integer, floor, Mod
+        
+        if isinstance(expr, (int, Integer)):
+            return ('imm', int(expr))
+        
+        if isinstance(expr, Symbol):
+            return ('sym', str(expr))
+        
+        if isinstance(expr, Mul):
+            # Sort args for canonical ordering
+            return ('mul',) + tuple(sorted(self._expr_key(a) for a in expr.args))
+        
+        if isinstance(expr, Add):
+            return ('add',) + tuple(sorted(self._expr_key(a) for a in expr.args))
+        
+        if isinstance(expr, Mod):
+            return ('mod', self._expr_key(expr.args[0]), self._expr_key(expr.args[1]))
+        
+        if getattr(expr, 'func', None) == floor:
+            return ('floor', self._expr_key(expr.args[0]))
+        
+        # Fallback: use string representation (less efficient but always works)
+        return ('expr', str(expr))
+    
     def get_or_emit(self, expr, cache_in_global: bool = False) -> KVReg:
         """
         Get a VGPR containing the value of expr, emitting instructions if needed.
@@ -401,6 +496,14 @@ class KernelIRExprEmitter:
         
         # Handle multiplication
         if isinstance(expr, Mul):
+            # Check if this expression is loop-invariant and already cached
+            is_invariant = self._is_loop_invariant(expr)
+            if is_invariant:
+                cache_key = self._expr_key(expr)
+                cached = self._lookup_cache(cache_key)
+                if cached is not None:
+                    return cached
+            
             # Separate constant and variable parts
             const_part = 1
             var_parts = []
@@ -448,6 +551,9 @@ class KernelIRExprEmitter:
                         comment=f"{var_parts[0]} * {const_part}"
                     ))
                 
+                # Cache if loop-invariant
+                if is_invariant:
+                    self._insert_cache(cache_key, result, global_scope=True)
                 return result
             
             # Multiple variable parts - emit sequentially
@@ -480,10 +586,21 @@ class KernelIRExprEmitter:
                     ))
                 result = final
             
+            # Cache if loop-invariant
+            if is_invariant:
+                self._insert_cache(cache_key, result, global_scope=True)
             return result
         
         # Handle addition
         if isinstance(expr, Add):
+            # Check if this expression is loop-invariant and already cached
+            is_invariant = self._is_loop_invariant(expr)
+            if is_invariant:
+                cache_key = self._expr_key(expr)
+                cached = self._lookup_cache(cache_key)
+                if cached is not None:
+                    return cached
+            
             # Emit first term
             result = self.get_or_emit(expr.args[0])
             
@@ -497,14 +614,38 @@ class KernelIRExprEmitter:
                 ))
                 result = new_result
             
+            # Cache if loop-invariant
+            if is_invariant:
+                self._insert_cache(cache_key, result, global_scope=True)
             return result
         
         # Handle floor expressions
         if isinstance(expr, floor):
-            return self._emit_floor(expr)
+            # Check if this expression is loop-invariant and already cached
+            is_invariant = self._is_loop_invariant(expr)
+            if is_invariant:
+                cache_key = self._expr_key(expr)
+                cached = self._lookup_cache(cache_key)
+                if cached is not None:
+                    return cached
+            
+            result = self._emit_floor(expr)
+            
+            # Cache if loop-invariant
+            if is_invariant:
+                self._insert_cache(cache_key, result, global_scope=True)
+            return result
         
         # Handle modulo
         if isinstance(expr, Mod):
+            # Check if this expression is loop-invariant and already cached
+            is_invariant = self._is_loop_invariant(expr)
+            if is_invariant:
+                cache_key = self._expr_key(expr)
+                cached = self._lookup_cache(cache_key)
+                if cached is not None:
+                    return cached
+            
             x, n = expr.args
             x_reg = self.get_or_emit(x)
             n_val = int(n)
@@ -522,6 +663,9 @@ class KernelIRExprEmitter:
                 # TODO: Implement general modulo
                 raise NotImplementedError(f"modulo by {n_val} not yet implemented")
             
+            # Cache if loop-invariant
+            if is_invariant:
+                self._insert_cache(cache_key, result, global_scope=True)
             return result
         
         raise NotImplementedError(f"Expression type not supported: {type(expr).__name__}: {expr}")
