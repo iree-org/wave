@@ -137,7 +137,6 @@ jobs:
         if: ${{ env.IS_CDNA3 == 'true' || env.IS_CDNA4 == 'true' }}
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
-          echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
           echo "WAVE_BUILD_WATER=1" >> $GITHUB_ENV
           echo "WAVE_LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install" >> $GITHUB_ENV
 
@@ -234,7 +233,7 @@ jobs:
 
       - name: Run LIT tests
         env:
-           WAVE_TEST_WATER: ${{ env.IS_CDNA4 == 'false' && '1' || '0'  }}
+           WAVE_TEST_WATER: ${{ (env.IS_CDNA3 == 'true' || env.IS_CDNA4 == 'true') && '1' || '0'  }}
            WAVE_TEST_DWARFDUMP: ${{ env.IS_RDNA4 == 'false' && '1' || '0' }}
         run: |
           # TODO: mlir_converter tests segfault on mi35x
