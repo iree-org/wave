@@ -127,7 +127,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Cache Vars
-        if: ${{ env.IS_CDNA3 || env.IS_CDNA4 }}
+        if: ${{ env.IS_CDNA3 == 'true' || env.IS_CDNA4 == 'true' }}
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
           echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
@@ -161,13 +161,13 @@ jobs:
           toolchain: stable
 
       - name: "Install dwarfdump"
-        if: ${{ !env.IS_RDNA4 }}
+        if: ${{ env.IS_RDNA4 == 'false' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y dwarfdump
 
       - name: Install pip deps
-        if: ${{ !env.HAS_GPU }}
+        if: ${{ env.HAS_GPU == 'false' }}
         run: |
           python -m pip install --no-compile --upgrade pip
           # Note: We install in three steps in order to satisfy requirements
@@ -195,7 +195,7 @@ jobs:
           pip install -r requirements.txt -e .
 
       - name: Install pip deps (CDNA3/RDNA4)
-        if: ${{ env.HAS_GPU && !env.IS_CDNA4 }}
+        if: ${{ env.HAS_GPU == 'true' && env.IS_CDNA4 == 'false' }}
         run: |
           python -m pip install --upgrade pip
           pip install -r pytorch-rocm-requirements.txt
@@ -207,7 +207,7 @@ jobs:
           pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
 
       - name: Test TKW runtime related stack on amdgpu
-        if: ${{ env.HAS_GPU }}
+        if: ${{ env.HAS_GPU == 'true' }}
         run: |
           python -c "import torch; print(torch.cuda.get_device_properties().gcnArchName if torch.cuda.is_available() else 'cpu')"
           export WAVE_CACHE_DIR=$PWD/.wave
@@ -216,19 +216,19 @@ jobs:
           WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/runtime
 
       - name: Run e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU && (github.event_name == 'pull_request') }}
+        if: ${{ env.HAS_GPU == 'true' && (github.event_name == 'pull_request') }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/
 
       - name: Run expensive e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU && (github.event_name != 'pull_request') }}
+        if: ${{ env.HAS_GPU == 'true' && (github.event_name != 'pull_request') }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
 
       - name: Run LIT tests
         env:
-           WAVE_TEST_WATER: ${{ !env.IS_CDNA4 && '1' || '0'  }}
-           WAVE_TEST_DWARFDUMP: ${{ !env.IS_RDNA4 && '1' || '0' }}
+           WAVE_TEST_WATER: ${{ env.IS_CDNA4 == 'false' && '1' || '0'  }}
+           WAVE_TEST_DWARFDUMP: ${{ env.IS_RDNA4 == 'false' && '1' || '0' }}
         run: |
           # TODO: mlir_converter tests segfault on mi35x
           # TODO: can't sudo to install dwarfdump on rdna4
