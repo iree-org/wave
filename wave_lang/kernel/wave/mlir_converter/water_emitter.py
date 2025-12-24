@@ -78,7 +78,20 @@ assert "iree" not in sys.modules, (
 print("past iree assertion", file=sys.stderr)
 
 try:
+    import sys
+    import os
+
+    for p in sys.path:
+        print(f"walking {p}", file=sys.stderr)
+        for root, dirs, files in os.walk(p):
+            if not "water" in root and not "mlir" in root:
+                continue
+            print(f"walking {root}", file=sys.stderr)
+            for file in files:
+                print(f"file: {file}", file=sys.stderr)
     from water_mlir.water_mlir import ir
+
+    print("past water_mlir import", file=sys.stderr)
     from water_mlir.water_mlir.dialects.wave import (
         AddOp,
         AllocateOp,
@@ -102,14 +115,28 @@ try:
         WaveMmaKindAttr,
         WaveWorkgroupDimAttr,
     )
+
+    print("past water_mlir.dialects import", file=sys.stderr)
     from water_mlir.water_mlir.sympy_to_affine_converter import (
         convert_sympy_to_affine_map,
     )
+
+    print("past water_mlir.sympy_to_affine_converter import", file=sys.stderr)
     from water_mlir.water_mlir.dialects import arith
+
+    print("past water_mlir.dialects.arith import", file=sys.stderr)
     from water_mlir.water_mlir.dialects import func
+
+    print("past water_mlir.dialects.func import", file=sys.stderr)
     from water_mlir.water_mlir.dialects import wave
+
+    print("past water_mlir.dialects.wave import", file=sys.stderr)
     from water_mlir.water_mlir.dialects import amdgpu
+
+    print("past water_mlir.dialects.amdgpu import", file=sys.stderr)
     from water_mlir.water_mlir.dialects.transform import interpreter
+
+    print("past water_mlir.dialects.transform.interpreter import", file=sys.stderr)
 except Exception as e:
     print(f"FATAL: failed to import water_mlir: {e}", file=sys.stderr)
     sys.exit(1)
