@@ -115,43 +115,19 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     env:
       VENV_DIR: ${{ github.workspace }}/.wave-venv
+      IS_CDNA3: ${{ contains(matrix.os, 'mi325') }}
+      IS_CDNA4: ${{ contains(matrix.os, 'mi35x') }}
+      IS_RDNA4: ${{ contains(matrix.os, 'rdna4') }}
+      HAS_GPU: ${{ contains(matrix.os, 'rdna4') || contains(matrix.os, 'mi325') ||  contains(matrix.os, 'mi35x') }}
 
     steps:
-      - name: Set environment variables
-        run: |
-          if [[ "${{ contains(matrix.os, 'rdna4') }}" == 'true' ]]; then
-            echo "IS_RDNA4=true" >> $GITHUB_ENV
-          else
-            echo "IS_RDNA4=false" >> $GITHUB_ENV
-          fi
-
-          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' ]]; then
-            echo "IS_MI325=true" >> $GITHUB_ENV
-          else
-            echo "IS_MI325=false" >> $GITHUB_ENV
-          fi
-
-          if [[ "${{ contains(matrix.os, 'mi35x') }}" == 'true' ]]; then
-            echo "IS_MI35X=true" >> $GITHUB_ENV
-          else
-            echo "IS_MI35X=false" >> $GITHUB_ENV
-          fi
-
-          if [[ "${{ contains(matrix.os, 'mi325') }}" == 'true' || "${{ contains(matrix.os, 'mi35x') }}" == 'true' || "${{ contains(matrix.os, 'mi250') }}" == 'true' || "${{ contains(matrix.os, 'rdna4') }}" == 'true' ]]; then
-            echo "HAS_GPU=true" >> $GITHUB_ENV
-            echo "HAS_NO_GPU=false" >> $GITHUB_ENV
-          else
-            echo "HAS_GPU=false" >> $GITHUB_ENV
-            echo "HAS_NO_GPU=true" >> $GITHUB_ENV
-          fi
-
       - name: Checkout repo
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
 
       - name: Setup Cache Vars
-        if: ${{ env.IS_MI325 == 'true' || env.IS_MI35X == 'true' }}
+        if: ${{ env.IS_CDNA3 || env.IS_CDNA4 }}
         run: |
           echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
           echo "WAVE_TEST_WATER=1" >> $GITHUB_ENV
@@ -185,13 +161,13 @@ jobs:
           toolchain: stable
 
       - name: "Install dwarfdump"
-        if: ${{ env.IS_RDNA4 == 'false' }}
+        if: ${{ !env.IS_RDNA4 }}
         run: |
           sudo apt-get update
           sudo apt-get install -y dwarfdump
 
       - name: Install pip deps
-        if: ${{ env.HAS_NO_GPU == 'true' }}
+        if: ${{ !env.HAS_GPU }}
         run: |
           python -m pip install --no-compile --upgrade pip
           # Note: We install in three steps in order to satisfy requirements
@@ -201,8 +177,8 @@ jobs:
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -r requirements.txt -e .
 
-      - name: Install pip deps (mi35x)
-        if: ${{ env.IS_MI35X == 'true' }}
+      - name: Install pip deps (CDNA4)
+        if: ${{ env.IS_CDNA4 }}
         run: |
           # Install TheRock
           python -m pip install --upgrade pip
@@ -218,8 +194,8 @@ jobs:
           pip install --no-cache-dir -r requirements-iree-pinned.txt --upgrade
           pip install -r requirements.txt -e .
 
-      - name: Install pip deps (mi250/mi325/rdna)
-        if: ${{ env.HAS_GPU == 'true' && env.IS_MI35X == 'false' }}
+      - name: Install pip deps (CDNA3/RDNA4)
+        if: ${{ env.HAS_GPU && !env.IS_CDNA4 }}
         run: |
           python -m pip install --upgrade pip
           pip install -r pytorch-rocm-requirements.txt
@@ -231,7 +207,7 @@ jobs:
           pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
 
       - name: Test TKW runtime related stack on amdgpu
-        if: ${{ env.HAS_GPU == 'true' }}
+        if: ${{ env.HAS_GPU }}
         run: |
           python -c "import torch; print(torch.cuda.get_device_properties().gcnArchName if torch.cuda.is_available() else 'cpu')"
           export WAVE_CACHE_DIR=$PWD/.wave
@@ -240,27 +216,22 @@ jobs:
           WAVE_CACHE_ON=1 pytest --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/runtime
 
       - name: Run e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU == 'true' && (github.event_name == 'pull_request') }}
+        if: ${{ env.HAS_GPU && (github.event_name == 'pull_request') }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=300 --capture=tee-sys -vv --run-e2e --durations=100 ./tests/kernel/
 
       - name: Run expensive e2e tests on AMD GPU
-        if: ${{ env.HAS_GPU == 'true' && (github.event_name != 'pull_request') }}
+        if: ${{ env.HAS_GPU && (github.event_name != 'pull_request') }}
         run: |
           WAVE_CACHE_ON=0 pytest -n 4 --timeout=600 --capture=tee-sys -vv --run-e2e --run-expensive-tests --durations=100 ./tests/kernel/
 
       - name: Run LIT tests
+        env:
+           WAVE_TEST_WATER: ${{ !env.IS_CDNA4 && "1" || "0"  }}
+           WAVE_TEST_DWARFDUMP: ${{ !env.IS_RDNA4 && "1" || "0" }}
         run: |
-          export WAVE_TEST_DWARFDUMP=1
-          if [[ "${{ contains(matrix.os, 'mi35x') }}" == 'true' ]]; then
-            # TODO: mlir_converter tests segfault on mi35x
-            export WAVE_TEST_WATER=0
-          fi
-
-          if [[ "${{ contains(matrix.os, 'rdna4') }}" == 'true' ]]; then
-            # TODO: can't sudo to install dwarfdump on rdna4
-            export WAVE_TEST_DWARFDUMP=0
-          fi
+          # TODO: mlir_converter tests segfault on mi35x
+          # TODO: can't sudo to install dwarfdump on rdna4
           lit lit_tests/ -v
 
       - name: MyPy Type Checking
