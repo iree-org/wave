@@ -34,7 +34,7 @@ from wave_lang.kernel.wave.asm.kernel_generator import (
     KernelRenderer, PhysicalMapping, render_program,
 )
 from wave_lang.kernel.wave.asm.kernel_pipeline import (
-    KernelCompilationContext, use_kernel_lsra,
+    KernelCompilationContext,
 )
 
 
