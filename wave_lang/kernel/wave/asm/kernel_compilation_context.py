@@ -4,7 +4,38 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .kernel_pipeline_shared import *
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from .kernel_model import KernelInfo
+
+# Core IR types
+from .kernel_ir import (
+    KernelProgram, KernelBuilder, KInstr,
+    KVReg, KSReg, KPhysVReg, KPhysSReg, KSpecialReg,
+    KReg, KRegRange, KImm, KMemOffset,
+    KernelABI, RegClass, M0, is_virtual,
+)
+# Liveness and allocation
+from .kernel_liveness import compute_liveness, LivenessInfo
+from .kernel_regalloc import KernelRegAlloc, allocate_kernel, AllocationStats, AllocationError
+# Code generation
+from .kernel_generator import KernelGenerator, PhysicalMapping, generate_program
+from .unified_emitter import UnifiedEmitter, EmissionMode
+# Instruction info
+from .instruction_categories import InstructionCategory, categorize_instruction
+from .instruction_registry import InstructionDef, OperandType, get_registry
+# Ticketing
+from .ticketing import Ticketing
+# Shared helpers
+from .kernel_pipeline_shared import (
+    _kernel_ticketing_enabled, _get_def_info, _ENABLE_KERNEL_IR_SIMPLIFY,
+    _parse_waitcnt_threshold, _iter_virtual_regs,
+)
+
 from .kernel_expr_emitter import KernelIRExprEmitter
 from .kernel_loops import _LoopSupport
 from .kernel_mfma import _MFMASupport

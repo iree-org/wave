@@ -339,8 +339,9 @@ class KernelRegAlloc:
         for phys_base in vreg_map.values():
             max_vgpr = max(max_vgpr, phys_base)
         # Account for ranges (vreg_ranges maps individual component to (base, size))
+        # Note: vreg_map keys are integers (virtual reg ids), not KVReg objects
         for vreg_id, (base, size) in vreg_ranges.items():
-            phys_base = vreg_map.get(KVReg(base))
+            phys_base = vreg_map.get(base)
             if phys_base is not None:
                 max_vgpr = max(max_vgpr, phys_base + size - 1)
         # Include reserved
@@ -353,8 +354,9 @@ class KernelRegAlloc:
         for phys_base in sreg_map.values():
             max_sgpr = max(max_sgpr, phys_base)
         # Account for ranges (sreg_ranges maps individual component to (base, size))
+        # Note: sreg_map keys are integers (virtual reg ids), not KSReg objects
         for sreg_id, (base, size) in sreg_ranges.items():
-            phys_base = sreg_map.get(KSReg(base))
+            phys_base = sreg_map.get(base)
             if phys_base is not None:
                 max_sgpr = max(max_sgpr, phys_base + size - 1)
         # Include reserved

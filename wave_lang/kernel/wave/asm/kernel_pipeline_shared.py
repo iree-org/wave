@@ -107,5 +107,27 @@ def _get_def_info(operand_types: Tuple[OperandType, ...]) -> Tuple[str, int, int
     return (None, 0, 1)
 
 
-# Export everything (including _private helpers) for `from ... import *`
-__all__ = [n for n in globals().keys() if not n.startswith("__")]
+# Explicit export list - only public symbols
+# This avoids namespace pollution when using `from ... import *`
+__all__ = [
+    # Core IR types
+    "KernelProgram", "KernelBuilder", "KInstr",
+    "KVReg", "KSReg", "KPhysVReg", "KPhysSReg", "KSpecialReg",
+    "KReg", "KRegRange", "KImm", "KMemOffset",
+    "KernelABI", "RegClass", "M0", "is_virtual",
+    # Liveness and allocation
+    "compute_liveness", "LivenessInfo",
+    "KernelRegAlloc", "allocate_kernel", "AllocationStats", "AllocationError",
+    # Code generation
+    "KernelGenerator", "PhysicalMapping", "generate_program",
+    "UnifiedEmitter", "EmissionMode",
+    # Instruction info
+    "InstructionCategory", "categorize_instruction",
+    "InstructionRegistry", "InstructionDef", "OperandType", "get_registry",
+    # Ticketing
+    "Ticketing",
+    # Helpers
+    "_kernel_ticketing_enabled", "_get_def_info",
+    "_ENABLE_KERNEL_IR_SIMPLIFY",
+    "_parse_waitcnt_threshold", "_iter_virtual_regs",
+]
