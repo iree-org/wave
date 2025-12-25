@@ -27,5 +27,3 @@ def test_system_vgpr_workitem_id_policy() -> None:
     assert system_vgpr_workitem_id_from_wg_size((64, 1, 1)) == 0
     assert system_vgpr_workitem_id_from_wg_size((64, 2, 1)) == 1
     assert system_vgpr_workitem_id_from_wg_size((64, 1, 2)) == 1
-
-

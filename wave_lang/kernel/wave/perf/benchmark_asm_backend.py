@@ -169,12 +169,12 @@ def create_gemm_kernel(block_m: int, block_n: int, wave_m: int, wave_n: int):
     wave_size = 64
 
     # Validate block sizes are divisible by wave sizes
-    assert block_m % wave_m == 0, (
-        f"BLOCK_M ({block_m}) must be divisible by WAVE_M ({wave_m})"
-    )
-    assert block_n % wave_n == 0, (
-        f"BLOCK_N ({block_n}) must be divisible by WAVE_N ({wave_n})"
-    )
+    assert (
+        block_m % wave_m == 0
+    ), f"BLOCK_M ({block_m}) must be divisible by WAVE_M ({wave_m})"
+    assert (
+        block_n % wave_n == 0
+    ), f"BLOCK_N ({block_n}) must be divisible by WAVE_N ({wave_n})"
 
     # Check wave count limit (max 16 waves = 1024 threads per workgroup)
     waves_along_m = block_m // wave_m
@@ -343,7 +343,9 @@ def _parse_int(s: Any) -> int:
     return int(float(txt))
 
 
-def _find_rocprof_outputs(output_dir: Path, prefix: str) -> tuple[Optional[Path], Optional[Path]]:
+def _find_rocprof_outputs(
+    output_dir: Path, prefix: str
+) -> tuple[Optional[Path], Optional[Path]]:
     # Preferred files when --output-file is set:
     #   <prefix>_kernel_stats.csv and <prefix>_kernel_trace.csv
     stats = output_dir / f"{prefix}_kernel_stats.csv"
@@ -354,10 +356,15 @@ def _find_rocprof_outputs(output_dir: Path, prefix: str) -> tuple[Optional[Path]
     # Fallback: best-effort search across rocprofv3 versions.
     stats_matches = sorted(output_dir.glob("*kernel*_stats*.csv"))
     trace_matches = sorted(output_dir.glob("*kernel*_trace*.csv"))
-    return (stats_matches[0] if stats_matches else None, trace_matches[0] if trace_matches else None)
+    return (
+        stats_matches[0] if stats_matches else None,
+        trace_matches[0] if trace_matches else None,
+    )
 
 
-def _rocprof_avg_ms_from_kernel_trace_last_n(trace_csv: Path, *, num_iterations: int) -> float:
+def _rocprof_avg_ms_from_kernel_trace_last_n(
+    trace_csv: Path, *, num_iterations: int
+) -> float:
     """Compute average time (ms) for the last N dispatches of the most frequent kernel.
 
     This avoids requiring ROCTx/marker ranges (which may not be available for the
@@ -369,8 +376,12 @@ def _rocprof_avg_ms_from_kernel_trace_last_n(trace_csv: Path, *, num_iterations:
         raise ValueError(f"Empty rocprof trace: {trace_csv}")
 
     kind_col = _pick_column(rows[0], ["Kind", "kind"])
-    name_col = _pick_column(rows[0], ["Kernel_Name", "KernelName", "Kernel Name", "Name", "name"])
-    start_col = _pick_column(rows[0], ["Start_Timestamp", "StartNs", "Start (ns)", "start_ns"])
+    name_col = _pick_column(
+        rows[0], ["Kernel_Name", "KernelName", "Kernel Name", "Name", "name"]
+    )
+    start_col = _pick_column(
+        rows[0], ["Start_Timestamp", "StartNs", "Start (ns)", "start_ns"]
+    )
     end_col = _pick_column(rows[0], ["End_Timestamp", "EndNs", "End (ns)", "end_ns"])
 
     if name_col is None or start_col is None or end_col is None:
@@ -435,7 +446,9 @@ def _rocprofv3_benchmark_avg_ms(
 
     with tempfile.TemporaryDirectory(prefix="wave_rocprofv3_") as tmpdir:
         out_dir = Path(tmpdir)
-        prefix = f"wave_bench_{backend}_{shape_name}".replace("/", "_").replace(" ", "_")
+        prefix = f"wave_bench_{backend}_{shape_name}".replace("/", "_").replace(
+            " ", "_"
+        )
 
         cmd = [
             rocprof,
@@ -722,4 +735,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

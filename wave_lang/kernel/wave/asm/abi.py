@@ -31,5 +31,3 @@ def system_vgpr_workitem_id_from_wg_size(wg_size: Tuple[int, int, int]) -> int:
     """
     wg_x, wg_y, wg_z = normalize_wg_size(wg_size)
     return 1 if (wg_y > 1 or wg_z > 1) else 0
-
-

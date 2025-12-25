@@ -8,7 +8,7 @@
 Register Allocation IR
 ======================
 
-This document describes the kernel-level intermediate representation (IR) and 
+This document describes the kernel-level intermediate representation (IR) and
 register allocation infrastructure used by the Wave ASM backend.
 
 Overview
@@ -25,7 +25,7 @@ allocation mode. This enables:
    dataflow analysis correctly handles loops and live ranges across iterations.
 
 3. **Constraint-aware allocation**: The allocator respects alignment requirements,
-   contiguous range needs (for MFMA accumulators), loop SGPR reservation, and 
+   contiguous range needs (for MFMA accumulators), loop SGPR reservation, and
    ABI-mandated precoloring.
 
 4. **Peephole optimization**: Post-allocation instruction fusion for reduced VALU count.
@@ -38,9 +38,15 @@ The register allocation pipeline follows this flow::
     MLIR Operations
          │
          ▼
-    ┌─────────────────────────┐
-    │  kernel_pipeline.py     │  KernelCompilationContext, KernelIRExprEmitter
-    └────────┬────────────────┘
+    ┌─────────────────────────────────┐
+    │  kernel_module_compiler.py      │  Entry point, orchestrates compilation
+    └────────┬────────────────────────┘
+             │
+             ▼
+    ┌─────────────────────────────────┐
+    │  kernel_compilation_context.py  │  KernelCompilationContext
+    │  kernel_expr_emitter.py         │  KernelIRExprEmitter (scoped CSE)
+    └────────┬────────────────────────┘
              │
              ▼
     ┌─────────────────┐
@@ -59,19 +65,38 @@ The register allocation pipeline follows this flow::
              │
              ▼
     ┌─────────────────────┐
-    │ kernel_pipeline.py  │  Peephole optimization and hazard mitigation
+    │ kernel_passes.py    │  Peephole optimization, hazard mitigation, ticketing
     └────────┬────────────┘
              │
              ▼
-    ┌─────────────────────┐
-    │ kernel_generator.py │  Substitute physical registers, emit assembly
-    └─────────────────────┘
+    ┌──────────────────────────────┐
+    │ kernel_generator.py          │  Physical register substitution
+    │ instruction_formatter.py     │  Instruction formatting to assembly text
+    └──────────────────────────────┘
 
-Kernel Compilation Context (kernel_pipeline.py)
-===============================================
+Note: ``kernel_pipeline.py`` is now a thin wrapper that re-exports the main classes
+for backward compatibility. The actual implementations have been split into the
+modules shown above.
+
+Kernel Compilation Context (kernel_compilation_context.py)
+==========================================================
 
 The ``KernelCompilationContext`` is the central orchestration point for kernel IR
 compilation. It manages the entire compilation flow from MLIR to assembly.
+
+Module Structure
+----------------
+
+The kernel compilation functionality is split across several focused modules:
+
+- ``kernel_compilation_context.py``: Core context class (``KernelCompilationContext``)
+- ``kernel_expr_emitter.py``: Expression emission with scoped CSE (``KernelIRExprEmitter``)
+- ``kernel_expr_floor_ops.py``: Floor operation handling
+- ``kernel_loops.py``: Loop management (``_LoopSupport``)
+- ``kernel_mfma.py``: MFMA instruction emission (``_MFMASupport``)
+- ``kernel_passes.py``: Finalization passes (``_CompilationPasses``)
+- ``kernel_pipeline.py``: Backward compatibility wrapper (re-exports main classes)
+- ``kernel_pipeline_shared.py``: Shared imports and helpers
 
 Key Components
 --------------
@@ -109,7 +134,7 @@ Uses symbol bounds from kernel info to simplify expressions::
 
     # When tid_x < 64 (single wave):
     floor(tid_x / 64) → 0  # Eliminated entirely
-    
+
     # When bit ranges don't overlap:
     (row * 256) + col → (row << 8) | col  # ADD becomes OR
 
@@ -157,7 +182,7 @@ Example::
 
     # Allocate a pair of VGPRs with 2-alignment
     pair = KRegRange(base_reg=KVReg(0), count=2, alignment=2)
-    
+
     # After allocation, this might become v[4:5] (base must be even)
 
 Instruction Representation
@@ -243,13 +268,13 @@ The ``KernelBuilder`` class provides helper methods for emitting common
 instruction patterns::
 
     builder = KernelBuilder()
-    
+
     # Emit v_mov_b32 and get destination register
     dst = builder.v_mov_b32(src=KImm(42))
-    
+
     # Emit v_add_u32
     sum_reg = builder.v_add_u32(src1, src2, comment="Add operands")
-    
+
     # Emit ds_read_b64 and get destination pair
     data = builder.ds_read_b64(addr_reg, offset=128)
 
@@ -271,7 +296,7 @@ The ``CFG`` class represents the control flow graph:
 CFG Construction::
 
     cfg = build_cfg(program.instructions)
-    
+
     # cfg.blocks: List of BasicBlock
     # Each block has: start_idx, end_idx, successors, predecessors
 
@@ -305,7 +330,7 @@ Example::
 
     # tid_x defined before loop, used in loop body
     # The live range extends from definition through all loop iterations
-    
+
     loop_header:
         # tid_x is in live_in[loop_header]
         # ... use tid_x ...
@@ -345,12 +370,12 @@ Example::
 
     program = KernelProgram()
     # ... emit instructions ...
-    
+
     liveness = compute_liveness(program)
-    
+
     print(f"Peak VGPR pressure: {liveness.max_vreg_pressure}")
     print(f"Peak SGPR pressure: {liveness.max_sreg_pressure}")
-    
+
     # Get registers live at instruction 10
     live_at_10 = liveness.get_live_at(10, RegClass.VGPR)
 
@@ -403,13 +428,13 @@ The ``RegPool`` class manages available physical registers:
 Example::
 
     pool = RegPool(RegClass.VGPR, max_regs=256, reserved={0})  # v0 reserved
-    
+
     # Allocate single VGPR
     r1 = pool.alloc_single()  # Returns e.g. 1
-    
+
     # Allocate aligned quad
     base = pool.alloc_range(size=4, alignment=4)  # Returns e.g. 4
-    
+
     # Free
     pool.free_single(r1)
     pool.free_range(base, 4)
@@ -457,21 +482,21 @@ Usage
 ::
 
     from kernel_regalloc import allocate_kernel
-    
+
     program = KernelProgram()
     # ... build program ...
-    
+
     mapping, stats = allocate_kernel(
         program,
         reserved_vgprs={0},           # v0 for flat tid
         reserved_sgprs={0, 1} | set(range(24, 32)),  # s[0:1] for kernarg, s24+ for loops
     )
-    
+
     print(f"Peak VGPRs: {stats.peak_vgprs}")
     print(f"Peak SGPRs: {stats.peak_sgprs}")
 
-Peephole Optimization (kernel_pipeline.py)
-==========================================
+Peephole Optimization (kernel_passes.py)
+========================================
 
 After register allocation, the ``_apply_peephole_optimizations()`` pass
 performs local instruction fusion.
@@ -484,7 +509,7 @@ Instruction Fusion
     # Before:
     v_lshlrev_b32 v5, 8, v3
     v_add_u32 v6, v5, v4
-    
+
     # After:
     v_lshl_add_u32 v6, v3, 8, v4
 
@@ -493,7 +518,7 @@ Instruction Fusion
     # Before:
     v_lshlrev_b32 v5, 8, v3
     v_or_b32 v6, v5, v4
-    
+
     # After:
     v_lshl_or_b32 v6, v3, 8, v4
 
@@ -525,7 +550,7 @@ The generator substitutes physical register numbers and formats instructions::
 
     generator = KernelGenerator(program, mapping)
     assembly = generator.generate_to_string()
-    
+
     # Output:
     #     v_add_u32 v7, v5, v6
     #     ds_read_b64 v[8:9], v10 offset:128

@@ -6,6 +6,7 @@
 
 from .handlers_shared import *
 
+
 class _ControlFlowHandlers:
     def handle_scf_for_op(self, operation: scf_d.ForOp, kernel_info: KernelInfo):
         """
@@ -34,13 +35,14 @@ class _ControlFlowHandlers:
         lower_bound = kernel_info.index_env[lower_bound_ssa]
         upper_bound = kernel_info.index_env[upper_bound_ssa]
         step = kernel_info.index_env[step_ssa]
-        
+
         # Pre-create G2S SRDs BEFORE the loop starts
         # This is critical for correctness: if G2S operations are in the loop body,
         # we need to create all SRD copies before the loop header is emitted.
         # Otherwise, the SRD copy for matrix B can overwrite the original SRD for
         # matrix A, causing incorrect memory accesses in subsequent loop iterations.
         from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds
+
         loop_body = operation.body
         loop_ops = list(loop_body.operations)
         g2s_schedule = analyze_g2s_region(loop_ops)
@@ -49,29 +51,29 @@ class _ControlFlowHandlers:
             precreate_g2s_srds(g2s_schedule, kernel_info, self)
 
         # Kernel IR mode: use virtual registers
-        from .kernel_ir import KVReg, KRegRange
-        
+        from .kernel_ir import KVReg
+
         ctx = self.walker.kernel_ctx
-        
+
         # Begin loop structure with virtual registers
         loop_ctx = ctx.begin_loop(lower_bound, upper_bound, step)
-        
+
         # Get induction variable and map it to the loop counter SGPR
         loop_body = operation.body
         induction_var = loop_body.arguments[0]
         induction_var_ssa = str(induction_var)
         counter_sreg = loop_ctx["counter_sreg"]
-        
+
         # Store mapping from SSA induction variable to SGPR
         # Use string format "s{idx}" for compatibility with expression simplification
         # The KPhysSReg has an index attribute we can use
         kernel_info.index_env[induction_var_ssa] = f"s{counter_sreg.index}"
         loop_ctx["induction_var_ssa"] = induction_var_ssa
-        
+
         # Allocate and initialize VGPRs for iter_args (accumulators)
         num_iter_args = len(loop_body.arguments) - 1  # Exclude induction var
         iter_arg_ranges = ctx.alloc_accumulators(num_iter_args)
-        
+
         # Track in SSA->reg map
         for i, arg in enumerate(loop_body.arguments[1:]):
             arg_ssa = str(arg)
@@ -79,23 +81,23 @@ class _ControlFlowHandlers:
             # Store as tuple of individual regs for compatibility
             regs = tuple(KVReg(quad.base_reg.id + j) for j in range(4))
             ctx.ssa_to_reg[arg_ssa] = regs
-        
+
         loop_ctx["iter_arg_ranges"] = iter_arg_ranges
-        
+
         # Emit loop header
         ctx.emit_loop_header(loop_ctx)
-        
+
         # Walk loop body (mark as inside loop to prevent duplicate M0/SRD setup)
         self.walker._inside_loop = True
         self.walker._walk_block(loop_body, kernel_info)
         self.walker._inside_loop = False
-        
+
         # Emit loop latch
         ctx.emit_loop_latch(loop_ctx)
-        
+
         # End loop
         ctx.end_loop()
-        
+
         # Map scf.for results to final values of iter_args
         for i, result in enumerate(operation.results):
             result_ssa = str(result)

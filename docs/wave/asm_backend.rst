@@ -36,28 +36,59 @@ Key Components
   - Binding subspan operations for memory mapping
   - Loop iteration arguments and result mappings
 
-**Operation Handlers** (``handlers.py``)
-  Operation-specific handlers for MLIR operations:
+**Operation Handlers** (``handlers*.py``)
+  Operation-specific handlers for MLIR operations, split into focused modules:
+
+  - ``handlers.py``: Main handler coordinator and compatibility layer
+  - ``handlers_memory.py``: Memory operations (loads, stores, SRD setup)
+  - ``handlers_control.py``: Control flow (scf.for, gpu.barrier)
+  - ``handlers_arith_affine.py``: Arithmetic and affine operations
+  - ``handlers_shared.py``: Shared imports and helper functions
+
+  Supported operations include:
 
   - Memory allocation (memref.alloc) including LDS staging
   - Memory views (memref.view) with offset tracking
-  - Load operations (vector.load) from global and LDS memory
-  - Store operations (vector.store) to global and LDS memory
+  - Load/store operations from global and LDS memory
   - MFMA operations (amdgpu.mfma) with accumulator chaining
   - LDS read/write operations (ds_read_b64, ds_write_b64) with offset optimization
   - Loop operations (scf.for) with induction variables and accumulators
-  - Vector extraction (vector.extract_strided_slice) for register slicing
-  - Fat raw buffer cast (amdgpu.fat_raw_buffer_cast) for gather_to_lds
 
-**Kernel Compilation Context** (``kernel_pipeline.py``)
-  Central orchestration for the kernel IR compilation path:
+**MLIR Analysis** (``mlir_analysis.py``)
+  Centralized MLIR parsing, walking, and kernel metadata extraction:
+
+  - ``walk_ops_recursively()``: Recursive MLIR operation walker
+  - ``detect_needed_workgroup_ids()``: Detects which workgroup IDs are used
+  - ``extract_translation_info()``: Extracts wg_size and subgroup_size from MLIR attributes
+  - ``should_skip_function()``: Explicit kernel selection policy with documented constants
+
+**Kernel Module Compiler** (``kernel_module_compiler.py``)
+  Canonical entry point for MLIR to AMDGCN assembly compilation:
+
+  - ``KernelModuleCompiler``: Main compiler class
+  - ``compile_mlir_string()``: Compiles MLIR string to assembly
+  - Orchestrates the full compilation pipeline
+
+**Kernel Compilation Context** (``kernel_compilation_context.py``)
+  Central context for kernel IR compilation (extracted from kernel_pipeline.py):
 
   - ``KernelCompilationContext``: Main context managing virtual registers, SRDs, and emission
-  - ``KernelIRExprEmitter``: Expression emitter with CSE and algebraic simplification
-  - ``KernelProgram``: Container for kernel IR instructions
-  - Scoped CSE with loop-invariant caching
   - Symbol bounds tracking for expression simplification
-  - Peephole optimizer for instruction fusion
+  - Scoped CSE with loop-invariant caching
+  - Loop management and finalization
+
+**Expression Emitter** (``kernel_expr_emitter.py``)
+  Expression emission with scoped CSE:
+
+  - ``KernelIRExprEmitter``: Expression emitter with CSE and algebraic simplification
+  - ``kernel_expr_floor_ops.py``: Floor operation handling
+
+**Compilation Passes** (``kernel_passes.py``)
+  Post-allocation optimization and correctness passes:
+
+  - Hazard mitigation (s_nop insertion for VALU hazards)
+  - Peephole optimizations (instruction fusion)
+  - Ticketing-based waitcnt insertion
 
 **Kernel IR** (``kernel_ir.py``)
   Instruction representation and virtual register types:
@@ -87,17 +118,38 @@ Key Components
 **Kernel Generator** (``kernel_generator.py``)
   Assembly generation from allocated program:
 
-  - Physical register substitution
+  - Physical register substitution using ``InstructionFormatter``
   - Pseudo-instruction expansion (e.g., ``_g2s_srd_copy``, ``_init_acc_quad``)
-  - Instruction formatting with proper syntax
-  - Special handling for s_waitcnt, SRD setup, etc.
+  - Label emission for control flow
 
-**ASM Emitter** (``asm_emitter.py``)
-  Low-level assembly emission and metadata:
+**Instruction Formatter** (``instruction_formatter.py``)
+  Centralized instruction formatting to assembly text:
 
-  - Kernel preamble and epilogue
-  - HSACO metadata generation
-  - Shader Resource Descriptor (SRD) setup
+  - Single point for all physical instruction formatting
+  - Operand validation (strict mode via ``WAVE_STRICT_FORMATTER``)
+  - Special handling for buffer operations, LDS, and MFMA
+  - Integration with ``InstructionRegistry`` for opcode metadata
+
+**Metadata Emitter** (``metadata_emitter.py``)
+  AMDGCN metadata directive generation:
+
+  - Kernel prologue (``.amdgcn_target``, ``.amdhsa_kernel``, etc.)
+  - Kernel epilogue (``.amdgpu_metadata`` YAML block)
+  - Resource patching for dynamic register counts
+  - Architecture-specific granularity handling
+
+**Ticketing** (``ticketing.py``)
+  Memory operation tracking and waitcnt coalescing:
+
+  - Tracks outstanding VMEM and LGKM operations
+  - Coalesces redundant ``s_waitcnt`` instructions
+  - Integrated into kernel IR finalization pass
+
+**ABI Policies** (``abi.py``)
+  Centralized ABI-related policies:
+
+  - ``get_system_vgpr_workitem_id_policy()``: Determines VGPR workitem ID requirements
+  - Workgroup size normalization
 
 **Gather-to-Shared Handler** (``gather_to_shared.py``)
   Handles gather_to_lds operations for direct global-to-LDS transfers:
@@ -766,7 +818,7 @@ The ASM backend uses SymPy for algebraic simplification with symbol bounds deriv
 
    # When tid_x < 64:
    floor(tid_x / 64) → 0  # Eliminated entirely
-   
+
    # When expression ranges don't overlap:
    (row * 256) + col → (row << 8) | col  # ADD becomes OR
 
