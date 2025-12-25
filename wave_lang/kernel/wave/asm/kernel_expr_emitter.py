@@ -254,10 +254,16 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         
         # Use actual bounds from kernel configuration
         # tid_ub_* are exclusive upper bounds, so max value is tid_ub_* - 1
-        tid_ub_x = getattr(self.ctx, 'tid_ub_x', 64)
-        tid_ub_y = getattr(self.ctx, 'tid_ub_y', 1)
+        # These must be set by update_bounds_from_kernel_info() before expression emission
+        if not hasattr(self.ctx, 'tid_ub_x') or self.ctx.tid_ub_x is None:
+            raise ValueError(
+                "ctx.tid_ub_x is required but not set. "
+                "Call update_bounds_from_kernel_info() before emitting expressions."
+            )
+        tid_ub_x = self.ctx.tid_ub_x
+        tid_ub_y = getattr(self.ctx, 'tid_ub_y', 1)  # tid_y/z can default to 1 (1D workgroup)
         tid_ub_z = getattr(self.ctx, 'tid_ub_z', 1)
-        subgroup_size = getattr(self.ctx, 'subgroup_size', 64)
+        subgroup_size = self.ctx.subgroup_size
         
         # Thread IDs - bounded by workgroup dimensions
         bounds[sympy.Symbol('tid_x')] = (0, tid_ub_x - 1)

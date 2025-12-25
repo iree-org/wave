@@ -152,9 +152,22 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         
         Args:
             kernel_info: KernelInfo populated by interpret_func()
+            
+        Raises:
+            ValueError: If kernel_info is missing wg_size or subgroup_size
         """
-        wg_size = getattr(kernel_info, 'wg_size', (64, 1, 1))
-        subgroup_size = getattr(kernel_info, 'subgroup_size', 64)
+        if not hasattr(kernel_info, 'wg_size'):
+            raise ValueError(
+                "kernel_info.wg_size is required but not set. "
+                "Ensure translation_info is parsed from MLIR."
+            )
+        if not hasattr(kernel_info, 'subgroup_size'):
+            raise ValueError(
+                "kernel_info.subgroup_size is required but not set. "
+                "Ensure translation_info is parsed from MLIR."
+            )
+        wg_size = kernel_info.wg_size
+        subgroup_size = kernel_info.subgroup_size
         
         self.wg_size = wg_size
         self.subgroup_size = subgroup_size
