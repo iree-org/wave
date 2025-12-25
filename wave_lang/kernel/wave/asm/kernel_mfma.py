@@ -6,7 +6,7 @@
 
 from .kernel_pipeline_shared import *
 
-class _KernelMFMAMixin:
+class _MFMASupport:
     # =========================================================================
     # MFMA Support
     # =========================================================================

@@ -6,12 +6,12 @@
 
 from .kernel_pipeline_shared import *
 from .kernel_expr_emitter import KernelIRExprEmitter
-from .kernel_compilation_loops_mixin import _KernelLoopsMixin
-from .kernel_compilation_mfma_mixin import _KernelMFMAMixin
-from .kernel_compilation_finalize_mixin import _KernelFinalizeMixin
+from .kernel_loops import _LoopSupport
+from .kernel_mfma import _MFMASupport
+from .kernel_passes import _CompilationPasses
 
 @dataclass
-class KernelCompilationContext(_KernelLoopsMixin, _KernelMFMAMixin, _KernelFinalizeMixin):
+class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
     """
     Context for kernel compilation with whole-program register allocation.
     
