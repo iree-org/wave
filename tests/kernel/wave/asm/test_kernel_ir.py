@@ -308,6 +308,47 @@ class TestRegAlloc:
         r3 = pool.alloc_single()
         assert r3 == r1
     
+    def test_peak_vgpr_accounting_with_ranges(self):
+        """
+        Regression test: peak VGPR/SGPR accounting must include register ranges.
+        
+        Previously, vreg_map.get(KVReg(base)) was wrong because the map keys are
+        integers (virtual reg ids), not KVReg objects. This caused under-reporting
+        of peak_vgprs/peak_sgprs when register ranges were allocated.
+        """
+        prog = KernelProgram()
+        builder = KernelBuilder(prog)
+        
+        # Allocate a single VGPR
+        v0 = builder.v_mov_b32(KImm(1))
+        
+        # Allocate a quad (4 VGPRs), which should push peak to at least 5
+        quad = builder.vreg_quad()
+        addr = builder.v_mov_b32(KImm(0))
+        
+        # Emit buffer_load_dwordx4 that defines the quad
+        prog.emit(KInstr("buffer_load_dwordx4", (quad,), (addr, KPhysSReg(4), KImm(0))))
+        
+        mapping, stats = allocate_kernel(prog, reserved_vgprs={0})
+        
+        # The quad takes 4 registers, plus v0 takes 1, plus addr takes 1
+        # peak_vgprs should be at least 6 (accounting for the quad range)
+        assert stats.peak_vgprs >= 5, (
+            f"peak_vgprs={stats.peak_vgprs} should be >= 5 when allocating "
+            f"a quad range. This regression indicates vreg_map key type bug."
+        )
+        
+        # Verify the quad base is allocated to a physical register
+        quad_base_phys = mapping.vreg_map.get(quad.base_reg.id)
+        assert quad_base_phys is not None, "Quad base not allocated"
+        
+        # Peak should account for quad_base + 3 (the full range)
+        expected_min_peak = quad_base_phys + 4  # base + 4 registers in quad
+        assert stats.peak_vgprs >= expected_min_peak, (
+            f"peak_vgprs={stats.peak_vgprs} should be >= {expected_min_peak} "
+            f"(quad at v{quad_base_phys}:v{quad_base_phys+3})"
+        )
+    
     def test_allocation_failure(self):
         """Test that allocation fails gracefully with no spilling."""
         prog = KernelProgram(max_vgprs=4)

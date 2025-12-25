@@ -15,13 +15,15 @@ Output:
   - llvm_asm.s / asm_asm.s: Raw assembly from each backend
   - llvm_disasm.s / asm_disasm.s: Disassembly from HSACO binaries
   - comparison_report.txt: Instruction counts, metrics, and analysis
-"""
 
-import os
-os.environ['WAVE_CACHE_ON'] = '0'
+Requirements:
+  - llvm-objdump (from ROCm or LLVM install)
+  - ROCm runtime for GPU execution
+"""
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -32,7 +34,13 @@ from typing import Dict, List, Optional, Tuple
 
 import wave_lang.kernel.lang as tkl
 import wave_lang.kernel.wave as tkw
-from wave_lang.kernel.lang.global_symbols import *
+# Explicit imports from global_symbols (avoid wildcard import)
+from wave_lang.kernel.lang.global_symbols import (
+    ADDRESS_SPACE, ADDRESS_SPACE_0,
+    BLOCK_M, BLOCK_N, BLOCK_K,
+    M, N, K,
+    SHARED_ADDRESS_SPACE, GLOBAL_ADDRESS_SPACE,
+)
 from wave_lang.kernel.wave.compile import wave_compile, WaveCompileOptions
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config, get_default_arch
 
@@ -604,6 +612,10 @@ def generate_report(
 
 
 def main():
+    # Disable cache to ensure fresh compilation for each run
+    # (moved from module level to avoid side effects at import time)
+    os.environ['WAVE_CACHE_ON'] = '0'
+    
     parser = argparse.ArgumentParser(
         description='Compare LLVM and ASM backend assembly',
         formatter_class=argparse.RawDescriptionHelpFormatter,
