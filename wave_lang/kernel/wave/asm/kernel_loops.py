@@ -6,7 +6,7 @@
 
 from .kernel_pipeline_shared import *
 
-class _KernelLoopsMixin:
+class _LoopSupport:
     # =========================================================================
     # Loop Support
     # =========================================================================

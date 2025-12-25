@@ -6,7 +6,7 @@
 
 from .handlers_shared import *
 
-class _ArithAffineHandlersMixin:
+class _ArithAffineHandlers:
     def handle_arith_constant_op(
         self, operation: arith_d.ConstantOp, kernel_info: KernelInfo
     ):

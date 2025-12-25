@@ -6,7 +6,7 @@
 
 from .handlers_shared import *
 
-class _ControlHandlersMixin:
+class _ControlFlowHandlers:
     def handle_scf_for_op(self, operation: scf_d.ForOp, kernel_info: KernelInfo):
         """
         Handle scf.for operations - emit loop assembly code.

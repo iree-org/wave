@@ -6,7 +6,7 @@
 
 from .kernel_pipeline_shared import *
 
-class _KernelFinalizeMixin:
+class _CompilationPasses:
     @property
     def unified(self) -> UnifiedEmitter:
         """

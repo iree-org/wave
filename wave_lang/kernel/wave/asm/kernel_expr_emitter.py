@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 from .kernel_pipeline_shared import *
-from .kernel_expr_emitter_floor_mixin import _KernelIRExprEmitterFloorMixin
+from .kernel_expr_floor_ops import _FloorExpressionOps
 
 class _ScopeContext:
     """Context manager for scoped CSE regions."""
@@ -28,7 +28,7 @@ class _ScopeContext:
 # =============================================================================
 
 
-class KernelIRExprEmitter(_KernelIRExprEmitterFloorMixin):
+class KernelIRExprEmitter(_FloorExpressionOps):
     """
     Expression emitter for kernel IR that can emit sympy expressions.
     

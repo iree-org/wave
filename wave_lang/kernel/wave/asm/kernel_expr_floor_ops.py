@@ -6,7 +6,7 @@
 
 from .kernel_pipeline_shared import *
 
-class _KernelIRExprEmitterFloorMixin:
+class _FloorExpressionOps:
     def _emit_floor(self, expr) -> KVReg:
         """
         Emit a floor expression.

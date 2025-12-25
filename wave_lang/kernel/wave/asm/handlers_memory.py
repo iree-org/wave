@@ -6,7 +6,7 @@
 
 from .handlers_shared import *
 
-class _MemoryHandlersMixin:
+class _MemoryHandlers:
     def handle_vector_load_op(
         self, operation: vector_d.LoadOp, kernel_info: KernelInfo
     ):
