@@ -4,7 +4,10 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .kernel_pipeline_shared import *
+from __future__ import annotations
+from typing import Optional, Tuple
+
+from .kernel_pipeline_shared import KVReg, KInstr, KImm
 
 class _FloorExpressionOps:
     def _emit_floor(self, expr) -> KVReg:

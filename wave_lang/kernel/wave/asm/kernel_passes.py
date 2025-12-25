@@ -4,7 +4,18 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .kernel_pipeline_shared import *
+from __future__ import annotations
+from typing import Dict, List, Optional, Tuple
+
+from .kernel_pipeline_shared import (
+    KVReg, KInstr, KImm, KRegRange, KPhysSReg,
+    UnifiedEmitter, EmissionMode,
+    compute_liveness, allocate_kernel, AllocationStats,
+    generate_program, KernelGenerator,
+    InstructionCategory, categorize_instruction,
+    Ticketing,
+    _kernel_ticketing_enabled,
+)
 
 class _CompilationPasses:
     @property

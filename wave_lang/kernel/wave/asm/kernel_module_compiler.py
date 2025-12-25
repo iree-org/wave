@@ -4,7 +4,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .kernel_pipeline_shared import *
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Tuple
+
 from .kernel_compilation_context import KernelCompilationContext
 
 @dataclass

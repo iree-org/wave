@@ -4,7 +4,16 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .kernel_pipeline_shared import *
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING, Any
+
+from .kernel_pipeline_shared import (
+    KVReg, KSReg, KInstr, KImm, KReg, KRegRange, M0, KPhysSReg, KPhysVReg,
+    InstructionCategory, OperandType, get_registry,
+    _ENABLE_KERNEL_IR_SIMPLIFY, _get_def_info,
+)
 from .kernel_expr_floor_ops import _FloorExpressionOps
 
 class _ScopeContext:

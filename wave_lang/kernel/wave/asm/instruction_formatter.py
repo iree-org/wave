@@ -27,6 +27,7 @@ Usage:
     # -> "    v_add_u32 v0, v1, v2"
 """
 
+import os
 from dataclasses import dataclass
 from typing import List, Any, Optional, Tuple, Union
 
@@ -37,6 +38,15 @@ from .instruction_registry import (
     InstructionCategory,
     get_registry,
 )
+
+# Enable strict operand validation (fail on missing/extra operands)
+# Default: enabled for tests (via pytest) and when explicitly set
+_STRICT_VALIDATION = os.environ.get("WAVE_STRICT_FORMATTER", "0") == "1"
+
+
+class FormatterValidationError(Exception):
+    """Raised when instruction formatting fails validation."""
+    pass
 
 
 # =============================================================================
@@ -134,14 +144,17 @@ class InstructionFormatter:
     consistent assembly output.
     """
     
-    def __init__(self, architecture: str = "common"):
+    def __init__(self, architecture: str = "common", strict: Optional[bool] = None):
         """
         Initialize the formatter with an instruction registry.
         
         Args:
             architecture: Target architecture for instruction definitions
+            strict: If True, raise errors for missing/invalid operands.
+                   If None, use WAVE_STRICT_FORMATTER env var (default: False).
         """
         self._registry = get_registry(architecture)
+        self._strict = strict if strict is not None else _STRICT_VALIDATION
     
     def format(
         self,
@@ -186,6 +199,10 @@ class InstructionFormatter:
         if instr_def.category == InstructionCategory.PSEUDO:
             return self._format_pseudo(instr_def, defs, uses, comment)
         
+        # Strict validation: check operand counts
+        if self._strict:
+            self._validate_operands(instr_def, defs, uses)
+        
         # Build operand strings
         operands = []
         
@@ -193,6 +210,10 @@ class InstructionFormatter:
         for i, def_op in enumerate(instr_def.defs):
             if i < len(defs):
                 operands.append(format_operand(defs[i], def_op.types, is_use=False))
+            elif not def_op.optional and self._strict:
+                raise FormatterValidationError(
+                    f"{instr_def.name}: missing required destination operand {i} ({def_op.name})"
+                )
         
         # Add sources (is_use=True)
         for i, use_op in enumerate(instr_def.uses):
@@ -209,6 +230,10 @@ class InstructionFormatter:
                         operands.append(format_operand(value, use_op.types, is_use=True))
                 else:
                     operands.append(format_operand(value, use_op.types, is_use=True))
+            elif not use_op.optional and self._strict:
+                raise FormatterValidationError(
+                    f"{instr_def.name}: missing required source operand {i} ({use_op.name})"
+                )
         
         # Build line
         mnemonic = instr_def.mnemonic
@@ -234,6 +259,48 @@ class InstructionFormatter:
             line += f"  // {comment}"
         
         return line
+    
+    def _validate_operands(
+        self,
+        instr_def: InstructionDef,
+        defs: List[Any],
+        uses: List[Any],
+    ) -> None:
+        """
+        Validate operand counts and types against instruction definition.
+        
+        Raises:
+            FormatterValidationError: If validation fails
+        """
+        # Count required operands
+        required_defs = sum(1 for d in instr_def.defs if not d.optional)
+        required_uses = sum(1 for u in instr_def.uses if not u.optional)
+        
+        if len(defs) < required_defs:
+            raise FormatterValidationError(
+                f"{instr_def.name}: expected {required_defs} destination operands, "
+                f"got {len(defs)}. Expected: {[d.name for d in instr_def.defs if not d.optional]}"
+            )
+        
+        if len(uses) < required_uses:
+            raise FormatterValidationError(
+                f"{instr_def.name}: expected {required_uses} source operands, "
+                f"got {len(uses)}. Expected: {[u.name for u in instr_def.uses if not u.optional]}"
+            )
+        
+        # Check for extra operands (warning in strict mode)
+        max_defs = len(instr_def.defs)
+        max_uses = len(instr_def.uses)
+        
+        if len(defs) > max_defs:
+            raise FormatterValidationError(
+                f"{instr_def.name}: too many destination operands ({len(defs)} > {max_defs})"
+            )
+        
+        if len(uses) > max_uses:
+            raise FormatterValidationError(
+                f"{instr_def.name}: too many source operands ({len(uses)} > {max_uses})"
+            )
     
     def _format_pseudo(
         self,

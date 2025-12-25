@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union, Any
 import os
 
+# Import canonical InstructionCategory from instruction_categories module
+from .instruction_categories import InstructionCategory
+
 
 # ==============================================================================
 # Operand Types
@@ -55,16 +58,8 @@ class OperandType(Enum):
     OFF = auto()            # Literal "off"
 
 
-class InstructionCategory(Enum):
-    """Categories of instructions for scheduling."""
-    VALU = auto()           # Vector ALU
-    SALU = auto()           # Scalar ALU
-    VMEM = auto()           # Vector memory
-    SMEM = auto()           # Scalar memory
-    LDS = auto()            # Local data share
-    MFMA = auto()           # Matrix fused multiply-add
-    CONTROL = auto()        # Control flow
-    PSEUDO = auto()         # Pseudo-instructions
+# InstructionCategory is imported from instruction_categories.py to avoid
+# duplicate enum definitions. See that module for the canonical definition.
 
 
 # ==============================================================================
@@ -152,17 +147,14 @@ def _parse_operand_type(type_str: str) -> Tuple[OperandType, ...]:
 
 def _parse_category(category_str: str) -> InstructionCategory:
     """Parse category string to InstructionCategory."""
-    category_map = {
-        "valu": InstructionCategory.VALU,
-        "salu": InstructionCategory.SALU,
-        "vmem": InstructionCategory.VMEM,
-        "smem": InstructionCategory.SMEM,
-        "lds": InstructionCategory.LDS,
-        "mfma": InstructionCategory.MFMA,
-        "control": InstructionCategory.CONTROL,
-        "pseudo": InstructionCategory.PSEUDO,
-    }
-    return category_map.get(category_str.lower(), InstructionCategory.VALU)
+    # Map YAML category strings to InstructionCategory enum values
+    # InstructionCategory uses string values, so we can match directly
+    category_str_lower = category_str.lower()
+    try:
+        return InstructionCategory(category_str_lower)
+    except ValueError:
+        # Fallback for unmapped categories
+        return InstructionCategory.OTHER
 
 
 def _parse_operand_def(op_dict: Dict[str, Any]) -> OperandDef:

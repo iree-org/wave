@@ -4,7 +4,10 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .kernel_pipeline_shared import *
+from __future__ import annotations
+from typing import Dict, List
+
+from .kernel_pipeline_shared import KRegRange, KPhysSReg, KInstr, KImm
 
 class _LoopSupport:
     # =========================================================================
