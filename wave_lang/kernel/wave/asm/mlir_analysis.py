@@ -76,29 +76,58 @@ class TranslationInfo:
     subgroup_size: int
 
 
-def extract_translation_info(fn: func_d.FuncOp) -> TranslationInfo:
-    """Extract (wg_size, subgroup_size) from translation_info attributes."""
-    # Defaults align with existing code paths.
-    wg_size: Tuple[int, int, int] = (64, 1, 1)
-    subgroup_size: int = 64
-
+def extract_translation_info(
+    fn: func_d.FuncOp, 
+    require_translation_info: bool = True
+) -> TranslationInfo:
+    """Extract (wg_size, subgroup_size) from translation_info attributes.
+    
+    Args:
+        fn: The MLIR function operation
+        require_translation_info: If True, raise an error when translation_info
+            is missing. If False, use defaults (64, 1, 1) and 64.
+            
+    Raises:
+        ValueError: If require_translation_info=True and the attribute is missing.
+    """
     function_attributes = (
         dict(fn.attributes) if isinstance(fn.attributes, OpAttributeMap) else {}
     )
     translation_info = function_attributes.get("translation_info")
-    if translation_info is not None:
-        workgroup_size_tuple, sg_size = parse_wg_and_subgroup(translation_info)
-        if workgroup_size_tuple:
-            # parse_wg_and_subgroup returns a tuple already normalized by upstream
-            # conventions (1-3 dims). Ensure 3-tuple.
-            if len(workgroup_size_tuple) == 3:
-                wg_size = workgroup_size_tuple
-            elif len(workgroup_size_tuple) == 2:
-                wg_size = (workgroup_size_tuple[0], workgroup_size_tuple[1], 1)
-            elif len(workgroup_size_tuple) == 1:
-                wg_size = (workgroup_size_tuple[0], 1, 1)
-        if sg_size:
-            subgroup_size = sg_size
+    
+    if translation_info is None:
+        if require_translation_info:
+            fn_name = fn.name.value if hasattr(fn.name, 'value') else str(fn.name)
+            raise ValueError(
+                f"Function '{fn_name}' is missing the required 'translation_info' "
+                f"attribute. This attribute specifies workgroup_size and subgroup_size. "
+                f"Ensure the MLIR has been properly lowered with IREE's codegen pipeline."
+            )
+        # Fallback defaults for test cases or special scenarios
+        return TranslationInfo(wg_size=(64, 1, 1), subgroup_size=64)
+    
+    # Parse translation_info
+    workgroup_size_tuple, sg_size = parse_wg_and_subgroup(translation_info)
+    
+    # Normalize workgroup size to 3-tuple
+    wg_size: Tuple[int, int, int] = (64, 1, 1)
+    if workgroup_size_tuple:
+        if len(workgroup_size_tuple) == 3:
+            wg_size = workgroup_size_tuple
+        elif len(workgroup_size_tuple) == 2:
+            wg_size = (workgroup_size_tuple[0], workgroup_size_tuple[1], 1)
+        elif len(workgroup_size_tuple) == 1:
+            wg_size = (workgroup_size_tuple[0], 1, 1)
+    
+    subgroup_size = sg_size if sg_size else 64
+    if not sg_size:
+        import warnings
+        fn_name = fn.name.value if hasattr(fn.name, 'value') else str(fn.name)
+        warnings.warn(
+            f"Function '{fn_name}' has translation_info but no subgroup_size. "
+            f"Defaulting to 64.",
+            UserWarning
+        )
 
     return TranslationInfo(wg_size=wg_size, subgroup_size=subgroup_size)
 
