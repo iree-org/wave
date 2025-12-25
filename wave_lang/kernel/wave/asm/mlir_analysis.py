@@ -16,7 +16,7 @@ and workgroup-id detection) in ONE place to avoid drift across:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Tuple
 
 from wave_lang.support.ir_imports import Operation, func_d, gpu_d, OpAttributeMap
 
@@ -54,31 +54,31 @@ _SKIP_FUNCTION_SUFFIXES = ("$async",)
 def should_skip_function(fn: func_d.FuncOp) -> bool:
     """
     Return True if this function should not be treated as a kernel.
-    
+
     This function implements the kernel selection policy for the ASM backend.
     Functions are skipped if they match any of the patterns defined in
     _SKIP_FUNCTION_PREFIXES or _SKIP_FUNCTION_SUFFIXES.
-    
+
     Args:
         fn: The MLIR function operation to check
-        
+
     Returns:
         True if the function should be skipped (not compiled as a kernel)
-        
+
     Note:
         If this returns True for your actual kernel function, you will get
         "named symbol not found" or "no kernel image" runtime errors.
     """
     name = fn.sym_name.value
-    
+
     for prefix in _SKIP_FUNCTION_PREFIXES:
         if name.startswith(prefix):
             return True
-    
+
     for suffix in _SKIP_FUNCTION_SUFFIXES:
         if name.endswith(suffix):
             return True
-    
+
     return False
 
 
@@ -120,16 +120,15 @@ class TranslationInfo:
 
 
 def extract_translation_info(
-    fn: func_d.FuncOp, 
-    require_translation_info: bool = True
+    fn: func_d.FuncOp, require_translation_info: bool = True
 ) -> TranslationInfo:
     """Extract (wg_size, subgroup_size) from translation_info attributes.
-    
+
     Args:
         fn: The MLIR function operation
         require_translation_info: If True, raise an error when translation_info
             is missing. If False, use defaults (64, 1, 1) and 64.
-            
+
     Raises:
         ValueError: If require_translation_info=True and the attribute is missing.
     """
@@ -137,10 +136,10 @@ def extract_translation_info(
         dict(fn.attributes) if isinstance(fn.attributes, OpAttributeMap) else {}
     )
     translation_info = function_attributes.get("translation_info")
-    
+
     if translation_info is None:
         if require_translation_info:
-            fn_name = fn.name.value if hasattr(fn.name, 'value') else str(fn.name)
+            fn_name = fn.name.value if hasattr(fn.name, "value") else str(fn.name)
             raise ValueError(
                 f"Function '{fn_name}' is missing the required 'translation_info' "
                 f"attribute. This attribute specifies workgroup_size and subgroup_size. "
@@ -148,10 +147,10 @@ def extract_translation_info(
             )
         # Fallback defaults for test cases or special scenarios
         return TranslationInfo(wg_size=(64, 1, 1), subgroup_size=64)
-    
+
     # Parse translation_info
     workgroup_size_tuple, sg_size = parse_wg_and_subgroup(translation_info)
-    
+
     # Normalize workgroup size to 3-tuple
     wg_size: Tuple[int, int, int] = (64, 1, 1)
     if workgroup_size_tuple:
@@ -161,17 +160,16 @@ def extract_translation_info(
             wg_size = (workgroup_size_tuple[0], workgroup_size_tuple[1], 1)
         elif len(workgroup_size_tuple) == 1:
             wg_size = (workgroup_size_tuple[0], 1, 1)
-    
+
     subgroup_size = sg_size if sg_size else 64
     if not sg_size:
         import warnings
-        fn_name = fn.name.value if hasattr(fn.name, 'value') else str(fn.name)
+
+        fn_name = fn.name.value if hasattr(fn.name, "value") else str(fn.name)
         warnings.warn(
             f"Function '{fn_name}' has translation_info but no subgroup_size. "
             f"Defaulting to 64.",
-            UserWarning
+            UserWarning,
         )
 
     return TranslationInfo(wg_size=wg_size, subgroup_size=subgroup_size)
-
-

@@ -13,7 +13,7 @@ instructions:
   # ===========================================================================
   # GFX950-specific MFMA Instructions (same as GFX942 + improvements)
   # ===========================================================================
-  
+
   # FP8 Matrix Multiply-Add
   v_mfma_f32_16x16x32_fp8_fp8:
     mnemonic: v_mfma_f32_16x16x32_fp8_fp8
@@ -109,7 +109,7 @@ instructions:
   # ===========================================================================
   # GFX950 Standard MFMA (improved latency)
   # ===========================================================================
-  
+
   v_mfma_f32_16x16x16_f16:
     mnemonic: v_mfma_f32_16x16x16_f16
     category: mfma
@@ -143,7 +143,7 @@ instructions:
   # ===========================================================================
   # GFX950-specific Conversion Instructions
   # ===========================================================================
-  
+
   v_cvt_pk_fp8_f32:
     mnemonic: v_cvt_pk_fp8_f32
     category: valu
@@ -193,7 +193,7 @@ instructions:
   # ===========================================================================
   # GFX950 Memory Operations (improved latency)
   # ===========================================================================
-  
+
   buffer_load_dword:
     mnemonic: buffer_load_dword
     category: vmem
@@ -262,7 +262,7 @@ instructions:
   # ===========================================================================
   # GFX950 Scalar Memory
   # ===========================================================================
-  
+
   s_load_dwordx2:
     mnemonic: s_load_dwordx2
     category: smem
@@ -294,7 +294,7 @@ instructions:
   # ===========================================================================
   # GFX950 LDS Operations
   # ===========================================================================
-  
+
   ds_read_b64:
     mnemonic: ds_read_b64
     category: lds
@@ -324,4 +324,3 @@ instructions:
     special:
       memory: true
       offset_format: space_separated
-

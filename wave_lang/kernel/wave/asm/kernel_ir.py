@@ -36,7 +36,7 @@ source of truth for instruction definitions.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple, Union, FrozenSet
+from typing import List, Optional, Set, Tuple, Union
 from enum import Enum, auto
 
 
@@ -44,8 +44,10 @@ from enum import Enum, auto
 # Register Classes
 # =============================================================================
 
+
 class RegClass(Enum):
     """Register class for allocation."""
+
     VGPR = auto()  # Vector general-purpose register
     SGPR = auto()  # Scalar general-purpose register
     AGPR = auto()  # Accumulator register (MFMA)
@@ -55,11 +57,13 @@ class RegClass(Enum):
 # Virtual Registers
 # =============================================================================
 
+
 @dataclass(frozen=True)
 class KVReg:
     """Virtual VGPR - placeholder for physical vN."""
+
     id: int
-    
+
     def __repr__(self) -> str:
         return f"kv{self.id}"
 
@@ -67,8 +71,9 @@ class KVReg:
 @dataclass(frozen=True)
 class KSReg:
     """Virtual SGPR - placeholder for physical sN."""
+
     id: int
-    
+
     def __repr__(self) -> str:
         return f"ks{self.id}"
 
@@ -76,8 +81,9 @@ class KSReg:
 @dataclass(frozen=True)
 class KPhysVReg:
     """Precolored physical VGPR - for ABI-mandated registers."""
+
     index: int
-    
+
     def __repr__(self) -> str:
         return f"v{self.index}"
 
@@ -85,8 +91,9 @@ class KPhysVReg:
 @dataclass(frozen=True)
 class KPhysSReg:
     """Precolored physical SGPR - for ABI-mandated registers."""
+
     index: int
-    
+
     def __repr__(self) -> str:
         return f"s{self.index}"
 
@@ -95,13 +102,14 @@ class KPhysSReg:
 class KSpecialReg:
     """
     Special non-allocatable register (e.g., m0, exec, vcc).
-    
+
     These registers are not part of the VGPR/SGPR pools and are
     never allocated by the register allocator. They are rendered
     verbatim in the final assembly.
     """
+
     name: str
-    
+
     def __repr__(self) -> str:
         return self.name
 
@@ -151,34 +159,38 @@ def get_reg_class(reg: KReg) -> RegClass:
 # Register Ranges (for pairs, quads, MFMA accumulators)
 # =============================================================================
 
+
 @dataclass(frozen=True)
 class KRegRange:
     """
     A contiguous range of registers.
-    
+
     Used for:
     - Register pairs (64-bit values, addresses)
     - Register quads (128-bit values, MFMA inputs)
     - MFMA accumulators (4-16 registers)
-    
+
     The base_reg is the first register in the range. The allocator
     ensures consecutive physical registers are assigned.
     """
+
     base_reg: KReg
     count: int
     alignment: int = 1  # Physical register alignment (1, 2, 4, ...)
-    
+
     def __repr__(self) -> str:
         base = repr(self.base_reg)
         if self.count == 1:
             return base
         return f"{base}..+{self.count}"
-    
+
     def __getitem__(self, idx: int) -> "KReg":
         """Get individual register from range by index."""
         if idx < 0 or idx >= self.count:
-            raise IndexError(f"Index {idx} out of range for KRegRange of count {self.count}")
-        
+            raise IndexError(
+                f"Index {idx} out of range for KRegRange of count {self.count}"
+            )
+
         base = self.base_reg
         if isinstance(base, KVReg):
             return KVReg(base.id + idx)
@@ -196,11 +208,13 @@ class KRegRange:
 # Immediate Values
 # =============================================================================
 
+
 @dataclass(frozen=True)
 class KImm:
     """Immediate constant value."""
+
     value: int
-    
+
     def __repr__(self) -> str:
         if -16 <= self.value <= 64:
             return str(self.value)
@@ -210,8 +224,9 @@ class KImm:
 @dataclass(frozen=True)
 class KMemOffset:
     """Memory offset for load/store instructions."""
+
     bytes: int
-    
+
     def __repr__(self) -> str:
         return f"offset:{self.bytes}"
 
@@ -224,61 +239,67 @@ KOperand = Union[KReg, KRegRange, KImm, KMemOffset]
 # Instruction Constraints
 # =============================================================================
 
+
 @dataclass
 class KInstrConstraints:
     """
     Constraints on instruction operands for register allocation.
-    
+
     These constraints inform the allocator about:
     - Register class requirements (VGPR vs SGPR)
     - Alignment requirements (pairs, quads)
     - Precoloring (must use specific physical reg)
     """
+
     # Destination constraints
-    dst_class: Optional[RegClass] = None     # Required class for destination
-    dst_alignment: int = 1                   # Required alignment (1, 2, 4, ...)
-    dst_size: int = 1                        # Number of consecutive regs needed
-    
+    dst_class: Optional[RegClass] = None  # Required class for destination
+    dst_alignment: int = 1  # Required alignment (1, 2, 4, ...)
+    dst_size: int = 1  # Number of consecutive regs needed
+
     # Source constraints (per-operand)
     src_classes: Tuple[Optional[RegClass], ...] = ()  # Required class per source
-    
+
     # Special constraints
-    same_as_src: Optional[int] = None        # dst must be same as src[N]
-    tied_operands: Tuple[Tuple[int, int], ...] = ()  # (dst_idx, src_idx) pairs that must match
-    
+    same_as_src: Optional[int] = None  # dst must be same as src[N]
+    tied_operands: Tuple[
+        Tuple[int, int], ...
+    ] = ()  # (dst_idx, src_idx) pairs that must match
+
     # Memory constraints
-    has_offset_field: bool = False           # Can encode immediate offset
-    
+    has_offset_field: bool = False  # Can encode immediate offset
+
     # Side effect flags
-    m0_clobber: bool = False                 # Clobbers m0
-    vcc_clobber: bool = False                # Clobbers vcc
+    m0_clobber: bool = False  # Clobbers m0
+    vcc_clobber: bool = False  # Clobbers vcc
 
 
 # =============================================================================
 # Instructions
 # =============================================================================
 
+
 @dataclass
 class KInstr:
     """
     A single kernel IR instruction.
-    
+
     Each instruction has:
     - name: Instruction name (e.g., "v_add_u32") - matches registry
     - defs: Registers/ranges defined (written) by this instruction
     - uses: Operands read by this instruction
     - constraints: Allocation constraints
     - comment: Optional comment for debugging
-    
+
     Note: Instructions are identified by name strings rather than enum opcodes.
     This allows the YAML instruction registry to be the single source of truth.
     """
-    name: str                                   # Instruction name (e.g., "v_add_u32")
-    defs: Tuple[Union[KReg, KRegRange], ...]    # Defined registers
-    uses: Tuple[KOperand, ...]                  # Used operands
+
+    name: str  # Instruction name (e.g., "v_add_u32")
+    defs: Tuple[Union[KReg, KRegRange], ...]  # Defined registers
+    uses: Tuple[KOperand, ...]  # Used operands
     constraints: KInstrConstraints = field(default_factory=KInstrConstraints)
     comment: Optional[str] = None
-    
+
     def get_virtual_defs(self) -> List[KVirtualReg]:
         """Get all virtual registers defined by this instruction."""
         result = []
@@ -289,7 +310,7 @@ class KInstr:
             elif is_virtual(d):
                 result.append(d)
         return result
-    
+
     def get_virtual_uses(self) -> List[KVirtualReg]:
         """Get all virtual registers used by this instruction."""
         result = []
@@ -300,23 +321,23 @@ class KInstr:
             elif isinstance(u, (KVReg, KSReg)):
                 result.append(u)
         return result
-    
+
     def __repr__(self) -> str:
         defs_str = ", ".join(repr(d) for d in self.defs) if self.defs else ""
         uses_str = ", ".join(repr(u) for u in self.uses)
         if defs_str:
             return f"{self.name} {defs_str} = {uses_str}"
         return f"{self.name} {uses_str}"
-    
+
     # Pseudo-instruction helpers
     @property
     def is_comment(self) -> bool:
         return self.name == "_comment"
-    
+
     @property
     def is_label(self) -> bool:
         return self.name == "_label"
-    
+
     @property
     def is_raw_asm(self) -> bool:
         return self.name == "_raw_asm"
@@ -326,30 +347,32 @@ class KInstr:
 # Kernel Program
 # =============================================================================
 
+
 @dataclass
 class KernelABI:
     """
     ABI bindings for precolored registers.
-    
+
     These registers are fixed by the GPU ABI and cannot be allocated
     to other values.
     """
+
     # Flat thread ID in v0 (contains packed tid_x, tid_y, tid_z)
     flat_tid_vreg: KPhysVReg = field(default_factory=lambda: KPhysVReg(0))
-    
+
     # Kernarg pointer in s[0:1]
     kernarg_ptr_sreg_lo: KPhysSReg = field(default_factory=lambda: KPhysSReg(0))
     kernarg_ptr_sreg_hi: KPhysSReg = field(default_factory=lambda: KPhysSReg(1))
-    
+
     # Workgroup ID in s[2], s[3], s[4] (optional, depends on kernel)
     workgroup_id_x_sreg: Optional[KPhysSReg] = None
     workgroup_id_y_sreg: Optional[KPhysSReg] = None
     workgroup_id_z_sreg: Optional[KPhysSReg] = None
-    
+
     def get_reserved_vgprs(self) -> Set[int]:
         """Get set of reserved VGPR indices."""
         return {self.flat_tid_vreg.index}
-    
+
     def get_reserved_sgprs(self) -> Set[int]:
         """Get set of reserved SGPR indices."""
         reserved = {self.kernarg_ptr_sreg_lo.index, self.kernarg_ptr_sreg_hi.index}
@@ -366,29 +389,30 @@ class KernelABI:
 class KernelProgram:
     """
     A complete kernel program in IR form.
-    
+
     Contains:
     - instructions: Ordered list of kernel instructions
     - abi: ABI bindings for precolored registers
     - Additional metadata for allocation limits
     """
+
     instructions: List[KInstr] = field(default_factory=list)
     abi: KernelABI = field(default_factory=KernelABI)
-    
+
     # Allocation limits
     max_vgprs: int = 256
     max_sgprs: int = 104
-    
+
     # Virtual register counters
     _next_vreg_id: int = field(default=0, repr=False)
     _next_sreg_id: int = field(default=0, repr=False)
-    
+
     def alloc_vreg(self) -> KVReg:
         """Allocate a new virtual VGPR."""
         vreg = KVReg(self._next_vreg_id)
         self._next_vreg_id += 1
         return vreg
-    
+
     def alloc_vreg_range(self, count: int, alignment: int = 1) -> KRegRange:
         """Allocate a range of virtual VGPRs."""
         base = self.alloc_vreg()
@@ -396,13 +420,13 @@ class KernelProgram:
         for _ in range(count - 1):
             self.alloc_vreg()
         return KRegRange(base, count, alignment)
-    
+
     def alloc_sreg(self) -> KSReg:
         """Allocate a new virtual SGPR."""
         sreg = KSReg(self._next_sreg_id)
         self._next_sreg_id += 1
         return sreg
-    
+
     def alloc_sreg_range(self, count: int, alignment: int = 1) -> KRegRange:
         """Allocate a range of virtual SGPRs."""
         base = self.alloc_sreg()
@@ -410,18 +434,18 @@ class KernelProgram:
         for _ in range(count - 1):
             self.alloc_sreg()
         return KRegRange(base, count, alignment)
-    
+
     def emit(self, instr: KInstr):
         """Add an instruction to the program."""
         self.instructions.append(instr)
-    
+
     def emit_comment(self, text: str):
         """Emit a comment."""
         self.emit(KInstr("_comment", (), (KImm(0),), comment=text))
-    
+
     def __len__(self) -> int:
         return len(self.instructions)
-    
+
     def __iter__(self):
         return iter(self.instructions)
 
@@ -430,140 +454,168 @@ class KernelProgram:
 # Builder Helpers
 # =============================================================================
 
+
 class KernelBuilder:
     """
     Helper class for building KernelProgram.
-    
+
     Provides convenient methods for emitting common instruction patterns
     and managing virtual registers.
-    
+
     Note: Most methods are generated dynamically via __getattr__ using
     the instruction registry. Only essential methods are defined here.
     """
-    
+
     def __init__(self, program: Optional[KernelProgram] = None):
         self.program = program if program is not None else KernelProgram()
         # Lazy-loaded registry
         self._registry = None
-    
+
     def _get_registry(self):
         """Lazy load instruction registry."""
         if self._registry is None:
             from .instruction_registry import get_registry
+
             self._registry = get_registry("common")
         return self._registry
-    
+
     # Virtual register allocation
     def vreg(self) -> KVReg:
         return self.program.alloc_vreg()
-    
+
     def vreg_pair(self) -> KRegRange:
         return self.program.alloc_vreg_range(2, alignment=2)
-    
+
     def vreg_quad(self) -> KRegRange:
         return self.program.alloc_vreg_range(4, alignment=4)
-    
+
     def sreg(self) -> KSReg:
         return self.program.alloc_sreg()
-    
+
     def sreg_pair(self) -> KRegRange:
         return self.program.alloc_sreg_range(2, alignment=2)
-    
+
     def comment(self, text: str):
         """Emit a comment."""
         self.program.emit_comment(text)
-    
+
     # Essential instruction emission helpers
     # These are kept for backwards compatibility and common patterns
-    
+
     def v_mov_b32(self, src: KOperand, comment: str = None) -> KVReg:
         """Emit v_mov_b32 and return destination vreg."""
         dst = self.vreg()
         self.program.emit(KInstr("v_mov_b32", (dst,), (src,), comment=comment))
         return dst
-    
+
     def v_add_u32(self, src1: KOperand, src2: KOperand, comment: str = None) -> KVReg:
         """Emit v_add_u32 and return destination vreg."""
         dst = self.vreg()
         self.program.emit(KInstr("v_add_u32", (dst,), (src1, src2), comment=comment))
         return dst
-    
-    def v_mul_lo_u32(self, src1: KOperand, src2: KOperand, comment: str = None) -> KVReg:
+
+    def v_mul_lo_u32(
+        self, src1: KOperand, src2: KOperand, comment: str = None
+    ) -> KVReg:
         """Emit v_mul_lo_u32 and return destination vreg."""
         dst = self.vreg()
         self.program.emit(KInstr("v_mul_lo_u32", (dst,), (src1, src2), comment=comment))
         return dst
-    
+
     def v_and_b32(self, src1: KOperand, src2: KOperand, comment: str = None) -> KVReg:
         """Emit v_and_b32 and return destination vreg."""
         dst = self.vreg()
         self.program.emit(KInstr("v_and_b32", (dst,), (src1, src2), comment=comment))
         return dst
-    
+
     def v_or_b32(self, src1: KOperand, src2: KOperand, comment: str = None) -> KVReg:
         """Emit v_or_b32 and return destination vreg."""
         dst = self.vreg()
         self.program.emit(KInstr("v_or_b32", (dst,), (src1, src2), comment=comment))
         return dst
-    
-    def v_lshlrev_b32(self, shift: KOperand, src: KOperand, comment: str = None) -> KVReg:
+
+    def v_lshlrev_b32(
+        self, shift: KOperand, src: KOperand, comment: str = None
+    ) -> KVReg:
         """Emit v_lshlrev_b32 and return destination vreg."""
         dst = self.vreg()
-        self.program.emit(KInstr("v_lshlrev_b32", (dst,), (shift, src), comment=comment))
+        self.program.emit(
+            KInstr("v_lshlrev_b32", (dst,), (shift, src), comment=comment)
+        )
         return dst
-    
-    def v_lshrrev_b32(self, shift: KOperand, src: KOperand, comment: str = None) -> KVReg:
+
+    def v_lshrrev_b32(
+        self, shift: KOperand, src: KOperand, comment: str = None
+    ) -> KVReg:
         """Emit v_lshrrev_b32 and return destination vreg."""
         dst = self.vreg()
-        self.program.emit(KInstr("v_lshrrev_b32", (dst,), (shift, src), comment=comment))
+        self.program.emit(
+            KInstr("v_lshrrev_b32", (dst,), (shift, src), comment=comment)
+        )
         return dst
-    
-    def v_bfe_u32(self, src: KOperand, offset: KOperand, width: KOperand, comment: str = None) -> KVReg:
+
+    def v_bfe_u32(
+        self, src: KOperand, offset: KOperand, width: KOperand, comment: str = None
+    ) -> KVReg:
         """Emit v_bfe_u32 and return destination vreg."""
         dst = self.vreg()
-        self.program.emit(KInstr("v_bfe_u32", (dst,), (src, offset, width), comment=comment))
+        self.program.emit(
+            KInstr("v_bfe_u32", (dst,), (src, offset, width), comment=comment)
+        )
         return dst
-    
-    def v_lshl_add_u32(self, src: KOperand, shift: KOperand, addend: KOperand, comment: str = None) -> KVReg:
+
+    def v_lshl_add_u32(
+        self, src: KOperand, shift: KOperand, addend: KOperand, comment: str = None
+    ) -> KVReg:
         """Emit v_lshl_add_u32 and return destination vreg."""
         dst = self.vreg()
-        self.program.emit(KInstr("v_lshl_add_u32", (dst,), (src, shift, addend), comment=comment))
+        self.program.emit(
+            KInstr("v_lshl_add_u32", (dst,), (src, shift, addend), comment=comment)
+        )
         return dst
-    
+
     def s_mov_b32(self, src: KOperand, comment: str = None) -> KSReg:
         """Emit s_mov_b32 and return destination sreg."""
         dst = self.sreg()
         self.program.emit(KInstr("s_mov_b32", (dst,), (src,), comment=comment))
         return dst
-    
-    def s_load_dwordx2(self, base: KRegRange, offset: KImm, comment: str = None) -> KRegRange:
+
+    def s_load_dwordx2(
+        self, base: KRegRange, offset: KImm, comment: str = None
+    ) -> KRegRange:
         """Emit s_load_dwordx2 and return destination sreg range."""
         dst = self.sreg_pair()
-        self.program.emit(KInstr("s_load_dwordx2", (dst,), (base, offset), comment=comment))
+        self.program.emit(
+            KInstr("s_load_dwordx2", (dst,), (base, offset), comment=comment)
+        )
         return dst
-    
-    def ds_read_b64(self, addr: KVReg, offset: int = 0, comment: str = None) -> KRegRange:
+
+    def ds_read_b64(
+        self, addr: KVReg, offset: int = 0, comment: str = None
+    ) -> KRegRange:
         """Emit ds_read_b64 and return destination vreg range."""
         dst = self.vreg_pair()
         uses = (addr,) if offset == 0 else (addr, KMemOffset(offset))
         self.program.emit(KInstr("ds_read_b64", (dst,), uses, comment=comment))
         return dst
-    
-    def ds_write_b64(self, addr: KVReg, src: KRegRange, offset: int = 0, comment: str = None):
+
+    def ds_write_b64(
+        self, addr: KVReg, src: KRegRange, offset: int = 0, comment: str = None
+    ):
         """Emit ds_write_b64."""
         uses = (addr, src) if offset == 0 else (addr, src, KMemOffset(offset))
         self.program.emit(KInstr("ds_write_b64", (), uses, comment=comment))
-    
+
     def s_waitcnt(self, vmcnt: int = 0, lgkmcnt: int = 0, comment: str = None):
         """Emit s_waitcnt."""
         # Encode wait counts as immediate
-        waitcnt = (vmcnt & 0x3f) | ((lgkmcnt & 0xf) << 8)
+        waitcnt = (vmcnt & 0x3F) | ((lgkmcnt & 0xF) << 8)
         self.program.emit(KInstr("s_waitcnt", (), (KImm(waitcnt),), comment=comment))
-    
+
     def s_barrier(self, comment: str = None):
         """Emit s_barrier."""
         self.program.emit(KInstr("s_barrier", (), (), comment=comment))
-    
+
     def s_endpgm(self, comment: str = None):
         """Emit s_endpgm."""
         self.program.emit(KInstr("s_endpgm", (), (), comment=comment))

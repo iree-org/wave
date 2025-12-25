@@ -15,21 +15,20 @@ loaded from YAML files. It supports:
 
 Usage:
     registry = InstructionRegistry.load("gfx942")
-    
+
     # Get instruction info
     info = registry.get("v_add_u32")
     print(info.mnemonic, info.latency)
-    
+
     # Use with emitter
     emitter = InstructionEmitter(registry)
     emitter.v_add_u32(dst, src0, src1)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union, Any
-import os
+from typing import Dict, List, Optional, Tuple, Any
 
 # Import canonical InstructionCategory from instruction_categories module
 from .instruction_categories import InstructionCategory
@@ -39,23 +38,25 @@ from .instruction_categories import InstructionCategory
 # Operand Types
 # ==============================================================================
 
+
 class OperandType(Enum):
     """Types of operands an instruction can accept."""
-    VGPR = auto()           # Single VGPR
-    VGPR_PAIR = auto()      # Pair of consecutive VGPRs (v[n:n+1])
-    VGPR_QUAD = auto()      # Quad of consecutive VGPRs (v[n:n+3])
-    VGPR_16 = auto()        # 16 consecutive VGPRs
-    SGPR = auto()           # Single SGPR
-    SGPR_PAIR = auto()      # Pair of consecutive SGPRs (s[n:n+1])
-    SGPR_QUAD = auto()      # Quad of consecutive SGPRs (s[n:n+3])
-    IMM = auto()            # Immediate value
-    IMM16 = auto()          # 16-bit immediate
-    OFFSET = auto()         # Memory offset (offset:N)
-    LABEL = auto()          # Branch label
-    SPECIAL = auto()        # Special register (m0, exec, vcc)
-    STRING = auto()         # String (for comments/raw asm)
-    WAITCNT = auto()        # Wait count value
-    OFF = auto()            # Literal "off"
+
+    VGPR = auto()  # Single VGPR
+    VGPR_PAIR = auto()  # Pair of consecutive VGPRs (v[n:n+1])
+    VGPR_QUAD = auto()  # Quad of consecutive VGPRs (v[n:n+3])
+    VGPR_16 = auto()  # 16 consecutive VGPRs
+    SGPR = auto()  # Single SGPR
+    SGPR_PAIR = auto()  # Pair of consecutive SGPRs (s[n:n+1])
+    SGPR_QUAD = auto()  # Quad of consecutive SGPRs (s[n:n+3])
+    IMM = auto()  # Immediate value
+    IMM16 = auto()  # 16-bit immediate
+    OFFSET = auto()  # Memory offset (offset:N)
+    LABEL = auto()  # Branch label
+    SPECIAL = auto()  # Special register (m0, exec, vcc)
+    STRING = auto()  # String (for comments/raw asm)
+    WAITCNT = auto()  # Wait count value
+    OFF = auto()  # Literal "off"
 
 
 # InstructionCategory is imported from instruction_categories.py to avoid
@@ -66,9 +67,11 @@ class OperandType(Enum):
 # Instruction Definition
 # ==============================================================================
 
+
 @dataclass(frozen=True)
 class OperandDef:
     """Definition of an instruction operand."""
+
     name: str
     types: Tuple[OperandType, ...]  # Allowed types
     optional: bool = False
@@ -79,35 +82,36 @@ class OperandDef:
 class InstructionDef:
     """
     Complete definition of an instruction.
-    
+
     This contains all the information needed to:
     - Emit the instruction to assembly
     - Allocate registers for it
     - Schedule it with latency awareness
     """
-    name: str                           # Internal name (e.g., "v_add_u32")
-    mnemonic: str                       # Assembly mnemonic
-    category: InstructionCategory       # Instruction category
-    format: str                         # Encoding format
-    defs: Tuple[OperandDef, ...]        # Destination operands
-    uses: Tuple[OperandDef, ...]        # Source operands
-    latency: int                        # Approximate latency in cycles
-    
+
+    name: str  # Internal name (e.g., "v_add_u32")
+    mnemonic: str  # Assembly mnemonic
+    category: InstructionCategory  # Instruction category
+    format: str  # Encoding format
+    defs: Tuple[OperandDef, ...]  # Destination operands
+    uses: Tuple[OperandDef, ...]  # Source operands
+    latency: int  # Approximate latency in cycles
+
     # Special properties
-    is_memory: bool = False             # Memory access
-    is_sync: bool = False               # Synchronization
-    is_barrier: bool = False            # Barrier
-    is_branch: bool = False             # Branch instruction
-    is_conditional: bool = False        # Conditional branch
-    is_terminator: bool = False         # Block terminator
-    sets_scc: bool = False              # Sets SCC
-    reads_scc: bool = False             # Reads SCC
-    lds_modifier: bool = False          # Has LDS modifier
-    offset_format: str = "comma"        # "comma" or "space_separated"
-    is_raw: bool = False                # Raw assembly
-    is_label_def: bool = False          # Label definition
-    is_accumulator: bool = False        # MFMA accumulator
-    
+    is_memory: bool = False  # Memory access
+    is_sync: bool = False  # Synchronization
+    is_barrier: bool = False  # Barrier
+    is_branch: bool = False  # Branch instruction
+    is_conditional: bool = False  # Conditional branch
+    is_terminator: bool = False  # Block terminator
+    sets_scc: bool = False  # Sets SCC
+    reads_scc: bool = False  # Reads SCC
+    lds_modifier: bool = False  # Has LDS modifier
+    offset_format: str = "comma"  # "comma" or "space_separated"
+    is_raw: bool = False  # Raw assembly
+    is_label_def: bool = False  # Label definition
+    is_accumulator: bool = False  # MFMA accumulator
+
     # Architecture support
     architectures: Tuple[str, ...] = ()  # Empty = all architectures
 
@@ -115,6 +119,7 @@ class InstructionDef:
 # ==============================================================================
 # Type Parsing
 # ==============================================================================
+
 
 def _parse_operand_type(type_str: str) -> Tuple[OperandType, ...]:
     """Parse operand type string to tuple of OperandType."""
@@ -135,13 +140,13 @@ def _parse_operand_type(type_str: str) -> Tuple[OperandType, ...]:
         "waitcnt": OperandType.WAITCNT,
         "off": OperandType.OFF,
     }
-    
+
     types = []
     for t in type_str.split("|"):
         t = t.strip().lower()
         if t in type_map:
             types.append(type_map[t])
-    
+
     return tuple(types) if types else (OperandType.IMM,)
 
 
@@ -174,10 +179,10 @@ def _parse_instruction_def(name: str, data: Dict[str, Any]) -> InstructionDef:
     uses_data = data.get("uses", [])
     defs = tuple(_parse_operand_def(d) for d in defs_data)
     uses = tuple(_parse_operand_def(u) for u in uses_data)
-    
+
     # Parse special properties
     special = data.get("special", {})
-    
+
     return InstructionDef(
         name=name,
         mnemonic=data.get("mnemonic", name),
@@ -207,46 +212,47 @@ def _parse_instruction_def(name: str, data: Dict[str, Any]) -> InstructionDef:
 # Instruction Registry
 # ==============================================================================
 
+
 class InstructionRegistry:
     """
     Registry of instruction definitions loaded from YAML files.
-    
+
     Provides lookup by instruction name and supports architecture-specific
     instruction sets.
     """
-    
+
     def __init__(self, architecture: str = "common"):
         self.architecture = architecture
         self._instructions: Dict[str, InstructionDef] = {}
         self._by_category: Dict[InstructionCategory, List[InstructionDef]] = {}
         self._by_mnemonic: Dict[str, InstructionDef] = {}
-    
+
     @classmethod
     def load(cls, architecture: str = "common") -> "InstructionRegistry":
         """
         Load instruction registry for the given architecture.
-        
+
         Loads common.yaml first, then overlays architecture-specific definitions.
         """
         registry = cls(architecture)
-        
+
         # Find the instruction_defs directory
         module_dir = Path(__file__).parent
         defs_dir = module_dir / "instruction_defs"
-        
+
         # Load common definitions
         common_path = defs_dir / "common.yaml"
         if common_path.exists():
             registry._load_yaml(common_path)
-        
+
         # Load architecture-specific definitions (overrides common)
         if architecture != "common":
             arch_path = defs_dir / f"{architecture}.yaml"
             if arch_path.exists():
                 registry._load_yaml(arch_path)
-        
+
         return registry
-    
+
     def _load_yaml(self, path: Path) -> None:
         """Load instructions from a YAML file."""
         try:
@@ -255,8 +261,9 @@ class InstructionRegistry:
             # Fallback: try to use ruamel.yaml
             try:
                 from ruamel.yaml import YAML
+
                 yaml_loader = YAML()
-                with open(path, 'r') as f:
+                with open(path, "r") as f:
                     data = yaml_loader.load(f)
             except ImportError:
                 raise ImportError(
@@ -264,43 +271,43 @@ class InstructionRegistry:
                     "Install with: pip install pyyaml"
                 )
         else:
-            with open(path, 'r') as f:
+            with open(path, "r") as f:
                 data = yaml.safe_load(f)
-        
+
         if not data or "instructions" not in data:
             return
-        
+
         for name, instr_data in data["instructions"].items():
             instr_def = _parse_instruction_def(name, instr_data)
             self._register(instr_def)
-    
+
     def _register(self, instr: InstructionDef) -> None:
         """Register an instruction definition."""
         self._instructions[instr.name] = instr
         self._by_mnemonic[instr.mnemonic] = instr
-        
+
         if instr.category not in self._by_category:
             self._by_category[instr.category] = []
         self._by_category[instr.category].append(instr)
-    
+
     def get(self, name: str) -> Optional[InstructionDef]:
         """Get instruction definition by name."""
         return self._instructions.get(name)
-    
+
     def get_by_mnemonic(self, mnemonic: str) -> Optional[InstructionDef]:
         """Get instruction definition by mnemonic."""
         return self._by_mnemonic.get(mnemonic)
-    
+
     def get_category(self, category: InstructionCategory) -> List[InstructionDef]:
         """Get all instructions in a category."""
         return self._by_category.get(category, [])
-    
+
     def __contains__(self, name: str) -> bool:
         return name in self._instructions
-    
+
     def __iter__(self):
         return iter(self._instructions.values())
-    
+
     def __len__(self) -> int:
         return len(self._instructions)
 
@@ -315,7 +322,7 @@ _global_registry: Optional[InstructionRegistry] = None
 def get_registry(architecture: str = "common") -> InstructionRegistry:
     """
     Get the global instruction registry, loading if necessary.
-    
+
     Uses lazy loading to avoid loading YAML at import time.
     """
     global _global_registry
@@ -324,7 +331,8 @@ def get_registry(architecture: str = "common") -> InstructionRegistry:
     return _global_registry
 
 
-def get_instruction(name: str, architecture: str = "common") -> Optional[InstructionDef]:
+def get_instruction(
+    name: str, architecture: str = "common"
+) -> Optional[InstructionDef]:
     """Convenience function to get an instruction definition."""
     return get_registry(architecture).get(name)
-

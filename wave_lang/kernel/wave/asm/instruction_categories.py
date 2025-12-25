@@ -11,7 +11,7 @@ entire ASM backend. All modules should import from this file.
 
 Categories are used for:
 - Scoreboard tracking (VMEM/LGKM operations need tickets)
-- Hazard detection 
+- Hazard detection
 - Instruction scheduling
 - YAML instruction definitions (instruction_registry.py)
 
@@ -26,26 +26,27 @@ from enum import Enum
 class InstructionCategory(Enum):
     """
     Categories of instructions for scoreboarding, ticketing, and scheduling.
-    
+
     String values are used for consistency with YAML instruction definitions.
     """
+
     # Memory operations
-    VMEM = "vmem"      # Vector memory (buffer_load/store)
-    SMEM = "smem"      # Scalar memory (s_load, s_store)
-    LDS = "lds"        # Local data share (ds_read, ds_write)
-    LGKM = "lgkm"      # Combined LDS/GDS/scalar memory/messages (for waitcnt)
-    
+    VMEM = "vmem"  # Vector memory (buffer_load/store)
+    SMEM = "smem"  # Scalar memory (s_load, s_store)
+    LDS = "lds"  # Local data share (ds_read, ds_write)
+    LGKM = "lgkm"  # Combined LDS/GDS/scalar memory/messages (for waitcnt)
+
     # ALU operations
-    VALU = "valu"      # Vector ALU
-    SALU = "salu"      # Scalar ALU
-    MFMA = "mfma"      # Matrix fused multiply-add
-    
+    VALU = "valu"  # Vector ALU
+    SALU = "salu"  # Scalar ALU
+    MFMA = "mfma"  # Matrix fused multiply-add
+
     # Control flow
     CONTROL = "control"  # Branch, call, return, etc.
-    
+
     # Special
-    PSEUDO = "pseudo"    # Pseudo-instructions (_comment, _label, _raw_asm)
-    OTHER = "other"      # Unknown/other (nop, wait, barrier, etc.)
+    PSEUDO = "pseudo"  # Pseudo-instructions (_comment, _label, _raw_asm)
+    OTHER = "other"  # Unknown/other (nop, wait, barrier, etc.)
 
 
 def categorize_instruction(instruction: str) -> InstructionCategory:

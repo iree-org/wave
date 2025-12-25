@@ -6,6 +6,7 @@
 
 from .handlers_shared import *
 
+
 class _ArithAffineHandlers:
     def handle_arith_constant_op(
         self, operation: arith_d.ConstantOp, kernel_info: KernelInfo
@@ -277,4 +278,3 @@ class _ArithAffineHandlers:
                 if not matched_tid:
                     # Store the simplified SymPy expression for later ASM emission
                     kernel_info.index_env[destination_ssa] = simplified_expression
-

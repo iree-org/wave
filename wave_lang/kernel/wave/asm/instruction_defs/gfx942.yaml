@@ -12,7 +12,7 @@ instructions:
   # ===========================================================================
   # GFX942-specific MFMA Instructions
   # ===========================================================================
-  
+
   # FP8 Matrix Multiply-Add (CDNA3 only)
   v_mfma_f32_16x16x32_fp8_fp8:
     mnemonic: v_mfma_f32_16x16x32_fp8_fp8
@@ -108,7 +108,7 @@ instructions:
   # ===========================================================================
   # GFX942-specific Conversion Instructions
   # ===========================================================================
-  
+
   v_cvt_pk_fp8_f32:
     mnemonic: v_cvt_pk_fp8_f32
     category: valu
@@ -159,7 +159,7 @@ instructions:
   # GFX942 Latency Overrides
   # ===========================================================================
   # Override base latencies for GFX942-specific timing
-  
+
   # Buffer loads have lower latency on MI300
   buffer_load_dword:
     mnemonic: buffer_load_dword
@@ -227,7 +227,7 @@ instructions:
   # ===========================================================================
   # GFX942 Scalar Memory (improved latency)
   # ===========================================================================
-  
+
   s_load_dwordx2:
     mnemonic: s_load_dwordx2
     category: smem
@@ -259,7 +259,7 @@ instructions:
   # ===========================================================================
   # GFX942 LDS (Local Data Share) - same latency
   # ===========================================================================
-  
+
   ds_read_b64:
     mnemonic: ds_read_b64
     category: lds
@@ -289,4 +289,3 @@ instructions:
     special:
       memory: true
       offset_format: space_separated
-

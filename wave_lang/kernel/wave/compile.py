@@ -1,4 +1,3 @@
-import os
 import glob
 from itertools import chain
 from typing import Any, Optional, Callable, Sequence
@@ -1157,7 +1156,10 @@ def _generate_asm_code(mb, options):
 
     # Canonical MLIR->ASM entry point (single-path kernel IR backend).
     from .asm.kernel_pipeline import KernelModuleCompiler
-    return KernelModuleCompiler(targetid=options.target, codeobj=options.codeobj).compile_mlir_string(mlir_asm)
+
+    return KernelModuleCompiler(
+        targetid=options.target, codeobj=options.codeobj
+    ).compile_mlir_string(mlir_asm)
 
 
 def _compile_asm_to_binary(asm_code, options):

@@ -31,9 +31,9 @@ This module implements a single-path architecture where all instructions
 
 import argparse
 import sys
-from typing import List
 
 from .kernel_pipeline import KernelModuleCompiler
+
 
 def main():
     ap = argparse.ArgumentParser()
