@@ -233,10 +233,9 @@ jobs:
 
       - name: Run LIT tests
         env:
-           WAVE_TEST_WATER: ${{ env.IS_CDNA3 == 'true' && '1' || '0'  }}
+           WAVE_TEST_WATER: ${{ (env.IS_CDNA3 == 'true' || env.is_CDNA4 == 'true')  && '1' || '0'  }}
            WAVE_TEST_DWARFDUMP: ${{ env.IS_RDNA4 == 'false' && '1' || '0' }}
         run: |
-          # TODO: mlir_converter tests segfault on mi35x
           # TODO: can't sudo to install dwarfdump on rdna4
           echo "WAVE_TEST_WATER=$WAVE_TEST_WATER"
           echo "WAVE_TEST_DWARFDUMP=$WAVE_TEST_DWARFDUMP"

@@ -36,6 +36,8 @@ if (WATER_ENABLE_PYTHON)
       WaterExtensionNanobind.cpp
     EMBED_CAPI_LINK_LIBS
       WaterCAPI
+    PRIVATE_LINK_LIBS
+      LLVMSupport
   )
 
   add_mlir_python_common_capi_library(WaterPythonCAPI
@@ -63,4 +65,29 @@ if (WATER_ENABLE_PYTHON)
     COMMON_CAPI_LINK_LIBS
       WaterPythonCAPI
   )
+
+  if (UNIX)
+    target_compile_options(WaterPythonCAPI
+      PRIVATE "-fvisibility=hidden"
+    )
+    target_link_options(WaterPythonCAPI
+      PRIVATE "-fvisibility=hidden"
+    )
+    if (APPLE)
+      # See https://github.com/numba/numba-mlir/blob/fd9609d81dab96b0658392886ebc470ea2fa4eeb/numba_mlir/numba_mlir/mlir_compiler/CMakeLists.txt#L71
+      message(SEND_ERROR "symbol management not implemented on Darwin")
+    else()
+      target_link_options(WaterPythonCAPI
+        PRIVATE
+        "-Wl,--no-undefined"
+        "-Wl,-z,defs"
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/capi.lds"
+      )
+      set_target_properties(WaterPythonCAPI
+        PROPERTIES
+	LINK_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/capi.lds"
+      )
+    endif()
+  endif()
 endif()
