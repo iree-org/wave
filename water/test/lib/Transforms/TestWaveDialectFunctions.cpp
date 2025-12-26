@@ -14,27 +14,29 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 
+using namespace mlir;
+
 namespace mlir::water::test {
 #define GEN_PASS_DEF_TESTWAVEDIALECTFUNCTIONSPASS
 #include "Transforms/Passes.h.inc"
 } // namespace mlir::water::test
 
-static llvm::LogicalResult testCreateTensor(mlir::Operation *op) {
+static llvm::LogicalResult testCreateTensor(Operation *op) {
   const static llvm::StringLiteral kFullySpecified = "fully_specified";
   const static llvm::StringLiteral kShape = "shape";
-  auto fullySpecifiedAttr = op->getAttrOfType<mlir::BoolAttr>(kFullySpecified);
+  auto fullySpecifiedAttr = op->getAttrOfType<BoolAttr>(kFullySpecified);
   if (!fullySpecifiedAttr)
     return op->emitOpError()
            << "expected the \"" << kFullySpecified << "\" bool attribute";
 
-  auto shapeAttr = op->getAttrOfType<mlir::ArrayAttr>(kShape);
+  auto shapeAttr = op->getAttrOfType<ArrayAttr>(kShape);
   if (!shapeAttr)
     return op->emitOpError()
            << "expected the \"" << kShape << "\" array attribute";
 
   llvm::SmallVector<wave::WaveSymbolAttr> shapeComponents;
-  for (mlir::Attribute a : shapeAttr.getValue()) {
-    if (auto symbol = llvm::dyn_cast<mlir::FlatSymbolRefAttr>(a)) {
+  for (Attribute a : shapeAttr.getValue()) {
+    if (auto symbol = llvm::dyn_cast<FlatSymbolRefAttr>(a)) {
       shapeComponents.emplace_back(
           wave::WaveSymbolAttr::get(op->getContext(), symbol.getValue()));
       continue;
@@ -43,7 +45,7 @@ static llvm::LogicalResult testCreateTensor(mlir::Operation *op) {
                              << "\" attribute to be flat symbol references";
   }
 
-  mlir::Type elementType = mlir::IndexType::get(op->getContext());
+  Type elementType = IndexType::get(op->getContext());
   auto type = wave::WaveTensorType::getChecked(
       [&]() { return op->emitError(); }, op->getContext(),
       llvm::ArrayRef(shapeComponents), fullySpecifiedAttr.getValue(),
@@ -58,24 +60,22 @@ class TestWaveDialectFunctionsPass
           TestWaveDialectFunctionsPass> {
 public:
   void runOnOperation() override {
-    mlir::OperationName createTensorOpName("wave_test.create_tensor",
-                                           &getContext());
-    mlir::WalkResult walkResult =
-        getOperation()->walk([&](mlir::Operation *op) {
-          if (op->getName() == createTensorOpName) {
-            if (failed(testCreateTensor(op)))
-              return mlir::WalkResult::interrupt();
-          }
-          return mlir::WalkResult::advance();
-        });
+    OperationName createTensorOpName("wave_test.create_tensor", &getContext());
+    WalkResult walkResult = getOperation()->walk([&](Operation *op) {
+      if (op->getName() == createTensorOpName) {
+        if (failed(testCreateTensor(op)))
+          return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
     if (walkResult.wasInterrupted())
       return signalPassFailure();
 
-    mlir::IRRewriter rewriter(&getContext());
+    IRRewriter rewriter(&getContext());
     getOperation()->walk([&](wave::IterateOp iterateOp) {
-      if (iterateOp->getAttrOfType<mlir::UnitAttr>("wave_test.make_isolated")) {
+      if (iterateOp->getAttrOfType<UnitAttr>("wave_test.make_isolated")) {
         iterateOp.makeIsolated(rewriter);
-      } else if (iterateOp->getAttrOfType<mlir::UnitAttr>(
+      } else if (iterateOp->getAttrOfType<UnitAttr>(
                      "wave_test.make_non_isolated")) {
         iterateOp.makeNonIsolated(rewriter);
       }

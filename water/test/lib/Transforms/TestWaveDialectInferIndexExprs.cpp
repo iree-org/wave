@@ -27,22 +27,22 @@ namespace mlir::water::test {
 static LogicalResult
 overrideInitialization(Operation *top,
                        wave::SetIndexLatticeFn setIndexForValue) {
-  auto overrideIndex = [&](mlir::Operation *op, ValueRange values,
+  auto overrideIndex = [&](Operation *op, ValueRange values,
                            const llvm::Twine &attributeName) -> LogicalResult {
-    auto overrides = op->getAttrOfType<mlir::ArrayAttr>(attributeName.str());
+    auto overrides = op->getAttrOfType<ArrayAttr>(attributeName.str());
     if (!overrides)
       return success();
     for (auto [value, attr] : llvm::zip(values, overrides)) {
-      if (llvm::isa<mlir::UnitAttr>(attr))
+      if (llvm::isa<UnitAttr>(attr))
         continue;
-      if (auto strAttr = llvm::dyn_cast<mlir::StringAttr>(attr);
+      if (auto strAttr = llvm::dyn_cast<StringAttr>(attr);
           strAttr && strAttr.getValue() == "<top>") {
         setIndexForValue(value, nullptr);
         continue;
       }
 
-      auto dict = llvm::dyn_cast<mlir::DictionaryAttr>(attr);
-      if (!dict || llvm::any_of(dict.getValue(), [](mlir::NamedAttribute attr) {
+      auto dict = llvm::dyn_cast<DictionaryAttr>(attr);
+      if (!dict || llvm::any_of(dict.getValue(), [](NamedAttribute attr) {
             return !llvm::isa<wave::WaveIndexMappingAttr>(attr.getValue());
           })) {
         return op->emitError()
@@ -65,7 +65,7 @@ overrideInitialization(Operation *top,
                              "wave_test.override_operand_index")))
       return WalkResult::interrupt();
 
-    for (mlir::Region &region : op->getRegions()) {
+    for (Region &region : op->getRegions()) {
       for (auto &&[blockNumber, block] : llvm::enumerate(region)) {
         if (failed(overrideIndex(op, block.getArguments(),
                                  "wave_test.override_region" +
@@ -86,22 +86,22 @@ class TestWaveDialectInferIndexExprsPass
           TestWaveDialectInferIndexExprsPass> {
 public:
   void runOnOperation() override {
-    mlir::SymbolTableCollection symbolTable;
-    mlir::DataFlowConfig config;
+    SymbolTableCollection symbolTable;
+    DataFlowConfig config;
     config.setInterprocedural(false);
-    mlir::DataFlowSolver solver(config);
+    DataFlowSolver solver(config);
 
     solver.load<mlir::dataflow::DeadCodeAnalysis>();
     solver.load<mlir::dataflow::SparseConstantPropagation>();
     WaveIndexExprsAnalysisOptions options;
-    options.disableBackward = getOperation()->getAttrOfType<mlir::UnitAttr>(
+    options.disableBackward = getOperation()->getAttrOfType<UnitAttr>(
                                   "wave_test.disable_backward") != nullptr;
-    options.disableForward = getOperation()->getAttrOfType<mlir::UnitAttr>(
+    options.disableForward = getOperation()->getAttrOfType<UnitAttr>(
                                  "wave_test.disable_forward") != nullptr;
     options.overrideInitialization = overrideInitialization;
     addWaveIndexExprsAnalyses(solver, symbolTable, options);
 
-    mlir::IRRewriter rewriter(&getContext());
+    IRRewriter rewriter(&getContext());
     getOperation()->walk(
         [&](wave::IterateOp iterateOp) { iterateOp.makeIsolated(rewriter); });
 

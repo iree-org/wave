@@ -27,6 +27,8 @@
 #include "llvm/Support/FormatVariadic.h"
 #include <type_traits>
 
+using namespace mlir;
+
 #define DEBUG_TYPE "wave-infer-types"
 
 using wave::ElementsPerThreadLatticeValue;
@@ -164,7 +166,7 @@ public:
 
 private:
   // The internal storage is either a type or one of the top/bottom flags.
-  llvm::PointerIntPair<mlir::Type, 2> value;
+  llvm::PointerIntPair<Type, 2> value;
 
   // State flags.
   const static unsigned kUninitializedState = 0;
@@ -173,8 +175,7 @@ private:
 };
 
 // Typed lattice object for type inference.
-class InferTypeLattice
-    : public mlir::dataflow::Lattice<InferTypeLatticeStorage> {
+class InferTypeLattice : public dataflow::Lattice<InferTypeLatticeStorage> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InferTypeLattice);
   using Lattice::Lattice;
@@ -185,7 +186,7 @@ public:
 // manipulate wave tensor types, failure otherwise. Returns nullopt if the op
 // does implement the interface.
 static std::optional<llvm::LogicalResult>
-handleNonInterfaceOpInferType(mlir::Operation *op) {
+handleNonInterfaceOpInferType(Operation *op) {
   if (llvm::isa<wave::WaveInferTypeOpInterface>(op))
     return std::nullopt;
 
@@ -193,7 +194,7 @@ handleNonInterfaceOpInferType(mlir::Operation *op) {
                     llvm::IsaPred<wave::WaveTensorType>) &&
       !llvm::any_of(op->getResultTypes(),
                     llvm::IsaPred<wave::WaveTensorType>)) {
-    return mlir::success();
+    return success();
   }
   return op->emitError()
          << "cannot propagate types across an operation not implementing "
@@ -215,7 +216,7 @@ handleNonInterfaceOpInferType(mlir::Operation *op) {
 // requested interfaces, the lattice instances may be set to the top state
 // without diagnostics.
 class InferTypeForwardAnalysis
-    : public mlir::dataflow::SparseForwardDataFlowAnalysis<InferTypeLattice> {
+    : public dataflow::SparseForwardDataFlowAnalysis<InferTypeLattice> {
 public:
   using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
 
@@ -226,31 +227,31 @@ public:
   // the intra-procedural case. Without this function, the framework would call
   // `setToEntryState` that would trigger setting to lattice top which we don't
   // want.
-  mlir::LogicalResult initialize(mlir::Operation *top) override {
+  LogicalResult initialize(Operation *top) override {
     if (getSolverConfig().isInterprocedural())
       return top->emitError() << "interprocedural analysis not supported";
 
     // Call the base class initialization in order to set up update listeners.
     // Note that this will initialize values at function/region entries to
     // lattice top.
-    if (mlir::failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
-      return mlir::failure();
+    if (failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
+      return failure();
 
     // Reset the initialization of values that may have been initialized to
     // lattice top to the concrete type instead.
-    top->walk([&](mlir::Operation *op) {
+    top->walk([&](Operation *op) {
       if (auto iface = llvm::dyn_cast<wave::WaveInferTypeOpInterface>(op)) {
         initForResults(iface);
-      } else if (auto iface = llvm::dyn_cast<mlir::FunctionOpInterface>(op)) {
+      } else if (auto iface = llvm::dyn_cast<FunctionOpInterface>(op)) {
         if (!iface.isDeclaration())
           initForBlockArguments(iface.getFunctionBody().front());
       } else if (auto iterate = llvm::dyn_cast<wave::IterateOp>(op)) {
         initForResults(op);
         initForBlockArguments(iterate.getBody().front());
       }
-      return mlir::WalkResult::advance();
+      return WalkResult::advance();
     });
-    return mlir::success();
+    return success();
   }
 
   // Called by base class initialization and when the analysis fails to identify
@@ -260,11 +261,11 @@ public:
   }
 
   // Dataflow transfer function, defers to the WaveInferTypeOpInterface.
-  mlir::LogicalResult
-  visitOperation(mlir::Operation *op,
+  LogicalResult
+  visitOperation(Operation *op,
                  llvm::ArrayRef<const InferTypeLattice *> operands,
                  llvm::ArrayRef<InferTypeLattice *> results) override {
-    std::optional<mlir::LogicalResult> res = handleNonInterfaceOpInferType(op);
+    std::optional<LogicalResult> res = handleNonInterfaceOpInferType(op);
     if (res)
       return *res;
 
@@ -278,25 +279,25 @@ public:
 
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
-    llvm::FailureOr<mlir::ChangeResult> result =
+    llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveInferTypeOpInterface>(op).propagateForward(
             operandTypes, resultTypes, errs);
-    if (mlir::failed(result)) {
+    if (failed(result)) {
       return op->emitError()
              << "failed to propagate type information forward: " << errs.str();
     }
-    if (*result == mlir::ChangeResult::NoChange)
-      return mlir::success();
+    if (*result == ChangeResult::NoChange)
+      return success();
 
     for (auto &&[result, lattice] : llvm::zip_equal(resultTypes, results)) {
       propagateIfChanged(lattice,
                          lattice->join(InferTypeLatticeStorage(result)));
     }
-    return mlir::success();
+    return success();
   }
 
-  void visitNonControlFlowArguments(mlir::Operation *op,
-                                    const mlir::RegionSuccessor &successor,
+  void visitNonControlFlowArguments(Operation *op,
+                                    const RegionSuccessor &successor,
                                     llvm::ArrayRef<InferTypeLattice *> lattices,
                                     unsigned firstIndex) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
@@ -331,7 +332,7 @@ public:
             getProgramPointBefore(iterateOp.getLoopBody()), iterArg);
         const InferTypeLattice *terminatorOperandLattice = getLatticeElementFor(
             getProgramPointBefore(iterateOp.getLoopBody()), terminatorOperand);
-        mlir::ChangeResult changed = lattice->join(iterArgLattice->getValue());
+        ChangeResult changed = lattice->join(iterArgLattice->getValue());
         changed |= lattice->join(terminatorOperandLattice->getValue());
         propagateIfChanged(lattice, changed);
       }
@@ -352,8 +353,7 @@ public:
             getProgramPointAfter(iterateOp), terminatorOperand);
         const InferTypeLattice *iterArgLattice =
             getLatticeElementFor(getProgramPointAfter(iterateOp), iterArg);
-        mlir::ChangeResult changed =
-            resultLattice->join(iterArgLattice->getValue());
+        ChangeResult changed = resultLattice->join(iterArgLattice->getValue());
         changed |= resultLattice->join(terminatorOperandLattice->getValue());
         propagateIfChanged(resultLattice, changed);
       }
@@ -364,25 +364,25 @@ private:
   // Initialize the lattice instance for the given value to its current type and
   // trigger dataflow propagation. Returns the lattice instance or null if the
   // value is not of wave tensor type.
-  InferTypeLattice *initForValue(mlir::Value value) {
+  InferTypeLattice *initForValue(Value value) {
     auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(value.getType());
     if (!tensorType)
       return nullptr;
     InferTypeLattice *lattice = getLatticeElement(value);
     lattice->getValue().unsafeSet(InferTypeLatticeStorage(tensorType));
-    propagateIfChanged(lattice, mlir::ChangeResult::Change);
+    propagateIfChanged(lattice, ChangeResult::Change);
     return lattice;
   }
 
   // Initialize lattice instances for results of the given op.
-  void initForResults(mlir::Operation *op) {
-    for (mlir::Value result : op->getResults())
+  void initForResults(Operation *op) {
+    for (Value result : op->getResults())
       initForValue(result);
   }
 
   // Initialize lattice instances for block arguments of the given block.
-  void initForBlockArguments(mlir::Block &block) {
-    for (mlir::Value arg : block.getArguments())
+  void initForBlockArguments(Block &block) {
+    for (Value arg : block.getArguments())
       initForValue(arg);
   }
 };
@@ -401,7 +401,7 @@ private:
 // flow operations not implementing the requested interfaces, the lattice
 // instances may be set to the top state without diagnostics.
 class InferTypeBackwardAnalysis
-    : public mlir::dataflow::SparseBackwardDataFlowAnalysis<InferTypeLattice> {
+    : public dataflow::SparseBackwardDataFlowAnalysis<InferTypeLattice> {
 public:
   using SparseBackwardDataFlowAnalysis::SparseBackwardDataFlowAnalysis;
 
@@ -412,22 +412,22 @@ public:
   // the intra-procedural case. Without this function, the framework would
   // call `setToEntryState` that would trigger setting to lattice top which we
   // don't want.
-  mlir::LogicalResult initialize(mlir::Operation *top) override {
+  LogicalResult initialize(Operation *top) override {
     if (getSolverConfig().isInterprocedural())
       return top->emitError() << "interprocedural analysis not supported";
 
     // Call the base class initialization in order to set up update listeners.
     // Note that this will initialize values at function/region entries to
     // lattice top.
-    if (mlir::failed(SparseBackwardDataFlowAnalysis::initialize(top)))
-      return mlir::failure();
+    if (failed(SparseBackwardDataFlowAnalysis::initialize(top)))
+      return failure();
 
-    top->walk([this](mlir::Operation *op) {
-      if (!op->hasTrait<mlir::OpTrait::ReturnLike>())
+    top->walk([this](Operation *op) {
+      if (!op->hasTrait<OpTrait::ReturnLike>())
         return;
-      if (!llvm::isa<mlir::FunctionOpInterface>(op->getParentOp()))
+      if (!llvm::isa<FunctionOpInterface>(op->getParentOp()))
         return;
-      for (mlir::Value operand : op->getOperands()) {
+      for (Value operand : op->getOperands()) {
         auto tensorType =
             llvm::dyn_cast<wave::WaveTensorType>(operand.getType());
         if (!tensorType)
@@ -436,7 +436,7 @@ public:
         lattice->getValue().unsafeSet(InferTypeLatticeStorage(tensorType));
       }
     });
-    return mlir::success();
+    return success();
   }
 
   // Called by base class initialization and when the analysis fails to identify
@@ -446,11 +446,10 @@ public:
   }
 
   // Dataflow transfer function, defers to the WaveInferTypeOpInterface.
-  mlir::LogicalResult
-  visitOperation(mlir::Operation *op,
-                 llvm::ArrayRef<InferTypeLattice *> operands,
+  LogicalResult
+  visitOperation(Operation *op, llvm::ArrayRef<InferTypeLattice *> operands,
                  llvm::ArrayRef<const InferTypeLattice *> results) override {
-    std::optional<mlir::LogicalResult> res = handleNonInterfaceOpInferType(op);
+    std::optional<LogicalResult> res = handleNonInterfaceOpInferType(op);
     if (res)
       return *res;
 
@@ -464,21 +463,21 @@ public:
 
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
-    llvm::FailureOr<mlir::ChangeResult> result =
+    llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveInferTypeOpInterface>(op).propagateBackward(
             operandTypes, resultTypes, errs);
-    if (mlir::failed(result)) {
+    if (failed(result)) {
       return op->emitError()
              << "failed to propagate type information backward: " << errs.str();
     }
-    if (*result == mlir::ChangeResult::NoChange)
-      return mlir::success();
+    if (*result == ChangeResult::NoChange)
+      return success();
 
     for (auto &&[operand, lattice] : llvm::zip_equal(operandTypes, operands)) {
       propagateIfChanged(lattice,
                          lattice->join(InferTypeLatticeStorage(operand)));
     }
-    return mlir::success();
+    return success();
   }
 
   // Specialization of the dataflow transfer function for control flow branch
@@ -488,7 +487,7 @@ public:
   // lattices manually here. For other ops, we do not expect this to happen so
   // move the lattice instance to the top state, which will result in a type
   // conflict diagnostic if this ever happens.
-  void visitBranchOperand(mlir::OpOperand &opOperand) override {
+  void visitBranchOperand(OpOperand &opOperand) override {
     auto tensorType =
         llvm::dyn_cast<wave::WaveTensorType>(opOperand.get().getType());
     if (!tensorType)
@@ -497,8 +496,7 @@ public:
     if (auto iterateOp =
             llvm::dyn_cast<wave::IterateOp>(opOperand.getOwner())) {
       unsigned position = opOperand.getOperandNumber();
-      mlir::Value blockArgument =
-          iterateOp.getLoopBody()->getArgument(position);
+      Value blockArgument = iterateOp.getLoopBody()->getArgument(position);
       const InferTypeLattice *blockArgLattice =
           getLatticeElement(blockArgument);
       InferTypeLattice *lattice = getLatticeElement(opOperand.get());
@@ -517,7 +515,7 @@ public:
 
     if (auto yieldOp = llvm::dyn_cast<wave::YieldOp>(opOperand.getOwner())) {
       unsigned position = opOperand.getOperandNumber();
-      mlir::Value result = yieldOp->getParentOp()->getResult(position);
+      Value result = yieldOp->getParentOp()->getResult(position);
       const InferTypeLattice *resultLattice = getLatticeElement(result);
       InferTypeLattice *lattice = getLatticeElement(opOperand.get());
       // Same as for the `addDependency` above.
@@ -534,7 +532,7 @@ public:
   // Specialization of the dataflow transfer function for call operands that are
   // not forwarded to the callee. We expect types to be fully specified at the
   // function boundary so just set to the type.
-  void visitCallOperand(mlir::OpOperand &opOperand) override {
+  void visitCallOperand(OpOperand &opOperand) override {
     auto tensorType =
         llvm::dyn_cast<wave::WaveTensorType>(opOperand.get().getType());
     if (!tensorType)
@@ -552,21 +550,21 @@ public:
 // Only emit a generic diagnostic if no more specific diagnostic was emitted.
 // This is usually indicative of some deep internal problem in the dataflow
 // solver.
-llvm::LogicalResult
-wave::runSolverAndCaptureErrors(mlir::DataFlowSolver &solver,
-                                mlir::Operation *root, bool force) {
+llvm::LogicalResult wave::runSolverAndCaptureErrors(DataFlowSolver &solver,
+                                                    Operation *root,
+                                                    bool force) {
   bool emittedError = false;
-  mlir::DiagnosticEngine::HandlerID handlerID =
+  DiagnosticEngine::HandlerID handlerID =
       root->getContext()->getDiagEngine().registerHandler(
-          [&](mlir::Diagnostic &diag) {
-            if (diag.getSeverity() == mlir::DiagnosticSeverity::Error)
+          [&](Diagnostic &diag) {
+            if (diag.getSeverity() == DiagnosticSeverity::Error)
               emittedError = true;
 
             // Returning failure indicates that the diagnostic wan't handled
             // and it is forwarded to other registered handlers.
-            return mlir::failure();
+            return failure();
           });
-  if (mlir::failed(solver.initializeAndRun(root))) {
+  if (failed(solver.initializeAndRun(root))) {
     if (!emittedError)
       root->emitError() << "dataflow analysis failed";
     if (!force)
@@ -580,30 +578,30 @@ wave::runSolverAndCaptureErrors(mlir::DataFlowSolver &solver,
 // set their types using the provided callback. Report error and stop if
 // any type failed to infer. Inferred types are supposed to still be accepted by
 // the op verifiers that will normally run after the pass.
-static llvm::LogicalResult updateValueTypes(
-    mlir::Operation *root,
-    llvm::function_ref<llvm::LogicalResult(mlir::Value, llvm::StringRef)>
-        updateType) {
-  mlir::WalkResult walkResult = root->walk([&](mlir::Operation *op) {
-    for (mlir::OpResult res : op->getResults()) {
-      if (mlir::failed(updateType(
-              res, "result #" + std::to_string(res.getResultNumber()))))
-        return mlir::WalkResult::interrupt();
+static llvm::LogicalResult
+updateValueTypes(Operation *root,
+                 llvm::function_ref<llvm::LogicalResult(Value, llvm::StringRef)>
+                     updateType) {
+  WalkResult walkResult = root->walk([&](Operation *op) {
+    for (OpResult res : op->getResults()) {
+      if (failed(updateType(res, "result #" +
+                                     std::to_string(res.getResultNumber()))))
+        return WalkResult::interrupt();
     }
 
-    for (mlir::Region &region : op->getRegions()) {
+    for (Region &region : op->getRegions()) {
       for (auto &&[blockNumber, block] : llvm::enumerate(region)) {
-        for (mlir::BlockArgument arg : block.getArguments()) {
+        for (BlockArgument arg : block.getArguments()) {
           auto fmt = llvm::formatv("argument #{0} of block #{1} in region #{2}",
                                    arg.getArgNumber(), blockNumber,
                                    region.getRegionNumber());
-          if (mlir::failed(updateType(arg, fmt.str())))
-            return mlir::WalkResult::interrupt();
+          if (failed(updateType(arg, fmt.str())))
+            return WalkResult::interrupt();
         }
       }
     }
 
-    return mlir::WalkResult::advance();
+    return WalkResult::advance();
   });
 
   return llvm::failure(walkResult.wasInterrupted());
@@ -623,38 +621,38 @@ public:
 
     // Configure the analyses. The dead code and SCP analyses are required by
     // the logic of the solver currently.
-    mlir::SymbolTableCollection symbolTable;
-    mlir::DataFlowConfig dataFlowConfig;
+    SymbolTableCollection symbolTable;
+    DataFlowConfig dataFlowConfig;
     dataFlowConfig.setInterprocedural(false);
-    mlir::DataFlowSolver solver(dataFlowConfig);
-    solver.load<mlir::dataflow::DeadCodeAnalysis>();
-    solver.load<mlir::dataflow::SparseConstantPropagation>();
+    DataFlowSolver solver(dataFlowConfig);
+    solver.load<dataflow::DeadCodeAnalysis>();
+    solver.load<dataflow::SparseConstantPropagation>();
     solver.load<InferTypeForwardAnalysis>();
     solver.load<InferTypeBackwardAnalysis>(symbolTable);
-    mlir::Operation *root = getOperation();
+    Operation *root = getOperation();
 
     if (llvm::failed(wave::runSolverAndCaptureErrors(solver, root, force)))
       return signalPassFailure();
 
     // Update the type of the value given the lattice. Don't return failure
     // after emitting error if force-processing is requested.
-    auto updateType = [&](mlir::Value value, llvm::StringRef description) {
+    auto updateType = [&](Value value, llvm::StringRef description) {
       if (!llvm::isa<wave::WaveTensorType>(value.getType()))
-        return mlir::success();
+        return success();
 
       auto *lattice = solver.lookupState<InferTypeLattice>(value);
       if (!lattice || lattice->getValue().isBottom()) {
         emitError(value.getLoc()) << "couldn't infer type for " << description;
-        return mlir::failure(!force);
+        return failure(!force);
       }
       if (lattice->getValue().isTop()) {
         emitError(value.getLoc())
             << "type conflict was detected for " << description;
-        return mlir::failure(!force);
+        return failure(!force);
       }
 
       value.setType(lattice->getValue().getConcreteValue());
-      return mlir::success();
+      return success();
     };
 
     if (llvm::failed(updateValueTypes(getOperation(), updateType)))
@@ -673,7 +671,7 @@ public:
 
 // Typed lattice object for elements-per-thread dataflow propagation.
 class ElementsPerThreadLattice
-    : public mlir::dataflow::Lattice<ElementsPerThreadLatticeValue> {
+    : public dataflow::Lattice<ElementsPerThreadLatticeValue> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ElementsPerThreadLattice);
   using Lattice::Lattice;
@@ -684,7 +682,7 @@ public:
 // the op doesn't manipulate register-resident wave tensor types, failure
 // otherwise. Returns nullopt if the op does implement the interface.
 static std::optional<llvm::LogicalResult>
-handleNonInterfaceOpElementsPerThread(mlir::Operation *op) {
+handleNonInterfaceOpElementsPerThread(Operation *op) {
   if (llvm::isa<wave::WaveElementsPerThreadOpInterface>(op))
     return std::nullopt;
 
@@ -713,23 +711,22 @@ handleNonInterfaceOpElementsPerThread(mlir::Operation *op) {
 // of elements per thread and there is no context allowing to infer them, the
 // lattice value remains set to bottom.
 class ElementsPerThreadForwardAnalysis
-    : public mlir::dataflow::SparseForwardDataFlowAnalysis<
-          ElementsPerThreadLattice> {
+    : public dataflow::SparseForwardDataFlowAnalysis<ElementsPerThreadLattice> {
 public:
   using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
 
   // Basic initialization and configuration filtering.
-  mlir::LogicalResult initialize(mlir::Operation *top) override {
+  LogicalResult initialize(Operation *top) override {
     if (getSolverConfig().isInterprocedural())
       return top->emitError() << "interprocedural analysis not supported";
 
     // Call the base class initialization in order to set up update listeners.
     // Note that this will initialize values at function/region entries to
     // lattice top.
-    if (mlir::failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
-      return mlir::failure();
+    if (failed(AbstractSparseForwardDataFlowAnalysis::initialize(top)))
+      return failure();
 
-    return mlir::success();
+    return success();
   }
 
   // Called by base class initialization and when the analysis fails to identify
@@ -741,14 +738,14 @@ public:
 
   // Dataflow transfer function, defers to either
   // WaveElementsPerThreadOpInterface or NoOpElementsPerThreadOpTrait.
-  mlir::LogicalResult
-  visitOperation(mlir::Operation *op,
+  LogicalResult
+  visitOperation(Operation *op,
                  llvm::ArrayRef<const ElementsPerThreadLattice *> operands,
                  llvm::ArrayRef<ElementsPerThreadLattice *> results) override {
     if (op->hasTrait<wave::NoOpElementsPerThreadOpTrait>())
       return llvm::success();
 
-    std::optional<mlir::LogicalResult> res =
+    std::optional<LogicalResult> res =
         handleNonInterfaceOpElementsPerThread(op);
     if (res)
       return *res;
@@ -763,7 +760,7 @@ public:
 
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
-    llvm::FailureOr<mlir::ChangeResult> result =
+    llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveElementsPerThreadOpInterface>(op)
             .propagateElementsPerThreadForward(operandElements, resultElements,
                                                errs);
@@ -772,18 +769,18 @@ public:
              << "failed to propagate elements per thread forward: "
              << errs.str();
     }
-    if (*result == mlir::ChangeResult::NoChange)
-      return mlir::success();
+    if (*result == ChangeResult::NoChange)
+      return success();
 
     for (auto &&[result, lattice] : llvm::zip_equal(resultElements, results)) {
       propagateIfChanged(lattice,
                          lattice->join(ElementsPerThreadLatticeValue(result)));
     }
-    return mlir::success();
+    return success();
   }
 
   void visitNonControlFlowArguments(
-      mlir::Operation *op, const mlir::RegionSuccessor &successor,
+      Operation *op, const RegionSuccessor &successor,
       llvm::ArrayRef<ElementsPerThreadLattice *> lattices,
       unsigned firstIndex) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
@@ -817,7 +814,7 @@ public:
         const ElementsPerThreadLattice *terminatorOperandLattice =
             getLatticeElementFor(getProgramPointBefore(iterateOp.getLoopBody()),
                                  terminatorOperand);
-        mlir::ChangeResult changed = lattice->join(iterArgLattice->getValue());
+        ChangeResult changed = lattice->join(iterArgLattice->getValue());
         changed |= lattice->join(terminatorOperandLattice->getValue());
         propagateIfChanged(lattice, changed);
       }
@@ -837,8 +834,7 @@ public:
                                  terminatorOperand);
         const ElementsPerThreadLattice *iterArgLattice =
             getLatticeElementFor(getProgramPointAfter(iterateOp), iterArg);
-        mlir::ChangeResult changed =
-            resultLattice->join(iterArgLattice->getValue());
+        ChangeResult changed = resultLattice->join(iterArgLattice->getValue());
         changed |= resultLattice->join(terminatorOperandLattice->getValue());
         propagateIfChanged(resultLattice, changed);
       }
@@ -862,20 +858,20 @@ public:
 // of elements per thread and there is no context allowing to infer them, the
 // lattice value remains set to bottom.
 class ElementsPerThreadBackwardAnalysis
-    : public mlir::dataflow::SparseBackwardDataFlowAnalysis<
+    : public dataflow::SparseBackwardDataFlowAnalysis<
           ElementsPerThreadLattice> {
 public:
   using SparseBackwardDataFlowAnalysis::SparseBackwardDataFlowAnalysis;
 
   // Basic initialization and configuration filtering.
-  mlir::LogicalResult initialize(mlir::Operation *top) override {
+  LogicalResult initialize(Operation *top) override {
     assert(!getSolverConfig().isInterprocedural() &&
            "interprocedural analysis not supported");
 
-    if (mlir::failed(SparseBackwardDataFlowAnalysis::initialize(top)))
-      return mlir::failure();
+    if (failed(SparseBackwardDataFlowAnalysis::initialize(top)))
+      return failure();
 
-    return mlir::success();
+    return success();
   }
 
   // Called by base class initialization and when the analysis fails to identify
@@ -892,15 +888,14 @@ public:
   // lattices manually here. For other ops, we do not expect this to happen so
   // move the lattice instance to the top state, which will result in a
   // conflict diagnostic if this ever happens.
-  void visitBranchOperand(mlir::OpOperand &opOperand) override {
+  void visitBranchOperand(OpOperand &opOperand) override {
     if (!wave::isaTensorInRegister(opOperand.get().getType()))
       return;
 
     if (auto iterateOp =
             llvm::dyn_cast<wave::IterateOp>(opOperand.getOwner())) {
       unsigned position = opOperand.getOperandNumber();
-      mlir::Value blockArgument =
-          iterateOp.getLoopBody()->getArgument(position);
+      Value blockArgument = iterateOp.getLoopBody()->getArgument(position);
       const ElementsPerThreadLattice *blockArgLattice =
           getLatticeElement(blockArgument);
       ElementsPerThreadLattice *lattice = getLatticeElement(opOperand.get());
@@ -917,7 +912,7 @@ public:
 
     if (auto yieldOp = llvm::dyn_cast<wave::YieldOp>(opOperand.getOwner())) {
       unsigned position = opOperand.getOperandNumber();
-      mlir::Value result = yieldOp->getParentOp()->getResult(position);
+      Value result = yieldOp->getParentOp()->getResult(position);
       const ElementsPerThreadLattice *resultLattice = getLatticeElement(result);
       ElementsPerThreadLattice *lattice = getLatticeElement(opOperand.get());
       // Same as for the `addDependency` above.
@@ -935,7 +930,7 @@ public:
   // handled by this analysis to be present at the function boundary so we move
   // the lattice instance to the top state, indicating a conflict if this ever
   // happens.
-  void visitCallOperand(mlir::OpOperand &opOperand) override {
+  void visitCallOperand(OpOperand &opOperand) override {
     if (!wave::isaTensorInRegister(opOperand.get().getType()))
       return;
 
@@ -945,12 +940,12 @@ public:
   // Dataflow transfer function, defers to either
   // WaveElementsPerThreadOpInterface or NoOpElementsPerThreadOpTrait.
   llvm::LogicalResult visitOperation(
-      mlir::Operation *op, llvm::ArrayRef<ElementsPerThreadLattice *> operands,
+      Operation *op, llvm::ArrayRef<ElementsPerThreadLattice *> operands,
       llvm::ArrayRef<const ElementsPerThreadLattice *> results) override {
     if (op->hasTrait<wave::NoOpElementsPerThreadOpTrait>())
       return llvm::success();
 
-    std::optional<mlir::LogicalResult> res =
+    std::optional<LogicalResult> res =
         handleNonInterfaceOpElementsPerThread(op);
     if (res)
       return *res;
@@ -965,7 +960,7 @@ public:
 
     std::string errorMessage;
     llvm::raw_string_ostream errs(errorMessage);
-    llvm::FailureOr<mlir::ChangeResult> result =
+    llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveElementsPerThreadOpInterface>(op)
             .propagateElementsPerThreadBackward(operandElements, resultElements,
                                                 errs);
@@ -974,7 +969,7 @@ public:
              << "failed to propagate elements per thread backward: "
              << errs.str();
     }
-    if (*result == mlir::ChangeResult::NoChange)
+    if (*result == ChangeResult::NoChange)
       return llvm::success();
 
     for (auto &&[operand, lattice] :
@@ -997,12 +992,12 @@ public:
   void runOnOperation() override {
     // Configure the analyses. The dead code and SCP analyses are required by
     // the logic of the solver currently.
-    mlir::SymbolTableCollection symbolTable;
-    mlir::DataFlowConfig dataFlowConfig;
+    SymbolTableCollection symbolTable;
+    DataFlowConfig dataFlowConfig;
     dataFlowConfig.setInterprocedural(false);
-    mlir::DataFlowSolver solver(dataFlowConfig);
-    solver.load<mlir::dataflow::DeadCodeAnalysis>();
-    solver.load<mlir::dataflow::SparseConstantPropagation>();
+    DataFlowSolver solver(dataFlowConfig);
+    solver.load<dataflow::DeadCodeAnalysis>();
+    solver.load<dataflow::SparseConstantPropagation>();
     solver.load<ElementsPerThreadForwardAnalysis>();
     solver.load<ElementsPerThreadBackwardAnalysis>(symbolTable);
 
@@ -1010,7 +1005,7 @@ public:
             wave::runSolverAndCaptureErrors(solver, getOperation(), false)))
       return signalPassFailure();
 
-    auto updateType = [&](mlir::Value value, llvm::StringRef description) {
+    auto updateType = [&](Value value, llvm::StringRef description) {
       auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(value.getType());
       if (!tensorType ||
           tensorType.getAddressSpaceValue() != wave::WaveAddressSpace::Register)
@@ -1028,7 +1023,7 @@ public:
         return llvm::failure();
       }
 
-      auto vectorType = mlir::VectorType::get(
+      auto vectorType = VectorType::get(
           {static_cast<int64_t>(lattice->getValue().getValue())},
           tensorType.getElementType());
       value.setType(vectorType);
@@ -1047,8 +1042,7 @@ public:
 
 // Lattice object for index expressions for analysis compatibility, the actual
 // logic is in the IndexExprsLatticeStorage class.
-class IndexExprsLattice
-    : public mlir::dataflow::Lattice<IndexExprsLatticeStorage> {
+class IndexExprsLattice : public dataflow::Lattice<IndexExprsLatticeStorage> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(IndexExprsLattice);
   using Lattice::Lattice;
@@ -1059,18 +1053,18 @@ namespace {
 // PrintNoRegions(op)`.
 class PrintNoRegions {
 public:
-  PrintNoRegions(mlir::Operation *op) : operation(op) {}
+  PrintNoRegions(Operation *op) : operation(op) {}
 
   void print(llvm::raw_ostream &os) const {
     if (!operation) {
       os << "<null>";
       return;
     }
-    operation->print(os, mlir::OpPrintingFlags().skipRegions());
+    operation->print(os, OpPrintingFlags().skipRegions());
   }
 
 private:
-  mlir::Operation *operation;
+  Operation *operation;
 };
 
 } // namespace
@@ -1083,33 +1077,33 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
 }
 
 class IndexExprsForwardAnalysis
-    : public mlir::dataflow::SparseForwardDataFlowAnalysis<IndexExprsLattice> {
+    : public dataflow::SparseForwardDataFlowAnalysis<IndexExprsLattice> {
 private:
   void unsafeSet(IndexExprsLattice *lattice, IndexExprsLatticeStorage value) {
     if (lattice->getValue() == value)
       return;
     lattice->getValue().unsafeSet(value);
-    propagateIfChanged(lattice, mlir::ChangeResult::Change);
+    propagateIfChanged(lattice, ChangeResult::Change);
   }
 
 public:
   explicit IndexExprsForwardAnalysis(
-      mlir::DataFlowSolver &solver,
+      DataFlowSolver &solver,
       wave::OverrideInitializationFn overrideInitialization = nullptr)
       : SparseForwardDataFlowAnalysis(solver),
         overrideInitialization(overrideInitialization) {}
 
-  mlir::LogicalResult initialize(mlir::Operation *top) override {
+  LogicalResult initialize(Operation *top) override {
     assert(!getSolverConfig().isInterprocedural() &&
            "interprocedural analysis not supported");
 
     // Call the base class initialization in order to set up update listeners.
     // Note that this will initialize values at function/region entries to
     // lattice top.
-    if (mlir::failed(SparseForwardDataFlowAnalysis::initialize(top)))
-      return mlir::failure();
+    if (failed(SparseForwardDataFlowAnalysis::initialize(top)))
+      return failure();
 
-    llvm::DenseMap<mlir::Operation *, mlir::Attribute> constraints;
+    llvm::DenseMap<Operation *, Attribute> constraints;
     if (llvm::failed(wave::collectWaveConstraints(top, constraints)))
       return llvm::failure();
 
@@ -1118,77 +1112,75 @@ public:
           wave::IndexExprsAnalysisInit::create(parent->getLoc(), attr);
       if (llvm::failed(initObject))
         return llvm::failure();
-      mlir::WalkResult walkResult =
-          parent->walk([&](mlir::Operation *op) -> mlir::WalkResult {
-            if (auto iface =
-                    llvm::dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
-              llvm::SmallVector<wave::IndexExprsLatticeStorage> resultExprs =
-                  llvm::map_to_vector(op->getResults(), [&](mlir::Value v) {
-                    return getLatticeElement(v)->getValue();
-                  });
-              auto emitError = [op]() { return op->emitError(); };
-              if (llvm::failed(iface.initializeIndexExprsForward(
-                      resultExprs, *initObject, emitError)))
-                return mlir::WalkResult::interrupt();
+      WalkResult walkResult = parent->walk([&](Operation *op) -> WalkResult {
+        if (auto iface =
+                llvm::dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
+          llvm::SmallVector<wave::IndexExprsLatticeStorage> resultExprs =
+              llvm::map_to_vector(op->getResults(), [&](Value v) {
+                return getLatticeElement(v)->getValue();
+              });
+          auto emitError = [op]() { return op->emitError(); };
+          if (llvm::failed(iface.initializeIndexExprsForward(
+                  resultExprs, *initObject, emitError)))
+            return WalkResult::interrupt();
 
-              for (auto &&[result, lattice] :
-                   llvm::zip_equal(op->getResults(), resultExprs)) {
-                IndexExprsLattice *latticeObject = getLatticeElement(result);
-                unsafeSet(latticeObject, lattice);
-              }
+          for (auto &&[result, lattice] :
+               llvm::zip_equal(op->getResults(), resultExprs)) {
+            IndexExprsLattice *latticeObject = getLatticeElement(result);
+            unsafeSet(latticeObject, lattice);
+          }
+        }
+
+        // Set block arguments to bottom initially so they can be join'ed
+        // with actual lattices coming from other operations.
+        for (Region &region : op->getRegions()) {
+          for (Block &block : region) {
+            for (Value value : block.getArguments()) {
+              if (!llvm::isa<wave::WaveTensorType>(value.getType()))
+                continue;
+
+              LDBG() << "setting block argument lattice " << value << " from "
+                     << PrintNoRegions(op) << " to bottom";
+              unsafeSet(getLatticeElement(value),
+                        IndexExprsLatticeStorage::bottom());
             }
+          }
+        }
 
-            // Set block arguments to bottom initially so they can be join'ed
-            // with actual lattices coming from other operations.
-            for (mlir::Region &region : op->getRegions()) {
-              for (mlir::Block &block : region) {
-                for (mlir::Value value : block.getArguments()) {
-                  if (!llvm::isa<wave::WaveTensorType>(value.getType()))
-                    continue;
-
-                  LDBG() << "setting block argument lattice " << value
-                         << " from " << PrintNoRegions(op) << " to bottom";
-                  unsafeSet(getLatticeElement(value),
-                            IndexExprsLatticeStorage::bottom());
-                }
-              }
+        if (auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op)) {
+          // Set lattices of captured block arguments to the relevant tiling
+          // constraint, it will be then propagated by joining with
+          // expressions induced by other constraints.
+          wave::WaveSymbolAttr iterSymbolAttr = iterateOp.getIterator();
+          llvm::SmallVector<Attribute> symbolConstraints =
+              initObject->symbolConstraints.lookup(iterSymbolAttr);
+          auto it = llvm::find_if(symbolConstraints,
+                                  llvm::IsaPred<wave::TilingConstraintAttr>);
+          if (it != symbolConstraints.end()) {
+            wave::TilingConstraintAttr tilingConstraint =
+                llvm::cast<wave::TilingConstraintAttr>(*it);
+            for (Value capture : iterateOp.getCaptureBlockArgs()) {
+              if (!llvm::isa<wave::WaveTensorType>(capture.getType()))
+                continue;
+              auto dict = DictionaryAttr::get(
+                  iterSymbolAttr.getContext(),
+                  {{iterSymbolAttr.getName(),
+                    wave::applyConstraint(tilingConstraint)}});
+              LDBG() << "setting iterate block argument lattice " << capture
+                     << " from " << PrintNoRegions(iterateOp) << " to " << dict;
+              unsafeSet(getLatticeElement(capture), dict);
             }
-
-            if (auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op)) {
-              // Set lattices of captured block arguments to the relevant tiling
-              // constraint, it will be then propagated by joining with
-              // expressions induced by other constraints.
-              wave::WaveSymbolAttr iterSymbolAttr = iterateOp.getIterator();
-              llvm::SmallVector<mlir::Attribute> symbolConstraints =
-                  initObject->symbolConstraints.lookup(iterSymbolAttr);
-              auto it = llvm::find_if(
-                  symbolConstraints, llvm::IsaPred<wave::TilingConstraintAttr>);
-              if (it != symbolConstraints.end()) {
-                wave::TilingConstraintAttr tilingConstraint =
-                    llvm::cast<wave::TilingConstraintAttr>(*it);
-                for (mlir::Value capture : iterateOp.getCaptureBlockArgs()) {
-                  if (!llvm::isa<wave::WaveTensorType>(capture.getType()))
-                    continue;
-                  auto dict = mlir::DictionaryAttr::get(
-                      iterSymbolAttr.getContext(),
-                      {{iterSymbolAttr.getName(),
-                        wave::applyConstraint(tilingConstraint)}});
-                  LDBG() << "setting iterate block argument lattice " << capture
-                         << " from " << PrintNoRegions(iterateOp) << " to "
-                         << dict;
-                  unsafeSet(getLatticeElement(capture), dict);
-                }
-              }
-            }
-            return llvm::success();
-          });
+          }
+        }
+        return llvm::success();
+      });
       if (walkResult.wasInterrupted())
         return llvm::failure();
     }
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](mlir::Value value, mlir::DictionaryAttr dict) {
+              top, [&](Value value, DictionaryAttr dict) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
@@ -1206,9 +1198,8 @@ public:
     // operation since we are running in a non-interprocedural analysis. Setting
     // them to top would propagate everywhere. Instead, just do nothing here and
     // let them converge to whatever value needed by backward analysis.
-    auto arg = llvm::dyn_cast<mlir::BlockArgument>(lattice->getAnchor());
-    if (arg &&
-        llvm::isa<mlir::CallableOpInterface>(arg.getOwner()->getParentOp())) {
+    auto arg = llvm::dyn_cast<BlockArgument>(lattice->getAnchor());
+    if (arg && llvm::isa<CallableOpInterface>(arg.getOwner()->getParentOp())) {
       return;
     }
 
@@ -1230,7 +1221,7 @@ public:
   }
 
   llvm::LogicalResult
-  visitOperation(mlir::Operation *op,
+  visitOperation(Operation *op,
                  llvm::ArrayRef<const IndexExprsLattice *> operands,
                  llvm::ArrayRef<IndexExprsLattice *> results) override {
 
@@ -1278,13 +1269,13 @@ public:
         llvm::map_to_vector(results, extractLattice);
 
     auto reportError = [op]() { return op->emitError(); };
-    llvm::FailureOr<mlir::ChangeResult> result =
+    llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveInferIndexExprsOpInterface>(op)
             .propagateIndexExprsForward(operandLattices, resultLattices,
                                         reportError);
     if (llvm::failed(result))
       return llvm::failure();
-    if (*result == mlir::ChangeResult::NoChange)
+    if (*result == ChangeResult::NoChange)
       return llvm::success();
 
     for (auto &&[resultLattice, lattice] :
@@ -1303,8 +1294,7 @@ public:
   }
 
   void
-  visitNonControlFlowArguments(mlir::Operation *op,
-                               const mlir::RegionSuccessor &successor,
+  visitNonControlFlowArguments(Operation *op, const RegionSuccessor &successor,
                                llvm::ArrayRef<IndexExprsLattice *> lattices,
                                unsigned firstIndex) override {
     auto iterateOp = llvm::dyn_cast<wave::IterateOp>(op);
@@ -1343,7 +1333,7 @@ public:
         LDBG() << "iter arg lattice: " << *iterArgLattice;
         LDBG() << "terminator operand lattice: " << *terminatorOperandLattice;
         LDBG() << "block lattice: " << *lattice;
-        mlir::ChangeResult changed = lattice->join(iterArgLattice->getValue());
+        ChangeResult changed = lattice->join(iterArgLattice->getValue());
         changed |= lattice->join(terminatorOperandLattice->getValue());
         propagateIfChanged(lattice, changed);
         LDBG() << "new block lattice: " << *lattice;
@@ -1382,8 +1372,7 @@ public:
         LDBG() << "iter arg lattice: " << *iterArgLattice;
         LDBG() << "terminator operand lattice: " << *terminatorOperandLattice;
         LDBG() << "result lattice: " << *resultLattice;
-        mlir::ChangeResult changed =
-            resultLattice->join(iterArgLattice->getValue());
+        ChangeResult changed = resultLattice->join(iterArgLattice->getValue());
         changed |= resultLattice->join(
             terminatorOperandLattice->getValue().withoutIterSymbols(
                 iterateOp.getIterator()));
@@ -1399,23 +1388,23 @@ private:
 };
 
 class IndexExprsBackwardAnalysis
-    : public mlir::dataflow::SparseBackwardDataFlowAnalysis<IndexExprsLattice> {
+    : public dataflow::SparseBackwardDataFlowAnalysis<IndexExprsLattice> {
 private:
   void unsafeSet(IndexExprsLattice *lattice, IndexExprsLatticeStorage value) {
     if (lattice->getValue() == value)
       return;
     lattice->getValue().unsafeSet(value);
-    propagateIfChanged(lattice, mlir::ChangeResult::Change);
+    propagateIfChanged(lattice, ChangeResult::Change);
   }
 
 public:
   IndexExprsBackwardAnalysis(
-      mlir::DataFlowSolver &solver, mlir::SymbolTableCollection &symbolTable,
+      DataFlowSolver &solver, SymbolTableCollection &symbolTable,
       wave::OverrideInitializationFn overrideInitialization = nullptr)
       : SparseBackwardDataFlowAnalysis(solver, symbolTable),
         overrideInitialization(overrideInitialization) {}
 
-  llvm::LogicalResult initialize(mlir::Operation *top) override {
+  llvm::LogicalResult initialize(Operation *top) override {
     assert(!getSolverConfig().isInterprocedural() &&
            "interprocedural analysis not supported");
 
@@ -1425,7 +1414,7 @@ public:
     if (llvm::failed(SparseBackwardDataFlowAnalysis::initialize(top)))
       return llvm::failure();
 
-    llvm::DenseMap<mlir::Operation *, mlir::Attribute> constraints;
+    llvm::DenseMap<Operation *, Attribute> constraints;
     if (llvm::failed(wave::collectWaveConstraints(top, constraints)))
       return llvm::failure();
     for (auto &&[parent, attr] : constraints) {
@@ -1434,28 +1423,28 @@ public:
       if (llvm::failed(initObject))
         return llvm::failure();
 
-      parent->walk([&](mlir::Operation *op) -> mlir::WalkResult {
+      parent->walk([&](Operation *op) -> WalkResult {
         if (auto iface =
                 llvm::dyn_cast<wave::WaveInferIndexExprsOpInterface>(op)) {
           llvm::SmallVector<wave::IndexExprsLatticeStorage> operandExprs =
-              llvm::map_to_vector(op->getOperands(), [&](mlir::Value v) {
+              llvm::map_to_vector(op->getOperands(), [&](Value v) {
                 return getLatticeElement(v)->getValue();
               });
           auto emitError = [op]() { return op->emitError(); };
 
           if (llvm::failed(iface.initializeIndexExprsBackward(
                   operandExprs, *initObject, emitError)))
-            return mlir::WalkResult::interrupt();
+            return WalkResult::interrupt();
           for (auto &&[operand, lattice] :
                llvm::zip_equal(op->getOperands(), operandExprs)) {
             IndexExprsLattice *latticeObject = getLatticeElement(operand);
             unsafeSet(latticeObject, lattice);
           }
-          return mlir::WalkResult::advance();
-        } else if (op->hasTrait<mlir::OpTrait::IsTerminator>()) {
+          return WalkResult::advance();
+        } else if (op->hasTrait<OpTrait::IsTerminator>()) {
           // Set terminator operands to bottom initially so they can be join'ed
           // with actual lattices coming from other operations.
-          for (mlir::Value operand : op->getOperands()) {
+          for (Value operand : op->getOperands()) {
             if (!llvm::isa<wave::WaveTensorType>(operand.getType()))
               continue;
             unsafeSet(getLatticeElement(operand),
@@ -1463,13 +1452,13 @@ public:
           }
         }
 
-        return mlir::WalkResult::advance();
+        return WalkResult::advance();
       });
     }
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](mlir::Value value, mlir::DictionaryAttr dict) {
+              top, [&](Value value, DictionaryAttr dict) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
@@ -1482,7 +1471,7 @@ public:
     return llvm::success();
   }
 
-  void visitBranchOperand(mlir::OpOperand &opOperand) override {
+  void visitBranchOperand(OpOperand &opOperand) override {
     if (!llvm::isa<wave::WaveTensorType>(opOperand.get().getType()))
       return;
 
@@ -1491,8 +1480,7 @@ public:
     if (auto iterateOp =
             llvm::dyn_cast<wave::IterateOp>(opOperand.getOwner())) {
       unsigned position = opOperand.getOperandNumber();
-      mlir::Value blockArgument =
-          iterateOp.getLoopBody()->getArgument(position);
+      Value blockArgument = iterateOp.getLoopBody()->getArgument(position);
       IndexExprsLattice *blockArgLattice = getLatticeElement(blockArgument);
       IndexExprsLattice *lattice = getLatticeElement(opOperand.get());
       // Explicitly add a dependency to update this analysis at the program
@@ -1522,7 +1510,7 @@ public:
     // Terminator operands are propagated from op results as is.
     if (auto yieldOp = llvm::dyn_cast<wave::YieldOp>(opOperand.getOwner())) {
       unsigned position = opOperand.getOperandNumber();
-      mlir::Value result = yieldOp->getParentOp()->getResult(position);
+      Value result = yieldOp->getParentOp()->getResult(position);
       const IndexExprsLattice *resultLattice = getLatticeElement(result);
       IndexExprsLattice *lattice = getLatticeElement(opOperand.get());
       // Explicitly add a dependency to update this analysis at the program
@@ -1549,7 +1537,7 @@ public:
     setToExitState(getLatticeElement(opOperand.get()));
   }
 
-  void visitCallOperand(mlir::OpOperand &opOperand) override {
+  void visitCallOperand(OpOperand &opOperand) override {
     if (!llvm::isa<wave::WaveTensorType>(opOperand.get().getType()))
       return;
     setToExitState(getLatticeElement(opOperand.get()));
@@ -1571,8 +1559,7 @@ public:
   }
 
   llvm::LogicalResult
-  visitOperation(mlir::Operation *op,
-                 llvm::ArrayRef<IndexExprsLattice *> operands,
+  visitOperation(Operation *op, llvm::ArrayRef<IndexExprsLattice *> operands,
                  llvm::ArrayRef<const IndexExprsLattice *> results) override {
     LLVM_DEBUG({
       LDBG() << "visiting operation backward " << PrintNoRegions(op);
@@ -1617,13 +1604,13 @@ public:
         llvm::map_to_vector(results, extractLattice);
 
     auto reportError = [op]() { return op->emitError(); };
-    llvm::FailureOr<mlir::ChangeResult> result =
+    llvm::FailureOr<ChangeResult> result =
         llvm::cast<wave::WaveInferIndexExprsOpInterface>(op)
             .propagateIndexExprsBackward(operandLattices, resultLattices,
                                          reportError);
     if (llvm::failed(result))
       return llvm::failure();
-    if (*result == mlir::ChangeResult::NoChange)
+    if (*result == ChangeResult::NoChange)
       return llvm::success();
 
     for (auto &&[operandLattice, lattice] :
@@ -1658,17 +1645,17 @@ public:
             getArgument())))
       return signalPassFailure();
 
-    mlir::IRRewriter rewriter(&getContext());
+    IRRewriter rewriter(&getContext());
     getOperation()->walk(
         [&](wave::IterateOp iterateOp) { iterateOp.makeIsolated(rewriter); });
 
-    mlir::SymbolTableCollection symbolTable;
-    mlir::DataFlowConfig config;
+    SymbolTableCollection symbolTable;
+    DataFlowConfig config;
     config.setInterprocedural(false);
-    mlir::DataFlowSolver solver(config);
+    DataFlowSolver solver(config);
 
-    solver.load<mlir::dataflow::DeadCodeAnalysis>();
-    solver.load<mlir::dataflow::SparseConstantPropagation>();
+    solver.load<dataflow::DeadCodeAnalysis>();
+    solver.load<dataflow::SparseConstantPropagation>();
     wave::addWaveIndexExprsAnalyses(solver, symbolTable);
 
     if (llvm::failed(
@@ -1691,7 +1678,7 @@ public:
 } // namespace
 
 void wave::addWaveIndexExprsAnalyses(
-    mlir::DataFlowSolver &solver, mlir::SymbolTableCollection &symbolTable,
+    DataFlowSolver &solver, SymbolTableCollection &symbolTable,
     wave::WaveIndexExprsAnalysisOptions options) {
   if (!options.disableForward) {
     solver.load<IndexExprsForwardAnalysis>(options.overrideInitialization);
@@ -1702,12 +1689,12 @@ void wave::addWaveIndexExprsAnalyses(
   }
 }
 
-mlir::LogicalResult
-wave::setWaveIndexExprAnalysisResults(mlir::Operation *top,
-                                      const mlir::DataFlowSolver &solver) {
-  mlir::WalkResult walkResult =
+LogicalResult
+wave::setWaveIndexExprAnalysisResults(Operation *top,
+                                      const DataFlowSolver &solver) {
+  WalkResult walkResult =
       top->walk([&](wave::WaveInferIndexExprsOpInterface iface) {
-        auto getLatticeValue = [&](mlir::Value value) {
+        auto getLatticeValue = [&](Value value) {
           auto *latticeObject = solver.lookupState<IndexExprsLattice>(value);
           return latticeObject ? latticeObject->getValue()
                                : IndexExprsLatticeStorage::bottom();
@@ -1718,9 +1705,9 @@ wave::setWaveIndexExprAnalysisResults(mlir::Operation *top,
             llvm::map_to_vector(iface->getResults(), getLatticeValue);
 
         if (llvm::failed(iface.setIndexFromLattices(operandExprs, resultExprs)))
-          return mlir::WalkResult::interrupt();
+          return WalkResult::interrupt();
 
-        return mlir::WalkResult::advance();
+        return WalkResult::advance();
       });
   return llvm::failure(walkResult.wasInterrupted());
 }

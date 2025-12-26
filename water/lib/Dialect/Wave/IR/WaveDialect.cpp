@@ -24,6 +24,8 @@
 #include <algorithm>
 #include <optional>
 
+using namespace mlir;
+
 void wave::WaveDialect::initialize() {
   registerAttributes();
   addOperations<
@@ -36,11 +38,11 @@ void wave::WaveDialect::initialize() {
 // Attach a note to the diagnostic listing the symbol names available in the
 // hyperparameter set.
 static void
-attachAvailableSymbolsNote(mlir::InFlightDiagnostic &diag,
+attachAvailableSymbolsNote(InFlightDiagnostic &diag,
                            wave::WaveHyperparameterAttr hyperparam) {
   std::string availableSymbols =
       llvm::join(llvm::map_range(hyperparam.getMapping(),
-                                 [](const mlir::NamedAttribute namedAttr) {
+                                 [](const NamedAttribute namedAttr) {
                                    return namedAttr.getName().getValue();
                                  }),
                  ", ");
@@ -51,9 +53,9 @@ attachAvailableSymbolsNote(mlir::InFlightDiagnostic &diag,
 // defined in the hyperparameter attribute, report errors otherwise using the
 // provided callback. Collect used symbols into the given set for future checks.
 static llvm::LogicalResult verifyTypeRangeHyperparamUses(
-    wave::WaveHyperparameterAttr hyperparam, mlir::TypeRange types,
+    wave::WaveHyperparameterAttr hyperparam, TypeRange types,
     llvm::StringSet<> &usedSymbols,
-    llvm::function_ref<mlir::InFlightDiagnostic()> emitError) {
+    llvm::function_ref<InFlightDiagnostic()> emitError) {
   for (auto [i, type] : llvm::enumerate(types)) {
     auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(type);
     if (!tensorType || !tensorType.getFullySpecified())
@@ -65,7 +67,7 @@ static llvm::LogicalResult verifyTypeRangeHyperparamUses(
       if (hyperparam.getMapping().contains(symbol.getName()))
         continue;
 
-      mlir::InFlightDiagnostic diag =
+      InFlightDiagnostic diag =
           emitError() << "type #" << i << " uses symbolic value " << symbol
                       << " not provided as a hyperparameter";
       attachAvailableSymbolsNote(diag, hyperparam);
@@ -85,9 +87,9 @@ static llvm::LogicalResult verifyTypeRangeHyperparamUses(
 // Report errors otherwise using the provided callback. Collect used symbols
 // into the given set for future checks.
 static llvm::LogicalResult verifyAttributeHyperparamUses(
-    wave::WaveHyperparameterAttr hyperparam,
-    const mlir::NamedAttribute &namedAttr, llvm::StringSet<> &usedSymbols,
-    llvm::function_ref<mlir::InFlightDiagnostic()> emitError) {
+    wave::WaveHyperparameterAttr hyperparam, const NamedAttribute &namedAttr,
+    llvm::StringSet<> &usedSymbols,
+    llvm::function_ref<InFlightDiagnostic()> emitError) {
 
   // TODO: we need a first-class attribute for this mapping, at which point this
   // special-casing will disappear as the walker below would also visit symbols
@@ -97,41 +99,41 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
     auto attr = namedAttr.getValue();
     // Skip verification if not an array of dictionaries, op-level verifiers
     // will detect this and complain.
-    auto arrayDict = llvm::dyn_cast<mlir::ArrayAttr>(attr);
+    auto arrayDict = llvm::dyn_cast<ArrayAttr>(attr);
     if (!arrayDict)
       return llvm::success();
 
-    for (mlir::Attribute a : arrayDict) {
-      auto dict = llvm::dyn_cast<mlir::DictionaryAttr>(a);
+    for (Attribute a : arrayDict) {
+      auto dict = llvm::dyn_cast<DictionaryAttr>(a);
       if (!dict)
         continue;
-      for (const mlir::NamedAttribute &entry : dict) {
+      for (const NamedAttribute &entry : dict) {
         usedSymbols.insert(entry.getName().strref());
 
         if (hyperparam.getMapping().contains(entry.getName().strref()))
           continue;
 
-        mlir::InFlightDiagnostic diag =
-            emitError() << "uses symbolic value " << entry.getName()
-                        << " not provided as a hyperparameter";
+        InFlightDiagnostic diag = emitError()
+                                  << "uses symbolic value " << entry.getName()
+                                  << " not provided as a hyperparameter";
         attachAvailableSymbolsNote(diag, hyperparam);
         return llvm::failure();
       }
     }
   }
-  mlir::WalkResult walkResult =
+  WalkResult walkResult =
       namedAttr.getValue().walk([&](wave::WaveSymbolAttr symbolAttr) {
         usedSymbols.insert(symbolAttr.getName());
         if (hyperparam.getMapping().contains(symbolAttr.getName()))
-          return mlir::WalkResult::advance();
+          return WalkResult::advance();
 
-        mlir::InFlightDiagnostic diag = emitError()
-                                        << "uses symbolic value " << symbolAttr
-                                        << " not provided as a hyperparameter";
+        InFlightDiagnostic diag = emitError()
+                                  << "uses symbolic value " << symbolAttr
+                                  << " not provided as a hyperparameter";
         attachAvailableSymbolsNote(diag, hyperparam);
-        return mlir::WalkResult::interrupt();
+        return WalkResult::interrupt();
       });
-  return mlir::failure(walkResult.wasInterrupted());
+  return failure(walkResult.wasInterrupted());
 }
 
 /// Verify DeviceConstraints, WorkgroupConstraints, WaveConstraints, and
@@ -139,9 +141,9 @@ static llvm::LogicalResult verifyAttributeHyperparamUses(
 /// assumes that all symbols used in the wave.constraints attributes have a
 /// corresponding entry in the hyperparameter attribute.
 static llvm::LogicalResult
-verifyConstraints(mlir::ArrayAttr constraints,
+verifyConstraints(ArrayAttr constraints,
                   wave::WaveHyperparameterAttr hyperparams,
-                  llvm::function_ref<mlir::InFlightDiagnostic()> emitError) {
+                  llvm::function_ref<InFlightDiagnostic()> emitError) {
   llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::DeviceConstraintAttr>
       deviceConstraints;
   llvm::SmallDenseMap<wave::WaveSymbolAttr, wave::WorkgroupConstraintAttr>
@@ -152,7 +154,7 @@ verifyConstraints(mlir::ArrayAttr constraints,
       tilingConstraints;
 
   // collect constraints for each dimension symbol
-  for (const mlir::Attribute &attr : constraints) {
+  for (const Attribute &attr : constraints) {
     if (auto dev = llvm::dyn_cast<wave::DeviceConstraintAttr>(attr)) {
       wave::WaveSymbolAttr dim = dev.getDim();
       auto [it, inserted] = deviceConstraints.try_emplace(dim, dev);
@@ -327,8 +329,8 @@ verifyConstraints(mlir::ArrayAttr constraints,
 }
 
 llvm::LogicalResult
-wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
-                                            mlir::NamedAttribute attr) {
+wave::WaveDialect::verifyOperationAttribute(Operation *op,
+                                            NamedAttribute attr) {
   // IMPORTANT NOTE: this verifier runs before nested ops have been verified, so
   // it should not assume anything but generic IR well-formedness.
   llvm::StringSet<> usedSymbols;
@@ -352,10 +354,10 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
     // TODO: consider a mode where parameters can be union'ed, but not
     // redefined. There are passes that currently assume a single set of
     // hyperparameters.
-    for (mlir::Operation *parent = op->getParentOp(); parent != nullptr;
+    for (Operation *parent = op->getParentOp(); parent != nullptr;
          parent = parent->getParentOp()) {
       if (parent->hasAttr(kHyperparameterAttrName)) {
-        mlir::InFlightDiagnostic diag =
+        InFlightDiagnostic diag =
             op->emitError()
             << "defines hyperparameters when its ancestor already had";
         diag.attachNote(parent->getLoc()) << "ancestor";
@@ -363,47 +365,47 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
       }
     }
 
-    mlir::WalkResult walkResult = op->walk([&](mlir::Operation *op) {
+    WalkResult walkResult = op->walk([&](Operation *op) {
       if (llvm::failed(verifyTypeRangeHyperparamUses(
               hyperparams, op->getResultTypes(), usedSymbols,
               [&]() { return op->emitOpError() << "result "; }))) {
-        return mlir::WalkResult::interrupt();
+        return WalkResult::interrupt();
       }
 
-      for (mlir::Region &region : op->getRegions()) {
+      for (Region &region : op->getRegions()) {
         // Can't use llvm::enumerate because of nested lambda capture defect.
         unsigned blockNo = 0;
-        for (mlir::Block &block : region) {
+        for (Block &block : region) {
           if (llvm::failed(verifyTypeRangeHyperparamUses(
                   hyperparams, block.getArgumentTypes(), usedSymbols, [&]() {
                     return op->emitOpError()
                            << "region #" << region.getRegionNumber()
                            << " block #" << blockNo << " argument ";
                   }))) {
-            return mlir::WalkResult::interrupt();
+            return WalkResult::interrupt();
           }
           ++blockNo;
         }
       }
 
-      for (const mlir::NamedAttribute &namedAttr : op->getAttrs()) {
+      for (const NamedAttribute &namedAttr : op->getAttrs()) {
         if (llvm::failed(verifyAttributeHyperparamUses(
                 hyperparams, namedAttr, usedSymbols, [&]() {
                   return op->emitOpError()
                          << "attribute " << namedAttr.getName() << " ";
                 }))) {
-          return mlir::WalkResult::interrupt();
+          return WalkResult::interrupt();
         }
       }
 
-      return mlir::WalkResult::advance();
+      return WalkResult::advance();
     });
 
     if (walkResult.wasInterrupted())
       return llvm::failure();
 
-    llvm::SmallVector<mlir::StringRef> unusedNames;
-    for (const mlir::NamedAttribute &namedAttr :
+    llvm::SmallVector<StringRef> unusedNames;
+    for (const NamedAttribute &namedAttr :
          hyperparams.getMapping().getValue()) {
       if (!usedSymbols.contains(namedAttr.getName().getValue()))
         unusedNames.push_back(namedAttr.getName().getValue());
@@ -420,14 +422,14 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
     return llvm::success();
   }
   if (attr.getName() == kElementsPerThreadAttrName) {
-    if (!llvm::isa<mlir::IntegerAttr>(attr.getValue())) {
+    if (!llvm::isa<IntegerAttr>(attr.getValue())) {
       return op->emitError() << attr.getName() << " expects an IntegerAttr";
     }
     return llvm::success();
   }
 
   if (attr.getName() == kWaveConstraintsAttrName) {
-    mlir::ArrayAttr attrs = llvm::dyn_cast<mlir::ArrayAttr>(attr.getValue());
+    ArrayAttr attrs = llvm::dyn_cast<ArrayAttr>(attr.getValue());
     bool needsHyperparams = false;
 
     for (auto attr : attrs) {
@@ -444,10 +446,10 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
     }
 
     // verfify no constraints above
-    for (mlir::Operation *parent = op->getParentOp(); parent != nullptr;
+    for (Operation *parent = op->getParentOp(); parent != nullptr;
          parent = parent->getParentOp()) {
       if (parent->hasAttr(kWaveConstraintsAttrName)) {
-        mlir::InFlightDiagnostic diag =
+        InFlightDiagnostic diag =
             op->emitError()
             << "defines wave constraints when its ancestor already had";
         diag.attachNote(parent->getLoc()) << "ancestor";
@@ -466,9 +468,9 @@ wave::WaveDialect::verifyOperationAttribute(mlir::Operation *op,
 
     // walk up to find hyperparameters
     wave::WaveHyperparameterAttr hyperparams;
-    for (mlir::Operation *parent = op; parent != nullptr && !hyperparams;
+    for (Operation *parent = op; parent != nullptr && !hyperparams;
          parent = parent->getParentOp()) {
-      for (mlir::NamedAttribute attr : parent->getAttrs()) {
+      for (NamedAttribute attr : parent->getAttrs()) {
         if (attr.getName() != kHyperparameterAttrName)
           continue;
 

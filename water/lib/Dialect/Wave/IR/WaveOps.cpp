@@ -35,34 +35,33 @@ using namespace wave;
 // Parse types of the `wave.register` op and perform type inference. The syntax
 // is simply the tensor type from which the elemental type is extract for the
 // initializer type.
-static mlir::ParseResult parseRegisterOpTypes(mlir::OpAsmParser &parser,
-                                              mlir::Type &initType,
-                                              mlir::Type &resultType) {
+static ParseResult parseRegisterOpTypes(OpAsmParser &parser, Type &initType,
+                                        Type &resultType) {
   llvm::SMLoc loc = parser.getCurrentLocation();
-  if (mlir::failed(parser.parseType(resultType)))
-    return mlir::failure();
+  if (failed(parser.parseType(resultType)))
+    return failure();
 
   initType =
-      llvm::TypeSwitch<mlir::Type, mlir::Type>(resultType)
-          .Case<wave::WaveTensorType, mlir::VectorType>(
+      llvm::TypeSwitch<Type, Type>(resultType)
+          .Case<wave::WaveTensorType, VectorType>(
               [](auto containerType) { return containerType.getElementType(); })
-          .Default([](mlir::Type) { return nullptr; });
+          .Default([](Type) { return nullptr; });
 
   if (!initType)
     return parser.emitError(loc)
            << "expected wave tensor or vector type, got " << resultType;
 
-  return mlir::success();
+  return success();
 }
 
 // Print types of the `wave.register` operation.
-static void printRegisterOpTypes(mlir::OpAsmPrinter &printer, mlir::Operation *,
-                                 mlir::Type initType, mlir::Type resultType) {
+static void printRegisterOpTypes(OpAsmPrinter &printer, Operation *,
+                                 Type initType, Type resultType) {
 #ifndef NDEBUG
   auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(resultType);
-  mlir::Type elementType =
-      tensorType ? tensorType.getElementType()
-                 : llvm::cast<mlir::VectorType>(resultType).getElementType();
+  Type elementType = tensorType
+                         ? tensorType.getElementType()
+                         : llvm::cast<VectorType>(resultType).getElementType();
   assert(initType == elementType && "expected equal types");
 #endif // NDEBUG
   (void)initType;
@@ -70,19 +69,19 @@ static void printRegisterOpTypes(mlir::OpAsmPrinter &printer, mlir::Operation *,
 }
 
 // Parse an @-symbol and interpret it as a wave symbol.
-static mlir::ParseResult parseSingleSymbol(mlir::OpAsmParser &parser,
-                                           wave::WaveSymbolAttr &symbolAttr) {
-  mlir::StringAttr strAttr;
-  if (mlir::failed(parser.parseSymbolName(strAttr)))
-    return mlir::failure();
+static ParseResult parseSingleSymbol(OpAsmParser &parser,
+                                     wave::WaveSymbolAttr &symbolAttr) {
+  StringAttr strAttr;
+  if (failed(parser.parseSymbolName(strAttr)))
+    return failure();
 
   symbolAttr =
       wave::WaveSymbolAttr::get(parser.getContext(), strAttr.getValue());
-  return mlir::success();
+  return success();
 }
 
 // Print a wave symbol as an MLIR @-symbol.
-static void printSingleSymbol(mlir::OpAsmPrinter &printer, mlir::Operation *,
+static void printSingleSymbol(OpAsmPrinter &printer, Operation *,
                               wave::WaveSymbolAttr symbolAttr) {
   printer.printSymbolName(symbolAttr.getName());
 }
@@ -115,53 +114,50 @@ llvm::LogicalResult wave::AllocateOp::verify() {
 // IterateOp
 //-----------------------------------------------------------------------------
 
-void wave::IterateOp::makeIsolated(mlir::RewriterBase &rewriter) {
+void wave::IterateOp::makeIsolated(RewriterBase &rewriter) {
   // Find all uses inside the body of values defined above.
-  llvm::SetVector<mlir::Value> captures;
-  llvm::SmallVector<mlir::OpOperand *> captureOperands;
-  llvm::SmallPtrSet<mlir::Region *, 8> ancestorRegions;
-  for (mlir::Operation *op = getOperation(); op != nullptr;
-       op = op->getParentOp()) {
+  llvm::SetVector<Value> captures;
+  llvm::SmallVector<OpOperand *> captureOperands;
+  llvm::SmallPtrSet<Region *, 8> ancestorRegions;
+  for (Operation *op = getOperation(); op != nullptr; op = op->getParentOp()) {
     ancestorRegions.insert(op->getParentRegion());
   }
-  getOperation()->walk([&](mlir::Operation *op) {
+  getOperation()->walk([&](Operation *op) {
     if (op == getOperation())
-      return mlir::WalkResult::advance();
+      return WalkResult::advance();
 
-    for (mlir::OpOperand &operand : op->getOpOperands()) {
+    for (OpOperand &operand : op->getOpOperands()) {
       if (!ancestorRegions.contains(operand.get().getParentRegion()))
         continue;
       captureOperands.push_back(&operand);
       captures.insert(operand.get());
     }
-    return mlir::WalkResult::advance();
+    return WalkResult::advance();
   });
 
   // Capture values defined above.
-  llvm::SmallVector<mlir::Location> newCaptureLocs = llvm::map_to_vector(
-      captures, [&](mlir::Value value) { return value.getLoc(); });
+  llvm::SmallVector<Location> newCaptureLocs = llvm::map_to_vector(
+      captures, [&](Value value) { return value.getLoc(); });
   rewriter.modifyOpInPlace(
       *this, [&] { getCapturesMutable().append(captures.getArrayRef()); });
 
   // Add trailing block arguments for captured values. The little dance with the
   // rewriter is a way to append block arguments.
-  llvm::SmallVector<mlir::Type> allTypes(getLoopBody()->getArgumentTypes());
-  llvm::append_range(allTypes,
-                     mlir::ValueRange(captures.getArrayRef()).getTypes());
-  llvm::SmallVector<mlir::Location> allLocs =
+  llvm::SmallVector<Type> allTypes(getLoopBody()->getArgumentTypes());
+  llvm::append_range(allTypes, ValueRange(captures.getArrayRef()).getTypes());
+  llvm::SmallVector<Location> allLocs =
       llvm::map_to_vector(getLoopBody()->getArguments(),
-                          [](mlir::Value value) { return value.getLoc(); });
+                          [](Value value) { return value.getLoc(); });
   llvm::append_range(allLocs, newCaptureLocs);
-  mlir::Block *originalBlock = getLoopBody();
-  mlir::Block *newBlock =
-      rewriter.createBlock(originalBlock, allTypes, allLocs);
+  Block *originalBlock = getLoopBody();
+  Block *newBlock = rewriter.createBlock(originalBlock, allTypes, allLocs);
   rewriter.mergeBlocks(originalBlock, newBlock,
                        newBlock->getArguments().drop_back(captures.size()));
   ValueRange innerValues = newBlock->getArguments().take_back(captures.size());
 
   // Update uses in the body to use block arguments instead of the captured
   // values.
-  for (mlir::OpOperand *opOperand : captureOperands) {
+  for (OpOperand *opOperand : captureOperands) {
     rewriter.modifyOpInPlace(opOperand->getOwner(), [&] {
       auto it = llvm::find(captures, opOperand->get());
       assert(it != captures.end() && "expected capture to be found");
@@ -171,7 +167,7 @@ void wave::IterateOp::makeIsolated(mlir::RewriterBase &rewriter) {
   }
 }
 
-void wave::IterateOp::makeNonIsolated(mlir::RewriterBase &rewriter) {
+void wave::IterateOp::makeNonIsolated(RewriterBase &rewriter) {
   // Replace uses of block arguments with the captured values, these uses can
   // only be inside the body in well-formed SSA.
   for (auto &&[captureBlockArg, captured] :
@@ -185,50 +181,48 @@ void wave::IterateOp::makeNonIsolated(mlir::RewriterBase &rewriter) {
   // no uses at this point.
   unsigned numCaptures = getCaptures().size();
   rewriter.modifyOpInPlace(*this, [&] { getCapturesMutable().clear(); });
-  mlir::Block *originalBlock = getLoopBody();
+  Block *originalBlock = getLoopBody();
   auto types =
-      mlir::TypeRange(originalBlock->getArgumentTypes()).drop_back(numCaptures);
-  llvm::SmallVector<mlir::Location> locations =
+      TypeRange(originalBlock->getArgumentTypes()).drop_back(numCaptures);
+  llvm::SmallVector<Location> locations =
       llvm::map_to_vector(originalBlock->getArguments().drop_back(numCaptures),
-                          [](mlir::Value value) { return value.getLoc(); });
-  mlir::Block *newBlock = rewriter.createBlock(getLoopBody(), types, locations);
-  SmallVector<mlir::Value> replacementValues(newBlock->getArguments());
-  replacementValues.append(numCaptures, mlir::Value());
+                          [](Value value) { return value.getLoc(); });
+  Block *newBlock = rewriter.createBlock(getLoopBody(), types, locations);
+  SmallVector<Value> replacementValues(newBlock->getArguments());
+  replacementValues.append(numCaptures, Value());
   rewriter.mergeBlocks(originalBlock, newBlock, replacementValues);
 }
 
-bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
+bool wave::IterateOp::areTypesCompatible(Type lhs, Type rhs) {
   return detail::verifyTypesCompatible(llvm::cast<wave::WaveTensorType>(lhs),
                                        llvm::cast<wave::WaveTensorType>(rhs),
                                        /*includeAddressSpace=*/true)
       .succeeded();
 }
 
-mlir::OperandRange
-wave::IterateOp::getEntrySuccessorOperands(mlir::RegionSuccessor) {
+OperandRange wave::IterateOp::getEntrySuccessorOperands(RegionSuccessor) {
   return getOperands().drop_back(getNumOperands());
 }
 
 void wave::IterateOp::getSuccessorRegions(
-    mlir::RegionBranchPoint point,
-    ::llvm::SmallVectorImpl<::mlir::RegionSuccessor> &regions) {
+    RegionBranchPoint point,
+    ::llvm::SmallVectorImpl<::RegionSuccessor> &regions) {
   // May branch into the region or bypass it regardless of the source.
-  regions.emplace_back(mlir::RegionSuccessor(
-      getOperation(), getResults().drop_back(getNumResults())));
   regions.emplace_back(
-      mlir::RegionSuccessor(&getBody(), getLoopBody()->getArguments().drop_back(
-                                            getLoopBody()->getNumArguments())));
+      RegionSuccessor(getOperation(), getResults().drop_back(getNumResults())));
+  regions.emplace_back(
+      RegionSuccessor(&getBody(), getLoopBody()->getArguments().drop_back(
+                                      getLoopBody()->getNumArguments())));
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::IterateOp::propagateIndexExprsForward(
+llvm::FailureOr<ChangeResult> wave::IterateOp::propagateIndexExprsForward(
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
     wave::EmitErrorFn /*emitError*/) {
   llvm_unreachable("IterateOp should be handled by control flow interfaces");
 }
 
-llvm::FailureOr<mlir::ChangeResult>
-wave::IterateOp::propagateIndexExprsBackward(
+llvm::FailureOr<ChangeResult> wave::IterateOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> /*operands*/,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> /*results*/,
     wave::EmitErrorFn /*emitError*/) {
@@ -241,18 +235,18 @@ llvm::LogicalResult wave::IterateOp::setIndexFromLattices(
   return detail::identitySetIndexFromLattices(*this, operands, resultExprs);
 }
 
-mlir::LogicalResult wave::IterateOp::verify() {
+LogicalResult wave::IterateOp::verify() {
   if (getNumOperands() != getLoopBody()->getNumArguments()) {
     return emitOpError() << "expects the same number of operands ("
                          << getNumOperands() << ") and block arguments ("
                          << getLoopBody()->getNumArguments() << ")";
   }
-  mlir::TypeRange blockIterArgTypes = getIterArgs().getTypes();
-  mlir::TypeRange iterArgTypes =
+  TypeRange blockIterArgTypes = getIterArgs().getTypes();
+  TypeRange iterArgTypes =
       getOperands().drop_back(getCaptures().size()).getTypes();
-  mlir::TypeRange captureTypes = getCaptures().getTypes();
-  mlir::TypeRange captureBlockArgTypes = getCaptureBlockArgs().getTypes();
-  mlir::TypeRange resultTypes = getResultTypes();
+  TypeRange captureTypes = getCaptures().getTypes();
+  TypeRange captureBlockArgTypes = getCaptureBlockArgs().getTypes();
+  TypeRange resultTypes = getResultTypes();
   if (iterArgTypes.size() != blockIterArgTypes.size()) {
     return emitOpError() << "expects the same number if iter_args ("
                          << iterArgTypes.size()
@@ -301,12 +295,11 @@ mlir::LogicalResult wave::IterateOp::verify() {
 llvm::LogicalResult wave::IterateOp::verifyRegions() {
   // Use the region hook since it runs after we verified the terminator itself
   // and know it is well-formed.
-  mlir::TypeRange iterArgTypes = getIterArgs().getTypes();
-  mlir::TypeRange blockIterArgTypes =
-      mlir::TypeRange(getLoopBody()->getArgumentTypes())
-          .take_front(iterArgTypes.size());
-  mlir::TypeRange resultTypes = getResultTypes();
-  mlir::TypeRange terminatorOperandTypes =
+  TypeRange iterArgTypes = getIterArgs().getTypes();
+  TypeRange blockIterArgTypes = TypeRange(getLoopBody()->getArgumentTypes())
+                                    .take_front(iterArgTypes.size());
+  TypeRange resultTypes = getResultTypes();
+  TypeRange terminatorOperandTypes =
       getLoopBody()->getTerminator()->getOperands().getTypes();
   if (resultTypes.size() != terminatorOperandTypes.size()) {
     return emitOpError() << "expects the same number of results ("
@@ -332,7 +325,7 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
 // MmaOp
 //-----------------------------------------------------------------------------
 
-llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateForward(
+llvm::FailureOr<ChangeResult> wave::MmaOp::propagateForward(
     llvm::ArrayRef<wave::WaveTensorType> operandTypes,
     llvm::MutableArrayRef<wave::WaveTensorType> resultTypes,
     llvm::raw_ostream &errs) {
@@ -344,7 +337,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateForward(
                                            "accumulator", "result", errs);
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateBackward(
+llvm::FailureOr<ChangeResult> wave::MmaOp::propagateBackward(
     llvm::MutableArrayRef<wave::WaveTensorType> operandTypes,
     llvm::ArrayRef<wave::WaveTensorType> resultTypes, llvm::raw_ostream &errs) {
   // TODO: we may consider doing partial type propagation, but we can't infer
@@ -356,20 +349,20 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateBackward(
 // Set the value of `lattice` to `newLattice` and return whether a change
 // happened. Note that this does NOT verify whether the lattice change goes into
 // the direction of top or bottom.
-static mlir::ChangeResult
+static ChangeResult
 updateIfChanged(wave::IndexExprsLatticeStorage &lattice,
                 const wave::IndexExprsLatticeStorage &newLattice) {
   if (newLattice == lattice)
-    return mlir::ChangeResult::NoChange;
+    return ChangeResult::NoChange;
   lattice = newLattice;
-  return mlir::ChangeResult::Change;
+  return ChangeResult::Change;
 }
 
 namespace llvm {
 // Combine two potentially failing ChangeResults: if any of them failed, the
 // result of the combination is also failure.
-FailureOr<mlir::ChangeResult> operator|(FailureOr<mlir::ChangeResult> lhs,
-                                        FailureOr<mlir::ChangeResult> rhs) {
+FailureOr<ChangeResult> operator|(FailureOr<ChangeResult> lhs,
+                                  FailureOr<ChangeResult> rhs) {
   if (failed(lhs) || failed(rhs))
     return failure();
   return *lhs | *rhs;
@@ -377,7 +370,7 @@ FailureOr<mlir::ChangeResult> operator|(FailureOr<mlir::ChangeResult> lhs,
 } // namespace llvm
 
 // Update index expressions of the result of the MMA operation.
-llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsForward(
+llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsForward(
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
@@ -397,7 +390,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsForward(
 
   // LHS: ignore M symbol since it has different indexing in LHS vs result.
   if (auto lhsType = dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
-    mlir::Attribute mSymbol = lhsType.getShape()[0];
+    Attribute mSymbol = lhsType.getShape()[0];
     resultLattice = wave::IndexExprsLatticeStorage::join(
         resultLattice, operandExprs[lhsOperandNumber], {mSymbol});
   }
@@ -419,7 +412,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsForward(
       wave::IndexExprsLatticeStorage::join(resultExprs[0], resultLattice);
 
   if (newResultLattice.isTop() && !resultExprs[0].isTop()) {
-    mlir::InFlightDiagnostic diag =
+    InFlightDiagnostic diag =
         emitError()
         << "conflict when propagating forward to the result lattice in MmaOp";
     diag.attachNote() << "Result lattice: " << resultExprs[0];
@@ -434,7 +427,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsForward(
 }
 
 // Update index expressions of the operands of the MMA operation.
-llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
+llvm::FailureOr<ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
@@ -456,7 +449,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
       continue;
 
     // For LHS/RHS operands, ignore M symbol.
-    mlir::Attribute mSymbol = resultType.getShape()[0];
+    Attribute mSymbol = resultType.getShape()[0];
     operandLattice = wave::IndexExprsLatticeStorage::join(
         operandLattice, resultExpr, {mSymbol});
 
@@ -465,7 +458,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
         wave::IndexExprsLatticeStorage::join(accumulatorLattice, resultExpr);
   }
 
-  mlir::ChangeResult changeResult = mlir::ChangeResult::NoChange;
+  ChangeResult changeResult = ChangeResult::NoChange;
 
   // Propagate to LHS (operand 0).
   if (auto lhsType = llvm::dyn_cast<wave::WaveTensorType>(getLhs().getType())) {
@@ -476,7 +469,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
                                              filtered);
 
     if (newLattice.isTop() && !operandExprs[lhsOperandNumber].isTop()) {
-      mlir::InFlightDiagnostic diag =
+      InFlightDiagnostic diag =
           emitError()
           << "conflict when propagating to LHS from result in MmaOp";
       diag.attachNote() << "LHS lattice: " << operandExprs[lhsOperandNumber];
@@ -486,7 +479,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
 
     if (newLattice != operandExprs[lhsOperandNumber]) {
       operandExprs[lhsOperandNumber] = newLattice;
-      changeResult = mlir::ChangeResult::Change;
+      changeResult = ChangeResult::Change;
     }
   }
 
@@ -499,7 +492,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
                                              filtered);
 
     if (newLattice.isTop() && !operandExprs[rhsOperandNumber].isTop()) {
-      mlir::InFlightDiagnostic diag =
+      InFlightDiagnostic diag =
           emitError()
           << "conflict when propagating to RHS from result in MmaOp";
       diag.attachNote() << "RHS lattice: " << operandExprs[rhsOperandNumber];
@@ -509,7 +502,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
 
     if (newLattice != operandExprs[rhsOperandNumber]) {
       operandExprs[rhsOperandNumber] = newLattice;
-      changeResult = mlir::ChangeResult::Change;
+      changeResult = ChangeResult::Change;
     }
   }
 
@@ -523,7 +516,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
             operandExprs[accumulatorOperandNumber], filtered);
 
     if (newLattice.isTop() && !operandExprs[accumulatorOperandNumber].isTop()) {
-      mlir::InFlightDiagnostic diag =
+      InFlightDiagnostic diag =
           emitError()
           << "conflict when propagating to accumulator from result in MmaOp";
       diag.attachNote() << "accumulator lattice: "
@@ -534,7 +527,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
 
     if (newLattice != operandExprs[accumulatorOperandNumber]) {
       operandExprs[accumulatorOperandNumber] = newLattice;
-      changeResult = mlir::ChangeResult::Change;
+      changeResult = ChangeResult::Change;
     }
   }
 
@@ -544,40 +537,36 @@ llvm::FailureOr<mlir::ChangeResult> wave::MmaOp::propagateIndexExprsBackward(
 // Check if the given type is one of the allowed types provided as template
 // arguments and report an error at the given location otherwise.
 template <typename... AllowedTypes>
-static mlir::LogicalResult
-checkAllowedTypes(mlir::Location loc, mlir::Type type, llvm::StringRef name,
-                  wave::WaveMmaKind kind) {
+static LogicalResult checkAllowedTypes(Location loc, Type type,
+                                       llvm::StringRef name,
+                                       wave::WaveMmaKind kind) {
   if (llvm::isa<AllowedTypes...>(type))
-    return mlir::success();
+    return success();
 
-  return mlir::emitError(loc)
-         << "unexpected " << name << " elemental type " << type
-         << " for MMA kind " << wave::stringifyEnum(kind);
+  return emitError(loc) << "unexpected " << name << " elemental type " << type
+                        << " for MMA kind " << wave::stringifyEnum(kind);
 }
 
 // Check if the given type is an integer type with one of the provided bitwidths
 // and report and error at the given location otherwise.
 template <typename T>
-static std::enable_if_t<std::is_same_v<T, mlir::IntegerType>,
-                        mlir::LogicalResult>
-checkAllowedTypes(mlir::Location loc, mlir::Type type, llvm::StringRef name,
+static std::enable_if_t<std::is_same_v<T, IntegerType>, LogicalResult>
+checkAllowedTypes(Location loc, Type type, llvm::StringRef name,
                   wave::WaveMmaKind kind, llvm::ArrayRef<unsigned> bitwidths) {
-  if (auto intType = llvm::dyn_cast<mlir::IntegerType>(type)) {
+  if (auto intType = llvm::dyn_cast<IntegerType>(type)) {
     if (llvm::is_contained(bitwidths, intType.getIntOrFloatBitWidth()))
-      return mlir::success();
+      return success();
   }
-  return mlir::emitError(loc)
-         << "unexpected " << name << " elemental type " << type
-         << " for MMA kind " << wave::stringifyEnum(kind);
+  return emitError(loc) << "unexpected " << name << " elemental type " << type
+                        << " for MMA kind " << wave::stringifyEnum(kind);
 }
 
 // Check if the types used for multiplication and accumulation in a `wave.mma`
 // operation are compatible with the specified MMA kind and report an error
 // otherwise.
-static mlir::LogicalResult checkMmaTypeCompatibility(mlir::Location loc,
-                                                     wave::WaveMmaKind kind,
-                                                     mlir::Type mulType,
-                                                     mlir::Type accType) {
+static LogicalResult checkMmaTypeCompatibility(Location loc,
+                                               wave::WaveMmaKind kind,
+                                               Type mulType, Type accType) {
   bool success = false;
   switch (kind) {
   case wave::WaveMmaKind::F32_16x16x16_F16:
@@ -588,11 +577,10 @@ static mlir::LogicalResult checkMmaTypeCompatibility(mlir::Location loc,
   case wave::WaveMmaKind::F32_32x32x16_K8_F16:
   case wave::WaveMmaKind::F32_32x32x16_BF16:
   case wave::WaveMmaKind::F32_16x16x32_BF16: {
-    success = mlir::succeeded(checkAllowedTypes<mlir::Float32Type>(
+    success = succeeded(checkAllowedTypes<Float32Type>(
                   loc, accType, "accumulator/result", kind)) &&
-              mlir::succeeded(
-                  checkAllowedTypes<mlir::Float16Type, mlir::BFloat16Type>(
-                      loc, mulType, "lhs/rhs", kind));
+              succeeded(checkAllowedTypes<Float16Type, BFloat16Type>(
+                  loc, mulType, "lhs/rhs", kind));
     break;
   }
 
@@ -600,44 +588,42 @@ static mlir::LogicalResult checkMmaTypeCompatibility(mlir::Location loc,
   case wave::WaveMmaKind::I32_32x32x8_I8:
   case wave::WaveMmaKind::I32_16x16x32_I8:
   case wave::WaveMmaKind::I32_32x32x16_I8:
-    success = mlir::succeeded(checkAllowedTypes<mlir::IntegerType>(
+    success = succeeded(checkAllowedTypes<IntegerType>(
                   loc, accType, "accumulator/result", kind, {32})) &&
-              mlir::succeeded(checkAllowedTypes<mlir::IntegerType>(
-                  loc, mulType, "lhs/rhs", kind, {8}));
+              succeeded(checkAllowedTypes<IntegerType>(loc, mulType, "lhs/rhs",
+                                                       kind, {8}));
     break;
 
   case wave::WaveMmaKind::F32_16x16x32_F8:
   case wave::WaveMmaKind::F32_32x32x16_F8:
   case wave::WaveMmaKind::F32_16x16x32_K4_F8:
   case wave::WaveMmaKind::F32_32x32x16_K4_F8:
-    success = mlir::succeeded(checkAllowedTypes<mlir::Float32Type>(
+    success = succeeded(checkAllowedTypes<Float32Type>(
                   loc, accType, "accumulator/result", kind)) &&
-              mlir::succeeded(
-                  checkAllowedTypes<mlir::Float8E3M4Type, mlir::Float8E5M2Type>(
-                      loc, mulType, "lhs/rhs", kind));
+              succeeded(checkAllowedTypes<Float8E3M4Type, Float8E5M2Type>(
+                  loc, mulType, "lhs/rhs", kind));
     break;
 
   case wave::WaveMmaKind::F32_16x16x128_F8F6F4:
   case wave::WaveMmaKind::F32_32x32x64_F8F6F4:
     success =
-        mlir::succeeded(checkAllowedTypes<mlir::Float32Type>(
-            loc, accType, "accumulator/result", kind)) &&
-        mlir::succeeded(
-            checkAllowedTypes<mlir::Float8E3M4Type, mlir::Float8E5M2Type,
-                              mlir::Float6E2M3FNType, mlir::Float6E3M2FNType,
-                              mlir::Float4E2M1FNType>(loc, mulType, "lhs/rhs",
-                                                      kind));
+        succeeded(checkAllowedTypes<Float32Type>(loc, accType,
+                                                 "accumulator/result", kind)) &&
+        succeeded(
+            checkAllowedTypes<Float8E3M4Type, Float8E5M2Type, Float6E2M3FNType,
+                              Float6E3M2FNType, Float4E2M1FNType>(
+                loc, mulType, "lhs/rhs", kind));
     break;
   }
 
-  return mlir::success(success);
+  return llvm::success(success);
 }
 
 // Extract the context from the first symbol that is not null.
-static mlir::MLIRContext *getAnySymbolContext(wave::WaveSymbolAttr mSymbol,
-                                              wave::WaveSymbolAttr nSymbol,
-                                              wave::WaveSymbolAttr kSymbol) {
-  mlir::MLIRContext *context = nullptr;
+static MLIRContext *getAnySymbolContext(wave::WaveSymbolAttr mSymbol,
+                                        wave::WaveSymbolAttr nSymbol,
+                                        wave::WaveSymbolAttr kSymbol) {
+  MLIRContext *context = nullptr;
   for (wave::WaveSymbolAttr symbol : {mSymbol, nSymbol, kSymbol})
     if (!context && symbol)
       context = symbol.getContext();
@@ -657,7 +643,7 @@ struct MmaSingleIndexExprBuilder {
 
   // Set the parameter of the index expression for the currently selected
   // dimension.
-  MmaSingleIndexExprBuilder &offset(mlir::AffineExpr expr);
+  MmaSingleIndexExprBuilder &offset(AffineExpr expr);
   MmaSingleIndexExprBuilder &size(int64_t value);
   MmaSingleIndexExprBuilder &stride(int64_t value);
 
@@ -667,10 +653,10 @@ struct MmaSingleIndexExprBuilder {
   MmaSingleIndexExprBuilder &k();
 
   // Populate the attributes with all index expressions.
-  void populate(llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const;
+  void populate(llvm::SmallVectorImpl<NamedAttribute> &attributes) const;
 
   MmaIndexingExprBuilder &parent;
-  mlir::AffineExpr offsetExpr, sizeExpr, strideExpr;
+  AffineExpr offsetExpr, sizeExpr, strideExpr;
   bool enabled;
 };
 
@@ -693,7 +679,7 @@ struct MmaSingleIndexExprBuilder {
 //          .populate(attributes);
 // ```
 struct MmaIndexingExprBuilder {
-  MmaIndexingExprBuilder(llvm::ArrayRef<mlir::Attribute> symbols,
+  MmaIndexingExprBuilder(llvm::ArrayRef<Attribute> symbols,
                          wave::WaveSymbolAttr mSymbol,
                          wave::WaveSymbolAttr nSymbol,
                          wave::WaveSymbolAttr kSymbol)
@@ -715,14 +701,14 @@ struct MmaIndexingExprBuilder {
   MmaSingleIndexExprBuilder &k() { return kBuilder; }
 
   // Populate the attributes with all index expressions.
-  void populate(llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const {
-    mlir::MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
+  void populate(llvm::SmallVectorImpl<NamedAttribute> &attributes) const {
+    MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
-    auto buildMap = [&](mlir::AffineExpr expr) {
+    auto buildMap = [&](AffineExpr expr) {
       assert(expr &&
              "expected offset/size/stride to be set up for all symbols");
-      return mlir::AffineMap::get(/*dimCount=*/0,
-                                  /*symbolCount=*/symbols.size(), expr, ctx);
+      return AffineMap::get(/*dimCount=*/0,
+                            /*symbolCount=*/symbols.size(), expr, ctx);
     };
     auto buildOne = [&](const MmaSingleIndexExprBuilder &builder) {
       return wave::WaveIndexMappingAttr::get(
@@ -739,13 +725,12 @@ struct MmaIndexingExprBuilder {
       attributes.emplace_back(kSymbol.getName(), buildOne(kBuilder));
   }
 
-  llvm::ArrayRef<mlir::Attribute> symbols;
+  llvm::ArrayRef<Attribute> symbols;
   MmaSingleIndexExprBuilder mBuilder, nBuilder, kBuilder;
   wave::WaveSymbolAttr mSymbol, nSymbol, kSymbol;
 };
 
-MmaSingleIndexExprBuilder &
-MmaSingleIndexExprBuilder::offset(mlir::AffineExpr expr) {
+MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::offset(AffineExpr expr) {
   if (!enabled)
     return *this;
   assert(!offsetExpr && "expected offset to be set only once");
@@ -757,7 +742,7 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::size(int64_t value) {
   if (!enabled)
     return *this;
   assert(!sizeExpr && "expected size to be set only once");
-  sizeExpr = mlir::getAffineConstantExpr(value, offsetExpr.getContext());
+  sizeExpr = getAffineConstantExpr(value, offsetExpr.getContext());
   return *this;
 }
 
@@ -765,7 +750,7 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::stride(int64_t value) {
   if (!enabled)
     return *this;
   assert(!strideExpr && "expected stride to be set only once");
-  strideExpr = mlir::getAffineConstantExpr(value, offsetExpr.getContext());
+  strideExpr = getAffineConstantExpr(value, offsetExpr.getContext());
   return *this;
 }
 
@@ -773,7 +758,7 @@ MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::m() { return parent.m(); }
 MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::n() { return parent.n(); }
 MmaSingleIndexExprBuilder &MmaSingleIndexExprBuilder::k() { return parent.k(); }
 void MmaSingleIndexExprBuilder::populate(
-    llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) const {
+    llvm::SmallVectorImpl<NamedAttribute> &attributes) const {
   parent.populate(attributes);
 }
 } // namespace
@@ -785,27 +770,28 @@ void MmaSingleIndexExprBuilder::populate(
 // be provided. If `isAccumulator` is set, the index expressions are created for
 // the accumulator/result of an MMA, which may affect the expression for the M
 // dimension.
-static llvm::LogicalResult populateMmaIndexingExpr(
-    wave::WaveMmaKind kind, bool isAccumulator,
-    llvm::ArrayRef<unsigned> wavesPerWorkgroup, int64_t threadsPerWave,
-    wave::WaveSymbolAttr mSymbol, wave::WaveSymbolAttr nSymbol,
-    wave::WaveSymbolAttr kSymbol,
-    llvm::SmallVectorImpl<mlir::NamedAttribute> &attributes) {
-  mlir::MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
+static llvm::LogicalResult
+populateMmaIndexingExpr(wave::WaveMmaKind kind, bool isAccumulator,
+                        llvm::ArrayRef<unsigned> wavesPerWorkgroup,
+                        int64_t threadsPerWave, wave::WaveSymbolAttr mSymbol,
+                        wave::WaveSymbolAttr nSymbol,
+                        wave::WaveSymbolAttr kSymbol,
+                        llvm::SmallVectorImpl<NamedAttribute> &attributes) {
+  MLIRContext *ctx = getAnySymbolContext(mSymbol, nSymbol, kSymbol);
 
-  llvm::SmallVector<mlir::Attribute> symbolNames = {
+  llvm::SmallVector<Attribute> symbolNames = {
       wave::WaveIndexSymbolAttr::get(ctx, wave::WaveIndexSymbol::THREAD_0),
       wave::WaveIndexSymbolAttr::get(ctx, wave::WaveIndexSymbol::THREAD_1),
       wave::WaveIndexSymbolAttr::get(ctx, wave::WaveIndexSymbol::THREAD_2),
       wave::WaveIndexSymbolAttr::get(ctx, wave::WaveIndexSymbol::GPR_NUMBER),
   };
-  mlir::AffineExpr threadX, threadY, threadZ, gprNum;
-  mlir::bindSymbols(ctx, threadX, threadY, threadZ, gprNum);
+  AffineExpr threadX, threadY, threadZ, gprNum;
+  bindSymbols(ctx, threadX, threadY, threadZ, gprNum);
 
-  mlir::AffineExpr linearizedThreadId =
+  AffineExpr linearizedThreadId =
       threadX + threadY * wavesPerWorkgroup[0] * threadsPerWave +
       threadZ * wavesPerWorkgroup[1] * wavesPerWorkgroup[0] * threadsPerWave;
-  mlir::AffineExpr laneId = linearizedThreadId % threadsPerWave;
+  AffineExpr laneId = linearizedThreadId % threadsPerWave;
   MmaIndexingExprBuilder builder(symbolNames, mSymbol, nSymbol, kSymbol);
 
   switch (kind) {
@@ -930,18 +916,17 @@ static llvm::LogicalResult populateMmaIndexingExpr(
 /// constraints or MMA shapes.
 static void mixInThreadIndependentConstraints(
     llvm::ArrayRef<wave::WaveSymbolAttr> indexingSymbols,
-    const llvm::DenseMap<wave::WaveSymbolAttr,
-                         llvm::SmallVector<mlir::Attribute>> &symbolConstraints,
-    llvm::SmallVector<mlir::NamedAttribute> &symbolMappings) {
+    const llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
+        &symbolConstraints,
+    llvm::SmallVector<NamedAttribute> &symbolMappings) {
   for (wave::WaveSymbolAttr symbol : indexingSymbols) {
     auto it = symbolConstraints.find(symbol);
     if (it == symbolConstraints.end())
       continue;
 
-    auto mappingIt =
-        llvm::find_if(symbolMappings, [&](mlir::NamedAttribute attr) {
-          return attr.getName() == symbol.getName();
-        });
+    auto mappingIt = llvm::find_if(symbolMappings, [&](NamedAttribute attr) {
+      return attr.getName() == symbol.getName();
+    });
 #ifndef NDEBUG
     if (mappingIt == symbolMappings.end()) {
       llvm::errs() << "symbol: " << symbol.getName() << "\n";
@@ -950,7 +935,7 @@ static void mixInThreadIndependentConstraints(
 #endif // NDEBUG
     wave::WaveIndexMappingAttr mapping =
         llvm::cast<wave::WaveIndexMappingAttr>(mappingIt->getValue());
-    for (mlir::Attribute constraint : it->second) {
+    for (Attribute constraint : it->second) {
       // Tiling constraints are handled separately in loop propagation.
       if (!isa<wave::TilingConstraintAttr>(constraint))
         mapping = wave::applyConstraintGeneric(constraint, mapping);
@@ -989,8 +974,7 @@ LogicalResult MmaOp::initializeIndexExprsForward(
 
   mixInThreadIndependentConstraints(
       indexingSymbols, initObject.symbolConstraints, symbolMappings);
-  resultExprs[0].unsafeSet(
-      mlir::DictionaryAttr::get(getContext(), symbolMappings));
+  resultExprs[0].unsafeSet(DictionaryAttr::get(getContext(), symbolMappings));
 
   return llvm::success();
 }
@@ -1015,7 +999,7 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
   if (!mmaKind)
     return emitError() << "MMA operation without kind attribute not supported";
 
-  llvm::SmallVector<mlir::NamedAttribute> operandSymbolMappings;
+  llvm::SmallVector<NamedAttribute> operandSymbolMappings;
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind, /*isAccumulator=*/false, initObject.wavesPerBlock,
           initObject.hardwareConstraint.getThreadsPerWave(), mSymbol, nSymbol,
@@ -1023,7 +1007,7 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
     return emitError() << "MMA kind not supported by index deduction";
   }
 
-  llvm::SmallVector<mlir::NamedAttribute> accumulatorSymbolMappings;
+  llvm::SmallVector<NamedAttribute> accumulatorSymbolMappings;
   if (llvm::failed(populateMmaIndexingExpr(
           *mmaKind,
           /*isAccumulator=*/true, initObject.wavesPerBlock,
@@ -1041,26 +1025,24 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   // Create the LHS and RHS mappings that are not using symbols
   // irrelevant for them.
-  llvm::SmallVector<mlir::NamedAttribute> lhsSymbolMappings =
-      llvm::filter_to_vector(operandSymbolMappings,
-                             [&](mlir::NamedAttribute attr) {
-                               return attr.getName() != nSymbol.getName();
-                             });
-  llvm::SmallVector<mlir::NamedAttribute> rhsSymbolMappings =
-      llvm::filter_to_vector(operandSymbolMappings,
-                             [&](mlir::NamedAttribute attr) {
-                               return attr.getName() != mSymbol.getName();
-                             });
+  llvm::SmallVector<NamedAttribute> lhsSymbolMappings =
+      llvm::filter_to_vector(operandSymbolMappings, [&](NamedAttribute attr) {
+        return attr.getName() != nSymbol.getName();
+      });
+  llvm::SmallVector<NamedAttribute> rhsSymbolMappings =
+      llvm::filter_to_vector(operandSymbolMappings, [&](NamedAttribute attr) {
+        return attr.getName() != mSymbol.getName();
+      });
 
   operandExprs[getLhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          mlir::DictionaryAttr::get(getContext(), lhsSymbolMappings));
+          DictionaryAttr::get(getContext(), lhsSymbolMappings));
   operandExprs[getRhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          mlir::DictionaryAttr::get(getContext(), rhsSymbolMappings));
+          DictionaryAttr::get(getContext(), rhsSymbolMappings));
   operandExprs[getAccumulatorMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          mlir::DictionaryAttr::get(getContext(), accumulatorSymbolMappings));
+          DictionaryAttr::get(getContext(), accumulatorSymbolMappings));
   return llvm::success();
 }
 
@@ -1071,21 +1053,21 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 LogicalResult MmaOp::setIndexFromLattices(
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
-  llvm::SmallVector<mlir::Attribute> indexExprs;
+  llvm::SmallVector<Attribute> indexExprs;
   indexExprs.reserve(operandExprs.size() + resultExprs.size());
-  for (mlir::OpOperand &operand : getOperation()->getOpOperands()) {
+  for (OpOperand &operand : getOperation()->getOpOperands()) {
     if (llvm::failed(detail::checkAndAppendIndexExpr(
             getLoc(), operandExprs[operand.getOperandNumber()],
             "operand #" + llvm::Twine(operand.getOperandNumber()), indexExprs)))
-      return mlir::failure();
+      return failure();
   }
   for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
     if (llvm::failed(detail::checkAndAppendIndexExpr(
             getLoc(), resultExprs[i], "result #" + llvm::Twine(i), indexExprs)))
-      return mlir::failure();
+      return failure();
   }
   getOperation()->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                          mlir::ArrayAttr::get(getContext(), indexExprs));
+                          ArrayAttr::get(getContext(), indexExprs));
   return llvm::success();
 }
 
@@ -1111,7 +1093,7 @@ LogicalResult MmaOp::verify() {
                                              rhsType)) ||
       failed(detail::verifyElementTypesMatch(getLoc(), "result", resultType,
                                              "accumulator", accumulatorType)))
-    return mlir::failure();
+    return failure();
 
   if (lhsType.getRank() != 2 || rhsType.getRank() != 2 ||
       accumulatorType.getRank() != 2) {
@@ -1127,7 +1109,7 @@ LogicalResult MmaOp::verify() {
       detail::verifyTypesMatchingDimensions(getLoc(), "RHS", rhsType, {0},
                                             "accumulator", accumulatorType, {1})
           .failed()) {
-    return mlir::failure();
+    return failure();
   }
 
   if (!getKind())
@@ -1146,7 +1128,7 @@ LogicalResult MmaOp::verify() {
 // non-unit dimension) and its correspondence with the explicit elements per
 // thread, if provided, and with the number of elements in the vector type.
 static LogicalResult
-verifyIndexElementsPerThread(Operation *op, mlir::ArrayAttr indexAttr,
+verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
                              std::optional<int64_t> elementsPerThread,
                              wave::WaveTensorType tensorType,
                              Type maybeVectorType) {
@@ -1297,12 +1279,12 @@ LogicalResult ReadOp::verify() {
 // RegisterOp
 //-----------------------------------------------------------------------------
 
-mlir::LogicalResult wave::RegisterOp::verify() {
+LogicalResult wave::RegisterOp::verify() {
   Type type = getResult().getType();
   auto tensorType = dyn_cast<WaveTensorType>(type);
   auto elementType = tensorType ? tensorType.getElementType()
                                 : cast<VectorType>(type).getElementType();
-  mlir::Type initType = getInit().getType();
+  Type initType = getInit().getType();
   if (elementType != initType) {
     return emitOpError() << "expected the type of the init value to match the "
                             "elemental type of the result";
@@ -1313,7 +1295,7 @@ mlir::LogicalResult wave::RegisterOp::verify() {
   if (!tensorType.getFullySpecified()) {
     return emitOpError() << "expected fully-specified tensor type";
   }
-  return mlir::success();
+  return success();
 }
 
 //-----------------------------------------------------------------------------
@@ -1376,22 +1358,22 @@ LogicalResult WriteOp::verify() {
 
 // Propagate index expressions forward from the operands to the result of the
 // WriteOp. Since WriteOp has no results, this is a no-op.
-llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateIndexExprsForward(
+llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsForward(
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
   // WriteOp has no results, so just return NoChange.
-  return mlir::ChangeResult::NoChange;
+  return ChangeResult::NoChange;
 }
 
 // WriteOp has no results, nothing to propagate to. Not propagating sideways
 // between operands either, the same index expression is used for the memory
 // operand, we can then read from the same memory with different index.
-llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
+llvm::FailureOr<ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
-  return mlir::ChangeResult::NoChange;
+  return ChangeResult::NoChange;
 }
 
 // Special case for WriteOp where we want an index expression even
@@ -1402,7 +1384,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
 llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs) {
-  llvm::SmallVector<mlir::Attribute> indexExprs;
+  llvm::SmallVector<Attribute> indexExprs;
   indexExprs.reserve(resultExprs.size() + 1);
   if (llvm::failed(detail::checkAndAppendIndexExpr(
           getLoc(), operandExprs[getValueToStoreMutable().getOperandNumber()],
@@ -1414,7 +1396,7 @@ llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
       return llvm::failure();
   }
   getOperation()->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-                          mlir::ArrayAttr::get(getContext(), indexExprs));
+                          ArrayAttr::get(getContext(), indexExprs));
   return llvm::success();
 }
 
@@ -1422,8 +1404,8 @@ llvm::LogicalResult wave::WriteOp::setIndexFromLattices(
 // YieldOp
 //-----------------------------------------------------------------------------
 
-mlir::MutableOperandRange
-wave::YieldOp::getMutableSuccessorOperands(mlir::RegionSuccessor) {
+MutableOperandRange
+wave::YieldOp::getMutableSuccessorOperands(RegionSuccessor) {
   // Create an empty mutable operand range (it has no default constructor).
   return getValuesMutable().slice(/*subStart=*/0, /*subLen=*/0);
 }
@@ -1432,16 +1414,16 @@ wave::YieldOp::getMutableSuccessorOperands(mlir::RegionSuccessor) {
 // CastOp
 //-----------------------------------------------------------------------------
 
-mlir::LogicalResult wave::CastOp::verify() {
-  mlir::Type valueType = getValueToCast().getType();
-  mlir::Type resultType = getResult().getType();
+LogicalResult wave::CastOp::verify() {
+  Type valueType = getValueToCast().getType();
+  Type resultType = getResult().getType();
 
   wave::WaveTensorType valueTensor =
       llvm::dyn_cast<wave::WaveTensorType>(valueType);
   wave::WaveTensorType resultTensor =
       llvm::dyn_cast<wave::WaveTensorType>(resultType);
-  mlir::VectorType valueVec = llvm::dyn_cast<mlir::VectorType>(valueType);
-  mlir::VectorType resultVec = llvm::dyn_cast<mlir::VectorType>(resultType);
+  VectorType valueVec = llvm::dyn_cast<VectorType>(valueType);
+  VectorType resultVec = llvm::dyn_cast<VectorType>(resultType);
   if (valueTensor && resultTensor && valueTensor.getFullySpecified() &&
       resultTensor.getFullySpecified() &&
       valueTensor.getShape() != resultTensor.getShape()) {
@@ -1456,5 +1438,5 @@ mlir::LogicalResult wave::CastOp::verify() {
            << resultVec.getShape() << ")";
   }
 
-  return mlir::success();
+  return success();
 }

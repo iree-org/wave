@@ -22,7 +22,7 @@ using namespace mlir;
 
 SmallVector<int64_t>
 wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
-                                mlir::DictionaryAttr indexDict,
+                                DictionaryAttr indexDict,
                                 wave::WaveHyperparameterAttr hyper) {
   return llvm::map_to_vector(shape, [&](wave::WaveSymbolAttr symbol) {
     Attribute entry = indexDict.get(symbol.getName());
@@ -44,7 +44,7 @@ wave::getUncollapsedVectorShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 
 std::optional<uint64_t>
 wave::getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
-                                 mlir::DictionaryAttr indexDict,
+                                 DictionaryAttr indexDict,
                                  wave::WaveHyperparameterAttr hyper) {
   uint64_t bestIdx = static_cast<uint64_t>(-1);
   std::optional<int64_t> bestSize; // largest constant size seen so far
@@ -62,7 +62,7 @@ wave::getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 }
 
 std::optional<llvm::SmallVector<int64_t>>
-wave::resolveSymbolNames(llvm::ArrayRef<mlir::Attribute> symbols,
+wave::resolveSymbolNames(llvm::ArrayRef<Attribute> symbols,
                          wave::WaveHyperparameterAttr hyper) {
   if (llvm::any_of(symbols, llvm::IsaPred<WaveIndexSymbolAttr>))
     return std::nullopt;
@@ -84,8 +84,7 @@ wave::resolveSymbolNames(llvm::ArrayRef<mlir::Attribute> symbols,
 }
 
 std::optional<SmallVector<int64_t>>
-wave::evaluateMapWithHyperparams(AffineMap map,
-                                 ArrayRef<mlir::Attribute> symbols,
+wave::evaluateMapWithHyperparams(AffineMap map, ArrayRef<Attribute> symbols,
                                  wave::WaveHyperparameterAttr hyperparams) {
   SmallVector<AffineExpr> symReplacements;
   symReplacements.reserve(map.getNumSymbols());

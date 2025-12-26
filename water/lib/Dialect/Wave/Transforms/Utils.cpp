@@ -10,32 +10,32 @@
 #include "mlir/IR/Operation.h"
 #include "llvm/Support/LogicalResult.h"
 
+using namespace mlir;
+
 llvm::LogicalResult wave::collectWaveConstraints(
-    mlir::Operation *top,
-    llvm::DenseMap<mlir::Operation *, mlir::Attribute> &constraints) {
+    Operation *top, llvm::DenseMap<Operation *, Attribute> &constraints) {
   auto *waveDialect = top->getContext()->getLoadedDialect<wave::WaveDialect>();
-  auto walkResult =
-      top->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *op) {
-        if (auto attr = op->getAttrOfType<mlir::ArrayAttr>(
-                wave::WaveDialect::kWaveConstraintsAttrName)) {
-          constraints[op] = attr;
-          return mlir::WalkResult::skip();
-        }
-        if (op->getDialect() == waveDialect) {
-          op->emitError()
-              << "wave dialect operation without constraints on an ancestor";
-          return mlir::WalkResult::interrupt();
-        }
-        return mlir::WalkResult::advance();
-      });
+  auto walkResult = top->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (auto attr = op->getAttrOfType<ArrayAttr>(
+            wave::WaveDialect::kWaveConstraintsAttrName)) {
+      constraints[op] = attr;
+      return WalkResult::skip();
+    }
+    if (op->getDialect() == waveDialect) {
+      op->emitError()
+          << "wave dialect operation without constraints on an ancestor";
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
   if (walkResult.wasInterrupted())
     return llvm::failure();
   return llvm::success();
 }
 
 llvm::LogicalResult
-wave::setNormalFormPassPostcondition(wave::WaveNormalForm form,
-                                     mlir::Operation *root, bool preserve) {
+wave::setNormalFormPassPostcondition(wave::WaveNormalForm form, Operation *root,
+                                     bool preserve) {
   wave::WaveNormalForm finalForm = form;
 
   if (preserve) {
@@ -50,7 +50,7 @@ wave::setNormalFormPassPostcondition(wave::WaveNormalForm form,
   if (llvm::failed(
           wave::detail::verifyNormalFormAttr(root, finalForm,
                                              /*emitDiagnostics=*/false))) {
-    return mlir::emitError(root->getLoc())
+    return emitError(root->getLoc())
            << "failed to produce code with the '" << wave::stringifyEnum(form)
            << "' normal form";
   }
@@ -61,19 +61,16 @@ wave::setNormalFormPassPostcondition(wave::WaveNormalForm form,
   return llvm::success();
 }
 
-llvm::LogicalResult
-wave::clearNormalFormPassPostcondition(mlir::Operation *root) {
+llvm::LogicalResult wave::clearNormalFormPassPostcondition(Operation *root) {
   // Actually remove the normal form attribute instead of setting it to None
   root->removeAttr(wave::WaveDialect::kNormalFormAttrName);
   return llvm::success();
 }
 
-llvm::LogicalResult
-wave::verifyNormalFormPassPrecondition(wave::WaveNormalForm form,
-                                       mlir::Operation *root,
-                                       llvm::StringRef passName) {
+llvm::LogicalResult wave::verifyNormalFormPassPrecondition(
+    wave::WaveNormalForm form, Operation *root, llvm::StringRef passName) {
 
-  for (mlir::Operation *op = root; op != nullptr; op = op->getParentOp()) {
+  for (Operation *op = root; op != nullptr; op = op->getParentOp()) {
     auto attr = op->getAttrOfType<wave::WaveNormalFormAttr>(
         wave::WaveDialect::kNormalFormAttrName);
     if (!attr)

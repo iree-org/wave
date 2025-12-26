@@ -203,9 +203,8 @@ void WaveIndexMappingAttr::print(AsmPrinter &printer) const {
   // s0, s1, ... using the shared names when rendering each expression.
   printer << "[";
   ArrayRef<Attribute> symbols = getSymbols();
-  llvm::interleaveComma(symbols, printer, [&](mlir::Attribute attr) {
-    printer.printAttribute(attr);
-  });
+  llvm::interleaveComma(symbols, printer,
+                        [&](Attribute attr) { printer.printAttribute(attr); });
   printer << "] -> ";
 
   SmallVector<StringRef> names;
@@ -367,26 +366,26 @@ wave::WaveExprListAttr::getResolvedShape(
 llvm::LogicalResult
 wave::verifyExprAttrsSameRank(llvm::ArrayRef<wave::WaveExprListAttr> exprs) {
   if (exprs.size() < 2)
-    return mlir::success();
+    return success();
 
   unsigned expectedRank = exprs[0].getRank();
 
   for (size_t i = 1; i < exprs.size(); ++i) {
     if (exprs[i].getRank() != expectedRank)
-      return mlir::failure();
+      return failure();
   }
 
-  return mlir::success();
+  return success();
 }
 
 llvm::LogicalResult
 wave::verifyExprAttrsNoSymbols(llvm::ArrayRef<wave::WaveExprListAttr> exprs) {
   for (const auto &expr : exprs) {
     if (expr.getNumSymbols() != 0)
-      return mlir::failure();
+      return failure();
   }
 
-  return mlir::success();
+  return success();
 }
 
 Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
@@ -446,14 +445,13 @@ Attribute WaveExprListAttr::parse(AsmParser &parser, Type) {
   return get(parser.getContext(), symbolNameAttrs, shape);
 }
 
-void WaveExprListAttr::print(mlir::AsmPrinter &printer) const {
+void WaveExprListAttr::print(AsmPrinter &printer) const {
   // Print symbol names like: [#wave.symbol<"M">, #wave.symbol<"K">] -> ( ... )
   printer << "<[";
   ArrayRef<Attribute> symbols = getSymbols();
   SmallVector<StringRef> names;
-  llvm::interleaveComma(symbols, printer, [&](mlir::Attribute attr) {
-    printer.printAttribute(attr);
-  });
+  llvm::interleaveComma(symbols, printer,
+                        [&](Attribute attr) { printer.printAttribute(attr); });
   printer << "] -> (";
 
   SmallVector<llvm::SmallString<16>> owningSymbolNames;
@@ -468,14 +466,14 @@ void WaveExprListAttr::print(mlir::AsmPrinter &printer) const {
 
   // We have one map with N results. For each result expr, make a 1-result map
   // so we can reuse the identical stringifyWithNames(map,names) helper.
-  mlir::AffineMap full = getMap(); // your stored map
+  AffineMap full = getMap(); // your stored map
   for (unsigned i = 0, e = full.getNumResults(); i < e; ++i) {
     if (i)
       printer << ", ";
-    mlir::AffineMap one =
-        mlir::AffineMap::get(/*numDims=*/0,
-                             /*numSymbols=*/full.getNumSymbols(),
-                             /*results=*/full.getResult(i), full.getContext());
+    AffineMap one =
+        AffineMap::get(/*numDims=*/0,
+                       /*numSymbols=*/full.getNumSymbols(),
+                       /*results=*/full.getResult(i), full.getContext());
     printer << stringifyWithNames(one, names);
   }
   printer << ")>";
@@ -596,19 +594,15 @@ void wave::WaveDialect::registerAttributes() {
 // TODO: Extend WaveMmaKind to avoid conflating fp8/fp6/fp4 variants
 // (E4M3FN/E5M2,etc.).
 
-wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
+wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(MLIRContext *ctx,
                                                  wave::WaveMmaKind kind) {
-  auto f16 = [&]() -> mlir::Type { return mlir::Float16Type::get(ctx); };
-  auto bf16 = [&]() -> mlir::Type { return mlir::BFloat16Type::get(ctx); };
-  auto f32 = [&]() -> mlir::Type { return mlir::Float32Type::get(ctx); };
-  auto i8 = [&]() -> mlir::Type { return mlir::IntegerType::get(ctx, 8); };
-  auto i32 = [&]() -> mlir::Type { return mlir::IntegerType::get(ctx, 32); };
-  auto f8E4M3FNUZ = [&]() -> mlir::Type {
-    return mlir::Float8E4M3FNUZType::get(ctx);
-  };
-  auto f8E4M3FN = [&]() -> mlir::Type {
-    return mlir::Float8E4M3FNType::get(ctx);
-  };
+  auto f16 = [&]() -> Type { return Float16Type::get(ctx); };
+  auto bf16 = [&]() -> Type { return BFloat16Type::get(ctx); };
+  auto f32 = [&]() -> Type { return Float32Type::get(ctx); };
+  auto i8 = [&]() -> Type { return IntegerType::get(ctx, 8); };
+  auto i32 = [&]() -> Type { return IntegerType::get(ctx, 32); };
+  auto f8E4M3FNUZ = [&]() -> Type { return Float8E4M3FNUZType::get(ctx); };
+  auto f8E4M3FN = [&]() -> Type { return Float8E4M3FNType::get(ctx); };
 
   switch (kind) {
   // CDNA1
@@ -658,8 +652,7 @@ wave::WaveMmaSpec wave::WaveMmaKindAttr::getSpec(mlir::MLIRContext *ctx,
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t>
-wave::WaveMmaKindAttr::getShape(mlir::MLIRContext *ctx,
-                                wave::WaveMmaKind kind) {
+wave::WaveMmaKindAttr::getShape(MLIRContext *ctx, wave::WaveMmaKind kind) {
   wave::WaveMmaSpec spec = wave::WaveMmaKindAttr::getSpec(ctx, kind);
   return {static_cast<uint32_t>(spec.m), static_cast<uint32_t>(spec.n),
           static_cast<uint32_t>(spec.k)};
@@ -669,15 +662,15 @@ wave::WaveMmaKindAttr::getShape(mlir::MLIRContext *ctx,
 // diagnostic with the given message at the location provided, if present,
 // otherwise just return failure.
 static llvm::LogicalResult
-verifyTypesFullySpecified(std::optional<mlir::Location> loc,
-                          mlir::TypeRange types, llvm::StringRef message) {
-  for (mlir::Type type : types) {
+verifyTypesFullySpecified(std::optional<Location> loc, TypeRange types,
+                          llvm::StringRef message) {
+  for (Type type : types) {
     auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(type);
     if (!tensorType || tensorType.getFullySpecified())
       continue;
 
     if (loc)
-      mlir::emitError(*loc) << message;
+      emitError(*loc) << message;
     return llvm::failure();
   }
   return llvm::success();
@@ -686,9 +679,9 @@ verifyTypesFullySpecified(std::optional<mlir::Location> loc,
 // Verify that wave tensor types in the given range have memory-related address
 // spaces, i.e., no unspecified and no register space.
 static llvm::LogicalResult
-verifyMemoryOnlyAddressSpaces(std::optional<mlir::Location> loc,
-                              mlir::TypeRange types, llvm::StringRef message) {
-  for (mlir::Type type : types) {
+verifyMemoryOnlyAddressSpaces(std::optional<Location> loc, TypeRange types,
+                              llvm::StringRef message) {
+  for (Type type : types) {
     auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(type);
     if (!tensorType || llvm::is_contained({wave::WaveAddressSpace::Global,
                                            wave::WaveAddressSpace::Shared},
@@ -696,7 +689,7 @@ verifyMemoryOnlyAddressSpaces(std::optional<mlir::Location> loc,
       continue;
 
     if (loc)
-      mlir::emitError(*loc) << message;
+      emitError(*loc) << message;
     return llvm::failure();
   }
   return llvm::success();
@@ -707,22 +700,22 @@ verifyMemoryOnlyAddressSpaces(std::optional<mlir::Location> loc,
 // diagnostic with the given message if the location is provided, and return
 // failure in any case if verification fails.
 using OpTypeRangeVisitor = llvm::function_ref<llvm::LogicalResult(
-    std::optional<mlir::Location>, mlir::TypeRange, llvm::StringRef)>;
+    std::optional<Location>, TypeRange, llvm::StringRef)>;
 
 // Call `visitor` to verify type ranges of operation operands, results and block
 // argument lists in immediately nested regions.
-static llvm::LogicalResult visitOpRelatedTypes(mlir::Operation *op,
+static llvm::LogicalResult visitOpRelatedTypes(Operation *op,
                                                OpTypeRangeVisitor visitor,
                                                llvm::StringRef message,
                                                bool emitDiagnostics) {
-  std::optional<mlir::Location> optionalLoc =
+  std::optional<Location> optionalLoc =
       emitDiagnostics ? std::optional(op->getLoc()) : std::nullopt;
   if (llvm::failed(visitor(optionalLoc, op->getOperandTypes(), message)))
     return llvm::failure();
   if (llvm::failed(visitor(optionalLoc, op->getResultTypes(), message)))
     return llvm::failure();
-  for (mlir::Region &region : op->getRegions()) {
-    for (mlir::Block &block : region) {
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
       if (llvm::failed(visitor(optionalLoc, block.getArgumentTypes(), message)))
         return llvm::failure();
     }
@@ -730,71 +723,70 @@ static llvm::LogicalResult visitOpRelatedTypes(mlir::Operation *op,
   return llvm::success();
 }
 
-llvm::LogicalResult wave::detail::verifyNormalFormAttr(
-    mlir::Operation *root, wave::WaveNormalForm form, bool emitDiagnostics) {
+llvm::LogicalResult
+wave::detail::verifyNormalFormAttr(Operation *root, wave::WaveNormalForm form,
+                                   bool emitDiagnostics) {
   // No normal form required.
   if (form == wave::WaveNormalForm::None)
     return llvm::success();
 
   // Walk in pre-order so we hit functions sooner and verify them for the first
   // form.
-  mlir::WalkResult walkResult =
-      root->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *op) {
-        std::optional<mlir::Location> optionalLoc;
-        if (emitDiagnostics)
-          optionalLoc = op->getLoc();
+  WalkResult walkResult = root->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    std::optional<Location> optionalLoc;
+    if (emitDiagnostics)
+      optionalLoc = op->getLoc();
 
-        if (auto func = llvm::dyn_cast<mlir::FunctionOpInterface>(op)) {
-          if (wave::bitEnumContainsAll(
-                  form, wave::WaveNormalForm::FunctionBoundarySpecified)) {
-            const llvm::StringLiteral kMessage =
-                "normal form requires tensor types to be fully specified at "
-                "function boundaries";
-            if (llvm::failed(verifyTypesFullySpecified(
-                    optionalLoc, func.getArgumentTypes(), kMessage)))
-              return mlir::WalkResult::interrupt();
-            if (llvm::failed(verifyTypesFullySpecified(
-                    optionalLoc, func->getResultTypes(), kMessage)))
-              return mlir::WalkResult::interrupt();
-          }
+    if (auto func = llvm::dyn_cast<FunctionOpInterface>(op)) {
+      if (wave::bitEnumContainsAll(
+              form, wave::WaveNormalForm::FunctionBoundarySpecified)) {
+        const llvm::StringLiteral kMessage =
+            "normal form requires tensor types to be fully specified at "
+            "function boundaries";
+        if (llvm::failed(verifyTypesFullySpecified(
+                optionalLoc, func.getArgumentTypes(), kMessage)))
+          return WalkResult::interrupt();
+        if (llvm::failed(verifyTypesFullySpecified(
+                optionalLoc, func->getResultTypes(), kMessage)))
+          return WalkResult::interrupt();
+      }
+    }
+
+    if (wave::bitEnumContainsAll(form,
+                                 wave::WaveNormalForm::OpTypesSpecified)) {
+      if (llvm::failed(visitOpRelatedTypes(
+              op, verifyTypesFullySpecified,
+              "normal form requires tensor types to be fully specified",
+              emitDiagnostics))) {
+        return WalkResult::interrupt();
+      }
+    }
+
+    if (wave::bitEnumContainsAll(form, wave::WaveNormalForm::MemoryOnlyTypes)) {
+      if (llvm::failed(visitOpRelatedTypes(
+              op, verifyMemoryOnlyAddressSpaces,
+              "normal form requires tensor types to have only memory "
+              "address spaces (elements per thread propagation missing?)",
+              emitDiagnostics))) {
+        return WalkResult::interrupt();
+      }
+    }
+
+    if (wave::bitEnumContainsAll(form,
+                                 wave::WaveNormalForm::IndexExprsSpecified)) {
+      if (op->hasTrait<wave::HasWaveIndexMapping>() &&
+          !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
+        if (emitDiagnostics) {
+          op->emitError()
+              << "normal form requires index expressions to be "
+                 "provided for all supported wave dialect operations";
         }
+        return WalkResult::interrupt();
+      }
+    }
 
-        if (wave::bitEnumContainsAll(form,
-                                     wave::WaveNormalForm::OpTypesSpecified)) {
-          if (llvm::failed(visitOpRelatedTypes(
-                  op, verifyTypesFullySpecified,
-                  "normal form requires tensor types to be fully specified",
-                  emitDiagnostics))) {
-            return mlir::WalkResult::interrupt();
-          }
-        }
-
-        if (wave::bitEnumContainsAll(form,
-                                     wave::WaveNormalForm::MemoryOnlyTypes)) {
-          if (llvm::failed(visitOpRelatedTypes(
-                  op, verifyMemoryOnlyAddressSpaces,
-                  "normal form requires tensor types to have only memory "
-                  "address spaces (elements per thread propagation missing?)",
-                  emitDiagnostics))) {
-            return mlir::WalkResult::interrupt();
-          }
-        }
-
-        if (wave::bitEnumContainsAll(
-                form, wave::WaveNormalForm::IndexExprsSpecified)) {
-          if (op->hasTrait<wave::HasWaveIndexMapping>() &&
-              !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
-            if (emitDiagnostics) {
-              op->emitError()
-                  << "normal form requires index expressions to be "
-                     "provided for all supported wave dialect operations";
-            }
-            return mlir::WalkResult::interrupt();
-          }
-        }
-
-        return mlir::WalkResult::advance();
-      });
+    return WalkResult::advance();
+  });
 
   return llvm::failure(walkResult.wasInterrupted());
 }

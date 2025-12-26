@@ -68,10 +68,9 @@ public:
       assert(cast && "unexpected type conversion configuration");
 
       byteOffset = static_cast<int64_t>(*op.getOffset());
-      mlir::Value off =
-          mlir::arith::ConstantIndexOp::create(rewriter, loc, byteOffset);
-      rewriter.replaceOpWithNewOp<mlir::memref::ViewOp>(
-          op, memrefType, cast.getOperand(0), off, mlir::ValueRange());
+      Value off = arith::ConstantIndexOp::create(rewriter, loc, byteOffset);
+      rewriter.replaceOpWithNewOp<memref::ViewOp>(
+          op, memrefType, cast.getOperand(0), off, ValueRange());
 
       return success();
     }
@@ -165,7 +164,7 @@ public:
 
     // Require float-like result (scalar float, vector-of-float, or
     // tensor-of-float).
-    Type elemType = mlir::getElementTypeOrSelf(convertedType);
+    Type elemType = getElementTypeOrSelf(convertedType);
     if (!isa<FloatType>(elemType))
       return rewriter.notifyMatchFailure(
           op, "unary op requires float-like result type after conversion");
@@ -180,7 +179,7 @@ public:
 
 void wave::populateWaveUnaryFPOpLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
-  patterns.add<UnaryFPOpLoweringPattern<wave::Exp2Op, mlir::math::Exp2Op>>(
+  patterns.add<UnaryFPOpLoweringPattern<wave::Exp2Op, math::Exp2Op>>(
       typeConverter, patterns.getContext());
 }
 
@@ -549,13 +548,13 @@ public:
         wave::WaveMmaKindAttr::getShape(rewriter.getContext(), *kind);
 
     // TODO: Extend lowering for ops beyond MFMA, e.g. WMMA
-    auto mfma = mlir::amdgpu::MFMAOp::create(rewriter, loc, acc.getType(),
-                                             /*m=*/M,
-                                             /*n=*/N,
-                                             /*k=*/K,
-                                             /*blocks=*/1,
-                                             /*sourceA=*/lhs, /*sourceB=*/rhs,
-                                             /*destC=*/acc);
+    auto mfma = amdgpu::MFMAOp::create(rewriter, loc, acc.getType(),
+                                       /*m=*/M,
+                                       /*n=*/N,
+                                       /*k=*/K,
+                                       /*blocks=*/1,
+                                       /*sourceA=*/lhs, /*sourceB=*/rhs,
+                                       /*destC=*/acc);
     rewriter.replaceOp(op, mfma.getResult());
     return success();
   }
