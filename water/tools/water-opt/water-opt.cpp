@@ -40,6 +40,8 @@
 #include "water/Tools/water-opt/WaterOptMain.h"
 #include "water/Transforms/Passes.h"
 
+using namespace mlir;
+
 // Forward-declare test passes so we don't have a dependency on the test
 // headers.
 namespace mlir::water::test {
@@ -48,66 +50,66 @@ void registerWaterTestDialect(DialectRegistry &registry);
 } // namespace mlir::water::test
 
 int main(int argc, char **argv) {
-  mlir::arith::registerArithIntRangeOptsPass();
-  mlir::registerCSEPass();
-  mlir::registerCanonicalizerPass();
-  mlir::registerCompositeFixedPointPass();
-  mlir::registerConvertAMDGPUToROCDLPass();
-  mlir::registerConvertGpuOpsToROCDLOpsPass();
-  mlir::registerConvertVectorToLLVMPass();
-  mlir::registerGpuModuleToBinaryPass();
-  mlir::registerGpuROCDLAttachTarget();
-  mlir::registerGpuToLLVMConversionPass();
-  mlir::registerLoopInvariantCodeMotionPass();
-  mlir::registerLowerAffinePass();
-  mlir::registerReconcileUnrealizedCastsPass();
-  mlir::registerSCFToControlFlowPass();
-  mlir::registerSymbolDCEPass();
-  mlir::transform::registerTransformPasses();
-  mlir::water::registerPasses();
-  mlir::water::test::registerAllPasses();
+  arith::registerArithIntRangeOptsPass();
+  registerCSEPass();
+  registerCanonicalizerPass();
+  registerCompositeFixedPointPass();
+  registerConvertAMDGPUToROCDLPass();
+  registerConvertGpuOpsToROCDLOpsPass();
+  registerConvertVectorToLLVMPass();
+  registerGpuModuleToBinaryPass();
+  registerGpuROCDLAttachTarget();
+  registerGpuToLLVMConversionPass();
+  registerLoopInvariantCodeMotionPass();
+  registerLowerAffinePass();
+  registerReconcileUnrealizedCastsPass();
+  registerSCFToControlFlowPass();
+  registerSymbolDCEPass();
+  transform::registerTransformPasses();
+  water::registerPasses();
+  water::test::registerAllPasses();
   wave::registerPasses();
 
-  mlir::DialectRegistry registry;
+  DialectRegistry registry;
   registry.insert<
       // clang-format off
-      mlir::LLVM::LLVMDialect,
-      mlir::ROCDL::ROCDLDialect,
-      mlir::affine::AffineDialect,
-      mlir::amdgpu::AMDGPUDialect,
-      mlir::arith::ArithDialect,
-      mlir::cf::ControlFlowDialect,
-      mlir::func::FuncDialect,
-      mlir::gpu::GPUDialect,
-      mlir::memref::MemRefDialect,
-      mlir::scf::SCFDialect,
-      mlir::transform::TransformDialect,
-      mlir::vector::VectorDialect,
+      LLVM::LLVMDialect,
+      ROCDL::ROCDLDialect,
+      affine::AffineDialect,
+      amdgpu::AMDGPUDialect,
+      arith::ArithDialect,
+      cf::ControlFlowDialect,
+      func::FuncDialect,
+      gpu::GPUDialect,
+      memref::MemRefDialect,
+      scf::SCFDialect,
+      transform::TransformDialect,
+      vector::VectorDialect,
       wave::WaveDialect
       // clang-format on
       >();
 
-  mlir::linalg::registerTransformDialectExtension(registry);
-  mlir::memref::registerTransformDialectExtension(registry);
+  linalg::registerTransformDialectExtension(registry);
+  memref::registerTransformDialectExtension(registry);
 
-  mlir::arith::registerConvertArithToLLVMInterface(registry);
-  mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
-  mlir::index::registerConvertIndexToLLVMInterface(registry);
-  mlir::registerConvertComplexToLLVMInterface(registry);
-  mlir::registerConvertFuncToLLVMInterface(registry);
-  mlir::registerConvertMathToLLVMInterface(registry);
-  mlir::registerConvertMemRefToLLVMInterface(registry);
-  mlir::ub::registerConvertUBToLLVMInterface(registry);
-  mlir::vector::registerConvertVectorToLLVMInterface(registry);
+  arith::registerConvertArithToLLVMInterface(registry);
+  cf::registerConvertControlFlowToLLVMInterface(registry);
+  index::registerConvertIndexToLLVMInterface(registry);
+  registerConvertComplexToLLVMInterface(registry);
+  registerConvertFuncToLLVMInterface(registry);
+  registerConvertMathToLLVMInterface(registry);
+  registerConvertMemRefToLLVMInterface(registry);
+  ub::registerConvertUBToLLVMInterface(registry);
+  vector::registerConvertVectorToLLVMInterface(registry);
 
-  mlir::ROCDL::registerROCDLTargetInterfaceExternalModels(registry);
+  ROCDL::registerROCDLTargetInterfaceExternalModels(registry);
 
-  mlir::registerGPUDialectTranslation(registry);
-  mlir::registerLLVMDialectTranslation(registry);
-  mlir::registerROCDLDialectTranslation(registry);
+  registerGPUDialectTranslation(registry);
+  registerLLVMDialectTranslation(registry);
+  registerROCDLDialectTranslation(registry);
 
-  mlir::water::test::registerWaterTestDialect(registry);
+  water::test::registerWaterTestDialect(registry);
 
-  return mlir::asMainReturnCode(
+  return asMainReturnCode(
       WaterOptMain(argc, argv, "water optimizer driver\n", registry));
 }

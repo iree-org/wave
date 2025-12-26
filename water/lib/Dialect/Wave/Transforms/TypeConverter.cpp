@@ -67,9 +67,9 @@ wave::WaveTypeConverter::WaveTypeConverter(
   });
 }
 
-mlir::Type wave::WaveTypeConverter::convertTensorFromComponents(
-    llvm::ArrayRef<mlir::Attribute> symbols, mlir::AffineMap shape,
-    mlir::Type elementType, wave::WaveAddressSpace addressSpace) const {
+Type wave::WaveTypeConverter::convertTensorFromComponents(
+    llvm::ArrayRef<Attribute> symbols, AffineMap shape, Type elementType,
+    wave::WaveAddressSpace addressSpace) const {
   if (any_of(symbols, llvm::IsaPred<wave::WaveIndexSymbolAttr>))
     return nullptr;
 

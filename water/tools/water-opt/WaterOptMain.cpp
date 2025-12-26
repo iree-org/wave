@@ -124,11 +124,11 @@ public:
         switch (diag.getSeverity()) {
         case DiagnosticSeverity::Error:
           return "error";
-        case mlir::DiagnosticSeverity::Warning:
+        case DiagnosticSeverity::Warning:
           return "warning";
-        case mlir::DiagnosticSeverity::Note:
+        case DiagnosticSeverity::Note:
           return "note";
-        case mlir::DiagnosticSeverity::Remark:
+        case DiagnosticSeverity::Remark:
           return "remark";
         }
         llvm_unreachable("unhandled diagnostic severity switch case");
@@ -453,7 +453,7 @@ static LogicalResult printRegisteredDialects(DialectRegistry &registry) {
 }
 
 static LogicalResult printRegisteredPassesAndReturn() {
-  mlir::printRegisteredPasses();
+  printRegisteredPasses();
   return success();
 }
 

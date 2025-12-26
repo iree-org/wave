@@ -87,11 +87,11 @@ namespace wave {
 
 WaveIndexMappingAttr applyConstraint(WorkgroupConstraintAttr constraint,
                                      WaveIndexMappingAttr baseMapping) {
-  llvm::SmallVector<mlir::Attribute> symbols =
+  llvm::SmallVector<Attribute> symbols =
       llvm::map_to_vector(constraint.getTileSize().getSymbols(),
-                          [](mlir::Attribute symbol) { return symbol; });
+                          [](Attribute symbol) { return symbol; });
 
-  mlir::MLIRContext *context = constraint.getContext();
+  MLIRContext *context = constraint.getContext();
 
   // TODO: we should just use workgroup attributes in expressions directly.
   WaveIndexSymbol symbol = [&] {
@@ -105,7 +105,7 @@ WaveIndexMappingAttr applyConstraint(WorkgroupConstraintAttr constraint,
     }
     llvm::report_fatal_error("unsupported workgroup dimension");
   }();
-  mlir::AffineExpr symbolExpr =
+  AffineExpr symbolExpr =
       getOrInsertSymbolExpr(WaveIndexSymbolAttr::get(context, symbol), symbols);
 
   return createIndexMappingFromSymbolExpr(symbolExpr, symbols,
@@ -115,12 +115,12 @@ WaveIndexMappingAttr applyConstraint(WorkgroupConstraintAttr constraint,
 
 WaveIndexMappingAttr applyConstraint(TilingConstraintAttr constraint,
                                      WaveIndexMappingAttr baseMapping) {
-  llvm::SmallVector<mlir::Attribute> symbols =
+  llvm::SmallVector<Attribute> symbols =
       llvm::map_to_vector(constraint.getTileSize().getSymbols(),
-                          [](mlir::Attribute symbol) { return symbol; });
+                          [](Attribute symbol) { return symbol; });
 
-  mlir::MLIRContext *context = constraint.getContext();
-  mlir::AffineExpr symbolExpr = getOrInsertSymbolExpr(
+  MLIRContext *context = constraint.getContext();
+  AffineExpr symbolExpr = getOrInsertSymbolExpr(
       WaveIterSymbolAttr::get(context, constraint.getDim().getName()), symbols);
 
   return createIndexMappingFromSymbolExpr(symbolExpr, symbols,
@@ -128,16 +128,16 @@ WaveIndexMappingAttr applyConstraint(TilingConstraintAttr constraint,
                                           context, baseMapping);
 }
 
-WaveIndexMappingAttr applyConstraintGeneric(mlir::Attribute constraint,
+WaveIndexMappingAttr applyConstraintGeneric(Attribute constraint,
                                             WaveIndexMappingAttr baseMapping) {
-  return llvm::TypeSwitch<mlir::Attribute, WaveIndexMappingAttr>(constraint)
+  return llvm::TypeSwitch<Attribute, WaveIndexMappingAttr>(constraint)
       .Case<WorkgroupConstraintAttr, TilingConstraintAttr>(
           [&](auto constraint) {
             // This double dispatching is necessary in absence of interfaces to
             // dispatch to a class method based on a specific type.
             return applyConstraint(constraint, baseMapping);
           })
-      .Default([&](mlir::Attribute constraint) { return nullptr; });
+      .Default([&](Attribute constraint) { return nullptr; });
 }
 
 } // namespace wave

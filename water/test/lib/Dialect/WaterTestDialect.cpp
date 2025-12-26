@@ -9,6 +9,8 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpImplementation.h"
 
+using namespace mlir;
+
 #include "WaterTestDialect.cpp.inc"
 
 void mlir::water::test::WaterTestDialect::initialize() {
@@ -26,25 +28,25 @@ void registerWaterTestDialect(DialectRegistry &registry) {
 
 using namespace mlir::water::test;
 
-llvm::FailureOr<mlir::ChangeResult> WaveFailPropagationOp::propagateForward(
+llvm::FailureOr<ChangeResult> WaveFailPropagationOp::propagateForward(
     llvm::ArrayRef<::wave::WaveTensorType> operandTypes,
     llvm::MutableArrayRef<::wave::WaveTensorType> resultTypes,
     llvm::raw_ostream &errs) {
   if (getForward()) {
     errs << "intentionally failed to propagate forward";
-    return mlir::failure();
+    return failure();
   }
   return wave::detail::identityTypeInferencePropagate(
       operandTypes, resultTypes, "operands", "results", errs);
 }
 
-llvm::FailureOr<mlir::ChangeResult> WaveFailPropagationOp::propagateBackward(
+llvm::FailureOr<ChangeResult> WaveFailPropagationOp::propagateBackward(
     llvm::MutableArrayRef<::wave::WaveTensorType> operandTypes,
     llvm::ArrayRef<::wave::WaveTensorType> resultTypes,
     llvm::raw_ostream &errs) {
   if (getBackward()) {
     errs << "intentionally failed to propagate backward";
-    return mlir::failure();
+    return failure();
   }
   return wave::detail::identityTypeInferencePropagate(
       resultTypes, operandTypes, "results", "operands", errs);

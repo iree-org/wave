@@ -15,32 +15,33 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 
+using namespace mlir;
+
 constexpr const static llvm::StringLiteral kwAny = "any";
 
-static mlir::ParseResult
-parseTensorShape(mlir::AsmParser &parser,
+static ParseResult
+parseTensorShape(AsmParser &parser,
                  llvm::SmallVectorImpl<wave::WaveSymbolAttr> &attr,
                  bool &fullySpecified) {
   if (parser.parseOptionalKeyword(kwAny).succeeded()) {
     fullySpecified = false;
-    return mlir::success();
+    return success();
   }
 
   fullySpecified = true;
-  auto parseOne = [&]() -> mlir::ParseResult {
-    mlir::StringAttr stringAttr;
+  auto parseOne = [&]() -> ParseResult {
+    StringAttr stringAttr;
     if (parser.parseSymbolName(stringAttr).failed())
-      return mlir::failure();
+      return failure();
     attr.emplace_back(wave::WaveSymbolAttr::get(stringAttr.getContext(),
                                                 stringAttr.getValue()));
-    return mlir::success();
+    return success();
   };
 
-  return parser.parseCommaSeparatedList(mlir::AsmParser::Delimiter::Square,
-                                        parseOne);
+  return parser.parseCommaSeparatedList(AsmParser::Delimiter::Square, parseOne);
 }
 
-static void printTensorShape(mlir::AsmPrinter &printer,
+static void printTensorShape(AsmPrinter &printer,
                              ::llvm::ArrayRef<::wave::WaveSymbolAttr> shape,
                              bool fullySpecified) {
   if (!fullySpecified) {
@@ -67,10 +68,11 @@ void wave::WaveDialect::registerTypes() {
       >();
 }
 
-mlir::LogicalResult wave::WaveTensorType::verify(
-    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
-    llvm::ArrayRef<wave::WaveSymbolAttr> shape, bool fullySpecified,
-    mlir::Type elementType, wave::WaveAddressSpaceAttr addressSpace) {
+LogicalResult
+wave::WaveTensorType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                             llvm::ArrayRef<wave::WaveSymbolAttr> shape,
+                             bool fullySpecified, Type elementType,
+                             wave::WaveAddressSpaceAttr addressSpace) {
   if (!fullySpecified && !shape.empty()) {
     return emitError() << "shape not expected for non-fully specified tensors";
   }
@@ -79,7 +81,7 @@ mlir::LogicalResult wave::WaveTensorType::verify(
     return emitError() << "expected element type to be integer, index or "
                           "floating point scalar";
   }
-  return mlir::success();
+  return success();
 }
 
 std::optional<llvm::SmallVector<int64_t>>

@@ -111,7 +111,7 @@ struct LowerWaveToMLIRPass
           RewritePatternSet patterns(ctx);
 
           // Add function signature conversion patterns.
-          mlir::populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(
+          populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(
               patterns, typeConverter);
 
           wave::populateWaveMiscellaneousOpsLoweringPatterns(typeConverter,

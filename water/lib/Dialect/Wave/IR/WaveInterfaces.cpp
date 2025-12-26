@@ -193,34 +193,33 @@ static bool hasSameShape(wave::WaveTensorType lhs, wave::WaveTensorType rhs) {
   return lhs && rhs && lhs.getShape() == rhs.getShape();
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::detail::checkPropagateShapeConflict(
+llvm::FailureOr<ChangeResult> wave::detail::checkPropagateShapeConflict(
     wave::WaveTensorType from, wave::WaveTensorType to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
   if (!from || !to || hasSameShape(from, to))
-    return mlir::ChangeResult::NoChange;
+    return ChangeResult::NoChange;
 
   if (!to.getFullySpecified())
-    return mlir::ChangeResult::Change;
+    return ChangeResult::Change;
 
   errs << "irreconcilable types during type inference from " << fromName << "("
        << from << ") to " << toName << "(" << to << ")";
-  return mlir::failure();
+  return failure();
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::detail::propagateShapeInformation(
+llvm::FailureOr<ChangeResult> wave::detail::propagateShapeInformation(
     wave::WaveTensorType from, wave::WaveTensorType &to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
-  llvm::FailureOr<mlir::ChangeResult> res =
+  llvm::FailureOr<ChangeResult> res =
       checkPropagateShapeConflict(from, to, fromName, toName, errs);
-  if (mlir::failed(res) || *res == mlir::ChangeResult::NoChange)
+  if (failed(res) || *res == ChangeResult::NoChange)
     return res;
 
   to = to.copyShapeFrom(from);
-  return mlir::ChangeResult::Change;
+  return ChangeResult::Change;
 }
 
-llvm::FailureOr<mlir::ChangeResult>
-wave::detail::identityTypeInferencePropagate(
+llvm::FailureOr<ChangeResult> wave::detail::identityTypeInferencePropagate(
     llvm::ArrayRef<wave::WaveTensorType> from,
     llvm::MutableArrayRef<wave::WaveTensorType> to, llvm::StringRef fromName,
     llvm::StringRef toName, llvm::raw_ostream &errs) {
@@ -228,25 +227,25 @@ wave::detail::identityTypeInferencePropagate(
     return type && type.getFullySpecified();
   });
   if (it == from.end())
-    return mlir::ChangeResult::NoChange;
+    return ChangeResult::NoChange;
 
   // Expect all fully-specified "from" types to have the same shape.
   for (auto [i, fr] : llvm::enumerate(from)) {
-    llvm::FailureOr<mlir::ChangeResult> res =
+    llvm::FailureOr<ChangeResult> res =
         checkPropagateShapeConflict(*it, fr, fromName, toName, errs);
-    if (mlir::failed(res)) {
+    if (failed(res)) {
       errs << " for " << fromName << " #" << i;
       return res;
     }
   }
 
-  mlir::ChangeResult changeResult = mlir::ChangeResult::NoChange;
+  ChangeResult changeResult = ChangeResult::NoChange;
   for (auto &&[i, toType] : llvm::enumerate(to)) {
-    llvm::FailureOr<mlir::ChangeResult> res =
+    llvm::FailureOr<ChangeResult> res =
         propagateShapeInformation(*it, toType, fromName, toName, errs);
-    if (mlir::failed(res)) {
+    if (failed(res)) {
       errs << " for " << fromName << " #" << i;
-      return mlir::failure();
+      return failure();
     }
 
     changeResult |= *res;
@@ -270,7 +269,7 @@ static void printElementsPerThreadMismatchMsg(
   errs << ")";
 }
 
-llvm::FailureOr<mlir::ChangeResult>
+llvm::FailureOr<ChangeResult>
 wave::detail::checkAndPropagateElementsPerThreadFromConstant(
     const ElementsPerThreadLatticeValue &from,
     llvm::ArrayRef<ElementsPerThreadLatticeValue> immutableValues,
@@ -283,10 +282,10 @@ wave::detail::checkAndPropagateElementsPerThreadFromConstant(
 
     printElementsPerThreadMismatchMsg(errs, from, fr, fromName, immutableName,
                                       i);
-    return mlir::failure();
+    return failure();
   }
 
-  mlir::ChangeResult changeResult = mlir::ChangeResult::NoChange;
+  ChangeResult changeResult = ChangeResult::NoChange;
   for (auto &&[i, toType] : llvm::enumerate(mutableValues)) {
     ElementsPerThreadLatticeValue joined =
         ElementsPerThreadLatticeValue::join(from, toType);
@@ -295,19 +294,18 @@ wave::detail::checkAndPropagateElementsPerThreadFromConstant(
       printElementsPerThreadMismatchMsg(errs, from, toType, fromName,
                                         mutableName, i);
       toType = ElementsPerThreadLatticeValue::top();
-      return mlir::failure();
+      return failure();
     }
 
     if (joined != toType) {
-      changeResult = mlir::ChangeResult::Change;
+      changeResult = ChangeResult::Change;
       toType = joined;
     }
   }
   return changeResult;
 }
 
-llvm::FailureOr<mlir::ChangeResult>
-wave::detail::identityElementsPerThreadPropagate(
+llvm::FailureOr<ChangeResult> wave::detail::identityElementsPerThreadPropagate(
     llvm::ArrayRef<ElementsPerThreadLatticeValue> from,
     llvm::MutableArrayRef<ElementsPerThreadLatticeValue> to,
     llvm::StringRef fromName, llvm::StringRef toName, llvm::raw_ostream &errs) {
@@ -359,7 +357,7 @@ static void updateNegativeIndices(llvm::MutableArrayRef<int> indices,
 }
 
 llvm::LogicalResult wave::detail::verifyTypesMatchingDimensions(
-    std::optional<mlir::Location> loc, llvm::StringRef lhsName,
+    std::optional<Location> loc, llvm::StringRef lhsName,
     wave::WaveTensorType lhs, llvm::ArrayRef<int> lhsDims,
     llvm::StringRef rhsName, wave::WaveTensorType rhs,
     llvm::ArrayRef<int> rhsDims) {
@@ -368,7 +366,7 @@ llvm::LogicalResult wave::detail::verifyTypesMatchingDimensions(
 
   // Under-specified types are okay everywhere.
   if (!lhs.getFullySpecified() || !rhs.getFullySpecified())
-    return mlir::success();
+    return success();
 
   llvm::SmallVector<int> lhsDimsVec(lhsDims), rhsDimsVec(rhsDims);
   updateNegativeIndices(lhsDimsVec, lhs.getRank());
@@ -380,39 +378,37 @@ llvm::LogicalResult wave::detail::verifyTypesMatchingDimensions(
       continue;
 
     if (loc) {
-      mlir::emitError(*loc)
-          << "expected " << lhsName << " dimension #" << lhsDim << " ("
-          << lhsExpr << ") to match " << rhsName << " dimension #" << rhsDim
-          << " (" << rhsExpr << ")";
+      emitError(*loc) << "expected " << lhsName << " dimension #" << lhsDim
+                      << " (" << lhsExpr << ") to match " << rhsName
+                      << " dimension #" << rhsDim << " (" << rhsExpr << ")";
     }
-    return mlir::failure();
+    return failure();
   }
-  return mlir::success();
+  return success();
 }
 
 llvm::LogicalResult wave::detail::verifyElementTypesMatch(
-    std::optional<mlir::Location> loc, llvm::StringRef lhsName,
+    std::optional<Location> loc, llvm::StringRef lhsName,
     wave::WaveTensorType lhs, llvm::StringRef rhsName,
     wave::WaveTensorType rhs) {
   if (lhs.getElementType() == rhs.getElementType())
-    return mlir::success();
+    return success();
 
   if (loc) {
-    mlir::emitError(*loc) << "expected " << lhsName << " and " << rhsName
-                          << " elemental types to match, got "
-                          << lhs.getElementType() << ", "
-                          << rhs.getElementType();
+    emitError(*loc) << "expected " << lhsName << " and " << rhsName
+                    << " elemental types to match, got " << lhs.getElementType()
+                    << ", " << rhs.getElementType();
   }
-  return mlir::failure();
+  return failure();
 }
 
 llvm::LogicalResult wave::detail::verifyTypesCompatible(
     wave::WaveTensorType lhs, wave::WaveTensorType rhs,
-    bool includeAddressSpace, std::optional<mlir::Location> errorLocation,
+    bool includeAddressSpace, std::optional<Location> errorLocation,
     llvm::StringRef lhsName, llvm::StringRef rhsName) {
   // Fast and cheap path.
   if (lhs == rhs)
-    return mlir::success();
+    return success();
 
   if (errorLocation) {
     assert(!lhsName.empty() && !rhsName.empty() &&
@@ -427,23 +423,23 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
         emitError(*errorLocation) << "address space mismatch between "
                                   << lhsName << " and " << rhsName;
       }
-      return mlir::failure();
+      return failure();
     }
   }
 
-  if (mlir::failed(
+  if (failed(
           verifyElementTypesMatch(errorLocation, lhsName, lhs, rhsName, rhs)))
-    return mlir::failure();
+    return failure();
 
   if (!lhs.getFullySpecified() || !rhs.getFullySpecified())
-    return mlir::success();
+    return success();
 
   if (lhs.getRank() != rhs.getRank()) {
     if (errorLocation) {
       emitError(*errorLocation)
           << "rank mismatch between " << lhsName << " and " << rhsName;
     }
-    return mlir::failure();
+    return failure();
   }
 
   auto allDims = llvm::to_vector(llvm::iota_range<int>(0, lhs.getRank(),
@@ -453,7 +449,7 @@ llvm::LogicalResult wave::detail::verifyTypesCompatible(
 }
 
 static llvm::LogicalResult
-verifyTypeRange(mlir::Location loc, mlir::TypeRange range,
+verifyTypeRange(Location loc, TypeRange range,
                 wave::WaveTensorType referenceType, bool includeAddressSpace,
                 llvm::StringRef rangeDescriptionPrefix,
                 llvm::StringRef referenceDescription) {
@@ -467,7 +463,7 @@ verifyTypeRange(mlir::Location loc, mlir::TypeRange range,
     llvm::raw_svector_ostream os(rangeDescription);
     os << i;
 
-    if (mlir::failed(wave::detail::verifyTypesCompatible(
+    if (failed(wave::detail::verifyTypesCompatible(
             tensorType, referenceType, includeAddressSpace, loc, os.str(),
             referenceDescription))) {
       return llvm::failure();
@@ -477,7 +473,7 @@ verifyTypeRange(mlir::Location loc, mlir::TypeRange range,
 }
 
 llvm::LogicalResult wave::detail::verifyCompatibleOperandsAndResultsOpTrait(
-    mlir::Operation *op, bool includeAddressSpace) {
+    Operation *op, bool includeAddressSpace) {
   const llvm::StringLiteral kOperandNamePrefix = "operand #";
   const llvm::StringLiteral kResultNamePrefix = "result #";
   std::string referenceDescription;
@@ -518,7 +514,7 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage()
     : value(nullptr, kUninitializedState) {}
 
 wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
-    mlir::DictionaryAttr concreteValue)
+    DictionaryAttr concreteValue)
     : value(concreteValue, kSpecificTypeState) {}
 
 bool wave::IndexExprsLatticeStorage::operator==(
@@ -539,10 +535,10 @@ bool wave::IndexExprsLatticeStorage::isTop() const {
   return value.getInt() == kUndecidableState;
 }
 
-mlir::DictionaryAttr wave::IndexExprsLatticeStorage::getConcreteValue() const {
+DictionaryAttr wave::IndexExprsLatticeStorage::getConcreteValue() const {
   if (value.getInt() != kSpecificTypeState)
     return nullptr;
-  return llvm::cast<mlir::DictionaryAttr>(value.getPointer());
+  return llvm::cast<DictionaryAttr>(value.getPointer());
 }
 
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::top() {
@@ -562,11 +558,11 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::bottom() {
 /// Parse and validate wave constraints from an attribute array.
 /// Returns the hardware constraint or nullptr on failure.
 static wave::HardwareConstraintAttr parseWaveConstraints(
-    mlir::Location loc, mlir::Attribute constraints,
-    llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<mlir::Attribute>>
+    Location loc, Attribute constraints,
+    llvm::DenseMap<wave::WaveSymbolAttr, llvm::SmallVector<Attribute>>
         &symbolConstraints) {
   wave::HardwareConstraintAttr hardwareConstraint;
-  for (mlir::Attribute constraint : llvm::cast<mlir::ArrayAttr>(constraints)) {
+  for (Attribute constraint : llvm::cast<ArrayAttr>(constraints)) {
     if (auto workgroup =
             llvm::dyn_cast<wave::WorkgroupConstraintAttr>(constraint)) {
       symbolConstraints[workgroup.getDim()].push_back(workgroup);
@@ -603,8 +599,7 @@ static wave::HardwareConstraintAttr parseWaveConstraints(
 }
 
 llvm::FailureOr<wave::IndexExprsAnalysisInit>
-wave::IndexExprsAnalysisInit::create(mlir::Location loc,
-                                     mlir::Attribute constraintsAttr) {
+wave::IndexExprsAnalysisInit::create(Location loc, Attribute constraintsAttr) {
   wave::IndexExprsAnalysisInit initObject;
   initObject.hardwareConstraint =
       parseWaveConstraints(loc, constraintsAttr, initObject.symbolConstraints);
@@ -851,16 +846,14 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
   rhs = rhs.removeUnusedInputs();
 
   // Collect all unique symbol names from both index mappings in order.
-  llvm::SmallVector<mlir::Attribute> allSymbols;
-  llvm::SetVector<mlir::Attribute> lhsSymbols(llvm::from_range,
-                                              lhs.getSymbols());
-  llvm::SetVector<mlir::Attribute> rhsSymbols(llvm::from_range,
-                                              rhs.getSymbols());
+  llvm::SmallVector<Attribute> allSymbols;
+  llvm::SetVector<Attribute> lhsSymbols(llvm::from_range, lhs.getSymbols());
+  llvm::SetVector<Attribute> rhsSymbols(llvm::from_range, rhs.getSymbols());
   wave::aggregateAllSymbols(llvm::ArrayRef{lhsSymbols, rhsSymbols}, allSymbols);
-  llvm::SetVector<mlir::Attribute> commonSymbols =
+  llvm::SetVector<Attribute> commonSymbols =
       llvm::set_intersection(lhsSymbols, rhsSymbols);
   llvm::SmallVector<unsigned> commonSymbolPositions;
-  for (mlir::Attribute symbol : commonSymbols) {
+  for (Attribute symbol : commonSymbols) {
     auto it = llvm::find(lhsSymbols, symbol);
     assert(it != lhsSymbols.end());
     commonSymbolPositions.push_back(std::distance(lhsSymbols.begin(), it));
@@ -888,7 +881,7 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
 
 wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     const IndexExprsLatticeStorage &lhs, const IndexExprsLatticeStorage &rhs,
-    llvm::ArrayRef<mlir::Attribute> ignoredRhsSymbols) {
+    llvm::ArrayRef<Attribute> ignoredRhsSymbols) {
   if (lhs.value == rhs.value)
     return lhs;
 
@@ -898,7 +891,7 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
 
   // Only named symbols may be ignored.
   llvm::StringSet<> ignoredRhsSymbolNames;
-  for (mlir::Attribute attr : ignoredRhsSymbols) {
+  for (Attribute attr : ignoredRhsSymbols) {
     auto symbolAttr = llvm::dyn_cast<wave::WaveSymbolAttr>(attr);
     if (!symbolAttr)
       continue;
@@ -910,28 +903,28 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
     if (ignoredRhsSymbols.empty() || rhs.isBottom())
       return rhs;
 
-    llvm::SmallVector<mlir::NamedAttribute> filtered = llvm::filter_to_vector(
-        rhs.getConcreteValue(), [&](mlir::NamedAttribute namedAttr) {
+    llvm::SmallVector<NamedAttribute> filtered = llvm::filter_to_vector(
+        rhs.getConcreteValue(), [&](NamedAttribute namedAttr) {
           return !ignoredRhsSymbolNames.contains(
               namedAttr.getName().getValue());
         });
-    return IndexExprsLatticeStorage(mlir::DictionaryAttr::get(
-        rhs.getConcreteValue().getContext(), filtered));
+    return IndexExprsLatticeStorage(
+        DictionaryAttr::get(rhs.getConcreteValue().getContext(), filtered));
   }
 
   if (rhs.isBottom())
     return lhs;
 
-  mlir::MLIRContext *ctx = lhs.getConcreteValue().getContext();
-  mlir::DictionaryAttr lhsValue = lhs.getConcreteValue();
-  mlir::DictionaryAttr rhsValue = rhs.getConcreteValue();
+  MLIRContext *ctx = lhs.getConcreteValue().getContext();
+  DictionaryAttr lhsValue = lhs.getConcreteValue();
+  DictionaryAttr rhsValue = rhs.getConcreteValue();
 
   // Join specific values per symbol.
-  llvm::DenseMap<mlir::StringAttr, mlir::Attribute> result;
-  for (mlir::NamedAttribute namedAttr : lhsValue) {
+  llvm::DenseMap<StringAttr, Attribute> result;
+  for (NamedAttribute namedAttr : lhsValue) {
     result[namedAttr.getName()] = namedAttr.getValue();
   }
-  for (mlir::NamedAttribute namedAttr : rhsValue) {
+  for (NamedAttribute namedAttr : rhsValue) {
     if (ignoredRhsSymbolNames.contains(namedAttr.getName().getValue()))
       continue;
 
@@ -956,10 +949,10 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::join(
 
     result[namedAttr.getName()] = joinedMapping;
   }
-  return IndexExprsLatticeStorage(mlir::DictionaryAttr::get(
-      ctx, llvm::map_to_vector(result, [](auto &&pair) {
-        return mlir::NamedAttribute(pair.first, pair.second);
-      })));
+  return IndexExprsLatticeStorage(
+      DictionaryAttr::get(ctx, llvm::map_to_vector(result, [](auto &&pair) {
+                            return NamedAttribute(pair.first, pair.second);
+                          })));
 }
 
 wave::IndexExprsLatticeStorage
@@ -982,8 +975,8 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
   for (wave::WaveSymbolAttr symbol : symbols)
     symbolNames.insert(symbol.getName());
 
-  llvm::SmallVector<mlir::NamedAttribute> filtered = llvm::filter_to_vector(
-      getConcreteValue(), [&](mlir::NamedAttribute attr) {
+  llvm::SmallVector<NamedAttribute> filtered =
+      llvm::filter_to_vector(getConcreteValue(), [&](NamedAttribute attr) {
         return symbolNames.contains(attr.getName().getValue());
       });
 
@@ -991,7 +984,7 @@ wave::IndexExprsLatticeStorage wave::IndexExprsLatticeStorage::keepOnlySymbols(
     return bottom();
 
   return IndexExprsLatticeStorage(
-      mlir::DictionaryAttr::get(getConcreteValue().getContext(), filtered));
+      DictionaryAttr::get(getConcreteValue().getContext(), filtered));
 }
 
 wave::IndexExprsLatticeStorage
@@ -1001,17 +994,17 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
     return *this;
 
   MLIRContext *ctx = getConcreteValue().getContext();
-  llvm::SmallVector<mlir::NamedAttribute> updated =
-      llvm::map_to_vector(getConcreteValue(), [&](mlir::NamedAttribute attr) {
+  llvm::SmallVector<NamedAttribute> updated =
+      llvm::map_to_vector(getConcreteValue(), [&](NamedAttribute attr) {
         auto value = llvm::cast<wave::WaveIndexMappingAttr>(attr.getValue());
         for (wave::WaveSymbolAttr iterSymbol : iterSymbols) {
           auto actualIterSymbol =
               wave::WaveIterSymbolAttr::get(ctx, iterSymbol.getName());
           value = value.removeInput(actualIterSymbol).removeUnusedInputs();
         }
-        return mlir::NamedAttribute(attr.getName(), value);
+        return NamedAttribute(attr.getName(), value);
       });
-  return IndexExprsLatticeStorage(mlir::DictionaryAttr::get(ctx, updated));
+  return IndexExprsLatticeStorage(DictionaryAttr::get(ctx, updated));
 }
 
 void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
@@ -1026,17 +1019,16 @@ void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
 
 void wave::IndexExprsLatticeStorage::dump() const { print(llvm::errs()); }
 
-void wave::operator<<(mlir::Diagnostic &diag,
-                      const IndexExprsLatticeStorage &value) {
+void wave::operator<<(Diagnostic &diag, const IndexExprsLatticeStorage &value) {
   std::string str;
   llvm::raw_string_ostream os(str);
   value.print(os);
   diag << os.str();
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
+llvm::FailureOr<ChangeResult> wave::detail::identityIndexExprsPropagate(
     llvm::ArrayRef<IndexExprsLatticeStorage> from,
-    llvm::MutableArrayRef<IndexExprsLatticeStorage> to, mlir::TypeRange toTypes,
+    llvm::MutableArrayRef<IndexExprsLatticeStorage> to, TypeRange toTypes,
     llvm::StringRef fromName, llvm::StringRef toName,
     wave::EmitErrorFn emitError) {
   // Join all "from" lattices.
@@ -1056,9 +1048,9 @@ llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
   // Report if joining non-top "from" lattices reached the top as this is
   // indicative of a "sideways" conflict.
   if (joined.isTop() && !fromTop) {
-    mlir::InFlightDiagnostic diag =
-        emitError() << "incompatible " << fromName << " lattices"
-                    << " when propagating from those to " << toName;
+    InFlightDiagnostic diag = emitError()
+                              << "incompatible " << fromName << " lattices"
+                              << " when propagating from those to " << toName;
     for (auto &&[i, fromLattice] : llvm::enumerate(from)) {
       diag.attachNote() << fromName << " #" << i << " lattice: " << fromLattice;
     }
@@ -1066,7 +1058,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
   }
 
   // Propagate to all "to" lattices.
-  mlir::ChangeResult changeResult = mlir::ChangeResult::NoChange;
+  ChangeResult changeResult = ChangeResult::NoChange;
   for (auto &&[i, toLattice] : llvm::enumerate(to)) {
     auto tensorType = llvm::dyn_cast<wave::WaveTensorType>(toTypes[i]);
     if (!tensorType) {
@@ -1084,7 +1076,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
     // is either reported above or it means the conflict was found elsewhere and
     // we are just propagating it.
     if (newLattice.isTop() && !toLattice.isTop() && !filtered.isTop()) {
-      mlir::InFlightDiagnostic diag =
+      InFlightDiagnostic diag =
           emitError() << "conflict when propagating index expressions from "
                       << fromName << " to " << toName << " #" << i;
       diag.attachNote() << "original " << toName << " lattice: " << toLattice;
@@ -1096,7 +1088,7 @@ llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
     }
 
     if (newLattice != toLattice) {
-      changeResult = mlir::ChangeResult::Change;
+      changeResult = ChangeResult::Change;
       toLattice = newLattice;
     }
   }
@@ -1104,17 +1096,17 @@ llvm::FailureOr<mlir::ChangeResult> wave::detail::identityIndexExprsPropagate(
 }
 
 llvm::LogicalResult wave::detail::checkAndAppendIndexExpr(
-    mlir::Location loc, const IndexExprsLatticeStorage &expr,
+    Location loc, const IndexExprsLatticeStorage &expr,
     const llvm::Twine &description,
-    llvm::SmallVectorImpl<mlir::Attribute> &indexExprs) {
+    llvm::SmallVectorImpl<Attribute> &indexExprs) {
   if (expr.isBottom()) {
     emitError(loc) << "failed to infer index expressions for " << description;
     return llvm::failure();
   }
   if (expr.isTop()) {
-    mlir::InFlightDiagnostic diag =
-        emitError(loc) << "conflict detected in index expressions for "
-                       << description;
+    InFlightDiagnostic diag = emitError(loc)
+                              << "conflict detected in index expressions for "
+                              << description;
     diag.attachNote() << "PLEASE REPORT this as a bug in absence of further "
                          "information about the conflict";
     return llvm::failure();
@@ -1124,10 +1116,10 @@ llvm::LogicalResult wave::detail::checkAndAppendIndexExpr(
 }
 
 llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
-    mlir::Operation *op,
+    Operation *op,
     [[maybe_unused]] llvm::ArrayRef<IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<IndexExprsLatticeStorage> resultExprs) {
-  llvm::SmallVector<mlir::Attribute> indexExprs;
+  llvm::SmallVector<Attribute> indexExprs;
   indexExprs.reserve(resultExprs.size());
   for (auto &&[i, expr] : llvm::enumerate(resultExprs)) {
     if (!llvm::isa<wave::WaveTensorType>(op->getResult(i).getType()))
@@ -1138,7 +1130,7 @@ llvm::LogicalResult wave::detail::identitySetIndexFromLattices(
       return llvm::failure();
   }
   op->setAttr(wave::WaveDialect::kIndexWaveExprListAttrName,
-              mlir::ArrayAttr::get(op->getContext(), indexExprs));
+              ArrayAttr::get(op->getContext(), indexExprs));
   return llvm::success();
 }
 
