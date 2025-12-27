@@ -465,6 +465,26 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 // -----
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @read_with_vector_result
+  func.func @read_with_vector_result(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {
+    // Test ReadOp lowering when result is already a vector type
+    // (simulates after PropagateElementsPerThread pass)
+    %0 = wave.read %mem index [{
+        M : [#wave.index_symbol<WG0>] -> (WG0, 1, 1),
+        N : [#wave.index_symbol<T0>] -> (T0, 8, 1)
+      }]
+      : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
+
+    // CHECK: %[[READ:.*]] = vector.load
+    // CHECK-SAME: : memref<128x128xf16, #gpu.address_space<global>>, vector<8xf16>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
 // CHECK-LABEL: @lower_write
 func.func @lower_write(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>}  {
   %cst = arith.constant 0.0 : f16
