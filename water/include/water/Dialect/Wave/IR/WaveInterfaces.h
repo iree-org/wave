@@ -319,45 +319,6 @@ checkAndPropagateElementsPerThreadFromConstant(
 
 } // namespace detail
 
-// Trait implementing the methods of the WaveElementsPerThreadOpInterface based
-// on the `elements_per_thead` attribute.
-template <typename OpTy>
-class AttrBasedElementsPerThreadOpTrait
-    : public mlir::OpTrait::TraitBase<OpTy, AttrBasedElementsPerThreadOpTrait> {
-public:
-  // Propagate `elements_per_thread` value to results.
-  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadForward(
-      llvm::ArrayRef<ElementsPerThreadLatticeValue> operandTypes,
-      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> resultTypes,
-      llvm::raw_ostream &errs) {
-    std::optional<int64_t> elementsPerThread =
-        llvm::cast<OpTy>(this->getOperation()).getElementsPerThread();
-    if (!elementsPerThread)
-      return mlir::ChangeResult::NoChange;
-
-    return detail::checkAndPropagateElementsPerThreadFromConstant(
-        ElementsPerThreadLatticeValue(*elementsPerThread), operandTypes,
-        resultTypes, "elements_per_thread attribute", "operand", "result",
-        errs);
-  }
-
-  // Propagate `elements_per_thread` value to operands.
-  llvm::FailureOr<mlir::ChangeResult> propagateElementsPerThreadBackward(
-      llvm::MutableArrayRef<ElementsPerThreadLatticeValue> operandTypes,
-      llvm::ArrayRef<ElementsPerThreadLatticeValue> resultTypes,
-      llvm::raw_ostream &errs) {
-    std::optional<int64_t> elementsPerThread =
-        llvm::cast<OpTy>(this->getOperation()).getElementsPerThread();
-    if (!elementsPerThread)
-      return mlir::ChangeResult::NoChange;
-
-    return detail::checkAndPropagateElementsPerThreadFromConstant(
-        ElementsPerThreadLatticeValue(*elementsPerThread), resultTypes,
-        operandTypes, "elements_per_thread attribute", "result", "operand",
-        errs);
-  }
-};
-
 // Trait implementing the methods of the WaveElementsPerThreadOpInterface with
 // information flowing between operands and results.
 template <typename OpTy>

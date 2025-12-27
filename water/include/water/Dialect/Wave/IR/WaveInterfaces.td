@@ -64,11 +64,6 @@ def WaveElementsPerThreadOpInterface
   let cppNamespace = "::wave";
 }
 
-def AttrBasedElementsPerThreadOpTrait
-    : NativeOpTrait<"AttrBasedElementsPerThreadOpTrait"> {
-  let cppNamespace = "::wave";
-}
-
 def NoOpElementsPerThreadOpTrait
     : NativeOpTrait<"NoOpElementsPerThreadOpTrait"> {
   let cppNamespace = "::wave";
