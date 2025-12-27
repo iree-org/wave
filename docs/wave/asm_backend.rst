@@ -10,20 +10,23 @@ The ASM backend transforms Wave kernels through the following pipeline:
 
 1. **MLIR Generation**: Wave kernels are first compiled to MLIR (Multi-Level Intermediate Representation)
 2. **MLIR Analysis**: The MLIR is analyzed to extract kernel information, memory access patterns, and thread organization
-3. **Assembly Generation**: AMDGCN assembly instructions are generated directly from the analyzed MLIR
-4. **Binary Compilation**: The assembly is compiled to HSACO (Heterogeneous System Architecture Code Object) binaries using AMD's toolchain
+3. **Kernel IR Generation**: Virtual register instructions are emitted to the Kernel IR program
+4. **Liveness Analysis**: CFG-based backward dataflow analysis computes register live ranges
+5. **Register Allocation**: Linear scan allocator assigns physical registers with constraint handling
+6. **Peephole Optimization**: Instruction fusion and other local optimizations are applied
+7. **Hazard Mitigation**: Architecture-specific hazard detection and s_nop insertion
+8. **Assembly Generation**: AMDGCN assembly is rendered from the allocated program
+9. **Binary Compilation**: The assembly is compiled to HSACO (Heterogeneous System Architecture Code Object) binaries using AMD's toolchain
 
 Architecture
 ------------
 
-The ASM backend consists of several key components:
-
-The ASM backend follows a modular architecture with clear separation of concerns between MLIR analysis, assembly generation, and register management.
+The ASM backend follows a modular architecture with clear separation of concerns between MLIR analysis, kernel IR generation, register allocation, and assembly rendering.
 
 Key Components
 ~~~~~~~~~~~~~~
 
-**MLIR Walker** (`mlir_walker.py`)
+**MLIR Walker** (``mlir_walker.py``)
   Analyzes MLIR operations and extracts kernel information including:
 
   - Function arguments and their types
@@ -31,57 +34,144 @@ Key Components
   - Thread ID operations and bounds
   - Affine expressions and their simplifications
   - Binding subspan operations for memory mapping
-  - Unified SSA-to-VGPR tracking for all operations
   - Loop iteration arguments and result mappings
 
-**ASM Emitter** (`asm_emitter.py`)
-  Generates AMDGCN assembly instructions from kernel information:
+**Operation Handlers** (``handlers*.py``)
+  Operation-specific handlers for MLIR operations, split into focused modules:
 
-  - Kernel preamble and metadata
-  - Register allocation and management
-  - Memory access instructions (buffer loads/stores)
-  - Thread synchronization and control flow
-  - Shader Resource Descriptor (SRD) setup
+  - ``handlers.py``: Main handler coordinator and compatibility layer
+  - ``handlers_memory.py``: Memory operations (loads, stores, SRD setup)
+  - ``handlers_control.py``: Control flow (scf.for, gpu.barrier)
+  - ``handlers_arith_affine.py``: Arithmetic and affine operations
+  - ``handlers_shared.py``: Shared imports and helper functions
 
-**Instruction Classes** (`instructions.py`)
-  Provides structured representation of AMDGCN instructions:
+  Supported operations include:
 
-  - Base instruction classes for different operation types
-  - Specific instruction implementations (loads, stores, arithmetic)
-  - Loop control flow instructions (s_cmp_lt_u32, s_cbranch_scc1, s_branch, s_add_u32)
-  - VGPR-variant MFMA with accumulator support
-  - Instruction builders for common patterns
-  - Proper assembly formatting and syntax
+  - Memory allocation (memref.alloc) including LDS staging
+  - Memory views (memref.view) with offset tracking
+  - Load/store operations from global and LDS memory
+  - MFMA operations (amdgpu.mfma) with accumulator chaining
+  - LDS read/write operations (ds_read_b64, ds_write_b64) with offset optimization
+  - Loop operations (scf.for) with induction variables and accumulators
 
-**Register Allocator** (`register_allocator.py`)
-  Manages GPU register allocation:
+**MLIR Analysis** (``mlir_analysis.py``)
+  Centralized MLIR parsing, walking, and kernel metadata extraction:
 
-  - Scalar General Purpose Register (SGPR) allocation
-  - Vector General Purpose Register (VGPR) allocation
-  - Register conflict detection and resolution
-  - Alignment requirements for vector operations
-  - Architecture-specific granularities (CDNA2/3: VGPR=4, SGPR=8; RDNA2/3: VGPR=4, SGPR=16)
-  - Free list-based register reuse for optimal register pressure
-  - Peak VGPR usage tracking for performance analysis
-  - Typed operation logging with RegisterOp enum
+  - ``walk_ops_recursively()``: Recursive MLIR operation walker
+  - ``detect_needed_workgroup_ids()``: Detects which workgroup IDs are used
+  - ``extract_translation_info()``: Extracts wg_size and subgroup_size from MLIR attributes
+  - ``should_skip_function()``: Explicit kernel selection policy with documented constants
 
-**Expression Emitter** (`expression_emitter.py`)
-  Generic SymPy expression visitor that emits AMDGCN instructions with CSE:
+**Kernel Module Compiler** (``kernel_module_compiler.py``)
+  Canonical entry point for MLIR to AMDGCN assembly compilation:
 
-  - Automatic Common Subexpression Elimination (CSE) with memoization
-  - Expression canonicalization to maximize CSE hits (flatten, sort, fold constants)
-  - Iterative postorder traversal of expression trees
-  - Support for constants, symbols, and complex expressions
-  - Optimized instruction selection (shifts for power-of-2, masks for modulo)
-  - Const marker system for efficient register usage
-  - Handles Add, Mul, Mod, floor division, and Pow operations
-  - Rational expression support for division in address calculations
-  - Structural expression keys for cache lookup
-  - SGPR reference handling for loop induction variables
-  - Multi-wave thread ID extraction (tid_x, tid_y) from flat ID
-  - Error handling for unsupported expression types
+  - ``KernelModuleCompiler``: Main compiler class
+  - ``compile_mlir_string()``: Compiles MLIR string to assembly
+  - Orchestrates the full compilation pipeline
 
-**Utils** (`utils.py`)
+**Kernel Compilation Context** (``kernel_compilation_context.py``)
+  Central context for kernel IR compilation (extracted from kernel_pipeline.py):
+
+  - ``KernelCompilationContext``: Main context managing virtual registers, SRDs, and emission
+  - Symbol bounds tracking for expression simplification
+  - Scoped CSE with loop-invariant caching
+  - Loop management and finalization
+
+**Expression Emitter** (``kernel_expr_emitter.py``)
+  Expression emission with scoped CSE:
+
+  - ``KernelIRExprEmitter``: Expression emitter with CSE and algebraic simplification
+  - ``kernel_expr_floor_ops.py``: Floor operation handling
+
+**Compilation Passes** (``kernel_passes.py``)
+  Post-allocation optimization and correctness passes:
+
+  - Hazard mitigation (s_nop insertion for VALU hazards)
+  - Peephole optimizations (instruction fusion)
+  - Ticketing-based waitcnt insertion
+
+**Kernel IR** (``kernel_ir.py``)
+  Instruction representation and virtual register types:
+
+  - ``KVReg``/``KSReg``: Virtual VGPR/SGPR register types
+  - ``KRegRange``: Contiguous register ranges with alignment
+  - ``KInstr``: Instruction with opcode, defs, uses, and metadata
+  - ``KImm``/``KMemOffset``/``KSpecialReg``: Operand types
+
+**Liveness Analysis** (``kernel_liveness.py``)
+  CFG-based backward dataflow analysis:
+
+  - ``BasicBlock``/``CFG``: Control flow graph construction
+  - ``compute_liveness()``: Live range computation with loop handling
+  - ``compute_cfg_liveness()``: Iterative dataflow for live_in/live_out sets
+  - ``compute_live_ranges_from_cfg()``: Extends ranges for loop-carried values
+  - SSA validation with dominance awareness
+
+**Register Allocation** (``kernel_regalloc.py``)
+  Constraint-aware linear scan allocator:
+
+  - Precoloring for ABI-mandated registers (v0 for flat tid, s[0:1] for kernarg)
+  - Range allocation with alignment constraints
+  - Loop SGPR reservation (s24+ for counters)
+  - No spilling: fails compilation with diagnostic if allocation fails
+
+**Kernel Generator** (``kernel_generator.py``)
+  Assembly generation from allocated program:
+
+  - Physical register substitution using ``InstructionFormatter``
+  - Pseudo-instruction expansion (e.g., ``_g2s_srd_copy``, ``_init_acc_quad``)
+  - Label emission for control flow
+
+**Instruction Formatter** (``instruction_formatter.py``)
+  Centralized instruction formatting to assembly text:
+
+  - Single point for all physical instruction formatting
+  - Operand validation (strict mode via ``WAVE_STRICT_FORMATTER``)
+  - Special handling for buffer operations, LDS, and MFMA
+  - Integration with ``InstructionRegistry`` for opcode metadata
+
+**Metadata Emitter** (``metadata_emitter.py``)
+  AMDGCN metadata directive generation:
+
+  - Kernel prologue (``.amdgcn_target``, ``.amdhsa_kernel``, etc.)
+  - Kernel epilogue (``.amdgpu_metadata`` YAML block)
+  - Resource patching for dynamic register counts
+  - Architecture-specific granularity handling
+
+**Ticketing** (``ticketing.py``)
+  Memory operation tracking and waitcnt coalescing:
+
+  - Tracks outstanding VMEM and LGKM operations
+  - Coalesces redundant ``s_waitcnt`` instructions
+  - Integrated into kernel IR finalization pass
+
+**ABI Policies** (``abi.py``)
+  Centralized ABI-related policies:
+
+  - ``get_system_vgpr_workitem_id_policy()``: Determines VGPR workitem ID requirements
+  - Workgroup size normalization
+
+**Gather-to-Shared Handler** (``gather_to_shared.py``)
+  Handles gather_to_lds operations for direct global-to-LDS transfers:
+
+  - ``G2SHandler`` class for buffer_load_dword...lds emission
+  - ``analyze_g2s_region`` for finding gather_to_lds operations
+  - ``precreate_g2s_srds`` for SRD pre-allocation before loops
+  - SRD tracing through memref cast chains
+  - VGPR offset computation for global memory addressing
+  - LDS destination address (M0) computation via kernel IR
+
+**Expression Simplification** (``expr_simplify.py``)
+  Algebraic simplification using singledispatch for type-based rule dispatch:
+
+  - Declarative rewrite rules with SymPy Wild patterns
+  - ``@singledispatch`` for ``get_max_value``, ``simplify_expr``, ``combine_like_terms``
+  - Floor/mod identity: ``floor(x/n)*n + Mod(x,n) → x``
+  - Linear floor to mod: ``a*x - a*n*floor(x/n) → a*Mod(x,n)``
+  - Redundant floor elimination when ``max(x) < n``
+  - Power-of-2 shift combining: ``x * 2^a * 2^b → x * 2^(a+b)``
+
+**Utils** (``utils.py``)
   Provides utility functions for:
 
   - MLIR type parsing and analysis
@@ -91,75 +181,46 @@ Key Components
   - SymPy expression building from MLIR indices
   - Byte offset calculation for memory addressing
 
-**Handlers** (`handlers.py`)
-  Operation-specific handlers for MLIR operations:
-
-  - Memory allocation (memref.alloc) including LDS staging
-  - Memory views (memref.view) with offset tracking
-  - Load operations (vector.load) from global and LDS memory
-  - Store operations (vector.store) to global and LDS memory
-  - MFMA operations (amdgpu.mfma) with accumulator chaining
-  - LDS read/write operations (ds_read_b64, ds_write_b64)
-  - Loop operations (scf.for) with induction variables and accumulators
-  - Vector extraction (vector.extract_strided_slice) for register slicing
-  - Fat raw buffer cast (amdgpu.fat_raw_buffer_cast) for gather_to_lds
-
-**Gather-to-Shared Handler** (`gather_to_shared.py`)
-  Handles gather_to_lds operations for direct global-to-LDS transfers:
-
-  - ``G2SHandler`` class for buffer_load_dword...lds emission
-  - ``analyze_g2s_region`` for finding gather_to_lds operations
-  - ``precompute_m0_values`` for M0 pre-computation before barriers
-  - SRD tracing through memref cast chains
-  - VGPR offset computation for global memory addressing
-  - LDS destination address (M0) computation
-
-**Hazard Detector** (`hazards.py`)
-  Handles architecture-specific hardware hazards:
-
-  - ``HazardDetector`` class for hazard detection and mitigation
-  - gfx950 VALU hazard: v_add followed by v_readfirstlane requires s_nop
-  - Automatic s_nop 0 insertion after hazardous instruction sequences
-
 Features
 --------
 
-Direct Assembly Generation
+Kernel IR Compilation Path
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ASM backend generates native AMDGCN assembly instructions, providing:
+The ASM backend uses a kernel IR compilation path that provides:
 
-- **Fine-grained control** over GPU execution
-- **Optimized memory access patterns** with proper SRD setup
-- **Efficient register usage** through intelligent allocation
-- **Thread synchronization** with proper wait instructions
+- **Virtual Registers**: All operations emit to virtual registers (KVReg/KSReg)
+- **Whole-Program Analysis**: Complete liveness analysis across the kernel
+- **Optimal Allocation**: Linear scan with constraint handling and precoloring
+- **Loop Awareness**: CFG-based analysis correctly handles loop-carried values
+
+This is the only compilation path - there is no legacy mode.
 
 Advanced Optimizations
 ~~~~~~~~~~~~~~~~~~~~~~
 
 The backend implements several optimization techniques:
 
-- **Common Subexpression Elimination (CSE)**: Automatically detects and reuses identical expressions across operations
-- **Expression Canonicalization**: Normalizes expressions (flatten, sort, fold) to maximize CSE effectiveness
-- **Affine Expression Simplification**: Uses SymPy to simplify complex index expressions
-- **Thread ID Analysis**: Automatically detects and optimizes thread ID usage patterns
-- **Memory Access Optimization**: Generates efficient buffer load/store sequences with base+offset addressing
-- **Register Lifetime Management**: Frees temporary VGPRs promptly while preserving cached expressions
-- **Register Reuse**: Minimizes register pressure through intelligent allocation and CSE
+- **Common Subexpression Elimination (CSE)**: Scoped caching with global scope for loop-invariant expressions
+- **Loop-Invariant Caching**: Expressions using only tid_x/tid_y/wgid_* are cached globally and persist across loop iterations
+- **Algebraic Simplification**: Uses symbol bounds (from workgroup/subgroup size) to simplify expressions like ``floor(tid_x/64) → 0`` when tid_x < 64
+- **Bit Range Analysis**: Detects non-overlapping bit ranges and uses OR instead of ADD (e.g., ``(tid_x * 256) + col`` becomes OR when ranges don't overlap)
+- **Instruction Fusion**: Peephole optimizer fuses ``v_lshlrev_b32 + v_add_u32`` → ``v_lshl_add_u32`` and ``v_lshlrev_b32 + v_or_b32`` → ``v_lshl_or_b32``
+- **ds_read/ds_write Offset Optimization**: Uses instruction offset field (up to 8192 bytes) to reduce address computation
 - **Power-of-2 Optimization**: Uses bit shifts instead of multiplication for power-of-2 constants
-- **Const Marker System**: Avoids unnecessary register allocation for integer constants
+- **Constant Caching**: Large constants are cached to avoid redundant v_mov_b32 instructions
 
 Memory Management
 ~~~~~~~~~~~~~~~~~
 
 The ASM backend handles memory operations through:
 
-- **Shader Resource Descriptors (SRDs)**: Proper setup for buffer access
+- **Shader Resource Descriptors (SRDs)**: Proper setup for buffer access with lazy allocation
 - **Vectorized Loads/Stores**: Efficient 16-byte aligned memory operations
 - **Address Calculation**: Optimized offset computation using SymPy expressions
 - **LDS (Local Data Share) Staging**: Automatic staging through shared memory for improved performance
+- **LDS Offset Optimization**: Uses ds_read/ds_write offset field (0-8192 bytes) to reduce VALU instructions
 - **Synchronization**: Proper wait instructions for memory consistency (vmcnt, lgkmcnt)
-- **Expression-Based Addressing**: Dynamic address calculation from MLIR affine maps
 
 Hardware Accelerated Operations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -167,7 +228,7 @@ Hardware Accelerated Operations
 The ASM backend provides native support for AMD GPU specialized instructions:
 
 - **MFMA (Matrix Multiply-Accumulate)**: Hardware-accelerated matrix operations on CDNA architectures using VGPR-variant instructions with accumulator chaining for K-loops
-- **LDS Operations**: Fast shared memory operations (ds_read_b64, ds_write_b64)
+- **LDS Operations**: Fast shared memory operations (ds_read_b64, ds_write_b64) with offset field support for reduced address computation
 - **Multi-Wave Support**: Automatic detection and handling of multi-wave workgroups with proper thread ID extraction
 - **Multi-Workgroup Support**: Dynamic detection of workgroup ID usage and conditional SGPR allocation
 - **Loop Support (scf.for)**: Native support for structured control flow loops with SGPR induction variables and VGPR accumulators
@@ -178,7 +239,7 @@ Architecture Support
 The ASM backend supports multiple AMD GPU architectures with architecture-specific optimizations:
 
 - **CDNA3 (gfx942)**: MI300 series with VGPR granularity of 4, SGPR granularity of 8
-- **gfx950**: Support with VALU hazard mitigation (s_nop after v_add before v_readfirstlane)
+- **gfx950**: Support with precise VALU hazard mitigation
 
 Gather-to-LDS Operations
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -189,9 +250,10 @@ which bypass VGPRs and load data directly into LDS (Local Data Share):
 **Key Features**
 
 - **Direct Transfer**: Data flows from global memory directly to LDS without VGPR intermediaries
-- **M0 Pre-computation**: M0 register (LDS destination address) is pre-computed before buffer loads
+- **M0 Computation via Kernel IR**: M0 register value computed inline using expression emitter
 - **Cache Swizzle Support**: Configurable cache swizzle stride for optimal LDS bank access
 - **SRD Management**: Automatic SRD (Shader Resource Descriptor) setup with LDS-specific word3 (0x27000)
+- **SRD Pre-creation**: All G2S SRDs are pre-created before loops to prevent overwrites
 
 **Generated Assembly Pattern**
 
@@ -231,12 +293,15 @@ Use the ``use_global_to_shared=True`` compile option:
 Hardware Hazard Mitigation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ASM backend automatically detects and mitigates architecture-specific hardware hazards:
+The ASM backend automatically detects and mitigates architecture-specific hardware hazards with precise insertion:
 
-**gfx950 VALU Hazard**
+**gfx94x/gfx95x VALU Hazard**
 
-On gfx950, a VALU instruction (like ``v_add_u32``) writing to a VGPR followed by
-``v_readfirstlane_b32`` reading that VGPR requires a 1-cycle wait:
+On gfx94x/gfx95x, a VALU instruction writing to a VGPR followed by ``v_readfirstlane_b32`` reading that same VGPR requires a 1-cycle wait. The hazard mitigation is precise:
+
+- Only inserts ``s_nop 0`` when ``v_readfirstlane_b32`` immediately follows a VALU instruction
+- Only when the VALU writes to a VGPR that ``v_readfirstlane`` reads
+- Reduces s_nop count from ~46 (blanket insertion) to ~2 (precise insertion)
 
 .. code-block:: asm
 
@@ -249,8 +314,51 @@ On gfx950, a VALU instruction (like ``v_add_u32``) writing to a VGPR followed by
    s_nop 0                         # 1-cycle wait inserted automatically
    v_readfirstlane_b32 s10, v7     # Safe: v7 is ready
 
-The ``HazardDetector`` class in ``hazards.py`` automatically inserts ``s_nop 0``
-after ``v_add_u32`` instructions to prevent this hazard.
+Peephole Optimizations
+~~~~~~~~~~~~~~~~~~~~~~
+
+The backend applies peephole optimizations after hazard mitigation:
+
+**Instruction Fusion**
+
+1. ``v_lshlrev_b32 + v_add_u32`` → ``v_lshl_add_u32`` (saves 1 VALU instruction)
+2. ``v_lshlrev_b32 + v_or_b32`` → ``v_lshl_or_b32`` (saves 1 VALU instruction)
+
+**Bit Range Analysis**
+
+When adding two values with non-overlapping bit ranges, the addition can be converted to OR:
+
+.. code-block:: python
+
+   # If tid_x is in bits 0-5 and (row * 256) is in bits 8+:
+   # (row * 256) + tid_x  # Uses v_add_u32
+   # becomes:
+   # (row << 8) | tid_x   # Can use v_or_b32 or v_lshl_or_b32
+
+The backend analyzes bit ranges of expressions using symbol bounds to detect this pattern automatically.
+
+CFG-Based Liveness Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The backend uses CFG-based backward dataflow analysis for accurate liveness:
+
+**Features**
+
+- **BasicBlock/CFG Construction**: Builds control flow graph from labels and branches
+- **Loop Detection**: Identifies back-edges to detect loops in the CFG
+- **Backward Dataflow**: Computes live_in/live_out sets for each basic block
+- **Live Range Extension**: Extends ranges for loop-carried values across iterations
+
+**Algorithm**
+
+For each basic block B:
+
+- ``use[B]`` = registers used before being defined in B
+- ``def[B]`` = registers defined in B
+- ``live_in[B]`` = use[B] ∪ (live_out[B] - def[B])
+- ``live_out[B]`` = ∪ live_in[S] for all successors S of B
+
+This correctly handles loop-invariant values like ``tid_x`` and ``wgid_x`` that are defined once but used across multiple loop iterations.
 
 Dynamic Register Allocation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -262,6 +370,7 @@ The backend features fully dynamic register allocation:
 - **Conditional System Register Allocation**: Dynamically detects workgroup ID and thread ID usage from MLIR
 - **Granularity Alignment**: Automatically rounds allocations to architecture-specific granularities
 - **VGPR-Variant MFMA**: Uses MFMA instructions that write directly to VGPRs, eliminating accumulator complexity
+- **Loop SGPR Reservation**: Reserves s24+ for loop counter SGPRs to prevent conflicts
 
 Usage
 -----
@@ -580,7 +689,7 @@ The ASM backend provides native support for MLIR structured control flow loops (
 
 The backend generates efficient loop control flow with:
 
-1. **Loop Initialization**: Allocates SGPR for loop counter, step, and upper bound
+1. **Loop Initialization**: Allocates SGPR for loop counter, step, and upper bound (reserved at s24+)
 2. **Loop Header**: Emits comparison (``s_cmp_lt_u32``) and conditional branch (``s_cbranch_scc1``)
 3. **Loop Body**: Contains the computation with access to loop induction variable
 4. **Loop Latch**: Increments counter (``s_add_u32``) and branches back to header
@@ -648,10 +757,11 @@ For K-loops with MFMA operations, the backend automatically:
 
 **Key Features**
 
-- **SGPR Induction Variables**: Loop counters stored in SGPRs for efficiency
+- **SGPR Induction Variables**: Loop counters stored in reserved SGPRs (s24+) for efficiency
 - **VGPR Accumulators**: Loop-carried values (e.g., MFMA results) stay in VGPRs
 - **Nested Loops**: Support for multiple active loop contexts via loop_stack
 - **Unique Labels**: Each loop gets unique labels (loop_N_header, loop_N_body, etc.)
+- **CFG-Based Liveness**: Live ranges correctly extended across loop iterations
 
 Multi-Wave and Multi-Workgroup Support
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -670,6 +780,7 @@ When a workgroup contains multiple waves (e.g., ``workgroup_size = [256, 4, 1]``
    - ``tid_y = (v0 >> 10) & 0x3ff`` (bits 10-19)
 
 4. **Uses in Addressing**: Thread IDs are used in affine expressions for memory access
+5. **Provides Bounds**: Symbol bounds from subgroup_size used for algebraic simplification
 
 **Multi-Workgroup Kernels**
 
@@ -691,149 +802,49 @@ When a kernel is dispatched across multiple workgroups (e.g., ``grid = [16, 16, 
 - ``wgid_x`` and ``wgid_y`` are detected and allocated
 - Global memory addresses: ``base + (wgid_x * 64 * 4) + (wgid_y * 64 * 256 * 4) + tid_x``
 
-Affine Expression Simplification
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Algebraic Simplification with Symbol Bounds
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ASM backend uses SymPy to simplify complex affine expressions:
+The ASM backend uses SymPy for algebraic simplification with symbol bounds derived from kernel information:
 
-.. code-block:: python
+**Symbol Bounds**
 
-   # Complex index expression
-   @tkw.wave(constraints)
-   def complex_index_kernel(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16]):
-       # This expression gets simplified automatically
-       idx = tkl.affine.apply(lambda d0, s0: d0 - (d0 // 64) * 64, [tkl.tid.x])
-       res = tkw.read(a[idx, 0])
-       tkw.write(res, b[idx, 0])
+- ``tid_x``, ``tid_y``, ``tid_z``: Bounded by ``subgroup_size`` (e.g., 0-63 for single wave, 0-255 for 4 waves)
+- ``wgid_x``, ``wgid_y``, ``wgid_z``: Bounded by grid dimensions
 
-The backend automatically simplifies ``d0 - (d0 // 64) * 64`` to just ``d0`` when ``d0 < 64``.
-
-Thread ID Analysis
-~~~~~~~~~~~~~~~~~~
-
-The backend analyzes thread ID usage patterns:
+**Optimizations Enabled**
 
 .. code-block:: python
 
-   @tkw.wave(constraints)
-   def thread_id_kernel(a: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16]):
-       # Backend automatically detects this is just tid.x
-       idx = tkl.affine.apply(lambda d0: d0, [tkl.tid.x])
-       res = tkw.read(a[idx, 0])
+   # When tid_x < 64:
+   floor(tid_x / 64) → 0  # Eliminated entirely
 
-The backend recognizes that the affine expression simplifies to the thread ID and generates optimal code.
+   # When expression ranges don't overlap:
+   (row * 256) + col → (row << 8) | col  # ADD becomes OR
 
-Unified SSA-to-VGPR Tracking
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Top-Level Only Simplification**
 
-The ASM backend maintains a unified mapping from MLIR SSA values to their allocated VGPRs through the ``ssa_to_vgpr`` dictionary in ``IRWalker``:
+To avoid exponential complexity, simplification is only applied to top-level expressions, not recursively on sub-expressions. This reduces simplification calls by ~18x while maintaining optimization benefits.
 
-**Design**
+Expression Caching and CSE
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- **Single Source of Truth**: All SSA→VGPR mappings are stored in one dictionary
-- **Operation Integration**: All handlers (loads, MFMAs, extracts, loops) populate ``ssa_to_vgpr``
-- **Type Flexibility**: Values can be single registers, pairs, quads, or lists
-- **Lifecycle Management**: Entries persist across operations for proper data flow
+The ASM backend uses a sophisticated caching system for Common Subexpression Elimination:
 
-**Supported Operations**
+**Scoped Caching**
 
-- **Global Loads**: ``buffer_load_*`` results mapped to allocated VGPR tuples
-- **LDS Reads**: ``ds_read_b64`` results mapped to VGPR pairs
-- **MFMA Results**: Matrix multiply outputs mapped to VGPR quads
-- **Loop Accumulators**: ``iter_args`` and results mapped to persistent VGPRs
-- **Vector Extracts**: ``vector.extract_strided_slice`` maps to register subsets
+- **Global Scope**: Loop-invariant expressions (containing only tid_x, tid_y, wgid_*) are cached globally
+- **Local Scopes**: Loop-varying expressions use scoped caches that are pushed/popped
+- **Structural Keys**: Expressions are keyed by structure, not Python object identity
 
-**Example Flow**
+**Loop-Invariant Detection**
 
-.. code-block:: python
+An expression is loop-invariant if it contains only:
+- Thread IDs: ``tid_x``, ``tid_y``, ``tid_z``
+- Workgroup IDs: ``wgid_x``, ``wgid_y``, ``wgid_z``
+- Integer constants
 
-   # Load A matrix → tracked in ssa_to_vgpr
-   %a_vec = vector.load %A[...]
-   # ssa_to_vgpr["%a_vec"] = (v24, v25)  # VGPR pair
-
-   # Load B matrix → tracked in ssa_to_vgpr
-   %b_vec = vector.load %B[...]
-   # ssa_to_vgpr["%b_vec"] = (v26, v27)  # VGPR pair
-
-   # MFMA operation uses ssa_to_vgpr to find inputs
-   %result = amdgpu.mfma %a_vec, %b_vec, %acc
-   # Looks up: ssa_to_vgpr["%a_vec"] → (v24, v25)
-   #           ssa_to_vgpr["%b_vec"] → (v26, v27)
-   #           ssa_to_vgpr["%acc"] → (v4, v5, v6, v7)
-   # Emits: v_mfma_f32_16x16x16_f16 v[4:7], v[24:25], v[26:27], v[4:7]
-   # Tracks: ssa_to_vgpr["%result"] = (v4, v5, v6, v7)
-
-   # Vector extraction creates new mapping to subset
-   %slice = vector.extract_strided_slice %result [offset=0, size=2]
-   # ssa_to_vgpr["%slice"] = (v4, v5)  # First two regs of quad
-
-   # Store uses ssa_to_vgpr to find source registers
-   vector.store %result, %C[...]
-   # Looks up: ssa_to_vgpr["%result"] → (v4, v5, v6, v7)
-   # Emits: buffer_store_dword v4, ...
-   #        buffer_store_dword v5, ...
-
-**Benefits**
-
-- **Simplified Code**: Eliminates fragmented tracking variables
-- **Better Debugging**: Single place to inspect SSA→register mappings
-- **Correct Data Flow**: Ensures operations use the right registers
-- **Loop Support**: Natural fit for tracking loop-carried values
-
-Expression Visitor System
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The ASM backend uses a sophisticated expression visitor (``ExprEmitter``) to convert SymPy expressions to AMDGCN assembly with automatic Common Subexpression Elimination:
-
-**Supported Operations:**
-
-- **Constants and Symbols**: Direct materialization into registers
-- **Addition**: Efficient left-to-right accumulation using ``v_add_u32``
-- **Multiplication**: Power-of-2 uses ``v_lshlrev_b32`` (shift), others use ``v_mul_lo_u32``
-- **Modulo**: Power-of-2 divisors use ``v_and_b32`` (mask)
-- **Floor Division**: Power-of-2 divisors use ``v_lshrrev_b32`` (shift)
-- **Power of 2**: Constant folding in expressions
-
-**Optimizations:**
-
-- **Common Subexpression Elimination**: Automatically caches and reuses emitted expressions
-- **Expression Canonicalization**: Normalizes expressions to maximize cache hits (flatten Add/Mul, sort operands, fold constants)
-- **Structural Expression Keys**: Uses structural hashing for efficient cache lookup
-- **Const/Dynamic Splitting**: Separates constant offsets into instruction immediates
-- **Lifetime Management**: Frees temporary registers while preserving cached values
-- **Const Marker System**: Avoids allocating registers for intermediate constants
-- **Iterative Postorder Traversal**: Efficient expression tree walking
-- **Register Reuse**: Minimizes temporary register allocation through CSE
-- **Instruction Selection**: Chooses optimal instructions based on operand types
-
-**Example Expression Handling:**
-
-.. code-block:: python
-
-   # Complex index expression: row*256 + col*4
-   # where row = tid_x // 16, col = tid_x % 16
-   # Used multiple times in load/store operations
-
-   # The backend automatically:
-   # 1. Canonicalizes the expression (flatten, sort, fold)
-   # 2. Simplifies floor division by 16 to right shift by 4
-   # 3. Simplifies modulo 16 to mask with 15
-   # 4. Optimizes multiplication by 256 to left shift by 8
-   # 5. Optimizes multiplication by 4 to left shift by 2
-   # 6. Caches the result for reuse across multiple operations
-   # 7. Accumulates results efficiently
-
-   # Generated assembly (simplified) - computed once, reused multiple times:
-   # v_lshrrev_b32 v2, 4, v1      # row = tid_x >> 4 (cached)
-   # v_lshlrev_b32 v2, 8, v2       # row * 256 (cached)
-   # v_and_b32 v3, 15, v1          # col = tid_x & 15 (cached)
-   # v_lshlrev_b32 v3, 2, v3       # col * 4 (cached)
-   # v_add_u32 v2, v2, v3          # row*256 + col*4 (cached in v2)
-   #
-   # # Subsequent uses of the same expression reuse v2:
-   # buffer_load_dwordx4 v[4:7], v2, s[8:11], 0 offen offset:0
-   # buffer_store_dwordx4 v[4:7], v2, s[12:15], 0 offen offset:0
-   # # No duplicate shift/mask instructions emitted!
+Loop-invariant expressions are computed once before the loop and reused across all iterations.
 
 Example: GEMM with K-Loop
 ---------------------------
@@ -913,7 +924,7 @@ This example demonstrates several advanced features working together:
 3. **MFMA Accumulator Chaining**: Accumulator persists across loop iterations
 4. **LDS Staging**: Input tiles automatically staged through shared memory
 5. **Loop Control Flow**: Efficient SGPR-based loop counter and comparison
-6. **Unified Register Tracking**: All SSA values correctly tracked through loop iterations
+6. **CFG-Based Liveness**: Loop-carried values correctly tracked across iterations
 
 Performance Characteristics
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -933,103 +944,32 @@ Performance Considerations
 The ASM backend is designed for performance-critical applications:
 
 - **Direct Assembly**: Eliminates intermediate compilation steps
-- **Common Subexpression Elimination**: Eliminates redundant computations by caching and reusing expressions
+- **Common Subexpression Elimination**: Scoped caching with global scope for loop-invariant expressions
+- **Algebraic Simplification**: Symbol bounds enable aggressive simplification (e.g., floor elimination)
+- **Instruction Fusion**: Peephole optimizer fuses shift+add/or into single instructions
+- **Bit Range Analysis**: Uses OR instead of ADD when operand bit ranges don't overlap
+- **LDS Offset Optimization**: Uses ds_read/ds_write offset field (0-8192 bytes) to reduce VALU instructions
 - **Optimized Instructions**: Uses the most efficient AMDGCN instructions (shifts over multiplies, masks over divides)
-- **Register Efficiency**: Minimizes register pressure through intelligent allocation, CSE, free lists, and const marker system
+- **Register Efficiency**: CFG-based liveness analysis minimizes register pressure
 - **Memory Bandwidth**: Optimizes memory access patterns with base+offset addressing for maximum throughput
-- **Lifetime Management**: Frees temporary registers promptly to reduce pressure while preserving cached values
-- **Register Reuse**: Free list-based allocator reuses freed registers before allocating new ones
+- **Precise Hazard Mitigation**: Only inserts s_nop where actually needed (reduces NOPs from ~46 to ~2)
 - **Hardware Acceleration**: Leverages MFMA for matrix operations on CDNA architectures with accumulator chaining
 - **LDS Staging**: Automatically uses shared memory for improved memory access patterns
-- **Loop Efficiency**: SGPR-based loop counters and VGPR accumulators for minimal overhead
+- **Loop Efficiency**: SGPR-based loop counters (reserved at s24+) and VGPR accumulators for minimal overhead
 - **Dynamic Allocation**: Computes exact register requirements for minimal resource usage
 - **Architecture-Specific**: Adapts to hardware granularities for optimal register allocation
-- **Unified Tracking**: Single SSA→VGPR mapping ensures correct data flow and simplifies debugging
 
-VMEM Wait Optimization (Ticket-based vmcnt)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Performance vs LLVM Backend
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-To hide vector memory (VMEM) latency and avoid over-synchronization, the backend uses a
-ticket-based scheme to place the minimal required ``s_waitcnt vmcnt(N)`` right before
-the first use of loaded data.
+The ASM backend typically achieves:
 
-- Each ``buffer_load_*`` is assigned a monotonically increasing ticket ``T``.
-- When consuming data from ticket ``K`` and the last issued ticket is ``T``, the backend emits
-  ``s_waitcnt vmcnt(T - K)``. This allows newer loads to remain in flight while ensuring
-  the data for ticket ``K`` is ready.
-- Waits are placed at the first use (e.g., before an LDS write or a compute op), not after the load.
-- The threshold coalesces across nearby uses and is reset when new loads are issued.
+- **VALU Instructions**: ~62 vs LLVM's ~33 (gap primarily due to fused 3-operand instructions)
+- **VGPRs**: ~20 vs LLVM's ~18
+- **SGPRs**: ~40 vs LLVM's ~24
+- **Performance**: ~65-70% of LLVM backend throughput
 
-Example (conceptual)
-^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: asm
-
-   # Issue two loads back-to-back (both in-flight)
-   buffer_load_dwordx4 v[4:7], v2, s[8:11], 0 offen offset:0   # ticket 0
-   buffer_load_dwordx4 v[8:11], v2, s[8:11], 0 offen offset:16  # ticket 1
-
-   # Minimal wait before first use of the data from ticket 0
-   s_waitcnt vmcnt(1)   # allow one newer load (ticket 1) to remain outstanding
-   buffer_store_dwordx4 v[4:7], v2, s[12:15], 0 offen offset:0
-
-   # Later when using data from ticket 1
-   s_waitcnt vmcnt(0)
-   buffer_store_dwordx4 v[8:11], v2, s[12:15], 0 offen offset:16
-
-This placement hides memory latency behind independent address/index computation
-and reduces the number of waits (and their strictness) compared to always using
-``vmcnt(0)`` immediately after each load.
-
-Latency-Aware Scheduling (Database-driven)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Beyond VMEM wait placement, the ASM backend employs a database-driven, latency-aware
-scheduler to minimize stalls across VMEM, LGKM (LDS/scalar), VALU and MFMA pipelines.
-
-- **Latency Database** (``latency_db/gfx942.json``): Versioned, per-architecture JSON
-  containing instruction latencies and throughputs, plus hazard-specific distances
-  (e.g. ``mfma_to_agpr_read``). Each entry has a measurement source:
-  - ``isa_manual``: From AMD ISA documentation
-  - ``llvm_codegen``: From LLVM's proven codegen patterns
-  - ``measured`` / ``profiled``: From microbenchmarks or profiling (future-ready)
-
-- **Latency Provider** (``latency_provider.py``): Query interface used by the emitter/handlers
-  to retrieve latency/throughput and hazard distances. All values come from the JSON database;
-  there are no hardcoded latencies in the code path.
-
-- **Scoreboard** (``scoreboard.py``): Tracks outstanding instructions and their readiness,
-  detects RAW/WAW hazards, and recommends minimal waits/NOPs. It also integrates with the
-  ticket-based VMEM/LGKM model.
-
-- **Always-On Integration** (``asm_emitter.py``): The emitter unconditionally initializes
-  the Latency Provider and Scoreboard. Latency-aware scheduling is always enabled.
-
-MFMA Scheduling Example
-^^^^^^^^^^^^^^^^^^^^^^^
-
-The backend uses VGPR-variant MFMA instructions that write results directly to VGPRs,
-simplifying the instruction sequence and eliminating the need for accumulator transfers.
-The latency-aware scheduler tracks MFMA execution to ensure proper timing before using results:
-
-.. code-block:: asm
-
-   # Wait for LDS data before MFMA
-   s_waitcnt lgkmcnt(0)
-   # VGPR-variant MFMA writes directly to VGPRs
-   v_mfma_f32_16x16x16_f16 v[0:3], v[26:27], v[24:25], 0
-   # Results in v[0:3] are ready after MFMA latency (~8 cycles)
-   # Scheduler ensures proper timing before using v[0:3]
-   buffer_store_dwordx4 v[0:3], v2, s[12:15], 0 offen
-
-Benefits
-^^^^^^^^
-
-- Minimal waits and NOPs derived from a single source of truth (the database)
-- Architecture-specific values without code changes
-- VGPR-variant MFMA simplifies instruction sequences and matches LLVM backend behavior
-- Dynamic workgroup/thread ID detection minimizes system register usage
-- Ready to adopt measured data in the future
+The remaining VALU gap is due to LLVM's use of fused 3-operand instructions like ``v_or3_b32`` (OR three operands) which the ASM backend does not yet emit.
 
 Best Practices
 ~~~~~~~~~~~~~~
@@ -1042,7 +982,7 @@ For optimal performance with the ASM backend:
 4. **Enable MFMA**: Use matrix operations on CDNA architectures for best performance
 5. **Use K-Loops**: Tile the K dimension with ``TilingConstraint`` and ``@tkw.iterate`` for cache efficiency
 6. **Chain MFMA Accumulators**: Pass accumulators through loop ``iter_args`` for optimal accumulation
-7. **Minimize Register Pressure**: Keep working sets small to maximize occupancy; use free lists naturally via allocator
+7. **Minimize Register Pressure**: Keep working sets small to maximize occupancy
 8. **Multi-Wave Configurations**: Use multiple waves per workgroup to increase parallelism (up to 16 waves)
 9. **Profile and Iterate**: Use ROCm profiling tools to identify bottlenecks
 
@@ -1058,6 +998,7 @@ The ASM backend has some limitations:
 - **Gather-to-LDS**: Requires gfx95x architecture with buffer_load...lds instruction support
 - **Dynamic Shapes**: Requires concrete shape values at compile time
 - **Loop Nesting**: While multiple loops are supported, deeply nested loops may increase register pressure
+- **No Spilling**: Register allocation fails if registers cannot be allocated (no spill code generation)
 
 Troubleshooting
 ---------------
@@ -1095,7 +1036,7 @@ This typically indicates missing synchronization:
 
 **Issue: Register Allocation Errors**
 
-The backend now dynamically computes register requirements:
+The backend uses CFG-based liveness and linear scan allocation:
 
 - Check ``amdhsa_next_free_vgpr`` and ``amdhsa_next_free_sgpr`` in generated assembly
 - Ensure allocations are aligned to granularity (VGPR: 4, SGPR: 8 or 16)
@@ -1108,8 +1049,7 @@ If K-loops cause high VGPR usage:
 
 - **Increase BLOCK_K**: Larger BLOCK_K means fewer iterations but more work per iteration
 - **Reduce Waves per Workgroup**: Fewer waves reduce parallelism but lower register pressure
-- **Check Free Lists**: The allocator reuses freed registers; ensure temps are freed properly
-- **Profile**: Use ``DEBUG_ASM_ALLOCATOR=1`` to see allocation patterns and peak usage
+- **Check Liveness**: Use ``WAVE_DEBUG_LIVENESS=1`` to see computed live ranges
 
 Debugging
 ~~~~~~~~~
@@ -1130,3 +1070,9 @@ To debug ASM backend issues:
 3. **Use ROCm Tools**: ``rocgdb``, ``rocprof``, and ``rocm-smi`` for runtime debugging
 
 4. **Check MLIR Output**: Enable ``compile_to_mlir=True`` to see intermediate representation
+
+5. **Debug Environment Variables**:
+
+   - ``WAVE_DEBUG_LIVENESS=1``: Show liveness analysis results
+   - ``WAVE_DEBUG_REGALLOC=1``: Show register allocation decisions
+   - ``WAVE_LDS_DSREAD_OFFSET_DEBUG=1``: Show ds_read offset optimization decisions

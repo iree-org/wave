@@ -5,38 +5,27 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """
 MLIR to AMDGCN assembly emitter package.
+
+Architecture:
+    InstructionRegistry (YAML) -> InstructionFormatter -> Assembly Text
+                                        ^
+                                        |
+    UnifiedEmitter (virtual emission) --+
+    KernelGenerator (physical rendering)
+    MetadataEmitter (assembler directives)
+
+All physical instruction formatting goes through InstructionFormatter.
 """
 
 from .driver import main
-from .asm_emitter import AsmEmitter
 from .mlir_walker import IRWalker
 from .kernel_model import KernelInfo, MemRefInfo, BindingUse, VecAccess
-from .register_allocator import RegFile, SGPRAllocator, VGPRAllocator
-from .instructions import (
-    Instruction,
-    MemoryInstruction,
-    ArithmeticInstruction,
-    ControlFlowInstruction,
-    WaitInstruction,
-    LoadInstruction,
-    StoreInstruction,
-    SLoadDwordx2,
-    BufferLoadDwordx4,
-    BufferStoreDwordx4,
-    SMovB32,
-    VMbcntLoU32B32,
-    VMbcntHiU32B32,
-    VLshlRevB32,
-    VMovB32,
-    VMulLoU32,
-    VAddU32,
-    SWaitcnt,
-    SEndpgm,
-    InstructionBuilder,
-    emit_kernargs,
-    emit_srd_setup,
-    emit_vector_load_store,
-)
+from .unified_emitter import UnifiedEmitter, EmissionMode
+from .instruction_registry import get_registry, InstructionDef, InstructionCategory
+from .instruction_formatter import InstructionFormatter, get_formatter
+from .metadata_emitter import MetadataEmitter, KernelMetadata, create_metadata
+from .kernel_pipeline import KernelCompilationContext, KernelModuleCompiler
+from .kernel_generator import KernelGenerator, PhysicalMapping
 from .utils import (
     parse_vector_type,
     parse_memref_type,
@@ -46,43 +35,37 @@ from .utils import (
     parse_wg_and_subgroup,
     tid_upper_bound_from_thread_id,
     simplify_expression,
-    emit_expression_asm,
 )
 
 __all__ = [
     "main",
-    "AsmEmitter",
+    # Core compilation
+    "KernelModuleCompiler",  # Canonical MLIR->ASM entry point
+    "KernelCompilationContext",
+    "KernelGenerator",
+    "PhysicalMapping",
+    # Metadata emission
+    "MetadataEmitter",
+    "KernelMetadata",
+    "create_metadata",
+    # Instruction formatting
+    "InstructionFormatter",
+    "get_formatter",
+    # Unified emitter
+    "UnifiedEmitter",
+    "EmissionMode",
+    # Instruction registry
+    "get_registry",
+    "InstructionDef",
+    "InstructionCategory",
+    # MLIR walker
     "IRWalker",
+    # Kernel model
     "KernelInfo",
     "MemRefInfo",
     "BindingUse",
     "VecAccess",
-    "RegFile",
-    "SGPRAllocator",
-    "VGPRAllocator",
-    "Instruction",
-    "MemoryInstruction",
-    "ArithmeticInstruction",
-    "ControlFlowInstruction",
-    "WaitInstruction",
-    "LoadInstruction",
-    "StoreInstruction",
-    "SLoadDwordx2",
-    "BufferLoadDwordx4",
-    "BufferStoreDwordx4",
-    "SMovB32",
-    "VMbcntLoU32B32",
-    "VMbcntHiU32B32",
-    "VLshlRevB32",
-    "VMovB32",
-    "VMulLoU32",
-    "VAddU32",
-    "SWaitcnt",
-    "SEndpgm",
-    "InstructionBuilder",
-    "emit_kernargs",
-    "emit_srd_setup",
-    "emit_vector_load_store",
+    # Utilities
     "parse_vector_type",
     "parse_memref_type",
     "parse_vector_type_from_obj",
@@ -91,5 +74,4 @@ __all__ = [
     "parse_wg_and_subgroup",
     "tid_upper_bound_from_thread_id",
     "simplify_expression",
-    "emit_expression_asm",
 ]

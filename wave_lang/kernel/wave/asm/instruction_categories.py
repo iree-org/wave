@@ -6,23 +6,47 @@
 """
 Instruction categorization for AMDGCN assembly.
 
-Shared utility for categorizing instructions by their functional class
-(VMEM, LGKM, VALU, SALU, MFMA, etc.), used by both the scoreboard and
-the assembler emitter for consistent ticketing and hazard detection.
+This is the SINGLE canonical definition of InstructionCategory for the
+entire ASM backend. All modules should import from this file.
+
+Categories are used for:
+- Scoreboard tracking (VMEM/LGKM operations need tickets)
+- Hazard detection
+- Instruction scheduling
+- YAML instruction definitions (instruction_registry.py)
+
+Note: The YAML registry imports InstructionCategory from this module to
+avoid duplicate enum definitions. The categorize_instruction() function
+provides fast prefix-based categorization for runtime classification.
 """
 
 from enum import Enum
 
 
 class InstructionCategory(Enum):
-    """Categories of instructions for scoreboarding and ticketing."""
+    """
+    Categories of instructions for scoreboarding, ticketing, and scheduling.
 
+    String values are used for consistency with YAML instruction definitions.
+    """
+
+    # Memory operations
     VMEM = "vmem"  # Vector memory (buffer_load/store)
-    LGKM = "lgkm"  # LDS/GDS/scalar memory/messages
+    SMEM = "smem"  # Scalar memory (s_load, s_store)
+    LDS = "lds"  # Local data share (ds_read, ds_write)
+    LGKM = "lgkm"  # Combined LDS/GDS/scalar memory/messages (for waitcnt)
+
+    # ALU operations
     VALU = "valu"  # Vector ALU
     SALU = "salu"  # Scalar ALU
-    MFMA = "mfma"  # Matrix FMA
-    OTHER = "other"  # Unknown/other
+    MFMA = "mfma"  # Matrix fused multiply-add
+
+    # Control flow
+    CONTROL = "control"  # Branch, call, return, etc.
+
+    # Special
+    PSEUDO = "pseudo"  # Pseudo-instructions (_comment, _label, _raw_asm)
+    OTHER = "other"  # Unknown/other (nop, wait, barrier, etc.)
 
 
 def categorize_instruction(instruction: str) -> InstructionCategory:

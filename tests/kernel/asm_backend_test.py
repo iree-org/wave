@@ -411,6 +411,11 @@ def test_mma_multi_wave_asm_backend(shape, config, run_bench):
             (64, 64, 16, 16),
         ),  # 4x4 = 16 waves per WG (max), BLOCK_K = 16
         ((64, 128, 64), 16, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, BLOCK_K = 16
+        # Larger problem size with BLOCK_K=64
+        ((256, 256, 128), 64, (32, 32, 16, 16)),  # 2x2 = 4 waves per WG, 8x8 WGs
+        # Non-square block configurations with BLOCK_K=64
+        ((128, 64, 64), 64, (64, 32, 16, 16)),  # 4x2 = 8 waves per WG, non-square
+        ((64, 128, 64), 64, (32, 64, 16, 16)),  # 2x4 = 8 waves per WG, non-square
     ],
 )
 @pytest.mark.parametrize("use_global_to_shared", _global_to_shared_params())
@@ -419,7 +424,7 @@ def test_gemm_asm_backend(shape, block_k, config, use_global_to_shared, run_benc
 
     Tests both single-wave and multi-wave configurations with varying BLOCK_K values.
     Multi-wave configurations enable testing workgroups with multiple waves per workgroup,
-    where each wave operates on a 16x16 tile (required by F32_16x16x16_F16 MMA).
+    where each wave operates on a tile (which can be larger than 16x16 MMA intrinsic).
     """
     M = tkl.sym.M
     N = tkl.sym.N
@@ -434,16 +439,13 @@ def test_gemm_asm_backend(shape, block_k, config, use_global_to_shared, run_benc
     block_m, block_n, WAVE_M, WAVE_N = config
     wave_size = 64
 
-    # Verify configuration: each wave must handle 16x16 tile for MMA
+    # Verify configuration
     assert (
         block_m % WAVE_M == 0
     ), f"BLOCK_M ({block_m}) must be divisible by WAVE_M ({WAVE_M})"
     assert (
         block_n % WAVE_N == 0
     ), f"BLOCK_N ({block_n}) must be divisible by WAVE_N ({WAVE_N})"
-    assert (
-        WAVE_M == 16 and WAVE_N == 16
-    ), f"Wave tile must be 16x16 for F32_16x16x16_F16 MMA"
 
     # Calculate number of waves per workgroup
     waves_per_wg_m = block_m // WAVE_M

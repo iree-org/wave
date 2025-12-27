@@ -1083,6 +1083,7 @@ def wave_compile(
         if options.compile_to_asm or options.backend == "asm":
             # ASM flow: generate AMDGCN assembly; optionally build a binary
             asm = _generate_asm_code(mb, options)
+
             if options.backend == "asm" and not options.compile_to_asm:
                 _compile_asm_to_binary(asm, options)
         elif options.use_water_backend:
@@ -1145,8 +1146,6 @@ def wave_compile(
 
 def _generate_asm_code(mb, options):
     """Generate AMDGCN assembly from MLIR module."""
-    from .asm.asm_emitter import AsmEmitter
-
     # Convert module_op to MLIR string
     mlir_asm = mb.module_op.get_asm(
         enable_debug_info=options.location_capture_config.level
@@ -1155,10 +1154,12 @@ def _generate_asm_code(mb, options):
         use_local_scope=options.use_local_scope,
     )
 
-    # Generate AMDGCN assembly directly from MLIR string
-    return AsmEmitter.from_mlir_string(
-        mlir_asm, targetid=options.target, codeobj=options.codeobj
-    )
+    # Canonical MLIR->ASM entry point (single-path kernel IR backend).
+    from .asm.kernel_pipeline import KernelModuleCompiler
+
+    return KernelModuleCompiler(
+        targetid=options.target, codeobj=options.codeobj
+    ).compile_mlir_string(mlir_asm)
 
 
 def _compile_asm_to_binary(asm_code, options):
