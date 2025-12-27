@@ -48,6 +48,7 @@ void registerWaterTestDialect(DialectRegistry &registry);
 } // namespace mlir::water::test
 
 int main(int argc, char **argv) {
+  mlir::arith::registerArithIntRangeNarrowingPass();
   mlir::arith::registerArithIntRangeOptsPass();
   mlir::registerCSEPass();
   mlir::registerCanonicalizerPass();
