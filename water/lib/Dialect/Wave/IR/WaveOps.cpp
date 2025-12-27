@@ -1448,13 +1448,14 @@ LogicalResult ReadOp::verify() {
                                bounds.getMapping());
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::ReadOp::propagateElementsPerThreadForward(
+llvm::FailureOr<mlir::ChangeResult>
+wave::ReadOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
     llvm::raw_ostream &errs) {
-  // ReadOp only propagates elements_per_thread attribute to result (register)
-  // Memory operand is ignored for propagation - you can read any number of elements
-  // from memory regardless of how many were written
+  // ReadOp only propagates elements_per_thread attribute to result (register).
+  // Memory operand is ignored for propagation - you can read any number of
+  // elements from memory regardless of how many were written.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
   if (!elementsPerThread)
     return mlir::ChangeResult::NoChange;
@@ -1465,12 +1466,13 @@ llvm::FailureOr<mlir::ChangeResult> wave::ReadOp::propagateElementsPerThreadForw
       resultElements, "elements_per_thread attribute", "", "result", errs);
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::ReadOp::propagateElementsPerThreadBackward(
+llvm::FailureOr<mlir::ChangeResult>
+wave::ReadOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> resultElements,
     llvm::raw_ostream &) {
-  // ReadOp doesn't propagate backward to memory operand
-  // Memory is decoupled from register dataflow for elements_per_thread
+  // ReadOp doesn't propagate backward to memory operand.
+  // Memory is decoupled from register dataflow for elements_per_thread.
   return mlir::ChangeResult::NoChange;
 }
 
@@ -1555,44 +1557,48 @@ LogicalResult WriteOp::verify() {
                                bounds.getMapping());
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateElementsPerThreadForward(
+llvm::FailureOr<mlir::ChangeResult>
+wave::WriteOp::propagateElementsPerThreadForward(
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::raw_ostream &errs) {
-  // WriteOp only validates that elements_per_thread attribute matches register operand
-  // Memory operand is ignored for propagation - you can write to memory with any layout
+  // WriteOp only validates that elements_per_thread attribute matches register
+  // operand. Memory operand is ignored for propagation - you can write to
+  // memory with any layout.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
   if (!elementsPerThread)
     return mlir::ChangeResult::NoChange;
 
-  // Validate register operand (value_to_store) matches attribute
+  // Validate register operand (value_to_store) matches attribute.
   wave::ElementsPerThreadLatticeValue expectedValue(*elementsPerThread);
   llvm::ArrayRef<wave::ElementsPerThreadLatticeValue> valueOnly =
-      operandElements.slice(0, 1); // Only first operand (value_to_store)
+      operandElements.slice(getValueToStoreMutable().getOperandNumber(), 1);
 
   return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
-      expectedValue, valueOnly, llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>(),
-      "elements_per_thread attribute", "register operand", "", errs);
+      expectedValue, valueOnly,
+      llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue>(),
+      "elements_per_thread attribute", "operand", "", errs);
 }
 
-llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateElementsPerThreadBackward(
+llvm::FailureOr<mlir::ChangeResult>
+wave::WriteOp::propagateElementsPerThreadBackward(
     llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> operandElements,
     llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>,
     llvm::raw_ostream &errs) {
-  // WriteOp only propagates backward to register operand (value_to_store)
-  // Memory operand is ignored - you can write any layout to memory
+  // WriteOp only propagates backward to register operand (value_to_store).
+  // Memory operand is ignored - you can write any layout to memory.
   std::optional<int64_t> elementsPerThread = getElementsPerThread();
   if (!elementsPerThread)
     return mlir::ChangeResult::NoChange;
 
-  // Propagate to register operand only
+  // Propagate to register operand only.
   wave::ElementsPerThreadLatticeValue expectedValue(*elementsPerThread);
   llvm::MutableArrayRef<wave::ElementsPerThreadLatticeValue> valueOnly =
-      operandElements.slice(0, 1); // Only first operand (value_to_store)
+      operandElements.slice(getValueToStoreMutable().getOperandNumber(), 1);
 
   return wave::detail::checkAndPropagateElementsPerThreadFromConstant(
       expectedValue, llvm::ArrayRef<wave::ElementsPerThreadLatticeValue>(),
-      valueOnly, "elements_per_thread attribute", "", "register operand", errs);
+      valueOnly, "elements_per_thread attribute", "", "operand", errs);
 }
 
 // Propagate index expressions forward from the operands to the result of the
