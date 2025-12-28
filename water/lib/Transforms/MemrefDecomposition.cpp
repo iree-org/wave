@@ -445,13 +445,7 @@ struct DecomposeReinterpretCast
     SmallVector<OpFoldResult> newStrides = getMixedValues(
         castOp.getStaticStrides(), flatten(adaptor.getStrides()), rewriter);
 
-    // Apply offset to buffer using memref.view.
     unsigned typeBit = resultType.getElementType().getIntOrFloatBitWidth();
-
-    // Compute size: (product of sizes) * (element size in bytes).
-    AffineExpr sizeExpr = rewriter.getAffineConstantExpr(typeBit / 8);
-    for (auto i : llvm::seq(resultRank))
-      sizeExpr = sizeExpr * rewriter.getAffineSymbolExpr(i);
 
     assert(resultRank == newSizes.size() && resultRank == newStrides.size() &&
            "sizes and strides must have the same rank");
