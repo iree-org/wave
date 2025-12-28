@@ -56,6 +56,7 @@ static SmallVector<Value> flatten(ArrayRef<ValueRange> values) {
   return result;
 }
 
+/// Unflatten a list of values into a (buffer, sizes, strides).
 static std::tuple<LogicalResult, Value, SmallVector<OpFoldResult>,
                   SmallVector<OpFoldResult>>
 unflattenDescriptor(ValueRange values, MemRefType memrefType) {
@@ -111,6 +112,7 @@ static Type getMemrefStructType(OpBuilder &builder, Location loc, Type ptrType,
       builder.getContext(), {ptrType, ptrType, i64, arrayType, arrayType});
 }
 
+/// Extract the pointer from a memref descriptor.
 static Value toPtr(OpBuilder &builder, Location loc,
                    LLVM::LLVMPointerType ptrType, Value value) {
   auto memrefType = cast<MemRefType>(value.getType());
@@ -122,6 +124,7 @@ static Value toPtr(OpBuilder &builder, Location loc,
   return MemRefDescriptor(value).alignedPtr(builder, loc);
 }
 
+/// Create a 0D memref descriptor from a pointer.
 static Value fromPtr(OpBuilder &builder, Location loc, MemRefType memrefType,
                      Value value) {
   auto ptrType = cast<LLVM::LLVMPointerType>(value.getType());
@@ -137,6 +140,7 @@ static Value fromPtr(OpBuilder &builder, Location loc, MemRefType memrefType,
       .getResult(0);
 }
 
+/// Cast an integer or index value to a different integer or index type.
 static Value integerCast(OpBuilder &builder, Location loc, Type dstType,
                          Value value) {
   Type srcType = value.getType();
@@ -159,6 +163,7 @@ static Value integerCast(OpBuilder &builder, Location loc, Type dstType,
     return arith::ExtSIOp::create(builder, loc, dstType, value);
 }
 
+/// Generate a GEP op with the given buffer and byte offset.
 static Value GEP(OpBuilder &builder, Location loc, Value buffer, Value offset) {
   Type elementType = builder.getIntegerType(8);
   Type i64 = builder.getIntegerType(64);
@@ -168,6 +173,8 @@ static Value GEP(OpBuilder &builder, Location loc, Value buffer, Value offset) {
                              buffer, offset, flags);
 }
 
+/// Given source pointer, type, sizes, strides, and indices, generate an
+/// adjusted pointer.
 static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
                               Type loadType, ArrayRef<OpFoldResult> sizes,
                               unsigned typeBit, ArrayRef<OpFoldResult> strides,
@@ -221,6 +228,7 @@ public:
           unsigned rank = type.getRank();
           auto indexType = IndexType::get(ctx);
 
+          // ptr, sizes, strides
           results.push_back(ptrType);
           results.resize(1 + rank * 2, indexType);
           return success();
