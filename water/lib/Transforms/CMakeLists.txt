@@ -16,6 +16,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   MLIRWaterPassesIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAMDGPUDialect
   MLIRAnalysis
   MLIRArithDialect
   MLIRControlFlowDialect
