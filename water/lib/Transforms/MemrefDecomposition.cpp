@@ -147,9 +147,11 @@ static Value integerCast(OpBuilder &builder, Location loc, Type dstType,
   if (srcType == dstType)
     return value;
 
-  if (isa<IndexType>(srcType) || isa<IntegerType>(srcType))
+  // If one of them is index, use index_cast.
+  if (isa<IndexType>(srcType) || isa<IntegerType>(dstType))
     return arith::IndexCastOp::create(builder, loc, dstType, value);
 
+  // If both are integers, use trunc/ext.
   if (cast<IntegerType>(srcType).getWidth() >
       cast<IntegerType>(dstType).getWidth())
     return arith::TruncIOp::create(builder, loc, dstType, value);
