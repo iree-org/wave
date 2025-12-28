@@ -440,8 +440,7 @@ struct DecomposeReinterpretCast
                                          "expected source to be decomposed");
 
     // Get new offset, sizes, and strides from the operation.
-    ArrayRef<OpFoldResult> offsetsRef = castOp.getMixedOffsets();
-    Value offset = getValue(rewriter, loc, offsetsRef[0]);
+    Value offset = getValue(rewriter, loc, castOp.getMixedOffsets()[0]);
     SmallVector<OpFoldResult> newSizes = getMixedValues(
         castOp.getStaticSizes(), flatten(adaptor.getSizes()), rewriter);
     SmallVector<OpFoldResult> newStrides = getMixedValues(
