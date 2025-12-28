@@ -281,9 +281,6 @@ public:
         return {};
 
       unsigned bitwidth = memrefType.getElementType().getIntOrFloatBitWidth();
-      AffineExpr sizeExpr = builder.getAffineConstantExpr(bitwidth / 8);
-      for (auto i : llvm::seq(rank))
-        sizeExpr = sizeExpr * builder.getAffineSymbolExpr(i);
 
       auto metadata =
           memref::ExtractStridedMetadataOp::create(builder, loc, input);
@@ -294,7 +291,7 @@ public:
       if (staticOffset != ShapedType::kDynamic)
         offset = arith::ConstantIndexOp::create(builder, loc, staticOffset);
 
-      AffineExpr offsetExpr = builder.getAffineConstantExpr(0) * (bitwidth / 8);
+      AffineExpr offsetExpr = builder.getAffineSymbolExpr(0) * (bitwidth / 8);
       offset =
           getValue(builder, loc,
                    affine::makeComposedFoldedAffineApply(
