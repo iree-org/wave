@@ -58,6 +58,15 @@ static SmallVector<Value> flatten(ArrayRef<ValueRange> values) {
   return result;
 }
 
+/// Materialize a dimension, using a static value if available.
+static OpFoldResult materializeDim(int64_t staticValue, Value dynamicValue) {
+  if (ShapedType::isDynamic(staticValue))
+    return dynamicValue;
+
+  auto indexType = IndexType::get(dynamicValue.getContext());
+  return IntegerAttr::get(indexType, staticValue);
+}
+
 /// Unflatten a list of values into a (buffer, sizes, strides).
 static FailureOr<Value>
 unflattenDescriptor(ValueRange values, MemRefType memrefType,
@@ -79,18 +88,12 @@ unflattenDescriptor(ValueRange values, MemRefType memrefType,
   values = values.drop_front(rank);
   ValueRange strides = values.take_front(rank);
 
-  auto indexType = IndexType::get(memrefType.getContext());
+  assert(sizes.size() == rank && strides.size() == rank &&
+         "sizes and strides must have the same rank");
   for (auto i : llvm::seq(rank)) {
     int64_t size = memrefType.getDimSize(i);
-    if (ShapedType::isDynamic(size))
-      mixedSizes.push_back(sizes[i]);
-    else
-      mixedSizes.push_back(IntegerAttr::get(indexType, size));
-
-    if (ShapedType::isDynamic(staticStrides[i]))
-      mixedStrides.push_back(strides[i]);
-    else
-      mixedStrides.push_back(IntegerAttr::get(indexType, staticStrides[i]));
+    mixedSizes.push_back(materializeDim(size, sizes[i]));
+    mixedStrides.push_back(materializeDim(staticStrides[i], strides[i]));
   }
 
   return buffer;
