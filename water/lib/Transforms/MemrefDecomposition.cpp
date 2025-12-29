@@ -99,11 +99,13 @@ unflattenDescriptor(ValueRange values, MemRefType memrefType,
   return buffer;
 }
 
+/// Create a 0D memref type from a memref type.
 static MemRefType make0DMemRefType(MemRefType type) {
   return MemRefType::get({}, type.getElementType(), MemRefLayoutAttrInterface{},
                          type.getMemorySpace());
 }
 
+/// Create a memref struct type from a pointer type and a rank.
 static Type getMemrefStructType(OpBuilder &builder, Location loc, Type ptrType,
                                 unsigned rank) {
   auto i64 = builder.getIntegerType(64);
@@ -204,6 +206,7 @@ static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
 
 namespace {
 
+/// Type converter for memref decomposition.
 class MemrefDecompositionTypeConverter : public TypeConverter {
 public:
   MemrefDecompositionTypeConverter() {
@@ -237,7 +240,10 @@ public:
           unsigned rank = type.getRank();
           auto indexType = IndexType::get(ctx);
 
-          // ptr, sizes, strides
+          // ptr, sizes[rank], strides[rank]
+          // We are keeping all the sizes and strides for simplicity, even if
+          // some of them may be static. Static sizes and strides will be
+          // constant folded later.
           results.push_back(ptrType);
           results.resize(1 + rank * 2, indexType);
           return success();
@@ -261,9 +267,8 @@ public:
           }))
         return {};
 
-      auto memrefType = MemRefType::get({}, resultType.getElementType(),
-                                        MemRefLayoutAttrInterface{},
-                                        resultType.getMemorySpace());
+      MemRefType memrefType = make0DMemRefType(resultType);
+
       Value buffer =
           create0DMemrefFromPtr(builder, loc, memrefType, *bufferResult);
 
@@ -317,14 +322,15 @@ public:
                    affine::makeComposedFoldedAffineApply(
                        builder, loc, offsetExpr, getAsOpFoldResult(offset)));
 
+      // If corresponding size or stride is static, replace it with a constant.
       for (auto i : llvm::seq(rank)) {
-        if (ShapedType::isStatic(memrefType.getDimSize(i)))
-          sizes[i] = arith::ConstantIndexOp::create(builder, loc,
-                                                    memrefType.getDimSize(i));
+        int64_t size = memrefType.getDimSize(i);
+        if (ShapedType::isStatic(size))
+          sizes[i] = arith::ConstantIndexOp::create(builder, loc, size);
 
-        if (ShapedType::isStatic(staticStrides[i]))
-          strides[i] =
-              arith::ConstantIndexOp::create(builder, loc, staticStrides[i]);
+        int64_t stride = staticStrides[i];
+        if (ShapedType::isStatic(stride))
+          strides[i] = arith::ConstantIndexOp::create(builder, loc, stride);
       }
 
       input = createPtrFromMemref(
@@ -340,6 +346,7 @@ public:
   }
 };
 
+/// Decompose memref or vector load operation.
 template <typename OpTy>
 struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
   using OpConversionPattern<OpTy>::OpConversionPattern;
@@ -387,6 +394,7 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
   }
 };
 
+/// Decompose memref or vector store operation.
 template <typename OpTy>
 struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
   using OpConversionPattern<OpTy>::OpConversionPattern;
@@ -439,6 +447,9 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
   }
 };
 
+/// Decompose memref reinterpret cast operation.
+/// As we are not keeping the offset, non zero offsets will be converted to a
+/// GEPs on the base pointer.
 struct DecomposeReinterpretCast
     : public OpConversionPattern<memref::ReinterpretCastOp> {
   using Base::Base;
@@ -495,6 +506,9 @@ struct DecomposeReinterpretCast
   }
 };
 
+/// Decompose fat raw buffer cast operation.
+/// We don't want to lower it into ROCDL op yet, so just convert args to 0D
+/// memrefs.
 struct DecomposeFatRawBufferCast
     : public OpConversionPattern<amdgpu::FatRawBufferCastOp> {
   using Base::Base;
@@ -557,6 +571,9 @@ struct DecomposeFatRawBufferCast
   }
 };
 
+/// Decompose gather to LDS operation.
+/// We don't want to lower it into ROCDL op yet, so just convert args to 0D
+/// memrefs.
 struct DecomposeGatherToLDS
     : public OpConversionPattern<amdgpu::GatherToLDSOp> {
   using Base::Base;
