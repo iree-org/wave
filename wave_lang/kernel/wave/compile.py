@@ -1,5 +1,14 @@
+# Copyright 2023-2025 The Wave Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+from contextlib import nullcontext
 import glob
 from itertools import chain
+import os
+import threading
 from typing import Any, Optional, Callable, Sequence
 
 import sympy
@@ -130,6 +139,13 @@ from .iree_utils import warn_iree_is_too_old
 import iree.runtime as rt
 
 
+WAVE_KERNEL_INVOCATION_CONTEXT = (
+    threading.Lock()
+    if int(os.environ.get("WAVE_KERNEL_INVOCATION_UNDER_MUTEX", "0")) == 1
+    else nullcontext()
+)
+
+
 class WaveKernel:
     """
     Represents a wave kernel that can be invoked by the user.
@@ -218,7 +234,7 @@ class WaveKernel:
     def __call__(self, *args, **kwargs):
         return self.invoke(*args, **kwargs)
 
-    def invoke(self, *args, **kwargs) -> None:
+    def _invoke_impl(self, *args, **kwargs) -> None:
         """
         Invokes the wave kernel with the given arguments.
         """
@@ -324,6 +340,10 @@ class WaveKernel:
                     printer(label, debug_log["value"])
             for handler in self.debug_handlers or []:
                 handler(debug_logs)
+
+    def invoke(self, *args, **kwargs) -> None:
+        with WAVE_KERNEL_INVOCATION_CONTEXT:
+            return self._invoke_impl(*args, **kwargs)
 
 
 def invoke_with_profile(options: WaveCompileOptions, invoke: Callable, *args, **kwargs):
