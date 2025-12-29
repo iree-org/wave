@@ -296,8 +296,7 @@ public:
       if (!isa<LLVM::LLVMPointerType>(resultType.front()))
         return {};
 
-      if (!llvm::all_of(resultType.drop_front(),
-                        [](Type type) { return isa<IndexType>(type); }))
+      if (!llvm::all_of(resultType.drop_front(), llvm::IsaPred<IndexType>))
         return {};
 
       int64_t staticOffset = 0;
