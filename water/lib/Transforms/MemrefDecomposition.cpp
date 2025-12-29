@@ -123,7 +123,7 @@ static Type getMemrefStructType(OpBuilder &builder, Location loc, Type ptrType,
 static Value createPtrFromMemref(OpBuilder &builder, Location loc,
                                  LLVM::LLVMPointerType ptrType, Value value) {
   auto memrefType = cast<MemRefType>(value.getType());
-  auto memrefStructType =
+  Type memrefStructType =
       getMemrefStructType(builder, loc, ptrType, memrefType.getRank());
   value =
       UnrealizedConversionCastOp::create(builder, loc, memrefStructType, value)
