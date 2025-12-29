@@ -183,19 +183,20 @@ static Value createGEP(OpBuilder &builder, Location loc, Value buffer,
 /// adjusted pointer.
 static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
                               Type loadType, ArrayRef<OpFoldResult> sizes,
-                              unsigned typeBit, ArrayRef<OpFoldResult> strides,
+                              unsigned typeBits, ArrayRef<OpFoldResult> strides,
                               ValueRange indices) {
   OpFoldResult zero = rewriter.getIndexAttr(0);
   OpFoldResult linearizedIndices;
   memref::LinearizedMemRefInfo linearizedInfo;
   std::tie(linearizedInfo, linearizedIndices) =
-      memref::getLinearizedMemRefOffsetAndSize(rewriter, loc, typeBit, typeBit,
-                                               zero, sizes, strides,
+      memref::getLinearizedMemRefOffsetAndSize(rewriter, loc, typeBits,
+                                               typeBits, zero, sizes, strides,
                                                getAsOpFoldResult(indices));
 
-  AffineExpr mul = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
-  linearizedIndices = affine::makeComposedFoldedAffineApply(rewriter, loc, mul,
-                                                            linearizedIndices);
+  // Multiply by the element size to get the offset in bytes.
+  AffineExpr elemSize = rewriter.getAffineSymbolExpr(0) * (typeBits / 8);
+  linearizedIndices = affine::makeComposedFoldedAffineApply(
+      rewriter, loc, elemSize, linearizedIndices);
 
   Value offset = getValue(rewriter, loc, linearizedIndices);
   return createGEP(rewriter, loc, source, offset);
@@ -351,7 +352,7 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
     Location loc = loadOp.getLoc();
     auto memrefType = cast<MemRefType>(loadOp.getMemRefType());
     unsigned rank = memrefType.getRank();
-    unsigned typeBit = memrefType.getElementType().getIntOrFloatBitWidth();
+    unsigned typeBits = memrefType.getElementType().getIntOrFloatBitWidth();
 
     if (rank == 0)
       return rewriter.notifyMatchFailure(loadOp, "already 0D memref");
@@ -376,7 +377,7 @@ struct DecomposeLoadOp : public OpConversionPattern<OpTy> {
     SmallVector<Value> indices = flatten(adaptor.getIndices());
 
     Value ptr = getFlattenMemref(rewriter, loc, *buffer, loadType, sizes,
-                                 typeBit, strides, indices);
+                                 typeBits, strides, indices);
 
     unsigned alignment = loadOp.getAlignment().value_or(0);
     rewriter.replaceOpWithNewOp<LLVM::LoadOp>(loadOp, loadType, ptr, alignment,
@@ -398,7 +399,7 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
     Location loc = storeOp.getLoc();
     auto memrefType = cast<MemRefType>(storeOp.getMemRefType());
     unsigned rank = memrefType.getRank();
-    unsigned typeBit = memrefType.getElementType().getIntOrFloatBitWidth();
+    unsigned typeBits = memrefType.getElementType().getIntOrFloatBitWidth();
 
     if (rank == 0)
       return rewriter.notifyMatchFailure(storeOp, "already 0D memref");
@@ -428,7 +429,7 @@ struct DecomposeStoreOp : public OpConversionPattern<OpTy> {
     Type storeType = valueToStore.getType();
 
     Value ptr = getFlattenMemref(rewriter, loc, *buffer, storeType, sizes,
-                                 typeBit, strides, indices);
+                                 typeBits, strides, indices);
 
     unsigned alignment = storeOp.getAlignment().value_or(0);
     rewriter.replaceOpWithNewOp<LLVM::StoreOp>(storeOp, valueToStore, ptr,
@@ -470,13 +471,13 @@ struct DecomposeReinterpretCast
     SmallVector<OpFoldResult> newStrides = getMixedValues(
         castOp.getStaticStrides(), flatten(adaptor.getStrides()), rewriter);
 
-    unsigned typeBit = resultType.getElementType().getIntOrFloatBitWidth();
+    unsigned typeBits = resultType.getElementType().getIntOrFloatBitWidth();
 
     assert(resultRank == newSizes.size() && resultRank == newStrides.size() &&
            "sizes and strides must have the same rank");
 
     // Compute adjusted offset in bytes.
-    AffineExpr offsetExpr = rewriter.getAffineSymbolExpr(0) * (typeBit / 8);
+    AffineExpr offsetExpr = rewriter.getAffineSymbolExpr(0) * (typeBits / 8);
     OpFoldResult adjustedOffset = affine::makeComposedFoldedAffineApply(
         rewriter, loc, offsetExpr, getAsOpFoldResult(offset));
     Value adjustedOffsetValue = getValue(rewriter, loc, adjustedOffset);
@@ -597,22 +598,22 @@ struct DecomposeGatherToLDS
     SmallVector<Value> dstIndices = flatten(adaptor.getDstIndices());
 
     // Compute linearized offsets and apply to buffers.
-    unsigned srcTypeBit = srcType.getElementType().getIntOrFloatBitWidth();
-    unsigned dstTypeBit = dstType.getElementType().getIntOrFloatBitWidth();
+    unsigned srcTypeBits = srcType.getElementType().getIntOrFloatBitWidth();
+    unsigned dstTypeBits = dstType.getElementType().getIntOrFloatBitWidth();
 
     Type srcElementType = srcType.getElementType();
     Type dstElementType = dstType.getElementType();
 
     Value srcPtr =
         getFlattenMemref(rewriter, loc, *srcBuffer, srcElementType, srcSizes,
-                         srcTypeBit, srcStrides, srcIndices);
+                         srcTypeBits, srcStrides, srcIndices);
     Value dstPtr =
         getFlattenMemref(rewriter, loc, *dstBuffer, dstElementType, dstSizes,
-                         dstTypeBit, dstStrides, dstIndices);
+                         dstTypeBits, dstStrides, dstIndices);
 
     // Convert to 0D memrefs.
-    auto src0DType = make0DMemRefType(srcType);
-    auto dst0DType = make0DMemRefType(dstType);
+    MemRefType src0DType = make0DMemRefType(srcType);
+    MemRefType dst0DType = make0DMemRefType(dstType);
 
     Value src0D = create0DMemrefFromPtr(rewriter, loc, src0DType, srcPtr);
     Value dst0D = create0DMemrefFromPtr(rewriter, loc, dst0DType, dstPtr);
@@ -653,12 +654,12 @@ public:
           return resultType.getRank() == 0;
         });
 
-    target.addDynamicallyLegalOp<amdgpu::GatherToLDSOp>([&](Operation *op) {
-      auto gatherOp = cast<amdgpu::GatherToLDSOp>(op);
-      auto srcType = cast<MemRefType>(gatherOp.getSrc().getType());
-      auto dstType = cast<MemRefType>(gatherOp.getDst().getType());
-      return srcType.getRank() == 0 && dstType.getRank() == 0;
-    });
+    target.addDynamicallyLegalOp<amdgpu::GatherToLDSOp>(
+        [&](amdgpu::GatherToLDSOp op) {
+          auto srcType = cast<MemRefType>(op.getSrc().getType());
+          auto dstType = cast<MemRefType>(op.getDst().getType());
+          return srcType.getRank() == 0 && dstType.getRank() == 0;
+        });
 
     RewritePatternSet patterns(ctx);
     patterns
