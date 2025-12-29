@@ -172,4 +172,25 @@ def WaterWaveResolveDistributedAllocationsPass
   ];
 }
 
+def WaterWaveUniformityAnalysisPass : Pass<"water-wave-uniformity-analysis"> {
+  let summary = "Analyze which values are uniform across threads in a wavefront";
+  let description = [{
+    Performs forward dataflow analysis to determine which values are uniform
+    (same across all threads/lanes in a wavefront) versus divergent (potentially
+    different per thread). This information is critical for:
+
+      - Instruction selection: choosing scalar vs vector register allocation.
+      - Memory optimization: uniform addresses enable scalar loads.
+      - Control flow: uniform branches avoid thread masking.
+
+    The analysis starts with known uniform values (workgroup IDs, constants)
+    and propagates uniformity through the dataflow graph. Values become
+    divergent when they depend on thread-specific sources (thread IDs) or
+    divergent phi nodes at control flow merge points.
+
+    Results are attached as attributes to operations for use in downstream
+    passes.
+  }];
+}
+
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_PASSES

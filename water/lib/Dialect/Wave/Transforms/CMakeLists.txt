@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIRWaveTransforms
   PropagateDefaultsFromConstraints.cpp
   ResolveDistributedAllocations.cpp
   TypeConverter.cpp
+  UniformityAnalysis.cpp
   Utils.cpp
 
   ADDITIONAL_HEADER_DIRS
