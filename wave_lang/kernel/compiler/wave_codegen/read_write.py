@@ -929,10 +929,9 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             assert (
                 unpadded_dim >= 8
             ), f"Invalid unpadded_dim for padding: {unpadded_dim} (must be at least 8 bytes)"
-            pad_interval = arith_d.constant(
-                i32, int(math.log2((unpadded_dim // 4) - 1))
-            )
-            pad_amount = arith_d.constant(i32, ((padding * bytewidth) // 4 - 1))
+            DWORD_SIZE = 4
+            pad_interval = arith_d.constant(i32, unpadded_dim // DWORD_SIZE)
+            pad_amount = arith_d.constant(i32, (padding * bytewidth) // DWORD_SIZE)
 
         workgroup_mask = None
         if local_multicast_mask := subs_idxc(
