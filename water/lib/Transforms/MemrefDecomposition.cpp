@@ -118,8 +118,8 @@ static Type getMemrefStructType(OpBuilder &builder, Location loc, Type ptrType,
 }
 
 /// Extract the pointer from a memref descriptor.
-static Value toPtr(OpBuilder &builder, Location loc,
-                   LLVM::LLVMPointerType ptrType, Value value) {
+static Value createPtrFromMemref(OpBuilder &builder, Location loc,
+                                 LLVM::LLVMPointerType ptrType, Value value) {
   auto memrefType = cast<MemRefType>(value.getType());
   auto memrefStructType =
       getMemrefStructType(builder, loc, ptrType, memrefType.getRank());
@@ -130,12 +130,12 @@ static Value toPtr(OpBuilder &builder, Location loc,
 }
 
 /// Create a 0D memref descriptor from a pointer.
-static Value fromPtr(OpBuilder &builder, Location loc, MemRefType memrefType,
-                     Value value) {
+static Value create0DMemrefFromPtr(OpBuilder &builder, Location loc,
+                                   MemRefType memrefType, Value value) {
   auto ptrType = cast<LLVM::LLVMPointerType>(value.getType());
   assert(memrefType.getRank() == 0 && "only 0D memrefs supported");
 
-  auto memrefStructType = getMemrefStructType(builder, loc, ptrType, 0);
+  Type memrefStructType = getMemrefStructType(builder, loc, ptrType, 0);
   auto descriptor = MemRefDescriptor::poison(builder, loc, memrefStructType);
   descriptor.setAllocatedPtr(builder, loc, value);
   descriptor.setAlignedPtr(builder, loc, value);
@@ -263,7 +263,8 @@ public:
       auto memrefType = MemRefType::get({}, resultType.getElementType(),
                                         MemRefLayoutAttrInterface{},
                                         resultType.getMemorySpace());
-      Value buffer = fromPtr(builder, loc, memrefType, *bufferResult);
+      Value buffer =
+          create0DMemrefFromPtr(builder, loc, memrefType, *bufferResult);
 
       OpFoldResult offset = builder.getIndexAttr(0);
       return memref::ReinterpretCastOp::create(builder, loc, resultType, buffer,
@@ -325,8 +326,8 @@ public:
               arith::ConstantIndexOp::create(builder, loc, staticStrides[i]);
       }
 
-      input = toPtr(builder, loc,
-                    cast<LLVM::LLVMPointerType>(resultType.front()), input);
+      input = createPtrFromMemref(
+          builder, loc, cast<LLVM::LLVMPointerType>(resultType.front()), input);
       Value base = createGEP(builder, loc, input, offset);
 
       SmallVector<Value> result;
@@ -534,15 +535,15 @@ struct DecomposeFatRawBufferCast
       return rewriter.notifyMatchFailure(castOp,
                                          "failed to convert source type");
 
-    buffer = fromPtr(rewriter, loc, sourceType, buffer);
+    buffer = create0DMemrefFromPtr(rewriter, loc, sourceType, buffer);
 
     Value fatBuffer = amdgpu::FatRawBufferCastOp::create(
         rewriter, loc, resultType, buffer, castOp.getValidBytes(),
         castOp.getCacheSwizzleStride(), castOp.getBoundsCheck(),
         castOp.getResetOffset());
 
-    fatBuffer = toPtr(rewriter, loc, cast<LLVM::LLVMPointerType>(resultPtrType),
-                      fatBuffer);
+    fatBuffer = createPtrFromMemref(
+        rewriter, loc, cast<LLVM::LLVMPointerType>(resultPtrType), fatBuffer);
 
     // Build result as decomposed memref (buffer, sizes, strides).
     SmallVector<Value> decomposedResult;
@@ -613,8 +614,8 @@ struct DecomposeGatherToLDS
     auto src0DType = make0DMemRefType(srcType);
     auto dst0DType = make0DMemRefType(dstType);
 
-    Value src0D = fromPtr(rewriter, loc, src0DType, srcPtr);
-    Value dst0D = fromPtr(rewriter, loc, dst0DType, dstPtr);
+    Value src0D = create0DMemrefFromPtr(rewriter, loc, src0DType, srcPtr);
+    Value dst0D = create0DMemrefFromPtr(rewriter, loc, dst0DType, dstPtr);
 
     // Create the gather_to_lds operation with 0D memrefs and no indices.
     rewriter.replaceOpWithNewOp<amdgpu::GatherToLDSOp>(
