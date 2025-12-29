@@ -152,7 +152,7 @@ static Value integerCast(OpBuilder &builder, Location loc, Type dstType,
     return value;
 
   // If one of them is index, use index_cast.
-  if (isa<IndexType>(srcType) || isa<IntegerType>(dstType))
+  if (isa<IndexType>(srcType) || isa<IndexType>(dstType))
     return arith::IndexCastOp::create(builder, loc, dstType, value);
 
   // If both are integers, use trunc/ext.
