@@ -30,8 +30,6 @@ namespace mlir::water {
 
 using namespace mlir;
 
-namespace {
-
 static Value getValue(OpBuilder &rewriter, Location loc, OpFoldResult in) {
   if (Attribute offsetAttr = dyn_cast<Attribute>(in)) {
     return arith::ConstantIndexOp::create(
@@ -164,7 +162,8 @@ static Value integerCast(OpBuilder &builder, Location loc, Type dstType,
 }
 
 /// Generate a GEP op with the given buffer and byte offset.
-static Value GEP(OpBuilder &builder, Location loc, Value buffer, Value offset) {
+static Value createGEP(OpBuilder &builder, Location loc, Value buffer,
+                       Value offset) {
   Type elementType = builder.getIntegerType(8);
   Type i64 = builder.getIntegerType(64);
   auto flags = LLVM::GEPNoWrapFlags::nusw;
@@ -192,8 +191,10 @@ static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
                                                             linearizedIndices);
 
   Value offset = getValue(rewriter, loc, linearizedIndices);
-  return GEP(rewriter, loc, source, offset);
+  return createGEP(rewriter, loc, source, offset);
 }
+
+namespace {
 
 class MemrefDecompositionTypeConverter : public TypeConverter {
 public:
@@ -317,7 +318,7 @@ public:
 
       input = toPtr(builder, loc,
                     cast<LLVM::LLVMPointerType>(resultType.front()), input);
-      Value base = GEP(builder, loc, input, offset);
+      Value base = createGEP(builder, loc, input, offset);
 
       SmallVector<Value> result;
       result.push_back(base);
@@ -464,7 +465,7 @@ struct DecomposeReinterpretCast
         rewriter, loc, offsetExpr, getAsOpFoldResult(offset));
     Value adjustedOffsetValue = getValue(rewriter, loc, adjustedOffset);
 
-    Value newBuffer = GEP(rewriter, loc, buffer, adjustedOffsetValue);
+    Value newBuffer = createGEP(rewriter, loc, buffer, adjustedOffsetValue);
 
     // Build result as decomposed memref (buffer, sizes, strides).
     SmallVector<Value> decomposedResult;
