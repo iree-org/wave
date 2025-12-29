@@ -210,12 +210,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          if [[ "${{ contains(matrix.os, 'mi35x') }}" == 'true' ]]; then
-            # TODO: water-related tests segfault on mi35x
-            pytest -n 4 --capture=tee-sys -vv ./tests/unittests/ --ignore=tests/unittests/index_sequence_difference_test.py --ignore=tests/unittests/location_exception.py
-          else
-            pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
-          fi
+          pytest -n 4 --capture=tee-sys -vv ./tests/unittests/
           pytest -n 4 --capture=tee-sys -vv ./tests/mlir_wave_iface
 
       - name: Test TKW runtime related stack on amdgpu
