@@ -14,6 +14,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Target/LLVM/ModuleToObject.h"
 #include "mlir/Target/LLVM/ROCDL/Utils.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
@@ -63,8 +64,6 @@ private:
   createTargetMachine(Attribute targetAttr);
   LogicalResult optimizeModule(llvm::Module &mod,
                                llvm::TargetMachine &targetMachine);
-  FailureOr<std::string> compileToISA(llvm::Module &mod,
-                                      llvm::TargetMachine &targetMachine);
 
   // Dump helpers
   LogicalResult dumpLLVMModule(llvm::Module &mod, StringRef modName,
@@ -163,8 +162,11 @@ LogicalResult WaterGPUModuleToBinaryPass::serializeModule(GPUModuleOp mod) {
   if (failed(dumpAndOverrideLLVM("_optimized")))
     return failure();
 
+  auto emitError = [&]() -> InFlightDiagnostic { return mod.emitError(); };
+
   // Step 5: Compile to ISA.
-  FailureOr<std::string> isa = compileToISA(*llvmModule, **targetMachine);
+  FailureOr<std::string> isa = LLVM::ModuleToObject::translateModuleToISA(
+      *llvmModule, **targetMachine, emitError);
   if (failed(isa))
     return mod.emitError("Failed to compile to ISA");
 
@@ -331,21 +333,6 @@ WaterGPUModuleToBinaryPass::optimizeModule(llvm::Module &mod,
     return failure();
   }
   return success();
-}
-
-FailureOr<std::string>
-WaterGPUModuleToBinaryPass::compileToISA(llvm::Module &mod,
-                                         llvm::TargetMachine &targetMachine) {
-  SmallVector<char, 0> isaBuffer;
-  llvm::raw_svector_ostream stream(isaBuffer);
-
-  llvm::legacy::PassManager codegen;
-  if (targetMachine.addPassesToEmitFile(codegen, stream, nullptr,
-                                        llvm::CodeGenFileType::AssemblyFile))
-    return getOperation()->emitError("Target machine cannot emit assembly");
-
-  codegen.run(mod);
-  return std::string(isaBuffer.begin(), isaBuffer.end());
 }
 
 LogicalResult WaterGPUModuleToBinaryPass::dumpLLVMModule(llvm::Module &mod,
