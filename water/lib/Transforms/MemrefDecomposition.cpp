@@ -187,6 +187,7 @@ static Value getFlattenMemref(OpBuilder &rewriter, Location loc, Value source,
                               Type loadType, ArrayRef<OpFoldResult> sizes,
                               unsigned typeBits, ArrayRef<OpFoldResult> strides,
                               ValueRange indices) {
+  assert(typeBits % 8 == 0 && "sub-byte element type not supported");
   OpFoldResult zero = rewriter.getIndexAttr(0);
   OpFoldResult linearizedIndices;
   memref::LinearizedMemRefInfo linearizedInfo;
