@@ -128,3 +128,81 @@ func.func @subgroup_broadcast_uniform(%arg0: i32) -> i32 {
   %broadcast = gpu.subgroup_broadcast %divergent, first_active_lane : i32
   return %broadcast : i32
 }
+
+// -----
+
+// CHECK-LABEL: @thread_id_div_subgroup_size
+func.func @thread_id_div_subgroup_size() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %warp_id = arith.divui %tid, %c64 : index
+  return %warp_id : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_div_half_subgroup
+func.func @thread_id_div_half_subgroup() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c32 = arith.constant 32 : index
+  // CHECK: arith.divui
+  // CHECK-NOT: wave.uniform
+  %half_warp = arith.divui %tid, %c32 : index
+  return %half_warp : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_mul_then_div
+func.func @thread_id_mul_then_div() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c2 = arith.constant 2 : index
+  // CHECK: arith.muli
+  // CHECK-NOT: wave.uniform
+  %doubled = arith.muli %tid, %c2 : index
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.divui
+  // CHECK-NOT: wave.uniform
+  %result = arith.divui %doubled, %c64 : index
+  return %result : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_div_not_divisible
+func.func @thread_id_div_not_divisible() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c48 = arith.constant 48 : index
+  // CHECK: arith.divui
+  // CHECK-NOT: wave.uniform
+  %result = arith.divui %tid, %c48 : index
+  return %result : index
+}
+
+// -----
+
+// CHECK-LABEL: @lane_id_div_subgroup_size
+func.func @lane_id_div_subgroup_size() -> index {
+  // CHECK: gpu.lane_id
+  // CHECK-NOT: wave.uniform
+  %lid = gpu.lane_id
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %result = arith.divui %lid, %c64 : index
+  return %result : index
+}
