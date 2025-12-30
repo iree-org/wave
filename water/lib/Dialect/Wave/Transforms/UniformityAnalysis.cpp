@@ -8,8 +8,11 @@
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
@@ -34,31 +37,42 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 // Lattice storage representing uniformity state of a value.
-// The lattice has three states:
+// The lattice has four states:
 //   - Bottom (uninitialized): analysis hasn't visited this value yet.
 //   - Uniform: value is the same across all threads in a wavefront.
-//   - Divergent: value may differ between threads.
+//   - SubgroupLinear(width): value varies linearly within subgroup with given
+//   width.
+//   - Divergent: value may differ arbitrarily between threads.
 //
-// Lattice order: Bottom < Uniform < Divergent (Top).
+// Lattice order: Bottom < Uniform < SubgroupLinear(w) < Divergent (Top).
 class UniformityLatticeStorage {
 public:
   enum class State {
-    Bottom,   // Uninitialized.
-    Uniform,  // Value is uniform across threads.
-    Divergent // Value is divergent (top of lattice).
+    Bottom,         // Uninitialized.
+    Uniform,        // Value is uniform across threads.
+    SubgroupLinear, // Value varies linearly within subgroup.
+    Divergent       // Value is divergent (top of lattice).
   };
 
-  UniformityLatticeStorage() : state(State::Bottom) {}
-  UniformityLatticeStorage(State state) : state(state) {}
+  UniformityLatticeStorage() : state(State::Bottom), width(0) {}
+  UniformityLatticeStorage(State state) : state(state), width(0) {}
+  UniformityLatticeStorage(State state, uint64_t width)
+      : state(state), width(width) {}
 
   State getState() const { return state; }
+  uint64_t getWidth() const { return width; }
 
   bool isUniform() const { return state == State::Uniform; }
   bool isDivergent() const { return state == State::Divergent; }
   bool isBottom() const { return state == State::Bottom; }
+  bool isSubgroupLinear() const { return state == State::SubgroupLinear; }
 
   bool operator==(const UniformityLatticeStorage &other) const {
-    return state == other.state;
+    if (state != other.state)
+      return false;
+    if (state == State::SubgroupLinear)
+      return width == other.width;
+    return true;
   }
 
   bool operator!=(const UniformityLatticeStorage &other) const {
@@ -75,21 +89,41 @@ public:
     return UniformityLatticeStorage(State::Uniform);
   }
 
+  // Return a subgroup linear lattice instance with given width.
+  static UniformityLatticeStorage subgroupLinear(uint64_t width) {
+    // Width <= 1 collapses to uniform.
+    if (width <= 1)
+      return uniform();
+    return UniformityLatticeStorage(State::SubgroupLinear, width);
+  }
+
   // Join operation for the lattice.
   // Bottom ⊔ x = x
   // Uniform ⊔ Uniform = Uniform
-  // Uniform ⊔ Divergent = Divergent
-  // Divergent ⊔ x = Divergent
+  // Uniform ⊔ SubgroupLinear(w) = SubgroupLinear(w)
+  // SubgroupLinear(w1) ⊔ SubgroupLinear(w2) = SubgroupLinear(max(w1, w2))
+  // x ⊔ Divergent = Divergent
   static UniformityLatticeStorage join(const UniformityLatticeStorage &lhs,
                                        const UniformityLatticeStorage &rhs) {
-    if (lhs.state == rhs.state)
+    if (lhs == rhs)
       return lhs;
     if (lhs.isBottom())
       return rhs;
     if (rhs.isBottom())
       return lhs;
-    // One is uniform, the other is divergent -> divergent.
-    return top();
+    if (lhs.isDivergent() || rhs.isDivergent())
+      return top();
+
+    // At least one is SubgroupLinear or both are Uniform/SubgroupLinear.
+    if (lhs.isUniform() && rhs.isUniform())
+      return uniform();
+    if (lhs.isUniform())
+      return rhs;
+    if (rhs.isUniform())
+      return lhs;
+
+    // Both are SubgroupLinear.
+    return subgroupLinear(std::max(lhs.width, rhs.width));
   }
 
   // Meet is same as join for this lattice.
@@ -106,6 +140,9 @@ public:
     case State::Uniform:
       os << "uniform";
       break;
+    case State::SubgroupLinear:
+      os << "subgroup_linear(" << width << ")";
+      break;
     case State::Divergent:
       os << "divergent";
       break;
@@ -114,6 +151,7 @@ public:
 
 private:
   State state;
+  uint64_t width; // Only used for SubgroupLinear state.
 };
 
 // Typed lattice wrapper.
@@ -133,6 +171,9 @@ class UniformityAnalysis
 public:
   using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
 
+  // TODO: Make subgroup size configurable or query from target.
+  static constexpr uint64_t SUBGROUP_SIZE = 64;
+
   // Helper: Mark all results as divergent.
   void setAllResultsDivergent(ArrayRef<UniformityLattice *> results) {
     for (UniformityLattice *result : results)
@@ -146,23 +187,32 @@ public:
                          result->join(UniformityLatticeStorage::uniform()));
   }
 
+  // Helper: Set all results to subgroup linear with given width.
+  void setAllResultsSubgroupLinear(ArrayRef<UniformityLattice *> results,
+                                   uint64_t width) {
+    for (UniformityLattice *result : results)
+      propagateIfChanged(
+          result,
+          result->join(UniformityLatticeStorage::subgroupLinear(width)));
+  }
+
   LogicalResult visitOperation(Operation *op,
                                ArrayRef<const UniformityLattice *> operands,
                                ArrayRef<UniformityLattice *> results) override {
     // Handle GPU-specific operations.
-    // Thread ID x and lane ID are divergent (different per lane in wavefront).
+    // Thread ID x is subgroup linear (varies within wavefront).
     if (auto threadIdOp = dyn_cast<gpu::ThreadIdOp>(op)) {
-      bool isDivergent = threadIdOp.getDimension() == gpu::Dimension::x;
-      if (isDivergent)
-        setAllResultsDivergent(results);
+      if (threadIdOp.getDimension() == gpu::Dimension::x)
+        setAllResultsSubgroupLinear(results, SUBGROUP_SIZE);
       else
         setAllResultsUniform(results);
       return success();
     }
 
-    // Lane ID is divergent (identifies individual lanes within wavefront).
+    // Lane ID is subgroup linear (identifies individual lanes within
+    // wavefront).
     if (isa<gpu::LaneIdOp>(op)) {
-      setAllResultsDivergent(results);
+      setAllResultsSubgroupLinear(results, SUBGROUP_SIZE);
       return success();
     }
 
@@ -179,14 +229,73 @@ public:
       return success();
     }
 
+    // Handle division: SubgroupLinear(w) / N -> SubgroupLinear(w/N) if w % N
+    // == 0.
+    if (isa<arith::DivSIOp, arith::DivUIOp>(op)) {
+      if (operands.size() == 2 && results.size() == 1) {
+        const auto &lhs = operands[0]->getValue();
+        const auto &rhs = operands[1]->getValue();
+
+        // If LHS is SubgroupLinear and RHS is uniform constant.
+        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+          if (auto divisor = getConstantIntValue(op->getOperand(1))) {
+            uint64_t divisorVal = *divisor;
+            uint64_t width = lhs.getWidth();
+
+            // Only remain SubgroupLinear if evenly divisible.
+            if (divisorVal > 0 && width % divisorVal == 0) {
+              setAllResultsSubgroupLinear(results, width / divisorVal);
+              return success();
+            }
+          }
+        }
+        // Fall through to default handling.
+      }
+    }
+
+    // Handle multiplication: SubgroupLinear(w) * N -> SubgroupLinear(w*N) if
+    // no overflow.
+    if (isa<arith::MulIOp>(op)) {
+      if (operands.size() == 2 && results.size() == 1) {
+        const auto &lhs = operands[0]->getValue();
+        const auto &rhs = operands[1]->getValue();
+
+        // If one is SubgroupLinear and other is uniform constant.
+        const UniformityLatticeStorage *linear = nullptr;
+        Value constOperand;
+
+        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+          linear = &lhs;
+          constOperand = op->getOperand(1);
+        } else if (rhs.isSubgroupLinear() && lhs.isUniform()) {
+          linear = &rhs;
+          constOperand = op->getOperand(0);
+        }
+
+        if (linear) {
+          if (auto factor = getConstantIntValue(constOperand)) {
+            uint64_t factorVal = *factor;
+            uint64_t width = linear->getWidth();
+
+            // Check for overflow.
+            if (factorVal > 0 && width <= UINT64_MAX / factorVal) {
+              setAllResultsSubgroupLinear(results, width * factorVal);
+              return success();
+            }
+          }
+        }
+        // Fall through to default handling.
+      }
+    }
+
     // Default propagation: mark results as divergent if any operand
-    // is divergent, otherwise uniform.
-    bool anyDivergent =
+    // is divergent or subgroup linear, otherwise uniform.
+    bool anyNonUniform =
         llvm::any_of(operands, [](const UniformityLattice *lattice) {
-          return lattice && lattice->getValue().isDivergent();
+          return lattice && !lattice->getValue().isUniform();
         });
 
-    if (anyDivergent)
+    if (anyNonUniform)
       setAllResultsDivergent(results);
     else
       setAllResultsUniform(results);
