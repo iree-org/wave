@@ -6,3 +6,107 @@ func.func @constant_uniform() -> i32 {
   %c = arith.constant 42 : i32
   return %c : i32
 }
+
+// -----
+
+// CHECK-LABEL: @thread_id_x_divergent
+func.func @thread_id_x_divergent() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  return %tid : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_y_uniform
+func.func @thread_id_y_uniform() -> index {
+  // CHECK: gpu.thread_id y {wave.uniform}
+  %tid = gpu.thread_id y
+  return %tid : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_z_uniform
+func.func @thread_id_z_uniform() -> index {
+  // CHECK: gpu.thread_id z {wave.uniform}
+  %tid = gpu.thread_id z
+  return %tid : index
+}
+
+// -----
+
+// CHECK-LABEL: @lane_id_divergent
+func.func @lane_id_divergent() -> index {
+  // CHECK: gpu.lane_id
+  // CHECK-NOT: wave.uniform
+  %lid = gpu.lane_id
+  return %lid : index
+}
+
+// -----
+
+// CHECK-LABEL: @all_thread_dims
+func.func @all_thread_dims() -> (index, index, index) {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %x = gpu.thread_id x
+  // CHECK: gpu.thread_id y {wave.uniform}
+  %y = gpu.thread_id y
+  // CHECK: gpu.thread_id z {wave.uniform}
+  %z = gpu.thread_id z
+  return %x, %y, %z : index, index, index
+}
+
+// -----
+
+// CHECK-LABEL: @block_ids_uniform
+func.func @block_ids_uniform() -> (index, index, index) {
+  // CHECK: gpu.block_id x {wave.uniform}
+  %x = gpu.block_id x
+  // CHECK: gpu.block_id y {wave.uniform}
+  %y = gpu.block_id y
+  // CHECK: gpu.block_id z {wave.uniform}
+  %z = gpu.block_id z
+  return %x, %y, %z : index, index, index
+}
+
+// -----
+
+// CHECK-LABEL: @divergent_propagation
+func.func @divergent_propagation() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.addi
+  // CHECK-NOT: wave.uniform
+  %result = arith.addi %tid, %tid : index
+  return %result : index
+}
+
+// -----
+
+// CHECK-LABEL: @uniform_propagation
+func.func @uniform_propagation() -> index {
+  // CHECK: gpu.thread_id y {wave.uniform}
+  %tid = gpu.thread_id y
+  // CHECK: arith.addi {{.*}} {wave.uniform}
+  %result = arith.addi %tid, %tid : index
+  return %result : index
+}
+
+// -----
+
+// CHECK-LABEL: @mixed_uniform_divergent
+func.func @mixed_uniform_divergent() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid_x = gpu.thread_id x
+  // CHECK: gpu.thread_id y {wave.uniform}
+  %tid_y = gpu.thread_id y
+  // CHECK: arith.addi
+  // CHECK-NOT: wave.uniform
+  %result = arith.addi %tid_x, %tid_y : index
+  return %result : index
+}

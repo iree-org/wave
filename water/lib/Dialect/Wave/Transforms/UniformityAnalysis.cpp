@@ -8,6 +8,7 @@
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/SymbolTable.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
@@ -135,10 +136,39 @@ public:
   LogicalResult visitOperation(Operation *op,
                                ArrayRef<const UniformityLattice *> operands,
                                ArrayRef<UniformityLattice *> results) override {
-    // TODO: Implement operation-specific uniformity propagation logic.
-    // For now, conservatively mark all results as divergent if any operand
-    // is divergent, otherwise uniform.
+    // Handle GPU-specific operations.
+    // Thread ID x and lane ID are divergent (different per lane in wavefront).
+    if (auto threadIdOp = dyn_cast<gpu::ThreadIdOp>(op)) {
+      bool isDivergent = threadIdOp.getDimension() == gpu::Dimension::x;
+      for (UniformityLattice *result : results) {
+        if (isDivergent)
+          propagateIfChanged(result,
+                             result->join(UniformityLatticeStorage::top()));
+        else
+          propagateIfChanged(result,
+                             result->join(UniformityLatticeStorage::uniform()));
+      }
+      return success();
+    }
 
+    // Lane ID is divergent (identifies individual lanes within wavefront).
+    if (isa<gpu::LaneIdOp>(op)) {
+      for (UniformityLattice *result : results)
+        propagateIfChanged(result,
+                           result->join(UniformityLatticeStorage::top()));
+      return success();
+    }
+
+    // Block IDs, grid dims, and block dims are uniform within a block.
+    if (isa<gpu::BlockIdOp, gpu::GridDimOp, gpu::BlockDimOp>(op)) {
+      for (UniformityLattice *result : results)
+        propagateIfChanged(result,
+                           result->join(UniformityLatticeStorage::uniform()));
+      return success();
+    }
+
+    // Default propagation: mark results as divergent if any operand
+    // is divergent, otherwise uniform.
     bool anyDivergent =
         llvm::any_of(operands, [](const UniformityLattice *lattice) {
           return lattice && lattice->getValue().isDivergent();
