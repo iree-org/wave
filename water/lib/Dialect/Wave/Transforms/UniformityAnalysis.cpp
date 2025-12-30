@@ -5,20 +5,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/Transforms/UniformityAnalysis.h"
-#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
-#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "water/Dialect/Wave/IR/WaveDialect.h"
-#include "water/Dialect/Wave/IR/WaveOps.h"
-#include "water/Dialect/Wave/Transforms/DataFlowAnalyses.h"
-#include "water/Dialect/Wave/Transforms/Passes.h"
+#include "mlir/Pass/Pass.h"
 #include "llvm/Support/Debug.h"
 
 using namespace mlir;
@@ -337,6 +331,25 @@ public:
 // UniformityAnalysisPass
 //===----------------------------------------------------------------------===//
 
+static void setWaveUniformityAnalysisResults(Operation *top,
+                                             const DataFlowSolver &solver) {
+  // Walk all operations and attach uniformity attributes.
+  top->walk([&](Operation *op) {
+    // Check if all results are uniform.
+    bool allResultsUniform = true;
+    for (Value result : op->getResults()) {
+      if (!wave::isUniform(result, solver)) {
+        allResultsUniform = false;
+        break;
+      }
+    }
+
+    // Attach unit attribute if all results are uniform.
+    if (allResultsUniform && op->getNumResults() > 0)
+      op->setAttr("wave.uniform", UnitAttr::get(op->getContext()));
+  });
+}
+
 struct UniformityAnalysisPass
     : public wave::impl::WaterWaveUniformityAnalysisPassBase<
           UniformityAnalysisPass> {
@@ -344,15 +357,13 @@ struct UniformityAnalysisPass
     Operation *op = getOperation();
 
     DataFlowSolver solver;
-    solver.load<DeadCodeAnalysis>();
-    solver.load<SparseConstantPropagation>();
+    loadBaselineAnalyses(solver);
     wave::addWaveUniformityAnalysis(solver);
 
     if (failed(solver.initializeAndRun(op)))
       return signalPassFailure();
 
-    if (failed(wave::setWaveUniformityAnalysisResults(op, solver)))
-      return signalPassFailure();
+    setWaveUniformityAnalysisResults(op, solver);
   }
 };
 
@@ -364,27 +375,10 @@ void addWaveUniformityAnalysis(DataFlowSolver &solver) {
   solver.load<UniformityAnalysis>();
 }
 
-LogicalResult setWaveUniformityAnalysisResults(Operation *top,
-                                               const DataFlowSolver &solver) {
-  // Walk all operations and attach uniformity attributes.
-  top->walk([&](Operation *op) {
-    // Check if all results are uniform.
-    bool allResultsUniform = true;
-    for (Value result : op->getResults()) {
-      const UniformityLattice *lattice =
-          solver.lookupState<UniformityLattice>(result);
-      if (!lattice || !lattice->getValue().isUniform()) {
-        allResultsUniform = false;
-        break;
-      }
-    }
-
-    // Attach unit attribute if all results are uniform.
-    if (allResultsUniform && op->getNumResults() > 0)
-      op->setAttr("wave.uniform", UnitAttr::get(op->getContext()));
-  });
-
-  return success();
+bool isUniform(Value value, const DataFlowSolver &solver) {
+  const UniformityLattice *lattice =
+      solver.lookupState<UniformityLattice>(value);
+  return lattice && lattice->getValue().isUniform();
 }
 
 } // namespace wave
