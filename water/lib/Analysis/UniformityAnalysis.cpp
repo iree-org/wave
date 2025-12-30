@@ -74,6 +74,11 @@ public:
     return UniformityLatticeStorage(State::Divergent);
   }
 
+  // Return the bottom lattice instance.
+  static UniformityLatticeStorage bottom() {
+    return UniformityLatticeStorage(State::Bottom);
+  }
+
   // Return the uniform lattice instance.
   static UniformityLatticeStorage uniform() {
     return UniformityLatticeStorage(State::Uniform);
@@ -448,11 +453,8 @@ public:
   }
 
   void setToEntryState(UniformityLattice *lattice) override {
-    // Entry state: mark as uniform by default.
-    // Specific divergent sources (like thread IDs) should be handled
-    // separately.
     propagateIfChanged(lattice,
-                       lattice->join(UniformityLatticeStorage::uniform()));
+                       lattice->join(UniformityLatticeStorage::bottom()));
   }
 
   void visitNonControlFlowArguments(Operation *op,
@@ -477,13 +479,12 @@ public:
       auto isUniform =
           [&](const std::optional<SmallVector<OpFoldResult>> &array,
               unsigned index) {
-            // If array is not present assume it's known and uniform.
+            // If array is not present assume value is fixed and uniform.
             if (!array)
               return true;
 
-            // If the value is a value, get the lattice for it.
-            if (auto value =
-                    llvm::dyn_cast_if_present<Value>((*array)[index])) {
+            // If it is a value, get the lattice for it.
+            if (auto value = llvm::dyn_cast<Value>((*array)[index])) {
               const UniformityLattice *lattice = getLatticeElement(value);
               return lattice && lattice->getValue().isUniform();
             }
@@ -496,8 +497,6 @@ public:
         if (isUniform(lowerBounds, i) && isUniform(upperBounds, i) &&
             isUniform(steps, i)) {
           setAllResultsUniform(ivEntry);
-        } else {
-          setAllResultsDivergent(ivEntry);
         }
       }
     }
