@@ -132,7 +132,7 @@ func.func @subgroup_broadcast_uniform(%arg0: i32) -> i32 {
 // -----
 
 // CHECK-LABEL: @thread_id_div_subgroup_size
-func.func @thread_id_div_subgroup_size() -> index {
+func.func @thread_id_div_subgroup_size() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
   // CHECK-NOT: wave.uniform
   %tid = gpu.thread_id x
@@ -146,7 +146,7 @@ func.func @thread_id_div_subgroup_size() -> index {
 // -----
 
 // CHECK-LABEL: @thread_id_div_half_subgroup
-func.func @thread_id_div_half_subgroup() -> index {
+func.func @thread_id_div_half_subgroup() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
   // CHECK-NOT: wave.uniform
   %tid = gpu.thread_id x
@@ -161,7 +161,7 @@ func.func @thread_id_div_half_subgroup() -> index {
 // -----
 
 // CHECK-LABEL: @thread_id_mul_then_div
-func.func @thread_id_mul_then_div() -> index {
+func.func @thread_id_mul_then_div() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
   // CHECK-NOT: wave.uniform
   %tid = gpu.thread_id x
@@ -181,7 +181,7 @@ func.func @thread_id_mul_then_div() -> index {
 // -----
 
 // CHECK-LABEL: @thread_id_div_not_divisible
-func.func @thread_id_div_not_divisible() -> index {
+func.func @thread_id_div_not_divisible() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
   // CHECK-NOT: wave.uniform
   %tid = gpu.thread_id x
@@ -196,7 +196,7 @@ func.func @thread_id_div_not_divisible() -> index {
 // -----
 
 // CHECK-LABEL: @lane_id_div_subgroup_size
-func.func @lane_id_div_subgroup_size() -> index {
+func.func @lane_id_div_subgroup_size() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.lane_id
   // CHECK-NOT: wave.uniform
   %lid = gpu.lane_id
