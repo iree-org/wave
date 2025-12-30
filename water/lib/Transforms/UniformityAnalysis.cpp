@@ -4,7 +4,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "water/Dialect/Wave/Transforms/UniformityAnalysis.h"
+#include "water/Transforms/UniformityAnalysis.h"
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -464,7 +464,7 @@ static void setWaveUniformityAnalysisResults(Operation *top,
     // Check if all results are uniform.
     bool allResultsUniform = true;
     for (Value result : op->getResults()) {
-      if (!wave::isUniform(result, solver)) {
+      if (!water::isUniform(result, solver)) {
         allResultsUniform = false;
         break;
       }
@@ -484,7 +484,7 @@ struct UniformityAnalysisPass
 
     DataFlowSolver solver;
     loadBaselineAnalyses(solver);
-    wave::addWaveUniformityAnalysis(solver);
+    water::addWaterUniformityAnalysis(solver);
 
     if (failed(solver.initializeAndRun(op)))
       return signalPassFailure();
@@ -495,16 +495,12 @@ struct UniformityAnalysisPass
 
 } // namespace
 
-namespace wave {
-
-void addWaveUniformityAnalysis(DataFlowSolver &solver) {
+void mlir::water::addWaterUniformityAnalysis(DataFlowSolver &solver) {
   solver.load<UniformityAnalysis>();
 }
 
-bool isUniform(Value value, const DataFlowSolver &solver) {
+bool mlir::water::isUniform(Value value, const DataFlowSolver &solver) {
   const UniformityLattice *lattice =
       solver.lookupState<UniformityLattice>(value);
   return lattice && lattice->getValue().isUniform();
 }
-
-} // namespace wave

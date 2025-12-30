@@ -4,26 +4,21 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef WATER_DIALECT_WAVE_TRANSFORMS_UNIFORMITYANALYSIS_H
-#define WATER_DIALECT_WAVE_TRANSFORMS_UNIFORMITYANALYSIS_H
-
-namespace llvm {
-struct LogicalResult;
-}
+#ifndef WATER_TRANSFORMS_UNIFORMITYANALYSIS_H
+#define WATER_TRANSFORMS_UNIFORMITYANALYSIS_H
 
 namespace mlir {
 class DataFlowSolver;
 class Value;
-} // namespace mlir
 
-namespace wave {
-
+namespace water {
 /// Add uniformity analysis to the solver.
-void addWaveUniformityAnalysis(mlir::DataFlowSolver &solver);
+void addWaterUniformityAnalysis(mlir::DataFlowSolver &solver);
 
 /// Check if a value is uniform across all threads in a wavefront.
 bool isUniform(mlir::Value value, const mlir::DataFlowSolver &solver);
 
-} // namespace wave
+} // namespace water
+} // namespace mlir
 
-#endif // WATER_DIALECT_WAVE_TRANSFORMS_UNIFORMITYANALYSIS_H
+#endif // WATER_TRANSFORMS_UNIFORMITYANALYSIS_H
