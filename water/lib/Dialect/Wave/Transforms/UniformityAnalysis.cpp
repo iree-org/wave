@@ -381,6 +381,40 @@ public:
       }
     }
 
+    // Handle bitwise AND: SubgroupLinear(w) & mask -> Uniform if mask zeros all
+    // width bits (mask & (w-1) == 0).
+    if (isa<arith::AndIOp>(op)) {
+      if (operands.size() == 2 && results.size() == 1) {
+        const auto &lhs = operands[0]->getValue();
+        const auto &rhs = operands[1]->getValue();
+
+        // If one is SubgroupLinear and other is uniform constant.
+        const UniformityLatticeStorage *linear = nullptr;
+        Value maskOperand;
+
+        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+          linear = &lhs;
+          maskOperand = op->getOperand(1);
+        } else if (rhs.isSubgroupLinear() && lhs.isUniform()) {
+          linear = &rhs;
+          maskOperand = op->getOperand(0);
+        }
+
+        if (linear) {
+          if (auto mask = getConstantIntValue(maskOperand)) {
+            uint64_t width = linear->getWidth();
+            // If mask zeros all bits used by width, result is uniform (all
+            // zeros).
+            if ((*mask & (width - 1)) == 0) {
+              setAllResultsUniform(results);
+              return success();
+            }
+          }
+        }
+        // Fall through to default handling.
+      }
+    }
+
     // Default propagation: mark results as divergent if any operand
     // is divergent or subgroup linear, otherwise uniform.
     bool anyNonUniform =

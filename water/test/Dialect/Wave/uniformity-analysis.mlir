@@ -283,3 +283,32 @@ func.func @thread_id_shl_then_shru() -> index attributes {subgroup_size = 64 : i
   %result = arith.shrui %doubled, %c7 : index
   return %result : index
 }
+
+// -----
+
+// CHECK-LABEL: @thread_id_and_uniform
+func.func @thread_id_and_uniform() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %mask = arith.constant -64 : index
+  // CHECK: arith.andi {{.*}} {wave.uniform}
+  %result = arith.andi %tid, %mask : index
+  return %result : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_and_divergent
+func.func @thread_id_and_divergent() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %mask = arith.constant 31 : index
+  // CHECK: arith.andi
+  // CHECK-NOT: wave.uniform
+  %result = arith.andi %tid, %mask : index
+  return %result : index
+}
