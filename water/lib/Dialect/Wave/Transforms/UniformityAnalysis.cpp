@@ -172,6 +172,13 @@ public:
       return success();
     }
 
+    // Subgroup broadcast always produces uniform result (broadcasts value to
+    // all lanes).
+    if (isa<gpu::SubgroupBroadcastOp>(op)) {
+      setAllResultsUniform(results);
+      return success();
+    }
+
     // Default propagation: mark results as divergent if any operand
     // is divergent, otherwise uniform.
     bool anyDivergent =
