@@ -9,6 +9,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
@@ -23,6 +24,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/LogicalResult.h"
 
 using namespace mlir;
 using namespace wave;
@@ -105,6 +107,63 @@ llvm::LogicalResult wave::AllocateOp::verify() {
                     llvm::IsaPred<wave::WaveSymbolAttr>)) {
     return emitOpError()
            << "distributed_shape must only contain WaveSymbolAttr";
+  }
+
+  return llvm::success();
+}
+
+//-----------------------------------------------------------------------------
+// ModuleOp
+//-----------------------------------------------------------------------------
+
+void wave::ModuleOp::build(mlir::OpBuilder &builder,
+                           mlir::OperationState &state,
+                           wave::WaveNormalForm normalForm,
+                           std::optional<llvm::StringRef> name) {
+  state.addRegion()->emplaceBlock();
+  state.addAttribute("normal_form",
+                     builder.getAttr<wave::WaveNormalFormAttr>(normalForm));
+  if (name) {
+    state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
+                       builder.getStringAttr(*name));
+  }
+}
+
+/// Construct a module from the given context.
+wave::ModuleOp wave::ModuleOp::create(mlir::Location loc,
+                                      wave::WaveNormalForm normalForm) {
+  OpBuilder builder(loc->getContext());
+  return ModuleOp::create(builder, loc, normalForm);
+}
+
+/// Construct a module from the given context.
+wave::ModuleOp wave::ModuleOp::create(mlir::Location loc,
+                                      wave::WaveNormalForm normalForm,
+                                      std::optional<llvm::StringRef> name) {
+  OpBuilder builder(loc->getContext());
+  return ModuleOp::create(builder, loc, normalForm, name);
+}
+
+llvm::LogicalResult wave::ModuleOp::verifyRegions() {
+  bool emitRemark = false;
+  bool emitDiagnostics = true;
+  if (!emitDiagnostics)
+    return llvm::success();
+
+  // we can assume here that child ops have been verified
+
+  wave::WaveNormalForm normalForm = getNormalFormAttr().getValue();
+  Operation *op = getOperation();
+
+  if (llvm::failed(
+          detail::verifyNormalFormAttr(op, normalForm, emitDiagnostics))) {
+    if (emitRemark) {
+      return op->emitRemark() << "nornmal form verification failed for: "
+                              << stringifyWaveNormalForm(normalForm);
+    } else {
+      return op->emitError() << "nornmal form verification failed for: "
+                             << stringifyWaveNormalForm(normalForm);
+    }
   }
 
   return llvm::success();

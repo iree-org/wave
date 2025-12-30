@@ -74,10 +74,11 @@ struct LowerWaveToMLIRPass
       vector::VectorDialect
         // clang-format on
         >();
-    target.addIllegalOp<wave::AddOp, wave::AllocateOp, wave::CastOp,
-                        wave::DivOp, wave::Exp2Op, wave::ExtractSliceOp,
-                        wave::IterateOp, wave::MmaOp, wave::MulOp, wave::ReadOp,
-                        wave::RegisterOp, wave::WriteOp, wave::YieldOp>();
+    target
+        .addIllegalOp<wave::AddOp, wave::AllocateOp, wave::CastOp, wave::DivOp,
+                      wave::Exp2Op, wave::ExtractSliceOp, wave::ModuleOp,
+                      wave::IterateOp, wave::MmaOp, wave::MulOp, wave::ReadOp,
+                      wave::RegisterOp, wave::WriteOp, wave::YieldOp>();
 
     // Mark functions as illegal if they have Wave tensor types in their
     // signature.

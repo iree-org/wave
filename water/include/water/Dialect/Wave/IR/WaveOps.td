@@ -11,7 +11,12 @@ include "water/Dialect/Wave/IR/WaveTypes.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/IR/CommonAttrConstraints.td"
+include "mlir/IR/CommonTypeConstraints.td"
 include "mlir/IR/BuiltinAttributeInterfaces.td"
+include "mlir/IR/RegionKindInterface.td"
+include "mlir/IR/SymbolInterfaces.td"
+
+
 
 #ifndef WATER_DIALECT_WAVE_WAVEOPS
 #define WATER_DIALECT_WAVE_WAVEOPS
@@ -137,6 +142,66 @@ def MmaOp : WaveOp<"mma",
     /// Returns failure if no hardware constraints are available.
     llvm::FailureOr<unsigned> computeElementsPerThreadForOperand(unsigned operandIndex);
   }];
+}
+
+//-----------------------------------------------------------------------------
+// Structure Ops
+//-----------------------------------------------------------------------------
+
+def ModuleOp : Op<WaveDialect, "module", [
+    AffineScope, IsolatedFromAbove, NoRegionArguments, SymbolTable, Symbol,
+  ] # GraphRegionNoTerminator.traits> {
+  let summary = "A top level compilation unit that define a Wave module";
+  let description = [{
+    This op defines a Wave module using a MLIR region.
+
+    ```
+    wave.module @symbol_name {
+        ...
+    }
+    ```
+  }];
+
+  let arguments = (ins OptionalAttr<SymbolNameAttr>:$sym_name, WaveNormalFormAttr:$normal_form);
+  let regions = (region SizedRegion<1>:$bodyRegion);
+  let assemblyFormat = [{
+    ($sym_name^)? $normal_form attr-dict-with-keyword $bodyRegion
+  }];
+
+  // let assemblyFormat = "($sym_name^)? attr-dict-with-keyword $bodyRegion";
+  let builders = [
+    OpBuilder<(ins
+      CArg<"wave::WaveNormalForm">:$normal_form,
+      CArg<"std::optional<::llvm::StringRef>", "{}">:$name)>
+  ];
+
+  let extraClassDeclaration = [{
+    /// Construct a module from the given location with an optional name.
+    static ModuleOp create(::mlir::Location loc,
+                               wave::WaveNormalForm normalForm,
+                               std::optional<::llvm::StringRef> name);
+
+    /// Construct a module from the given location with an optional name.
+    static ModuleOp create(::mlir::Location loc,
+                               wave::WaveNormalForm normalForm);
+
+    /// Return the name of this module if present.
+    std::optional<::llvm::StringRef> getName() { return getSymName(); }
+
+    //===------------------------------------------------------------------===//
+    // SymbolOpInterface Methods
+    //===------------------------------------------------------------------===//
+
+    /// A ModuleOp may optionally define a symbol.
+    bool isOptionalSymbol() { return true; }
+  }];
+
+  let hasVerifier = 0;
+  let hasRegionVerifier = 1;
+
+  // We need to ensure the block inside the region is properly terminated;
+  // the auto-generated builders do not guarantee that.
+  let skipDefaultBuilders = 1;
 }
 
 //-----------------------------------------------------------------------------
