@@ -169,7 +169,7 @@ public:
   // Attribute name for subgroup size on function operations.
   static constexpr StringLiteral SUBGROUP_SIZE_ATTR = "subgroup_size";
 
-  // Helper: Get subgroup size from parent function attribute.
+  // Get subgroup size from parent function attribute.
   std::optional<uint64_t> getSubgroupSize(Operation *op) {
     auto func = op->getParentOfType<FunctionOpInterface>();
     if (!func)
@@ -182,26 +182,62 @@ public:
     return attr.getValue().getZExtValue();
   }
 
-  // Helper: Mark all results as divergent.
+  // Mark all results as divergent.
   void setAllResultsDivergent(ArrayRef<UniformityLattice *> results) {
     for (UniformityLattice *result : results)
       propagateIfChanged(result, result->join(UniformityLatticeStorage::top()));
   }
 
-  // Helper: Mark all results as uniform.
+  // Mark all results as uniform.
   void setAllResultsUniform(ArrayRef<UniformityLattice *> results) {
     for (UniformityLattice *result : results)
       propagateIfChanged(result,
                          result->join(UniformityLatticeStorage::uniform()));
   }
 
-  // Helper: Set all results to subgroup linear with given width.
+  // Set all results to subgroup linear with given width.
   void setAllResultsSubgroupLinear(ArrayRef<UniformityLattice *> results,
                                    uint64_t width) {
     for (UniformityLattice *result : results)
       propagateIfChanged(
           result,
           result->join(UniformityLatticeStorage::subgroupLinear(width)));
+  }
+
+  // Handle division of SubgroupLinear by a uniform divisor.
+  // Returns true if handled (uniform or subgroup linear), false otherwise.
+  bool handleSubgroupLinearDivision(uint64_t width, uint64_t divisor,
+                                    ArrayRef<UniformityLattice *> results) {
+    if (divisor == 0)
+      return false;
+
+    // If divisor is a multiple of width and larger, result is uniform.
+    if (divisor > width && divisor % width == 0) {
+      setAllResultsUniform(results);
+      return true;
+    }
+
+    // Remain SubgroupLinear if width evenly divisible by divisor.
+    if (width % divisor == 0) {
+      setAllResultsSubgroupLinear(results, width / divisor);
+      return true;
+    }
+
+    return false;
+  }
+
+  // Handle multiplication of SubgroupLinear by a uniform multiplier.
+  // Returns the result width on success, or 0 on failure (overflow).
+  uint64_t handleSubgroupLinearMultiplication(uint64_t width,
+                                              uint64_t multiplier) {
+    if (multiplier == 0)
+      return 0;
+
+    // Check for overflow.
+    if (width > (std::numeric_limits<decltype(width)>::max() / multiplier))
+      return 0;
+
+    return width * multiplier;
   }
 
   LogicalResult visitOperation(Operation *op,
@@ -254,22 +290,8 @@ public:
         // If LHS is SubgroupLinear and RHS is uniform constant.
         if (lhs.isSubgroupLinear() && rhs.isUniform()) {
           if (auto divisor = getConstantIntValue(op->getOperand(1))) {
-            uint64_t divisorVal = *divisor;
-            uint64_t width = lhs.getWidth();
-
-            if (divisorVal > 0) {
-              // If divisor is a multiple of width and larger, result is
-              // uniform.
-              if (divisorVal > width && divisorVal % width == 0) {
-                setAllResultsUniform(results);
-                return success();
-              }
-              // Remain SubgroupLinear if width evenly divisible by divisor.
-              if (width % divisorVal == 0) {
-                setAllResultsSubgroupLinear(results, width / divisorVal);
-                return success();
-              }
-            }
+            if (handleSubgroupLinearDivision(lhs.getWidth(), *divisor, results))
+              return success();
           }
         }
         // Fall through to default handling.
@@ -297,15 +319,14 @@ public:
 
         if (linear) {
           if (auto factor = getConstantIntValue(constOperand)) {
-            uint64_t factorVal = *factor;
-            uint64_t width = linear->getWidth();
-
             // Check if nsw flag is set.
-            if (factorVal > 0 &&
-                bitEnumContainsAny(mulOp.getOverflowFlags(),
+            if (bitEnumContainsAny(mulOp.getOverflowFlags(),
                                    arith::IntegerOverflowFlags::nsw)) {
-              setAllResultsSubgroupLinear(results, width * factorVal);
-              return success();
+              if (uint64_t newWidth = handleSubgroupLinearMultiplication(
+                      linear->getWidth(), *factor)) {
+                setAllResultsSubgroupLinear(results, newWidth);
+                return success();
+              }
             }
           }
         }
@@ -322,15 +343,16 @@ public:
 
         if (lhs.isSubgroupLinear() && rhs.isUniform()) {
           if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
-            uint64_t shiftVal = *shiftAmount;
-            uint64_t width = lhs.getWidth();
-
             // Check if nsw flag is set.
-            if (shiftVal > 0 && shiftVal < 64 &&
+            if (*shiftAmount > 0 && *shiftAmount < 64 &&
                 bitEnumContainsAny(shliOp.getOverflowFlags(),
                                    arith::IntegerOverflowFlags::nsw)) {
-              setAllResultsSubgroupLinear(results, width << shiftVal);
-              return success();
+              uint64_t multiplier = 1ULL << *shiftAmount;
+              if (uint64_t newWidth = handleSubgroupLinearMultiplication(
+                      lhs.getWidth(), multiplier)) {
+                setAllResultsSubgroupLinear(results, newWidth);
+                return success();
+              }
             }
           }
         }
@@ -347,23 +369,11 @@ public:
 
         if (lhs.isSubgroupLinear() && rhs.isUniform()) {
           if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
-            uint64_t shiftVal = *shiftAmount;
-            uint64_t width = lhs.getWidth();
-
-            if (shiftVal > 0 && shiftVal < 64) {
-              uint64_t divisor = 1ULL << shiftVal;
-
-              // If divisor is a multiple of width and larger, result is
-              // uniform.
-              if (divisor > width && divisor % width == 0) {
-                setAllResultsUniform(results);
+            if (*shiftAmount > 0 && *shiftAmount < 64) {
+              uint64_t divisor = 1ULL << *shiftAmount;
+              if (handleSubgroupLinearDivision(lhs.getWidth(), divisor,
+                                               results))
                 return success();
-              }
-              // Remain SubgroupLinear if width evenly divisible by divisor.
-              if (width % divisor == 0) {
-                setAllResultsSubgroupLinear(results, width >> shiftVal);
-                return success();
-              }
             }
           }
         }
