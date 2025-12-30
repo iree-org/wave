@@ -12,6 +12,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
@@ -269,6 +270,64 @@ public:
     if (isa<gpu::SubgroupBroadcastOp>(op)) {
       setAllResultsUniform(results);
       return success();
+    }
+
+    // Handle loops: if lower/upper bounds and step are uniform, induction
+    // variables are uniform.
+    if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op)) {
+      std::optional<SmallVector<Value>> inductionVars =
+          loopLike.getLoopInductionVars();
+      std::optional<SmallVector<OpFoldResult>> lowerBounds =
+          loopLike.getLoopLowerBounds();
+      std::optional<SmallVector<OpFoldResult>> upperBounds =
+          loopLike.getLoopUpperBounds();
+      std::optional<SmallVector<OpFoldResult>> steps = loopLike.getLoopSteps();
+
+      // Only proceed if loop exposes induction variables and bounds/steps.
+      if (inductionVars && lowerBounds && upperBounds && steps) {
+        // Helper to check if an OpFoldResult is uniform.
+        auto checkUniform = [&](OpFoldResult foldResult) {
+          if (auto value = llvm::dyn_cast_if_present<Value>(foldResult)) {
+            // Find the lattice for this value in operands.
+            for (size_t i = 0; i < op->getNumOperands(); ++i) {
+              if (op->getOperand(i) == value)
+                return operands[i]->getValue().isUniform();
+            }
+            // If value is not an operand, conservatively assume non-uniform.
+            return false;
+          }
+          // Attributes (constants) are always uniform.
+          return true;
+        };
+
+        // Check each induction variable with its corresponding bounds and step.
+        for (size_t i = 0; i < inductionVars->size(); ++i) {
+          Value inductionVar = (*inductionVars)[i];
+          OpFoldResult lowerBound = (*lowerBounds)[i];
+          OpFoldResult upperBound = (*upperBounds)[i];
+          OpFoldResult step = (*steps)[i];
+
+          if (auto blockArg = llvm::dyn_cast<BlockArgument>(inductionVar)) {
+            auto *ivLattice = getLatticeElement(blockArg);
+            if (ivLattice) {
+              if (checkUniform(lowerBound) && checkUniform(upperBound) &&
+                  checkUniform(step)) {
+                // All bounds and step are uniform, mark induction var as
+                // uniform.
+                propagateIfChanged(
+                    ivLattice,
+                    ivLattice->join(UniformityLatticeStorage::uniform()));
+              } else {
+                // At least one bound or step is not uniform, mark as divergent.
+                propagateIfChanged(
+                    ivLattice,
+                    ivLattice->join(UniformityLatticeStorage::top()));
+              }
+            }
+          }
+        }
+      }
+      // Continue to handle loop results with default propagation.
     }
 
     // Handle division: SubgroupLinear(w) / N -> SubgroupLinear(w/N) if w % N
