@@ -14,6 +14,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/Transforms/DataFlowAnalyses.h"
@@ -171,8 +172,21 @@ class UniformityAnalysis
 public:
   using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
 
-  // TODO: Make subgroup size configurable or query from target.
-  static constexpr uint64_t SUBGROUP_SIZE = 64;
+  // Attribute name for subgroup size on function operations.
+  static constexpr StringLiteral SUBGROUP_SIZE_ATTR = "subgroup_size";
+
+  // Helper: Get subgroup size from parent function attribute.
+  std::optional<uint64_t> getSubgroupSize(Operation *op) {
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    if (!func)
+      return std::nullopt;
+
+    auto attr = func->getAttrOfType<IntegerAttr>(SUBGROUP_SIZE_ATTR);
+    if (!attr)
+      return std::nullopt;
+
+    return attr.getValue().getZExtValue();
+  }
 
   // Helper: Mark all results as divergent.
   void setAllResultsDivergent(ArrayRef<UniformityLattice *> results) {
@@ -202,17 +216,24 @@ public:
     // Handle GPU-specific operations.
     // Thread ID x is subgroup linear (varies within wavefront).
     if (auto threadIdOp = dyn_cast<gpu::ThreadIdOp>(op)) {
-      if (threadIdOp.getDimension() == gpu::Dimension::x)
-        setAllResultsSubgroupLinear(results, SUBGROUP_SIZE);
-      else
+      if (threadIdOp.getDimension() == gpu::Dimension::x) {
+        if (auto subgroupSize = getSubgroupSize(op))
+          setAllResultsSubgroupLinear(results, *subgroupSize);
+        else
+          setAllResultsDivergent(results);
+      } else {
         setAllResultsUniform(results);
+      }
       return success();
     }
 
     // Lane ID is subgroup linear (identifies individual lanes within
     // wavefront).
     if (isa<gpu::LaneIdOp>(op)) {
-      setAllResultsSubgroupLinear(results, SUBGROUP_SIZE);
+      if (auto subgroupSize = getSubgroupSize(op))
+        setAllResultsSubgroupLinear(results, *subgroupSize);
+      else
+        setAllResultsDivergent(results);
       return success();
     }
 
