@@ -313,6 +313,64 @@ public:
       }
     }
 
+    // Handle shift left: SubgroupLinear(w) << N -> SubgroupLinear(w << N) if
+    // nsw flag set (similar to multiplication by 2^N).
+    if (auto shliOp = dyn_cast<arith::ShLIOp>(op)) {
+      if (operands.size() == 2 && results.size() == 1) {
+        const auto &lhs = operands[0]->getValue();
+        const auto &rhs = operands[1]->getValue();
+
+        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+          if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
+            uint64_t shiftVal = *shiftAmount;
+            uint64_t width = lhs.getWidth();
+
+            // Check if nsw flag is set.
+            if (shiftVal > 0 && shiftVal < 64 &&
+                bitEnumContainsAny(shliOp.getOverflowFlags(),
+                                   arith::IntegerOverflowFlags::nsw)) {
+              setAllResultsSubgroupLinear(results, width << shiftVal);
+              return success();
+            }
+          }
+        }
+        // Fall through to default handling.
+      }
+    }
+
+    // Handle shift right: SubgroupLinear(w) >> N -> SubgroupLinear(w >> N) if
+    // w is divisible by 2^N, or Uniform if 2^N > w and 2^N % w == 0.
+    if (isa<arith::ShRUIOp, arith::ShRSIOp>(op)) {
+      if (operands.size() == 2 && results.size() == 1) {
+        const auto &lhs = operands[0]->getValue();
+        const auto &rhs = operands[1]->getValue();
+
+        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+          if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
+            uint64_t shiftVal = *shiftAmount;
+            uint64_t width = lhs.getWidth();
+
+            if (shiftVal > 0 && shiftVal < 64) {
+              uint64_t divisor = 1ULL << shiftVal;
+
+              // If divisor is a multiple of width and larger, result is
+              // uniform.
+              if (divisor > width && divisor % width == 0) {
+                setAllResultsUniform(results);
+                return success();
+              }
+              // Remain SubgroupLinear if width evenly divisible by divisor.
+              if (width % divisor == 0) {
+                setAllResultsSubgroupLinear(results, width >> shiftVal);
+                return success();
+              }
+            }
+          }
+        }
+        // Fall through to default handling.
+      }
+    }
+
     // Default propagation: mark results as divergent if any operand
     // is divergent or subgroup linear, otherwise uniform.
     bool anyNonUniform =
