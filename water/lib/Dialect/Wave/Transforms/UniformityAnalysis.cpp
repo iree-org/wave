@@ -414,6 +414,24 @@ public:
       // Fall through to default handling.
     }
 
+    // Handle cast operations: preserve SubgroupLinear state.
+    // These operations change representation but not value distribution.
+    if (isa<arith::IndexCastOp, arith::TruncIOp, arith::ExtUIOp,
+            arith::ExtSIOp>(op)) {
+      assert(operands.size() == 1 && results.size() == 1 &&
+             "Cast must have 1 operand and 1 result");
+      const UniformityLatticeStorage &operand = operands[0]->getValue();
+
+      if (operand.isSubgroupLinear()) {
+        setAllResultsSubgroupLinear(results, operand.getWidth());
+        return success();
+      } else if (operand.isUniform()) {
+        setAllResultsUniform(results);
+        return success();
+      }
+      // Fall through to default handling for divergent operands.
+    }
+
     // Default propagation: mark results as divergent if any operand
     // is divergent or subgroup linear, otherwise uniform.
     bool anyNonUniform =

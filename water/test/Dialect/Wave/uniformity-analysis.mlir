@@ -312,3 +312,85 @@ func.func @thread_id_and_divergent() -> index attributes {subgroup_size = 64 : i
   %result = arith.andi %tid, %mask : index
   return %result : index
 }
+
+// -----
+
+// CHECK-LABEL: @index_cast_preserves_uniform
+func.func @index_cast_preserves_uniform() -> i32 attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %warp_id = arith.divui %tid, %c64 : index
+  // CHECK: arith.index_cast {{.*}} {wave.uniform}
+  %result = arith.index_cast %warp_id : index to i32
+  return %result : i32
+}
+
+// -----
+
+// CHECK-LABEL: @trunci_preserves_subgroup_linear
+func.func @trunci_preserves_subgroup_linear() -> i32 attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.index_cast
+  // CHECK-NOT: wave.uniform
+  %tid_i64 = arith.index_cast %tid : index to i64
+  // CHECK: arith.trunci
+  // CHECK-NOT: wave.uniform
+  %tid_i32 = arith.trunci %tid_i64 : i64 to i32
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : i32
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %result = arith.divui %tid_i32, %c64 : i32
+  return %result : i32
+}
+
+// -----
+
+// CHECK-LABEL: @extui_preserves_subgroup_linear
+func.func @extui_preserves_subgroup_linear() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.index_cast
+  // CHECK-NOT: wave.uniform
+  %tid_i32 = arith.index_cast %tid : index to i32
+  // CHECK: arith.extui
+  // CHECK-NOT: wave.uniform
+  %tid_i64 = arith.extui %tid_i32 : i32 to i64
+  // CHECK: arith.index_cast
+  // CHECK-NOT: wave.uniform
+  %tid_idx = arith.index_cast %tid_i64 : i64 to index
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %result = arith.divui %tid_idx, %c64 : index
+  return %result : index
+}
+
+// -----
+
+// CHECK-LABEL: @extsi_preserves_subgroup_linear
+func.func @extsi_preserves_subgroup_linear() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.index_cast
+  // CHECK-NOT: wave.uniform
+  %tid_i32 = arith.index_cast %tid : index to i32
+  // CHECK: arith.extsi
+  // CHECK-NOT: wave.uniform
+  %tid_i64 = arith.extsi %tid_i32 : i32 to i64
+  // CHECK: arith.index_cast
+  // CHECK-NOT: wave.uniform
+  %tid_idx = arith.index_cast %tid_i64 : i64 to index
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %result = arith.divui %tid_idx, %c64 : index
+  return %result : index
+}
