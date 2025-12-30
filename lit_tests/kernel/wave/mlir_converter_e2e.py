@@ -89,7 +89,9 @@ def test_matrix_add_water_e2e():
     constraints = matrix_add.constraints
 
     # Emit Wave dialect MLIR
-    wave_dialect_mlir, diagnostics = emit_wave_dialect(trace, constraints, options_mlir)
+    wave_dialect_mlir, diagnostics, _ = emit_wave_dialect(
+        trace, constraints, options_mlir
+    )
 
     # Apply Water PassManager lowering
     lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)
