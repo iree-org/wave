@@ -382,3 +382,47 @@ func.func @loop_divergent_bounds() -> index {
   }
   return %result : index
 }
+
+// -----
+
+
+// -----
+
+// CHECK-LABEL: @thread_id_rem_subgroup_size
+func.func @thread_id_rem_subgroup_size() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x {wave.subgroup_linear = 64 : i64}
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.remui {{.*}} {wave.subgroup_linear = 64 : i64}
+  %remainder = arith.remui %tid, %c64 : index
+  return %remainder : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_rem_double_subgroup
+func.func @thread_id_rem_double_subgroup() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x {wave.subgroup_linear = 64 : i64}
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c128 = arith.constant 128 : index
+  // CHECK: arith.remui {{.*}} {wave.subgroup_linear = 64 : i64}
+  %remainder = arith.remui %tid, %c128 : index
+  return %remainder : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_rem_not_divisible
+func.func @thread_id_rem_not_divisible() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x {wave.subgroup_linear = 64 : i64}
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c48 = arith.constant 48 : index
+  // CHECK: arith.remui
+  // CHECK-NOT: wave.uniform
+  // CHECK-NOT: wave.subgroup_linear
+  %remainder = arith.remui %tid, %c48 : index
+  return %remainder : index
+}
