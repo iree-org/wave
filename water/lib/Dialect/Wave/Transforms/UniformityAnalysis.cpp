@@ -245,7 +245,7 @@ public:
     }
 
     // Handle division: SubgroupLinear(w) / N -> SubgroupLinear(w/N) if w % N
-    // == 0.
+    // == 0, or Uniform if N % w == 0 and N > w.
     if (isa<arith::DivSIOp, arith::DivUIOp>(op)) {
       if (operands.size() == 2 && results.size() == 1) {
         const auto &lhs = operands[0]->getValue();
@@ -257,10 +257,18 @@ public:
             uint64_t divisorVal = *divisor;
             uint64_t width = lhs.getWidth();
 
-            // Only remain SubgroupLinear if evenly divisible.
-            if (divisorVal > 0 && width % divisorVal == 0) {
-              setAllResultsSubgroupLinear(results, width / divisorVal);
-              return success();
+            if (divisorVal > 0) {
+              // If divisor is a multiple of width and larger, result is
+              // uniform.
+              if (divisorVal > width && divisorVal % width == 0) {
+                setAllResultsUniform(results);
+                return success();
+              }
+              // Remain SubgroupLinear if width evenly divisible by divisor.
+              if (width % divisorVal == 0) {
+                setAllResultsSubgroupLinear(results, width / divisorVal);
+                return success();
+              }
             }
           }
         }

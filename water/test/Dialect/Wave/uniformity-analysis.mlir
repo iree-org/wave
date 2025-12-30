@@ -206,3 +206,17 @@ func.func @lane_id_div_subgroup_size() -> index attributes {subgroup_size = 64 :
   %result = arith.divui %lid, %c64 : index
   return %result : index
 }
+
+// -----
+
+// CHECK-LABEL: @thread_id_div_larger_divisor
+func.func @thread_id_div_larger_divisor() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c128 = arith.constant 128 : index
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %warp_id = arith.divui %tid, %c128 : index
+  return %warp_id : index
+}
