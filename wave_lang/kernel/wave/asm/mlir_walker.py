@@ -21,26 +21,82 @@ from wave_lang.support.ir_imports import (
     scf_d,
     stream_d,
     vector_d,
-    OpAttributeMap,
-)
-
-from .utils import (
-    parse_wg_and_subgroup,
 )
 
 from .kernel_model import KernelInfo
 from .handlers import OperationHandlers
-from .gather_to_shared import analyze_g2s_region, precompute_m0_values
+from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds
+from .kernel_pipeline import KernelCompilationContext
+
+
+class _SSAToVGPRAdapter(dict):
+    """
+    Adapter that provides dict-like access to kernel_ctx.ssa_to_reg.
+
+    This maintains backward compatibility with code that accesses
+    walker.ssa_to_vgpr[key] = (v1, v2, ...) using physical indices.
+
+    During the migration:
+    - Gets return tuple of virtual reg IDs (for comparison/iteration)
+    - Sets store into kernel_ctx.ssa_to_reg
+    """
+
+    def __init__(self, kernel_ctx: KernelCompilationContext):
+        self._ctx = kernel_ctx
+
+    def __getitem__(self, key):
+        regs = self._ctx.ssa_to_reg.get(key)
+        if regs is None:
+            raise KeyError(key)
+        # Extract IDs for backward compatibility
+        from .kernel_ir import KVReg, KSReg
+
+        return tuple(r.id if isinstance(r, (KVReg, KSReg)) else r for r in regs)
+
+    def __setitem__(self, key, value):
+        # Convert physical indices to virtual regs
+        from .kernel_ir import KVReg
+
+        if isinstance(value, tuple):
+            regs = tuple(KVReg(v) if isinstance(v, int) else v for v in value)
+            self._ctx.ssa_to_reg[key] = regs
+        else:
+            self._ctx.ssa_to_reg[key] = (value,)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        return key in self._ctx.ssa_to_reg
+
+    def keys(self):
+        return self._ctx.ssa_to_reg.keys()
+
+    def values(self):
+        # Return tuples of IDs for compatibility
+        from .kernel_ir import KVReg, KSReg
+
+        for regs in self._ctx.ssa_to_reg.values():
+            yield tuple(r.id if isinstance(r, (KVReg, KSReg)) else r for r in regs)
+
+    def items(self):
+        for key in self._ctx.ssa_to_reg:
+            yield key, self[key]
 
 
 class IRWalker:
-    def __init__(self, emitter=None):
-        """Initialize IRWalker with optional emitter."""
-        self.emitter = emitter
+    def __init__(self, kernel_ctx: KernelCompilationContext):
+        """
+        Initialize IRWalker with kernel compilation context.
 
-        # Unified SSA-to-VGPR mapping for all vector operations
-        # Maps SSA value strings to register allocations (tuples of register indices)
-        self.ssa_to_vgpr: dict[str, tuple[int, ...]] = {}
+        Args:
+            kernel_ctx: KernelCompilationContext - the source of truth for
+                        instruction emission and register allocation.
+        """
+        self.kernel_ctx = kernel_ctx
 
         # Supporting fields
         self.last_vmem_ticket = None  # Used for wait count computation
@@ -48,22 +104,47 @@ class IRWalker:
         # Initialize operation handlers
         self.handlers = OperationHandlers(self)
 
+    @property
+    def ssa_to_vgpr(self) -> dict:
+        """
+        Legacy SSA-to-VGPR mapping property.
+
+        Delegates to kernel_ctx.ssa_to_reg for actual storage.
+        During migration, handlers will be updated to use kernel_ctx directly.
+        """
+        if self.kernel_ctx is not None:
+            # Return a view that extracts physical-like indices from virtual regs
+            # This maintains backward compatibility during the migration
+            return _SSAToVGPRAdapter(self.kernel_ctx)
+        # Fallback for legacy mode (will be removed)
+        if not hasattr(self, "_legacy_ssa_to_vgpr"):
+            self._legacy_ssa_to_vgpr = {}
+        return self._legacy_ssa_to_vgpr
+
+    @property
+    def unified(self):
+        """Return the unified emitter for instruction emission."""
+        return self.kernel_ctx.unified
+
     def interpret_func(self, fn: func_d.FuncOp) -> KernelInfo:
         kernel_info = KernelInfo(name=fn.sym_name.value)
 
         entry_block = fn.entry_block
         kernel_info.arg_ssa_order = [str(arg) for arg in entry_block.arguments]
 
-        # Extract translation_info from function attributes
-        assert isinstance(fn.attributes, OpAttributeMap)
-        function_attributes = dict(fn.attributes)
-        translation_info = function_attributes.get("translation_info")
-        if translation_info is not None:
-            workgroup_size, subgroup_size = parse_wg_and_subgroup(translation_info)
-            if workgroup_size:
-                kernel_info.wg_size = workgroup_size
-            if subgroup_size:
-                kernel_info.subgroup_size = subgroup_size
+        # NOTE: translation_info parsing is centralized in mlir_analysis and used
+        # by KernelModuleCompiler. Avoid re-parsing here to prevent duplication.
+        #
+        # Source wg/subgroup from the kernel compilation context (single source of truth).
+        if getattr(self.kernel_ctx, "wg_size", None):
+            kernel_info.wg_size = tuple(self.kernel_ctx.wg_size)
+        if getattr(self.kernel_ctx, "subgroup_size", None):
+            kernel_info.subgroup_size = int(self.kernel_ctx.subgroup_size)
+
+        # Update kernel context with actual bounds from MLIR
+        # This enables correct algebraic simplifications based on workgroup size
+        if self.kernel_ctx is not None:
+            self.kernel_ctx.update_bounds_from_kernel_info(kernel_info)
 
         # Walk operations and fill environment + accesses
         self._walk_block(fn.entry_block, kernel_info)
@@ -90,8 +171,11 @@ class IRWalker:
             for i in range(schedule.first_g2s_idx):
                 self._dispatch_operation(ops[i], kernel_info)
 
-            # Pre-compute M0 values before any buffer_load...lds
-            precompute_m0_values(schedule, kernel_info, self.handlers)
+            # Pre-create G2S SRD copies to ensure they're allocated before the loop
+            # This prevents the second SRD copy from overwriting the first's source
+            # Skip if already inside a loop (handled by handle_scf_for_op)
+            if not getattr(self, "_inside_loop", False):
+                precreate_g2s_srds(schedule, kernel_info, self.handlers)
 
             # Dispatch remaining ops
             for i in range(schedule.first_g2s_idx, len(ops)):
