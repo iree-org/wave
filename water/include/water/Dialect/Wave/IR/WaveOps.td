@@ -17,6 +17,16 @@ include "mlir/IR/BuiltinAttributeInterfaces.td"
 #define WATER_DIALECT_WAVE_WAVEOPS
 
 //-----------------------------------------------------------------------------
+// Type constraints for Wave operations.
+//-----------------------------------------------------------------------------
+
+// Named constraint for types supported by wave.iterate and wave.yield operations.
+// Supports both WaveTensorType (before PropagateElementsPerThread pass) and
+// 1D vectors (after PropagateElementsPerThread pass).
+def WaveIterableType : AnyTypeOf<[WaveTensorType, VectorOfRank<[1]>],
+                                 "WaveIterableType">;
+
+//-----------------------------------------------------------------------------
 // Base class for all Wave operations.
 //-----------------------------------------------------------------------------
 
@@ -168,14 +178,16 @@ def IterateOp : Op<WaveDialect, "iterate", [
 
   let arguments = (ins
     Arg<WaveSymbolAttr, "Iterator symbol">:$iterator,
-    // Accept both WaveTensorType (before PropagateElementsPerThread) and AnyVectorOfAnyRank (after)
-    Arg<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Carried values">:$iter_args,
-    Arg<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Captured values">:$captures
+    // Accept both WaveTensorType (before PropagateElementsPerThread) and 1D vectors (after).
+    // We cannot use Arg<Variadic<WaveTensorInRegisters>> because Variadic
+    // requires a Type and not TypeConstraint.
+    Arg<Variadic<WaveIterableType>, "Carried values">:$iter_args,
+    Arg<Variadic<WaveIterableType>, "Captured values">:$captures
   );
 
   let results = (outs
-    // Results follow the same type constraints as inputs
-    Res<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Yielded values">:$results
+    // Results follow the same type constraints as inputs.
+    Res<Variadic<WaveIterableType>, "Yielded values">:$results
   );
 
   let regions = (region
@@ -216,8 +228,8 @@ def YieldOp : Op<WaveDialect, "yield",
   let summary = "Yields values from the current control flow context";
 
   let arguments = (ins
-    // Must match the type constraints of wave.iterate results
-    Arg<Variadic<AnyTypeOf<[WaveTensorType, AnyVectorOfAnyRank]>>, "Yielded values">:$values
+    // Must match the type constraints of wave.iterate results.
+    Arg<Variadic<WaveIterableType>, "Yielded values">:$values
   );
 
   let assemblyFormat = "$values attr-dict `:` type($values)";

@@ -6,11 +6,11 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
-#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -277,7 +277,7 @@ LogicalResult wave::IterateOp::verify() {
   }
   for (auto &&[i, iterArg, result] :
        llvm::enumerate(iterArgTypes, resultTypes)) {
-    // Handle verification for both wave tensors and vectors
+    // Handle verification for both wave tensors and vectors.
     auto iterArgTensor = llvm::dyn_cast<wave::WaveTensorType>(iterArg);
     auto resultTensor = llvm::dyn_cast<wave::WaveTensorType>(result);
     auto iterArgVector = llvm::dyn_cast<mlir::VectorType>(iterArg);
@@ -285,9 +285,10 @@ LogicalResult wave::IterateOp::verify() {
 
     auto istr = std::to_string(i);
 
-    // Both are wave tensors - use existing shape verification logic
+    // Both are wave tensors - verify shapes match across all dimensions.
     if (iterArgTensor && resultTensor) {
-      if (!iterArgTensor.getFullySpecified() || !resultTensor.getFullySpecified())
+      if (!iterArgTensor.getFullySpecified() ||
+          !resultTensor.getFullySpecified())
         continue;
 
       auto allDims =
@@ -298,7 +299,7 @@ LogicalResult wave::IterateOp::verify() {
               "result #" + istr, resultTensor, allDims)))
         return mlir::failure();
     }
-    // Both are vectors - check exact type equality
+    // Both are vectors - check exact type equality.
     else if (iterArgVector && resultVector) {
       if (iterArgVector != resultVector) {
         return emitOpError() << "iter_args #" << i << " type (" << iterArgVector
@@ -306,10 +307,11 @@ LogicalResult wave::IterateOp::verify() {
                              << resultVector << ")";
       }
     }
-    // Mixed types are not allowed
+    // Mixed types are not allowed.
     else {
       return emitOpError() << "iter_args #" << i << " and result #" << i
-                           << " must be the same category of types (both wave tensors or both vectors)";
+                           << " must be the same category of types (both wave "
+                              "tensors or both vectors)";
     }
   }
 
@@ -335,8 +337,9 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
                        blockIterArgTypes)) {
     auto istr = std::to_string(i);
 
-    // Verify result type vs terminator operand type
-    if (isa<wave::WaveTensorType>(result) && isa<wave::WaveTensorType>(terminatorOperand)) {
+    // Verify result type vs terminator operand type.
+    if (isa<wave::WaveTensorType>(result) &&
+        isa<wave::WaveTensorType>(terminatorOperand)) {
       if (llvm::failed(detail::verifyTypesCompatible(
               llvm::cast<wave::WaveTensorType>(result),
               llvm::cast<wave::WaveTensorType>(terminatorOperand),
@@ -345,7 +348,7 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
         return llvm::failure();
       }
     } else if (isa<VectorType>(result) && isa<VectorType>(terminatorOperand)) {
-      // For vector types, just check that they are exactly equal
+      // For vector types, just check that they are exactly equal.
       if (result != terminatorOperand) {
         return emitOpError() << "result #" << i << " type (" << result
                              << ") does not match terminator operand #" << i
@@ -357,8 +360,9 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
                            << terminatorOperand << ") are not compatible types";
     }
 
-    // Verify iter arg type vs block arg type
-    if (isa<wave::WaveTensorType>(iterArg) && isa<wave::WaveTensorType>(blockIterArg)) {
+    // Verify iter arg type vs block arg type.
+    if (isa<wave::WaveTensorType>(iterArg) &&
+        isa<wave::WaveTensorType>(blockIterArg)) {
       if (llvm::failed(detail::verifyTypesCompatible(
               llvm::cast<wave::WaveTensorType>(iterArg),
               llvm::cast<wave::WaveTensorType>(blockIterArg),
@@ -367,7 +371,7 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
         return llvm::failure();
       }
     } else if (isa<VectorType>(iterArg) && isa<VectorType>(blockIterArg)) {
-      // For vector types, just check that they are exactly equal
+      // For vector types, just check that they are exactly equal.
       if (iterArg != blockIterArg) {
         return emitOpError() << "iter arg #" << i << " type (" << iterArg
                              << ") does not match block iter arg #" << i
@@ -379,6 +383,20 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
                            << blockIterArg << ") are not compatible types";
     }
   }
+
+  // Verify capture types match their corresponding block arguments.
+  TypeRange captureTypes = getCaptures().getTypes();
+  TypeRange captureBlockArgTypes = TypeRange(getLoopBody()->getArgumentTypes())
+                                       .take_back(captureTypes.size());
+  for (auto &&[i, capture, captureBlockArg] :
+       llvm::enumerate(captureTypes, captureBlockArgTypes)) {
+    if (capture != captureBlockArg) {
+      return emitOpError() << "expects the same type for capture #" << i
+                           << " and block argument #"
+                           << (getIterArgs().size() + i);
+    }
+  }
+
   return llvm::success();
 }
 

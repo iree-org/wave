@@ -432,30 +432,21 @@ func.func @iterate_pure_vectors() {
   return
 }
 
+// Test that wave.iterate supports vector types in both iter_args and captures,
+// including different vector types in the same operation
 // CHECK-LABEL: @iterate_vector_captures
 func.func @iterate_vector_captures() {
+  // CHECK: %[[ITER_ARG:.*]] = arith.constant dense<1.000000e+00> : vector<8xf32>
   %iter_arg = arith.constant dense<1.0> : vector<8xf32>
+  // CHECK: %[[CAPTURE:.*]] = arith.constant dense<2.000000e+00> : vector<4xf16>
   %capture = arith.constant dense<2.0> : vector<4xf16>
 
-  // CHECK: wave.iterate @I iter_args(%{{.*}}) captures(%{{.*}})
+  // CHECK: wave.iterate @I iter_args(%[[ITER_ARG]]) captures(%[[CAPTURE]])
   %result = wave.iterate @I iter_args(%iter_arg) captures(%capture) {
   ^bb0(%in_arg: vector<8xf32>, %cap: vector<4xf16>):
     // CHECK: wave.yield %{{.*}} : vector<8xf32>
     wave.yield %in_arg : vector<8xf32>
   } : (vector<8xf32>, vector<4xf16>) -> (vector<8xf32>)
-  return
-}
-
-// CHECK-LABEL: @iterate_multidim_vectors
-func.func @iterate_multidim_vectors() {
-  %input = arith.constant dense<1.0> : vector<4x8xf32>
-
-  // CHECK: wave.iterate @I iter_args(%{{.*}})
-  %result = wave.iterate @I iter_args(%input) {
-  ^bb0(%in_arg: vector<4x8xf32>):
-    // CHECK: wave.yield %{{.*}} : vector<4x8xf32>
-    wave.yield %in_arg : vector<4x8xf32>
-  } : (vector<4x8xf32>) -> (vector<4x8xf32>)
   return
 }
 
