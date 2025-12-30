@@ -1220,6 +1220,20 @@ class OperationHandlers:
         if source_ssa in kernel_info.index_env:
             kernel_info.index_env[result_ssa] = kernel_info.index_env[source_ssa]
 
+    def handle_subgroup_broadcast_op(
+        self, operation: gpu_d.SubgroupBroadcastOp, kernel_info: KernelInfo
+    ):
+        """Handle gpu.subgroup_broadcast - propagate value for uniform broadcast.
+
+        The expression is preserved as-is (not evaluated) because each wavefront
+        has different tid values. v_readfirstlane is emitted during code generation.
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.src)
+
+        if source_ssa in kernel_info.index_env:
+            kernel_info.index_env[result_ssa] = kernel_info.index_env[source_ssa]
+
     def handle_s_waitcnt_op(
         self, operation: rocdl_d.SWaitcntOp, kernel_info: KernelInfo
     ):

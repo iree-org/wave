@@ -142,6 +142,8 @@ class IRWalker:
             self.handlers.handle_fat_raw_buffer_cast_op(operation, kernel_info)
         elif isinstance(operation, rocdl_d.ReadfirstlaneOp):
             self.handlers.handle_readfirstlane_op(operation, kernel_info)
+        elif isinstance(operation, gpu_d.SubgroupBroadcastOp):
+            self.handlers.handle_subgroup_broadcast_op(operation, kernel_info)
         elif isinstance(operation, rocdl_d.SWaitcntOp):
             self.handlers.handle_s_waitcnt_op(operation, kernel_info)
         else:
