@@ -7,8 +7,6 @@ func.func @constant_uniform() -> i32 {
   return %c : i32
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_x_divergent
 func.func @thread_id_x_divergent() -> index {
   // CHECK: gpu.thread_id x
@@ -17,16 +15,12 @@ func.func @thread_id_x_divergent() -> index {
   return %tid : index
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_y_uniform
 func.func @thread_id_y_uniform() -> index {
   // CHECK: gpu.thread_id y {wave.uniform}
   %tid = gpu.thread_id y
   return %tid : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_z_uniform
 func.func @thread_id_z_uniform() -> index {
@@ -35,8 +29,6 @@ func.func @thread_id_z_uniform() -> index {
   return %tid : index
 }
 
-// -----
-
 // CHECK-LABEL: @lane_id_divergent
 func.func @lane_id_divergent() -> index {
   // CHECK: gpu.lane_id
@@ -44,8 +36,6 @@ func.func @lane_id_divergent() -> index {
   %lid = gpu.lane_id
   return %lid : index
 }
-
-// -----
 
 // CHECK-LABEL: @all_thread_dims
 func.func @all_thread_dims() -> (index, index, index) {
@@ -59,8 +49,6 @@ func.func @all_thread_dims() -> (index, index, index) {
   return %x, %y, %z : index, index, index
 }
 
-// -----
-
 // CHECK-LABEL: @block_ids_uniform
 func.func @block_ids_uniform() -> (index, index, index) {
   // CHECK: gpu.block_id x {wave.uniform}
@@ -71,8 +59,6 @@ func.func @block_ids_uniform() -> (index, index, index) {
   %z = gpu.block_id z
   return %x, %y, %z : index, index, index
 }
-
-// -----
 
 // CHECK-LABEL: @divergent_propagation
 func.func @divergent_propagation() -> index {
@@ -85,8 +71,6 @@ func.func @divergent_propagation() -> index {
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @uniform_propagation
 func.func @uniform_propagation() -> index {
   // CHECK: gpu.thread_id y {wave.uniform}
@@ -95,8 +79,6 @@ func.func @uniform_propagation() -> index {
   %result = arith.addi %tid, %tid : index
   return %result : index
 }
-
-// -----
 
 // CHECK-LABEL: @mixed_uniform_divergent
 func.func @mixed_uniform_divergent() -> index {
@@ -110,8 +92,6 @@ func.func @mixed_uniform_divergent() -> index {
   %result = arith.addi %tid_x, %tid_y : index
   return %result : index
 }
-
-// -----
 
 // CHECK-LABEL: @subgroup_broadcast_uniform
 func.func @subgroup_broadcast_uniform(%arg0: i32) -> i32 {
@@ -129,8 +109,6 @@ func.func @subgroup_broadcast_uniform(%arg0: i32) -> i32 {
   return %broadcast : i32
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_div_subgroup_size
 func.func @thread_id_div_subgroup_size() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
@@ -142,8 +120,6 @@ func.func @thread_id_div_subgroup_size() -> index attributes {subgroup_size = 64
   %warp_id = arith.divui %tid, %c64 : index
   return %warp_id : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_div_half_subgroup
 func.func @thread_id_div_half_subgroup() -> index attributes {subgroup_size = 64 : i64} {
@@ -157,8 +133,6 @@ func.func @thread_id_div_half_subgroup() -> index attributes {subgroup_size = 64
   %half_warp = arith.divui %tid, %c32 : index
   return %half_warp : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_mul_then_div
 func.func @thread_id_mul_then_div() -> index attributes {subgroup_size = 64 : i64} {
@@ -178,8 +152,6 @@ func.func @thread_id_mul_then_div() -> index attributes {subgroup_size = 64 : i6
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_div_not_divisible
 func.func @thread_id_div_not_divisible() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
@@ -193,8 +165,6 @@ func.func @thread_id_div_not_divisible() -> index attributes {subgroup_size = 64
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @lane_id_div_subgroup_size
 func.func @lane_id_div_subgroup_size() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.lane_id
@@ -207,8 +177,6 @@ func.func @lane_id_div_subgroup_size() -> index attributes {subgroup_size = 64 :
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_div_larger_divisor
 func.func @thread_id_div_larger_divisor() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
@@ -220,8 +188,6 @@ func.func @thread_id_div_larger_divisor() -> index attributes {subgroup_size = 6
   %warp_id = arith.divui %tid, %c128 : index
   return %warp_id : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_shl
 func.func @thread_id_shl() -> index attributes {subgroup_size = 64 : i64} {
@@ -236,8 +202,6 @@ func.func @thread_id_shl() -> index attributes {subgroup_size = 64 : i64} {
   return %doubled : index
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_shru_uniform
 func.func @thread_id_shru_uniform() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
@@ -249,8 +213,6 @@ func.func @thread_id_shru_uniform() -> index attributes {subgroup_size = 64 : i6
   %warp_id = arith.shrui %tid, %c6 : index
   return %warp_id : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_shru_subgroup_linear
 func.func @thread_id_shru_subgroup_linear() -> index attributes {subgroup_size = 64 : i64} {
@@ -264,8 +226,6 @@ func.func @thread_id_shru_subgroup_linear() -> index attributes {subgroup_size =
   %half = arith.shrui %tid, %c1 : index
   return %half : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_shl_then_shru
 func.func @thread_id_shl_then_shru() -> index attributes {subgroup_size = 64 : i64} {
@@ -284,8 +244,6 @@ func.func @thread_id_shl_then_shru() -> index attributes {subgroup_size = 64 : i
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_and_uniform
 func.func @thread_id_and_uniform() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
@@ -297,8 +255,6 @@ func.func @thread_id_and_uniform() -> index attributes {subgroup_size = 64 : i64
   %result = arith.andi %tid, %mask : index
   return %result : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_and_divergent
 func.func @thread_id_and_divergent() -> index attributes {subgroup_size = 64 : i64} {
@@ -313,8 +269,6 @@ func.func @thread_id_and_divergent() -> index attributes {subgroup_size = 64 : i
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @index_cast_preserves_uniform
 func.func @index_cast_preserves_uniform() -> i32 attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
@@ -328,8 +282,6 @@ func.func @index_cast_preserves_uniform() -> i32 attributes {subgroup_size = 64 
   %result = arith.index_cast %warp_id : index to i32
   return %result : i32
 }
-
-// -----
 
 // CHECK-LABEL: @trunci_preserves_subgroup_linear
 func.func @trunci_preserves_subgroup_linear() -> i32 attributes {subgroup_size = 64 : i64} {
@@ -348,8 +300,6 @@ func.func @trunci_preserves_subgroup_linear() -> i32 attributes {subgroup_size =
   %result = arith.divui %tid_i32, %c64 : i32
   return %result : i32
 }
-
-// -----
 
 // CHECK-LABEL: @extui_preserves_subgroup_linear
 func.func @extui_preserves_subgroup_linear() -> index attributes {subgroup_size = 64 : i64} {
@@ -372,8 +322,6 @@ func.func @extui_preserves_subgroup_linear() -> index attributes {subgroup_size 
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @extsi_preserves_subgroup_linear
 func.func @extsi_preserves_subgroup_linear() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x
@@ -395,8 +343,6 @@ func.func @extsi_preserves_subgroup_linear() -> index attributes {subgroup_size 
   return %result : index
 }
 
-// -----
-
 // CHECK-LABEL: @loop_uniform_bounds
 func.func @loop_uniform_bounds() -> index {
   // CHECK: arith.constant {wave.uniform}
@@ -415,8 +361,6 @@ func.func @loop_uniform_bounds() -> index {
   }
   return %result : index
 }
-
-// -----
 
 // CHECK-LABEL: @loop_divergent_bounds
 func.func @loop_divergent_bounds() -> index {

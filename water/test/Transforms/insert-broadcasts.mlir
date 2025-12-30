@@ -13,8 +13,6 @@ func.func @insert_broadcast_after_div() -> index attributes {subgroup_size = 64 
   return %warp_id : index
 }
 
-// -----
-
 // CHECK-LABEL: @no_broadcast_after_broadcast
 func.func @no_broadcast_after_broadcast(%arg0: i32) -> i32 {
   // CHECK: gpu.thread_id
@@ -30,8 +28,6 @@ func.func @no_broadcast_after_broadcast(%arg0: i32) -> i32 {
   return %broadcast : i32
 }
 
-// -----
-
 // CHECK-LABEL: @insert_broadcast_after_and
 func.func @insert_broadcast_after_and() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: %[[TID:.*]] = gpu.thread_id  x
@@ -44,8 +40,6 @@ func.func @insert_broadcast_after_and() -> index attributes {subgroup_size = 64 
   %result = arith.andi %tid, %mask : index
   return %result : index
 }
-
-// -----
 
 // CHECK-LABEL: @no_broadcast_for_uniform_inputs
 func.func @no_broadcast_for_uniform_inputs() -> index {
