@@ -9,7 +9,6 @@ add_mlir_dialect_library(MLIRWaterTransforms
   InsertBroadcasts.cpp
   MemrefDecomposition.cpp
   SLPVectorizer.cpp
-  UniformityAnalysis.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include/water
