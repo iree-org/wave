@@ -169,7 +169,7 @@ func.func @thread_id_mul_then_div() -> index attributes {subgroup_size = 64 : i6
   %c2 = arith.constant 2 : index
   // CHECK: arith.muli
   // CHECK-NOT: wave.uniform
-  %doubled = arith.muli %tid, %c2 : index
+  %doubled = arith.muli %tid, %c2 overflow<nsw> : index
   // CHECK: arith.constant {wave.uniform}
   %c64 = arith.constant 64 : index
   // CHECK: arith.divui

@@ -277,8 +277,8 @@ public:
     }
 
     // Handle multiplication: SubgroupLinear(w) * N -> SubgroupLinear(w*N) if
-    // no overflow.
-    if (isa<arith::MulIOp>(op)) {
+    // no overflow (nsw flag set).
+    if (auto mulOp = dyn_cast<arith::MulIOp>(op)) {
       if (operands.size() == 2 && results.size() == 1) {
         const auto &lhs = operands[0]->getValue();
         const auto &rhs = operands[1]->getValue();
@@ -300,8 +300,10 @@ public:
             uint64_t factorVal = *factor;
             uint64_t width = linear->getWidth();
 
-            // Check for overflow.
-            if (factorVal > 0 && width <= UINT64_MAX / factorVal) {
+            // Check if nsw flag is set.
+            if (factorVal > 0 &&
+                bitEnumContainsAny(mulOp.getOverflowFlags(),
+                                   arith::IntegerOverflowFlags::nsw)) {
               setAllResultsSubgroupLinear(results, width * factorVal);
               return success();
             }
