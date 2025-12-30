@@ -80,10 +80,9 @@ logger = get_logger("wave.ops_location_check")
 
 def _get_upper_bound(expr: Any) -> Optional[Attribute]:
     res = subs_idxc(expr)
-    if is_literal(res):
-        return IntegerAttr.get(IndexType.get(), int(res))
-    else:
-        return None
+    # If bound is not statically known, use signed i32 max.
+    bound = int(res) if is_literal(res) else (1 << 31) - 1
+    return IntegerAttr.get(IndexType.get(), bound)
 
 
 @dataclass
