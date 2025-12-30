@@ -9,11 +9,16 @@
 
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/OpDefinition.h"
+#include "water/Dialect/NormalForm/IR/NormalFormInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 
 #include "WaterTestDialect.h.inc"
 #include "mlir/IR/Dialect.h"
+
+// Test normal form attribute.
+#define GET_ATTRDEF_CLASSES
+#include "TestNormalFormAttr.h.inc"
 
 #define GET_OP_CLASSES
 #include "WaterTestDialectOps.h.inc"

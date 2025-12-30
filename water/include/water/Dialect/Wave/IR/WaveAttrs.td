@@ -8,6 +8,7 @@
 #define WATER_DIALECT_WAVE_WAVEATTRS
 
 include "water/Dialect/Wave/IR/WaveDialect.td"
+include "water/Dialect/NormalForm/IR/NormalFormInterfaces.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/IR/BuiltinAttributeInterfaces.td"
@@ -126,7 +127,9 @@ def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
 }
 
 def WaveNormalFormAttr
-    : EnumAttr<WaveDialect, WaveNormalFormEnum, "normal_form"> {
+    : EnumAttr<WaveDialect, WaveNormalFormEnum, "normal_form", [
+      DeclareAttrInterfaceMethods<NormalFormAttrInterface, ["verifyOperation"]>
+    ]> {
   let assemblyFormat = "`<` $value `>`";
   let extraClassDeclaration = [{
     static unsigned getLastSetBit() {

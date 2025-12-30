@@ -9,6 +9,7 @@
 
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "water/Dialect/NormalForm/IR/NormalFormInterfaces.h"
 
 namespace wave {
 
@@ -41,14 +42,5 @@ llvm::LogicalResult
 verifyExprAttrsNoSymbols(llvm::ArrayRef<WaveExprListAttr> exprs);
 
 } // namespace wave
-
-namespace wave::detail {
-/// Verifies that the provided operation and its descendants satisfies the
-/// required normal forms. Emits diagnostics if requested, otherwise just
-/// returns failure.
-llvm::LogicalResult verifyNormalFormAttr(mlir::Operation *root,
-                                         wave::WaveNormalForm form,
-                                         bool emitDiagnostics);
-} // namespace wave::detail
 
 #endif // WATER_DIALECT_WAVE_IR_WAVEATTRS_H

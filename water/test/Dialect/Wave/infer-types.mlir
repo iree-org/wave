@@ -1,7 +1,7 @@
 // RUN: water-opt %s --water-wave-infer-types --split-input-file --verify-diagnostics | FileCheck %s
 
 // CHECK: #wave.normal_form<full_types>
-module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+normalform.module [#wave.normal_form<full_func_boundary>] {
 
 // CHECK-LABEL: @propagate_forward
 func.func @propagate_forward(%a: !wave.tensor<[@A, @B] of bf16>) {
@@ -127,11 +127,11 @@ func.func @propagate_structured_control_backward() {
   return
 }
 
-} // module
+} // normalform.module
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @conflict(%arg0: !wave.tensor<[@A] of f32>) {
     // expected-error @below {{failed to propagate type information backward: irreconcilable types during type inference from results(!wave.tensor<[@B] of f32>) to operands(!wave.tensor<[@A] of f32>) for results #0}}
     %0 = wave.exp2 %arg0 : (!wave.tensor<[@A] of f32>) -> !wave.tensor<any of f32>
@@ -142,7 +142,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @iterate_conflict(%arg0: !wave.tensor<[@A] of f32>) {
     // expected-error @below {{type conflict was detected for result #0}}
     %0 = wave.iterate @I iter_args(%arg0) {
@@ -159,7 +159,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @force_fail_forward(%arg0: !wave.tensor<[@A] of f32>) {
     // expected-error @below {{failed to propagate type information forward: intentionally failed to propagate forward}}
     water_test.wave_fail_propagation %arg0, %arg0 {forward}
@@ -171,7 +171,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @force_fail_backward(%arg0: !wave.tensor<[@A] of f32>) {
     // expected-error @below {{failed to propagate type information backward: intentionally failed to propagate backward}}
     water_test.wave_fail_propagation %arg0, %arg0 {backward}
@@ -183,7 +183,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @type_mismatch_operands(%arg0: !wave.tensor<[@A] of f32>, %arg1: !wave.tensor<[@B] of f32>) {
     // This op intentionally doesn't have a verifier for shape matching so we can
     // see the failure coming from the analysis/interface trait.
@@ -198,12 +198,12 @@ module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
 // -----
 
 // expected-error @below {{water-wave-infer-types pass expects the root operation or its ancestor to guarantee the full_func_boundary normal form}}
-module {
+normalform.module [] {
 }
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_func_boundary>} {
+normalform.module [#wave.normal_form<full_func_boundary>] {
   func.func @iterate_mismatching_results(%arg0: !wave.tensor<[@A] of f32>, %arg1: !wave.tensor<[@B] of f32>) {
     %read = wave.read %arg1 : (!wave.tensor<[@B] of f32>) -> !wave.tensor<any of f32>
     // expected-error @below {{expected iter arg #0 dimension #0 (#wave.symbol<"A">) to match block iter arg #0 dimension #0 (#wave.symbol<"B">)}}

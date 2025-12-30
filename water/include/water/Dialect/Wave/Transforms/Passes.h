@@ -8,6 +8,8 @@
 #define WATER_DIALECT_WAVE_TRANSFORMS_PASSES_H
 
 #include "mlir/Pass/Pass.h"
+#include "water/Dialect/NormalForm/IR/NormalFormDialect.h"
+#include "water/Dialect/NormalForm/IR/NormalFormOps.h"
 #include <memory>
 
 namespace wave {

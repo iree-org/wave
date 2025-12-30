@@ -31,7 +31,7 @@ def TestWaveDialectFunctionsPass : Pass<"water-test-wave-dialect-functions"> {
   let dependentDialects = ["::wave::WaveDialect"];
 }
 
-def TestWaveDialectInferIndexExprsPass : Pass<"water-test-wave-infer-index-exprs"> {
+def TestWaveDialectInferIndexExprsPass : Pass<"water-test-wave-infer-index-exprs", "::normalform::ModuleOp"> {
   let summary =
     "Test lattice operations in Wave dialect index expression propagation";
   let description = [{

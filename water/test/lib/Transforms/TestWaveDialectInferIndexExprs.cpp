@@ -12,6 +12,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Support/WalkResult.h"
+#include "water/Dialect/NormalForm/IR/NormalFormOps.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/Transforms/DataFlowAnalyses.h"

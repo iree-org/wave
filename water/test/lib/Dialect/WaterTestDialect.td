@@ -16,6 +16,7 @@ def WaterTestDialect : Dialect {
   let name = "water_test";
   let summary = "Dialect for testing Water";
   let cppNamespace = "::mlir::water::test";
+  let useDefaultAttributePrinterParser = 1;
 }
 
 def WaveTensorOp

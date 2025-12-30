@@ -35,6 +35,8 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 
+#include "water/Dialect/NormalForm/IR/NormalFormDialect.h"
+#include "water/Dialect/NormalForm/Transforms/Passes.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/Tools/water-opt/WaterOptMain.h"
@@ -67,6 +69,7 @@ int main(int argc, char **argv) {
   registerSCFToControlFlowPass();
   registerSymbolDCEPass();
   transform::registerTransformPasses();
+  normalform::registerNormalFormPasses();
   water::registerPasses();
   water::test::registerAllPasses();
   wave::registerPasses();
@@ -83,6 +86,7 @@ int main(int argc, char **argv) {
       func::FuncDialect,
       gpu::GPUDialect,
       memref::MemRefDialect,
+      normalform::NormalFormDialect,
       scf::SCFDialect,
       transform::TransformDialect,
       vector::VectorDialect,

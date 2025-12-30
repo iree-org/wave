@@ -73,8 +73,9 @@ def emit_wave_dialect(
 module attributes {transform.with_named_sequence} {
   transform.named_sequence @__transform_main(%arg0: !transform.any_op) {
     %0 = transform.apply_registered_pass "water-wave-detect-normal-forms" to %arg0 : (!transform.any_op) -> !transform.any_op
-    %1 = transform.apply_registered_pass "water-wave-propagate-defaults-from-constraints" to %0 : (!transform.any_op) -> !transform.any_op
-    transform.apply_registered_pass "water-wave-infer-index-exprs" to %1 : (!transform.any_op) -> !transform.any_op
+    %1 = transform.structured.match ops{["normalform.module"]} in %0 : (!transform.any_op) -> !transform.any_op
+    %2 = transform.apply_registered_pass "water-wave-propagate-defaults-from-constraints" to %1 : (!transform.any_op) -> !transform.any_op
+    transform.apply_registered_pass "water-wave-infer-index-exprs" to %2 : (!transform.any_op) -> !transform.any_op
     transform.yield
   }
 }"""

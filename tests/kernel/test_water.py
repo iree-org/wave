@@ -46,10 +46,8 @@ class TestWaterLowering:
 
     def test_apply_water_middle_end_passes_success(self):
         """Test apply_water_middle_end_passes with mocked subprocess."""
-        mlir_input = (
-            "module attributes {wave.normal_form = #wave.normal_form<full_types>} {}"
-        )
-        expected_output = "module {}"
+        mlir_input = "normalform.module [#wave.normal_form<full_types>] {}"
+        expected_output = "normalform.module [] {}"
 
         with patch("wave_lang.kernel.wave.water.get_water_opt") as mock_get_water_opt:
             mock_get_water_opt.return_value = "/mock/water-opt"
@@ -95,7 +93,7 @@ class TestWaterLoweringIntegration:
     def test_lowering_passes(self):
         # Test with simple Wave dialect operations - just register and add
         wave_mlir = """
-        module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+         normalform.module [#wave.normal_form<full_types,memory_only_types>] {
           func.func @test_kernel() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
             %cst = arith.constant 0.0 : f32
             %lhs = wave.register %cst : vector<4xf32>

@@ -1,7 +1,7 @@
 // RUN: water-opt %s --water-wave-infer-index-exprs --allow-unregistered-dialect --split-input-file --verify-diagnostics | FileCheck %s
 
-// expected-error @below {{expects the root operation or its ancestor to guarantee the full_types normal for}}
-module {
+// expected-error @below {{expects the root operation or its ancestor to guarantee the full_types normal form}}
+normalform.module [] {
   func.func @normal_form() {
     return
   }
@@ -9,7 +9,7 @@ module {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
                         %c: !wave.tensor<[@M, @N] of f32>) {
@@ -22,7 +22,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // expected-error @below {{expected a hardware constraint}}
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
@@ -36,7 +36,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // expected-error @below {{expected a waves_per_block entry with three elements in the hardware constraint}}
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
@@ -52,7 +52,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @simple_mma
   func.func @simple_mma(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@N, @K] of f16>,
@@ -86,7 +86,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @simple_mma_with_reads_and_write
   func.func @simple_mma_with_reads_and_write(%a: !wave.tensor<[@M, @K] of f16>,
                                              %b: !wave.tensor<[@N, @K] of f16>,
@@ -136,7 +136,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Two MMAs in a row. We need to store to the temporary storage and
 // load back because of the index (layout) change.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @mma_chain
   func.func @mma_chain(%a: !wave.tensor<[@M, @K] of f16>,
                        %b: !wave.tensor<[@N, @K] of f16>,
@@ -230,7 +230,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @mma_32x32x8_f16
   func.func @mma_32x32x8_f16(%a: !wave.tensor<[@M, @K] of f16>,
                              %b: !wave.tensor<[@N, @K] of f16>,
@@ -259,7 +259,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @mma_16x16x32_f16
   func.func @mma_16x16x32_f16(%a: !wave.tensor<[@M, @K] of f16>,
                               %b: !wave.tensor<[@N, @K] of f16>,
@@ -288,7 +288,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @mma_16x16x32_k4_f8
   func.func @mma_16x16x32_k4_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
                                 %b: !wave.tensor<[@N, @K] of f8E5M2>,
@@ -317,7 +317,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @mma_32x32x16_f16
   func.func @mma_32x32x16_f16(%a: !wave.tensor<[@M, @K] of f16>,
                               %b: !wave.tensor<[@N, @K] of f16>,
@@ -346,7 +346,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK: @mma_32x32x16_k4_f8
   func.func @mma_32x32x16_k4_f8(%a: !wave.tensor<[@M, @K] of f8E5M2>,
                                 %b: !wave.tensor<[@N, @K] of f8E5M2>,
@@ -375,7 +375,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // Technically this is a matrix multiplication, but we really care about the iterators.
   func.func @iterate(%a: !wave.tensor<[@M, @K] of bf16, <shared>>,
                      %b: !wave.tensor<[@N, @K] of bf16, <shared>>,
@@ -432,7 +432,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @unregistered_noprop(%a: !wave.tensor<[@M, @K] of f16>,
                              %b: !wave.tensor<[@N, @K] of f16>,
                              %c: !wave.tensor<[@M, @N] of f32>)
@@ -453,7 +453,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Cannot propagate for only pure operations in absence of MMA/writes/reductions.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(%a: !wave.tensor<[@M, @K] of f16>,
                         %b: !wave.tensor<[@M, @K] of f16>)
       -> !wave.tensor<[@M, @K] of f16>
@@ -473,7 +473,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // There is no inference source here so we can't infer.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @failed_to_infer_write(%src: !wave.tensor<[@M, @N] of f32>, %dst: !wave.tensor<[@M, @N] of f32, <global>>)
     attributes { wave.constraints = [
       #wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1]>
@@ -490,7 +490,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // There is no inference source here so we can't infer.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @failed_to_infer_binop(%a: !wave.tensor<[@M, @N] of f32>, %b: !wave.tensor<[@M, @N] of f32>)
     -> !wave.tensor<[@M, @N] of f32>
     attributes { wave.constraints = [
@@ -506,7 +506,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // expected-error @below {{unsupported constraint type: #wave.device_constraint}}
   func.func @empty() attributes {
     wave.constraints = [
@@ -521,7 +521,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @allocate_register_index(
     %a: !wave.tensor<[@M, @K] of f16>
   ) attributes {
@@ -550,7 +550,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @tiling_constraints_in_iter(
     %x: !wave.tensor<[@M, @K] of f16>
   ) -> !wave.tensor<[@M, @N] of f32> attributes {
@@ -602,7 +602,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @tiling_constraints_in_nested_iter(
     %x: !wave.tensor<[@M, @K] of f16>
   ) attributes {

@@ -43,10 +43,6 @@ def WaveDialect : Dialect {
     const static constexpr ::llvm::StringLiteral kHyperparameterAttrName =
         "wave.hyperparameters";
 
-    // Name of the normal form attribute.
-    const static constexpr ::llvm::StringLiteral kNormalFormAttrName =
-        "wave.normal_form";
-
     // Name of the inherent attribute for op index expressions;
     const static constexpr ::llvm::StringLiteral kIndexWaveExprListAttrName = "index";
 

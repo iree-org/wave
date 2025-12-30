@@ -8,7 +8,7 @@
 // states.
 //
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_mma(
     %lhs: !wave.tensor<[@M, @K] of f16>,
     %rhs: !wave.tensor<[@N, @K] of f16>,
@@ -35,7 +35,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_mma(
     %lhs: !wave.tensor<[@M, @K] of f16>,
     %rhs: !wave.tensor<[@N, @K] of f16>,
@@ -61,7 +61,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_mma(
     %lhs: !wave.tensor<[@M, @K] of f16>,
     %rhs: !wave.tensor<[@N, @K] of f16>,
@@ -88,7 +88,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_mma(
     %lhs: !wave.tensor<[@M, @K] of f16>,
     %rhs: !wave.tensor<[@N, @K] of f16>,
@@ -116,7 +116,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @add_then_mul(
     %a: !wave.tensor<[@M, @K] of f16>,
     %b: !wave.tensor<[@M, @K] of f16>,
@@ -144,7 +144,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types>, wave_test.disable_backward } {
+normalform.module [#wave.normal_form<full_types>] attributes { wave_test.disable_backward } {
   func.func @add_then_mul(
     %a: !wave.tensor<[@M, @K] of f16>,
     %b: !wave.tensor<[@M, @K] of f16>,
@@ -173,7 +173,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types>, wave_test.
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types>, wave_test.disable_backward } {
+normalform.module [#wave.normal_form<full_types>] attributes { wave_test.disable_backward } {
   func.func @operand_conflict(
     %a: !wave.tensor<[@M, @K] of f16>,
     %b: !wave.tensor<[@M, @K] of f16>,
@@ -202,7 +202,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types>, wave_test.
 
 // Generic error message when reached top somehow without detecting the conflict before.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M, @N] of f32>,
     %b: !wave.tensor<[@M, @N] of f32>
@@ -223,7 +223,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Joining with the same expression results in that expression.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_with_same
   func.func @join_with_same(
     %a: !wave.tensor<[@M] of f32>,
@@ -250,7 +250,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Joining with null (uninitialized) doesn't crash and gives the other expression.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_with_null
   func.func @join_with_null(
     %a: !wave.tensor<[@M] of f32>,
@@ -277,7 +277,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Joining with bottom (denoted as unit) gives the other expression.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_with_bottom
   func.func @join_with_bottom(
     %a: !wave.tensor<[@M] of f32>,
@@ -304,7 +304,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Joining with zero is gives the other expression.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_with_zero
   func.func @join_with_zero(
     %a: !wave.tensor<[@M] of f32>,
@@ -331,7 +331,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Additional constant summand makes expressions join to top.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -357,7 +357,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Different constant summands join to top.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -384,7 +384,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Different constant values other than zero join to top.
 // Also, difference may be in the step.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -410,7 +410,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Difference in stride joins to top.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -436,7 +436,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Stride 1 joins with the other constant stride to become that stride.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -462,7 +462,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Step 1 joins with the other non-constant step to become that step.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -488,7 +488,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Different expressions in step join to top even if they would have resulted in a sum for start.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -516,7 +516,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Note that here the underlying affine expression is the same, but symbols
 // are different, we should be able to catch that.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -543,7 +543,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Different expressions involving workgroups join to top.
 // Note that there are unused symbols in mappings.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @simple_add(
     %a: !wave.tensor<[@M] of f32>,
     %b: !wave.tensor<[@M] of f32>
@@ -570,7 +570,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Joining thread and block components is fine. Note that some symbols are unused in mappings.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_threads_workgroups
   func.func @join_threads_workgroups(
     %a: !wave.tensor<[@M] of f32>,
@@ -597,7 +597,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Identical constant summands don't sum up when symbols do.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @same_constant_summands
   func.func @same_constant_summands(
     %a: !wave.tensor<[@M] of f32>,
@@ -624,7 +624,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Joining thread and block components is fine, this requires aligning symbols in mappings.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_threads_workgroups_align
   func.func @join_threads_workgroups_align(
     %a: !wave.tensor<[@M] of f32>,
@@ -652,7 +652,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Joining iter symbols and blocks is fine and results in an add.
 // TODO: Also check that iter symbols don't leak form the loop to results.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_iter_workgroups
   func.func @join_iter_workgroups(
     %a: !wave.tensor<[@M, @K] of f32>,
@@ -684,7 +684,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Joining iter symbols with themselves is fine.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_iter_same
   func.func @join_iter_same(
     %a: !wave.tensor<[@M, @K] of f32>,
@@ -718,7 +718,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Also check that we are not leaking iter symbols to operations after the loop
 // by checking that they are not used in expressions for loop results.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @join_iters
   func.func @join_iters(
     %a: !wave.tensor<[@M, @K] of f32>,
@@ -762,7 +762,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Otherwise iter symbols behave like any other component, e.g., different
 // expressions involving the same symbol join to top.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @join_iters(
     %a: !wave.tensor<[@M, @K] of f32>,
     %b: !wave.tensor<[@M, @K] of f32>
@@ -793,7 +793,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Check that we don't leak iter symbols to values before the loop.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @do_not_leak_above
   func.func @do_not_leak_above(
     %a: !wave.tensor<[@M, @K] of f32>,
@@ -825,7 +825,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 
 // Check that we propagate lattices between adjacent operands of a write.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @write_sideways_propagation
   func.func @write_sideways_propagation(
     %a: !wave.tensor<[@M] of f32>,
@@ -856,7 +856,7 @@ module attributes { wave.normal_form = #wave.normal_form<full_types> } {
 // Check that sideways propagation between operands of a write that would
 // lead to a conflict is not happening.
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   // CHECK-LABEL: @write_sideways_no_conflicting_propagation
   func.func @write_sideways_no_conflicting_propagation(
     %a: !wave.tensor<[@M] of f32>,

@@ -1,9 +1,9 @@
 // RUN: water-opt %s --water-wave-resolve-distributed-allocations --split-input-file | FileCheck %s
 
 // Test basic shared memory allocation resolution.
-// CHECK: #wave.normal_form<full_types,resolved_allocations>
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_basic_alloc
-module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @resolve_basic_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64}>} {
     // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K)>}
     // CHECK-SAME: memref<64x32xbf16, #gpu.address_space<workgroup>>
@@ -16,9 +16,9 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // -----
 
 // Test allocation with expression in distributed shape.
-// CHECK: #wave.normal_form<full_types,resolved_allocations>
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_alloc_with_expr
-module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @resolve_alloc_with_expr() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 28, M = 128, K = 64}>} {
     // CHECK: wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
     // CHECK-SAME: memref<64x32xbf16, #gpu.address_space<workgroup>>
@@ -31,9 +31,9 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // -----
 
 // Test that child allocation is also resolved.
-// CHECK: #wave.normal_form<full_types,resolved_allocations>
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_child_alloc
-module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @resolve_child_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_K = 32, M = 128, K = 64, SIZE = 8192}>} {
     // CHECK: %[[PARENT:.*]] = wave.allocate {distributed_shape = #wave.expr_list<[] -> (8192)>}
     // CHECK-SAME: memref<8192xi8, #gpu.address_space<workgroup>>
@@ -52,8 +52,8 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // -----
 
 // Test that resolved_allocations is set even when there are no allocations.
-// CHECK: #wave.normal_form<full_types,resolved_allocations>
-module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+// CHECK: normalform.module [#wave.normal_form<full_types,resolved_allocations>]
+normalform.module [#wave.normal_form<full_types>] {
   func.func @no_allocations() {
     return
   }
@@ -62,8 +62,8 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 // -----
 
 // Test that resolved_allocations is set on a module without existing normal form.
-// CHECK: #wave.normal_form<resolved_allocations>
-module {
+// CHECK: normalform.module [#wave.normal_form<resolved_allocations>]
+normalform.module [] {
   func.func @resolve_without_existing_normal_form() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 32}>} {
     // CHECK: wave.allocate
     // CHECK-SAME: memref<32xf32, #gpu.address_space<workgroup>>

@@ -9,36 +9,39 @@
 
 include "mlir/Pass/PassBase.td"
 
-def LowerWaveToMLIRPass : Pass<"lower-wave-to-mlir"> {
+def LowerWaveToMLIRPass : Pass<"lower-wave-to-mlir", "::normalform::ModuleOp"> {
   let summary = "Lower Wave dialect to upstream MLIR dialects";
   let description = [{
     This pass lowers operations from the Wave dialect to upstream MLIR
     dialects, notably arith and vector.
+
+    This pass operates on `normalform.module` operations, which define the
+    expected normal form for the contained Wave operations.
   }];
   let dependentDialects = [
     "::mlir::arith::ArithDialect",
     "::mlir::math::MathDialect",
     "::mlir::vector::VectorDialect",
     "::mlir::memref::MemRefDialect",
+    "::normalform::NormalFormDialect",
   ];
 }
 
 def WaterWaveDetectNormalFormsPass : Pass<"water-wave-detect-normal-forms"> {
-  let summary = "Detect the normal forms satisfied by the operation";
+  let summary = "Detect the normal forms satisfied by each module";
   let description = [{
-    For all known Wave dialect normal forms, verifies if the operation the pass
-    is invoked on satisfies that normal form. If so, attaches the corresponding
-    attribute to the root operation. No diagnostics are emitted.
+    For each module encountered, wraps its contents in a normalform module and
+    infers which Wave dialect normal forms are satisfied. The resulting
+    normalform module will have the applicable normal form attributes attached.
   }];
 
-  // This may run on operations that have no Wave dialect and will attach an
-  // attribute from it.
   let dependentDialects = [
-    "::wave::WaveDialect"
+    "::wave::WaveDialect",
+    "::normalform::NormalFormDialect"
   ];
 }
 
-def WaterWaveInferIndexExprsPass : Pass<"water-wave-infer-index-exprs"> {
+def WaterWaveInferIndexExprsPass : Pass<"water-wave-infer-index-exprs", "::normalform::ModuleOp"> {
   let summary = "Infer index expressions for Wave operations";
   let description = [{
     Performs forward and backward sparse dataflow analysis to infer index
@@ -87,7 +90,7 @@ def WaterWaveInferIndexExprsPass : Pass<"water-wave-infer-index-exprs"> {
   }];
 }
 
-def WaterWaveInferTypesPass : Pass<"water-wave-infer-types"> {
+def WaterWaveInferTypesPass : Pass<"water-wave-infer-types", "::normalform::ModuleOp"> {
   let summary = "Infer fully-specified Wave dialect types";
   let description = [{
     Performs forward and backward sparse dataflow analysis propagating shape
@@ -111,7 +114,7 @@ def WaterWaveInferTypesPass : Pass<"water-wave-infer-types"> {
 }
 
 def WaterWavePropagateElementsPerThreadPass
-    : Pass<"water-wave-propagate-elements-per-thread"> {
+    : Pass<"water-wave-propagate-elements-per-thread", "::normalform::ModuleOp"> {
   let summary = "Replace register-resident tensor types with vector types";
   let description = [{
     Performs forward and backward sparse dataflow analysis propagating
@@ -148,7 +151,7 @@ def WaterWavePropagateDefaultsFromConstraintsPass
 }
 
 def WaterWaveResolveDistributedAllocationsPass
-    : Pass<"water-wave-resolve-distributed-allocations"> {
+    : Pass<"water-wave-resolve-distributed-allocations", "::normalform::ModuleOp"> {
   let summary = "Resolve distributed shapes in allocate operations";
   let description = [{
     This pass transforms wave.allocate operations that have a distributed_shape

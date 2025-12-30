@@ -14,6 +14,8 @@ set(LIBS
         MLIRTransformDialectTransforms
         MLIRWaterTransforms
         MLIRWaveTransforms
+        MLIRNormalFormDialect
+        MLIRNormalFormTransforms
 
         MLIRWaterTestTransforms
         MLIRWaterTestDialect

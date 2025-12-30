@@ -21,6 +21,7 @@ add_mlir_dialect_library(MLIRWaveTransforms
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRIR
+  MLIRNormalFormDialect
   MLIRPass
   MLIRSCFDialect
   MLIRTransforms

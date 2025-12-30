@@ -5,16 +5,26 @@ mlir_tablegen(WaterTestDialectOps.h.inc -gen-op-decls)
 mlir_tablegen(WaterTestDialectOps.cpp.inc -gen-op-defs)
 add_public_tablegen_target(MLIRWaterTestDialectIncGen)
 
-add_mlir_library(MLIRWaterTestDialect
+# Separate tablegen target for test normal form attribute to avoid
+# pulling in Wave dialect enums.
+set(LLVM_TARGET_DEFINITIONS TestNormalFormAttr.td)
+mlir_tablegen(TestNormalFormAttr.h.inc -gen-attrdef-decls -attrdefs-dialect=water_test)
+mlir_tablegen(TestNormalFormAttr.cpp.inc -gen-attrdef-defs -attrdefs-dialect=water_test)
+add_public_tablegen_target(MLIRTestNormalFormAttrIncGen)
+
+add_mlir_dialect_library(MLIRWaterTestDialect
   WaterTestDialect.cpp
 
   EXCLUDE_FROM_LIBMLIR
 
   DEPENDS
   MLIRWaterTestDialectIncGen
+  MLIRTestNormalFormAttrIncGen
 
   LINK_LIBS PUBLIC
+  MLIRArithDialect
   MLIRIR
+  MLIRNormalFormDialect
   MLIRWaveDialect
 )
 

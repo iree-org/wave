@@ -387,8 +387,9 @@ module attributes {transform.with_named_sequence} {
 
     # The pass must have applied and inferred normal forms. We don't care which
     # ones here, this is tested separately, just checking the fact that the pass
-    # applied.
-    # CHECK: module attributes {wave.normal_form = #wave.normal_form<
+    # applied. The pass wraps content in a normalform.module.
+    # CHECK: normalform.module
+    # CHECK-SAME: #wave.normal_form<
     print(payload_module)
 
 

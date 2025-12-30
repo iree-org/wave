@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Operation.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
@@ -30,6 +32,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 #include "water/Dialect/Wave/IR/WaveEnums.cpp.inc"
 #define GET_ATTRDEF_CLASSES
@@ -844,101 +847,89 @@ static llvm::LogicalResult visitOpRelatedTypes(Operation *op,
   return llvm::success();
 }
 
-llvm::LogicalResult
-wave::detail::verifyNormalFormAttr(Operation *root, wave::WaveNormalForm form,
-                                   bool emitDiagnostics) {
+//-----------------------------------------------------------------------------
+// Normal Form attributes
+//-----------------------------------------------------------------------------
+
+LogicalResult WaveNormalFormAttr::verifyOperation(
+    function_ref<InFlightDiagnostic()> emitError, Operation *op) const {
+  WaveNormalForm form = getValue();
+
   // No normal form required.
   if (form == wave::WaveNormalForm::None)
     return llvm::success();
 
-  // Walk in pre-order so we hit functions sooner and verify them for the first
-  // form.
-  WalkResult walkResult = root->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    std::optional<Location> optionalLoc;
-    if (emitDiagnostics)
-      optionalLoc = op->getLoc();
+  if (auto func = llvm::dyn_cast<FunctionOpInterface>(op)) {
+    if (wave::bitEnumContainsAll(
+            form, wave::WaveNormalForm::FunctionBoundarySpecified)) {
+      constexpr llvm::StringLiteral kMessage =
+          "normal form requires tensor types to be fully specified at "
+          "function boundaries";
+      if (llvm::failed(verifyTypesFullySpecified(
+              /*loc*/ std::nullopt, func.getArgumentTypes(), kMessage)))
+        return emitError() << kMessage;
 
-    if (auto func = llvm::dyn_cast<FunctionOpInterface>(op)) {
-      if (wave::bitEnumContainsAll(
-              form, wave::WaveNormalForm::FunctionBoundarySpecified)) {
-        const llvm::StringLiteral kMessage =
-            "normal form requires tensor types to be fully specified at "
-            "function boundaries";
-        if (llvm::failed(verifyTypesFullySpecified(
-                optionalLoc, func.getArgumentTypes(), kMessage)))
-          return WalkResult::interrupt();
-        if (llvm::failed(verifyTypesFullySpecified(
-                optionalLoc, func->getResultTypes(), kMessage)))
-          return WalkResult::interrupt();
-      }
+      if (llvm::failed(verifyTypesFullySpecified(
+              /*loc*/ std::nullopt, func->getResultTypes(), kMessage)))
+        return emitError() << kMessage;
     }
+  }
 
-    if (wave::bitEnumContainsAll(form,
-                                 wave::WaveNormalForm::OpTypesSpecified)) {
-      if (llvm::failed(visitOpRelatedTypes(
-              op, verifyTypesFullySpecified,
-              "normal form requires tensor types to be fully specified",
-              emitDiagnostics))) {
-        return WalkResult::interrupt();
-      }
+  if (wave::bitEnumContainsAll(form, wave::WaveNormalForm::OpTypesSpecified)) {
+    constexpr llvm::StringLiteral kMessage =
+        "normal form requires tensor types to be fully specified";
+    if (llvm::failed(visitOpRelatedTypes(op, verifyTypesFullySpecified,
+                                         kMessage,
+                                         /*emitDiagnostics*/ false))) {
+      return emitError() << kMessage;
     }
+  }
 
-    if (wave::bitEnumContainsAll(form, wave::WaveNormalForm::MemoryOnlyTypes)) {
-      if (llvm::failed(visitOpRelatedTypes(
-              op, verifyMemoryOnlyAddressSpaces,
-              "normal form requires tensor types to have only memory "
-              "address spaces (elements per thread propagation missing?)",
-              emitDiagnostics))) {
-        return WalkResult::interrupt();
-      }
+  if (wave::bitEnumContainsAll(form, wave::WaveNormalForm::MemoryOnlyTypes)) {
+    constexpr llvm::StringLiteral kMessage =
+        "normal form requires tensor types to have only memory address spaces "
+        "(elements per thread propagation missing?)";
+    if (llvm::failed(visitOpRelatedTypes(op, verifyMemoryOnlyAddressSpaces,
+                                         kMessage,
+                                         /*emitDiagnostics*/ false))) {
+      return emitError() << kMessage;
     }
+  }
 
-    if (wave::bitEnumContainsAll(form,
-                                 wave::WaveNormalForm::IndexExprsSpecified)) {
-      if (op->hasTrait<wave::HasWaveIndexMapping>() &&
-          !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
-        // Only require index expressions for read/write ops, or ops with
-        // WaveTensorType operands/results. Vector-only ops (after
-        // elements-per-thread propagation) don't need index expressions.
-        bool hasWaveTensor =
-            llvm::any_of(op->getOperandTypes(),
-                         llvm::IsaPred<wave::WaveTensorType>) ||
-            llvm::any_of(op->getResultTypes(),
-                         llvm::IsaPred<wave::WaveTensorType>);
-        bool isMemoryAccessOp = llvm::isa<wave::ReadOp, wave::WriteOp>(op);
+  if (wave::bitEnumContainsAll(form,
+                               wave::WaveNormalForm::IndexExprsSpecified)) {
+    if (op->hasTrait<wave::HasWaveIndexMapping>() &&
+        !op->getAttr(wave::WaveDialect::kIndexWaveExprListAttrName)) {
+      // Only require index expressions for read/write ops, or ops with
+      // WaveTensorType operands/results. Vector-only ops (after
+      // elements-per-thread propagation) don't need index expressions.
+      bool hasWaveTensor = llvm::any_of(op->getOperandTypes(),
+                                        llvm::IsaPred<wave::WaveTensorType>) ||
+                           llvm::any_of(op->getResultTypes(),
+                                        llvm::IsaPred<wave::WaveTensorType>);
+      bool isMemoryAccessOp = llvm::isa<wave::ReadOp, wave::WriteOp>(op);
 
-        if (!hasWaveTensor && !isMemoryAccessOp)
-          return WalkResult::advance();
+      if (!hasWaveTensor && !isMemoryAccessOp)
+        return llvm::success();
 
-        if (emitDiagnostics) {
-          if (isMemoryAccessOp) {
-            op->emitError() << "missing index expressions on memory access "
-                               "operation, required by normal form";
-          } else {
-            op->emitError() << "missing index expressions on operation with "
-                               "WaveTensorType operand/result, required by "
-                               "normal form";
-          }
-        }
-        return WalkResult::interrupt();
-      }
+      if (isMemoryAccessOp)
+        return emitError() << "missing index expressions on memory access "
+                              "operation, required by normal form";
+
+      return emitError() << "missing index expressions on operation with "
+                            "WaveTensorType operand/result, required by "
+                            "normal form";
     }
+  }
 
-    if (wave::bitEnumContainsAll(form,
-                                 wave::WaveNormalForm::ResolvedAllocations)) {
-      if (auto allocOp = llvm::dyn_cast<wave::AllocateOp>(op)) {
-        if (!llvm::isa<MemRefType>(allocOp.getResult().getType())) {
-          if (emitDiagnostics) {
-            op->emitError() << "normal form requires all wave.allocate "
-                               "operations to have memref result type";
-          }
-          return WalkResult::interrupt();
-        }
-      }
+  if (wave::bitEnumContainsAll(form,
+                               wave::WaveNormalForm::ResolvedAllocations)) {
+    if (auto allocOp = llvm::dyn_cast<wave::AllocateOp>(op)) {
+      if (!llvm::isa<MemRefType>(allocOp.getResult().getType()))
+        return emitError() << "normal form requires all wave.allocate "
+                              "operations to have memref result type";
     }
+  }
 
-    return WalkResult::advance();
-  });
-
-  return llvm::failure(walkResult.wasInterrupted());
+  return llvm::success();
 }

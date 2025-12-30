@@ -416,7 +416,7 @@ func.func @cast_mixed_specified(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.t
 // -----
 // Test wave.iterate and wave.yield with vector types
 
-module attributes {wave.normal_form = #wave.normal_form<full_types>, wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
+normalform.module [#wave.normal_form<full_types>] attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
 
 // Test that wave.iterate supports vector types in both iter_args and captures
 // CHECK-LABEL: @iterate_vector_types

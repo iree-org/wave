@@ -335,14 +335,6 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
   // it should not assume anything but generic IR well-formedness.
   llvm::StringSet<> usedSymbols;
 
-  if (attr.getName() == kNormalFormAttrName) {
-    if (auto enumAttr = llvm::dyn_cast<WaveNormalFormAttr>(attr.getValue())) {
-      return detail::verifyNormalFormAttr(op, enumAttr.getValue(),
-                                          /*emitDiagnostics=*/true);
-    }
-    return op->emitError() << attr.getName() << " expects a WaveNormalFormAttr";
-  }
-
   if (attr.getName() == kHyperparameterAttrName) {
     auto hyperparams =
         llvm::dyn_cast<wave::WaveHyperparameterAttr>(attr.getValue());

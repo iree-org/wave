@@ -42,7 +42,7 @@ func.func @mismatch_dim_rhs_acc(%lhs: !wave.tensor<[@A, @B] of f16>, %rhs: !wave
 
 // -----
 
-module attributes { wave.normal_form = #wave.normal_form<full_types> } {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @mma_3d(%a: !wave.tensor<[@M, @K, @B] of f16>,
                     %b: !wave.tensor<[@N, @K, @B] of f16>,
                     %c: !wave.tensor<[@M, @N, @B] of f32>) {
@@ -399,7 +399,7 @@ module attributes { wave.hyperparameters = #wave.hyperparameters<{A = 42, C = 43
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @index_key_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128}>}  {
     // expected-error @below {{attribute "index" uses symbolic value "N" not provided as a hyperparameter}}
@@ -414,7 +414,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @index_value_unspecified(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 256}>}  {
     // expected-error @below {{attribute "index" uses symbolic value #wave.symbol<"BLOCK_M"> not provided as a hyperparameter}}
@@ -429,7 +429,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+normalform.module [#wave.normal_form<full_types>] {
   func.func @elements_per_thread_mismatch(%mem: !wave.tensor<[@M] of f16, <global>>)
   attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128}>}  {
     // expected-error @below {{expected result vector type to have the number of elements per thread matching the attribute (4), got 42}}
