@@ -110,3 +110,21 @@ func.func @mixed_uniform_divergent() -> index {
   %result = arith.addi %tid_x, %tid_y : index
   return %result : index
 }
+
+// -----
+
+// CHECK-LABEL: @subgroup_broadcast_uniform
+func.func @subgroup_broadcast_uniform(%arg0: i32) -> i32 {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.index_cast
+  // CHECK-NOT: wave.uniform
+  %tid_i32 = arith.index_cast %tid : index to i32
+  // CHECK: arith.addi
+  // CHECK-NOT: wave.uniform
+  %divergent = arith.addi %tid_i32, %arg0 : i32
+  // CHECK: gpu.subgroup_broadcast {{.*}} {wave.uniform}
+  %broadcast = gpu.subgroup_broadcast %divergent, first_active_lane : i32
+  return %broadcast : i32
+}
