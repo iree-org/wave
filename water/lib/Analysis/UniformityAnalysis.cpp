@@ -4,7 +4,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "water/Transforms/UniformityAnalysis.h"
+#include "water/Analysis/UniformityAnalysis.h"
 #include "water/Transforms/Passes.h"
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
