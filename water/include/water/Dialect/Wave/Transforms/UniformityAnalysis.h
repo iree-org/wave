@@ -13,18 +13,16 @@ struct LogicalResult;
 
 namespace mlir {
 class DataFlowSolver;
-class Operation;
+class Value;
 } // namespace mlir
 
 namespace wave {
 
-// Add uniformity analysis to the solver.
+/// Add uniformity analysis to the solver.
 void addWaveUniformityAnalysis(mlir::DataFlowSolver &solver);
 
-// Set uniformity analysis results as attributes on operations.
-llvm::LogicalResult
-setWaveUniformityAnalysisResults(mlir::Operation *top,
-                                 const mlir::DataFlowSolver &solver);
+/// Check if a value is uniform across all threads in a wavefront.
+bool isUniform(mlir::Value value, const mlir::DataFlowSolver &solver);
 
 } // namespace wave
 
