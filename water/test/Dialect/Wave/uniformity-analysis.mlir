@@ -220,3 +220,66 @@ func.func @thread_id_div_larger_divisor() -> index attributes {subgroup_size = 6
   %warp_id = arith.divui %tid, %c128 : index
   return %warp_id : index
 }
+
+// -----
+
+// CHECK-LABEL: @thread_id_shl
+func.func @thread_id_shl() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c1 = arith.constant 1 : index
+  // CHECK: arith.shli
+  // CHECK-NOT: wave.uniform
+  %doubled = arith.shli %tid, %c1 overflow<nsw> : index
+  return %doubled : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_shru_uniform
+func.func @thread_id_shru_uniform() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c6 = arith.constant 6 : index
+  // CHECK: arith.shrui {{.*}} {wave.uniform}
+  %warp_id = arith.shrui %tid, %c6 : index
+  return %warp_id : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_shru_subgroup_linear
+func.func @thread_id_shru_subgroup_linear() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c1 = arith.constant 1 : index
+  // CHECK: arith.shrui
+  // CHECK-NOT: wave.uniform
+  %half = arith.shrui %tid, %c1 : index
+  return %half : index
+}
+
+// -----
+
+// CHECK-LABEL: @thread_id_shl_then_shru
+func.func @thread_id_shl_then_shru() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c1 = arith.constant 1 : index
+  // CHECK: arith.shli
+  // CHECK-NOT: wave.uniform
+  %doubled = arith.shli %tid, %c1 overflow<nsw> : index
+  // CHECK: arith.constant {wave.uniform}
+  %c7 = arith.constant 7 : index
+  // CHECK: arith.shrui {{.*}} {wave.uniform}
+  %result = arith.shrui %doubled, %c7 : index
+  return %result : index
+}
