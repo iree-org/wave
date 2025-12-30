@@ -21,6 +21,16 @@ namespace mlir::water {
 #include "water/Transforms/Passes.h.inc"
 } // namespace mlir::water
 
+static bool isSupportedBroadcastType(Type type) {
+  if (auto integerType = llvm::dyn_cast<IntegerType>(type))
+    return llvm::is_contained({8, 16, 32, 64}, (int)integerType.getWidth());
+
+  if (isa<IndexType, FloatType>(type))
+    return true;
+
+  return false;
+}
+
 namespace {
 
 struct InsertBroadcastsPass
@@ -37,7 +47,7 @@ struct InsertBroadcastsPass
       return signalPassFailure();
 
     // Collect operations that need broadcasts.
-    SmallVector<std::pair<Operation *, Value>> insertsNeeded;
+    SmallVector<Value> insertsNeeded;
 
     op->walk([&](Operation *currentOp) {
       // Skip broadcast operations.
@@ -60,19 +70,23 @@ struct InsertBroadcastsPass
         }
 
         // If we have non-uniform operands but uniform result, insert broadcast.
-        if (hasNonUniformOperand)
-          insertsNeeded.push_back({currentOp, result});
+        if (hasNonUniformOperand && isSupportedBroadcastType(result.getType()))
+          insertsNeeded.push_back(result);
       }
     });
 
     // Insert broadcasts.
     OpBuilder builder(&getContext());
-    for (auto [opToInsertAfter, value] : insertsNeeded) {
-      builder.setInsertionPointAfter(opToInsertAfter);
+    for (Value value : insertsNeeded) {
+      if (auto opToInsertAfter = value.getDefiningOp()) {
+        builder.setInsertionPointAfter(opToInsertAfter);
+      } else {
+        // Block argument.
+        builder.setInsertionPointToStart(value.getParentBlock());
+      }
 
-      Location loc = opToInsertAfter->getLoc();
       auto broadcast = gpu::SubgroupBroadcastOp::create(
-          builder, loc, value.getType(), value,
+          builder, value.getLoc(), value.getType(), value,
           /*id=*/nullptr,
           /*broadcast_type=*/gpu::BroadcastType::first_active_lane);
 
