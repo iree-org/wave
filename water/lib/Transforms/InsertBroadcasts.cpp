@@ -4,8 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "water/Dialect/Wave/Transforms/UniformityAnalysis.h"
 #include "water/Transforms/Passes.h"
+#include "water/Transforms/UniformityAnalysis.h"
 
 #include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Analysis/DataFlowFramework.h"
@@ -31,7 +31,7 @@ struct InsertBroadcastsPass
     // Run uniformity analysis.
     DataFlowSolver solver;
     loadBaselineAnalyses(solver);
-    wave::addWaveUniformityAnalysis(solver);
+    water::addWaterUniformityAnalysis(solver);
 
     if (failed(solver.initializeAndRun(op)))
       return signalPassFailure();
@@ -47,13 +47,13 @@ struct InsertBroadcastsPass
       // Check each result.
       for (Value result : currentOp->getResults()) {
         // Skip if result is not uniform.
-        if (!wave::isUniform(result, solver))
+        if (!water::isUniform(result, solver))
           continue;
 
         // Check if any operand is non-uniform.
         bool hasNonUniformOperand = false;
         for (Value operand : currentOp->getOperands()) {
-          if (!wave::isUniform(operand, solver)) {
+          if (!water::isUniform(operand, solver)) {
             hasNonUniformOperand = true;
             break;
           }
