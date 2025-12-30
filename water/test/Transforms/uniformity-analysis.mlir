@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-uniformity-analysis | FileCheck %s
+// RUN: water-opt %s --water-test-uniformity-analysis | FileCheck %s
 
 // CHECK-LABEL: @constant_uniform
 func.func @constant_uniform() -> i32 {

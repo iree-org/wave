@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Analysis/UniformityAnalysis.h"
-#include "water/Transforms/Passes.h"
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
@@ -17,11 +16,6 @@
 
 using namespace mlir;
 using namespace mlir::dataflow;
-
-namespace mlir::water {
-#define GEN_PASS_DEF_WATERUNIFORMITYANALYSISPASS
-#include "water/Transforms/Passes.h.inc"
-} // namespace mlir::water
 
 namespace {
 
@@ -452,47 +446,6 @@ public:
                        lattice->join(UniformityLatticeStorage::uniform()));
   }
 };
-
-//===----------------------------------------------------------------------===//
-// UniformityAnalysisPass
-//===----------------------------------------------------------------------===//
-
-static void setWaveUniformityAnalysisResults(Operation *top,
-                                             const DataFlowSolver &solver) {
-  // Walk all operations and attach uniformity attributes.
-  top->walk([&](Operation *op) {
-    // Check if all results are uniform.
-    bool allResultsUniform = true;
-    for (Value result : op->getResults()) {
-      if (!water::isUniform(result, solver)) {
-        allResultsUniform = false;
-        break;
-      }
-    }
-
-    // Attach unit attribute if all results are uniform.
-    if (allResultsUniform && op->getNumResults() > 0)
-      op->setAttr("wave.uniform", UnitAttr::get(op->getContext()));
-  });
-}
-
-struct UniformityAnalysisPass
-    : public water::impl::WaterUniformityAnalysisPassBase<
-          UniformityAnalysisPass> {
-  void runOnOperation() override {
-    Operation *op = getOperation();
-
-    DataFlowSolver solver;
-    loadBaselineAnalyses(solver);
-    water::addWaterUniformityAnalysis(solver);
-
-    if (failed(solver.initializeAndRun(op)))
-      return signalPassFailure();
-
-    setWaveUniformityAnalysisResults(op, solver);
-  }
-};
-
 } // namespace
 
 void mlir::water::addWaterUniformityAnalysis(DataFlowSolver &solver) {
