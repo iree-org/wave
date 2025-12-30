@@ -24,18 +24,45 @@ static void setWaveUniformityAnalysisResults(Operation *top,
                                              const DataFlowSolver &solver) {
   // Walk all operations and attach uniformity attributes.
   top->walk([&](Operation *op) {
+    if (op->getNumResults() == 0)
+      return;
+
     // Check if all results are uniform.
     bool allResultsUniform = true;
+    std::optional<uint64_t> subgroupLinearWidth;
+
     for (Value result : op->getResults()) {
-      if (!water::isUniform(result, solver)) {
-        allResultsUniform = false;
+      if (water::isUniform(result, solver)) {
+        continue;
+      }
+
+      allResultsUniform = false;
+
+      // Check if subgroup linear.
+      if (auto width = water::getSubgroupLinearWidth(result, solver)) {
+        if (!subgroupLinearWidth) {
+          subgroupLinearWidth = width;
+        } else if (*subgroupLinearWidth != *width) {
+          // Results have different widths, don't attach attribute.
+          subgroupLinearWidth = std::nullopt;
+          break;
+        }
+      } else {
+        // Not uniform and not subgroup linear.
+        subgroupLinearWidth = std::nullopt;
         break;
       }
     }
 
     // Attach unit attribute if all results are uniform.
-    if (allResultsUniform && op->getNumResults() > 0)
+    if (allResultsUniform) {
       op->setAttr("wave.uniform", UnitAttr::get(op->getContext()));
+    } else if (subgroupLinearWidth) {
+      // Attach subgroup linear attribute with width.
+      op->setAttr("wave.subgroup_linear",
+                  IntegerAttr::get(IntegerType::get(op->getContext(), 64),
+                                   *subgroupLinearWidth));
+    }
   });
 }
 

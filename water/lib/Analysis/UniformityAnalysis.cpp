@@ -184,14 +184,14 @@ public:
 
   // Mark all results as divergent.
   void setAllResultsDivergent(ArrayRef<UniformityLattice *> results) {
-    LDBG() << "setting all results divergent";
+    LDBG() << "  setting all results divergent";
     for (UniformityLattice *result : results)
       propagateIfChanged(result, result->join(UniformityLatticeStorage::top()));
   }
 
   // Mark all results as uniform.
   void setAllResultsUniform(ArrayRef<UniformityLattice *> results) {
-    LDBG() << "setting all results uniform";
+    LDBG() << "  setting all results uniform";
     for (UniformityLattice *result : results)
       propagateIfChanged(result,
                          result->join(UniformityLatticeStorage::uniform()));
@@ -200,7 +200,7 @@ public:
   // Set all results to subgroup linear with given width.
   void setAllResultsSubgroupLinear(ArrayRef<UniformityLattice *> results,
                                    uint64_t width) {
-    LDBG() << "setting all results subgroup linear with width " << width;
+    LDBG() << "  setting all results subgroup linear with width " << width;
     for (UniformityLattice *result : results)
       propagateIfChanged(
           result,
@@ -227,6 +227,24 @@ public:
     }
 
     return false;
+  }
+
+  // Handle modulo of SubgroupLinear by a uniform divisor.
+  // Returns true if handled (subgroup linear or divergent), false otherwise.
+  bool handleSubgroupLinearModulo(uint64_t width, uint64_t divisor,
+                                  ArrayRef<UniformityLattice *> results) {
+    if (divisor == 0)
+      return false;
+
+    // If there's a clean divisibility relationship, keep SubgroupLinear(width).
+    if (divisor % width == 0 || width % divisor == 0) {
+      setAllResultsSubgroupLinear(results, width);
+      return true;
+    }
+
+    // Otherwise, mark as divergent.
+    setAllResultsDivergent(results);
+    return true;
   }
 
   // Handle multiplication of SubgroupLinear by a uniform multiplier.
@@ -297,6 +315,24 @@ public:
       if (lhs.isSubgroupLinear() && rhs.isUniform()) {
         if (auto divisor = getConstantIntValue(op->getOperand(1))) {
           if (handleSubgroupLinearDivision(lhs.getWidth(), *divisor, results))
+            return success();
+        }
+      }
+      // Fall through to default handling.
+    }
+
+    // Handle modulo: SubgroupLinear(w) % N -> SubgroupLinear(w) if divisibility
+    // relation holds, otherwise Divergent.
+    if (isa<arith::RemSIOp, arith::RemUIOp>(op)) {
+      assert(operands.size() == 2 && results.size() == 1 &&
+             "Modulo must have 2 operands and 1 result");
+      const UniformityLatticeStorage &lhs = operands[0]->getValue();
+      const UniformityLatticeStorage &rhs = operands[1]->getValue();
+
+      // If LHS is SubgroupLinear and RHS is uniform constant.
+      if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+        if (auto divisor = getConstantIntValue(op->getOperand(1))) {
+          if (handleSubgroupLinearModulo(lhs.getWidth(), *divisor, results))
             return success();
         }
       }
@@ -515,4 +551,13 @@ bool mlir::water::isUniform(Value value, const DataFlowSolver &solver) {
   const UniformityLattice *lattice =
       solver.lookupState<UniformityLattice>(value);
   return lattice && lattice->getValue().isUniform();
+}
+
+std::optional<uint64_t>
+mlir::water::getSubgroupLinearWidth(Value value, const DataFlowSolver &solver) {
+  const UniformityLattice *lattice =
+      solver.lookupState<UniformityLattice>(value);
+  if (lattice && lattice->getValue().isSubgroupLinear())
+    return lattice->getValue().getWidth();
+  return std::nullopt;
 }
