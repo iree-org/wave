@@ -394,3 +394,47 @@ func.func @extsi_preserves_subgroup_linear() -> index attributes {subgroup_size 
   %result = arith.divui %tid_idx, %c64 : index
   return %result : index
 }
+
+// -----
+
+// CHECK-LABEL: @loop_uniform_bounds
+func.func @loop_uniform_bounds() -> index {
+  // CHECK: arith.constant {wave.uniform}
+  %c0 = arith.constant 0 : index
+  // CHECK: arith.constant {wave.uniform}
+  %c10 = arith.constant 10 : index
+  // CHECK: arith.constant {wave.uniform}
+  %c1 = arith.constant 1 : index
+  // CHECK: arith.constant {wave.uniform}
+  %c100 = arith.constant 100 : index
+  // CHECK: scf.for
+  %result = scf.for %i = %c0 to %c10 step %c1 iter_args(%arg = %c100) -> index {
+    // CHECK: arith.addi {{.*}} {wave.uniform}
+    %sum = arith.addi %i, %arg : index
+    scf.yield %sum : index
+  }
+  return %result : index
+}
+
+// -----
+
+// CHECK-LABEL: @loop_divergent_bounds
+func.func @loop_divergent_bounds() -> index {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.constant {wave.uniform}
+  %c10 = arith.constant 10 : index
+  // CHECK: arith.constant {wave.uniform}
+  %c1 = arith.constant 1 : index
+  // CHECK: arith.constant {wave.uniform}
+  %c0 = arith.constant 0 : index
+  // CHECK: scf.for
+  %result = scf.for %i = %tid to %c10 step %c1 iter_args(%arg = %c0) -> index {
+    // CHECK: arith.addi
+    // CHECK-NOT: wave.uniform
+    %sum = arith.addi %i, %arg : index
+    scf.yield %sum : index
+  }
+  return %result : index
+}
