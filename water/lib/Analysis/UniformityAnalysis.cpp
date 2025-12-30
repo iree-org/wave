@@ -14,6 +14,9 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/Support/DebugLog.h"
+
+#define DEBUG_TYPE "water-uniformity-analysis"
 
 using namespace mlir;
 using namespace mlir::dataflow;
@@ -176,12 +179,14 @@ public:
 
   // Mark all results as divergent.
   void setAllResultsDivergent(ArrayRef<UniformityLattice *> results) {
+    LDBG() << "setting all results divergent";
     for (UniformityLattice *result : results)
       propagateIfChanged(result, result->join(UniformityLatticeStorage::top()));
   }
 
   // Mark all results as uniform.
   void setAllResultsUniform(ArrayRef<UniformityLattice *> results) {
+    LDBG() << "setting all results uniform";
     for (UniformityLattice *result : results)
       propagateIfChanged(result,
                          result->join(UniformityLatticeStorage::uniform()));
@@ -190,6 +195,7 @@ public:
   // Set all results to subgroup linear with given width.
   void setAllResultsSubgroupLinear(ArrayRef<UniformityLattice *> results,
                                    uint64_t width) {
+    LDBG() << "setting all results subgroup linear with width " << width;
     for (UniformityLattice *result : results)
       propagateIfChanged(
           result,
@@ -235,6 +241,8 @@ public:
   LogicalResult visitOperation(Operation *op,
                                ArrayRef<const UniformityLattice *> operands,
                                ArrayRef<UniformityLattice *> results) override {
+    LDBG() << "visiting operation " << *op;
+
     // Handle GPU-specific operations.
     // Thread ID x is subgroup linear (varies within wavefront).
     if (auto threadIdOp = dyn_cast<gpu::ThreadIdOp>(op)) {
@@ -270,64 +278,6 @@ public:
     if (isa<gpu::SubgroupBroadcastOp>(op)) {
       setAllResultsUniform(results);
       return success();
-    }
-
-    // Handle loops: if lower/upper bounds and step are uniform, induction
-    // variables are uniform.
-    if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op)) {
-      std::optional<SmallVector<Value>> inductionVars =
-          loopLike.getLoopInductionVars();
-      std::optional<SmallVector<OpFoldResult>> lowerBounds =
-          loopLike.getLoopLowerBounds();
-      std::optional<SmallVector<OpFoldResult>> upperBounds =
-          loopLike.getLoopUpperBounds();
-      std::optional<SmallVector<OpFoldResult>> steps = loopLike.getLoopSteps();
-
-      // Only proceed if loop exposes induction variables and bounds/steps.
-      if (inductionVars && lowerBounds && upperBounds && steps) {
-        // Helper to check if an OpFoldResult is uniform.
-        auto checkUniform = [&](OpFoldResult foldResult) {
-          if (auto value = llvm::dyn_cast_if_present<Value>(foldResult)) {
-            // Find the lattice for this value in operands.
-            for (size_t i = 0; i < op->getNumOperands(); ++i) {
-              if (op->getOperand(i) == value)
-                return operands[i]->getValue().isUniform();
-            }
-            // If value is not an operand, conservatively assume non-uniform.
-            return false;
-          }
-          // Attributes (constants) are always uniform.
-          return true;
-        };
-
-        // Check each induction variable with its corresponding bounds and step.
-        for (size_t i = 0; i < inductionVars->size(); ++i) {
-          Value inductionVar = (*inductionVars)[i];
-          OpFoldResult lowerBound = (*lowerBounds)[i];
-          OpFoldResult upperBound = (*upperBounds)[i];
-          OpFoldResult step = (*steps)[i];
-
-          if (auto blockArg = llvm::dyn_cast<BlockArgument>(inductionVar)) {
-            auto *ivLattice = getLatticeElement(blockArg);
-            if (ivLattice) {
-              if (checkUniform(lowerBound) && checkUniform(upperBound) &&
-                  checkUniform(step)) {
-                // All bounds and step are uniform, mark induction var as
-                // uniform.
-                propagateIfChanged(
-                    ivLattice,
-                    ivLattice->join(UniformityLatticeStorage::uniform()));
-              } else {
-                // At least one bound or step is not uniform, mark as divergent.
-                propagateIfChanged(
-                    ivLattice,
-                    ivLattice->join(UniformityLatticeStorage::top()));
-              }
-            }
-          }
-        }
-      }
-      // Continue to handle loop results with default propagation.
     }
 
     // Handle division: SubgroupLinear(w) / N -> SubgroupLinear(w/N) if w % N
@@ -504,6 +454,57 @@ public:
     propagateIfChanged(lattice,
                        lattice->join(UniformityLatticeStorage::uniform()));
   }
+
+  void visitNonControlFlowArguments(Operation *op,
+                                    const RegionSuccessor &successor,
+                                    ArrayRef<UniformityLattice *> argLattices,
+                                    unsigned firstIndex) override {
+    LDBG() << "visiting non control flow arguments " << *op;
+
+    if (auto loop = dyn_cast<LoopLikeOpInterface>(op)) {
+      std::optional<SmallVector<Value>> inductionVars =
+          loop.getLoopInductionVars();
+      if (!inductionVars) {
+        return SparseForwardDataFlowAnalysis ::visitNonControlFlowArguments(
+            op, successor, argLattices, firstIndex);
+      }
+      std::optional<SmallVector<OpFoldResult>> lowerBounds =
+          loop.getLoopLowerBounds();
+      std::optional<SmallVector<OpFoldResult>> upperBounds =
+          loop.getLoopUpperBounds();
+      std::optional<SmallVector<OpFoldResult>> steps = loop.getLoopSteps();
+
+      auto isUniform =
+          [&](const std::optional<SmallVector<OpFoldResult>> &array,
+              unsigned index) {
+            // If array is not present assume it's known and uniform.
+            if (!array)
+              return true;
+
+            // If the value is a value, get the lattice for it.
+            if (auto value =
+                    llvm::dyn_cast_if_present<Value>((*array)[index])) {
+              const UniformityLattice *lattice = getLatticeElement(value);
+              return lattice && lattice->getValue().isUniform();
+            }
+            // Attributes (constants) are always uniform.
+            return true;
+          };
+
+      for (auto [i, iv] : llvm::enumerate(*inductionVars)) {
+        UniformityLattice *ivEntry = getLatticeElement(iv);
+        if (isUniform(lowerBounds, i) && isUniform(upperBounds, i) &&
+            isUniform(steps, i)) {
+          setAllResultsUniform(ivEntry);
+        } else {
+          setAllResultsDivergent(ivEntry);
+        }
+      }
+    }
+
+    SparseForwardDataFlowAnalysis::visitNonControlFlowArguments(
+        op, successor, argLattices, firstIndex);
+  };
 };
 } // namespace
 
