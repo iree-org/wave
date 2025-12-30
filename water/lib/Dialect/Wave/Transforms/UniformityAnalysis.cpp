@@ -283,136 +283,135 @@ public:
     // Handle division: SubgroupLinear(w) / N -> SubgroupLinear(w/N) if w % N
     // == 0, or Uniform if N % w == 0 and N > w.
     if (isa<arith::DivSIOp, arith::DivUIOp>(op)) {
-      if (operands.size() == 2 && results.size() == 1) {
-        const auto &lhs = operands[0]->getValue();
-        const auto &rhs = operands[1]->getValue();
+      assert(operands.size() == 2 && results.size() == 1 &&
+             "Division must have 2 operands and 1 result");
+      const UniformityLatticeStorage &lhs = operands[0]->getValue();
+      const UniformityLatticeStorage &rhs = operands[1]->getValue();
 
-        // If LHS is SubgroupLinear and RHS is uniform constant.
-        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
-          if (auto divisor = getConstantIntValue(op->getOperand(1))) {
-            if (handleSubgroupLinearDivision(lhs.getWidth(), *divisor, results))
-              return success();
-          }
+      // If LHS is SubgroupLinear and RHS is uniform constant.
+      if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+        if (auto divisor = getConstantIntValue(op->getOperand(1))) {
+          if (handleSubgroupLinearDivision(lhs.getWidth(), *divisor, results))
+            return success();
         }
-        // Fall through to default handling.
       }
+      // Fall through to default handling.
     }
 
     // Handle multiplication: SubgroupLinear(w) * N -> SubgroupLinear(w*N) if
     // no overflow (nsw flag set).
     if (auto mulOp = dyn_cast<arith::MulIOp>(op)) {
-      if (operands.size() == 2 && results.size() == 1) {
-        const auto &lhs = operands[0]->getValue();
-        const auto &rhs = operands[1]->getValue();
+      assert(operands.size() == 2 && results.size() == 1 &&
+             "Multiplication must have 2 operands and 1 result");
+      const UniformityLatticeStorage &lhs = operands[0]->getValue();
+      const UniformityLatticeStorage &rhs = operands[1]->getValue();
 
-        // If one is SubgroupLinear and other is uniform constant.
-        const UniformityLatticeStorage *linear = nullptr;
-        Value constOperand;
+      // If one is SubgroupLinear and other is uniform constant.
+      const UniformityLatticeStorage *linear = nullptr;
+      Value constOperand;
 
-        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
-          linear = &lhs;
-          constOperand = op->getOperand(1);
-        } else if (rhs.isSubgroupLinear() && lhs.isUniform()) {
-          linear = &rhs;
-          constOperand = op->getOperand(0);
-        }
+      if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+        linear = &lhs;
+        constOperand = op->getOperand(1);
+      } else if (rhs.isSubgroupLinear() && lhs.isUniform()) {
+        linear = &rhs;
+        constOperand = op->getOperand(0);
+      }
 
-        if (linear) {
-          if (auto factor = getConstantIntValue(constOperand)) {
-            // Check if nsw flag is set.
-            if (bitEnumContainsAny(mulOp.getOverflowFlags(),
-                                   arith::IntegerOverflowFlags::nsw)) {
-              if (uint64_t newWidth = handleSubgroupLinearMultiplication(
-                      linear->getWidth(), *factor)) {
-                setAllResultsSubgroupLinear(results, newWidth);
-                return success();
-              }
+      if (linear) {
+        if (auto factor = getConstantIntValue(constOperand)) {
+          // Check if nsw flag is set.
+          if (bitEnumContainsAny(mulOp.getOverflowFlags(),
+                                 arith::IntegerOverflowFlags::nsw)) {
+            if (uint64_t newWidth = handleSubgroupLinearMultiplication(
+                    linear->getWidth(), *factor)) {
+              setAllResultsSubgroupLinear(results, newWidth);
+              return success();
             }
           }
         }
-        // Fall through to default handling.
       }
+      // Fall through to default handling.
     }
 
     // Handle shift left: SubgroupLinear(w) << N -> SubgroupLinear(w << N) if
     // nsw flag set (similar to multiplication by 2^N).
     if (auto shliOp = dyn_cast<arith::ShLIOp>(op)) {
-      if (operands.size() == 2 && results.size() == 1) {
-        const auto &lhs = operands[0]->getValue();
-        const auto &rhs = operands[1]->getValue();
+      assert(operands.size() == 2 && results.size() == 1 &&
+             "Shift left must have 2 operands and 1 result");
+      const UniformityLatticeStorage &lhs = operands[0]->getValue();
+      const UniformityLatticeStorage &rhs = operands[1]->getValue();
 
-        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
-          if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
-            // Check if nsw flag is set.
-            if (*shiftAmount > 0 && *shiftAmount < 64 &&
-                bitEnumContainsAny(shliOp.getOverflowFlags(),
-                                   arith::IntegerOverflowFlags::nsw)) {
-              uint64_t multiplier = 1ULL << *shiftAmount;
-              if (uint64_t newWidth = handleSubgroupLinearMultiplication(
-                      lhs.getWidth(), multiplier)) {
-                setAllResultsSubgroupLinear(results, newWidth);
-                return success();
-              }
+      if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+        if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
+          // Check if nsw flag is set.
+          if (*shiftAmount > 0 && *shiftAmount < 64 &&
+              bitEnumContainsAny(shliOp.getOverflowFlags(),
+                                 arith::IntegerOverflowFlags::nsw)) {
+            uint64_t multiplier = 1ULL << *shiftAmount;
+            if (uint64_t newWidth = handleSubgroupLinearMultiplication(
+                    lhs.getWidth(), multiplier)) {
+              setAllResultsSubgroupLinear(results, newWidth);
+              return success();
             }
           }
         }
-        // Fall through to default handling.
       }
+      // Fall through to default handling.
     }
 
     // Handle shift right: SubgroupLinear(w) >> N -> SubgroupLinear(w >> N) if
     // w is divisible by 2^N, or Uniform if 2^N > w and 2^N % w == 0.
     if (isa<arith::ShRUIOp, arith::ShRSIOp>(op)) {
-      if (operands.size() == 2 && results.size() == 1) {
-        const auto &lhs = operands[0]->getValue();
-        const auto &rhs = operands[1]->getValue();
+      assert(operands.size() == 2 && results.size() == 1 &&
+             "Shift right must have 2 operands and 1 result");
+      const UniformityLatticeStorage &lhs = operands[0]->getValue();
+      const UniformityLatticeStorage &rhs = operands[1]->getValue();
 
-        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
-          if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
-            if (*shiftAmount > 0 && *shiftAmount < 64) {
-              uint64_t divisor = 1ULL << *shiftAmount;
-              if (handleSubgroupLinearDivision(lhs.getWidth(), divisor,
-                                               results))
-                return success();
-            }
+      if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+        if (auto shiftAmount = getConstantIntValue(op->getOperand(1))) {
+          if (*shiftAmount > 0 && *shiftAmount < 64) {
+            uint64_t divisor = 1ULL << *shiftAmount;
+            if (handleSubgroupLinearDivision(lhs.getWidth(), divisor, results))
+              return success();
           }
         }
-        // Fall through to default handling.
       }
+      // Fall through to default handling.
     }
 
     // Handle bitwise AND: SubgroupLinear(w) & mask -> Uniform if mask zeros all
     // width bits (mask & (w-1) == 0).
     if (isa<arith::AndIOp>(op)) {
-      if (operands.size() == 2 && results.size() == 1) {
-        const auto &lhs = operands[0]->getValue();
-        const auto &rhs = operands[1]->getValue();
+      assert(operands.size() == 2 && results.size() == 1 &&
+             "Bitwise AND must have 2 operands and 1 result");
+      const UniformityLatticeStorage &lhs = operands[0]->getValue();
+      const UniformityLatticeStorage &rhs = operands[1]->getValue();
 
-        // If one is SubgroupLinear and other is uniform constant.
-        const UniformityLatticeStorage *linear = nullptr;
-        Value maskOperand;
+      // If one is SubgroupLinear and other is uniform constant.
+      const UniformityLatticeStorage *linear = nullptr;
+      Value maskOperand;
 
-        if (lhs.isSubgroupLinear() && rhs.isUniform()) {
-          linear = &lhs;
-          maskOperand = op->getOperand(1);
-        } else if (rhs.isSubgroupLinear() && lhs.isUniform()) {
-          linear = &rhs;
-          maskOperand = op->getOperand(0);
-        }
+      if (lhs.isSubgroupLinear() && rhs.isUniform()) {
+        linear = &lhs;
+        maskOperand = op->getOperand(1);
+      } else if (rhs.isSubgroupLinear() && lhs.isUniform()) {
+        linear = &rhs;
+        maskOperand = op->getOperand(0);
+      }
 
-        if (linear) {
-          if (auto mask = getConstantIntValue(maskOperand)) {
-            uint64_t width = linear->getWidth();
-            // If mask zeros all bits used by width, result is uniform (all
-            // zeros).
-            if ((*mask & (width - 1)) == 0) {
-              setAllResultsUniform(results);
-              return success();
-            }
+      if (linear) {
+        if (auto mask = getConstantIntValue(maskOperand)) {
+          uint64_t width = linear->getWidth();
+          // If mask zeros all bits used by width, result is uniform (all
+          // zeros).
+          if ((*mask & (width - 1)) == 0) {
+            setAllResultsUniform(results);
+            return success();
           }
         }
-        // Fall through to default handling.
       }
+      // Fall through to default handling.
     }
 
     // Default propagation: mark results as divergent if any operand
