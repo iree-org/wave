@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/Transforms/UniformityAnalysis.h"
+#include "water/Transforms/Passes.h"
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
@@ -13,17 +14,14 @@
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/Support/Debug.h"
 
 using namespace mlir;
 using namespace mlir::dataflow;
 
-#define DEBUG_TYPE "wave-uniformity-analysis"
-
-namespace wave {
-#define GEN_PASS_DEF_WATERWAVEUNIFORMITYANALYSISPASS
-#include "water/Dialect/Wave/Transforms/Passes.h.inc"
-} // namespace wave
+namespace mlir::water {
+#define GEN_PASS_DEF_WATERUNIFORMITYANALYSISPASS
+#include "water/Transforms/Passes.h.inc"
+} // namespace mlir::water
 
 namespace {
 
@@ -479,7 +477,7 @@ static void setWaveUniformityAnalysisResults(Operation *top,
 }
 
 struct UniformityAnalysisPass
-    : public wave::impl::WaterWaveUniformityAnalysisPassBase<
+    : public water::impl::WaterUniformityAnalysisPassBase<
           UniformityAnalysisPass> {
   void runOnOperation() override {
     Operation *op = getOperation();

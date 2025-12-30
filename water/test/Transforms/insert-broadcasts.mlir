@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-wave-insert-broadcasts | FileCheck %s
+// RUN: water-opt %s --water-insert-broadcasts | FileCheck %s
 
 // CHECK-LABEL: @insert_broadcast_after_div
 func.func @insert_broadcast_after_div() -> index attributes {subgroup_size = 64 : i64} {

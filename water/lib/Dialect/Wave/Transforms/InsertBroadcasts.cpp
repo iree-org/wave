@@ -5,30 +5,26 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "water/Dialect/Wave/Transforms/UniformityAnalysis.h"
+#include "water/Transforms/Passes.h"
 
-#include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Analysis/DataFlow/Utils.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/Support/Debug.h"
 
 using namespace mlir;
 using namespace mlir::dataflow;
 
-#define DEBUG_TYPE "wave-insert-broadcasts"
-
-namespace wave {
-#define GEN_PASS_DEF_WATERWAVEINSERTBROADCASTSPASS
-#include "water/Dialect/Wave/Transforms/Passes.h.inc"
-} // namespace wave
+namespace mlir::water {
+#define GEN_PASS_DEF_WATERINSERTBROADCASTSPASS
+#include "water/Transforms/Passes.h.inc"
+} // namespace mlir::water
 
 namespace {
 
 struct InsertBroadcastsPass
-    : public wave::impl::WaterWaveInsertBroadcastsPassBase<
-          InsertBroadcastsPass> {
+    : public water::impl::WaterInsertBroadcastsPassBase<InsertBroadcastsPass> {
   void runOnOperation() override {
     Operation *op = getOperation();
 
@@ -70,13 +66,13 @@ struct InsertBroadcastsPass
     });
 
     // Insert broadcasts.
-    OpBuilder builder(op->getContext());
+    OpBuilder builder(&getContext());
     for (auto [opToInsertAfter, value] : insertsNeeded) {
       builder.setInsertionPointAfter(opToInsertAfter);
 
-      // Create broadcast operation.
-      auto broadcast = builder.create<gpu::SubgroupBroadcastOp>(
-          opToInsertAfter->getLoc(), value.getType(), value,
+      Location loc = opToInsertAfter->getLoc();
+      auto broadcast = gpu::SubgroupBroadcastOp::create(
+          builder, loc, value.getType(), value,
           /*id=*/nullptr,
           /*broadcast_type=*/gpu::BroadcastType::first_active_lane);
 
