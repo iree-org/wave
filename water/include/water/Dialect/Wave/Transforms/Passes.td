@@ -193,4 +193,18 @@ def WaterWaveUniformityAnalysisPass : Pass<"water-wave-uniformity-analysis"> {
   }];
 }
 
+def WaterWaveInsertBroadcastsPass : Pass<"water-wave-insert-broadcasts"> {
+  let summary = "Insert broadcasts for uniform values derived from non-uniform inputs";
+  let description = [{
+    This pass inserts explicit broadcast operations after operations that
+    produce uniform results from non-uniform (divergent or SubgroupLinear)
+    inputs. This makes the uniformity explicit in the IR and can help with
+    downstream optimizations and code generation.
+
+    The pass runs uniformity analysis directly to determine where broadcasts
+    are needed. Does not insert broadcasts after existing broadcast operations.
+  }];
+  let dependentDialects = ["::mlir::gpu::GPUDialect"];
+}
+
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_PASSES

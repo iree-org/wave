@@ -1,6 +1,7 @@
 add_mlir_dialect_library(MLIRWaveTransforms
   DetectNormalForms.cpp
   InferTypes.cpp
+  InsertBroadcasts.cpp
   LoweringPatterns.cpp
   LowerReadWriteOps.cpp
   LowerWaveToMLIR.cpp
