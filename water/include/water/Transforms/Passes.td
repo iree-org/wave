@@ -143,23 +143,6 @@ def WaterGPUModuleToBinary : Pass<"water-gpu-module-to-binary", ""> {
   ];
 }
 
-def WaterUniformityAnalysisPass : Pass<"water-uniformity-analysis"> {
-  let summary = "Analyze which values are uniform across threads in a wavefront";
-  let description = [{
-    Performs forward dataflow analysis to determine which values are uniform
-    (same across all threads/lanes in a wavefront) versus divergent (potentially
-    different per thread).
-
-    The analysis starts with known uniform values (workgroup IDs, constants)
-    and propagates uniformity through the dataflow graph. Values become
-    divergent when they depend on thread-specific sources (thread IDs) or
-    divergent nodes at control flow merge points.
-
-    Results are attached as attributes to operations for use in downstream
-    passes.
-  }];
-}
-
 def WaterInsertBroadcastsPass : Pass<"water-insert-broadcasts"> {
   let summary = "Insert broadcasts for uniform values derived from non-uniform inputs";
   let description = [{
