@@ -198,8 +198,24 @@ void addWaveUniformityAnalysis(DataFlowSolver &solver) {
 
 LogicalResult setWaveUniformityAnalysisResults(Operation *top,
                                                const DataFlowSolver &solver) {
-  // TODO: Attach uniformity information as attributes to operations.
-  // For now, just return success.
+  // Walk all operations and attach uniformity attributes.
+  top->walk([&](Operation *op) {
+    // Check if all results are uniform.
+    bool allResultsUniform = true;
+    for (Value result : op->getResults()) {
+      const UniformityLattice *lattice =
+          solver.lookupState<UniformityLattice>(result);
+      if (!lattice || !lattice->getValue().isUniform()) {
+        allResultsUniform = false;
+        break;
+      }
+    }
+
+    // Attach unit attribute if all results are uniform.
+    if (allResultsUniform && op->getNumResults() > 0)
+      op->setAttr("wave.uniform", UnitAttr::get(op->getContext()));
+  });
+
   return success();
 }
 
