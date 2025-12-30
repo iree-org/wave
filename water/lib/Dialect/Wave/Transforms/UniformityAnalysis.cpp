@@ -49,8 +49,7 @@ public:
     Divergent       // Value is divergent (top of lattice).
   };
 
-  UniformityLatticeStorage() : state(State::Bottom), width(0) {}
-  UniformityLatticeStorage(State state) : state(state), width(0) {}
+  UniformityLatticeStorage(State state = State::Bottom) : state(state) {}
   UniformityLatticeStorage(State state, uint64_t width)
       : state(state), width(width) {}
 
@@ -146,7 +145,7 @@ public:
 
 private:
   State state;
-  uint64_t width; // Only used for SubgroupLinear state.
+  uint64_t width = 0; // Only used for SubgroupLinear state.
 };
 
 // Typed lattice wrapper.
