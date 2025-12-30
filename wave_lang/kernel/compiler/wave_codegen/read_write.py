@@ -27,11 +27,12 @@ from wave_lang.support.ir_imports import (
     VectorType,
     amdgpu_d,
     arith_d,
+    func_d,
+    gpu_d,
     llvm_d,
     memref_d,
     rocdl_d,
     vector_d,
-    func_d,
 )
 from .ir_utils import (
     is_float_type,
@@ -829,7 +830,7 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:
     original_type = value.type
     idx = arith_d.index_cast(element_type, value)
-    res = rocdl_d.readfirstlane(element_type, idx)
+    res = gpu_d.subgroup_broadcast(idx, gpu_d.BroadcastType.first_active_lane)
     res = arith_d.index_cast(original_type, res)
     return res
 
