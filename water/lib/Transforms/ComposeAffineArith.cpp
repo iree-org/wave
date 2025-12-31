@@ -107,8 +107,7 @@ public:
                  ComposeArithWithAffineApply<arith::MulIOp, AffineMul>>(
         &getContext());
 
-    if (failed(
-            applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
 };
