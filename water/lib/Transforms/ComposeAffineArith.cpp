@@ -8,22 +8,92 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 using namespace mlir;
+using namespace mlir::affine;
 
 namespace mlir::water {
 #define GEN_PASS_DEF_WATERCOMPOSEAFFINEARITHPASS
 #include "water/Transforms/Passes.h.inc"
 } // namespace mlir::water
 
+namespace {
+
+struct ComposeAddiWithAffineApply : public OpRewritePattern<arith::AddIOp> {
+  using OpRewritePattern<arith::AddIOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::AddIOp addOp,
+                                PatternRewriter &rewriter) const override {
+    // Check if the addi has nsw flag.
+    if (addOp.getOverflowFlags() != arith::IntegerOverflowFlags::nsw)
+      return failure();
+
+    Value lhs = addOp.getLhs();
+    Value rhs = addOp.getRhs();
+
+    // Try to find affine.apply on either side.
+    auto lhsAffine = lhs.getDefiningOp<AffineApplyOp>();
+    auto rhsAffine = rhs.getDefiningOp<AffineApplyOp>();
+
+    // At least one operand must be affine.apply.
+    if (!lhsAffine && !rhsAffine)
+      return failure();
+
+    AffineApplyOp affineOp;
+    Value otherOperand;
+
+    if (lhsAffine) {
+      affineOp = lhsAffine;
+      otherOperand = rhs;
+    } else {
+      affineOp = rhsAffine;
+      otherOperand = lhs;
+    }
+
+    // Get the affine map and operands from the affine.apply.
+    AffineMap map = affineOp.getAffineMap();
+    SmallVector<Value> mapOperands(affineOp.getMapOperands());
+
+    // Create a new symbol for the other operand.
+    unsigned numDims = map.getNumDims();
+    unsigned numSymbols = map.getNumSymbols();
+
+    // Get the affine expression and add the new symbol to it.
+    AffineExpr expr = map.getResult(0);
+    AffineExpr newSymbol =
+        getAffineSymbolExpr(numSymbols, rewriter.getContext());
+    AffineExpr newExpr = expr + newSymbol;
+
+    // Create new affine map with additional symbol.
+    AffineMap newMap = AffineMap::get(numDims, numSymbols + 1, newExpr);
+
+    // Add the other operand as a new symbol operand.
+    mapOperands.push_back(otherOperand);
+
+    // Create new affine.apply op.
+    rewriter.replaceOpWithNewOp<AffineApplyOp>(addOp, newMap, mapOperands);
+
+    return success();
+  }
+};
+
+} // namespace
+
 class ComposeAffineArithPass
     : public water::impl::WaterComposeAffineArithPassBase<
           ComposeAffineArithPass> {
 public:
   void runOnOperation() override {
-    // TODO: Implement the transformation logic.
-    // Walk through arith operations and compose them with affine.apply ops.
+    RewritePatternSet patterns(&getContext());
+    patterns.add<ComposeAddiWithAffineApply>(&getContext());
+
+    if (failed(
+            applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+      signalPassFailure();
   }
 };
