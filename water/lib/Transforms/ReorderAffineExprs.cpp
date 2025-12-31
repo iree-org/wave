@@ -91,9 +91,9 @@ static AffineExpr rebuildCommutativeExpr(ArrayRef<AffineExpr> terms,
   // Build right-associative: ((a + b) + c) + d.
   // This puts the least hoistable term (last in array) deepest in the tree.
   AffineExpr result = terms[0];
-  for (unsigned i = 1; i < terms.size(); ++i) {
+  for (auto i : llvm::seq<unsigned>(1, terms.size()))
     result = getAffineBinaryOpExpr(kind, result, terms[i]);
-  }
+
   return result;
 }
 
