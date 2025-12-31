@@ -1419,7 +1419,7 @@ def test_gemm_four_stage_global_to_lds():
 
     # Prologue
     # Verify prologue stores to shared memory
-    # CHECK: rocdl.tensor.load.to.lds
+    # CHECK: amdgpu.tensor_load_to_lds
 
     # CHECK: rocdl.s.wait.tensorcnt 0
     # CHECK: rocdl.s.wait.dscnt 0
@@ -1431,7 +1431,7 @@ def test_gemm_four_stage_global_to_lds():
     # CHECK: %[[LOAD_IDX2:.*]] = affine.apply #[[MAP_LOAD2:.*]]()[%thread_id_x]
     # CHECK: vector.load %[[VIEW1]][%[[LOAD_IDX1]], %[[LOAD_IDX2]]]
 
-    # CHECK: rocdl.tensor.load.to.lds
+    # CHECK: amdgpu.tensor_load_to_lds
 
     # Main Loop:
     # Verify Pipelined Loop, iter_args should contain vector values from prologue
@@ -1452,7 +1452,7 @@ def test_gemm_four_stage_global_to_lds():
     # CHECK: rocdl.s.barrier.signal id = -1
     # CHECK: rocdl.s.barrier.wait id = -1
 
-    # CHECK: rocdl.tensor.load.to.lds
+    # CHECK: amdgpu.tensor_load_to_lds
 
     # CHECK: scf.yield {{.*}}, %[[LVIEW2]], %[[LVIEW3]], %[[LVIEW0]], %[[LVIEW1]]
 

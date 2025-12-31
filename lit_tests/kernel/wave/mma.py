@@ -644,6 +644,8 @@ def test_wmma_with_tensor_load():
     # CHECK:          func.func @mma
 
     ### global buffer is bound to %0, %1 and %2 : MK, NK, MN
+    # CHECK:        %[[C0:.*]] = arith.constant 0 : index
+
     # CHECK:        %[[SUBSPAN0:.*]] = stream.binding.subspan
     # CHECK:        %[[SUBSPAN1:.*]] = stream.binding.subspan
     # CHECK:        %[[SUBSPAN2:.*]] = stream.binding.subspan
@@ -658,14 +660,8 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[VIEW0:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<32x36xf16, #gpu.address_space<workgroup>>
     # CHECK:        %[[VIEW1:.*]] = memref.view %[[SMEM]][{{.*}}] : memref<4608xi8, #gpu.address_space<workgroup>> to memref<32x36xf16, #gpu.address_space<workgroup>>
 
-    ### get global buffer pointer
-    # CHECK:        %[[INT_PTR_0:.+]] = memref.extract_aligned_pointer_as_index
-
-    ### get shared buffer pointer
-    # CHECK:        %[[CAST_3:.*]] = memref.reinterpret_cast %[[VIEW1]]
-    # CHECK:        %[[INT_PTR_1:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_3]]
-
-    # CHECK:        %[[D0:.*]] = vector.from_elements
+    ### make DMA base
+    # CHECK:        %[[DMA_BASE0:.+]] = amdgpu.make_dma_base {{.*}}, %[[VIEW1]][{{.*}}]
 
     # Cluster mask generation
     # CHECK:        %[[COND0:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
@@ -677,30 +673,17 @@ def test_wmma_with_tensor_load():
     # CHECK:        %[[MASK3:.*]] = arith.select %[[COND1]], %{{.*}}, %[[MASK2]] : index
     # CHECK:        %[[MASK4:.*]] = arith.select %[[COND0]], %{{.*}}, %[[MASK3]] : index
 
-    ### pack descriptors and invoke tensor load
+    # CHECK:        %[[TENSOR_DESC_0:.*]] = amdgpu.make_dma_descriptor %[[DMA_BASE0:.+]] globalSize [%{{.*}}, 32] globalStride [32, 1] sharedSize [16, 32]
 
-    # CHECK:        %[[TENSOR_DESC_0:.*]] = vector.from_elements
-    # CHECK-NOT:    rocdl.tensor.load.to.lds
-    # CHECK-NOT:    rocdl.s.wait.tensorcnt
-    # CHECK-NOT:    amdgpu.lds_barrier
-
-    ### get shared buffer pointer
-    # CHECK:        %[[CAST_4:.*]] = memref.reinterpret_cast %[[VIEW0]]
-    # CHECK:        %[[INT_PTR_2:.+]] = memref.extract_aligned_pointer_as_index %[[CAST_4]]
-    # CHECK:        %[[INT_PTR_2_CAST:.+]] = arith.index_cast %[[INT_PTR_2]] : index to i32
-    # CHECK:        %[[INT_PTR_2_CAST_ADDED:.+]] = arith.addi %[[INT_PTR_2_CAST]], %{{.*}} : i32
-
-    ### pack descriptors and invoke tensor load
-    # CHECK:        %[[D1:.*]] = vector.from_elements %{{.*}}, %[[INT_PTR_2_CAST_ADDED]], %{{.*}}, %{{.*}} : vector<4xi32>
-    # CHECK:        %[[TENSOR_DESC_1:.*]] = vector.from_elements
+    # CHECK:        %[[DMA_BASE1:.+]] = amdgpu.make_dma_base {{.*}}, %[[VIEW0]][{{.*}}]
+    # CHECK:        %[[TENSOR_DESC_1:.*]] = amdgpu.make_dma_descriptor %[[DMA_BASE1:.+]] globalSize [%{{.*}}, 32] globalStride [32, 1] sharedSize [16, 32]
 
     # Fused descriptors
     # CHECK:        %[[SELECTED:.*]] = arith.cmpi eq, %{{.*}}, %[[C0]] : index
-    # CHECK:        %[[D_FUSED:.*]] = arith.select %[[SELECTED]], %[[D0]], %[[D1]] : vector<4xi32>
-    # CHECK:        %[[DESC_FUSED:.*]] = arith.select %[[SELECTED]], %[[TENSOR_DESC_0]], %[[TENSOR_DESC_1]] : vector<8xi32>
+    # CHECK:        %[[DESC_FUSED:.*]] = arith.select %[[SELECTED]], %[[TENSOR_DESC_0]], %[[TENSOR_DESC_1]] : !amdgpu.tdm_descriptor
 
     ### resource provider
-    # CHECK:        rocdl.tensor.load.to.lds %[[D_FUSED]], %[[DESC_FUSED]], {{.*}}, {{.*}} cachepolicy {{.*}} : vector<4xi32>, vector<8xi32>
+    # CHECK:        amdgpu.tensor_load_to_lds %[[DESC_FUSED:.*]]
     # CHECK:        rocdl.s.wait.tensorcnt 0
     # CHECK:        rocdl.s.wait.dscnt 0
     # CHECK:        rocdl.s.barrier.signal id = -1
