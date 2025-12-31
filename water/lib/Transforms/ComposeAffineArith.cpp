@@ -24,17 +24,18 @@ namespace mlir::water {
 
 namespace {
 
-struct ComposeAddiWithAffineApply : public OpRewritePattern<arith::AddIOp> {
-  using OpRewritePattern<arith::AddIOp>::OpRewritePattern;
+template <typename ArithOp, typename CombineFn>
+struct ComposeArithWithAffineApply : public OpRewritePattern<ArithOp> {
+  using OpRewritePattern<ArithOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(arith::AddIOp addOp,
+  LogicalResult matchAndRewrite(ArithOp arithOp,
                                 PatternRewriter &rewriter) const override {
-    // Check if the addi has nsw flag.
-    if (addOp.getOverflowFlags() != arith::IntegerOverflowFlags::nsw)
+    // Check if the operation has nsw flag.
+    if (arithOp.getOverflowFlags() != arith::IntegerOverflowFlags::nsw)
       return failure();
 
-    Value lhs = addOp.getLhs();
-    Value rhs = addOp.getRhs();
+    Value lhs = arithOp.getLhs();
+    Value rhs = arithOp.getRhs();
 
     // Try to find affine.apply on either side.
     auto lhsAffine = lhs.getDefiningOp<AffineApplyOp>();
@@ -63,11 +64,11 @@ struct ComposeAddiWithAffineApply : public OpRewritePattern<arith::AddIOp> {
     unsigned numDims = map.getNumDims();
     unsigned numSymbols = map.getNumSymbols();
 
-    // Get the affine expression and add the new symbol to it.
+    // Get the affine expression and combine with the new symbol.
     AffineExpr expr = map.getResult(0);
     AffineExpr newSymbol =
         getAffineSymbolExpr(numSymbols, rewriter.getContext());
-    AffineExpr newExpr = expr + newSymbol;
+    AffineExpr newExpr = CombineFn()(expr, newSymbol);
 
     // Create new affine map with additional symbol.
     AffineMap newMap = AffineMap::get(numDims, numSymbols + 1, newExpr);
@@ -76,9 +77,21 @@ struct ComposeAddiWithAffineApply : public OpRewritePattern<arith::AddIOp> {
     mapOperands.push_back(otherOperand);
 
     // Create new affine.apply op.
-    rewriter.replaceOpWithNewOp<AffineApplyOp>(addOp, newMap, mapOperands);
+    rewriter.replaceOpWithNewOp<AffineApplyOp>(arithOp, newMap, mapOperands);
 
     return success();
+  }
+};
+
+struct AffineAdd {
+  AffineExpr operator()(AffineExpr lhs, AffineExpr rhs) const {
+    return lhs + rhs;
+  }
+};
+
+struct AffineMul {
+  AffineExpr operator()(AffineExpr lhs, AffineExpr rhs) const {
+    return lhs * rhs;
   }
 };
 
@@ -90,7 +103,9 @@ class ComposeAffineArithPass
 public:
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<ComposeAddiWithAffineApply>(&getContext());
+    patterns.add<ComposeArithWithAffineApply<arith::AddIOp, AffineAdd>,
+                 ComposeArithWithAffineApply<arith::MulIOp, AffineMul>>(
+        &getContext());
 
     if (failed(
             applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
