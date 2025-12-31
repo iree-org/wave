@@ -787,3 +787,61 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     func.return %alloc : memref<32x32xf32>
   }
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @lower_iterate_with_vector_iter_args
+  func.func @lower_iterate_with_vector_iter_args() attributes {
+    wave.hyperparameters = #wave.hyperparameters<{K = 128, BLOCK_K = 32}>,
+    wave.constraints = [
+      #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
+    ]
+  } {
+    %cst = arith.constant 0.0 : f16
+    %init = wave.register %cst : vector<32xf16>
+
+    // CHECK:     %[[LB:.*]] = arith.constant 0 : index
+    // CHECK:     %[[UB:.*]] = arith.constant 4 : index
+    // CHECK:     %[[STEP:.*]] = arith.constant 1 : index
+    // CHECK:     scf.for %{{.*}} = %[[LB]] to %[[UB]] step %[[STEP]] iter_args(%{{.*}} = %{{.*}}) -> (vector<32xf16>)
+    %result = wave.iterate @K iter_args(%init) {
+    ^bb0(%arg: vector<32xf16>):
+      // Test vector operations within iterate body
+      // CHECK: arith.addf %{{.*}}, %{{.*}} : vector<32xf16>
+      %add = wave.add %arg, %arg : (vector<32xf16>, vector<32xf16>) -> vector<32xf16>
+      // CHECK: scf.yield %{{.*}} : vector<32xf16>
+      wave.yield %add : vector<32xf16>
+    } : (vector<32xf16>) -> vector<32xf16>
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @lower_iterate_multiple_vector_iter_args
+  func.func @lower_iterate_multiple_vector_iter_args() attributes {
+    wave.hyperparameters = #wave.hyperparameters<{I = 8}>,
+    wave.constraints = [
+      #wave.tiling_constraint<dim = <"I">, tile_size = <[#wave.symbol<"I">] -> (I)>>
+    ]
+  } {
+    %cst_f32 = arith.constant 1.0 : f32
+    %cst_i32 = arith.constant 42 : i32
+    %init1 = wave.register %cst_f32 : vector<4xf32>
+    %init2 = wave.register %cst_i32 : vector<8xi32>
+
+    // CHECK:     scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}) -> (vector<4xf32>, vector<8xi32>)
+    %result:2 = wave.iterate @I iter_args(%init1, %init2) {
+    ^bb0(%arg1: vector<4xf32>, %arg2: vector<8xi32>):
+      // CHECK: arith.addf %{{.*}}, %{{.*}} : vector<4xf32>
+      %add = wave.add %arg1, %arg1 : (vector<4xf32>, vector<4xf32>) -> vector<4xf32>
+      // CHECK: arith.addi %{{.*}}, %{{.*}} : vector<8xi32>
+      %add2 = wave.add %arg2, %arg2 : (vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+      // CHECK: scf.yield %{{.*}}, %{{.*}} : vector<4xf32>, vector<8xi32>
+      wave.yield %add, %add2 : vector<4xf32>, vector<8xi32>
+    } : (vector<4xf32>, vector<8xi32>) -> (vector<4xf32>, vector<8xi32>)
+    return
+  }
+}

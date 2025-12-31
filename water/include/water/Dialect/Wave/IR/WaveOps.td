@@ -24,7 +24,7 @@ include "mlir/IR/BuiltinAttributeInterfaces.td"
 // Supports both WaveTensorType (before PropagateElementsPerThread pass) and
 // 1D vectors (after PropagateElementsPerThread pass).
 def WaveIterableType : AnyTypeOf<[WaveTensorType, VectorOfRank<[1]>],
-                                 "WaveIterableType">;
+                                 "wave tensor or 1d vector type">;
 
 //-----------------------------------------------------------------------------
 // Base class for all Wave operations.

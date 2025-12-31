@@ -644,7 +644,7 @@ func.func @iterate_vector_element_type_mismatch() attributes {wave.hyperparamete
 func.func @iterate_multidim_vectors_rejected() attributes {wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
   %input = arith.constant dense<1.0> : vector<4x8xf32>
 
-  // expected-error @below {{'wave.iterate' op operand #0 must be variadic of WaveIterableType, but got 'vector<4x8xf32>'}}
+  // expected-error @below {{'wave.iterate' op operand #0 must be variadic of wave tensor or 1d vector type, but got 'vector<4x8xf32>'}}
   %result = wave.iterate @I iter_args(%input) {
   ^bb0(%in_arg: vector<4x8xf32>):
     wave.yield %in_arg : vector<4x8xf32>

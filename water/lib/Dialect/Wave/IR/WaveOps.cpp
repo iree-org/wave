@@ -6,7 +6,6 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
-#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -195,25 +194,25 @@ void wave::IterateOp::makeNonIsolated(RewriterBase &rewriter) {
 }
 
 bool wave::IterateOp::areTypesCompatible(mlir::Type lhs, mlir::Type rhs) {
-  // Handle both WaveTensorType and VectorType combinations
+  // Handle both WaveTensorType and VectorType combinations.
   auto lhsTensor = llvm::dyn_cast<wave::WaveTensorType>(lhs);
   auto rhsTensor = llvm::dyn_cast<wave::WaveTensorType>(rhs);
   auto lhsVector = llvm::dyn_cast<mlir::VectorType>(lhs);
   auto rhsVector = llvm::dyn_cast<mlir::VectorType>(rhs);
 
-  // Both are wave tensors - use existing logic
+  // Both are wave tensors - check shape and address space compatibility.
   if (lhsTensor && rhsTensor) {
     return detail::verifyTypesCompatible(lhsTensor, rhsTensor,
                                          /*includeAddressSpace=*/true)
         .succeeded();
   }
 
-  // Both are vectors - simple equality check
+  // Both are vectors - simple equality check.
   if (lhsVector && rhsVector) {
     return lhsVector == rhsVector;
   }
 
-  // Mixed types are not compatible
+  // Mixed types are not compatible.
   return false;
 }
 
@@ -280,8 +279,6 @@ LogicalResult wave::IterateOp::verify() {
     // Handle verification for both wave tensors and vectors.
     auto iterArgTensor = llvm::dyn_cast<wave::WaveTensorType>(iterArg);
     auto resultTensor = llvm::dyn_cast<wave::WaveTensorType>(result);
-    auto iterArgVector = llvm::dyn_cast<mlir::VectorType>(iterArg);
-    auto resultVector = llvm::dyn_cast<mlir::VectorType>(result);
 
     auto istr = std::to_string(i);
 
@@ -300,11 +297,11 @@ LogicalResult wave::IterateOp::verify() {
         return mlir::failure();
     }
     // Both are vectors - check exact type equality.
-    else if (iterArgVector && resultVector) {
-      if (iterArgVector != resultVector) {
-        return emitOpError() << "iter_args #" << i << " type (" << iterArgVector
-                             << ") must match result #" << i << " type ("
-                             << resultVector << ")";
+    else if (isa<VectorType>(iterArg) && isa<VectorType>(result)) {
+      if (iterArg != result) {
+        return emitOpError()
+               << "iter_args #" << i << " type (" << iterArg
+               << ") must match result #" << i << " type (" << result << ")";
       }
     }
     // Mixed types are not allowed.
@@ -337,12 +334,17 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
                        blockIterArgTypes)) {
     auto istr = std::to_string(i);
 
+    auto iterArgTensor = llvm::dyn_cast<wave::WaveTensorType>(iterArg);
+    auto resultTensor = llvm::dyn_cast<wave::WaveTensorType>(result);
+    auto blockIterArgTensor =
+        llvm::dyn_cast<wave::WaveTensorType>(blockIterArg);
+    auto terminatorOperandTensor =
+        llvm::dyn_cast<wave::WaveTensorType>(terminatorOperand);
+
     // Verify result type vs terminator operand type.
-    if (isa<wave::WaveTensorType>(result) &&
-        isa<wave::WaveTensorType>(terminatorOperand)) {
+    if (resultTensor && terminatorOperandTensor) {
       if (llvm::failed(detail::verifyTypesCompatible(
-              llvm::cast<wave::WaveTensorType>(result),
-              llvm::cast<wave::WaveTensorType>(terminatorOperand),
+              resultTensor, terminatorOperandTensor,
               /*includeAddressSpace=*/true, getLoc(), "result #" + istr,
               "terminator operand #" + istr))) {
         return llvm::failure();
@@ -361,11 +363,9 @@ llvm::LogicalResult wave::IterateOp::verifyRegions() {
     }
 
     // Verify iter arg type vs block arg type.
-    if (isa<wave::WaveTensorType>(iterArg) &&
-        isa<wave::WaveTensorType>(blockIterArg)) {
+    if (iterArgTensor && blockIterArgTensor) {
       if (llvm::failed(detail::verifyTypesCompatible(
-              llvm::cast<wave::WaveTensorType>(iterArg),
-              llvm::cast<wave::WaveTensorType>(blockIterArg),
+              iterArgTensor, blockIterArgTensor,
               /*includeAddressSpace=*/true, getLoc(), "iter arg #" + istr,
               "block iter arg #" + istr))) {
         return llvm::failure();

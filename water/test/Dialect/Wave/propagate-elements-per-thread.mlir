@@ -312,11 +312,12 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, I = 4}>,
                 wave.constraints = [#wave.hardware_constraint<threads_per_wave = 64, waves_per_block = [1, 1, 1], mma_type = #wave.mma_kind<f32_32x32x8_f16>, vector_shapes = {M = 1}>]} {
 
-    // Read into register tensor - this will become a vector after PropagateElementsPerThread
+    // Read into register tensor - this will become a vector after PropagateElementsPerThread.
+    // CHECK: %[[INIT:.*]] = wave.read {{.*}} : (!wave.tensor<[@M] of f32, <global>>) -> vector<8xf32>
     %init = wave.read %mem {elements_per_thread = 8} : (!wave.tensor<[@M] of f32, <global>>) -> !wave.tensor<[@M] of f32, <register>>
 
-    // Iterate should work with vectors after transformation
-    // CHECK: wave.iterate @I iter_args({{.*}})
+    // Iterate should work with vectors after transformation.
+    // CHECK: wave.iterate @I iter_args(%[[INIT]]) {
     %result = wave.iterate @I iter_args(%init) {
     ^bb0(%arg: !wave.tensor<[@M] of f32, <register>>):
       // Wave operations should work within the loop body after type conversion

@@ -418,24 +418,9 @@ func.func @cast_mixed_specified(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.t
 
 module attributes {wave.normal_form = #wave.normal_form<full_types>, wave.hyperparameters = #wave.hyperparameters<{I = 4}>} {
 
-// CHECK-LABEL: @iterate_pure_vectors
-func.func @iterate_pure_vectors() {
-  %input0 = arith.constant dense<1.0> : vector<8xf32>
-  %input1 = arith.constant dense<2.0> : vector<4xf16>
-
-  // CHECK: wave.iterate @I iter_args(%{{.*}}, %{{.*}})
-  %iter_result:2 = wave.iterate @I iter_args(%input0, %input1) {
-  ^bb0(%in_arg0: vector<8xf32>, %in_arg1: vector<4xf16>):
-    // CHECK: wave.yield %{{.*}}, %{{.*}} : vector<8xf32>, vector<4xf16>
-    wave.yield %in_arg0, %in_arg1 : vector<8xf32>, vector<4xf16>
-  } : (vector<8xf32>, vector<4xf16>) -> (vector<8xf32>, vector<4xf16>)
-  return
-}
-
-// Test that wave.iterate supports vector types in both iter_args and captures,
-// including different vector types in the same operation
-// CHECK-LABEL: @iterate_vector_captures
-func.func @iterate_vector_captures() {
+// Test that wave.iterate supports vector types in both iter_args and captures
+// CHECK-LABEL: @iterate_vector_types
+func.func @iterate_vector_types() {
   // CHECK: %[[ITER_ARG:.*]] = arith.constant dense<1.000000e+00> : vector<8xf32>
   %iter_arg = arith.constant dense<1.0> : vector<8xf32>
   // CHECK: %[[CAPTURE:.*]] = arith.constant dense<2.000000e+00> : vector<4xf16>
