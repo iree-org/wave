@@ -202,4 +202,26 @@ def WaterReorderAffinePass : Pass<"water-reorder-affine"> {
   ];
 }
 
+def WaterReorderAffineExprsPass : Pass<"water-reorder-affine-exprs"> {
+  let summary = "Reorder commutative operations in affine expressions by hoistability";
+  let description = [{
+    This pass analyzes affine expressions and reorders sequences of commutative
+    operations (add and mul) to improve loop hoistability. It uses
+    numEnclosingInvariantLoops to determine the hoistability of each operand
+    and rearranges expressions so that more hoistable operands are involved
+    first, and least hoistable operands are involved last.
+
+    Example in nested loops:
+      %0 = affine.apply (d0 + d1 + s0)>(%j, %i)[%arg0]
+      where %j is inner loop var, %i is outer loop var, %arg0 is invariant
+
+    Transforms to:
+      %0 = affine.apply (d1 + s0 + d0)>(%j, %i)[%arg0]
+      effectively computing: %i + %arg0 + %j (most hoistable first)
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+  ];
+}
+
 #endif // WATER_PASSES
