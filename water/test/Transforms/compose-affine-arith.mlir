@@ -59,3 +59,14 @@ func.func @test_muli_without_nsw(%arg0: index, %arg1: index, %arg2: index) -> in
   %1 = arith.muli %0, %arg2 : index
   return %1 : index
 }
+
+// CHECK-LABEL: func.func @test_reorder_by_hoistability
+func.func @test_reorder_by_hoistability(%arg0: index, %arg1: index, %buf: memref<10xindex>) {
+  affine.for %i = 0 to 10 {
+    // Operands all have same hoistability here, so no reordering expected.
+    // CHECK: affine.apply
+    %0 = affine.apply affine_map<(d0)[s0, s1] -> (d0 + s0 + s1)>(%i)[%arg0, %arg1]
+    memref.store %0, %buf[%i] : memref<10xindex>
+  }
+  return
+}
