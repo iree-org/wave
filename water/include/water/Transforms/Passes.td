@@ -190,4 +190,16 @@ def WaterComposeAffineArithPass : Pass<"water-compose-affine-arith"> {
   ];
 }
 
+def WaterReorderAffinePass : Pass<"water-reorder-affine"> {
+  let summary = "Reorder affine.apply operands by hoistability";
+  let description = [{
+    This pass reorders the operands of affine.apply operations to improve
+    hoistability and enable better loop-invariant code motion. Operands
+    that are more likely to be loop-invariant are moved to symbol positions.
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+  ];
+}
+
 #endif // WATER_PASSES

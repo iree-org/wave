@@ -8,6 +8,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   MemrefDecomposition.cpp
+  ReorderAffine.cpp
   SLPVectorizer.cpp
 
   ADDITIONAL_HEADER_DIRS
