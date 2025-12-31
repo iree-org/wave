@@ -169,4 +169,25 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
+def WaterComposeAffineArithPass : Pass<"water-compose-affine-arith"> {
+  let summary = "Compose arithmetic operations with affine.apply operations";
+  let description = [{
+    This pass folds integer arithmetic operations (addi, subi, muli) into
+    affine.apply operations when one operand is an affine.apply result and
+    the other is a constant. This reduces the number of operations and
+    enables better affine analysis.
+
+    Example:
+      %0 = affine.apply affine_map<(d0)[s0] -> (d0 + s0)>(%x)[%y]
+      %1 = arith.addi %0, %c4 : index
+
+    Transforms to:
+      %1 = affine.apply affine_map<(d0)[s0, s1] -> (d0 + s0 + s1)>(%x)[%y, %c4]
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+    "::mlir::arith::ArithDialect",
+  ];
+}
+
 #endif // WATER_PASSES
