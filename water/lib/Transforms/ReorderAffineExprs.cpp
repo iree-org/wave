@@ -22,11 +22,9 @@ namespace mlir::water {
 #include "water/Transforms/Passes.h.inc"
 } // namespace mlir::water
 
-namespace {
-
 // Collect all terms from a commutative binary operation chain.
-void collectCommutativeTerms(AffineExpr expr, AffineExprKind kind,
-                             SmallVectorImpl<AffineExpr> &terms) {
+static void collectCommutativeTerms(AffineExpr expr, AffineExprKind kind,
+                                    SmallVectorImpl<AffineExpr> &terms) {
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
     if (binExpr.getKind() == kind) {
       collectCommutativeTerms(binExpr.getLHS(), kind, terms);
@@ -38,8 +36,9 @@ void collectCommutativeTerms(AffineExpr expr, AffineExprKind kind,
 }
 
 // Get positions of dims/symbols used in an affine expression.
-void getUsedOperands(AffineExpr expr, SmallVectorImpl<unsigned> &dimPositions,
-                     SmallVectorImpl<unsigned> &symPositions) {
+static void getUsedOperands(AffineExpr expr,
+                            SmallVectorImpl<unsigned> &dimPositions,
+                            SmallVectorImpl<unsigned> &symPositions) {
   if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
     dimPositions.push_back(dimExpr.getPosition());
   } else if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
@@ -52,7 +51,7 @@ void getUsedOperands(AffineExpr expr, SmallVectorImpl<unsigned> &dimPositions,
 
 // Compute hoistability score for an affine expression term.
 // Returns the minimum number of enclosing invariant loops across all operands.
-int64_t getTermHoistability(AffineExpr term, AffineApplyOp applyOp) {
+static int64_t getTermHoistability(AffineExpr term, AffineApplyOp applyOp) {
   SmallVector<unsigned> dimPositions, symPositions;
   getUsedOperands(term, dimPositions, symPositions);
 
@@ -83,8 +82,8 @@ int64_t getTermHoistability(AffineExpr term, AffineApplyOp applyOp) {
 // Rebuild a commutative binary expression from sorted terms.
 // Most hoistable terms first, least hoistable last.
 // Build as right-associative tree to preserve order.
-AffineExpr rebuildCommutativeExpr(ArrayRef<AffineExpr> terms,
-                                  AffineExprKind kind) {
+static AffineExpr rebuildCommutativeExpr(ArrayRef<AffineExpr> terms,
+                                         AffineExprKind kind) {
   assert(!terms.empty() && "Cannot rebuild from empty terms");
   if (terms.size() == 1)
     return terms[0];
@@ -99,7 +98,8 @@ AffineExpr rebuildCommutativeExpr(ArrayRef<AffineExpr> terms,
 }
 
 // Recursively reorder commutative operations in an affine expression.
-AffineExpr reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp) {
+static AffineExpr reorderCommutativeOps(AffineExpr expr,
+                                        AffineApplyOp applyOp) {
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
     AffineExprKind kind = binExpr.getKind();
 
@@ -132,6 +132,8 @@ AffineExpr reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp) {
 
   return expr;
 }
+
+namespace {
 
 struct ReorderAffineApplyOperands : public OpRewritePattern<AffineApplyOp> {
   using OpRewritePattern<AffineApplyOp>::OpRewritePattern;
