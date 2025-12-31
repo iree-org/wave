@@ -24,7 +24,7 @@ concurrency:
 
 env:
   LLVM_SHA_FILE: llvm-sha.txt
-  LLVM_CACHE_NUMBER: 2  # Increase to reset cache
+  LLVM_CACHE_NUMBER: 1  # Increase to reset cache
 
 jobs:
   # Water uses its own LLVM version independent of the one used by IREE and
