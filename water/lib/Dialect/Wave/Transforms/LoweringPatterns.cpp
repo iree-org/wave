@@ -56,27 +56,61 @@ public:
     Value parent = adaptor.getParent();
     int64_t byteOffset = 0;
     if (parent) {
-      // We need to ignore the automatically inserted cast. It is due to the
-      // fact that the memref shape coming out of the allocation has a shape
-      // different from one that would be obtained by converting the result
-      // type... This is an annoying repercussion of the strange design choice
-      // in original Wave of having "allocate" represent both allocations and
-      // views, which makes it impossible to have a consistent result type: for
-      // allocations, the shape is the distributed shape, but for views it is
-      // the result shape.
-      auto cast = parent.getDefiningOp<UnrealizedConversionCastOp>();
-      assert(cast && "unexpected type conversion configuration");
+      // We need to handle the automatically inserted cast when the memref shape
+      // coming out of the allocation has a shape different from one that would
+      // be obtained by converting the result type. This is due to the strange
+      // design choice in original Wave of having "allocate" represent both
+      // allocations and views, which makes it impossible to have a consistent
+      // result type: for allocations, the shape is the distributed shape, but
+      // for views it is the result shape.
+      Value memrefParent = parent;
+      if (auto cast = parent.getDefiningOp<UnrealizedConversionCastOp>()) {
+        // If there's a cast, use the original operand.
+        memrefParent = cast.getOperand(0);
+      }
+      // If no cast, the parent is already the correct memref type.
 
       byteOffset = static_cast<int64_t>(*op.getOffset());
       Value off = arith::ConstantIndexOp::create(rewriter, loc, byteOffset);
-      rewriter.replaceOpWithNewOp<memref::ViewOp>(
-          op, memrefType, cast.getOperand(0), off, ValueRange());
+      rewriter.replaceOpWithNewOp<memref::ViewOp>(op, memrefType, memrefParent,
+                                                  off, ValueRange());
 
       return success();
     }
 
-    // No parent : emit plain memref.alloc
-    rewriter.replaceOpWithNewOp<memref::AllocOp>(op, memrefType);
+    // No parent : emit plain memref.alloc.
+    // Check if this allocation might be used as a parent for views by looking
+    // for other allocate operations that use this one as parent.
+    bool isUsedAsParent = false;
+    for (auto user : op.getResult().getUsers()) {
+      if (auto allocateUser = dyn_cast<wave::AllocateOp>(user)) {
+        if (allocateUser.getParent() == op.getResult()) {
+          isUsedAsParent = true;
+          break;
+        }
+      }
+    }
+
+    if (isUsedAsParent) {
+      // For allocations that will be used as parents for views,
+      // we need to allocate a flat buffer rather than a multi-dimensional
+      // memref.
+      ArrayRef<int64_t> shape = memrefType.getShape();
+      int64_t totalElements = 1;
+      for (int64_t dim : shape) {
+        totalElements *= dim;
+      }
+
+      // Create a 1D memref type with the same element type and address space.
+      auto flatMemRefType = MemRefType::get(
+          {totalElements}, memrefType.getElementType(),
+          MemRefLayoutAttrInterface{}, memrefType.getMemorySpace());
+
+      rewriter.replaceOpWithNewOp<memref::AllocOp>(op, flatMemRefType);
+    } else {
+      // Regular allocation - keep the original shape.
+      rewriter.replaceOpWithNewOp<memref::AllocOp>(op, memrefType);
+    }
 
     return success();
   }

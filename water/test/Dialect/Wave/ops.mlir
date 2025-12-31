@@ -304,6 +304,23 @@ func.func @allocate() -> !wave.tensor<[@M, @N] of bf16, <shared>> {
   return %buf : !wave.tensor<[@M, @N] of bf16, <shared>>
 }
 
+// CHECK-LABEL: @allocate_child_rank_mismatch_ok
+func.func @allocate_child_rank_mismatch_ok() {
+  // Parent allocation
+  %parent = wave.allocate { distributed_shape = #wave.expr_list<[] -> (256)> }
+    : !wave.tensor<[@M, @K] of i8, <shared>>
+
+  // Child allocations are exempt from rank constraints (this should be valid)
+  // distributed_shape has rank 1, logical shape has rank 2
+  // CHECK: %[[PARENT:.*]] = wave.allocate {distributed_shape = #wave.expr_list<[] -> (256)>}
+  // CHECK: wave.allocate in %[[PARENT]]
+  %buf = wave.allocate in %parent : !wave.tensor<[@M, @K] of i8, <shared>>
+    { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">] -> (BLOCK_M)>, offset = 128}
+    : !wave.tensor<[@M, @K] of bf16, <shared>>
+
+  return
+}
+
 // CHECK-LABEL: @index_magic_symbols
 func.func @index_magic_symbols(%mem: !wave.tensor<[@M] of f16, <global>>)
 attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 32, BLOCK_N = 32, M = 128, N = 256}>}  {

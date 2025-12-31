@@ -270,6 +270,36 @@ def AllocateOp : WaveOp<"allocate"> {
     " (`in` $parent^ `:` type($parent))? attr-dict `:` type($result)";
 
   let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    /// Returns true if this is a parent allocation (flat buffer with no index expressions).
+    /// Parent allocations have the following characteristics:
+    /// - No index attribute (no per-thread access patterns)
+    /// - Empty symbol list in distributed_shape
+    /// - Distributed shape rank = 1 (flattened buffer)
+    /// - Distributed shape is constant (no symbolic expressions)
+    bool isParentAllocation() {
+      mlir::ArrayAttr indexAttr = getIndexAttr();
+      if (indexAttr && !indexAttr.empty())
+        return false;  // Regular allocations have index expressions.
+
+      wave::WaveExprListAttr distributedShape = getDistributedShape();
+
+      // Empty symbol list in distributed_shape.
+      if (!distributedShape.getSymbols().empty())
+        return false;
+
+      // Distributed shape rank must be 1 (flattened).
+      if (distributedShape.getMap().getNumResults() != 1)
+        return false;
+
+      // Distributed shape must be constant.
+      if (!distributedShape.getMap().isConstant())
+        return false;
+
+      return true;
+    }
+  }];
 }
 
 def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait]> {
