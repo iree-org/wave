@@ -78,12 +78,7 @@ struct InsertBroadcastsPass
     // Insert broadcasts.
     OpBuilder builder(&getContext());
     for (Value value : insertsNeeded) {
-      if (auto opToInsertAfter = value.getDefiningOp()) {
-        builder.setInsertionPointAfter(opToInsertAfter);
-      } else {
-        // Block argument.
-        builder.setInsertionPointToStart(value.getParentBlock());
-      }
+      builder.setInsertionPointAfterValue(value);
 
       auto broadcast = gpu::SubgroupBroadcastOp::create(
           builder, value.getLoc(), value.getType(), value,
