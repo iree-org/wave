@@ -12,9 +12,13 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/Debug.h"
 
 using namespace mlir;
 using namespace mlir::affine;
+
+#define DEBUG_TYPE "water-reorder-affine-exprs"
 
 namespace mlir::water {
 #define GEN_PASS_DEF_WATERREORDERAFFINEEXPRSPASS
@@ -96,6 +100,32 @@ static AffineExpr rebuildCommutativeExpr(ArrayRef<AffineExpr> terms,
   return result;
 }
 
+// Recursively compute hash for affine expression including operand Values.
+static size_t hashExprWithOperands(AffineExpr expr, AffineApplyOp applyOp) {
+  if (auto constExpr = dyn_cast<AffineConstantExpr>(expr))
+    return llvm::hash_combine(AffineExprKind::Constant, constExpr.getValue());
+
+  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+    Value operand = applyOp.getMapOperands()[dimExpr.getPosition()];
+    return llvm::hash_combine(AffineExprKind::DimId,
+                              operand.getAsOpaquePointer());
+  }
+
+  if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
+    unsigned numDims = applyOp.getAffineMap().getNumDims();
+    Value operand = applyOp.getMapOperands()[numDims + symExpr.getPosition()];
+    return llvm::hash_combine(AffineExprKind::SymbolId,
+                              operand.getAsOpaquePointer());
+  }
+
+  if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr))
+    return llvm::hash_combine(binExpr.getKind(),
+                              hashExprWithOperands(binExpr.getLHS(), applyOp),
+                              hashExprWithOperands(binExpr.getRHS(), applyOp));
+
+  return 0;
+}
+
 // Recursively reorder commutative operations in an affine expression.
 static AffineExpr reorderCommutativeOps(AffineExpr expr,
                                         AffineApplyOp applyOp) {
@@ -141,6 +171,7 @@ public:
   void runOnOperation() override {
     IRRewriter rewriter(&getContext());
     SmallVector<AffineApplyOp> opsToRewrite;
+    llvm::SmallDenseMap<size_t, unsigned> exprStats;
 
     // Collect all affine.apply ops that need rewriting.
     getOperation()->walk([&](AffineApplyOp applyOp) {
@@ -150,6 +181,10 @@ public:
 
       AffineExpr expr = map.getResult(0);
       AffineExpr reorderedExpr = reorderCommutativeOps(expr, applyOp);
+
+      // Always compute hash and update statistics for reordered expression.
+      size_t hash = hashExprWithOperands(reorderedExpr, applyOp);
+      exprStats[hash]++;
 
       // Check if the expression changed.
       if (reorderedExpr != expr)
@@ -171,6 +206,12 @@ public:
       rewriter.replaceOpWithNewOp<AffineApplyOp>(applyOp, newMap,
                                                  applyOp.getMapOperands());
     }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "Reordered expression statistics:\n";
+      for (const auto &[hash, count] : exprStats)
+        llvm::dbgs() << "  Hash " << hash << ": " << count << " occurrences\n";
+    });
   }
 };
 } // namespace
