@@ -361,33 +361,6 @@ public:
 };
 
 //===----------------------------------------------------------------------===//
-// ModuleOp
-//===----------------------------------------------------------------------===//
-
-/// Lower `wave.module` to `buitin.module`.
-class ModuleOpLoweringPattern : public OpConversionPattern<wave::ModuleOp> {
-public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(wave::ModuleOp waveModule, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    ModuleOp builtinModule =
-        ModuleOp::create(rewriter, waveModule.getLoc(), waveModule.getName());
-    builtinModule->setAttr(wave::WaveDialect::kNormalFormAttrName,
-                           waveModule.getNormalFormAttr());
-    rewriter.inlineRegionBefore(waveModule.getRegion(),
-                                builtinModule.getBody());
-
-    // Remove the terminator block that was automatically added by builder
-    rewriter.eraseBlock(&builtinModule.getBodyRegion().back());
-    rewriter.eraseOp(waveModule);
-    return success();
-  }
-};
-
-//===----------------------------------------------------------------------===//
 // IterateOp
 //===----------------------------------------------------------------------===//
 
@@ -536,8 +509,8 @@ public:
 void wave::populateWaveMiscellaneousOpsLoweringPatterns(
     WaveTypeConverter &typeConverter, RewritePatternSet &patterns) {
   patterns.add<CastOpLoweringPattern, ExtractSliceOpLoweringPattern,
-               ModuleOpLoweringPattern, IterateOpLoweringPattern,
-               RegisterOpLoweringPattern>(typeConverter, patterns.getContext());
+               IterateOpLoweringPattern, RegisterOpLoweringPattern>(
+      typeConverter, patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
