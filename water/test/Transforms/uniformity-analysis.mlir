@@ -383,8 +383,6 @@ func.func @loop_divergent_bounds() -> index {
   return %result : index
 }
 
-// -----
-
 gpu.module @test_module1 {
   // CHECK-LABEL: gpu.func @kernel_args_uniform
   gpu.func @kernel_args_uniform(%arg0: index, %arg1: index) kernel {
@@ -394,8 +392,6 @@ gpu.module @test_module1 {
     gpu.return
   }
 }
-
-// -----
 
 gpu.module @test_module2 {
   // CHECK-LABEL: gpu.func @kernel_arg_propagation
@@ -410,8 +406,6 @@ gpu.module @test_module2 {
   }
 }
 
-// -----
-
 gpu.module @test_module3 {
   // CHECK-LABEL: gpu.func @kernel_arg_only_uniform_ops
   gpu.func @kernel_arg_only_uniform_ops(%arg0: index, %arg1: index) kernel {
@@ -425,8 +419,6 @@ gpu.module @test_module3 {
   }
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_rem_subgroup_size
 func.func @thread_id_rem_subgroup_size() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x {wave.subgroup_linear = 64 : i64}
@@ -438,8 +430,6 @@ func.func @thread_id_rem_subgroup_size() -> index attributes {subgroup_size = 64
   return %remainder : index
 }
 
-// -----
-
 // CHECK-LABEL: @thread_id_rem_double_subgroup
 func.func @thread_id_rem_double_subgroup() -> index attributes {subgroup_size = 64 : i64} {
   // CHECK: gpu.thread_id x {wave.subgroup_linear = 64 : i64}
@@ -450,8 +440,6 @@ func.func @thread_id_rem_double_subgroup() -> index attributes {subgroup_size = 
   %remainder = arith.remui %tid, %c128 : index
   return %remainder : index
 }
-
-// -----
 
 // CHECK-LABEL: @thread_id_rem_not_divisible
 func.func @thread_id_rem_not_divisible() -> index attributes {subgroup_size = 64 : i64} {
