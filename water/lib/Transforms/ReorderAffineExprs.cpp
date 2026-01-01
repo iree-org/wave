@@ -12,7 +12,6 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 using namespace mlir;
 using namespace mlir::affine;
@@ -135,44 +134,43 @@ static AffineExpr reorderCommutativeOps(AffineExpr expr,
 
 namespace {
 
-struct ReorderAffineApplyOperands : public OpRewritePattern<AffineApplyOp> {
-  using OpRewritePattern<AffineApplyOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(AffineApplyOp applyOp,
-                                PatternRewriter &rewriter) const override {
-    AffineMap map = applyOp.getAffineMap();
-    if (map.getNumResults() != 1)
-      return failure();
-
-    AffineExpr expr = map.getResult(0);
-    AffineExpr reorderedExpr = reorderCommutativeOps(expr, applyOp);
-
-    // Check if the expression changed.
-    if (reorderedExpr == expr)
-      return failure();
-
-    // Create new affine map with reordered expression.
-    AffineMap newMap =
-        AffineMap::get(map.getNumDims(), map.getNumSymbols(), reorderedExpr);
-
-    // Replace with new affine.apply.
-    rewriter.replaceOpWithNewOp<AffineApplyOp>(applyOp, newMap,
-                                               applyOp.getMapOperands());
-    return success();
-  }
-};
-
-} // namespace
-
 class ReorderAffineExprsPass
     : public water::impl::WaterReorderAffineExprsPassBase<
           ReorderAffineExprsPass> {
 public:
   void runOnOperation() override {
-    RewritePatternSet patterns(&getContext());
-    patterns.add<ReorderAffineApplyOperands>(&getContext());
+    IRRewriter rewriter(&getContext());
+    SmallVector<AffineApplyOp> opsToRewrite;
 
-    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
-      signalPassFailure();
+    // Collect all affine.apply ops that need rewriting.
+    getOperation()->walk([&](AffineApplyOp applyOp) {
+      AffineMap map = applyOp.getAffineMap();
+      if (map.getNumResults() != 1)
+        return;
+
+      AffineExpr expr = map.getResult(0);
+      AffineExpr reorderedExpr = reorderCommutativeOps(expr, applyOp);
+
+      // Check if the expression changed.
+      if (reorderedExpr != expr)
+        opsToRewrite.push_back(applyOp);
+    });
+
+    // Rewrite collected ops.
+    for (AffineApplyOp applyOp : opsToRewrite) {
+      rewriter.setInsertionPoint(applyOp);
+      AffineMap map = applyOp.getAffineMap();
+      AffineExpr expr = map.getResult(0);
+      AffineExpr reorderedExpr = reorderCommutativeOps(expr, applyOp);
+
+      // Create new affine map with reordered expression.
+      AffineMap newMap =
+          AffineMap::get(map.getNumDims(), map.getNumSymbols(), reorderedExpr);
+
+      // Replace with new affine.apply.
+      rewriter.replaceOpWithNewOp<AffineApplyOp>(applyOp, newMap,
+                                                 applyOp.getMapOperands());
+    }
   }
 };
+} // namespace
