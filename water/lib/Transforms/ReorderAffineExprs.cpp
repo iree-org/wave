@@ -101,29 +101,32 @@ static AffineExpr rebuildCommutativeExpr(ArrayRef<AffineExpr> terms,
 }
 
 // Recursively compute hash for affine expression including operand Values.
-static size_t hashExprWithOperands(AffineExpr expr, AffineApplyOp applyOp) {
-  if (auto constExpr = dyn_cast<AffineConstantExpr>(expr))
-    return llvm::hash_combine(AffineExprKind::Constant, constExpr.getValue());
+// Populates statistics for all sub-expressions.
+static size_t hashExprWithOperands(AffineExpr expr, AffineApplyOp applyOp,
+                                   llvm::SmallDenseMap<size_t, unsigned> &stats) {
+  size_t hash = 0;
 
-  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+  if (auto constExpr = dyn_cast<AffineConstantExpr>(expr)) {
+    hash = llvm::hash_combine(AffineExprKind::Constant, constExpr.getValue());
+  } else if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
     Value operand = applyOp.getMapOperands()[dimExpr.getPosition()];
-    return llvm::hash_combine(AffineExprKind::DimId,
+    hash = llvm::hash_combine(AffineExprKind::DimId,
                               operand.getAsOpaquePointer());
-  }
-
-  if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
+  } else if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
     unsigned numDims = applyOp.getAffineMap().getNumDims();
     Value operand = applyOp.getMapOperands()[numDims + symExpr.getPosition()];
-    return llvm::hash_combine(AffineExprKind::SymbolId,
+    hash = llvm::hash_combine(AffineExprKind::SymbolId,
                               operand.getAsOpaquePointer());
+  } else if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
+    size_t lhsHash = hashExprWithOperands(binExpr.getLHS(), applyOp, stats);
+    size_t rhsHash = hashExprWithOperands(binExpr.getRHS(), applyOp, stats);
+    hash = llvm::hash_combine(binExpr.getKind(), lhsHash, rhsHash);
   }
 
-  if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr))
-    return llvm::hash_combine(binExpr.getKind(),
-                              hashExprWithOperands(binExpr.getLHS(), applyOp),
-                              hashExprWithOperands(binExpr.getRHS(), applyOp));
+  // Track this sub-expression in statistics.
+  stats[hash]++;
 
-  return 0;
+  return hash;
 }
 
 // Recursively reorder commutative operations in an affine expression.
@@ -182,9 +185,9 @@ public:
       AffineExpr expr = map.getResult(0);
       AffineExpr reorderedExpr = reorderCommutativeOps(expr, applyOp);
 
-      // Always compute hash and update statistics for reordered expression.
-      size_t hash = hashExprWithOperands(reorderedExpr, applyOp);
-      exprStats[hash]++;
+      // Compute hash and update statistics for reordered expression and all
+      // sub-expressions.
+      hashExprWithOperands(reorderedExpr, applyOp, exprStats);
 
       // Check if the expression changed.
       if (reorderedExpr != expr)
