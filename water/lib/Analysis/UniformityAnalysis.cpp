@@ -493,6 +493,29 @@ public:
                        lattice->join(UniformityLatticeStorage::bottom()));
   }
 
+  void visitCallableOperation(
+      CallableOpInterface callable,
+      ArrayRef<AbstractSparseLattice *> argLattices) override {
+    LDBG() << "visiting callable operation " << callable;
+
+    // Check if this is a kernel entry point function.
+    // Kernel arguments are uniform across all threads.
+    Operation *op = callable.getOperation();
+    if (op->hasAttrOfType<UnitAttr>("gpu.kernel")) {
+      LDBG() << "  kernel function - marking arguments as uniform";
+      // Mark all argument lattices as uniform.
+      for (AbstractSparseLattice *absLattice : argLattices) {
+        auto *lattice = static_cast<UniformityLattice *>(absLattice);
+        propagateIfChanged(lattice,
+                           lattice->join(UniformityLatticeStorage::uniform()));
+      }
+    }
+
+    // Call parent implementation.
+    SparseForwardDataFlowAnalysis::visitCallableOperation(callable,
+                                                          argLattices);
+  }
+
   void visitNonControlFlowArguments(Operation *op,
                                     const RegionSuccessor &successor,
                                     ArrayRef<UniformityLattice *> argLattices,

@@ -385,6 +385,45 @@ func.func @loop_divergent_bounds() -> index {
 
 // -----
 
+gpu.module @test_module1 {
+  // CHECK-LABEL: gpu.func @kernel_args_uniform
+  gpu.func @kernel_args_uniform(%arg0: index, %arg1: index) kernel {
+    // Kernel arguments should be marked as uniform.
+    // CHECK: arith.addi {{.*}} {wave.uniform}
+    %sum = arith.addi %arg0, %arg1 : index
+    gpu.return
+  }
+}
+
+// -----
+
+gpu.module @test_module2 {
+  // CHECK-LABEL: gpu.func @kernel_arg_propagation
+  gpu.func @kernel_arg_propagation(%arg0: index) kernel attributes {subgroup_size = 64 : i64} {
+    // CHECK: gpu.thread_id x
+    // CHECK-NOT: wave.uniform
+    %tid = gpu.thread_id x
+    // CHECK: arith.addi
+    // CHECK-NOT: wave.uniform
+    %result = arith.addi %tid, %arg0 : index
+    gpu.return
+  }
+}
+
+// -----
+
+gpu.module @test_module3 {
+  // CHECK-LABEL: gpu.func @kernel_arg_only_uniform_ops
+  gpu.func @kernel_arg_only_uniform_ops(%arg0: index, %arg1: index) kernel {
+    // CHECK: arith.addi {{.*}} {wave.uniform}
+    %sum = arith.addi %arg0, %arg1 : index
+    // CHECK: arith.constant {wave.uniform}
+    %c10 = arith.constant 10 : index
+    // CHECK: arith.muli {{.*}} {wave.uniform}
+    %result = arith.muli %sum, %c10 : index
+    gpu.return
+  }
+}
 
 // -----
 
