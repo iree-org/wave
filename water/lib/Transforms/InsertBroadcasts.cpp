@@ -50,27 +50,26 @@ struct InsertBroadcastsPass
     SmallVector<Value> insertsNeeded;
 
     op->walk([&](Operation *currentOp) {
-      // Skip broadcast operations.
       if (isa<gpu::SubgroupBroadcastOp>(currentOp))
         return;
 
-      // Check each result.
+      // Check if any operand is non-uniform.
+      bool hasNonUniformOperand = false;
+      for (Value operand : currentOp->getOperands()) {
+        if (!water::isUniform(operand, solver)) {
+          hasNonUniformOperand = true;
+          break;
+        }
+      }
+
+      if (!hasNonUniformOperand)
+        return;
+
       for (Value result : currentOp->getResults()) {
-        // Skip if result is not uniform.
         if (!water::isUniform(result, solver))
           continue;
 
-        // Check if any operand is non-uniform.
-        bool hasNonUniformOperand = false;
-        for (Value operand : currentOp->getOperands()) {
-          if (!water::isUniform(operand, solver)) {
-            hasNonUniformOperand = true;
-            break;
-          }
-        }
-
-        // If we have non-uniform operands but uniform result, insert broadcast.
-        if (hasNonUniformOperand && isSupportedBroadcastType(result.getType()))
+        if (isSupportedBroadcastType(result.getType()))
           insertsNeeded.push_back(result);
       }
     });
