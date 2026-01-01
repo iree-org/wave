@@ -343,6 +343,24 @@ func.func @extsi_preserves_subgroup_linear() -> index attributes {subgroup_size 
   return %result : index
 }
 
+// CHECK-LABEL: @index_castui_preserves_subgroup_linear
+func.func @index_castui_preserves_subgroup_linear() -> index attributes {subgroup_size = 64 : i64} {
+  // CHECK: gpu.thread_id x
+  // CHECK-NOT: wave.uniform
+  %tid = gpu.thread_id x
+  // CHECK: arith.index_castui
+  // CHECK-NOT: wave.uniform
+  %tid_i64 = arith.index_castui %tid : index to i64
+  // CHECK: arith.index_castui
+  // CHECK-NOT: wave.uniform
+  %tid_idx = arith.index_castui %tid_i64 : i64 to index
+  // CHECK: arith.constant {wave.uniform}
+  %c64 = arith.constant 64 : index
+  // CHECK: arith.divui {{.*}} {wave.uniform}
+  %result = arith.divui %tid_idx, %c64 : index
+  return %result : index
+}
+
 // CHECK-LABEL: @loop_uniform_bounds
 func.func @loop_uniform_bounds() -> index {
   // CHECK: arith.constant {wave.uniform}

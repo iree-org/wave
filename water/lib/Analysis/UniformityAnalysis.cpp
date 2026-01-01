@@ -457,8 +457,8 @@ public:
 
     // Handle cast operations: preserve SubgroupLinear state.
     // These operations change representation but not value distribution.
-    if (isa<arith::IndexCastOp, arith::TruncIOp, arith::ExtUIOp,
-            arith::ExtSIOp>(op)) {
+    if (isa<arith::IndexCastOp, arith::IndexCastUIOp, arith::TruncIOp,
+            arith::ExtUIOp, arith::ExtSIOp>(op)) {
       assert(operands.size() == 1 && results.size() == 1 &&
              "Cast must have 1 operand and 1 result");
       const UniformityLatticeStorage &operand = operands[0]->getValue();
