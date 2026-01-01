@@ -23,7 +23,7 @@ namespace mlir::water {
 
 static bool isSupportedBroadcastType(Type type) {
   if (auto integerType = llvm::dyn_cast<IntegerType>(type))
-    return llvm::is_contained({8, 16, 32, 64}, (int)integerType.getWidth());
+    return llvm::is_contained({16, 32, 64}, (int)integerType.getWidth());
 
   if (isa<IndexType, FloatType>(type))
     return true;
@@ -49,28 +49,29 @@ struct InsertBroadcastsPass
     // Collect operations that need broadcasts.
     SmallVector<Value> insertsNeeded;
 
+    auto isUniform = [&](Value value) -> bool {
+      return water::isUniform(value, solver);
+    };
+    auto isNonUniform = [&](Value value) -> bool {
+      return !water::isUniform(value, solver);
+    };
+
     op->walk([&](Operation *currentOp) {
       if (isa<gpu::SubgroupBroadcastOp>(currentOp))
         return;
 
       // Check if any operand is non-uniform.
-      bool hasNonUniformOperand = false;
-      for (Value operand : currentOp->getOperands()) {
-        if (!water::isUniform(operand, solver)) {
-          hasNonUniformOperand = true;
-          break;
-        }
-      }
-
-      if (!hasNonUniformOperand)
+      if (!llvm::any_of(currentOp->getOperands(), isNonUniform))
         return;
 
       for (Value result : currentOp->getResults()) {
-        if (!water::isUniform(result, solver))
+        if (!isSupportedBroadcastType(result.getType()))
           continue;
 
-        if (isSupportedBroadcastType(result.getType()))
-          insertsNeeded.push_back(result);
+        if (!isUniform(result))
+          continue;
+
+        insertsNeeded.push_back(result);
       }
     });
 
