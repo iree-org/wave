@@ -1435,7 +1435,7 @@ def handle_conditional(emitter: WaveEmitter, node: fx.Node):
         result_types = [a.ir_value.type for a in flat_else_return]
 
     has_return_values = bool(result_types)
-    if_op = scf_d.IfOp(condition, result_types, hasElse=has_return_values)
+    if_op = scf_d.IfOp(condition, result_types, has_else=has_return_values)
     with InsertionPoint(if_op.then_block) as ip:
         subgraph = emitter.trace.get_subgraph(subgraph_name)
 
