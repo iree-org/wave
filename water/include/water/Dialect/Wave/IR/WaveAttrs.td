@@ -401,19 +401,20 @@ def WaveIndexMappingAttr : AttrDef<WaveDialect, "WaveIndexMapping"> {
     "::mlir::AffineMap":$stride
   );
 
+  let builders = [
+    AttrBuilder<(ins "::llvm::ArrayRef<::mlir::Attribute>":$symbols,
+                 "::mlir::AffineMap":$start,
+                 "::mlir::AffineMap":$step,
+                 "::mlir::AffineMap":$stride)>
+  ];
+
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
+  let skipDefaultBuilders = 1;
 
   let extraClassDeclaration = [{
     // Return a new mapping with all uses of the given input removed.
     ::wave::WaveIndexMappingAttr removeInput(::mlir::Attribute input) const;
-
-    // Return positions of symbols that are used in any of the expressions in
-    // this mapping. They are not returned in any particular order.
-    ::llvm::SmallVector<unsigned> getUsedSymbolPositions() const;
-
-    // Return a copy of the mapping with unused symbols removed.
-    ::wave::WaveIndexMappingAttr removeUnusedInputs() const;
   }];
 }
 

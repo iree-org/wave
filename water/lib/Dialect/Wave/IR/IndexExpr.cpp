@@ -88,8 +88,7 @@ namespace wave {
 WaveIndexMappingAttr applyConstraint(WorkgroupConstraintAttr constraint,
                                      WaveIndexMappingAttr baseMapping) {
   llvm::SmallVector<mlir::Attribute> symbols =
-      llvm::map_to_vector(constraint.getTileSize().getSymbols(),
-                          [](mlir::Attribute symbol) { return symbol; });
+      llvm::to_vector(constraint.getTileSize().getSymbols());
 
   mlir::MLIRContext *context = constraint.getContext();
 
