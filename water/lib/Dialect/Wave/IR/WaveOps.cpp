@@ -89,6 +89,44 @@ static void printSingleSymbol(OpAsmPrinter &printer, Operation *,
 #define GET_OP_CLASSES
 #include "water/Dialect/Wave/IR/WaveOps.cpp.inc"
 
+/// Validates that index expressions match tensor dimension symbols.
+/// Returns failure if the count or symbols don't match.
+static LogicalResult
+verifyIndexDimensionMatch(Operation *op, ArrayAttr indexAttr,
+                          ArrayRef<wave::WaveSymbolAttr> tensorShape) {
+  if (!indexAttr || indexAttr.empty())
+    return success(); // No index expressions is valid
+
+  if (!llvm::hasSingleElement(indexAttr.getValue())) {
+    return op->emitError() << "'index' attribute must contain exactly one "
+                              "dictionary for this op, got "
+                           << indexAttr.size();
+  }
+
+  auto indexDict = dyn_cast<DictionaryAttr>(indexAttr[0]);
+  if (!indexDict)
+    return success(); // Empty dictionary is valid
+
+  // Check count matches
+  if (indexDict.size() != tensorShape.size()) {
+    return op->emitError() << "number of index expressions ("
+                           << indexDict.size()
+                           << ") must match logical shape rank ("
+                           << tensorShape.size() << ")";
+  }
+
+  // Check that each tensor dimension symbol has a corresponding index
+  // expression
+  for (auto symbol : tensorShape) {
+    if (!indexDict.get(symbol.getName())) {
+      return op->emitError() << "missing index expression for dimension '"
+                             << symbol.getName() << "'";
+    }
+  }
+
+  return success();
+}
+
 //-----------------------------------------------------------------------------
 // AllocateOp
 //-----------------------------------------------------------------------------
@@ -105,6 +143,29 @@ llvm::LogicalResult wave::AllocateOp::verify() {
                     llvm::IsaPred<wave::WaveSymbolAttr>)) {
     return emitOpError()
            << "distributed_shape must only contain WaveSymbolAttr";
+  }
+
+  // For regular allocations (not child or parent allocations), enforce rank
+  // consistency.
+  if (!getParent() && !isParentAllocation()) {
+    ArrayAttr indexAttr = getIndexAttr();
+    wave::WaveExprListAttr distributedShape = getDistributedShape();
+    wave::WaveTensorType resultType = getResult().getType();
+
+    uint64_t logicalRank = resultType.getShape().size();
+    uint64_t distributedRank = distributedShape.getMap().getNumResults();
+
+    if (distributedRank != logicalRank) {
+      return emitOpError() << "distributed_shape rank (" << distributedRank
+                           << ") must match logical shape rank (" << logicalRank
+                           << ") for regular allocations";
+    }
+
+    // Use the extracted helper to validate index expressions
+    if (failed(verifyIndexDimensionMatch(*this, indexAttr,
+                                         resultType.getShape()))) {
+      return failure();
+    }
   }
 
   return llvm::success();

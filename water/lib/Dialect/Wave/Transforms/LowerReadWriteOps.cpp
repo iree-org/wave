@@ -191,6 +191,7 @@ buildStartIndices(Location loc, DictionaryAttr indexDict,
                   ArrayRef<wave::WaveSymbolAttr> orderedSyms,
                   PatternRewriter &rewriter,
                   wave::WaveHyperparameterAttr hyper) {
+
   SmallVector<Value> indices;
   indices.reserve(orderedSyms.size());
   for (wave::WaveSymbolAttr symAttr : orderedSyms) {
@@ -414,14 +415,86 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
   }
 }
 
+/// Helper to extract distributed shape from memory value.
+/// Returns the resolved distributed shape for shared memory tensors.
+/// Handles both cases:
+/// 1. WaveTensorType with distributed_shape attribute from AllocateOp.
+/// 2. Already-converted MemRefType.
+/// Returns nullopt if not shared memory or shape cannot be resolved.
+static std::optional<SmallVector<int64_t>>
+getDistributedShape(Value memory, wave::WaveHyperparameterAttr hyper) {
+  // Case 1: Already converted to MemRefType.
+  if (auto memrefType = dyn_cast<MemRefType>(memory.getType())) {
+    // Check if this is shared memory (workgroup address space).
+    if (auto addrSpace = memrefType.getMemorySpace()) {
+      if (auto gpuAddrSpace = dyn_cast<gpu::AddressSpaceAttr>(addrSpace)) {
+        if (gpuAddrSpace.getValue() == gpu::AddressSpace::Workgroup) {
+          SmallVector<int64_t> shape(memrefType.getShape().begin(),
+                                     memrefType.getShape().end());
+          return shape;
+        }
+      }
+    }
+    return std::nullopt;
+  }
+
+  // Case 2: WaveTensorType - trace back to AllocateOp for distributed_shape.
+  auto waveTensorType = dyn_cast<wave::WaveTensorType>(memory.getType());
+  if (!waveTensorType) {
+    return std::nullopt;
+  }
+
+  if (waveTensorType.getAddressSpaceValue() != wave::WaveAddressSpace::Shared) {
+    return std::nullopt;
+  }
+
+  if (auto definingOp = memory.getDefiningOp()) {
+    // Check if defining op is unrealized_conversion_cast and look through it.
+    if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(definingOp)) {
+      if (castOp.getNumOperands() == 1) {
+        Value sourceValue = castOp.getOperand(0);
+
+        // Check if the source is a MemRefType with shared memory.
+        if (auto sourceMemrefType =
+                dyn_cast<MemRefType>(sourceValue.getType())) {
+          if (auto addrSpace = sourceMemrefType.getMemorySpace()) {
+            if (auto gpuAddrSpace =
+                    dyn_cast<gpu::AddressSpaceAttr>(addrSpace)) {
+              if (gpuAddrSpace.getValue() == gpu::AddressSpace::Workgroup) {
+                SmallVector<int64_t> shape(sourceMemrefType.getShape().begin(),
+                                           sourceMemrefType.getShape().end());
+                return shape;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (auto allocateOp = dyn_cast<wave::AllocateOp>(definingOp)) {
+      wave::WaveExprListAttr distributedShape =
+          allocateOp.getDistributedShape();
+
+      // Resolve the distributed shape using hyperparameters.
+      return wave::evaluateMapWithHyperparams(
+          distributedShape.getMap(), distributedShape.getSymbols(), hyper);
+    }
+  }
+
+  return std::nullopt;
+}
+
 /// Describes access info used when lowering Wave ops to vector read/write ops.
 /// - startIndices: base element indices into the memref (size == memref rank).
 /// - mask: vector<i1> guarding per-lane accesses (length == elementsPerThread).
-/// - vectorizedDim: memref dimension spanned by the vector elements
+/// - vectorizedDim: memref dimension spanned by the vector elements.
+/// - memoryOperand: the actual memory operand to use (distributed memref when
+/// shapes differ).
 struct MemAccessInfo {
   SmallVector<Value> startIndices;
   Value mask;
   int64_t vectorizedDim;
+  Value memoryOperand;
 };
 
 // Common lowering for memory operations such as read/write. Checks whether
@@ -468,13 +541,54 @@ static FailureOr<MemAccessInfo> createMemoryIndicesAndMask(
         op, "failed to convert start indices to affine");
   SmallVector<Value> startIndices = std::move(*maybeStartIndices);
 
+  // Determine which memory operand to use for shared memory.
+  Value memoryOperand = nullptr; // Will be set below.
+
+  if (memoryType.getAddressSpaceValue() == wave::WaveAddressSpace::Shared) {
+    std::optional<SmallVector<int64_t>> distributedShape =
+        getDistributedShape(op.getMemory(), hyper);
+
+    if (distributedShape.has_value()) {
+      std::optional<SmallVector<int64_t>> logicalShape =
+          memoryType.getResolvedShape(hyper);
+
+      if (logicalShape.has_value()) {
+        if (*distributedShape != *logicalShape) {
+          // Extract the distributed memref from the unrealized_conversion_cast.
+          if (auto defOp = op.getMemory().getDefiningOp()) {
+            if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+              if (castOp.getNumOperands() == 1) {
+                Value sourceValue = castOp.getOperand(0);
+                if (auto sourceMemrefType =
+                        dyn_cast<MemRefType>(sourceValue.getType())) {
+                  if (auto addrSpace = sourceMemrefType.getMemorySpace()) {
+                    if (auto gpuAddrSpace =
+                            dyn_cast<gpu::AddressSpaceAttr>(addrSpace)) {
+                      if (gpuAddrSpace.getValue() ==
+                          gpu::AddressSpace::Workgroup) {
+                        memoryOperand = sourceValue;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   FailureOr<Value> mask =
       buildMask(op->getLoc(), boundsDict, orderedSyms, rewriter, indexDict,
                 hyper, startIndices, elementsPerThread);
   if (failed(mask))
     return rewriter.notifyMatchFailure(op, "couldn't build the required mask");
 
-  return MemAccessInfo{startIndices, *mask, *vectorizedDim};
+  // If no specific memory operand was set (e.g., for non-shared memory or when
+  // shapes match), memoryOperand will be nullptr, indicating to use the default
+  // converted operand.
+  return MemAccessInfo{startIndices, *mask, *vectorizedDim, memoryOperand};
 }
 
 class ReadOpLoweringPattern : public OpConversionPattern<wave::ReadOp> {
@@ -484,6 +598,7 @@ public:
   LogicalResult
   matchAndRewrite(wave::ReadOp op, wave::ReadOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
     // Check if result is already a vector (after PropagateElementsPerThread
     // pass)
     Type resultType = op.getResult().getType();
@@ -504,7 +619,11 @@ public:
     if (failed(memInfo))
       return failure();
 
-    Value readOp = buildVectorRead(op.getLoc(), rewriter, adaptor.getMemory(),
+    // Use the distributed memref if one was identified, otherwise use the
+    // converted operand.
+    Value memoryToUse =
+        memInfo->memoryOperand ? memInfo->memoryOperand : adaptor.getMemory();
+    Value readOp = buildVectorRead(op.getLoc(), rewriter, memoryToUse,
                                    memInfo->startIndices, vectorType,
                                    memInfo->mask, memInfo->vectorizedDim);
     rewriter.replaceOp(op, readOp);
@@ -519,6 +638,7 @@ public:
   LogicalResult
   matchAndRewrite(wave::WriteOp op, wave::WriteOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
     Value vec = adaptor.getValueToStore();
     auto vecType = cast<VectorType>(vec.getType());
 
@@ -527,9 +647,12 @@ public:
     if (failed(memInfo))
       return failure();
 
-    buildVectorWrite(op.getLoc(), rewriter, adaptor.getMemory(),
-                     memInfo->startIndices, vec, memInfo->mask,
-                     memInfo->vectorizedDim);
+    // Use the distributed memref if one was identified, otherwise use the
+    // converted operand.
+    Value memoryToUse =
+        memInfo->memoryOperand ? memInfo->memoryOperand : adaptor.getMemory();
+    buildVectorWrite(op.getLoc(), rewriter, memoryToUse, memInfo->startIndices,
+                     vec, memInfo->mask, memInfo->vectorizedDim);
     rewriter.eraseOp(op);
     return success();
   }

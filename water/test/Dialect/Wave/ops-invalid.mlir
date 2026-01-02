@@ -348,11 +348,30 @@ func.func @alloc_offset_no_parent() {
 // -----
 
 func.func @alloc_parent_no_offset() {
-  %alloc = wave.allocate { distributed_shape = #wave.expr_list<[] -> (100)> }
+  %alloc = wave.allocate { distributed_shape = #wave.expr_list<[] -> (100, 100)> }
     : !wave.tensor<[@M, @K] of bf16, <shared>>
   // expected-error @below {{expects parent and offset to be present simultaneously}}
-  %buf = wave.allocate in %alloc : !wave.tensor<[@M, @K] of bf16, <shared>> { distributed_shape = #wave.expr_list<[] -> (42)>}
+  %buf = wave.allocate in %alloc : !wave.tensor<[@M, @K] of bf16, <shared>> { distributed_shape = #wave.expr_list<[] -> (42, 42)>}
     : !wave.tensor<[@M, @K] of bf16, <shared>>
+}
+
+// -----
+
+func.func @alloc_distributed_rank_mismatch() {
+  // expected-error @below {{distributed_shape rank (1) must match logical shape rank (2) for regular allocations}}
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
+                         index = [{M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0, 8, 1)>,
+                                  K = #wave<index_mapping[#wave.index_symbol<T1>] -> (T1, 1, 1)>}] }
+    : !wave.tensor<[@M, @K] of f16, <shared>>
+}
+
+// -----
+
+func.func @alloc_index_count_mismatch() {
+  // expected-error @below {{number of index expressions (1) must match logical shape rank (2)}}
+  %buf = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">, #wave.symbol<"K">] -> (M, K)>,
+                         index = [{M = #wave<index_mapping[#wave.index_symbol<T0>] -> (T0, 8, 1)>}] }
+    : !wave.tensor<[@M, @K] of f16, <shared>>
 }
 
 // -----
@@ -607,6 +626,7 @@ func.func @iterate_mixed_tensor_vector_types() attributes {wave.hyperparameters 
   } : (!wave.tensor<[@M] of f32, <register>>, vector<8xf32>) -> (vector<8xf32>, !wave.tensor<[@M] of f32, <register>>)
   return
 }
+
 
 // -----
 
