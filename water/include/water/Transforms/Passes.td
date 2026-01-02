@@ -203,21 +203,29 @@ def WaterReorderAffinePass : Pass<"water-reorder-affine"> {
 }
 
 def WaterReorderAffineExprsPass : Pass<"water-reorder-affine-exprs"> {
-  let summary = "Reorder commutative operations in affine expressions by hoistability";
+  let summary = "Reorder commutative operations to maximize common subexpression elimination";
   let description = [{
     This pass analyzes affine expressions and reorders sequences of commutative
-    operations (add and mul) to improve loop hoistability. It uses
-    numEnclosingInvariantLoops to determine the hoistability of each operand
-    and rearranges expressions so that more hoistable operands are involved
-    first, and least hoistable operands are involved last.
+    operations (add and mul) to maximize opportunities for common subexpression
+    elimination (CSE). It uses hash-based scoring that considers both the
+    expression structure and the actual operand Values to canonicalize equivalent
+    expressions.
 
-    Example in nested loops:
-      %0 = affine.apply (d0 + d1 + s0)>(%j, %i)[%arg0]
-      where %j is inner loop var, %i is outer loop var, %arg0 is invariant
+    The pass works in two phases:
+    1. Collects all affine.apply operations and builds hash statistics for
+       all sub-expressions encountered.
+    2. For each commutative operation, tries all permutations and selects
+       the ordering that maximizes hash hits (sum of occurrence counts).
 
-    Transforms to:
-      %0 = affine.apply (d1 + s0 + d0)>(%j, %i)[%arg0]
-      effectively computing: %i + %arg0 + %j (most hoistable first)
+    The optimization is conservative: if the best score equals the original
+    score, the original form is preserved to avoid unnecessary changes.
+
+    Example:
+      %0 = affine.apply (d0 + d1 + d2)>(%a, %b, %c)
+      %1 = affine.apply (d2 + d0 + d1)>(%a, %b, %c)
+
+    Both expressions are canonicalized to the same form, enabling CSE to
+    eliminate the redundant computation.
   }];
   let dependentDialects = [
     "::mlir::affine::AffineDialect",
