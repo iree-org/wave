@@ -28,12 +28,19 @@ namespace mlir::water {
 
 // Context for stable hashing - maps pointers to indices.
 struct HashContext {
-  llvm::DenseMap<void *, unsigned> valueIndices;
+  llvm::DenseMap<const void *, unsigned> ptrIndices;
+
+  unsigned getIndex(const void *ptr) {
+    auto [it, inserted] = ptrIndices.try_emplace(ptr, ptrIndices.size());
+    return it->second;
+  }
 
   unsigned getValueIndex(Value val) {
-    void *ptr = val.getAsOpaquePointer();
-    auto [it, inserted] = valueIndices.try_emplace(ptr, valueIndices.size());
-    return it->second;
+    return getIndex(val.getAsOpaquePointer());
+  }
+
+  unsigned getExprIndex(AffineExpr expr) {
+    return getIndex(expr.getAsOpaquePointer());
   }
 };
 
@@ -193,9 +200,9 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
       for (auto &term : terms)
         term = reorderCommutativeOps(term, applyOp, ctx, stats);
 
-      // Sort for initial canonical ordering.
-      llvm::stable_sort(terms, [](AffineExpr a, AffineExpr b) {
-        return a.getAsOpaquePointer() < b.getAsOpaquePointer();
+      // Sort for initial canonical ordering using stable indices.
+      llvm::stable_sort(terms, [&](AffineExpr a, AffineExpr b) {
+        return ctx.getExprIndex(a) < ctx.getExprIndex(b);
       });
 
       // Try all permutations and choose the one with maximum hash hits.
@@ -210,8 +217,8 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
           bestExpr = candidate;
         }
       } while (std::next_permutation(
-          terms.begin(), terms.end(), [](AffineExpr a, AffineExpr b) {
-            return a.getAsOpaquePointer() < b.getAsOpaquePointer();
+          terms.begin(), terms.end(), [&](AffineExpr a, AffineExpr b) {
+            return ctx.getExprIndex(a) < ctx.getExprIndex(b);
           }));
 
       return bestExpr;
