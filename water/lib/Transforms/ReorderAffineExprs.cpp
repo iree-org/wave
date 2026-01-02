@@ -13,7 +13,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugLog.h"
 #include <algorithm>
 
 using namespace mlir;
@@ -269,8 +269,10 @@ public:
       hashExprWithOperands(reorderedExpr, applyOp, hashCtx, exprStats);
 
       // Check if the expression changed.
-      if (reorderedExpr != expr)
+      if (reorderedExpr != expr) {
+        LDBG() << "Reordered expression: " << expr << " -> " << reorderedExpr;
         opsToRewrite.push_back({applyOp, reorderedExpr});
+      }
     });
 
     // Rewrite collected ops.
@@ -286,12 +288,6 @@ public:
       rewriter.replaceOpWithNewOp<AffineApplyOp>(applyOp, newMap,
                                                  applyOp.getMapOperands());
     }
-
-    LLVM_DEBUG({
-      llvm::dbgs() << "Reordered expression statistics:\n";
-      for (const auto &[hash, count] : exprStats)
-        llvm::dbgs() << "  Hash " << hash << ": " << count << " occurrences\n";
-    });
   }
 };
 } // namespace
