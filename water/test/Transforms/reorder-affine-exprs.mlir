@@ -6,9 +6,9 @@
 // CHECK-DAG: #[[MAP_ADD:.*]] = affine_map<(d0, d1, d2) -> (d0 + d1 + d2)>
 // CHECK-DAG: #[[MAP_MUL:.*]] = affine_map<(d0)[s0, s1] -> ((d0 * s0) * s1)>
 // CHECK-DAG: #[[MAP_NESTED:.*]] = affine_map<(d0, d1, d2, d3) -> (d0 + d1 + d2 + d3)>
-// CHECK-DAG: #[[MAP_MIXED:.*]] = affine_map<(d0, d1, d2) -> (d2 + d1 * 3 + d0 * 2)>
+// CHECK-DAG: #[[MAP_MIXED:.*]] = affine_map<(d0, d1, d2) -> (d0 * 2 + d1 * 3 + d2)>
 // CHECK-DAG: #[[MAP_NONCOMM:.*]] = affine_map<(d0)[s0] -> ((d0 floordiv s0) mod 8)>
-// CHECK-DAG: #[[MAP_SYMDIM:.*]] = affine_map<(d0, d1)[s0, s1] -> (d0 + d1 + s0 + s1)>
+// CHECK-DAG: #[[MAP_SYMDIM:.*]] = affine_map<(d0, d1)[s0, s1] -> (d0 + s0 + d1 + s1)>
 // CHECK-DAG: #[[MAP_CONST:.*]] = affine_map<(d0, d1) -> (d0 + d1 + 15)>
 // CHECK-DAG: #[[MAP_DEEP:.*]] = affine_map<(d0, d1, d2, d3, d4) -> (d0 + d1 + d2 + d3 + d4)>
 // CHECK-DAG: #[[MAP_SINGLE:.*]] = affine_map<(d0) -> (d0)>

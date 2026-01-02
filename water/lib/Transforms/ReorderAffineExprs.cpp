@@ -200,6 +200,11 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
       for (auto &term : terms)
         term = reorderCommutativeOps(term, applyOp, ctx, stats);
 
+      // Rebuild in original order (with recursively reordered subterms).
+      AffineExpr originalReordered = rebuildCommutativeExpr(terms, kind);
+      unsigned originalScore =
+          computeHashScore(originalReordered, applyOp, ctx, stats);
+
       // Sort for initial canonical ordering using stable indices.
       llvm::stable_sort(terms, [&](AffineExpr a, AffineExpr b) {
         return ctx.getExprIndex(a) < ctx.getExprIndex(b);
@@ -220,6 +225,10 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
           terms.begin(), terms.end(), [&](AffineExpr a, AffineExpr b) {
             return ctx.getExprIndex(a) < ctx.getExprIndex(b);
           }));
+
+      // If best score equals original score, return the original form.
+      if (bestScore == originalScore)
+        return originalReordered;
 
       return bestExpr;
     }
