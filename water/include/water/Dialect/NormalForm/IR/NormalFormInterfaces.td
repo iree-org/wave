@@ -23,16 +23,30 @@ def NormalFormAttrInterface : AttrInterface<"NormalFormAttrInterface"> {
        TODO: type verification hook
       }],
       "::llvm::LogicalResult", "verifyType",
-      (ins "::mlir::Type":$type)>,
+      (ins "::mlir::Type":$type),
+      [{
+        return llvm::success();
+      }]
+    >,
+
     InterfaceMethod<[{
         TODO: attribute verification hook
       }], "::llvm::LogicalResult", "verifyAttribute",
-        (ins "::mlir::Attribute":$attr)>,
+        (ins "::mlir::Attribute":$attr),
+      [{
+        return llvm::success();
+      }]
+    >,
+
     InterfaceMethod<[{
        TODO: op verification hook
       }],
       "::llvm::LogicalResult", "verifyOperation",
-      (ins "::mlir::Operation*":$op)>,
+      (ins "::mlir::Operation*":$op),
+      [{
+        return llvm::success();
+      }]
+    >,
   ];
 }
 
