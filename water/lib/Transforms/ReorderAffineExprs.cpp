@@ -241,7 +241,7 @@ class ReorderAffineExprsPass
 public:
   void runOnOperation() override {
     IRRewriter rewriter(&getContext());
-    SmallVector<AffineApplyOp> opsToRewrite;
+    SmallVector<std::pair<AffineApplyOp, AffineExpr>> opsToRewrite;
     llvm::SmallDenseMap<size_t, unsigned> exprStats;
     HashContext hashCtx;
 
@@ -261,16 +261,13 @@ public:
 
       // Check if the expression changed.
       if (reorderedExpr != expr)
-        opsToRewrite.push_back(applyOp);
+        opsToRewrite.push_back({applyOp, reorderedExpr});
     });
 
     // Rewrite collected ops.
-    for (AffineApplyOp applyOp : opsToRewrite) {
+    for (auto &[applyOp, reorderedExpr] : opsToRewrite) {
       rewriter.setInsertionPoint(applyOp);
       AffineMap map = applyOp.getAffineMap();
-      AffineExpr expr = map.getResult(0);
-      AffineExpr reorderedExpr =
-          reorderCommutativeOps(expr, applyOp, hashCtx, exprStats);
 
       // Create new affine map with reordered expression.
       AffineMap newMap =
