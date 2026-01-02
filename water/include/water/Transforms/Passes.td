@@ -224,4 +224,32 @@ def WaterReorderAffineExprsPass : Pass<"water-reorder-affine-exprs"> {
   ];
 }
 
+def WaterReorderAffineExprsByRangePass : Pass<"water-reorder-affine-exprs-by-range"> {
+  let summary = "Reorder commutative operations to minimize intermediate result widths";
+  let description = [{
+    This pass analyzes affine expressions and reorders sequences of commutative
+    operations (add and mul) to minimize the bit width of intermediate results.
+    It uses integer range analysis to infer the range of each operand and
+    subexpression, then tries all permutations to find the ordering that
+    minimizes the maximum intermediate width.
+
+    This can reduce register pressure and improve performance by keeping
+    intermediate values as small as possible during computation.
+
+    Example:
+      Given: a + b + c where ranges are:
+        a: [0, 10]
+        b: [0, 100]
+        c: [0, 5]
+
+      Original: (a + b) + c gives intermediate [0, 110], then [0, 115]
+      Optimized: (a + c) + b gives intermediate [0, 15], then [0, 115]
+
+      The optimized version has a smaller maximum intermediate width (15 vs 110).
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+  ];
+}
+
 #endif // WATER_PASSES

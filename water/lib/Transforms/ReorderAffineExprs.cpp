@@ -6,11 +6,15 @@
 
 #include "water/Transforms/Passes.h"
 
+#include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
+#include "mlir/Analysis/DataFlow/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/DebugLog.h"
@@ -23,6 +27,7 @@ using namespace mlir::affine;
 
 namespace mlir::water {
 #define GEN_PASS_DEF_WATERREORDERAFFINEEXPRSPASS
+#define GEN_PASS_DEF_WATERREORDERAFFINEEXPRSBYRANGEPASS
 #include "water/Transforms/Passes.h.inc"
 } // namespace mlir::water
 
@@ -294,6 +299,148 @@ public:
       rewriter.replaceOpWithNewOp<AffineApplyOp>(applyOp, newMap,
                                                  applyOp.getMapOperands());
     }
+  }
+};
+
+class ReorderAffineExprsByRangePass
+    : public water::impl::WaterReorderAffineExprsByRangePassBase<
+          ReorderAffineExprsByRangePass> {
+public:
+  void runOnOperation() override {
+    IRRewriter rewriter(&getContext());
+    SmallVector<std::pair<AffineApplyOp, AffineExpr>> opsToRewrite;
+
+    // Run integer range analysis.
+    DataFlowSolver solver;
+    dataflow::loadBaselineAnalyses(solver);
+    solver.load<dataflow::IntegerRangeAnalysis>();
+    if (failed(solver.initializeAndRun(getOperation())))
+      return signalPassFailure();
+
+    // Collect all affine.apply ops that need rewriting.
+    getOperation()->walk([&](AffineApplyOp applyOp) {
+      AffineMap map = applyOp.getAffineMap();
+      if (map.getNumResults() != 1)
+        return;
+
+      AffineExpr expr = map.getResult(0);
+
+      // Create scoring function that minimizes intermediate result widths.
+      auto scoreFn = [&](AffineExpr e) -> unsigned {
+        return computeRangeScore(e, applyOp, solver);
+      };
+
+      AffineExpr reorderedExpr = reorderCommutativeOps(expr, scoreFn);
+
+      // Check if the expression changed.
+      if (reorderedExpr != expr) {
+        LDBG() << "Reordered expression by range: " << expr << " -> "
+               << reorderedExpr;
+        opsToRewrite.push_back({applyOp, reorderedExpr});
+      }
+    });
+
+    // Rewrite collected ops.
+    for (auto &[applyOp, reorderedExpr] : opsToRewrite) {
+      rewriter.setInsertionPoint(applyOp);
+      AffineMap map = applyOp.getAffineMap();
+
+      // Create new affine map with reordered expression.
+      AffineMap newMap =
+          AffineMap::get(map.getNumDims(), map.getNumSymbols(), reorderedExpr);
+
+      // Replace with new affine.apply.
+      rewriter.replaceOpWithNewOp<AffineApplyOp>(applyOp, newMap,
+                                                 applyOp.getMapOperands());
+    }
+  }
+
+private:
+  // Compute a score that favors orderings with narrower intermediate results.
+  // Higher score is better (we invert the width so smaller widths = higher
+  // scores).
+  unsigned computeRangeScore(AffineExpr expr, AffineApplyOp applyOp,
+                             DataFlowSolver &solver) {
+    // Get the maximum width encountered when evaluating this expression tree.
+    unsigned width = computeMaxIntermediateWidth(expr, applyOp, solver);
+    // Invert so that smaller widths give higher scores.
+    return UINT_MAX - width;
+  }
+
+  // Recursively compute the maximum bit width of intermediate results.
+  unsigned computeMaxIntermediateWidth(AffineExpr expr, AffineApplyOp applyOp,
+                                       DataFlowSolver &solver) {
+    ConstantIntRanges range = inferRange(expr, applyOp, solver);
+    unsigned width = range.umin().getActiveBits();
+    width = std::max(width, range.umax().getActiveBits());
+    width = std::max(width, range.smin().getSignificantBits());
+    width = std::max(width, range.smax().getSignificantBits());
+
+    // For binary expressions, also consider the widths of subexpressions.
+    if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
+      unsigned lhsWidth =
+          computeMaxIntermediateWidth(binExpr.getLHS(), applyOp, solver);
+      unsigned rhsWidth =
+          computeMaxIntermediateWidth(binExpr.getRHS(), applyOp, solver);
+      width = std::max(width, std::max(lhsWidth, rhsWidth));
+    }
+
+    return width;
+  }
+
+  // Infer the integer range of an affine expression.
+  ConstantIntRanges inferRange(AffineExpr expr, AffineApplyOp applyOp,
+                               DataFlowSolver &solver) {
+    if (auto constExpr = dyn_cast<AffineConstantExpr>(expr)) {
+      APInt value(64, constExpr.getValue());
+      return ConstantIntRanges::constant(value);
+    }
+
+    if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+      Value operand = applyOp.getMapOperands()[dimExpr.getPosition()];
+      return getRangeForValue(operand, solver);
+    }
+
+    if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
+      unsigned numDims = applyOp.getAffineMap().getNumDims();
+      Value operand = applyOp.getMapOperands()[numDims + symExpr.getPosition()];
+      return getRangeForValue(operand, solver);
+    }
+
+    if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
+      ConstantIntRanges lhs = inferRange(binExpr.getLHS(), applyOp, solver);
+      ConstantIntRanges rhs = inferRange(binExpr.getRHS(), applyOp, solver);
+
+      // Use InferIntRangeCommon.h utilities for computing ranges.
+      std::array<ConstantIntRanges, 2> operands = {lhs, rhs};
+      switch (binExpr.getKind()) {
+      case AffineExprKind::Add:
+        return intrange::inferAdd(operands, intrange::OverflowFlags::Nsw);
+      case AffineExprKind::Mul:
+        return intrange::inferMul(operands, intrange::OverflowFlags::Nsw);
+      case AffineExprKind::Mod:
+        return intrange::inferRemS(operands);
+      case AffineExprKind::FloorDiv:
+        return intrange::inferFloorDivS(operands);
+      case AffineExprKind::CeilDiv:
+        return intrange::inferCeilDivS(operands);
+      default:
+        break;
+      }
+    }
+
+    // Conservative fallback.
+    return ConstantIntRanges::maxRange(64);
+  }
+
+  // Get the integer range for a Value using dataflow analysis.
+  ConstantIntRanges getRangeForValue(Value value, DataFlowSolver &solver) {
+    auto *state = solver.lookupState<dataflow::IntegerValueRangeLattice>(value);
+    if (state && !state->getValue().isUninitialized())
+      return state->getValue().getValue();
+
+    // Conservative fallback.
+    return ConstantIntRanges::maxRange(64);
   }
 };
 } // namespace
