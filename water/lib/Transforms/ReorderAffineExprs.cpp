@@ -182,11 +182,12 @@ hashExprWithOperands(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
   return hash;
 }
 
+// Type alias for scoring function used to evaluate expression orderings.
+using ScoringFn = llvm::function_ref<unsigned(AffineExpr)>;
+
 // Recursively reorder commutative operations in an affine expression.
-// Tries all permutations to maximize hash hits.
-static AffineExpr
-reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
-                      const llvm::SmallDenseMap<size_t, unsigned> &stats) {
+// Tries all permutations to maximize the score given by scoreFn.
+static AffineExpr reorderCommutativeOps(AffineExpr expr, ScoringFn scoreFn) {
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
     AffineExprKind kind = binExpr.getKind();
 
@@ -198,32 +199,32 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
 
       // Recursively reorder each term.
       for (auto &term : terms)
-        term = reorderCommutativeOps(term, applyOp, ctx, stats);
+        term = reorderCommutativeOps(term, scoreFn);
 
       // Rebuild in original order (with recursively reordered subterms).
       AffineExpr originalReordered = rebuildCommutativeExpr(terms, kind);
-      unsigned originalScore =
-          computeHashScore(originalReordered, applyOp, ctx, stats);
+      unsigned originalScore = scoreFn(originalReordered);
 
-      // Sort for initial canonical ordering using stable indices.
-      llvm::stable_sort(terms, [&](AffineExpr a, AffineExpr b) {
-        return ctx.getExprIndex(a) < ctx.getExprIndex(b);
+      // Sort for initial canonical ordering.
+      // Use pointer values for stable ordering across invocations.
+      llvm::stable_sort(terms, [](AffineExpr a, AffineExpr b) {
+        return a.getAsOpaquePointer() < b.getAsOpaquePointer();
       });
 
-      // Try all permutations and choose the one with maximum hash hits.
+      // Try all permutations and choose the one with maximum score.
       AffineExpr bestExpr = rebuildCommutativeExpr(terms, kind);
-      unsigned bestScore = computeHashScore(bestExpr, applyOp, ctx, stats);
+      unsigned bestScore = scoreFn(bestExpr);
 
       do {
         AffineExpr candidate = rebuildCommutativeExpr(terms, kind);
-        unsigned score = computeHashScore(candidate, applyOp, ctx, stats);
+        unsigned score = scoreFn(candidate);
         if (score > bestScore) {
           bestScore = score;
           bestExpr = candidate;
         }
       } while (std::next_permutation(
-          terms.begin(), terms.end(), [&](AffineExpr a, AffineExpr b) {
-            return ctx.getExprIndex(a) < ctx.getExprIndex(b);
+          terms.begin(), terms.end(), [](AffineExpr a, AffineExpr b) {
+            return a.getAsOpaquePointer() < b.getAsOpaquePointer();
           }));
 
       // If best score equals original score, return the original form.
@@ -235,8 +236,8 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
 
     // For non-commutative operations, recursively reorder children.
     return getAffineBinaryOpExpr(
-        kind, reorderCommutativeOps(binExpr.getLHS(), applyOp, ctx, stats),
-        reorderCommutativeOps(binExpr.getRHS(), applyOp, ctx, stats));
+        kind, reorderCommutativeOps(binExpr.getLHS(), scoreFn),
+        reorderCommutativeOps(binExpr.getRHS(), scoreFn));
   }
 
   return expr;
@@ -261,8 +262,13 @@ public:
         return;
 
       AffineExpr expr = map.getResult(0);
-      AffineExpr reorderedExpr =
-          reorderCommutativeOps(expr, applyOp, hashCtx, exprStats);
+
+      // Create scoring function for this operation.
+      auto scoreFn = [&](AffineExpr e) {
+        return computeHashScore(e, applyOp, hashCtx, exprStats);
+      };
+
+      AffineExpr reorderedExpr = reorderCommutativeOps(expr, scoreFn);
 
       // Compute hash and update statistics for reordered expression and all
       // sub-expressions.
