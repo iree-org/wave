@@ -791,9 +791,8 @@ struct MmaIndexingExprBuilder {
     };
     auto buildOne = [&](const MmaSingleIndexExprBuilder &builder) {
       return wave::WaveIndexMappingAttr::get(
-                 ctx, symbols, buildMap(builder.offsetExpr),
-                 buildMap(builder.sizeExpr), buildMap(builder.strideExpr))
-          .removeUnusedInputs();
+          ctx, symbols, buildMap(builder.offsetExpr),
+          buildMap(builder.sizeExpr), buildMap(builder.strideExpr));
     };
 
     if (mSymbol)
