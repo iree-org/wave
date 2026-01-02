@@ -333,3 +333,30 @@ module attributes {wave.normal_form = #wave.normal_form<full_types>} {
     return
   }
 }
+
+// -----
+
+// Test extract_slice propagates elements_per_thread as a no-op.
+module attributes {wave.normal_form = #wave.normal_form<full_types>} {
+
+  // CHECK-LABEL: @extract_slice_propagates_ept
+  func.func @extract_slice_propagates_ept(%mem: !wave.tensor<[@M, @N] of f32, <global>>)
+    attributes {wave.hyperparameters = #wave.hyperparameters<{M = 64, N = 64}>} {
+
+    // CHECK: %[[REG:.*]] = wave.read {{.*}} : (!wave.tensor<[@M, @N] of f32, <global>>) -> vector<16xf32>
+    %reg = wave.read %mem {elements_per_thread = 16} : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // extract_slice should propagate elements_per_thread through (no-op trait).
+    // CHECK: %[[SLICE:.*]] = wave.extract_slice %[[REG]]
+    // CHECK-SAME: : (vector<16xf32>) -> vector<16xf32>
+    %slice = wave.extract_slice %reg {
+      offset = #wave.expr_list<[] -> (0)>,
+      size = #wave.expr_list<[] -> (1)>,
+      stride = #wave.expr_list<[] -> (1)>
+    } : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+
+    // CHECK: wave.write %[[SLICE]], {{.*}} : vector<16xf32>, !wave.tensor<[@M, @N] of f32, <global>>
+    wave.write %slice, %mem {elements_per_thread = 16} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
+    return
+  }
+}

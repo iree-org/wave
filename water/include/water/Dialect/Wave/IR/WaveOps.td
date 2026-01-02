@@ -272,7 +272,7 @@ def AllocateOp : WaveOp<"allocate"> {
   let hasVerifier = 1;
 }
 
-def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait]> {
+def ExtractSliceOp : WaveOp<"extract_slice", [WaveInferTypeOpInterface, IdentityTypeInferenceOpTrait, CompatibleOperandsAndResultsOpTrait, NoOpElementsPerThreadOpTrait]> {
   let summary = "Extracts a subvector from an n-D tensor";
   let description = [{
     Extracts an n-D subvector from an n-D tensor using k-D offset, size, and
