@@ -27,3 +27,103 @@ module attributes {wave.unexpected = 42} {}
 
 // expected-error @below {{symbols names starting with '_' are reserved for internal use}}
 module attributes {wave_test.symbol = #wave.symbol<"_A">}
+
+// -----
+
+// expected-error @below {{start map should have exactly one result, got 2}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0] -> (s0, s0 + 1)>,
+  step = affine_map<()[s0] -> (s0)>,
+  stride = affine_map<()[s0] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{step map should have exactly one result, got 2}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0] -> (s0)>,
+  step = affine_map<()[s0] -> (s0, s0 + 1)>,
+  stride = affine_map<()[s0] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{stride map should have exactly one result, got 2}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0] -> (s0)>,
+  step = affine_map<()[s0] -> (s0)>,
+  stride = affine_map<()[s0] -> (s0, s0 + 1)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{start map should have the same number of symbols as given to the attribute, got 2 symbols for 1 symbols}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0, s1] -> (s0)>,
+  step = affine_map<()[s0] -> (s0)>,
+  stride = affine_map<()[s0] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{step map should have the same number of symbols as given to the attribute, got 2 symbols for 1 symbols}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0] -> (s0)>,
+  step = affine_map<()[s0, s1] -> (s0)>,
+  stride = affine_map<()[s0] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{stride map should have the same number of symbols as given to the attribute, got 2 symbols for 1 symbols}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0] -> (s0)>,
+  step = affine_map<()[s0] -> (s0)>,
+  stride = affine_map<()[s0, s1] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{start map should have no dimensions, got 1 dimensions}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<(d0)[s0] -> (s0)>,
+  step = affine_map<()[s0] -> (s0)>,
+  stride = affine_map<()[s0] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{step map should have no dimensions, got 1 dimensions}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0] -> (s0)>,
+  step = affine_map<(d0)[s0] -> (s0)>,
+  stride = affine_map<()[s0] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{stride map should have no dimensions, got 1 dimensions}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>],
+  start = affine_map<()[s0] -> (s0)>,
+  step = affine_map<()[s0] -> (s0)>,
+  stride = affine_map<(d0)[s0] -> (s0)>
+} : () -> ()
+
+// -----
+
+// expected-error @below {{duplicate symbol: #wave.index_symbol<WG0>}}
+"wave_test.create_index_mapping"() {
+  symbols = [#wave.index_symbol<WG0>, #wave.index_symbol<WG0>],
+  start = affine_map<()[s0, s1] -> (s0)>,
+  step = affine_map<()[s0, s1] -> (s0)>,
+  stride = affine_map<()[s0, s1] -> (s0)>
+} : () -> ()

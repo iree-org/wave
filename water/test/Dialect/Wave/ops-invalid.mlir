@@ -294,7 +294,7 @@ func.func @index_attr_wrong_value_type(%arg0: f32) {
 
 func.func @index_attr_iter_not_allowed(%arg0: f32) {
   // expected-error @below {{index expression uses iterator symbol M which is not defined by any parent op}}
-  wave.register %arg0 index [{M : [#wave.iter<"M">] -> (0, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
+  wave.register %arg0 index [{M : [#wave.iter<"M">] -> (_Iter_M, 1, 1)}] : !wave.tensor<[@M] of f32, <register>>
   return
 }
 

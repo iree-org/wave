@@ -721,7 +721,7 @@ static bool isIndexExprMapFunctionOf(AffineMap map,
 static FailureOr<AffineMap> getIndexExprStartJoinedMap(
     AffineMap lhs, AffineMap rhs, ArrayRef<Attribute> lhsSymbols,
     ArrayRef<Attribute> rhsSymbols, ArrayRef<Attribute> allSymbols,
-    ArrayRef<unsigned> disallowedSymbols) {
+    ArrayRef<Attribute> commonSymbols) {
   if (!lhs)
     return rhs;
   if (!rhs)
@@ -754,8 +754,13 @@ static FailureOr<AffineMap> getIndexExprStartJoinedMap(
   // The symbolic part of the difference should not depend on any of the
   // disallowed symbols (usually meaning symbols appearing in both).
   for (AffineExpr expr : difference.getResults()) {
-    for (unsigned symbol : disallowedSymbols) {
-      if (expr.isFunctionOfSymbol(symbol))
+    for (Attribute symbol : commonSymbols) {
+      auto it = llvm::find(allSymbols, symbol);
+      assert(it != allSymbols.end() &&
+             "expected common symbols to be a subset of all symbols");
+      unsigned position = std::distance(allSymbols.begin(), it);
+      if (expr.isFunctionOfSymbol(position) &&
+          !llvm::is_contained(threadLikePositions, position))
         return failure();
     }
   }
@@ -805,8 +810,7 @@ static FailureOr<AffineMap> getIndexExprStartJoinedMap(
 // join to lattice top.
 static FailureOr<AffineMap> getIndexExprStepStrideJoinedMap(
     AffineMap lhs, AffineMap rhs, ArrayRef<Attribute> lhsSymbols,
-    ArrayRef<Attribute> rhsSymbols, ArrayRef<Attribute> allSymbols,
-    ArrayRef<unsigned> disallowedSymbols) {
+    ArrayRef<Attribute> rhsSymbols, ArrayRef<Attribute> allSymbols) {
   if (!lhs)
     return rhs;
   if (!rhs)
@@ -842,9 +846,6 @@ static wave::WaveIndexMappingAttr
 getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
                           wave::WaveIndexMappingAttr rhs) {
 
-  lhs = lhs.removeUnusedInputs();
-  rhs = rhs.removeUnusedInputs();
-
   // Collect all unique symbol names from both index mappings in order.
   llvm::SmallVector<Attribute> allSymbols;
   llvm::SetVector<Attribute> lhsSymbols(llvm::from_range, lhs.getSymbols());
@@ -852,26 +853,20 @@ getIndexExprsJoinMappings(wave::WaveIndexMappingAttr lhs,
   wave::aggregateAllSymbols(llvm::ArrayRef{lhsSymbols, rhsSymbols}, allSymbols);
   llvm::SetVector<Attribute> commonSymbols =
       llvm::set_intersection(lhsSymbols, rhsSymbols);
-  llvm::SmallVector<unsigned> commonSymbolPositions;
-  for (Attribute symbol : commonSymbols) {
-    auto it = llvm::find(lhsSymbols, symbol);
-    assert(it != lhsSymbols.end());
-    commonSymbolPositions.push_back(std::distance(lhsSymbols.begin(), it));
-  }
 
   FailureOr<AffineMap> joinedStart = getIndexExprStartJoinedMap(
       lhs.getStart(), rhs.getStart(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
+      rhsSymbols.getArrayRef(), allSymbols, commonSymbols.getArrayRef());
   if (failed(joinedStart))
     return nullptr;
   FailureOr<AffineMap> joinedStep = getIndexExprStepStrideJoinedMap(
       lhs.getStep(), rhs.getStep(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
+      rhsSymbols.getArrayRef(), allSymbols);
   if (failed(joinedStep))
     return nullptr;
   FailureOr<AffineMap> joinedStride = getIndexExprStepStrideJoinedMap(
       lhs.getStride(), rhs.getStride(), lhsSymbols.getArrayRef(),
-      rhsSymbols.getArrayRef(), allSymbols, commonSymbolPositions);
+      rhsSymbols.getArrayRef(), allSymbols);
   if (failed(joinedStride))
     return nullptr;
 
@@ -1000,7 +995,7 @@ wave::IndexExprsLatticeStorage::withoutIterSymbols(
         for (wave::WaveSymbolAttr iterSymbol : iterSymbols) {
           auto actualIterSymbol =
               wave::WaveIterSymbolAttr::get(ctx, iterSymbol.getName());
-          value = value.removeInput(actualIterSymbol).removeUnusedInputs();
+          value = value.removeInput(actualIterSymbol);
         }
         return NamedAttribute(attr.getName(), value);
       });
