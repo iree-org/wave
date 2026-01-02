@@ -26,6 +26,17 @@ namespace mlir::water {
 #include "water/Transforms/Passes.h.inc"
 } // namespace mlir::water
 
+// Context for stable hashing - maps pointers to indices.
+struct HashContext {
+  llvm::DenseMap<void *, unsigned> valueIndices;
+
+  unsigned getValueIndex(Value val) {
+    void *ptr = val.getAsOpaquePointer();
+    auto [it, inserted] = valueIndices.try_emplace(ptr, valueIndices.size());
+    return it->second;
+  }
+};
+
 // Collect all terms from a commutative binary operation chain.
 static void collectCommutativeTerms(AffineExpr expr, AffineExprKind kind,
                                     SmallVectorImpl<AffineExpr> &terms) {
@@ -102,26 +113,27 @@ static AffineExpr rebuildCommutativeExpr(ArrayRef<AffineExpr> terms,
 }
 
 // Compute hash for affine expression including operand Values (read-only).
-static size_t computeExprHash(AffineExpr expr, AffineApplyOp applyOp) {
+static size_t computeExprHash(AffineExpr expr, AffineApplyOp applyOp,
+                              HashContext &ctx) {
   if (auto constExpr = dyn_cast<AffineConstantExpr>(expr))
     return llvm::hash_combine(AffineExprKind::Constant, constExpr.getValue());
 
   if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
     Value operand = applyOp.getMapOperands()[dimExpr.getPosition()];
-    return llvm::hash_combine(AffineExprKind::DimId,
-                              operand.getAsOpaquePointer());
+    unsigned valueIdx = ctx.getValueIndex(operand);
+    return llvm::hash_combine(AffineExprKind::DimId, valueIdx);
   }
 
   if (auto symExpr = dyn_cast<AffineSymbolExpr>(expr)) {
     unsigned numDims = applyOp.getAffineMap().getNumDims();
     Value operand = applyOp.getMapOperands()[numDims + symExpr.getPosition()];
-    return llvm::hash_combine(AffineExprKind::SymbolId,
-                              operand.getAsOpaquePointer());
+    unsigned valueIdx = ctx.getValueIndex(operand);
+    return llvm::hash_combine(AffineExprKind::SymbolId, valueIdx);
   }
 
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
-    size_t lhsHash = computeExprHash(binExpr.getLHS(), applyOp);
-    size_t rhsHash = computeExprHash(binExpr.getRHS(), applyOp);
+    size_t lhsHash = computeExprHash(binExpr.getLHS(), applyOp, ctx);
+    size_t rhsHash = computeExprHash(binExpr.getRHS(), applyOp, ctx);
     return llvm::hash_combine(binExpr.getKind(), lhsHash, rhsHash);
   }
 
@@ -131,14 +143,14 @@ static size_t computeExprHash(AffineExpr expr, AffineApplyOp applyOp) {
 // Compute total score for expression by summing hit counts of all
 // sub-expressions.
 static unsigned
-computeHashScore(AffineExpr expr, AffineApplyOp applyOp,
+computeHashScore(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
                  const llvm::SmallDenseMap<size_t, unsigned> &stats) {
-  size_t hash = computeExprHash(expr, applyOp);
+  size_t hash = computeExprHash(expr, applyOp, ctx);
   unsigned score = stats.lookup(hash);
 
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
-    score += computeHashScore(binExpr.getLHS(), applyOp, stats);
-    score += computeHashScore(binExpr.getRHS(), applyOp, stats);
+    score += computeHashScore(binExpr.getLHS(), applyOp, ctx, stats);
+    score += computeHashScore(binExpr.getRHS(), applyOp, ctx, stats);
   }
 
   return score;
@@ -147,17 +159,17 @@ computeHashScore(AffineExpr expr, AffineApplyOp applyOp,
 // Recursively compute hash for affine expression including operand Values.
 // Populates statistics for all sub-expressions.
 static size_t
-hashExprWithOperands(AffineExpr expr, AffineApplyOp applyOp,
+hashExprWithOperands(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
                      llvm::SmallDenseMap<size_t, unsigned> &stats) {
-  size_t hash = computeExprHash(expr, applyOp);
+  size_t hash = computeExprHash(expr, applyOp, ctx);
 
   // Track this sub-expression in statistics.
   stats[hash]++;
 
   // Recurse into sub-expressions to track them too.
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
-    hashExprWithOperands(binExpr.getLHS(), applyOp, stats);
-    hashExprWithOperands(binExpr.getRHS(), applyOp, stats);
+    hashExprWithOperands(binExpr.getLHS(), applyOp, ctx, stats);
+    hashExprWithOperands(binExpr.getRHS(), applyOp, ctx, stats);
   }
 
   return hash;
@@ -166,7 +178,7 @@ hashExprWithOperands(AffineExpr expr, AffineApplyOp applyOp,
 // Recursively reorder commutative operations in an affine expression.
 // Tries all permutations to maximize hash hits.
 static AffineExpr
-reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp,
+reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp, HashContext &ctx,
                       const llvm::SmallDenseMap<size_t, unsigned> &stats) {
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
     AffineExprKind kind = binExpr.getKind();
@@ -179,7 +191,7 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp,
 
       // Recursively reorder each term.
       for (auto &term : terms)
-        term = reorderCommutativeOps(term, applyOp, stats);
+        term = reorderCommutativeOps(term, applyOp, ctx, stats);
 
       // Sort for initial canonical ordering.
       llvm::stable_sort(terms, [](AffineExpr a, AffineExpr b) {
@@ -188,11 +200,11 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp,
 
       // Try all permutations and choose the one with maximum hash hits.
       AffineExpr bestExpr = rebuildCommutativeExpr(terms, kind);
-      unsigned bestScore = computeHashScore(bestExpr, applyOp, stats);
+      unsigned bestScore = computeHashScore(bestExpr, applyOp, ctx, stats);
 
       do {
         AffineExpr candidate = rebuildCommutativeExpr(terms, kind);
-        unsigned score = computeHashScore(candidate, applyOp, stats);
+        unsigned score = computeHashScore(candidate, applyOp, ctx, stats);
         if (score > bestScore) {
           bestScore = score;
           bestExpr = candidate;
@@ -207,8 +219,8 @@ reorderCommutativeOps(AffineExpr expr, AffineApplyOp applyOp,
 
     // For non-commutative operations, recursively reorder children.
     return getAffineBinaryOpExpr(
-        kind, reorderCommutativeOps(binExpr.getLHS(), applyOp, stats),
-        reorderCommutativeOps(binExpr.getRHS(), applyOp, stats));
+        kind, reorderCommutativeOps(binExpr.getLHS(), applyOp, ctx, stats),
+        reorderCommutativeOps(binExpr.getRHS(), applyOp, ctx, stats));
   }
 
   return expr;
@@ -224,6 +236,7 @@ public:
     IRRewriter rewriter(&getContext());
     SmallVector<AffineApplyOp> opsToRewrite;
     llvm::SmallDenseMap<size_t, unsigned> exprStats;
+    HashContext hashCtx;
 
     // Collect all affine.apply ops that need rewriting.
     getOperation()->walk([&](AffineApplyOp applyOp) {
@@ -233,11 +246,11 @@ public:
 
       AffineExpr expr = map.getResult(0);
       AffineExpr reorderedExpr =
-          reorderCommutativeOps(expr, applyOp, exprStats);
+          reorderCommutativeOps(expr, applyOp, hashCtx, exprStats);
 
       // Compute hash and update statistics for reordered expression and all
       // sub-expressions.
-      hashExprWithOperands(reorderedExpr, applyOp, exprStats);
+      hashExprWithOperands(reorderedExpr, applyOp, hashCtx, exprStats);
 
       // Check if the expression changed.
       if (reorderedExpr != expr)
@@ -250,7 +263,7 @@ public:
       AffineMap map = applyOp.getAffineMap();
       AffineExpr expr = map.getResult(0);
       AffineExpr reorderedExpr =
-          reorderCommutativeOps(expr, applyOp, exprStats);
+          reorderCommutativeOps(expr, applyOp, hashCtx, exprStats);
 
       // Create new affine map with reordered expression.
       AffineMap newMap =
