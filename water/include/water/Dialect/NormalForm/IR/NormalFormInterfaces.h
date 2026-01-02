@@ -7,15 +7,9 @@
 #ifndef WATER_DIALECT_NORMALFORM_IR_NORMALFORMINTERFACES_H
 #define WATER_DIALECT_NORMALFORM_IR_NORMALFORMINTERFACES_H
 
-#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/IR/Attributes.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Support/LLVM.h"
-
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/raw_ostream.h"
 
 namespace normalform {} // namespace normalform
 

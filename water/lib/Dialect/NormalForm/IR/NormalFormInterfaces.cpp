@@ -7,14 +7,6 @@
 #include "water/Dialect/NormalForm/IR/NormalFormInterfaces.h"
 #include "water/Dialect/NormalForm/IR/NormalFormDialect.h"
 
-#include "mlir/IR/AffineMap.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/OpImplementation.h"
-#include "llvm/ADT/SetOperations.h"
-#include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/SmallVectorExtras.h"
-#include "llvm/ADT/StringSet.h"
-
 using namespace mlir;
 
 #include "water/Dialect/NormalForm/IR/NormalFormAttrInterfaces.cpp.inc"
