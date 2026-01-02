@@ -476,11 +476,22 @@ public:
     // Create mapping from old block arguments to new ones.
     IRMapping mapping;
 
-    // Map iter_args.
+    // Map iter_args and captures separately.
     // Note: wave.iterate doesn't expose the induction variable, so we skip it.
-    for (auto [oldArg, newArg] : llvm::zip_equal(
-             waveBody.getArguments(), scfBody.getArguments().drop_front())) {
-      mapping.map(oldArg, newArg);
+    size_t numIterArgs = adaptor.getIterArgs().size();
+
+    // Map iter_args: wave iter_args -> scf.for iter_args (skip induction var)
+    for (auto [waveIterArg, scfIterArg] :
+         llvm::zip_equal(waveBody.getArguments().take_front(numIterArgs),
+                         scfBody.getArguments().drop_front())) {
+      mapping.map(waveIterArg, scfIterArg);
+    }
+
+    // Map captures: wave capture args -> original capture SSA values
+    for (auto [waveCaptureArg, originalCapture] :
+         llvm::zip_equal(waveBody.getArguments().drop_front(numIterArgs),
+                         adaptor.getCaptures())) {
+      mapping.map(waveCaptureArg, originalCapture);
     }
 
     // Clone all operations except the terminator.

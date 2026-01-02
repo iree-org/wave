@@ -845,3 +845,31 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
     return
   }
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @lower_iterate_with_vector_captures
+  func.func @lower_iterate_with_vector_captures() attributes {
+    wave.hyperparameters = #wave.hyperparameters<{I = 4}>,
+    wave.constraints = [
+      #wave.tiling_constraint<dim = <"I">, tile_size = <[#wave.symbol<"I">] -> (I)>>
+    ]
+  } {
+    %cst = arith.constant 2.0 : f32
+    %cst2 = arith.constant 3.0 : f16
+    %iter_arg = wave.register %cst : vector<8xf32>
+    %capture = wave.register %cst2 : vector<4xf16>
+
+    // CHECK:     scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%{{.*}} = %{{.*}}) -> (vector<8xf32>)
+    %result = wave.iterate @I iter_args(%iter_arg) captures(%capture) {
+    ^bb0(%arg: vector<8xf32>, %cap: vector<4xf16>):
+      // Test that vector captures work correctly - should use original SSA value
+      // CHECK: arith.extf %{{.*}} : vector<4xf16> to vector<4xf32>
+      %cast = wave.cast %cap : vector<4xf16> to vector<4xf32>
+      // CHECK: scf.yield %{{.*}} : vector<8xf32>
+      wave.yield %arg : vector<8xf32>
+    } : (vector<8xf32>, vector<4xf16>) -> vector<8xf32>
+    return
+  }
+}
