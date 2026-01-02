@@ -19,31 +19,41 @@ def NormalFormAttrInterface : AttrInterface<"NormalFormAttrInterface"> {
   }];
   let cppNamespace = "::normalform";
   let methods = [
-    InterfaceMethod<[{
-       TODO: type verification hook
+    InterfaceMethod<
+      /*desc=*/[{
+       Verify the type using this normal form attribute.
       }],
-      "::llvm::LogicalResult", "verifyType",
-      (ins "::mlir::Type":$type),
-      [{
+      /*returnType=*/"::llvm::LogicalResult",
+      /*name=*/"verifyType",
+      /*arguments=*/(ins "::mlir::Type":$type),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
         return llvm::success();
       }]
     >,
 
-    InterfaceMethod<[{
-        TODO: attribute verification hook
-      }], "::llvm::LogicalResult", "verifyAttribute",
-        (ins "::mlir::Attribute":$attr),
-      [{
+    InterfaceMethod<
+      /*desc=*/[{
+        Verify the attribute using this normal form attribute.
+      }],
+      /*returnType=*/"::llvm::LogicalResult",
+      /*name=*/"verifyAttribute",
+      /*arguments=*/(ins "::mlir::Attribute":$attr),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
         return llvm::success();
       }]
     >,
 
-    InterfaceMethod<[{
-       TODO: op verification hook
+    InterfaceMethod<
+      /*desc=*/[{
+       Verify the operation using this normal form attribute.
       }],
-      "::llvm::LogicalResult", "verifyOperation",
-      (ins "::mlir::Operation*":$op),
-      [{
+      /*returnType=*/"::llvm::LogicalResult",
+      /*name=*/"verifyOperation",
+      /*arguments=*/(ins "::mlir::Operation*":$op),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
         return llvm::success();
       }]
     >,
