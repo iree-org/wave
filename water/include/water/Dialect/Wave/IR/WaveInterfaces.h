@@ -425,9 +425,17 @@ public:
 // expressions.
 class IndexExprsLatticeStorage {
 public:
+  // Priorities for specific operations that may be used.
+  static constexpr int32_t kHighestPriority =
+      std::numeric_limits<int32_t>::max();
+  static constexpr int32_t kMmaPriority = 3;
+  static constexpr int32_t kWritePriority = 1;
+  static constexpr int32_t kLowestPriority = 0;
+
   IndexExprsLatticeStorage();
   IndexExprsLatticeStorage(const IndexExprsLatticeStorage &value) = default;
-  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue);
+  IndexExprsLatticeStorage(mlir::DictionaryAttr concreteValue,
+                           int32_t priority);
 
   IndexExprsLatticeStorage &
   operator=(const IndexExprsLatticeStorage &other) = default;
@@ -444,6 +452,10 @@ public:
   // Returns the concrete value stored in the lattice instance, be it fully
   // specified or not, or null if the lattice instance is a top or a bottom.
   mlir::DictionaryAttr getConcreteValue() const;
+
+  // Return the priority of this lattice instance or -1 if it is not a concrete
+  // value.
+  int32_t getPriority() const { return getConcreteValue() ? priority : -1; }
 
   // Return the top lattice instance.
   static IndexExprsLatticeStorage top();
@@ -489,6 +501,10 @@ private:
   // The internal storage is either a dictionary attribute with one entry per
   // symbol indexing the value or one of the top/bottom flags.
   llvm::PointerIntPair<mlir::Attribute, 2> value;
+
+  // Priority of this value. Specific values with higher priority override
+  // values with lower priority in joins.
+  int32_t priority;
 
   // State flags.
   constexpr static unsigned kUninitializedState = 0;

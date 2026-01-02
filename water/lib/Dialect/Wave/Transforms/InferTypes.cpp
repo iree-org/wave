@@ -1127,6 +1127,8 @@ public:
                     return getLatticeElement(v)->getValue();
                   });
               auto emitError = [op]() { return op->emitError(); };
+              LDBG() << "initializing index expressions forward for "
+                     << PrintNoRegions(op);
               if (llvm::failed(iface.initializeIndexExprsForward(
                       resultExprs, *initObject, emitError)))
                 return mlir::WalkResult::interrupt();
@@ -1134,7 +1136,11 @@ public:
               for (auto &&[result, lattice] :
                    llvm::zip_equal(op->getResults(), resultExprs)) {
                 IndexExprsLattice *latticeObject = getLatticeElement(result);
+                LDBG() << "  result #" << result.getResultNumber()
+                       << " original: " << *latticeObject;
                 unsafeSet(latticeObject, lattice);
+                LDBG() << "  result #" << result.getResultNumber()
+                       << " updated: " << *latticeObject;
               }
             }
 
@@ -1176,7 +1182,11 @@ public:
                   LDBG() << "setting iterate block argument lattice " << capture
                          << " from " << PrintNoRegions(iterateOp) << " to "
                          << dict;
-                  unsafeSet(getLatticeElement(capture), dict);
+                  unsafeSet(
+                      getLatticeElement(capture),
+                      wave::IndexExprsLatticeStorage(
+                          dict,
+                          wave::IndexExprsLatticeStorage::kLowestPriority));
                 }
               }
             }
@@ -1188,11 +1198,13 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](mlir::Value value, mlir::DictionaryAttr dict) {
+              top, [&](mlir::Value value, mlir::DictionaryAttr dict,
+                       int32_t priority) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value), dict);
+                unsafeSet(getLatticeElement(value),
+                          wave::IndexExprsLatticeStorage(dict, priority));
               })))
         return llvm::failure();
     }
@@ -1443,13 +1455,17 @@ public:
               });
           auto emitError = [op]() { return op->emitError(); };
 
+          LDBG() << "initializing index expressions backward for "
+                 << PrintNoRegions(op);
           if (llvm::failed(iface.initializeIndexExprsBackward(
                   operandExprs, *initObject, emitError)))
             return mlir::WalkResult::interrupt();
-          for (auto &&[operand, lattice] :
-               llvm::zip_equal(op->getOperands(), operandExprs)) {
+          for (auto &&[i, operand, lattice] :
+               llvm::enumerate(op->getOperands(), operandExprs)) {
             IndexExprsLattice *latticeObject = getLatticeElement(operand);
+            LDBG() << "  operand #" << i << " original: " << *latticeObject;
             unsafeSet(latticeObject, lattice);
+            LDBG() << "  operand #" << i << " updated: " << *latticeObject;
           }
           return mlir::WalkResult::advance();
         } else if (op->hasTrait<mlir::OpTrait::IsTerminator>()) {
@@ -1469,11 +1485,13 @@ public:
 
     if (overrideInitialization) {
       if (llvm::failed(overrideInitialization(
-              top, [&](mlir::Value value, mlir::DictionaryAttr dict) {
+              top, [&](mlir::Value value, mlir::DictionaryAttr dict,
+                       int32_t priority) {
                 if (!dict)
                   return unsafeSet(getLatticeElement(value),
                                    IndexExprsLatticeStorage::top());
-                unsafeSet(getLatticeElement(value), dict);
+                unsafeSet(getLatticeElement(value),
+                          wave::IndexExprsLatticeStorage(dict, priority));
               })))
         return llvm::failure();
     }

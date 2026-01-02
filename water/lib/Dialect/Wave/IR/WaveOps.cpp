@@ -6,12 +6,14 @@
 
 #include "water/Dialect/Wave/IR/WaveOps.h"
 
+#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "water/Dialect/Wave/IR/IndexExpr.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
@@ -988,8 +990,9 @@ LogicalResult MmaOp::initializeIndexExprsForward(
 
   mixInThreadIndependentConstraints(
       indexingSymbols, initObject.symbolConstraints, symbolMappings);
-  resultExprs[0].unsafeSet(
-      mlir::DictionaryAttr::get(getContext(), symbolMappings));
+  resultExprs[0].unsafeSet(wave::IndexExprsLatticeStorage(
+      mlir::DictionaryAttr::get(getContext(), symbolMappings),
+      wave::IndexExprsLatticeStorage::kMmaPriority));
 
   return llvm::success();
 }
@@ -1053,13 +1056,16 @@ LogicalResult MmaOp::initializeIndexExprsBackward(
 
   operandExprs[getLhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          mlir::DictionaryAttr::get(getContext(), lhsSymbolMappings));
+          mlir::DictionaryAttr::get(getContext(), lhsSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
   operandExprs[getRhsMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          mlir::DictionaryAttr::get(getContext(), rhsSymbolMappings));
+          mlir::DictionaryAttr::get(getContext(), rhsSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
   operandExprs[getAccumulatorMutable().getOperandNumber()] =
       wave::IndexExprsLatticeStorage(
-          mlir::DictionaryAttr::get(getContext(), accumulatorSymbolMappings));
+          mlir::DictionaryAttr::get(getContext(), accumulatorSymbolMappings),
+          wave::IndexExprsLatticeStorage::kMmaPriority);
   return llvm::success();
 }
 
@@ -1610,6 +1616,177 @@ llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateIndexExprsForward(
   return mlir::ChangeResult::NoChange;
 }
 
+static FailureOr<bool>
+isContiguousDimension(wave::WaveTensorType tensorType, int64_t dimension,
+                      HardwareConstraintAttr hardwareConstraint) {
+  assert(tensorType.getFullySpecified() &&
+         "expected fully-specified tensor type");
+  assert(dimension >= 0 &&
+         static_cast<size_t>(dimension) < tensorType.getRank() &&
+         "expected dimension to be within tensor type rank");
+  if (dimension == static_cast<int64_t>(tensorType.getRank()) - 1)
+    return true;
+
+  DictionaryAttr vectorShapes = hardwareConstraint.getVectorShapes();
+  if (!vectorShapes)
+    return failure();
+  for (int64_t i = dimension + 1, e = tensorType.getRank(); i < e; ++i) {
+    Attribute vectorShape =
+        vectorShapes.get(tensorType.getShape()[i].getName());
+    if (!vectorShape)
+      return failure();
+    if (!cast<IntegerAttr>(vectorShape).getValue().isOne())
+      return false;
+  }
+  return true;
+}
+
+LogicalResult WriteOp::initializeIndexExprsBackward(
+    llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
+    const wave::IndexExprsAnalysisInit &initObject,
+    wave::EmitErrorFn emitError) {
+
+  // TODO: figure out how to propagate elements per threads from constraints to
+  // operations while avoiding the clash with index sequences. When propagating,
+  // we don't have sequences yet.
+  WaveTensorType tensorType = cast<WaveTensorType>(getValueToStore().getType());
+  HardwareConstraintAttr hardwareConstraint = initObject.hardwareConstraint;
+
+  assert(tensorType.getFullySpecified());
+  SmallVector<NamedAttribute> indexMappings;
+  for (int64_t i = 0, e = tensorType.getRank(); i < e; ++i) {
+    AffineExpr elementsPerThread = nullptr;
+    // TODO: this should be only computed once and reused.
+    FailureOr<bool> isContiguous =
+        isContiguousDimension(tensorType, i, hardwareConstraint);
+    if (failed(isContiguous)) {
+      // TODO: store this error for later, in case the lattices used in this
+      // write op remain at bottom.
+      // This is important, otherwise we just report failure to infer...
+      // emitError() << "couldn't find vector shapes in the contiguity check";
+      // return llvm::failure();
+      return success();
+    }
+
+    // TODO: copied from pywave... This may be the wrong place for this
+    // logic, we likely want to infer this number from the constraints
+    // somehow early.
+    auto it = initObject.symbolConstraints.find(tensorType.getShape()[i]);
+    // TODO: pywave just ignores this not sure if we want to, including the
+    // case below where there may be zero constraints. Interestingly, it
+    // asserts if trailing dimensions are not found when computing the
+    // stride...
+    if (it == initObject.symbolConstraints.end()) {
+      // emitError() << "expected constraints for dimension "
+      //             << tensorType.getShape()[i]
+      //             << " used in the write operation without explicit "
+      //                "`elements_per_thread`";
+      // return failure();
+      continue;
+    }
+    auto wgConstraintIt =
+        llvm::find_if(it->second, llvm::IsaPred<WorkgroupConstraintAttr>);
+    if (wgConstraintIt == it->second.end()) {
+      // emitError() << "expected a single workgroup constraint for dimension "
+      //             << tensorType.getShape()[i]
+      //             << " used in the write operation without explicit "
+      //                "`elements_per_thread`";
+      // return failure();
+      continue;
+    }
+    WorkgroupConstraintAttr wgConstraint =
+        cast<WorkgroupConstraintAttr>(*wgConstraintIt);
+
+    std::optional<int64_t> opElementsPerThread = getElementsPerThread();
+    SmallVector<Attribute> symbols;
+    if (*isContiguous) {
+      if (opElementsPerThread) {
+        elementsPerThread =
+            getAffineConstantExpr(*opElementsPerThread, getContext());
+      } else {
+        AffineMap tileSizeMap = wgConstraint.getTileSize().getMap();
+        assert(tileSizeMap.getNumResults() == 1 &&
+               "expected a single expression in tile size affine map");
+        unsigned numThreads = [&]() {
+          switch (wgConstraint.getWorkgroupDim().getValue()) {
+          case WaveWorkgroupDim::X:
+            return initObject.wavesPerBlock[0] *
+                   initObject.hardwareConstraint.getThreadsPerWave();
+          case WaveWorkgroupDim::Y:
+            return initObject.wavesPerBlock[1];
+          case WaveWorkgroupDim::Z:
+            return initObject.wavesPerBlock[2];
+          }
+        }();
+
+        elementsPerThread = tileSizeMap.getResult(0).ceilDiv(numThreads);
+        llvm::append_range(symbols, wgConstraint.getTileSize().getSymbols());
+      }
+    } else if (!*isContiguous) {
+      elementsPerThread = getAffineConstantExpr(1, getContext());
+    }
+
+    // TODO: if we reverse the outer loop, we can compute a running stride
+    // instead...
+    int64_t stride = 1;
+    for (int64_t j = i + 1; j < e; ++j) {
+      Attribute vectorShape = hardwareConstraint.getVectorShapes().get(
+          tensorType.getShape()[j].getName());
+      if (!vectorShape) {
+        emitError() << "couldn't find vector shape for dimension "
+                    << tensorType.getShape()[j];
+        return failure();
+      }
+      stride *= cast<IntegerAttr>(vectorShape).getValue().getSExtValue();
+    }
+    if (stride <= 0) {
+      // TODO: this should likely be verified by the hardware constraint
+      // verification.
+      emitError() << "non-positive stride found: " << stride
+                  << " for dimension " << tensorType.getShape()[i];
+      return failure();
+    }
+
+    WaveIndexSymbol threadSymbol = [&]() {
+      switch (wgConstraint.getWorkgroupDim().getValue()) {
+      case WaveWorkgroupDim::X:
+        return WaveIndexSymbol::THREAD_0;
+      case WaveWorkgroupDim::Y:
+        return WaveIndexSymbol::THREAD_1;
+      case WaveWorkgroupDim::Z:
+        return WaveIndexSymbol::THREAD_2;
+      }
+    }();
+    WaveIndexSymbolAttr threadSymbolAttr =
+        WaveIndexSymbolAttr::get(getContext(), threadSymbol);
+    symbols.push_back(threadSymbolAttr);
+
+    AffineExpr startExpr =
+        getAffineSymbolExpr(symbols.size() - 1, getContext());
+    if (wgConstraint.getWorkgroupDim().getValue() == WaveWorkgroupDim::X) {
+      startExpr = startExpr % hardwareConstraint.getThreadsPerWave();
+    }
+
+    auto indexMapping = WaveIndexMappingAttr::get(
+        getContext(), symbols,
+        AffineMap::get(/*dimCount=*/0, symbols.size(),
+                       startExpr * elementsPerThread),
+        AffineMap::get(/*dimCount=*/0, symbols.size(), elementsPerThread),
+        AffineMap::get(/*dimCount=*/0, symbols.size(),
+                       getAffineConstantExpr(stride, getContext())));
+    indexMappings.emplace_back(tensorType.getShape()[i].getName(),
+                               indexMapping);
+  }
+  operandExprs[getValueToStoreMutable().getOperandNumber()] =
+      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
+                               IndexExprsLatticeStorage::kWritePriority);
+  operandExprs[getMemoryMutable().getOperandNumber()] =
+      IndexExprsLatticeStorage(DictionaryAttr::get(getContext(), indexMappings),
+                               IndexExprsLatticeStorage::kWritePriority);
+
+  return success();
+}
+
 // WriteOp has no results, nothing to propagate to. Not propagating sideways
 // between operands either, the same index expression is used for the memory
 // operand, we can then read from the same memory with different index.
@@ -1617,7 +1794,9 @@ llvm::FailureOr<mlir::ChangeResult> wave::WriteOp::propagateIndexExprsBackward(
     llvm::MutableArrayRef<wave::IndexExprsLatticeStorage> operandExprs,
     llvm::ArrayRef<wave::IndexExprsLatticeStorage> resultExprs,
     wave::EmitErrorFn emitError) {
-  return mlir::ChangeResult::NoChange;
+  // TODO: NOW: we need to join the initialized mapping with what is being
+  // propagated somehow...
+  return ChangeResult::NoChange;
 }
 
 // Special case for WriteOp where we want an index expression even

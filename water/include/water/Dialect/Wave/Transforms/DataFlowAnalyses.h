@@ -23,7 +23,7 @@ class DictionaryAttr;
 
 namespace wave {
 using SetIndexLatticeFn =
-    llvm::function_ref<void(mlir::Value, mlir::DictionaryAttr)>;
+    llvm::function_ref<void(mlir::Value, mlir::DictionaryAttr, int32_t)>;
 using OverrideInitializationFn = llvm::function_ref<llvm::LogicalResult(
     mlir::Operation *, SetIndexLatticeFn)>;
 
