@@ -911,11 +911,11 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         shared_index, _, _ = _build_start_indices(emitter, shared_tile_index_current)
 
         base = amdgpu_d.make_dma_base(
-            dma_type,
-            global_value,
-            index,
-            shared_value,
-            shared_index,
+            base=dma_type,
+            global_=global_value,
+            global_indices=index,
+            lds=shared_value,
+            lds_indices=shared_index,
         )
 
         pad_interval = None
@@ -943,14 +943,14 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             workgroup_mask = vector_d.bitcast(v16i1, workgroup_mask)
 
         desc = amdgpu_d.make_dma_descriptor(
-            base,
-            local_bounds,
-            [ShapedType.get_dynamic_size(), ShapedType.get_dynamic_size()],
-            None,
-            strides,
-            distributed_shape_vals,
-            [ShapedType.get_dynamic_size(), ShapedType.get_dynamic_size()],
-            None,
+            base=base,
+            global_dynamic_sizes=local_bounds,
+            global_static_sizes=[ShapedType.get_dynamic_size()] * len(local_bounds),
+            global_dynamic_strides=None,
+            global_static_strides=strides,
+            shared_dynamic_sizes=distributed_shape_vals,
+            shared_static_sizes=[ShapedType.get_dynamic_size()] * len(distributed_shape_vals),
+            atomic_barrier_indices=None,
             workgroup_mask=workgroup_mask,
             pad_amount=pad_amount,
             pad_interval=pad_interval,
