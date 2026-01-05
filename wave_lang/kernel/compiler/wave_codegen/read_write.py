@@ -31,7 +31,6 @@ from wave_lang.support.ir_imports import (
     gpu_d,
     llvm_d,
     memref_d,
-    rocdl_d,
     vector_d,
 )
 from .ir_utils import (
