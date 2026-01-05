@@ -163,12 +163,26 @@ def get_users(
             if node in custom.init_args:
                 init_arg_idx = custom.init_args.index(node)
                 users.append(custom.iter_args(graph)[init_arg_idx])
-            else:
-                assert node in custom.implicit_captures
+            elif node in custom.implicit_captures:
                 for outside_node in graph.nodes:
                     if outside_node.meta.get("lifted", None) == node:
                         users.append(outside_node)
                         break
+            else:
+                # Check if any placeholder in implicit_captures captures this node
+                found = False
+                for capture in custom.implicit_captures:
+                    capture_custom = get_custom(capture)
+                    if isinstance(capture_custom, Placeholder):
+                        captured_node = capture_custom.get_captured_fx_node()
+                        if captured_node == node:
+                            for outside_node in graph.nodes:
+                                if outside_node.meta.get("lifted", None) == capture:
+                                    users.append(outside_node)
+                                    found = True
+                                    break
+                            if found:
+                                break
             continue
         if isinstance(custom, Output):
             # Map output to get result
@@ -218,10 +232,13 @@ def get_users(
     return users, region
 
 
-def propagate_placeholders(n: fx.Node) -> fx.Node:
+def propagate_placeholders(n: fx.Node | tuple) -> fx.Node | tuple:
     """
     Returns the captured node of a placeholder if it exists.
+    Handles tuples by recursively propagating each element.
     """
+    if isinstance(n, (tuple, list)):
+        return type(n)(propagate_placeholders(elem) for elem in n)
     c = get_custom(n)
     if isinstance(c, Placeholder):
         p = c.get_captured_fx_node()
@@ -337,7 +354,14 @@ def get_inputs(
             inputs.append(input)
 
     inputs = [propagate_placeholders(i) for i in inputs if i is not None]
-    return inputs, region
+    # Flatten any tuples/lists in inputs
+    flattened_inputs = []
+    for inp in inputs:
+        if isinstance(inp, (tuple, list)):
+            flattened_inputs.extend(inp)
+        else:
+            flattened_inputs.append(inp)
+    return flattened_inputs, region
 
 
 def bfs(
