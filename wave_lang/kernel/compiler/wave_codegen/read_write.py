@@ -949,7 +949,8 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
             global_dynamic_strides=None,
             global_static_strides=strides,
             shared_dynamic_sizes=distributed_shape_vals,
-            shared_static_sizes=[ShapedType.get_dynamic_size()] * len(distributed_shape_vals),
+            shared_static_sizes=[ShapedType.get_dynamic_size()]
+            * len(distributed_shape_vals),
             atomic_barrier_indices=None,
             workgroup_mask=workgroup_mask,
             pad_amount=pad_amount,
