@@ -54,8 +54,11 @@ from wave_lang.kernel.wave.schedules.gemm_two_pp_cluster import (
     get_tagged_gemm,
     get_two_pp_cluster_schedule,
     get_async_two_pp_clusters,
-    get_async_two_pp_cluster_triple_buffer,
 )
+from wave_lang.kernel.wave.schedules.gemm_triple_buffer import (
+    get_async_two_cluster_triple_buffer,
+)
+
 from wave_lang.kernel.lang import DataType
 import os
 import json
@@ -2592,7 +2595,9 @@ def test_gemm_prefetch_reorder_manual_schedule(
 @pytest.mark.parametrize("mfma_variant", [MMAType.F32_16x16x16_F16])
 @require_e2e
 @require_cdna_3_or_4
-def get_async_two_pp_cluster_triple_buffer(shape: tuple[int], mfma_variant: MMAType):
+def test_gemm_two_async_cluster_triple_buffering(
+    shape: tuple[int], mfma_variant: MMAType
+):
     """
     Test the async GEMM two-cluster ping-pong with global_to_shared operations kernel using triple buffering.
     """
@@ -2606,7 +2611,8 @@ def get_async_two_pp_cluster_triple_buffer(shape: tuple[int], mfma_variant: MMAT
         use_global_to_shared=True,
     )
     options.minimize_shared_allocs = False
-    schedule = get_async_two_pp_cluster_triple_buffer()
+    schedule = get_async_two_cluster_triple_buffer()
+
     # Set runtime configuration for execution
     options = set_default_run_config(options)
 
