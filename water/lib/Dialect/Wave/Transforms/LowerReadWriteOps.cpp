@@ -432,14 +432,7 @@ static FailureOr<MemAccessInfo>
 createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
                            const TypeConverter *typeConverter, OpTy op,
                            Type memoryTypeArg, VectorType vectorType) {
-  auto memoryType = dyn_cast<wave::WaveTensorType>(memoryTypeArg);
-  if (!memoryType)
-    return rewriter.notifyMatchFailure(
-        op, "lowering with MemRefType memory not yet implemented");
-
   int64_t elementsPerThread = vectorType.getNumElements();
-
-  ArrayRef<wave::WaveSymbolAttr> orderedSyms = memoryType.getShape();
 
   wave::WaveReadWriteBoundsAttr boundsDict = op.getBoundsAttr();
   wave::WaveHyperparameterAttr hyper =
@@ -458,6 +451,15 @@ createMemoryIndicesAndMask(ConversionPatternRewriter &rewriter,
   assert(llvm::hasSingleElement(indexArr.getValue()) &&
          "'index' must be an array with exactly one dictionary");
   DictionaryAttr indexDict = cast<DictionaryAttr>(indexArr[0]);
+
+  // Get ordered symbols from the index dictionary keys.
+  // DictAttr is internally an ArrayRef<NamedAttribute>, so keys are ordered.
+  SmallVector<wave::WaveSymbolAttr> orderedSymsStorage;
+  orderedSymsStorage.reserve(indexDict.size());
+  for (NamedAttribute namedAttr : indexDict)
+    orderedSymsStorage.push_back(wave::WaveSymbolAttr::get(
+        op.getContext(), namedAttr.getName().strref()));
+  ArrayRef<wave::WaveSymbolAttr> orderedSyms = orderedSymsStorage;
   std::optional<int64_t> vectorizedDim =
       wave::getPositionOfVectorizedDim(orderedSyms, indexDict, hyper);
 

@@ -867,3 +867,29 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,index_exprs,m
     return
   }
 }
+
+// -----
+
+// Test read/write lowering with MemRefType memory operand.
+// This simulates the state after ResolveDistributedAllocations pass has run.
+// Dimension ordering is derived from the index dictionary keys (DictAttr is ordered).
+module attributes {wave.normal_form = #wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations>} {
+  // CHECK-LABEL: @lower_read_write_memref
+  func.func @lower_read_write_memref(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>)
+      attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64}>} {
+    // CHECK: %[[READ:.*]] = vector.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<64x64xf16, #gpu.address_space<workgroup>>, vector<8xf16>
+    %0 = wave.read %mem index [{
+        BLOCK_M : [#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64),
+        BLOCK_N : [#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)
+      }]
+      : (memref<64x64xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
+
+    // CHECK: vector.store %[[READ]], %{{.*}}[%{{.*}}, %{{.*}}] : memref<64x64xf16, #gpu.address_space<workgroup>>, vector<8xf16>
+    wave.write %0, %mem index [{
+        BLOCK_M : [#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64),
+        BLOCK_N : [#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)
+      }]
+      : vector<8xf16>, memref<64x64xf16, #gpu.address_space<workgroup>>
+    return
+  }
+}

@@ -55,6 +55,7 @@ struct ResolveDistributedAllocations
         return;
       }
 
+      // Update the result type in place.
       allocateOp.getResult().setType(memrefType);
     });
     return result;
