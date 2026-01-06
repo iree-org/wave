@@ -46,6 +46,7 @@ from wave_lang.kernel.wave.templates.gemm import (
     get_persistent_gemm_kernel,
     get_streamk_gemm_kernel,
     get_hybrid_streamk_gemm_kernel,
+    get_persistent_reordering_kernel,
 )
 from wave_lang.kernel.wave.templates.test_kernels import (
     get_gemm_prefetch_kernel_and_schedule,
@@ -2999,6 +3000,7 @@ def test_streamk_gemm(
         num_ctas=num_ctas,
     )
 
+
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -3101,6 +3103,67 @@ def test_hybrid_streamk_gemm(
     )
 
     gemm(a, b, partial_buffer, lock_buffer, c)
+
+    torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
+    assert_close(
+        c.to(torch.float32), torch_ref, atol=1e-2, rtol=1e-2, check_device=False
+    )
+
+
+@require_e2e
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (300, 300, 300),
+        (2048, 2048, 2048),
+        (1536, 3072, 19776),
+        (1792, 2895, 2048),
+    ],
+)
+@pytest.mark.parametrize(
+    "mfma_variant, threads_per_wave",
+    [
+        pytest.param(MMAType.F32_16x16x16_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.F32_32x32x8_F16, 64, marks=require_cdna_3_or_4),
+        pytest.param(MMAType.RDNA4_WAVE32_F32_16x16x16_F16, 32, marks=require_rdna4),
+    ],
+)
+@pytest.mark.parametrize(
+    "waves_per_block",
+    [
+        (4, 1),
+        (2, 2),
+    ],
+)
+def test_persistent_reordering_gemm(
+    shape: tuple[int],
+    mfma_variant: MMAType,
+    threads_per_wave: int,
+    waves_per_block: tuple[int, int],
+):
+    """Test persistent GEMM with L2 and XCD swizzling for improved cache locality."""
+    persistent_gemm, hyperparams = get_persistent_reordering_kernel(
+        shape=shape,
+        mfma_variant=mfma_variant,
+        threads_per_wave=threads_per_wave,
+        waves_per_block=waves_per_block,
+    )
+
+    # Compile kernel
+    options = WaveCompileOptions(
+        subs=hyperparams,
+        canonicalize=True,
+    )
+    options = set_default_run_config(options)
+
+    gemm = wave_compile(options, persistent_gemm)
+
+    # Run test
+    a = device_randn(shape[0], shape[2], device="cuda", dtype=torch.float16)
+    b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
+    c = device_zeros(shape[0], shape[1], device="cuda", dtype=torch.float32)
+    gemm(a, b, c)
+
 
     torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
     assert_close(

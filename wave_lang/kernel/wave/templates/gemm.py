@@ -968,6 +968,7 @@ def get_hybrid_streamk_gemm_kernel(
             tkw.set_symbol(START_K_TILE, tkw.scalar(0, i32))
             tkw.set_symbol(NUM_K_TILES, tkw.scalar(ITERS_PER_OUTPUT_TILE, i32))
 
+
             c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
             @tkw.iterate(axis=K, init_args=[c_reg])
@@ -1176,3 +1177,188 @@ def get_hybrid_streamk_gemm_kernel(
     }
 
     return hybrid_streamk_gemm, hyperparams
+
+
+def get_persistent_reordering_kernel(
+    shape: tuple[int, int, int],
+    mfma_variant: MMAType,
+    threads_per_wave: int = 64,
+    block_shape: Optional[tuple[int, int, int]] = None,
+    waves_per_block: Optional[tuple[int, int]] = None,
+    num_ctas: Optional[int] = None,
+    group_size_m: int = 4,
+    num_xcds: int = 8,
+    chunk_size: int = 2,
+):
+    """
+    Creates a persistent GEMM kernel with L2 cache swizzling and XCD swizzling
+    for improved cache locality on AMD MI300 series GPUs.
+
+    L2 Swizzling groups nearby tiles together to improve data reuse in L2 cache.
+    XCD Swizzling remaps workgroup IDs so that workgroups processing nearby tiles
+    are scheduled on the same XCD, improving LLC/MALL cache reuse.
+    """
+    if not block_shape:
+        block_shape = (128, 256, 64)
+
+    if not waves_per_block:
+        waves_per_block = (4, 1)
+
+    m, n, k = shape
+    block_m, block_n, block_k = block_shape
+
+    m_tiles = (m + block_m - 1) // block_m
+    n_tiles = (n + block_n - 1) // block_n
+    total_tiles = m_tiles * n_tiles
+    num_ctas_in_group = group_size_m * n_tiles
+
+    if num_ctas is None:
+        num_ctas = total_tiles
+
+    # Symbols
+    M = tkl.sym.M
+    N = tkl.sym.N
+    K = tkl.sym.K
+    BLOCK_M = tkl.sym.BLOCK_M
+    BLOCK_N = tkl.sym.BLOCK_N
+    BLOCK_K = tkl.sym.BLOCK_K
+    ADDRESS_SPACE = tkl.sym.ADDRESS_SPACE
+    TOTAL_TILES = tkl.sym.TOTAL_TILES
+    NUM_CTAS = tkl.sym.NUM_CTAS
+    TILE_IDX = tkl.sym.TILE_IDX
+    CTA_M_OFFSET = tkl.sym.CTA_M_OFFSET
+    CTA_N_OFFSET = tkl.sym.CTA_N_OFFSET
+    M_TILES = tkl.sym.M_TILES
+    N_TILES = tkl.sym.N_TILES
+    GROUP_SIZE_M = tkl.sym.GROUP_SIZE_M
+    NUM_CTAS_IN_GROUP = tkl.sym.NUM_CTAS_IN_GROUP
+    NUM_XCDS = tkl.sym.NUM_XCDS
+    CHUNK_SIZE = tkl.sym.CHUNK_SIZE
+
+    # Index mappings for manual offset control
+    i = tkw.IndexMapping.iterator(0)
+    j = tkw.IndexMapping.iterator(1)
+
+    a_read_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i + CTA_M_OFFSET, K: j},
+        outputs={M: i, K: j},
+    )
+
+    b_read_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={N: i + CTA_N_OFFSET, K: j},
+        outputs={N: i, K: j},
+    )
+
+    c_write_mapping = tkw.IndexMapping(
+        num_iterators=2,
+        inputs={M: i, N: j},
+        outputs={M: i + CTA_M_OFFSET, N: j + CTA_N_OFFSET},
+    )
+
+    constraints = [
+        tkw.GridConstraint(NUM_CTAS),
+        tkw.WorkgroupConstraint(M, BLOCK_M, 0),
+        tkw.WorkgroupConstraint(N, BLOCK_N, 1),
+        tkw.TilingConstraint(K, BLOCK_K),
+        tkw.TilingConstraint(TILE_IDX),
+        tkw.WaveConstraint(M, BLOCK_M / waves_per_block[0]),
+        tkw.WaveConstraint(N, BLOCK_N / waves_per_block[1]),
+        tkw.HardwareConstraint(
+            threads_per_wave=threads_per_wave,
+            mma_type=mfma_variant,
+            vector_shapes={TILE_IDX: 0},
+        ),
+    ]
+
+    @tkw.wave(constraints)
+    def persistent_gemm_reordering(
+        a: tkl.Memory[M, K, ADDRESS_SPACE, tkl.f16],
+        b: tkl.Memory[N, K, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        cta = tkw.scalar(WORKGROUP_0, tkl.i32)
+
+        # XCD Swizzling (LLC/MALL Cache)
+        # compute remapped cta for chunked region
+        xcd_id = cta % tkw.scalar(NUM_XCDS, tkl.i32)
+        local_cta = cta // tkw.scalar(NUM_XCDS, tkl.i32)
+        chunk_idx = local_cta // tkw.scalar(CHUNK_SIZE, tkl.i32)
+        pos_in_chunk = local_cta % tkw.scalar(CHUNK_SIZE, tkl.i32)
+        remapped_cta = (
+            chunk_idx * tkw.scalar(NUM_XCDS, tkl.i32) * tkw.scalar(CHUNK_SIZE, tkl.i32)
+            + xcd_id * tkw.scalar(CHUNK_SIZE, tkl.i32)
+            + pos_in_chunk
+        )
+
+        # use remapped_cta if in chunked region, else use original cta
+        chunked_threshold = (
+            tkw.scalar(TOTAL_TILES, tkl.i32)
+            // (tkw.scalar(NUM_XCDS, tkl.i32) * tkw.scalar(CHUNK_SIZE, tkl.i32))
+        ) * (tkw.scalar(NUM_XCDS, tkl.i32) * tkw.scalar(CHUNK_SIZE, tkl.i32))
+        in_chunked_region = cta <= chunked_threshold
+        init_tile_id = tkw.select(in_chunked_region, remapped_cta, cta)
+
+        condition = TILE_IDX < TOTAL_TILES
+
+        @tkw.iterate(TILE_IDX, start=init_tile_id, condition=condition, init_args=[])
+        def persistent_loop():
+            tile_id = tkw.self_index(TILE_IDX, tkl.i32)
+
+            # CTA Swizzling (L2 Cache)
+            # 1 CTA mapped to 1 output tile
+            group_id = tile_id // tkw.scalar(NUM_CTAS_IN_GROUP, tkl.i32)
+            first_cta_m = group_id * tkw.scalar(GROUP_SIZE_M, tkl.i32)
+            group_size_m_val = tkw.minimum(
+                tkw.scalar(M_TILES, tkl.i32) - first_cta_m,
+                tkw.scalar(GROUP_SIZE_M, tkl.i32),
+            )
+            # relative cta coords within a group
+            cta_m = (
+                first_cta_m
+                + (tile_id % tkw.scalar(NUM_CTAS_IN_GROUP, tkl.i32)) % group_size_m_val
+            )
+            cta_n = (
+                tile_id % tkw.scalar(NUM_CTAS_IN_GROUP, tkl.i32)
+            ) // group_size_m_val
+
+            m_offset = cta_m * tkw.scalar(BLOCK_M, tkl.i32)
+            n_offset = cta_n * tkw.scalar(BLOCK_N, tkl.i32)
+            tkw.set_symbol(CTA_M_OFFSET, m_offset)
+            tkw.set_symbol(CTA_N_OFFSET, n_offset)
+
+            c_reg = tkl.Register[M, N, tkl.f32](0.0)
+
+            @tkw.iterate(axis=K, init_args=[c_reg])
+            def k_loop(acc: tkl.Register[M, N, tkl.f32]) -> tkl.Register[M, N, tkl.f32]:
+                a_reg = tkw.read(a, mapping=a_read_mapping)
+                b_reg = tkw.read(b, mapping=b_read_mapping)
+                acc = tkw.mma(a_reg, b_reg, acc)
+                return acc
+
+            tkw.write(k_loop, c, mapping=c_write_mapping)
+
+            num_ctas_scalar = tkw.scalar(NUM_CTAS, tkl.i32)
+            next_idx = tile_id + num_ctas_scalar
+            tkw.set_symbol(TILE_IDX, next_idx)
+
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        BLOCK_M: block_m,
+        BLOCK_N: block_n,
+        BLOCK_K: block_k,
+        M: m,
+        N: n,
+        K: k,
+        TOTAL_TILES: total_tiles,
+        M_TILES: m_tiles,
+        N_TILES: n_tiles,
+        GROUP_SIZE_M: group_size_m,
+        NUM_CTAS_IN_GROUP: num_ctas_in_group,
+        NUM_CTAS: num_ctas,
+        NUM_XCDS: num_xcds,
+        CHUNK_SIZE: chunk_size,
+    }
+
+    return persistent_gemm_reordering, hyperparams

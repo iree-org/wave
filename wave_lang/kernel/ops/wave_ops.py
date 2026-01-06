@@ -1231,9 +1231,10 @@ class SelectOp(CustomOp):
             cond_type, if_true_type, if_false_type
         )
 
-        result_type = Register[broadcasted_shape, if_true_type.dtype]
-
-        self.type = result_type
+        if not broadcasted_shape:
+            self.type = if_true_type
+        else:
+            self.type = Register[broadcasted_shape, if_true_type.dtype]
 
 
 @final
