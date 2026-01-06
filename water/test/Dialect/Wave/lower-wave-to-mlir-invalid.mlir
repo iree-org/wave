@@ -1,6 +1,6 @@
 // RUN: water-opt %s -allow-unregistered-dialect -lower-wave-to-mlir --split-input-file --verify-diagnostics
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   func.func @binary_ops_pattern_failure() {
     %cst = arith.constant 1.0 : f32
     // expected-error @below {{wave dialect operation with no hyperparameters provided by any ancestor}}
@@ -12,7 +12,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 // -----
 
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // expected-error @+1 {{failed to convert starting at this operation}}
   func.func @read_pattern_failure(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {
@@ -26,7 +26,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // expected-error @+1 {{failed to convert starting at this operation}}
   func.func @write_pattern_failure(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {

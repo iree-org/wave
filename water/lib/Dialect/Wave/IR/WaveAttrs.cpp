@@ -7,6 +7,7 @@
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
 #include "water/Dialect/Wave/IR/WaveInterfaces.h"
+#include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
 #include "water/Dialect/Wave/IR/WaveUtils.h"
 
@@ -902,6 +903,19 @@ wave::detail::verifyNormalFormAttr(Operation *root, wave::WaveNormalForm form,
                  "provided for all supported wave dialect operations";
         }
         return WalkResult::interrupt();
+      }
+    }
+
+    if (wave::bitEnumContainsAll(form,
+                                 wave::WaveNormalForm::ResolvedAllocations)) {
+      if (auto allocOp = llvm::dyn_cast<wave::AllocateOp>(op)) {
+        if (!llvm::isa<MemRefType>(allocOp.getResult().getType())) {
+          if (emitDiagnostics) {
+            op->emitError() << "normal form requires all wave.allocate "
+                               "operations to have memref result type";
+          }
+          return WalkResult::interrupt();
+        }
       }
     }
 

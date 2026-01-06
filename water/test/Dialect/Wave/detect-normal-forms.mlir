@@ -3,7 +3,7 @@
 // None of the ops inside are wave ops, so full types are specified.
 // None of the ops need index expressions, meaning that form is also specified.
 // CHECK-LABEL: @full_func_boundary_satisfied_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs,resolved_allocations>
 module @full_func_boundary_satisfied_module {
   func.func @full_func_boundary_satisfied(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32> {
     return %arg0 : !wave.tensor<[@M, @N] of f32>
@@ -14,7 +14,7 @@ module @full_func_boundary_satisfied_module {
 
 // None of the ops need index expressions, meaning that form is also specified.
 // CHECK-LABEL: @full_func_boundary_not_satisfied_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<index_exprs>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<index_exprs,resolved_allocations>
 module @full_func_boundary_not_satisfied_module {
   func.func @full_func_boundary_not_satisfied(%arg0: !wave.tensor<any of f32>) -> !wave.tensor<any of f32> {
     return %arg0 : !wave.tensor<any of f32>
@@ -25,7 +25,7 @@ module @full_func_boundary_not_satisfied_module {
 
 // Explicit index expressions are provided.
 // CHECK-LABEL: @index_exprs_satisfied_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs,resolved_allocations>
 module @index_exprs_satisfied_module {
   func.func @index_exprs_satisfied() {
     %c = arith.constant 0.0 : f32
@@ -42,7 +42,7 @@ module @index_exprs_satisfied_module {
 // -----
 
 // CHECK-LABEL: @index_exprs_not_satisfied_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,resolved_allocations>
 module @index_exprs_not_satisfied_module {
   func.func @index_exprs_not_satisfied() {
     %c = arith.constant 0.0 : f32
@@ -65,7 +65,7 @@ module @memory_only_types_satisfied_module {
 // -----
 
 // CHECK-LABEL: @memory_only_types_not_satisfied_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,resolved_allocations>
 module @memory_only_types_not_satisfied_module {
   func.func @memory_only_types_not_satisfied() {
     %c = arith.constant 0.0 : f32
@@ -77,7 +77,7 @@ module @memory_only_types_not_satisfied_module {
 // -----
 
 // CHECK-LABEL: @multiple_ops_with_index_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs,resolved_allocations>
 module @multiple_ops_with_index_module {
   func.func @multiple_ops_with_index() {
     %c = arith.constant 0.0 : f32
@@ -95,6 +95,32 @@ module @multiple_ops_with_index_module {
 
 // Empty module: all normal forms trivially satisfied, needs wave dialect to be registered.
 // CHECK-LABEL: @empty_module
-// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs,memory_only_types>
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,index_exprs,memory_only_types,resolved_allocations>
 module @empty_module {
+}
+
+// -----
+
+// wave.allocate returns memref, so resolved_allocations is satisfied.
+// CHECK-LABEL: @resolved_allocations_satisfied_module
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>
+module @resolved_allocations_satisfied_module {
+  func.func @resolved_allocations_satisfied() {
+    %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+      : memref<32xf32, #gpu.address_space<workgroup>>
+    return
+  }
+}
+
+// -----
+
+// wave.allocate returns WaveTensorType, so resolved_allocations is NOT satisfied.
+// CHECK-LABEL: @resolved_allocations_not_satisfied_module
+// CHECK-SAME: wave.normal_form = #wave.normal_form<full_types,memory_only_types>
+module @resolved_allocations_not_satisfied_module {
+  func.func @resolved_allocations_not_satisfied() {
+    %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+      : !wave.tensor<[@M] of f32, <shared>>
+    return
+  }
 }

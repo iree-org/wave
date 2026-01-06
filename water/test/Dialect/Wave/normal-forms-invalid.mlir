@@ -26,3 +26,14 @@ module attributes {wave.normal_form = #wave.normal_form<index_exprs>} {
     return
   }
 }
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<resolved_allocations>} {
+  func.func @unresolved_allocate() {
+    // expected-error @below {{normal form requires all wave.allocate operations to have memref result type}}
+    %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
+      : !wave.tensor<[@M] of f32, <shared>>
+    return
+  }
+}

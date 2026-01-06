@@ -98,6 +98,8 @@ def NORMAL_FORM_INDEX_EXPRS : I32BitEnumAttrCaseBit<
     "IndexExprsSpecified",       2, "index_exprs">;
 def NORMAL_FORM_MEMORY_ONLY_TYPES : I32BitEnumAttrCaseBit<
     "MemoryOnlyTypes",           3, "memory_only_types">;
+def NORMAL_FORM_RESOLVED_ALLOCATIONS : I32BitEnumAttrCaseBit<
+    "ResolvedAllocations",       4, "resolved_allocations">;
 
 def NORMAL_FORM_FULL_TYPES : I32BitEnumAttrCaseGroup<
     "AllTypesSpecified", [
@@ -112,6 +114,7 @@ def WaveNormalFormEnum : I32BitEnumAttr<"WaveNormalForm", "", [
   NORMAL_FORM_OP_TYPES,
   NORMAL_FORM_INDEX_EXPRS,
   NORMAL_FORM_MEMORY_ONLY_TYPES,
+  NORMAL_FORM_RESOLVED_ALLOCATIONS,
 
   // Group aliases.
   NORMAL_FORM_FULL_TYPES

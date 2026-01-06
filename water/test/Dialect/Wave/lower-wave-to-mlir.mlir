@@ -1,6 +1,6 @@
 // RUN: water-opt %s -allow-unregistered-dialect -lower-wave-to-mlir --mlir-print-local-scope --split-input-file --verify-diagnostics | FileCheck %s
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   func.func @no_hyperparams() {
     %cst = arith.constant 0.0 : f32
     // expected-error @below {{wave dialect operation with no hyperparameters provided by any ancestor}}
@@ -11,7 +11,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_exp2
   func.func @lower_exp2() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.exp2
@@ -27,7 +27,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_mma_f16_f32
   func.func @lower_mma_f16_f32() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     %cst_f16 = arith.constant 0.0 : f16
@@ -54,7 +54,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_all_mmas
   func.func @lower_all_mmas() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // Common scalars
@@ -183,7 +183,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_register
   func.func @lower_register() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.register
@@ -204,7 +204,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_allocate_memref
   // Test lowering when wave.allocate already has MemRefType result
   // (after ResolveDistributedAllocations pass).
@@ -221,7 +221,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_nested_register
   func.func @lower_nested_register(%cond: i1) attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.register
@@ -242,7 +242,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_add
   func.func @lower_add() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.add
@@ -270,7 +270,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_mul
   func.func @lower_mul() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.mul
@@ -298,7 +298,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_div
   func.func @lower_div() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.div
@@ -326,7 +326,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
 // CHECK-LABEL: func.func @lower_alloc_view
 func.func @lower_alloc_view() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28}>}  {
   // CHECK: %[[BUFF:.*]] = memref.alloc() : memref<256xi8, #gpu.address_space<workgroup>>
@@ -345,7 +345,7 @@ func.func @lower_alloc_view() attributes {wave.hyperparameters = #wave.hyperpara
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
 // CHECK-LABEL: @lower_alloc
 func.func @lower_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28}>}  {
   // CHECK: memref.alloc() : memref<4x32xbf16, #gpu.address_space<workgroup>>
@@ -358,7 +358,7 @@ func.func @lower_alloc() attributes {wave.hyperparameters = #wave.hyperparameter
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
 // CHECK-LABEL: @lower_read
 func.func @lower_read(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>}  {
   %0 = wave.read %mem index [{
@@ -380,7 +380,7 @@ func.func @lower_read(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes 
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
 // CHECK-LABEL: @lower_read_non_innermost_dim
 func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>}  {
   %0 = wave.read %mem index [{
@@ -402,7 +402,7 @@ func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <glo
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @lower_read_masked
   func.func @lower_read_masked(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 100, N = 50}>} {
@@ -444,7 +444,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @lower_read_masked_non_innermost_dim
   func.func @lower_read_masked_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 100, N = 50}>} {
@@ -464,7 +464,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @read_with_vector_result
   func.func @read_with_vector_result(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, N = 128}>} {
@@ -484,7 +484,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
 // CHECK-LABEL: @lower_write
 func.func @lower_write(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>}  {
   %cst = arith.constant 0.0 : f16
@@ -508,7 +508,7 @@ func.func @lower_write(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
 // CHECK-LABEL: @lower_write_non_innermost
 func.func @lower_write_non_innermost(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 128, N = 128}>}  {
   %cst = arith.constant 0.0 : f16
@@ -532,7 +532,7 @@ func.func @lower_write_non_innermost(%mem: !wave.tensor<[@M, @N] of f16, <global
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_cast_float_extension
   func.func @lower_cast_float_extension() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.cast
@@ -547,7 +547,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_cast_float_truncation
   func.func @lower_cast_float_truncation() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.cast
@@ -562,7 +562,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_cast_integer_extension
   func.func @lower_cast_integer_extension() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.cast
@@ -577,7 +577,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_cast_integer_truncation
   func.func @lower_cast_integer_truncation() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.cast
@@ -592,7 +592,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_cast_float_to_integer
   func.func @lower_cast_float_to_integer() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.cast
@@ -607,7 +607,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_cast_integer_to_float
   func.func @lower_cast_integer_to_float() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK-NOT: wave.cast
@@ -622,7 +622,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_cast_mixed_types
   func.func @lower_cast_mixed_types() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // Test f16 -> f32 extension
@@ -646,7 +646,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_extract_slice_constants
   func.func @lower_extract_slice_constants() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     // CHECK:     %[[INPUT:.*]] = arith.constant dense<0.000000e+00> : vector<16xf32>
@@ -667,7 +667,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_iterate
   func.func @lower_iterate(%init: vector<8xf32>) attributes {
     wave.hyperparameters = #wave.hyperparameters<{K = 128, BLOCK_K = 32}>,
@@ -693,7 +693,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @lower_iterate_with_operations
   func.func @lower_iterate_with_operations(%init: vector<4xf32>) attributes {
     wave.hyperparameters = #wave.hyperparameters<{K = 64, BLOCK_K = 16, M = 32}>,
@@ -724,7 +724,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // CHECK: module {
 // CHECK-NOT: wave.normal_form
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: func.func @test_normal_form_cleared
   func.func @test_normal_form_cleared() attributes {wave.hyperparameters = #wave.hyperparameters<{}>} {
     return
@@ -733,7 +733,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @func_with_wave_input
   // CHECK-SAME: (%[[ARG0:.*]]: memref<32x32xf16, #gpu.address_space<global>>)
   func.func @func_with_wave_input(%arg0: !wave.tensor<[@M, @N] of f16, <global>>)
@@ -744,7 +744,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @func_with_multiple_wave_inputs
   // CHECK-SAME: (%[[ARG0:.*]]: memref<32x32xf16, #gpu.address_space<global>>, %[[ARG1:.*]]: memref<32x32xf16, #gpu.address_space<global>>, %[[ARG2:.*]]: memref<32x32xf16, #gpu.address_space<global>>)
   func.func @func_with_multiple_wave_inputs(
@@ -758,7 +758,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @func_with_mixed_input_types
   // CHECK-SAME: (%[[ARG0:.*]]: memref<64x64xf32, #gpu.address_space<global>>, %[[ARG1:.*]]: i32, %[[ARG2:.*]]: memref<16x16xf16, #gpu.address_space<global>>)
   func.func @func_with_mixed_input_types(
@@ -772,7 +772,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @func_without_wave_tensors
   // CHECK-SAME: (%[[ARG0:.*]]: f32, %[[ARG1:.*]]: i64) -> memref<32x32xf32>
   func.func @func_without_wave_tensors(%arg0: f32, %arg1: i64) -> memref<32x32xf32>
@@ -784,7 +784,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @lower_iterate_with_vector_iter_args
   func.func @lower_iterate_with_vector_iter_args() attributes {
     wave.hyperparameters = #wave.hyperparameters<{K = 128, BLOCK_K = 32}>,
@@ -813,7 +813,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @lower_iterate_multiple_vector_iter_args
   func.func @lower_iterate_multiple_vector_iter_args() attributes {
     wave.hyperparameters = #wave.hyperparameters<{I = 8}>,
@@ -842,7 +842,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 // -----
 
-module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types,resolved_allocations>} {
   // CHECK-LABEL: @lower_iterate_with_vector_captures
   func.func @lower_iterate_with_vector_captures() attributes {
     wave.hyperparameters = #wave.hyperparameters<{I = 4}>,

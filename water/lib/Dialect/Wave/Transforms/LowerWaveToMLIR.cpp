@@ -56,7 +56,8 @@ struct LowerWaveToMLIRPass
     // TODO: require index expressions to be present
     if (failed(wave::verifyNormalFormPassPrecondition(
             wave::WaveNormalForm::AllTypesSpecified |
-                wave::WaveNormalForm::MemoryOnlyTypes,
+                wave::WaveNormalForm::MemoryOnlyTypes |
+                wave::WaveNormalForm::ResolvedAllocations,
             op, getPassName())))
       return signalPassFailure();
 
