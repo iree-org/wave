@@ -4,7 +4,18 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import operator
+
+import sympy
+from wave_lang.support.ir_imports import (
+    affine_d,
+    arith_d,
+    gpu_d,
+)
+
 from .handlers_shared import *
+from .kernel_model import KernelInfo
+from .utils import simplify_expression, tid_upper_bound_from_thread_id
 
 
 class _ArithAffineHandlers:
@@ -122,6 +133,20 @@ class _ArithAffineHandlers:
             kernel_info.index_env[str(operation.result)] = "wgid_y"
         elif "dim z" in dimension_string:
             kernel_info.index_env[str(operation.result)] = "wgid_z"
+
+    def handle_subgroup_broadcast_op(
+        self, operation: gpu_d.SubgroupBroadcastOp, kernel_info: KernelInfo
+    ):
+        """Handle gpu.subgroup_broadcast - propagate value for uniform broadcast.
+
+        The expression is preserved as-is (not evaluated) because each wavefront
+        has different tid values. v_readfirstlane is emitted during code generation.
+        """
+        result_ssa = str(operation.results[0])
+        source_ssa = str(operation.src)
+
+        if source_ssa in kernel_info.index_env:
+            kernel_info.index_env[result_ssa] = kernel_info.index_env[source_ssa]
 
     def _extract_dimension_values(
         self,

@@ -4,7 +4,21 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from wave_lang.support.ir_imports import (
+    amdgpu_d,
+    gpu_d,
+    memref_d,
+    stream_d,
+    vector_d,
+)
+
 from .handlers_shared import *
+from .kernel_model import BindingUse, KernelInfo, MemRefInfo, VecAccess
+from .utils import (
+    parse_memref_type_from_obj,
+    parse_vector_type_from_obj,
+    split_const_dynamic,
+)
 
 
 class _MemoryHandlers:

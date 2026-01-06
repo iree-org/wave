@@ -4,7 +4,16 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+from wave_lang.support.ir_imports import (
+    arith_d,
+    amdgpu_d,
+    memref_d,
+    rocdl_d,
+    scf_d,
+)
+
 from .handlers_shared import *
+from .kernel_model import KernelInfo
 
 
 class _ControlFlowHandlers:
