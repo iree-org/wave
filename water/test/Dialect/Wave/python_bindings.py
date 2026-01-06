@@ -44,7 +44,7 @@ with ir.Context() as ctx:
     else:
         assert False, "Expected to fail with TypeError."
 
-    # CHECK: #wave<index_mapping[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * 3, WG0 + BLOCK_M, T0 mod WG0)>
+    # CHECK: #wave<index_mapping[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * 3, WG0 + BLOCK_M, T0 mod WG0)>
     symbols = [
         wave.WaveIndexSymbolAttr.get(wave.WaveIndexSymbol.WORKGROUP_0),
         wave.WaveSymbolAttr.get("BLOCK_M"),
@@ -64,10 +64,12 @@ with ir.Context() as ctx:
     # CHECK: ()[s0, s1, s2] -> (s0 * 3)
     print(index_mapping_attr.start)
 
-    # CHECK: ()[s0, s1, s2] -> (s0 + s1)
+    # Note that symbols were reordered to ensure a consistent order in the
+    # mapping, in particular s1 and s2 were swapped.
+    # CHECK: ()[s0, s1, s2] -> (s0 + s2)
     print(index_mapping_attr.step)
 
-    # CHECK: ()[s0, s1, s2] -> (s2 mod s0)
+    # CHECK: ()[s0, s1, s2] -> (s1 mod s0)
     print(index_mapping_attr.stride)
 
     # CHECK: 3
@@ -77,10 +79,10 @@ with ir.Context() as ctx:
     # CHECK: #wave.index_symbol<WG0>
     print(retrieved_symbols[0])
 
-    # CHECK: #wave.symbol<"BLOCK_M">
+    # CHECK: #wave.index_symbol<T0>
     print(retrieved_symbols[1])
 
-    # CHECK: #wave.index_symbol<T0>
+    # CHECK: #wave.symbol<"BLOCK_M">
     print(retrieved_symbols[2])
 
     try:

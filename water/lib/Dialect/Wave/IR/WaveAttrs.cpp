@@ -67,6 +67,127 @@ static ParseResult parseExprWithNames(ArrayRef<StringRef> names,
 // WaveIndexMappingAttr
 //===----------------------------------------------------------------------===//
 
+// Returns true if the first operand is an attribute usable as
+// WaveIndexMappingAttr symbol that should be ordered before the second
+// attribute, also usable as such symbol.
+static bool isSymbolBefore(Attribute lhs, Attribute rhs) {
+  auto getKindOrder = [](Attribute attr) {
+    return llvm::TypeSwitch<Attribute, int>(attr)
+        .Case([](WaveSymbolAttr symbolAttr) { return 2; })
+        .Case([](WaveIndexSymbolAttr indexSymbolAttr) { return 0; })
+        .Case([](WaveIterSymbolAttr iterSymbolAttr) { return 1; })
+        .DefaultUnreachable("unhandled symbol attribute type");
+  };
+  auto compareValuesOfSameKind = [](Attribute lhs, Attribute rhs) {
+    assert(lhs.getTypeID() == rhs.getTypeID() &&
+           "expected symbols to be of the same kind");
+    return llvm::TypeSwitch<Attribute, bool>(lhs)
+        .Case([&](WaveSymbolAttr symbolAttr) {
+          return symbolAttr.getName() < cast<WaveSymbolAttr>(rhs).getName();
+        })
+        .Case([&](WaveIndexSymbolAttr indexSymbolAttr) {
+          return indexSymbolAttr.getValue() <
+                 cast<WaveIndexSymbolAttr>(rhs).getValue();
+        })
+        .Case([&](WaveIterSymbolAttr iterSymbolAttr) {
+          return iterSymbolAttr.getName() <
+                 cast<WaveIterSymbolAttr>(rhs).getName();
+        })
+        .DefaultUnreachable("unhandled symbol attribute type");
+  };
+  int lhsOrder = getKindOrder(lhs);
+  int rhsOrder = getKindOrder(rhs);
+  return lhsOrder < rhsOrder ||
+         (lhsOrder == rhsOrder && compareValuesOfSameKind(lhs, rhs));
+}
+
+// Return positions of symbols that are used in any of the maps. They are not
+// returned in any particular order.
+static SmallVector<unsigned> getUsedSymbolPositions(ArrayRef<AffineMap> maps) {
+  llvm::SetVector<unsigned> usedSymbolPositions;
+  auto collect = [&](AffineMap map) {
+    map.walkExprs([&](AffineExpr expr) {
+      if (auto symbolExpr = dyn_cast<AffineSymbolExpr>(expr))
+        usedSymbolPositions.insert(symbolExpr.getPosition());
+    });
+  };
+  for (AffineMap map : maps)
+    if (map)
+      collect(map);
+  return usedSymbolPositions.takeVector();
+}
+
+// Replace subexpressions in the given map, preserve null map as is. The
+// resulting map will have the given number of symbols.
+static AffineMap replaceSymbols(AffineMap map,
+                                DenseMap<AffineExpr, AffineExpr> &replacement,
+                                unsigned numSymbols) {
+  if (!map)
+    return map;
+  return map.replace(replacement, /*numResultDims=*/0, numSymbols);
+}
+
+WaveIndexMappingAttr WaveIndexMappingAttr::get(MLIRContext *context,
+                                               ArrayRef<Attribute> symbols,
+                                               AffineMap start, AffineMap step,
+                                               AffineMap stride) {
+  // Deduplicate first so we don't get anything fun with indices later on.
+  DenseMap<AffineExpr, AffineExpr> replacement;
+  llvm::SmallPtrSet<Attribute, 6> seenSymbols;
+  for (auto [i, symbol] : llvm::enumerate(symbols)) {
+    auto [iter, inserted] = seenSymbols.insert(symbol);
+    if (!inserted) {
+      replacement.try_emplace(
+          getAffineSymbolExpr(i, context),
+          getAffineSymbolExpr(std::distance(seenSymbols.begin(), iter),
+                              context));
+    }
+  }
+  if (!replacement.empty()) {
+    start = replaceSymbols(start, replacement, symbols.size());
+    step = replaceSymbols(step, replacement, symbols.size());
+    stride = replaceSymbols(stride, replacement, symbols.size());
+  }
+  replacement.clear();
+
+  // Sort symbols and drop unused ones in one pass. This is a naive-ish O(n^2)
+  // insertion-like sort, but it is practically fast because it avoids dynamic
+  // allocations and copies that would be dominating the runtime for vectors
+  // with small numbers of elements.
+  SmallVector<unsigned> usedSymbolPositions =
+      ::getUsedSymbolPositions({start, step, stride});
+  SmallVector<Attribute> sortedSymbols;
+  sortedSymbols.resize(usedSymbolPositions.size());
+  for (unsigned position : usedSymbolPositions) {
+    size_t count = llvm::count_if(usedSymbolPositions, [&](unsigned other) {
+      return isSymbolBefore(symbols[other], symbols[position]);
+    });
+    sortedSymbols[count] = symbols[position];
+  }
+
+  // Replace symbols in the maps with their new positions.
+  for (auto [i, symbol] : llvm::enumerate(sortedSymbols)) {
+    SmallVector<unsigned> originalPositions;
+    for (auto [j, otherSymbol] : llvm::enumerate(symbols)) {
+      if (symbol == otherSymbol)
+        replacement.try_emplace(getAffineSymbolExpr(j, context),
+                                getAffineSymbolExpr(i, context));
+    }
+  }
+  start = replaceSymbols(start, replacement, sortedSymbols.size());
+  step = replaceSymbols(step, replacement, sortedSymbols.size());
+  stride = replaceSymbols(stride, replacement, sortedSymbols.size());
+  return Base::get(context, sortedSymbols, start, step, stride);
+}
+
+WaveIndexMappingAttr
+WaveIndexMappingAttr::getChecked(function_ref<InFlightDiagnostic()> emitError,
+                                 MLIRContext *context,
+                                 ArrayRef<Attribute> symbols, AffineMap start,
+                                 AffineMap step, AffineMap stride) {
+  return Base::getChecked(emitError, context, symbols, start, step, stride);
+}
+
 // Helper function to render an affine map result to a string.
 // It textually substitutes 's<i>' occurrences with the corresponding names from
 // the provided `names` array.
@@ -234,6 +355,55 @@ WaveIndexMappingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "expected all symbols to be a WaveSymbolAttr, "
                           "WaveIndexSymbolAttr or WaveIterSymbolAttr";
   }
+  if (start && start.getNumResults() != 1) {
+    return emitError() << "start map should have exactly one result, got "
+                       << start.getNumResults();
+  }
+  if (step && step.getNumResults() != 1) {
+    return emitError() << "step map should have exactly one result, got "
+                       << step.getNumResults();
+  }
+  if (stride && stride.getNumResults() != 1) {
+    return emitError() << "stride map should have exactly one result, got "
+                       << stride.getNumResults();
+  }
+  if (start && start.getNumSymbols() != symbols.size()) {
+    return emitError() << "start map should have the same number of symbols as "
+                          "given to the attribute, got "
+                       << start.getNumSymbols() << " symbols for "
+                       << symbols.size() << " symbols";
+  }
+  if (step && step.getNumSymbols() != symbols.size()) {
+    return emitError() << "step map should have the same number of symbols as "
+                          "given to the attribute, got "
+                       << step.getNumSymbols() << " symbols for "
+                       << symbols.size() << " symbols";
+  }
+  if (stride && stride.getNumSymbols() != symbols.size()) {
+    return emitError() << "stride map should have the same number of symbols "
+                          "as given to the attribute, got "
+                       << stride.getNumSymbols() << " symbols for "
+                       << symbols.size() << " symbols";
+  }
+  if (start && start.getNumDims() != 0) {
+    return emitError() << "start map should have no dimensions, got "
+                       << start.getNumDims() << " dimensions";
+  }
+  if (step && step.getNumDims() != 0) {
+    return emitError() << "step map should have no dimensions, got "
+                       << step.getNumDims() << " dimensions";
+  }
+  if (stride && stride.getNumDims() != 0) {
+    return emitError() << "stride map should have no dimensions, got "
+                       << stride.getNumDims() << " dimensions";
+  }
+
+  llvm::SmallPtrSet<Attribute, 6> seenSymbols;
+  for (Attribute symbol : symbols) {
+    if (!seenSymbols.insert(symbol).second) {
+      return emitError() << "duplicate symbol: " << symbol;
+    }
+  }
 
   return success();
 }
@@ -259,56 +429,6 @@ WaveIndexMappingAttr WaveIndexMappingAttr::removeInput(Attribute input) const {
              getStart() ? getStart().replace(replacement) : AffineMap(),
              getStep() ? getStep().replace(replacement) : AffineMap(),
              getStride() ? getStride().replace(replacement) : AffineMap());
-}
-
-SmallVector<unsigned> WaveIndexMappingAttr::getUsedSymbolPositions() const {
-  llvm::SetVector<unsigned> usedSymbolPositions;
-  auto collect = [&](AffineMap map) {
-    map.walkExprs([&](AffineExpr expr) {
-      if (auto symbolExpr = dyn_cast<AffineSymbolExpr>(expr))
-        usedSymbolPositions.insert(symbolExpr.getPosition());
-    });
-  };
-  if (getStart())
-    collect(getStart());
-  if (getStep())
-    collect(getStep());
-  if (getStride())
-    collect(getStride());
-  return usedSymbolPositions.takeVector();
-}
-
-WaveIndexMappingAttr WaveIndexMappingAttr::removeUnusedInputs() const {
-  SmallVector<unsigned> usedSymbolPositions = getUsedSymbolPositions();
-  llvm::sort(usedSymbolPositions);
-  SmallVector<Attribute> newSymbols;
-  DenseMap<AffineExpr, AffineExpr> replacement;
-  for (auto [oldPosition, symbol] : llvm::enumerate(getSymbols())) {
-    if (!llvm::is_contained(usedSymbolPositions, oldPosition))
-      continue;
-
-    replacement.try_emplace(
-        getAffineSymbolExpr(oldPosition, getContext()),
-        getAffineSymbolExpr(newSymbols.size(), getContext()));
-    newSymbols.push_back(symbol);
-  }
-  assert(newSymbols.size() == usedSymbolPositions.size());
-  AffineMap start =
-      getStart()
-          ? getStart().replace(replacement, /*numResultDims=*/0,
-                               /*numResultSyms=*/usedSymbolPositions.size())
-          : AffineMap();
-  AffineMap step =
-      getStep()
-          ? getStep().replace(replacement, /*numResultDims=*/0,
-                              /*numResultSyms=*/usedSymbolPositions.size())
-          : AffineMap();
-  AffineMap stride =
-      getStride()
-          ? getStride().replace(replacement, /*numResultDims=*/0,
-                                /*numResultSyms=*/usedSymbolPositions.size())
-          : AffineMap();
-  return get(getContext(), newSymbols, start, step, stride);
 }
 
 //===----------------------------------------------------------------------===//

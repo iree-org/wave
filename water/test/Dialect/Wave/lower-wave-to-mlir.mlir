@@ -366,11 +366,11 @@ func.func @lower_read(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes 
       // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
       // Note: BLOCK_M = 64
       // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 mod 64)>()[%[[BIDX_X]], %[[TIDX_X]]]
-      M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-      // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+      M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
       // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
-      // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s1 * 64 + s0 * 8)>()[%[[TIDX_Y]], %[[BIDX_Y]]]
-      N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)}]
+      // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+      // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
+      N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)}]
      : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
      // CHECK: %[[VEC:.+]] = vector.load {{.*}}[%[[ROW]], %[[COL]]] : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
 
@@ -388,11 +388,11 @@ func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <glo
     // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
     // Note: BLOCK_M = 64
     // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 * 8)>()[%[[BIDX_X]], %[[TIDX_X]]]
-    M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , 8, 64),
-    // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+    M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , 8, 64),
     // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
-    // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s1 * 64 + s0 * 8)>()[%[[TIDX_Y]], %[[BIDX_Y]]]
-    N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)}]
+    // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+    // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
+    N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)}]
     : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
     // CHECK: %[[PAD:.*]] = arith.constant {{.*}} : f16
     // CHECK: vector.transfer_read {{.*}}[%[[ROW]], %[[COL]]], %[[PAD]] {permutation_map = affine_map<(d0, d1) -> (d0)>} : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
@@ -411,7 +411,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
         // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
         // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
         // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1)>()[%[[BIDX_X]], %[[TIDX_X]]]
-        M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0, 1, 64),
+        M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 1, 64),
         // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
         // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
         // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 32)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
@@ -449,7 +449,7 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
   func.func @lower_read_masked_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 64, BLOCK_N = 64, M = 100, N = 50}>} {
     %v = wave.read %mem index [{
-        M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0, 8, 64),
+        M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 8, 64),
         N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 1, 1)
       }] { bounds = #wave.read_write_bounds<{
         M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
@@ -494,11 +494,11 @@ func.func @lower_write(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes
       // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
       // Note: BLOCK_M = 64
       // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 mod 64)>()[%[[BIDX_X]], %[[TIDX_X]]]
-      M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
-      // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+      M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64),
       // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
-      // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s1 * 64 + s0 * 8)>()[%[[TIDX_Y]], %[[BIDX_Y]]]
-      N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)}]
+      // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+      // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
+      N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)}]
      : vector<8xf16>, !wave.tensor<[@M, @N] of f16, <global>>
      // CHECK: vector.store {{.*}}[%[[ROW]], %[[COL]]] : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
      // CHECK-NOT: vector.transfer_write
@@ -518,11 +518,11 @@ func.func @lower_write_non_innermost(%mem: !wave.tensor<[@M, @N] of f16, <global
       // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
       // Note: BLOCK_M = 64
       // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 mod 64)>()[%[[BIDX_X]], %[[TIDX_X]]]
-      M : [#wave.symbol<"BLOCK_M">, #wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 8, 64),
-      // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+      M : [#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 8, 64),
       // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
-      // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s1 * 64 + s0 * 8)>()[%[[TIDX_Y]], %[[BIDX_Y]]]
-      N : [#wave.index_symbol<T1>, #wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)}]
+      // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
+      // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
+      N : [#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)}]
      : vector<8xf16>, !wave.tensor<[@M, @N] of f16, <global>>
      // CHECK: vector.transfer_write {{.*}}, {{.*}}[{{.*}}, {{.*}}] {permutation_map = affine_map<(d0, d1) -> (d0)>} : vector<8xf16>, memref<{{.*}}xf16{{.*}}>
 
@@ -842,6 +842,34 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
       // CHECK: scf.yield %{{.*}}, %{{.*}} : vector<4xf32>, vector<8xi32>
       wave.yield %add, %add2 : vector<4xf32>, vector<8xi32>
     } : (vector<4xf32>, vector<8xi32>) -> (vector<4xf32>, vector<8xi32>)
+    return
+  }
+}
+
+// -----
+
+module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
+  // CHECK-LABEL: @lower_iterate_with_vector_captures
+  func.func @lower_iterate_with_vector_captures() attributes {
+    wave.hyperparameters = #wave.hyperparameters<{I = 4}>,
+    wave.constraints = [
+      #wave.tiling_constraint<dim = <"I">, tile_size = <[#wave.symbol<"I">] -> (I)>>
+    ]
+  } {
+    %cst = arith.constant 2.0 : f32
+    %cst2 = arith.constant 3.0 : f16
+    %iter_arg = wave.register %cst : vector<8xf32>
+    %capture = wave.register %cst2 : vector<4xf16>
+
+    // CHECK:     scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%{{.*}} = %{{.*}}) -> (vector<8xf32>)
+    %result = wave.iterate @I iter_args(%iter_arg) captures(%capture) {
+    ^bb0(%arg: vector<8xf32>, %cap: vector<4xf16>):
+      // Test that vector captures work correctly - should use original SSA value
+      // CHECK: arith.extf %{{.*}} : vector<4xf16> to vector<4xf32>
+      %cast = wave.cast %cap : vector<4xf16> to vector<4xf32>
+      // CHECK: scf.yield %{{.*}} : vector<8xf32>
+      wave.yield %arg : vector<8xf32>
+    } : (vector<8xf32>, vector<4xf16>) -> vector<8xf32>
     return
   }
 }
