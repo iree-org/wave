@@ -419,6 +419,15 @@ def fuse_tensor_loads(
         if hasattr(load1_node, "pre_expansion_id"):
             fused_load.pre_expansion_id = load1_node.pre_expansion_id
 
+        # Add tags to the fused load
+        tags = []
+        if hasattr(load1_node, "tag"):
+            tags.append(load1_node.tag)
+        if hasattr(load2_node, "tag"):
+            tags.append(load2_node.tag)
+        if tags:
+            fused_load.tag = ",".join(tags)
+
         logger.debug(f"Created fused load: {fused_load.name}")
 
         load1_node.replace_all_uses_with(fused_load)
