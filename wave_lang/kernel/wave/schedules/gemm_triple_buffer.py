@@ -93,6 +93,7 @@ def get_async_two_cluster_triple_buffer():
         clusters = [
             tkw.cluster(
                 [
+                    tkw.WorkgroupBarrier(),
                     shared_load_a_0,
                     shared_load_b_0,
                     tkw.SchedulingBarrier([]),

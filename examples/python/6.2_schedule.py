@@ -513,7 +513,7 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
     The schedule uses async operations to overlap global-to-shared transfers with compute operations
     from different iterations. It also uses a 3 stage pipeline to triple buffer the shared memory which allows for 2 memory prefetches before the loop starts.
     """
-    shape: tuple[int, int, int] = (256, 256, 232)
+    shape: tuple[int, int, int] = (128, 256, 1024)
     mfma_variant: tkw.MMAType = tkw.MMAType.F32_16x16x16_F16
 
     # Symbol definitions
@@ -629,11 +629,10 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
             shared_load_b, dim=K, num_partitions=2
         )
 
-        independent_global_count = len(global_to_shared_a) + len(global_to_shared_b)
-
         clusters = [
             tkw.cluster(
                 [
+                    tkw.WorkgroupBarrier(),
                     shared_load_a_0,
                     shared_load_b_0,
                     tkw.SchedulingBarrier([]),
@@ -686,8 +685,8 @@ def test_async_gemm_schedule_triple_buffering(is_debug=False):
             M: M_val,
             N: N_val,
             K: K_val,
-            BLOCK_M: 64,
-            BLOCK_N: 32,
+            BLOCK_M: 128,
+            BLOCK_N: 256,
             BLOCK_K: 64,
             ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
             ADDRESS_SPACE_0: GLOBAL_ADDRESS_SPACE,
