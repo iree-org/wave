@@ -667,7 +667,8 @@ def construct_epilogue(
 
     Returns:
         The list of nodes representing the final values after the epilogue completes.
-        These are the nodes that should be used as outputs, NOT the GetResult nodes.
+        These are the nodes that should be used as outputs for the overall
+        prologue+loop+epilogue package.
     """
     logger.debug("=====================================")
     logger.debug("Constructing epilogue.")
