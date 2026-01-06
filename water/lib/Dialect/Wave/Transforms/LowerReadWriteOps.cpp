@@ -430,7 +430,11 @@ struct MemAccessInfo {
 template <typename OpTy>
 static FailureOr<MemAccessInfo> createMemoryIndicesAndMask(
     ConversionPatternRewriter &rewriter, const TypeConverter *typeConverter,
-    OpTy op, wave::WaveTensorType memoryType, VectorType vectorType) {
+    OpTy op, Type memoryTypeArg, VectorType vectorType) {
+  auto memoryType = dyn_cast<wave::WaveTensorType>(memoryTypeArg);
+  if (!memoryType)
+    return rewriter.notifyMatchFailure(
+        op, "lowering with MemRefType memory not yet implemented");
 
   int64_t elementsPerThread = vectorType.getNumElements();
 

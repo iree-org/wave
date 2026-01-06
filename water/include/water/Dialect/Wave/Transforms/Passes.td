@@ -147,4 +147,27 @@ def WaterWavePropagateDefaultsFromConstraintsPass
   }];
 }
 
+def WaterWaveResolveDistributedAllocationsPass
+    : Pass<"water-wave-resolve-distributed-allocations"> {
+  let summary = "Resolve distributed shapes in allocate operations";
+  let description = [{
+    This pass transforms wave.allocate operations that have a distributed_shape
+    attribute from returning WaveTensorType to returning MemRefType with the
+    resolved distributed shape. This makes the physical memory layout explicit
+    in the type system before lowering.
+
+    The pass also updates all users of the allocation (wave.read and wave.write
+    operations) to use the new memref-typed value.
+
+    This pass must run before LowerWaveToMLIR to ensure that read/write
+    operations can directly use the distributed memref without needing to look
+    through unrealized_conversion_cast operations.
+  }];
+
+  let dependentDialects = [
+    "::mlir::gpu::GPUDialect",
+    "::mlir::memref::MemRefDialect"
+  ];
+}
+
 #endif // WATER_DIALECT_WAVE_TRANSFORMS_PASSES

@@ -12,6 +12,15 @@
 
 using namespace mlir;
 
+wave::WaveHyperparameterAttr wave::getHyperparameters(Operation *op) {
+  for (Operation *current = op; current; current = current->getParentOp()) {
+    if (auto hyperparams = current->getAttrOfType<WaveHyperparameterAttr>(
+            WaveDialect::kHyperparameterAttrName))
+      return hyperparams;
+  }
+  return nullptr;
+}
+
 llvm::LogicalResult wave::collectWaveConstraints(
     Operation *top, llvm::DenseMap<Operation *, Attribute> &constraints) {
   auto *waveDialect = top->getContext()->getLoadedDialect<wave::WaveDialect>();

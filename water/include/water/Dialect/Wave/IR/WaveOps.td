@@ -26,6 +26,12 @@ include "mlir/IR/BuiltinAttributeInterfaces.td"
 def WaveIterableType : AnyTypeOf<[WaveTensorType, VectorOfRank<[1]>],
                                  "wave tensor or 1d vector type">;
 
+// Memory type for allocate results and read/write memory operands.
+// Before ResolveDistributedAllocations: WaveTensorType with memory address space.
+// After ResolveDistributedAllocations: MemRefType with resolved distributed shape.
+def WaveMemoryType : Type<Or<[WaveTensorInMemory.predicate, AnyMemRef.predicate]>,
+                          "wave tensor in memory or memref">;
+
 //-----------------------------------------------------------------------------
 // Base class for all Wave operations.
 //-----------------------------------------------------------------------------
@@ -259,12 +265,12 @@ def AllocateOp : WaveOp<"allocate"> {
   }];
 
   let arguments = !con((ins
-    Arg<Optional<WaveTensorType>, "Optional parent buffer to view into">:$parent,
+    Arg<Optional<WaveMemoryType>, "Optional parent buffer to view into">:$parent,
     Arg<WaveExprListAttr, "Distributed (physical) shape">:$distributed_shape,
     Arg<OptionalAttr<I64Attr>, "Byte offset into parent buffer">:$offset
   ), commonArguments);
 
-  let results = (outs Res<WaveTensorType,"Allocated buffer">:$result);
+  let results = (outs Res<WaveMemoryType, "Allocated buffer">:$result);
 
   let assemblyFormat =
     " (`in` $parent^ `:` type($parent))? attr-dict `:` type($result)";
@@ -307,7 +313,7 @@ def ReadOp : WaveOp<"read", [
   }];
 
   let arguments = !con((ins
-    Arg<WaveTensorInMemory, "Tensor representing memory to read from">:$memory,
+    Arg<WaveMemoryType, "Memory to read from">:$memory,
     Arg<OptionalAttr<I64Attr>,
         "Number of elements processed by each thread">:$elements_per_thread,
     Arg<OptionalAttr<WaveReadWriteBoundsAttr>,
@@ -362,7 +368,7 @@ def WriteOp : WaveOp<"write", [
 
   let arguments = !con((ins
     Arg<WaveTensorInRegister, "Value to write">:$value_to_store,
-    Arg<WaveTensorInMemory, "Tensor representing memory to write into">:$memory,
+    Arg<WaveMemoryType, "Memory to write into">:$memory,
     Arg<OptionalAttr<I64Attr>,
         "Number of elements processed by each thread">:$elements_per_thread,
     Arg<OptionalAttr<WaveReadWriteBoundsAttr>,

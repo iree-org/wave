@@ -597,7 +597,8 @@ func.func @cast_underspecified_to_different_shape(%arg0: !wave.tensor<[@A, @B] o
 
 // Test mixed wave tensor and vector types in iterate - should fail
 func.func @iterate_mixed_tensor_vector_types() attributes {wave.hyperparameters = #wave.hyperparameters<{M = 128, I = 4}>} {
-  %tensor_input = wave.allocate {distributed_shape = #wave.expr_list<[] -> (128)>} : !wave.tensor<[@M] of f32, <register>>
+  %cst = arith.constant 0.0 : f32
+  %tensor_input = wave.register %cst : !wave.tensor<[@M] of f32, <register>>
   %vector_input = arith.constant dense<1.0> : vector<8xf32>
 
   // expected-error @below {{iter_args #0 and result #0 must be the same category of types (both wave tensors or both vectors)}}

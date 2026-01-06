@@ -205,16 +205,16 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 // -----
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
-  // CHECK-LABEL: func.func @lower_register_with_unrealized_cast
-  func.func @lower_register_with_unrealized_cast() attributes {wave.hyperparameters = #wave.hyperparameters<{Y = 10, Z = 1, BLOCK_M = 1, BLOCK_K = 2}>} {
-    // CHECK-NOT: wave.register
+  // CHECK-LABEL: func.func @lower_allocate_memref
+  // Test lowering when wave.allocate already has MemRefType result
+  // (after ResolveDistributedAllocations pass).
+  func.func @lower_allocate_memref() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 1, BLOCK_K = 2}>} {
     // CHECK:     %[[ALLOC:.*]] = memref.alloc() : memref<1x6xf32, #gpu.address_space<workgroup>>
-    // CHECK:     %[[CAST:.*]] = builtin.unrealized_conversion_cast %[[ALLOC]] : memref<1x6xf32, #gpu.address_space<workgroup>> to !wave.tensor<[@Y, @Z] of f32, <shared>>
-    // CHECK:     "test.foo"(%[[CAST]])
+    // CHECK:     "test.foo"(%[[ALLOC]])
     %0 = wave.allocate
     { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
-    : !wave.tensor<[@Y, @Z] of f32, <shared>>
-    "test.foo"(%0) : (!wave.tensor<[@Y, @Z] of f32, <shared>>) -> ()
+    : memref<1x6xf32, #gpu.address_space<workgroup>>
+    "test.foo"(%0) : (memref<1x6xf32, #gpu.address_space<workgroup>>) -> ()
     return
   }
 }
@@ -328,17 +328,17 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
 // CHECK-LABEL: func.func @lower_alloc_view
-func.func @lower_alloc_view() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28, M = 128, N=128, K= 128}>}  {
+func.func @lower_alloc_view() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28}>}  {
   // CHECK: %[[BUFF:.*]] = memref.alloc() : memref<256xi8, #gpu.address_space<workgroup>>
   %parent = wave.allocate { distributed_shape = #wave.expr_list<[] -> (256)> }
-    : !wave.tensor<[@M,@N,@K] of i8, <shared>>
+    : memref<256xi8, #gpu.address_space<workgroup>>
 
   // CHECK: %[[OFF:.*]] = arith.constant 128 : index
   // CHECK: %[[VIEW:.*]] = memref.view %[[BUFF]][%[[OFF]]][]
   // CHECK-SAME: : memref<256xi8, #gpu.address_space<workgroup>> to memref<4x32xbf16, #gpu.address_space<workgroup>>
-  %buf = wave.allocate in %parent : !wave.tensor<[@M,@N,@K] of i8, <shared>>
+  %buf = wave.allocate in %parent : memref<256xi8, #gpu.address_space<workgroup>>
     { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>, offset = 128}
-    : !wave.tensor<[@M, @K] of bf16, <shared>>
+    : memref<4x32xbf16, #gpu.address_space<workgroup>>
   return
   }
 }
@@ -347,11 +347,11 @@ func.func @lower_alloc_view() attributes {wave.hyperparameters = #wave.hyperpara
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
 // CHECK-LABEL: @lower_alloc
-func.func @lower_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28, M = 128, K= 128}>}  {
+func.func @lower_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<{BLOCK_M = 4, BLOCK_K = 28}>}  {
   // CHECK: memref.alloc() : memref<4x32xbf16, #gpu.address_space<workgroup>>
   %buf = wave.allocate
     { distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_M">, #wave.symbol<"BLOCK_K">] -> (BLOCK_M, BLOCK_K + 4)>}
-    : !wave.tensor<[@M, @K] of bf16, <shared>>
+    : memref<4x32xbf16, #gpu.address_space<workgroup>>
   return
   }
 }
@@ -669,26 +669,23 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
   // CHECK-LABEL: func.func @lower_iterate
-  func.func @lower_iterate() attributes {
-    wave.hyperparameters = #wave.hyperparameters<{K = 128, BLOCK_K = 32, M = 64}>,
+  func.func @lower_iterate(%init: vector<8xf32>) attributes {
+    wave.hyperparameters = #wave.hyperparameters<{K = 128, BLOCK_K = 32}>,
     wave.constraints = [
       #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
     ]
   } {
-    %alloc = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)> }
-      : !wave.tensor<[@M] of f32, <shared>>
-
     // CHECK-NOT: wave.iterate
     // CHECK:     %[[LB:.*]] = arith.constant 0 : index
     // CHECK:     %[[UB:.*]] = arith.constant 4 : index
     // CHECK:     %[[STEP:.*]] = arith.constant 1 : index
-    // CHECK:     scf.for %{{.*}} = %[[LB]] to %[[UB]] step %[[STEP]] iter_args(%{{.*}} = %{{.*}}) -> (memref<64xf32, #gpu.address_space<workgroup>>) {
-    // CHECK:       scf.yield %{{.*}} : memref<64xf32, #gpu.address_space<workgroup>>
+    // CHECK:     scf.for %{{.*}} = %[[LB]] to %[[UB]] step %[[STEP]] iter_args(%{{.*}} = %{{.*}}) -> (vector<8xf32>) {
+    // CHECK:       scf.yield %{{.*}} : vector<8xf32>
     // CHECK:     }
-    %result = wave.iterate @K iter_args(%alloc) {
-    ^bb0(%arg0: !wave.tensor<[@M] of f32, <shared>>):
-      wave.yield %arg0 : !wave.tensor<[@M] of f32, <shared>>
-    } : (!wave.tensor<[@M] of f32, <shared>>) -> !wave.tensor<[@M] of f32, <shared>>
+    %result = wave.iterate @K iter_args(%init) {
+    ^bb0(%arg0: vector<8xf32>):
+      wave.yield %arg0 : vector<8xf32>
+    } : (vector<8xf32>) -> vector<8xf32>
 
     return
   }
@@ -698,29 +695,26 @@ module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_t
 
 module attributes {wave.normal_form = #wave.normal_form<full_types,memory_only_types>} {
   // CHECK-LABEL: func.func @lower_iterate_with_operations
-  func.func @lower_iterate_with_operations() attributes {
+  func.func @lower_iterate_with_operations(%init: vector<4xf32>) attributes {
     wave.hyperparameters = #wave.hyperparameters<{K = 64, BLOCK_K = 16, M = 32}>,
     wave.constraints = [
       #wave.tiling_constraint<dim = <"K">, tile_size = <[#wave.symbol<"BLOCK_K">] -> (BLOCK_K)>>
     ]
   } {
-    %alloc = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)> }
-      : !wave.tensor<[@M] of f32, <shared>>
-
     // CHECK-NOT: wave.iterate
     // CHECK:     %[[LB:.*]] = arith.constant 0 : index
     // CHECK:     %[[UB:.*]] = arith.constant 4 : index
     // CHECK:     %[[STEP:.*]] = arith.constant 1 : index
-    // CHECK:     scf.for %{{.*}} = %[[LB]] to %[[UB]] step %[[STEP]] iter_args(%{{.*}} = %{{.*}}) -> (memref<32xf32, #gpu.address_space<workgroup>>) {
+    // CHECK:     scf.for %{{.*}} = %[[LB]] to %[[UB]] step %[[STEP]] iter_args(%{{.*}} = %{{.*}}) -> (vector<4xf32>) {
     // CHECK:       %[[TEMP:.*]] = memref.alloc() : memref<32xf32, #gpu.address_space<workgroup>>
-    // CHECK:       scf.yield %{{.*}} : memref<32xf32, #gpu.address_space<workgroup>>
+    // CHECK:       scf.yield %{{.*}} : vector<4xf32>
     // CHECK:     }
-    %result = wave.iterate @K iter_args(%alloc) {
-    ^bb0(%arg0: !wave.tensor<[@M] of f32, <shared>>):
+    %result = wave.iterate @K iter_args(%init) {
+    ^bb0(%arg0: vector<4xf32>):
       %temp = wave.allocate { distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)> }
-        : !wave.tensor<[@M] of f32, <shared>>
-      wave.yield %arg0 : !wave.tensor<[@M] of f32, <shared>>
-    } : (!wave.tensor<[@M] of f32, <shared>>) -> !wave.tensor<[@M] of f32, <shared>>
+        : memref<32xf32, #gpu.address_space<workgroup>>
+      wave.yield %arg0 : vector<4xf32>
+    } : (vector<4xf32>) -> vector<4xf32>
 
     return
   }

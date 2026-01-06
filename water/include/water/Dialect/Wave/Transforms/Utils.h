@@ -8,6 +8,10 @@
 
 namespace wave {
 
+/// Get the hyperparameters from an ancestor operation.
+/// Returns nullptr if no hyperparameters are found.
+WaveHyperparameterAttr getHyperparameters(mlir::Operation *op);
+
 // Populates `constraints` with a mapping from an operation with a Wave
 // constraints attribute attached to that attribute.
 llvm::LogicalResult collectWaveConstraints(

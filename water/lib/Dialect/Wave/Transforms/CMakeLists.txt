@@ -4,8 +4,9 @@ add_mlir_dialect_library(MLIRWaveTransforms
   LoweringPatterns.cpp
   LowerReadWriteOps.cpp
   LowerWaveToMLIR.cpp
-  TypeConverter.cpp
   PropagateDefaultsFromConstraints.cpp
+  ResolveDistributedAllocations.cpp
+  TypeConverter.cpp
   Utils.cpp
 
   ADDITIONAL_HEADER_DIRS

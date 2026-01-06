@@ -33,45 +33,23 @@ public:
   LogicalResult
   matchAndRewrite(wave::AllocateOp op, wave::AllocateOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    wave::WaveTensorType resultType = op.getResult().getType();
-    wave::WaveExprListAttr distributedShape = op.getDistributedShape();
-    auto *typeConverter =
-        static_cast<const wave::WaveTypeConverter *>(getTypeConverter());
-    Type convertedResultType = typeConverter->convertTensorFromComponents(
-        distributedShape.getSymbols(), distributedShape.getMap(),
-        resultType.getElementType(), resultType.getAddressSpaceValue());
-    if (!convertedResultType) {
-      return rewriter.notifyMatchFailure(op,
-                                         "failed to construct resulting type");
-    }
-
-    auto memrefType = dyn_cast<MemRefType>(convertedResultType);
+    // ResolveDistributedAllocations must run before this pass to convert
+    // the result type from WaveTensorType to MemRefType.
+    auto memrefType = dyn_cast<MemRefType>(op.getResult().getType());
     if (!memrefType)
       return rewriter.notifyMatchFailure(
-          op, "expected memref type for allocate op");
+          op, "expected memref type; ResolveDistributedAllocations must run "
+              "before lowering");
     Location loc = op.getLoc();
 
     // If operation contains a parent op, emit a view into this parent
-    // allocation
+    // allocation.
     Value parent = adaptor.getParent();
-    int64_t byteOffset = 0;
     if (parent) {
-      // We need to ignore the automatically inserted cast. It is due to the
-      // fact that the memref shape coming out of the allocation has a shape
-      // different from one that would be obtained by converting the result
-      // type... This is an annoying repercussion of the strange design choice
-      // in original Wave of having "allocate" represent both allocations and
-      // views, which makes it impossible to have a consistent result type: for
-      // allocations, the shape is the distributed shape, but for views it is
-      // the result shape.
-      auto cast = parent.getDefiningOp<UnrealizedConversionCastOp>();
-      assert(cast && "unexpected type conversion configuration");
-
-      byteOffset = static_cast<int64_t>(*op.getOffset());
+      int64_t byteOffset = static_cast<int64_t>(*op.getOffset());
       Value off = arith::ConstantIndexOp::create(rewriter, loc, byteOffset);
-      rewriter.replaceOpWithNewOp<memref::ViewOp>(
-          op, memrefType, cast.getOperand(0), off, ValueRange());
-
+      rewriter.replaceOpWithNewOp<memref::ViewOp>(op, memrefType, parent, off,
+                                                  ValueRange());
       return success();
     }
 
