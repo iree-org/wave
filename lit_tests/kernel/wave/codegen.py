@@ -1905,7 +1905,6 @@ def test_block_reduce_sum():
     # CHECK-COUNT-2: vector.extract
     # CHECK-NEXT: arith.addf
 
-
     # Global Reduce
     # CHECK-COUNT-6: gpu.shuffle  xor
     # CHECK-NEXT: %[[global_reduce:.+]] = arith.addf
