@@ -8,17 +8,32 @@ import os
 
 import torch.fx as fx
 
+import wave_lang.kernel.lang as tkl
 from wave_lang.support.logging import get_logger
 
 from ..._support.tracing import CapturedTrace
-from ...ops.wave_ops import CustomOp, IterArg, Iterate, get_custom
+from ...ops.wave_ops import (
+    Allocate,
+    Conditional,
+    CustomOp,
+    Ge,
+    GetResult,
+    IterArg,
+    Iterate,
+    NewScalar,
+    Output,
+    get_custom,
+)
 from ..constraints import Constraint
 from ..utils.general_utils import (
+    get_induction_variable,
     get_tiling_constraint,
 )
 from ..utils.graph_utils import (
     erase_graph,
+    get_graph_node,
     graph_copy,
+    prepare_subgraph_for_conditional,
     update_sort_keys,
 )
 
@@ -213,39 +228,20 @@ def construct_conditional_pipelined_loop(
 
     The conditional ensures prologue/epilogue only run when there are enough iterations.
     """
-    from ..utils.graph_utils import (
-        prepare_subgraph_for_conditional,
-        graph_copy,
-        get_graph_node,
-    )
-    from ...ops.wave_ops import (
-        Iterate as IterateOp,
-        GetResult,
-        Conditional,
-        NewScalar,
-        Ge,
-        Output,
-        Allocate,
-        get_custom,
-    )
-    import wave_lang.kernel.lang as tkl
-
-    # Step 0: Save properties before any transformations
+    # Save properties before any transformations
     original_index = reduction.index
     original_init_args = reduction.init_args
     original_fx_node = reduction.fx_node
     main_graph = reduction.graph
 
     # Find all GetResult nodes that reference this reduction
-    from ...ops.wave_ops import GetResult as GetResultOp
-
     existing_get_results = []
     for node in main_graph.nodes:
         custom = get_custom(node) if hasattr(node, "tkw_op") else None
-        if isinstance(custom, GetResultOp) and custom.value == original_fx_node:
+        if isinstance(custom, GetResult) and custom.value == original_fx_node:
             existing_get_results.append(node)
 
-    # Step 1: Create condition: max_induction_variable >= num_stages
+    # Create condition: max_induction_variable >= num_stages
     with main_graph.inserting_before(reduction.fx_node):
         num_stages_scalar = get_graph_node(
             NewScalar(num_stages, tkl.i32), main_graph, reduction.location
@@ -257,7 +253,7 @@ def construct_conditional_pipelined_loop(
             Ge(num_iters_scalar, num_stages_scalar), main_graph, reduction.location
         )
 
-    # Step 2: Prepare conditional subgraph
+    # Prepare conditional subgraph
     captured_nodes = list(reduction.init_args) + list(reduction.implicit_captures)
     memory_nodes = [
         node for node in captured_nodes if isinstance(get_custom(node), Allocate)
@@ -270,7 +266,7 @@ def construct_conditional_pipelined_loop(
         )
     )
 
-    # Step 3: Build pipelined loop INSIDE the conditional subgraph
+    # Build pipelined loop INSIDE the conditional subgraph
     # We need to create a temporary reduction in the conditional subgraph,
     # then call construct_pipelined_loop on it
 
@@ -297,7 +293,7 @@ def construct_conditional_pipelined_loop(
     conditional_subgraph.subgraphs[temp_body_name] = conditional_body_graph
 
     # Create temporary reduction in conditional subgraph
-    temp_reduction = IterateOp(
+    temp_reduction = Iterate(
         reduction.axis,
         init_args=placeholder_init_args,
         step=reduction.step,
@@ -326,14 +322,13 @@ def construct_conditional_pipelined_loop(
 
     # Now call construct_pipelined_loop on this temporary reduction
     # This will create the prologue, pipelined loop, and epilogue inside the conditional
-    from .loop_reconstruction import construct_pipelined_loop as build_pipelined
 
     # Create a temporary trace wrapper for the conditional subgraph
     # We need to register the body graph properly
     if temp_body_name not in trace.region_graph.subgraphs:
         trace.region_graph.subgraphs[temp_body_name] = conditional_body_graph
 
-    pipelined_node, node_mapping, final_results = build_pipelined(
+    pipelined_node, node_mapping, final_results = construct_pipelined_loop(
         trace,
         get_custom(temp_reduction),
         conditional_body_graph,
@@ -367,7 +362,7 @@ def construct_conditional_pipelined_loop(
     # Add Output to the conditional subgraph using the final results from the epilogue
     Output(final_results).add_to_graph(conditional_subgraph, loc=reduction.location)
 
-    # Step 4: Create the Conditional node in the main graph
+    # Create the Conditional node in the main graph
     # Register the conditional subgraph
     if not hasattr(main_graph, "subgraphs"):
         main_graph.subgraphs = {}
@@ -384,7 +379,7 @@ def construct_conditional_pipelined_loop(
 
     conditional_subgraph.parent_op = conditional_op
 
-    # Step 5: Extract results from conditional
+    # Extract results from conditional
     conditional_results = []
     with main_graph.inserting_before(reduction.fx_node):
         for i in range(len(original_init_args)):
@@ -399,7 +394,7 @@ def construct_conditional_pipelined_loop(
             )
             conditional_results.append(result)
 
-    # Step 6: Create remainder loop using a copy of the original body
+    # Create remainder loop using a copy of the original body
     # The remainder loop should start where the pipelined loop ended
     remainder_graph, _ = graph_copy(reduction_graph)
     remainder_subgraph_name = f"{reduction.subgraph_name}_remainder"
@@ -409,14 +404,12 @@ def construct_conditional_pipelined_loop(
 
     # Create a scalar node for the starting iteration (where pipelined loop ended)
     # This will be pipelined_iterations
-    import wave_lang.kernel.lang as tkl
-
     with main_graph.inserting_before(reduction.fx_node):
         start_iter = get_graph_node(
             NewScalar(pipelined_iterations, tkl.index), main_graph, reduction.location
         )
 
-        remainder_reduction = IterateOp(
+        remainder_reduction = Iterate(
             reduction.axis,
             init_args=conditional_results,
             step=reduction.step,
@@ -431,11 +424,11 @@ def construct_conditional_pipelined_loop(
     get_custom(remainder_reduction).index = original_index
     get_custom(remainder_reduction).count = max_induction_variable
 
-    # Step 7: Replace all uses of the original reduction with the remainder loop
+    # Replace all uses of the original reduction with the remainder loop
     # This will update all GetResult nodes automatically
     reduction.replace_all_uses_with(get_custom(remainder_reduction))
 
-    # Step 8: Erase the original reduction (now safe since it has no users)
+    # Erase the original reduction (now safe since it has no users)
     reduction.erase()
 
     # Return the pipelined node and node mapping so manual schedules can reference it
@@ -467,11 +460,6 @@ def construct_pipelined_loop_with_conditional(
             return (0, init_values...)
         remainder_loop(start=iterations_done, end=total_iterations)
     """
-    from ...ops.wave_ops import (
-        get_custom,
-    )
-    from ..utils.general_utils import get_induction_variable
-
     # Get the induction variable for the tiling dimension
     induction_var = get_induction_variable(reduction, constraints)
 
