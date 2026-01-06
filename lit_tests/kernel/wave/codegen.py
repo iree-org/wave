@@ -1902,23 +1902,13 @@ def test_block_reduce_sum():
     # CHECK: %[[tid:.+]] = gpu.thread_id  x
 
     # Local Reduce
-    # CHECK: vector.extract
-    # CHECK: vector.extract
-    # CHECK: arith.addf
+    # CHECK-COUNT-2: vector.extract
+    # CHECK-NEXT: arith.addf
 
-    # Global Reduce - 6 shuffle operations with interleaved adds
-    # CHECK: gpu.shuffle{{.*}}xor
-    # CHECK: arith.addf
-    # CHECK: gpu.shuffle{{.*}}xor
-    # CHECK: arith.addf
-    # CHECK: gpu.shuffle{{.*}}xor
-    # CHECK: arith.addf
-    # CHECK: gpu.shuffle{{.*}}xor
-    # CHECK: arith.addf
-    # CHECK: gpu.shuffle{{.*}}xor
-    # CHECK: arith.addf
-    # CHECK: gpu.shuffle{{.*}}xor
-    # CHECK: %[[global_reduce:.+]] = arith.addf
+
+    # Global Reduce
+    # CHECK-COUNT-6: gpu.shuffle  xor
+    # CHECK-NEXT: %[[global_reduce:.+]] = arith.addf
 
     # Allocate shared memory for cross-wave communication
     # CHECK: %[[alloc:.+]] = memref.alloc() : memref<4xf16, #gpu.address_space<workgroup>>
