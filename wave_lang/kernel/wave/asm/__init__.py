@@ -24,7 +24,8 @@ from .unified_emitter import UnifiedEmitter, EmissionMode
 from .instruction_registry import get_registry, InstructionDef, InstructionCategory
 from .instruction_formatter import InstructionFormatter, get_formatter
 from .metadata_emitter import MetadataEmitter, KernelMetadata, create_metadata
-from .kernel_pipeline import KernelCompilationContext, KernelModuleCompiler
+from .kernel_compilation_context import KernelCompilationContext
+from .kernel_module_compiler import KernelModuleCompiler
 from .kernel_generator import KernelGenerator, PhysicalMapping
 from .utils import (
     parse_vector_type,

@@ -24,7 +24,7 @@ Usage:
     print(emitter.get_lines())
 
     # Kernel IR emission (preferred)
-    from kernel_pipeline import KernelCompilationContext
+    from kernel_compilation_context import KernelCompilationContext
     ctx = KernelCompilationContext()
     emitter = UnifiedEmitter(architecture="gfx942", mode="kernel_ir", context=ctx)
     result = emitter.v_add_u32(src0=v1, src1=v2)  # Returns virtual register

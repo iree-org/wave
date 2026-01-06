@@ -4,7 +4,9 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from wave_lang.kernel.wave.asm.kernel_pipeline import KernelCompilationContext
+from wave_lang.kernel.wave.asm.kernel_compilation_context import (
+    KernelCompilationContext,
+)
 from wave_lang.kernel.wave.asm.kernel_ir import KInstr, KVReg, KRegRange, KImm
 
 

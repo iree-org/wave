@@ -32,7 +32,7 @@ This module implements a single-path architecture where all instructions
 import argparse
 import sys
 
-from .kernel_pipeline import KernelModuleCompiler
+from .kernel_module_compiler import KernelModuleCompiler
 
 
 def main():

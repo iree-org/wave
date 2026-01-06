@@ -1155,7 +1155,7 @@ def _generate_asm_code(mb, options):
     )
 
     # Canonical MLIR->ASM entry point (single-path kernel IR backend).
-    from .asm.kernel_pipeline import KernelModuleCompiler
+    from .asm.kernel_module_compiler import KernelModuleCompiler
 
     return KernelModuleCompiler(
         targetid=options.target, codeobj=options.codeobj

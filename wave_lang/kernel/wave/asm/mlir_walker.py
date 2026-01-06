@@ -26,7 +26,7 @@ from wave_lang.support.ir_imports import (
 from .kernel_model import KernelInfo
 from .handlers import OperationHandlers
 from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds
-from .kernel_pipeline import KernelCompilationContext
+from .kernel_compilation_context import KernelCompilationContext
 
 
 class _SSAToVGPRAdapter(dict):

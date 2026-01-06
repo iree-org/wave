@@ -53,7 +53,7 @@ from wave_lang.kernel.wave.asm.kernel_generator import (
     PhysicalMapping,
     render_program,
 )
-from wave_lang.kernel.wave.asm.kernel_pipeline import (
+from wave_lang.kernel.wave.asm.kernel_compilation_context import (
     KernelCompilationContext,
 )
 
