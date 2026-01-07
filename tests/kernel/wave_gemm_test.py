@@ -3000,7 +3000,6 @@ def test_streamk_gemm(
         num_ctas=num_ctas,
     )
 
-
     options = WaveCompileOptions(
         subs=hyperparams,
         canonicalize=True,
@@ -3163,7 +3162,6 @@ def test_persistent_reordering_gemm(
     b = device_randn(shape[1], shape[2], device="cuda", dtype=torch.float16)
     c = device_zeros(shape[0], shape[1], device="cuda", dtype=torch.float32)
     gemm(a, b, c)
-
 
     torch_ref = torch.matmul(a.to(torch.float32), b.t().to(torch.float32))
     assert_close(

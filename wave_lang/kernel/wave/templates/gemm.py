@@ -968,7 +968,6 @@ def get_hybrid_streamk_gemm_kernel(
             tkw.set_symbol(START_K_TILE, tkw.scalar(0, i32))
             tkw.set_symbol(NUM_K_TILES, tkw.scalar(ITERS_PER_OUTPUT_TILE, i32))
 
-
             c_reg = tkl.Register[M, N, tkl.f32](0.0)
 
             @tkw.iterate(axis=K, init_args=[c_reg])
