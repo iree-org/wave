@@ -137,6 +137,14 @@ public:
 
   /// Visitation function along branching and region control flow.
   void visitBranchOperand(OpOperand &opOperand) override;
+
+  /// Visit the non-forwarded arguments of a region, such as the
+  /// induction variables of a loop.
+  void
+  visitNonControlFlowArguments(RegionSuccessor & /*successor*/,
+                               ArrayRef<BlockArgument> /*arguments*/) override {
+    // nothing
+  }
 };
 
 } // namespace mlir::water
