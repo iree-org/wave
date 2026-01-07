@@ -17,6 +17,7 @@ from .kernel_pipeline_shared import (
     _ENABLE_KERNEL_IR_SIMPLIFY,
 )
 from .kernel_expr_floor_ops import _FloorExpressionOps
+from .instruction_registry import Instruction
 
 
 class _ScopeContext:
@@ -135,7 +136,12 @@ class KernelIRExprEmitter(_FloorExpressionOps):
         if -16 <= value <= 64:
             result = self.ctx.vreg()
             self.ctx.program.emit(
-                KInstr("v_mov_b32", (result,), (KImm(value),), comment=f"imm = {value}")
+                KInstr(
+                    Instruction.V_MOV_B32,
+                    (result,),
+                    (KImm(value),),
+                    comment=f"imm = {value}",
+                )
             )
             return result
 
@@ -193,9 +199,12 @@ class KernelIRExprEmitter(_FloorExpressionOps):
                 # Check if it's a known invariant symbol
                 if name in self._LOOP_INVARIANT_SYMBOLS:
                     continue
-                # Check if it's bound to a physical SGPR (loop counter)
-                # SGPR references like s24, s25 are loop counters - NOT invariant
+                # Check if it's bound to an SGPR (loop counter)
+                # Physical SGPR references like s24, s25 are loop counters - NOT invariant
                 if name.startswith("s") and name[1:].isdigit():
+                    return False
+                # Virtual SGPR references like ks5, ks6 are also loop counters - NOT invariant
+                if name.startswith("ks") and name[2:].isdigit():
                     return False
                 # Check bindings
                 if name in self._bindings:
@@ -215,7 +224,11 @@ class KernelIRExprEmitter(_FloorExpressionOps):
             name = str(expr)
             if name in self._LOOP_INVARIANT_SYMBOLS:
                 return True
+            # Physical SGPR references like s24, s25 are loop counters - NOT invariant
             if name.startswith("s") and name[1:].isdigit():
+                return False
+            # Virtual SGPR references like ks5, ks6 are also loop counters - NOT invariant
+            if name.startswith("ks") and name[2:].isdigit():
                 return False
             # Unknown - conservative
             return False
@@ -471,7 +484,12 @@ class KernelIRExprEmitter(_FloorExpressionOps):
             else:
                 result = self.ctx.vreg()
                 self.ctx.program.emit(
-                    KInstr("v_mov_b32", (result,), (KImm(val),), comment=f"imm = {val}")
+                    KInstr(
+                        Instruction.V_MOV_B32,
+                        (result,),
+                        (KImm(val),),
+                        comment=f"imm = {val}",
+                    )
                 )
             self._insert_cache(cache_key, result, global_scope=is_invariant)
             return result
@@ -618,6 +636,25 @@ class KernelIRExprEmitter(_FloorExpressionOps):
                         (result,),
                         (KPhysSReg(sgpr_idx),),
                         comment=f"broadcast {name} to VGPR",
+                    )
+                )
+                return result
+
+            # Handle virtual SGPR references (like loop counters: ks5, ks6, etc.)
+            # These are virtual registers that will be allocated to physical SGPRs.
+            # NEVER cache these - loop counters change each iteration.
+            if name.startswith("ks") and name[2:].isdigit():
+                from .kernel_ir import KSReg
+
+                sreg_id = int(name[2:])
+                sreg = KSReg(sreg_id)
+                result = self.ctx.vreg()
+                self.ctx.program.emit(
+                    KInstr(
+                        "v_mov_b32",
+                        (result,),
+                        (sreg,),
+                        comment=f"broadcast loop counter {name} to VGPR",
                     )
                 )
                 return result

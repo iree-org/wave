@@ -28,6 +28,7 @@ from wave_lang.kernel.wave.asm.kernel_liveness import (
     compute_block_local_info,
     LiveRange,
 )
+from wave_lang.kernel.wave.asm.instruction_registry import Instruction
 
 
 class TestCFGConstruction:
@@ -40,8 +41,8 @@ class TestCFGConstruction:
         v1 = program.alloc_vreg()
 
         # Simple sequence: v0 = 1; v1 = v0 + 1
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("v_add_u32", (v1,), (v0, KImm(1))))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
         cfg = build_cfg(program)
 
@@ -57,8 +58,8 @@ class TestCFGConstruction:
         v0 = program.alloc_vreg()
 
         # label: v0 = 1
-        program.emit(KInstr("_label", (), (), comment="my_label"))
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="my_label"))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
 
         cfg = build_cfg(program)
 
@@ -72,11 +73,11 @@ class TestCFGConstruction:
         v0 = program.alloc_vreg()
 
         # v0 = 1; branch target; v0 = 2; target: v0 = 3
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("s_branch", (), (), comment="target"))
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(2),)))
-        program.emit(KInstr("_label", (), (), comment="target"))
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(3),)))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="target"))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(2),)))
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="target"))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(3),)))
 
         cfg = build_cfg(program)
 
@@ -91,10 +92,10 @@ class TestCFGConstruction:
         v0 = program.alloc_vreg()
 
         # cbranch target; v0 = 1; target: v0 = 2
-        program.emit(KInstr("s_cbranch_scc1", (), (), comment="target"))
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("_label", (), (), comment="target"))
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(2),)))
+        program.emit(KInstr(Instruction.S_CBRANCH_SCC1, (), (), comment="target"))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="target"))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(2),)))
 
         cfg = build_cfg(program)
 
@@ -107,9 +108,9 @@ class TestCFGConstruction:
         v0 = program.alloc_vreg()
 
         # loop_header: v0 = 1; branch loop_header
-        program.emit(KInstr("_label", (), (), comment="loop_header"))
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("s_branch", (), (), comment="loop_header"))
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="loop_header"))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="loop_header"))
 
         cfg = build_cfg(program)
 
@@ -120,8 +121,8 @@ class TestCFGConstruction:
         program = KernelProgram()
         v0 = program.alloc_vreg()
 
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(2),)))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(2),)))
 
         cfg = build_cfg(program)
 
@@ -136,7 +137,7 @@ class TestBlockLocalInfo:
         program = KernelProgram()
         v0 = program.alloc_vreg()
 
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
 
         cfg = build_cfg(program)
         compute_block_local_info(cfg.blocks[0], program.instructions)
@@ -151,7 +152,7 @@ class TestBlockLocalInfo:
         v1 = program.alloc_vreg()
 
         # Manually set up: use v0 (not defined locally), then define v1
-        program.emit(KInstr("v_add_u32", (v1,), (v0, KImm(1))))
+        program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
         cfg = build_cfg(program)
         compute_block_local_info(cfg.blocks[0], program.instructions)
@@ -168,8 +169,8 @@ class TestBlockLocalInfo:
 
         # v0 = 1; v1 = v0 + 1
         # v0 should not be in use_set because it's defined first
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("v_add_u32", (v1,), (v0, KImm(1))))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
         cfg = build_cfg(program)
         compute_block_local_info(cfg.blocks[0], program.instructions)
@@ -189,10 +190,10 @@ class TestCFGLiveness:
 
         # Block 0: v0 = 1; branch block1
         # Block 1: v1 = v0 + 1
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("s_branch", (), (), comment="block1"))
-        program.emit(KInstr("_label", (), (), comment="block1"))
-        program.emit(KInstr("v_add_u32", (v1,), (v0, KImm(1))))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="block1"))
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="block1"))
+        program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
         cfg = build_cfg(program)
         compute_cfg_liveness(cfg, program.instructions)
@@ -209,16 +210,16 @@ class TestCFGLiveness:
         v2 = program.alloc_vreg()  # Accumulator
 
         # Prologue: v0 = 42 (loop-invariant)
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(42),)))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(42),)))
 
         # Loop header
-        program.emit(KInstr("_label", (), (), comment="loop_header"))
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="loop_header"))
 
         # Loop body: use v0 (loop-invariant)
-        program.emit(KInstr("v_add_u32", (v2,), (v0, v1)))
+        program.emit(KInstr(Instruction.V_ADD_U32, (v2,), (v0, v1)))
 
         # Loop latch: branch back
-        program.emit(KInstr("s_branch", (), (), comment="loop_header"))
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="loop_header"))
 
         cfg = build_cfg(program)
         compute_cfg_liveness(cfg, program.instructions)
@@ -244,9 +245,9 @@ class TestLiveRangeExtension:
         v1 = program.alloc_vreg()
 
         # v0 = 1; v1 = v0 + 1; (v0 dead after this)
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        program.emit(KInstr("v_add_u32", (v1,), (v0, KImm(1))))
-        program.emit(KInstr("v_mov_b32", (v1,), (KImm(2),)))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
+        program.emit(KInstr(Instruction.V_MOV_B32, (v1,), (KImm(2),)))
 
         info = compute_liveness(program, use_cfg=True)
 
@@ -260,16 +261,18 @@ class TestLiveRangeExtension:
         v1 = program.alloc_vreg()  # Used in loop
 
         # v0 = 42 (defined before loop)
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(42),)))  # idx 0
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(42),)))  # idx 0
 
         # loop_header:
-        program.emit(KInstr("_label", (), (), comment="loop_header"))  # idx 1
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="loop_header"))  # idx 1
 
         # v1 = v0 + 1 (use v0 in loop body)
-        program.emit(KInstr("v_add_u32", (v1,), (v0, KImm(1))))  # idx 2
+        program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))  # idx 2
 
         # branch loop_header (back-edge)
-        program.emit(KInstr("s_branch", (), (), comment="loop_header"))  # idx 3
+        program.emit(
+            KInstr(Instruction.S_BRANCH, (), (), comment="loop_header")
+        )  # idx 3
 
         info = compute_liveness(program, use_cfg=True)
 
@@ -286,16 +289,16 @@ class TestLiveRangeExtension:
         v1 = program.alloc_vreg()
 
         # v0 = 42
-        program.emit(KInstr("v_mov_b32", (v0,), (KImm(42),)))  # idx 0
+        program.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(42),)))  # idx 0
 
         # loop:
-        program.emit(KInstr("_label", (), (), comment="loop"))  # idx 1
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="loop"))  # idx 1
 
         # v1 = v0 + 1
-        program.emit(KInstr("v_add_u32", (v1,), (v0, KImm(1))))  # idx 2
+        program.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))  # idx 2
 
         # branch loop
-        program.emit(KInstr("s_branch", (), (), comment="loop"))  # idx 3
+        program.emit(KInstr(Instruction.S_BRANCH, (), (), comment="loop"))  # idx 3
 
         # Compare CFG-based vs linear liveness
         info_cfg = compute_liveness(program, use_cfg=True)
@@ -316,37 +319,45 @@ class TestIntegration:
 
         # Pre-loop: compute thread ID (loop-invariant)
         tid = program.alloc_vreg()
-        program.emit(KInstr("v_mov_b32", (tid,), (KImm(0),), comment="tid"))  # idx 0
+        program.emit(
+            KInstr(Instruction.V_MOV_B32, (tid,), (KImm(0),), comment="tid")
+        )  # idx 0
 
         # Loop counter
         counter = program.alloc_sreg()
         bound = program.alloc_sreg()
-        program.emit(KInstr("s_mov_b32", (counter,), (KImm(0),)))  # idx 1
-        program.emit(KInstr("s_mov_b32", (bound,), (KImm(4),)))  # idx 2
+        program.emit(KInstr(Instruction.S_MOV_B32, (counter,), (KImm(0),)))  # idx 1
+        program.emit(KInstr(Instruction.S_MOV_B32, (bound,), (KImm(4),)))  # idx 2
 
         # loop_header:
-        program.emit(KInstr("_label", (), (), comment="loop_header"))  # idx 3
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="loop_header"))  # idx 3
 
         # Compare and conditional branch
-        program.emit(KInstr("s_cmp_lt_u32", (), (counter, bound)))  # idx 4
-        program.emit(KInstr("s_cbranch_scc0", (), (), comment="loop_exit"))  # idx 5
+        program.emit(KInstr(Instruction.S_CMP_LT_U32, (), (counter, bound)))  # idx 4
+        program.emit(
+            KInstr(Instruction.S_CBRANCH_SCC0, (), (), comment="loop_exit")
+        )  # idx 5
 
         # Loop body: use tid (loop-invariant)
         acc = program.alloc_vreg()
-        program.emit(KInstr("v_add_u32", (acc,), (tid, KImm(1))))  # idx 6
+        program.emit(KInstr(Instruction.V_ADD_U32, (acc,), (tid, KImm(1))))  # idx 6
 
         # Increment counter
-        program.emit(KInstr("s_add_u32", (counter,), (counter, KImm(1))))  # idx 7
+        program.emit(
+            KInstr(Instruction.S_ADD_U32, (counter,), (counter, KImm(1)))
+        )  # idx 7
 
         # Branch back
-        program.emit(KInstr("s_branch", (), (), comment="loop_header"))  # idx 8
+        program.emit(
+            KInstr(Instruction.S_BRANCH, (), (), comment="loop_header")
+        )  # idx 8
 
         # loop_exit:
-        program.emit(KInstr("_label", (), (), comment="loop_exit"))  # idx 9
+        program.emit(KInstr(Instruction._LABEL, (), (), comment="loop_exit"))  # idx 9
 
         # Epilogue: use result
         result = program.alloc_vreg()
-        program.emit(KInstr("v_mov_b32", (result,), (acc,)))  # idx 10
+        program.emit(KInstr(Instruction.V_MOV_B32, (result,), (acc,)))  # idx 10
 
         info = compute_liveness(program, use_cfg=True)
 

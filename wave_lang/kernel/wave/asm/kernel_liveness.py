@@ -35,6 +35,7 @@ from .kernel_ir import (
     is_virtual,
     get_reg_class,
 )
+from .instruction_registry import Instruction
 
 
 # =============================================================================
@@ -195,20 +196,12 @@ class CFG:
 
 def _is_branch_instruction(instr: KInstr) -> bool:
     """Check if instruction is a branch."""
-    return instr.name in (
-        "s_branch",
-        "s_cbranch_scc0",
-        "s_cbranch_scc1",
-        "s_cbranch_vccz",
-        "s_cbranch_vccnz",
-        "s_cbranch_execz",
-        "s_cbranch_execnz",
-    )
+    return instr.is_branch
 
 
 def _is_conditional_branch(instr: KInstr) -> bool:
     """Check if instruction is a conditional branch."""
-    return instr.name.startswith("s_cbranch_")
+    return instr.is_conditional_branch
 
 
 def _get_branch_target(instr: KInstr) -> Optional[str]:
@@ -286,7 +279,7 @@ def build_cfg(program: KernelProgram) -> CFG:
         last_instr = None
         for idx in range(block.end_idx, block.start_idx - 1, -1):
             instr = instructions[idx]
-            if instr.name not in ("_comment", "_label"):
+            if instr.name not in (Instruction._COMMENT, Instruction._LABEL):
                 last_instr = instr
                 break
 
@@ -705,8 +698,11 @@ def validate_ssa(program: KernelProgram) -> List[str]:
     Validate that a kernel program is in SSA form.
 
     Checks:
-    1. Each virtual register is defined exactly once
+    1. Each virtual register is defined exactly once (except loop control regs)
     2. Each use of a virtual register is dominated by its definition
+
+    Loop control registers (counter, step, bound) are exempt from SSA
+    validation because they are naturally re-defined in the loop latch.
 
     Returns:
         List of error messages (empty if valid)
@@ -715,13 +711,18 @@ def validate_ssa(program: KernelProgram) -> List[str]:
     defs: Dict[KReg, int] = {}
     range_membership: Dict[KReg, KReg] = {}
 
+    def is_loop_control(reg: KReg) -> bool:
+        """Check if register is a loop control register (exempt from SSA)."""
+        return isinstance(reg, KSReg) and program.is_loop_control_sreg(reg)
+
     for idx, instr in enumerate(program.instructions):
         # Check defs
         for d in instr.defs:
             if isinstance(d, KRegRange):
                 base_reg = d.base_reg
                 if is_virtual(base_reg):
-                    if base_reg in defs:
+                    # Allow redefinition for loop control registers
+                    if base_reg in defs and not is_loop_control(base_reg):
                         errors.append(
                             f"SSA violation: {base_reg} defined at {defs[base_reg]} and {idx}"
                         )
@@ -735,7 +736,8 @@ def validate_ssa(program: KernelProgram) -> List[str]:
             else:
                 reg = d
                 if is_virtual(reg):
-                    if reg in defs:
+                    # Allow redefinition for loop control registers
+                    if reg in defs and not is_loop_control(reg):
                         errors.append(
                             f"SSA violation: {reg} defined at {defs[reg]} and {idx}"
                         )

@@ -64,7 +64,7 @@ class _MemoryHandlers:
         """Handle vector.extract_strided_slice operations - extract subset of source registers."""
         # Get source SSA value and its registers
         source_ssa = str(operation.operands[0])
-        source_regs = self.walker.ssa_to_vgpr.get(source_ssa)
+        source_regs = self.walker.kernel_ctx.ssa_to_reg.get(source_ssa)
 
         if not source_regs:
             # Source not tracked - skip silently
@@ -88,7 +88,7 @@ class _MemoryHandlers:
             result_regs = source_regs[offset_val : offset_val + size_val]
 
         result_ssa = str(operation.result)
-        self.walker.ssa_to_vgpr[result_ssa] = result_regs
+        self.walker.kernel_ctx.ssa_to_reg[result_ssa] = result_regs
 
     def handle_vector_store_op(
         self, operation: vector_d.StoreOp, kernel_info: KernelInfo
@@ -424,7 +424,7 @@ class _MemoryHandlers:
             memref_ssa, vector_bytes, voffset, instoffset
         )
 
-        # Convert ranges to tuple of register IDs for ssa_to_vgpr compatibility
+        # Convert ranges to tuple of individual registers for ssa_to_reg storage
         if len(loaded_ranges) == 1:
             # Single range (pair or quad)
             base = loaded_ranges[0].base_reg
@@ -449,6 +449,7 @@ class _MemoryHandlers:
 
         # Kernel IR mode: allocate virtual registers
         from .kernel_ir import KInstr, KImm
+        from .instruction_registry import Instruction
 
         # Compute voffset in kernel IR
         voffset_v = self.walker.kernel_ctx.vreg()
@@ -458,7 +459,12 @@ class _MemoryHandlers:
         ):
             # No dynamic part: set voffset to 0
             self.walker.kernel_ctx.program.emit(
-                KInstr("v_mov_b32", (voffset_v,), (KImm(0),), comment="voffset = 0")
+                KInstr(
+                    Instruction.V_MOV_B32,
+                    (voffset_v,),
+                    (KImm(0),),
+                    comment="voffset = 0",
+                )
             )
             instoffset = const_offset
         else:
@@ -638,6 +644,7 @@ class _MemoryHandlers:
         # Kernel IR mode: use virtual registers
         from .kernel_ir import KInstr, KImm, KVReg, KRegRange
         from .utils import build_element_byte_offset_exprs
+        from .instruction_registry import Instruction
 
         # Get expression emitter - loop-invariant expressions are cached globally,
         # loop-varying expressions are never cached, so no cache clearing needed.
@@ -656,7 +663,12 @@ class _MemoryHandlers:
             hasattr(dynamic_expr, "is_zero") and dynamic_expr.is_zero
         ):
             self.walker.kernel_ctx.program.emit(
-                KInstr("v_mov_b32", (voffset_v,), (KImm(0),), comment="voffset = 0")
+                KInstr(
+                    Instruction.V_MOV_B32,
+                    (voffset_v,),
+                    (KImm(0),),
+                    comment="voffset = 0",
+                )
             )
             instoffset = const_offset
         else:
@@ -668,7 +680,7 @@ class _MemoryHandlers:
         # Otherwise we overwrite the load SRD while loads are still in flight
         self.walker.kernel_ctx.program.emit(
             KInstr(
-                "s_waitcnt",
+                Instruction.S_WAITCNT,
                 (),
                 ("vmcnt(0)",),
                 comment="MARKER: wait for loads before store SRD setup",

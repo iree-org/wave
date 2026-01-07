@@ -345,6 +345,7 @@ class G2SHandler:
     ) -> None:
         """Emit M0 register setup using kernel IR."""
         from .kernel_ir import KInstr, KImm, KSpecialReg
+        from .instruction_registry import Instruction
 
         ctx = self.walker.kernel_ctx
         program = ctx.program
@@ -366,16 +367,21 @@ class G2SHandler:
         # Emit: either constant or expression -> readfirstlane -> M0
         if m0_expr.is_number:
             program.emit(
-                KInstr("s_mov_b32", (M0,), (KImm(int(m0_expr)),), comment="LDS offset")
+                KInstr(
+                    Instruction.S_MOV_B32,
+                    (M0,),
+                    (KImm(int(m0_expr)),),
+                    comment="LDS offset",
+                )
             )
         else:
             # Compute expression to VGPR
             m0_vreg = ctx.expr_emitter.get_or_emit(m0_expr)
             # Read first lane to SGPR
             s_tmp = ctx.sreg()
-            program.emit(KInstr("v_readfirstlane_b32", (s_tmp,), (m0_vreg,)))
+            program.emit(KInstr(Instruction.V_READFIRSTLANE_B32, (s_tmp,), (m0_vreg,)))
             # Move to M0
-            program.emit(KInstr("s_mov_b32", (M0,), (s_tmp,)))
+            program.emit(KInstr(Instruction.S_MOV_B32, (M0,), (s_tmp,)))
 
     def _emit_buffer_load(self, transfer_bytes: int, voffset, srd_range) -> None:
         """Emit buffer_load...lds instruction.

@@ -12,6 +12,7 @@ loaded from YAML files. It supports:
 - Common instructions across architectures
 - Dynamic emission method generation
 - Latency and constraint information
+- Dynamic Instruction enum generation for type-safe comparisons
 
 Usage:
     registry = InstructionRegistry.load("gfx942")
@@ -23,6 +24,11 @@ Usage:
     # Use with emitter
     emitter = InstructionEmitter(registry)
     emitter.v_add_u32(dst, src0, src1)
+
+    # Type-safe instruction name comparisons using Instruction enum
+    from .instruction_registry import Instruction
+    if instr.name == Instruction.V_ADD_U32:
+        ...
 """
 
 from dataclasses import dataclass
@@ -313,10 +319,44 @@ class InstructionRegistry:
 
 
 # ==============================================================================
+# Instruction Enum Generation
+# ==============================================================================
+
+
+def _generate_instruction_enum(instructions: Dict[str, InstructionDef]) -> type:
+    """
+    Dynamically generate an Instruction enum from loaded instruction names.
+
+    The generated enum uses str as a mixin, allowing direct comparison with
+    strings without needing .value:
+
+        if instr.name == Instruction.V_ADD_U32:  # Works directly!
+
+    Args:
+        instructions: Dictionary of instruction name -> InstructionDef
+
+    Returns:
+        A dynamically generated Instruction enum class
+    """
+    # Build enum members: convert instruction names to UPPER_SNAKE_CASE
+    # e.g., "v_add_u32" -> "V_ADD_U32"
+    members = {}
+    for name in instructions.keys():
+        # Convert to uppercase for enum member name
+        enum_name = name.upper()
+        members[enum_name] = name
+
+    # Create a string enum (inherits from str) for easy comparison
+    # This allows: instr.name == Instruction.V_ADD_U32 (no .value needed)
+    return Enum("Instruction", members, type=str)
+
+
+# ==============================================================================
 # Global Registry Instance
 # ==============================================================================
 
 _global_registry: Optional[InstructionRegistry] = None
+_global_instruction_enum: Optional[type] = None
 
 
 def get_registry(architecture: str = "common") -> InstructionRegistry:
@@ -325,10 +365,38 @@ def get_registry(architecture: str = "common") -> InstructionRegistry:
 
     Uses lazy loading to avoid loading YAML at import time.
     """
-    global _global_registry
+    global _global_registry, _global_instruction_enum
     if _global_registry is None or _global_registry.architecture != architecture:
         _global_registry = InstructionRegistry.load(architecture)
+        # Generate instruction enum when registry is loaded
+        _global_instruction_enum = _generate_instruction_enum(
+            _global_registry._instructions
+        )
     return _global_registry
+
+
+def get_instruction_enum(architecture: str = "common") -> type:
+    """
+    Get the Instruction enum for type-safe instruction name comparisons.
+
+    The enum is generated from the loaded instruction definitions, so it
+    includes all instructions from the YAML files.
+
+    Usage:
+        Instruction = get_instruction_enum("gfx942")
+        if instr.name == Instruction.V_ADD_U32:
+            ...
+
+    Args:
+        architecture: Target architecture (default: "common")
+
+    Returns:
+        Dynamically generated Instruction enum class
+    """
+    global _global_instruction_enum
+    # Ensure registry is loaded (which generates the enum)
+    get_registry(architecture)
+    return _global_instruction_enum
 
 
 def get_instruction(
@@ -336,3 +404,113 @@ def get_instruction(
 ) -> Optional[InstructionDef]:
     """Convenience function to get an instruction definition."""
     return get_registry(architecture).get(name)
+
+
+# ==============================================================================
+# Instruction Property Helpers
+# ==============================================================================
+
+
+def get_instruction_category(
+    name: str, architecture: str = "common"
+) -> InstructionCategory:
+    """
+    Get the category of an instruction by name.
+
+    Args:
+        name: Instruction name (e.g., "v_add_u32")
+        architecture: Target architecture (default "common")
+
+    Returns:
+        InstructionCategory for the instruction
+
+    Raises:
+        ValueError: If instruction is not found in registry
+    """
+    registry = get_registry(architecture)
+    instr_def = registry.get(name)
+    if instr_def is None:
+        raise ValueError(
+            f"Unknown instruction '{name}' not found in registry for "
+            f"architecture '{architecture}'. Please add it to the YAML definitions."
+        )
+    return instr_def.category
+
+
+def is_conditional_branch(name: str, architecture: str = "common") -> bool:
+    """
+    Check if instruction is a conditional branch.
+
+    Args:
+        name: Instruction name (e.g., "s_cbranch_scc0")
+        architecture: Target architecture (default "common")
+
+    Returns:
+        True if instruction is a conditional branch
+
+    Raises:
+        ValueError: If instruction is not found in registry
+    """
+    registry = get_registry(architecture)
+    instr_def = registry.get(name)
+    if instr_def is None:
+        raise ValueError(
+            f"Unknown instruction '{name}' not found in registry for "
+            f"architecture '{architecture}'. Please add it to the YAML definitions."
+        )
+    return instr_def.is_conditional
+
+
+def is_branch_instruction(name: str, architecture: str = "common") -> bool:
+    """
+    Check if instruction is a branch (conditional or unconditional).
+
+    Args:
+        name: Instruction name (e.g., "s_branch", "s_cbranch_scc0")
+        architecture: Target architecture (default "common")
+
+    Returns:
+        True if instruction is a branch
+
+    Raises:
+        ValueError: If instruction is not found in registry
+    """
+    registry = get_registry(architecture)
+    instr_def = registry.get(name)
+    if instr_def is None:
+        raise ValueError(
+            f"Unknown instruction '{name}' not found in registry for "
+            f"architecture '{architecture}'. Please add it to the YAML definitions."
+        )
+    return instr_def.is_branch
+
+
+# ==============================================================================
+# Convenience: Lazy-loaded Instruction enum
+# ==============================================================================
+# This provides a module-level Instruction that loads on first access.
+# Import with: from .instruction_registry import Instruction
+
+
+class _InstructionProxy:
+    """
+    Proxy class that lazily loads the Instruction enum on first attribute access.
+
+    This allows importing Instruction at module level without triggering YAML
+    loading until the enum is actually used.
+    """
+
+    _enum: Optional[type] = None
+
+    def __getattr__(self, name: str):
+        if self._enum is None:
+            # Default to gfx942 for common use case
+            self._enum = get_instruction_enum("gfx942")
+        return getattr(self._enum, name)
+
+    def __repr__(self):
+        return "<Instruction (lazy-loaded)>"
+
+
+# Module-level proxy for convenient imports
+Instruction = _InstructionProxy()

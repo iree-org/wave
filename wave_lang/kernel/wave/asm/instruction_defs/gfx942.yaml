@@ -7,6 +7,8 @@
 # - Improved MFMA throughput
 # - Additional FP8 instructions
 # - Enhanced memory subsystem
+#
+# Latencies sourced from: AMD Instinct MI300 CDNA3 ISA, Table 28 "MFMA VALU Opcodes"
 
 instructions:
   # ===========================================================================
@@ -14,6 +16,7 @@ instructions:
   # ===========================================================================
 
   # FP8 Matrix Multiply-Add (CDNA3 only)
+  # Per ISA Table 28: V_MFMA_F32_{*}_FP8_FP8 16x16x32 = 16 cycles
   v_mfma_f32_16x16x32_fp8_fp8:
     mnemonic: v_mfma_f32_16x16x32_fp8_fp8
     category: mfma
@@ -24,11 +27,12 @@ instructions:
       - {name: a, type: vgpr_pair}
       - {name: b, type: vgpr_pair}
       - {name: c, type: vgpr_quad}
-    latency: 64
+    latency: 16
     architectures: [gfx942]
     special:
       accumulator: true
 
+  # Per ISA Table 28: V_MFMA_F32_{*}_FP8_FP8 32x32x16 = 32 cycles
   v_mfma_f32_32x32x16_fp8_fp8:
     mnemonic: v_mfma_f32_32x32x16_fp8_fp8
     category: mfma
@@ -39,11 +43,12 @@ instructions:
       - {name: a, type: vgpr_pair}
       - {name: b, type: vgpr_pair}
       - {name: c, type: vgpr_16}
-    latency: 64
+    latency: 32
     architectures: [gfx942]
     special:
       accumulator: true
 
+  # Per ISA Table 28: V_MFMA_F32_{*}_BF8_BF8 16x16x32 = 16 cycles
   v_mfma_f32_16x16x32_bf8_bf8:
     mnemonic: v_mfma_f32_16x16x32_bf8_bf8
     category: mfma
@@ -54,11 +59,12 @@ instructions:
       - {name: a, type: vgpr_pair}
       - {name: b, type: vgpr_pair}
       - {name: c, type: vgpr_quad}
-    latency: 64
+    latency: 16
     architectures: [gfx942]
     special:
       accumulator: true
 
+  # Per ISA Table 28: V_MFMA_F32_{*}_BF8_BF8 32x32x16 = 32 cycles
   v_mfma_f32_32x32x16_bf8_bf8:
     mnemonic: v_mfma_f32_32x32x16_bf8_bf8
     category: mfma
@@ -69,12 +75,13 @@ instructions:
       - {name: a, type: vgpr_pair}
       - {name: b, type: vgpr_pair}
       - {name: c, type: vgpr_16}
-    latency: 64
+    latency: 32
     architectures: [gfx942]
     special:
       accumulator: true
 
   # Mixed precision MFMA (FP8/BF8 with F32 accumulator)
+  # Per ISA Table 28: V_MFMA_F32_{*}_FP8_BF8 16x16x32 = 16 cycles
   v_mfma_f32_16x16x32_fp8_bf8:
     mnemonic: v_mfma_f32_16x16x32_fp8_bf8
     category: mfma
@@ -85,11 +92,12 @@ instructions:
       - {name: a, type: vgpr_pair}
       - {name: b, type: vgpr_pair}
       - {name: c, type: vgpr_quad}
-    latency: 64
+    latency: 16
     architectures: [gfx942]
     special:
       accumulator: true
 
+  # Per ISA Table 28: V_MFMA_F32_{*}_BF8_FP8 16x16x32 = 16 cycles
   v_mfma_f32_16x16x32_bf8_fp8:
     mnemonic: v_mfma_f32_16x16x32_bf8_fp8
     category: mfma
@@ -100,7 +108,135 @@ instructions:
       - {name: a, type: vgpr_pair}
       - {name: b, type: vgpr_pair}
       - {name: c, type: vgpr_quad}
-    latency: 64
+    latency: 16
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_F32_{*}_BF16 32x32x8 = 32 cycles
+  v_mfma_f32_32x32x8_bf16:
+    mnemonic: v_mfma_f32_32x32x8_bf16
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_16, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_16}
+    latency: 32
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_F32_{*}_BF16 16x16x16 = 16 cycles
+  v_mfma_f32_16x16x16_bf16:
+    mnemonic: v_mfma_f32_16x16x16_bf16
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_quad, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_quad}
+    latency: 16
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_I32_{*}_I8 32x32x16 = 32 cycles
+  v_mfma_i32_32x32x16_i8:
+    mnemonic: v_mfma_i32_32x32x16_i8
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_16, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_16}
+    latency: 32
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_I32_{*}_I8 16x16x32 = 16 cycles
+  v_mfma_i32_16x16x32_i8:
+    mnemonic: v_mfma_i32_16x16x32_i8
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_quad, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_quad}
+    latency: 16
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_F32_{*}_XF32 32x32x4 = 32 cycles
+  v_mfma_f32_32x32x4_xf32:
+    mnemonic: v_mfma_f32_32x32x4_xf32
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_16, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_16}
+    latency: 32
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_F32_{*}_XF32 16x16x8 = 16 cycles
+  v_mfma_f32_16x16x8_xf32:
+    mnemonic: v_mfma_f32_16x16x8_xf32
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_quad, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_quad}
+    latency: 16
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_F64_{*}_F64 16x16x4 = 32 cycles
+  v_mfma_f64_16x16x4_f64:
+    mnemonic: v_mfma_f64_16x16x4_f64
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_8, alignment: 4}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_8}
+    latency: 32
+    architectures: [gfx942]
+    special:
+      accumulator: true
+
+  # Per ISA Table 28: V_MFMA_F64_{*}_F64 4x4x4_4B = 16 cycles
+  v_mfma_f64_4x4x4_4b_f64:
+    mnemonic: v_mfma_f64_4x4x4_4b_f64
+    category: mfma
+    format: vop3p
+    defs:
+      - {name: dst, type: vgpr_pair, alignment: 2}
+    uses:
+      - {name: a, type: vgpr_pair}
+      - {name: b, type: vgpr_pair}
+      - {name: c, type: vgpr_pair}
+    latency: 16
     architectures: [gfx942]
     special:
       accumulator: true
@@ -194,6 +330,7 @@ instructions:
       memory: true
 
   # MFMA latency for MI300
+  # Per ISA Table 28: V_MFMA_F32_{*}_F16 16x16x16 = 16 cycles
   v_mfma_f32_16x16x16_f16:
     mnemonic: v_mfma_f32_16x16x16_f16
     category: mfma
@@ -204,11 +341,12 @@ instructions:
       - {name: a, type: vgpr_pair}
       - {name: b, type: vgpr_pair}
       - {name: c, type: vgpr_quad}
-    latency: 32  # Lower than generic 64 on MI300
+    latency: 16
     architectures: [gfx942]
     special:
       accumulator: true
 
+  # Per ISA Table 28: V_MFMA_F32_{*}_F16 32x32x8 = 32 cycles
   v_mfma_f32_32x32x8_f16:
     mnemonic: v_mfma_f32_32x32x8_f16
     category: mfma

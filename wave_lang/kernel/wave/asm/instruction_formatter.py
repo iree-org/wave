@@ -35,6 +35,7 @@ from .instruction_registry import (
     OperandType,
     InstructionCategory,
     get_registry,
+    Instruction,
 )
 
 # Enable strict operand validation (fail on missing/extra operands)
@@ -336,12 +337,12 @@ class InstructionFormatter:
         comment: str,
     ) -> str:
         """Format pseudo-op."""
-        if instr_def.name == "_comment":
+        if instr_def.name == Instruction._COMMENT:
             return f"    // {comment or (uses[0] if uses else '')}"
-        elif instr_def.name == "_label":
+        elif instr_def.name == Instruction._LABEL:
             label = uses[0] if uses else comment
             return f"{label}:"
-        elif instr_def.name == "_raw_asm":
+        elif instr_def.name == Instruction._RAW_ASM:
             return uses[0] if uses else comment
         return ""
 
@@ -384,11 +385,11 @@ class InstructionFormatter:
                     line = parts[0] + " offset:" + parts[1]
 
         # Buffer instructions: special formatting
-        if instr_def.mnemonic.startswith("buffer_"):
+        if instr_def.category == InstructionCategory.VMEM:
             line = self._format_buffer_instruction(instr_def, line)
 
         # s_waitcnt: format wait count nicely
-        if instr_def.name == "s_waitcnt":
+        if instr_def.name == Instruction.S_WAITCNT:
             line = self._format_waitcnt(line, operands)
 
         return line
@@ -472,11 +473,11 @@ class InstructionFormatter:
         if lgkmcnt is not None:
             parts.append(f"lgkmcnt({lgkmcnt})")
         waitcnt_str = " ".join(parts) if parts else "0"
-        return self.format("s_waitcnt", uses=[waitcnt_str], comment=comment)
+        return self.format(Instruction.S_WAITCNT, uses=[waitcnt_str], comment=comment)
 
     def format_endpgm(self, comment: str = None) -> str:
         """Format an s_endpgm instruction."""
-        return self.format("s_endpgm", comment=comment)
+        return self.format(Instruction.S_ENDPGM, comment=comment)
 
     def format_label(self, label: str) -> str:
         """Format a label."""

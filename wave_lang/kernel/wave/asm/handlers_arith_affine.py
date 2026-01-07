@@ -14,6 +14,7 @@ from wave_lang.support.ir_imports import (
 )
 
 from .handlers_shared import *
+from .kernel_ir import KSReg
 from .kernel_model import KernelInfo
 from .utils import simplify_expression, tid_upper_bound_from_thread_id
 
@@ -228,6 +229,12 @@ class _ArithAffineHandlers:
                 ):
                     # SGPR references (e.g., "s4" for loop counter) can be used as symbol values
                     symbol_values.append(operand_value)
+                elif isinstance(operand_value, KSReg):
+                    # Virtual SGPR references (loop counters) can be used as symbol values
+                    # Convert to ks{id} symbol format for expression evaluation
+                    symbol_values.append(
+                        sympy.Symbol(f"ks{operand_value.id}", nonnegative=True)
+                    )
                 else:
                     # If we can't resolve the symbol value, we can't simplify
                     return None

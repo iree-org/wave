@@ -381,6 +381,8 @@ def build_memref_byte_offset_expr(
 
     def to_sympy(value) -> sympy.Expr:
         """Convert index value to SymPy expression."""
+        from .kernel_ir import KSReg, KPhysSReg
+
         if isinstance(value, sympy.Expr):
             return value
         if isinstance(value, int):
@@ -392,6 +394,13 @@ def build_memref_byte_offset_expr(
             if value.startswith("s") and value[1:].isdigit():
                 return sympy.Symbol(value, nonnegative=True)
             raise ValueError(f"Unknown ID string: {value}")
+        # Handle virtual SGPR (loop counter) - create symbol using virtual register id
+        # The symbol name uses ks{id} to indicate it's a virtual SGPR
+        if isinstance(value, KSReg):
+            return sympy.Symbol(f"ks{value.id}", nonnegative=True)
+        # Handle physical SGPR references
+        if isinstance(value, KPhysSReg):
+            return sympy.Symbol(f"s{value.index}", nonnegative=True)
         raise ValueError(f"Unsupported index type: {type(value)}")
 
     # Build element index expression: sum(index[i] * stride[i])

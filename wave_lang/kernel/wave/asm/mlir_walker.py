@@ -29,64 +29,6 @@ from .gather_to_shared import analyze_g2s_region, precreate_g2s_srds
 from .kernel_compilation_context import KernelCompilationContext
 
 
-class _SSAToVGPRAdapter(dict):
-    """
-    Adapter that provides dict-like access to kernel_ctx.ssa_to_reg.
-
-    This maintains backward compatibility with code that accesses
-    walker.ssa_to_vgpr[key] = (v1, v2, ...) using physical indices.
-
-    During the migration:
-    - Gets return tuple of virtual reg IDs (for comparison/iteration)
-    - Sets store into kernel_ctx.ssa_to_reg
-    """
-
-    def __init__(self, kernel_ctx: KernelCompilationContext):
-        self._ctx = kernel_ctx
-
-    def __getitem__(self, key):
-        regs = self._ctx.ssa_to_reg.get(key)
-        if regs is None:
-            raise KeyError(key)
-        # Extract IDs for backward compatibility
-        from .kernel_ir import KVReg, KSReg
-
-        return tuple(r.id if isinstance(r, (KVReg, KSReg)) else r for r in regs)
-
-    def __setitem__(self, key, value):
-        # Convert physical indices to virtual regs
-        from .kernel_ir import KVReg
-
-        if isinstance(value, tuple):
-            regs = tuple(KVReg(v) if isinstance(v, int) else v for v in value)
-            self._ctx.ssa_to_reg[key] = regs
-        else:
-            self._ctx.ssa_to_reg[key] = (value,)
-
-    def get(self, key, default=None):
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-    def __contains__(self, key):
-        return key in self._ctx.ssa_to_reg
-
-    def keys(self):
-        return self._ctx.ssa_to_reg.keys()
-
-    def values(self):
-        # Return tuples of IDs for compatibility
-        from .kernel_ir import KVReg, KSReg
-
-        for regs in self._ctx.ssa_to_reg.values():
-            yield tuple(r.id if isinstance(r, (KVReg, KSReg)) else r for r in regs)
-
-    def items(self):
-        for key in self._ctx.ssa_to_reg:
-            yield key, self[key]
-
-
 class IRWalker:
     def __init__(self, kernel_ctx: KernelCompilationContext):
         """
@@ -103,23 +45,6 @@ class IRWalker:
         self._lds_view_base_bytes: dict[str, int] = {}  # LDS view offsets
         # Initialize operation handlers
         self.handlers = OperationHandlers(self)
-
-    @property
-    def ssa_to_vgpr(self) -> dict:
-        """
-        Legacy SSA-to-VGPR mapping property.
-
-        Delegates to kernel_ctx.ssa_to_reg for actual storage.
-        During migration, handlers will be updated to use kernel_ctx directly.
-        """
-        if self.kernel_ctx is not None:
-            # Return a view that extracts physical-like indices from virtual regs
-            # This maintains backward compatibility during the migration
-            return _SSAToVGPRAdapter(self.kernel_ctx)
-        # Fallback for legacy mode (will be removed)
-        if not hasattr(self, "_legacy_ssa_to_vgpr"):
-            self._legacy_ssa_to_vgpr = {}
-        return self._legacy_ssa_to_vgpr
 
     @property
     def unified(self):

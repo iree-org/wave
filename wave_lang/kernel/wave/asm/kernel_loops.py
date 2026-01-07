@@ -7,7 +7,8 @@
 from __future__ import annotations
 from typing import List
 
-from .kernel_pipeline_shared import KRegRange, KPhysSReg, KInstr, KImm
+from .kernel_pipeline_shared import KRegRange, KInstr, KImm
+from .instruction_registry import Instruction
 
 
 class _LoopSupport:
@@ -17,31 +18,35 @@ class _LoopSupport:
 
     def begin_loop(self, lower_bound: int, upper_bound: int, step: int) -> dict:
         """
-        Begin a loop structure with physical registers for loop control.
+        Begin a loop structure with virtual registers for loop control.
 
-        Loop control registers (counter, step, upper_bound) use physical SGPRs
-        to avoid SSA violations from the loop counter update in the latch.
+        Loop control registers (counter, step, upper_bound) use virtual SGPRs
+        that are marked as loop control registers. This allows them to:
+        - Be allocated by the register allocator (no hardcoded register numbers)
+        - Be exempt from SSA validation (loop counters are re-defined in latch)
 
         Returns a loop context dict for use with emit_loop_header/latch/end.
         """
         loop_id = self._loop_counter
         self._loop_counter += 1
 
-        # Use physical SGPRs for loop control to avoid SSA violations
-        # Reserve SGPRs starting at 24 to avoid conflicts with SRDs (which use s4+)
-        # Legacy mode uses s24 for loop counter, which is known to be safe.
+        # Use VIRTUAL SGPRs for loop control - allocator picks physical regs
         # Each loop needs 3 SGPRs: counter, step, upper_bound
-        base_sgpr = 24 + loop_id * 3
-        counter_phys = KPhysSReg(base_sgpr)
-        step_phys = KPhysSReg(base_sgpr + 1)
-        upper_bound_phys = KPhysSReg(base_sgpr + 2)
+        counter_vreg = self.sreg()
+        step_vreg = self.sreg()
+        upper_bound_vreg = self.sreg()
 
-        # Initialize loop counter and bounds using physical registers
+        # Mark these as loop control registers (exempt from SSA validation)
+        self.program.register_loop_control_sreg(counter_vreg)
+        self.program.register_loop_control_sreg(step_vreg)
+        self.program.register_loop_control_sreg(upper_bound_vreg)
+
+        # Initialize loop counter and bounds using virtual registers
         self.comment(f"Initialize loop {loop_id}")
         self.program.emit(
             KInstr(
                 "s_mov_b32",
-                (counter_phys,),
+                (counter_vreg,),
                 (KImm(lower_bound),),
                 comment=f"loop {loop_id} counter = {lower_bound}",
             )
@@ -49,7 +54,7 @@ class _LoopSupport:
         self.program.emit(
             KInstr(
                 "s_mov_b32",
-                (step_phys,),
+                (step_vreg,),
                 (KImm(step),),
                 comment=f"loop {loop_id} step = {step}",
             )
@@ -57,7 +62,7 @@ class _LoopSupport:
         self.program.emit(
             KInstr(
                 "s_mov_b32",
-                (upper_bound_phys,),
+                (upper_bound_vreg,),
                 (KImm(upper_bound),),
                 comment=f"loop {loop_id} upper = {upper_bound}",
             )
@@ -65,9 +70,9 @@ class _LoopSupport:
 
         loop_ctx = {
             "loop_id": loop_id,
-            "counter_sreg": counter_phys,
-            "step_sreg": step_phys,
-            "upper_bound_sreg": upper_bound_phys,
+            "counter_sreg": counter_vreg,
+            "step_sreg": step_vreg,
+            "upper_bound_sreg": upper_bound_vreg,
             "lower_bound": lower_bound,
             "upper_bound": upper_bound,
             "step": step,
@@ -97,11 +102,13 @@ class _LoopSupport:
 
         # Branch to body if SCC=1
         self.program.emit(
-            KInstr("s_cbranch_scc1", (), (), comment=f"loop_{loop_id}_body")
+            KInstr(Instruction.S_CBRANCH_SCC1, (), (), comment=f"loop_{loop_id}_body")
         )
 
         # Branch to exit if not taken
-        self.program.emit(KInstr("s_branch", (), (), comment=f"loop_{loop_id}_exit"))
+        self.program.emit(
+            KInstr(Instruction.S_BRANCH, (), (), comment=f"loop_{loop_id}_exit")
+        )
 
         # Body label
         self.emit_label(f"loop_{loop_id}_body")
@@ -115,19 +122,22 @@ class _LoopSupport:
         # Latch label
         self.emit_label(f"loop_{loop_id}_latch")
 
-        # Increment counter - uses physical regs so no defs to track
-        # s_add_u32 with physical regs: counter += step
+        # Increment counter - counter is a loop control register so SSA
+        # validation will allow this redefinition
+        # s_add_u32: counter = counter + step
         self.program.emit(
             KInstr(
-                "_loop_inc",
-                (),
-                (counter, step),
+                Instruction._LOOP_INC,
+                (counter,),  # def: counter (redefinition allowed for loop regs)
+                (counter, step),  # uses: counter, step
                 comment=f"loop {loop_id} counter += step",
             )
         )
 
         # Branch back to header
-        self.program.emit(KInstr("s_branch", (), (), comment=f"loop_{loop_id}_header"))
+        self.program.emit(
+            KInstr(Instruction.S_BRANCH, (), (), comment=f"loop_{loop_id}_header")
+        )
 
     def end_loop(self):
         """End loop and emit exit label."""

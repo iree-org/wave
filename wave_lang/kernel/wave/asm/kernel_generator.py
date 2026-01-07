@@ -398,8 +398,20 @@ class KernelGenerator:
         return None
 
     def _handle_loop_inc(self, instr: KInstr) -> str:
-        """Handle loop increment (physical register, no def)."""
-        if len(instr.uses) >= 2:
+        """Handle loop increment (counter = counter + step)."""
+        # The counter is both defined and used - use the def for the destination
+        if len(instr.defs) >= 1 and len(instr.uses) >= 2:
+            counter = self._resolve_operand(instr.defs[0])
+            counter_use = self._resolve_operand(instr.uses[0])
+            step = self._resolve_operand(instr.uses[1])
+            return self._formatter.format(
+                "s_add_u32",
+                defs=[counter],
+                uses=[counter_use, step],
+                comment=instr.comment,
+            )
+        # Fallback for legacy format (no def, just uses)
+        elif len(instr.uses) >= 2:
             counter = self._resolve_operand(instr.uses[0])
             step = self._resolve_operand(instr.uses[1])
             return self._formatter.format(

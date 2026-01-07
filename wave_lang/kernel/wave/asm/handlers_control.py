@@ -74,9 +74,8 @@ class _ControlFlowHandlers:
         counter_sreg = loop_ctx["counter_sreg"]
 
         # Store mapping from SSA induction variable to SGPR
-        # Use string format "s{idx}" for compatibility with expression simplification
-        # The KPhysSReg has an index attribute we can use
-        kernel_info.index_env[induction_var_ssa] = f"s{counter_sreg.index}"
+        # Store the virtual SGPR directly - the utils.py to_sympy() handles KSReg
+        kernel_info.index_env[induction_var_ssa] = counter_sreg
         loop_ctx["induction_var_ssa"] = induction_var_ssa
 
         # Allocate and initialize VGPRs for iter_args (accumulators)

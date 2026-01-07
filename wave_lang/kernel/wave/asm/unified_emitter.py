@@ -7,9 +7,7 @@
 Unified instruction emitter for AMDGCN kernels.
 
 This module provides a single class that owns instruction definitions
-and emission, supporting both:
-- Direct assembly emission (legacy mode - deprecated)
-- Kernel IR emission (for whole-program register allocation)
+and emission for kernel IR (whole-program register allocation).
 
 The emitter generates methods dynamically from instruction definitions,
 ensuring consistency between the instruction registry and emission API.
@@ -18,16 +16,10 @@ All instruction formatting goes through InstructionFormatter, which is
 the SINGLE point for physical instruction rendering.
 
 Usage:
-    # Direct assembly emission (deprecated - use kernel IR instead)
-    emitter = UnifiedEmitter(architecture="gfx942", mode="direct")
-    emitter.v_add_u32(dst="v0", src0="v1", src1="v2")
-    print(emitter.get_lines())
-
-    # Kernel IR emission (preferred)
     from kernel_compilation_context import KernelCompilationContext
     ctx = KernelCompilationContext()
-    emitter = UnifiedEmitter(architecture="gfx942", mode="kernel_ir", context=ctx)
-    result = emitter.v_add_u32(src0=v1, src1=v2)  # Returns virtual register
+    # ctx.unified provides access to instruction emission methods
+    result = ctx.unified.v_add_u32(src0=v1, src1=v2)  # Returns virtual register
 """
 
 from enum import Enum, auto
@@ -38,50 +30,8 @@ from .instruction_registry import (
     InstructionDef,
     get_registry,
 )
+from .instruction_categories import InstructionCategory
 from .instruction_formatter import InstructionFormatter, get_formatter
-
-
-# ==============================================================================
-# Register Wrappers (to distinguish from immediates)
-# ==============================================================================
-
-
-class VReg:
-    """Wrapper to explicitly mark a value as a VGPR index."""
-
-    __slots__ = ("index",)
-
-    def __init__(self, index: int):
-        self.index = index
-
-    def __repr__(self):
-        return f"v{self.index}"
-
-
-class SReg:
-    """Wrapper to explicitly mark a value as an SGPR index."""
-
-    __slots__ = ("index",)
-
-    def __init__(self, index: int):
-        self.index = index
-
-    def __repr__(self):
-        return f"s{self.index}"
-
-
-class Imm:
-    """Wrapper to explicitly mark a value as an immediate."""
-
-    __slots__ = ("value",)
-
-    def __init__(self, value: int):
-        self.value = value
-
-    def __repr__(self):
-        if abs(self.value) > 0xFFFF:
-            return f"0x{self.value & 0xFFFFFFFF:x}"
-        return str(self.value)
 
 
 # ==============================================================================
@@ -92,7 +42,6 @@ class Imm:
 class EmissionMode(Enum):
     """Mode of instruction emission."""
 
-    DIRECT = auto()  # Emit directly to assembly lines (deprecated)
     KERNEL_IR = auto()  # Emit to KernelProgram via KernelCompilationContext
 
 
@@ -103,18 +52,12 @@ class EmissionMode(Enum):
 
 class UnifiedEmitter:
     """
-    Unified instruction emitter supporting both direct and kernel IR emission.
+    Unified instruction emitter for kernel IR emission.
 
     This class dynamically generates emission methods from the instruction
-    registry, providing a consistent API regardless of emission mode.
+    registry, providing a consistent API for instruction emission.
 
-    In DIRECT mode (deprecated):
-        - Methods append assembly lines to internal buffer
-        - Caller retrieves lines with get_lines()
-
-    In KERNEL_IR mode (preferred):
-        - Methods emit to a KernelCompilationContext
-        - Methods return virtual register results
+    Methods emit to a KernelCompilationContext and return virtual register results.
 
     All physical instruction formatting goes through InstructionFormatter.
     """
@@ -122,7 +65,7 @@ class UnifiedEmitter:
     def __init__(
         self,
         architecture: str = "common",
-        mode: EmissionMode = EmissionMode.DIRECT,
+        mode: EmissionMode = EmissionMode.KERNEL_IR,
         context: Any = None,  # KernelCompilationContext for KERNEL_IR mode
     ):
         self.architecture = architecture
@@ -138,7 +81,7 @@ class UnifiedEmitter:
     def _generate_methods(self) -> None:
         """Generate emission methods for all instructions in the registry."""
         for instr in self._registry:
-            if not instr.name.startswith("_"):  # Skip pseudo-ops for direct methods
+            if instr.category != InstructionCategory.PSEUDO:  # Skip pseudo-ops
                 method = self._create_emission_method(instr)
                 setattr(self, instr.name, method)
 
@@ -147,10 +90,7 @@ class UnifiedEmitter:
 
         def emit_method(*args, comment: str = None, **kwargs):
             """Emit instruction."""
-            if self.mode == EmissionMode.DIRECT:
-                return self._emit_direct(instr, args, kwargs, comment)
-            else:
-                return self._emit_kernel_ir(instr, args, kwargs, comment)
+            return self._emit_kernel_ir(instr, args, kwargs, comment)
 
         # Set docstring
         emit_method.__doc__ = f"""
@@ -163,55 +103,6 @@ class UnifiedEmitter:
 
         return emit_method
 
-    def _parse_args(self, instr: InstructionDef, args: tuple, kwargs: dict):
-        """Parse positional and keyword args into defs and uses."""
-        defs = []
-        uses = []
-
-        arg_idx = 0
-        for def_op in instr.defs:
-            if arg_idx < len(args):
-                defs.append(self._format_arg(args[arg_idx]))
-                arg_idx += 1
-            elif def_op.name in kwargs:
-                defs.append(self._format_arg(kwargs[def_op.name]))
-
-        for use_op in instr.uses:
-            if arg_idx < len(args):
-                uses.append(self._format_arg(args[arg_idx]))
-                arg_idx += 1
-            elif use_op.name in kwargs:
-                uses.append(self._format_arg(kwargs[use_op.name]))
-            elif use_op.optional:
-                uses.append(None)
-
-        return defs, uses
-
-    def _format_arg(self, value: Any) -> Any:
-        """Format an argument value, handling wrappers."""
-        if isinstance(value, VReg):
-            return f"v{value.index}"
-        if isinstance(value, SReg):
-            return f"s{value.index}"
-        if isinstance(value, Imm):
-            return repr(value)
-        return value
-
-    def _emit_direct(
-        self,
-        instr: InstructionDef,
-        args: tuple,
-        kwargs: dict,
-        comment: str,
-    ) -> None:
-        """Emit instruction directly to assembly lines using InstructionFormatter."""
-        defs, uses = self._parse_args(instr, args, kwargs)
-
-        # Use InstructionFormatter for all formatting
-        line = self._formatter.format(instr.name, defs=defs, uses=uses, comment=comment)
-        if line:
-            self._lines.append(line)
-
     def _emit_kernel_ir(
         self,
         instr: InstructionDef,
@@ -221,7 +112,7 @@ class UnifiedEmitter:
     ) -> Any:
         """Emit instruction to kernel IR via context."""
         if self.context is None:
-            raise ValueError("KernelCompilationContext required for KERNEL_IR mode")
+            raise ValueError("KernelCompilationContext required for emission")
 
         # Map instruction to context method if available
         method_name = instr.name
@@ -238,33 +129,29 @@ class UnifiedEmitter:
 
         return None
 
-    # =========================================================================
-    # Line Management
-    # =========================================================================
+    def _parse_args(self, instr: InstructionDef, args: tuple, kwargs: dict):
+        """Parse positional and keyword args into defs and uses."""
+        defs = []
+        uses = []
 
-    def get_lines(self) -> List[str]:
-        """Get all emitted assembly lines."""
-        return self._lines.copy()
+        arg_idx = 0
+        for def_op in instr.defs:
+            if arg_idx < len(args):
+                defs.append(args[arg_idx])
+                arg_idx += 1
+            elif def_op.name in kwargs:
+                defs.append(kwargs[def_op.name])
 
-    def clear(self) -> None:
-        """Clear emitted lines."""
-        self._lines.clear()
+        for use_op in instr.uses:
+            if arg_idx < len(args):
+                uses.append(args[arg_idx])
+                arg_idx += 1
+            elif use_op.name in kwargs:
+                uses.append(kwargs[use_op.name])
+            elif use_op.optional:
+                uses.append(None)
 
-    def emit_line(self, line: str) -> None:
-        """Emit a raw line (for custom formatting)."""
-        self._lines.append(line)
-
-    def emit_comment(self, text: str) -> None:
-        """Emit a comment line."""
-        self._lines.append(self._formatter.format_comment(text))
-
-    def emit_label(self, name: str) -> None:
-        """Emit a label."""
-        self._lines.append(self._formatter.format_label(name))
-
-    def emit_blank(self) -> None:
-        """Emit a blank line."""
-        self._lines.append("")
+        return defs, uses
 
     # =========================================================================
     # Convenience Methods
@@ -291,13 +178,8 @@ class UnifiedEmitter:
 
 
 # ==============================================================================
-# Factory Functions
+# Factory Function
 # ==============================================================================
-
-
-def create_direct_emitter(architecture: str = "common") -> UnifiedEmitter:
-    """Create an emitter for direct assembly emission."""
-    return UnifiedEmitter(architecture=architecture, mode=EmissionMode.DIRECT)
 
 
 def create_kernel_ir_emitter(

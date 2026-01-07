@@ -37,7 +37,7 @@ from .unified_emitter import UnifiedEmitter, EmissionMode
 
 # Instruction info
 from .instruction_categories import InstructionCategory, categorize_instruction
-from .instruction_registry import InstructionDef, get_registry
+from .instruction_registry import InstructionDef, get_registry, Instruction
 
 # Ticketing
 from .ticketing import Ticketing
@@ -290,7 +290,9 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
             )
 
             # Emit empty line for readability
-            self.program.emit(KInstr("_comment", defs=(), uses=(), comment=""))
+            self.program.emit(
+                KInstr(Instruction._COMMENT, defs=(), uses=(), comment="")
+            )
 
         self._kernargs_emitted = True
 
@@ -443,13 +445,20 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
     def wait_vmem(self, count: int = 0):
         """Emit s_waitcnt vmcnt(count) to wait for VMEM operations."""
         self.program.emit(
-            KInstr("s_waitcnt", (), (f"vmcnt({count})",), comment="wait for VMEM")
+            KInstr(
+                Instruction.S_WAITCNT, (), (f"vmcnt({count})",), comment="wait for VMEM"
+            )
         )
 
     def wait_lgkm(self, count: int = 0):
         """Emit s_waitcnt lgkmcnt(count) to wait for LDS/scalar operations."""
         self.program.emit(
-            KInstr("s_waitcnt", (), (f"lgkmcnt({count})",), comment="wait for LGKM")
+            KInstr(
+                Instruction.S_WAITCNT,
+                (),
+                (f"lgkmcnt({count})",),
+                comment="wait for LGKM",
+            )
         )
 
     # =========================================================================
@@ -494,7 +503,7 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
 
         for instr in self.program.instructions:
             # Respect externally emitted waits (e.g. from rocdl.s.waitcnt lowering).
-            if instr.name == "s_waitcnt":
+            if instr.name == Instruction.S_WAITCNT:
                 for u in instr.uses:
                     parsed = _parse_waitcnt_threshold(u)
                     if parsed is None:
@@ -689,11 +698,11 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
 
     def emit_raw(self, asm_line: str):
         """Emit a raw assembly line (escape hatch)."""
-        self.program.emit(KInstr("_raw_asm", (), (), comment=asm_line))
+        self.program.emit(KInstr(Instruction._RAW_ASM, (), (), comment=asm_line))
 
     def emit_label(self, label: str):
         """Emit a label."""
-        self.program.emit(KInstr("_label", (), (), comment=label))
+        self.program.emit(KInstr(Instruction._LABEL, (), (), comment=label))
 
     def comment(self, text: str):
         """Emit a comment."""
@@ -701,15 +710,15 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
 
     def s_mov_b32_to_m0(self, src, comment: str = None):
         """Emit s_mov_b32 m0, src (special: destination is M0)."""
-        self.program.emit(KInstr("s_mov_b32", (M0,), (src,), comment=comment))
+        self.program.emit(KInstr(Instruction.S_MOV_B32, (M0,), (src,), comment=comment))
 
     def s_cbranch_scc1(self, label: str, comment: str = None):
         """Emit s_cbranch_scc1 (label stored in comment)."""
-        self.program.emit(KInstr("s_cbranch_scc1", (), (), comment=label))
+        self.program.emit(KInstr(Instruction.S_CBRANCH_SCC1, (), (), comment=label))
 
     def s_branch(self, label: str, comment: str = None):
         """Emit s_branch (label stored in comment)."""
-        self.program.emit(KInstr("s_branch", (), (), comment=label))
+        self.program.emit(KInstr(Instruction.S_BRANCH, (), (), comment=label))
 
     # =========================================================================
     # SRD Management (for kernel IR path)
@@ -829,7 +838,12 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         result = self.vreg()
         self._prologue_wgid_x = result
         self._pending_abi_prologue.append(
-            KInstr("v_mov_b32", (result,), (KPhysSReg(2),), comment="wgid_x from s2")
+            KInstr(
+                Instruction.V_MOV_B32,
+                (result,),
+                (KPhysSReg(2),),
+                comment="wgid_x from s2",
+            )
         )
         return result
 
@@ -841,7 +855,12 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         result = self.vreg()
         self._prologue_wgid_y = result
         self._pending_abi_prologue.append(
-            KInstr("v_mov_b32", (result,), (KPhysSReg(3),), comment="wgid_y from s3")
+            KInstr(
+                Instruction.V_MOV_B32,
+                (result,),
+                (KPhysSReg(3),),
+                comment="wgid_y from s3",
+            )
         )
         return result
 
@@ -853,7 +872,12 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         result = self.vreg()
         self._prologue_wgid_z = result
         self._pending_abi_prologue.append(
-            KInstr("v_mov_b32", (result,), (KPhysSReg(4),), comment="wgid_z from s4")
+            KInstr(
+                Instruction.V_MOV_B32,
+                (result,),
+                (KPhysSReg(4),),
+                comment="wgid_z from s4",
+            )
         )
         return result
 
@@ -935,7 +959,7 @@ class KernelCompilationContext(_LoopSupport, _MFMASupport, _CompilationPasses):
         insert_pos = 0
         while insert_pos < len(self.program.instructions):
             instr = self.program.instructions[insert_pos]
-            if instr.name != "_comment":
+            if instr.name != Instruction._COMMENT:
                 break
             insert_pos += 1
 

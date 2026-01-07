@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple
 
 from .kernel_pipeline_shared import (
     KVReg,
+    KPhysVReg,
     KInstr,
     KImm,
     KRegRange,
@@ -17,6 +18,7 @@ from .kernel_pipeline_shared import (
     AllocationStats,
     KernelGenerator,
 )
+from .instruction_registry import Instruction
 
 
 class _CompilationPasses:
@@ -60,9 +62,9 @@ class _CompilationPasses:
         # Emit s_endpgm at the end of the program (if not already there)
         if (
             not self.program.instructions
-            or self.program.instructions[-1].name != "s_endpgm"
+            or self.program.instructions[-1].name != Instruction.S_ENDPGM
         ):
-            self.program.emit(KInstr("s_endpgm", defs=(), uses=()))
+            self.program.emit(KInstr(Instruction.S_ENDPGM, defs=(), uses=()))
 
         # Emit SRD prologue - moves all SRD setup to program start
         self._emit_srd_prologue()
@@ -81,19 +83,10 @@ class _CompilationPasses:
         reserved_vgprs = self.program.abi.get_reserved_vgprs()
         reserved_sgprs = self.program.abi.get_reserved_sgprs()
 
-        # IMPORTANT: Reserve physical SGPRs used for loop control.
-        #
-        # Loop emission intentionally uses *physical* SGPRs (s24+) for the loop
-        # counter/step/upper bound to avoid SSA violations from counter updates
-        # in the latch. These physical regs are not part of the ABI reserved set,
-        # so we must explicitly reserve them from allocation. Otherwise, increased
-        # SGPR pressure (e.g. enabling G2S, extra SRD copies, M0 temps) can cause
-        # the allocator to assign a virtual SGPR to s24/s25/s26, clobbering the
-        # loop counter and producing incorrect memory addresses at runtime.
-        if self._loop_counter > 0:
-            loop_sgpr_count = self._loop_counter * 3  # counter, step, upper per loop
-            reserved_sgprs = set(reserved_sgprs)  # copy in case it's not a set
-            reserved_sgprs.update(range(24, 24 + loop_sgpr_count))
+        # Note: Loop control registers are now virtual SGPRs that go through
+        # normal register allocation. They are marked as loop control registers
+        # in the program, which exempts them from SSA validation (allowing the
+        # redefinition in the loop latch). No manual reservation needed.
 
         # Allocate
         mapping, stats = allocate_kernel(
@@ -101,14 +94,6 @@ class _CompilationPasses:
             reserved_vgprs=reserved_vgprs,
             reserved_sgprs=reserved_sgprs,
         )
-
-        # Account for loop control SGPRs which use physical registers
-        # Loop control uses s24+ (3 SGPRs per loop: counter, step, upper_bound)
-        if self._loop_counter > 0:
-            max_loop_sgpr = (
-                24 + self._loop_counter * 3
-            )  # s24,s25,s26 for first loop, etc.
-            stats.peak_sgprs = max(stats.peak_sgprs, max_loop_sgpr)
 
         # Render
         generator = KernelGenerator(self.program, mapping)
@@ -141,7 +126,7 @@ class _CompilationPasses:
             next_instr = instructions[i + 1]
 
             # Check if next instruction is v_readfirstlane_b32
-            if next_instr.name != "v_readfirstlane_b32":
+            if next_instr.name != Instruction.V_READFIRSTLANE_B32:
                 continue
 
             # Check if current instruction is a VALU that writes a VGPR
@@ -155,19 +140,20 @@ class _CompilationPasses:
         # Insert s_nop instructions in reverse order to preserve indices
         for idx in reversed(insertions):
             instructions.insert(
-                idx, KInstr("s_nop", (), (KImm(0),), comment="hazard mitigation")
+                idx,
+                KInstr(Instruction.S_NOP, (), (KImm(0),), comment="hazard mitigation"),
             )
 
     def _is_valu_vgpr_write(self, instr: KInstr) -> bool:
         """Check if instruction is a VALU that writes a VGPR."""
-        # Must be a vector instruction
-        if not instr.name.startswith("v_"):
+        # Must be a VALU instruction (not MFMA which also writes VGPRs)
+        if not instr.is_valu:
             return False
         # Must have at least one def (destination)
         if not instr.defs:
             return False
         # Exclude v_readfirstlane (reads VGPR, writes SGPR)
-        if instr.name.startswith("v_readfirstlane"):
+        if instr.name == Instruction.V_READFIRSTLANE_B32:
             return False
         return True
 
@@ -236,7 +222,7 @@ class _CompilationPasses:
             # Pattern: v_add_u32 vD, vA, vB where vA was produced by v_lshlrev_b32
             # Fuse to: v_lshl_add_u32 vD, src, shift, vB
             if (
-                instr.name == "v_add_u32"
+                instr.name == Instruction.V_ADD_U32
                 and len(instr.uses) == 2
                 and len(instr.defs) == 1
             ):
@@ -249,7 +235,7 @@ class _CompilationPasses:
                     shift_instr = instructions[shift_idx]
 
                     if (
-                        shift_instr.name == "v_lshlrev_b32"
+                        shift_instr.name == Instruction.V_LSHLREV_B32
                         and len(shift_instr.uses) == 2
                         and isinstance(shift_instr.uses[0], KImm)
                         and shift_idx not in to_delete
@@ -273,7 +259,7 @@ class _CompilationPasses:
                             # Can fuse!
                             # v_lshl_add_u32 vD, src, shift, addend
                             fused = KInstr(
-                                "v_lshl_add_u32",
+                                Instruction.V_LSHL_ADD_U32,
                                 (dst,),
                                 (shift_src, shift_amt, src_b),
                                 comment=f"fused: ({shift_src} << {shift_amt.value}) + {src_b}",
@@ -288,7 +274,7 @@ class _CompilationPasses:
                     shift_instr = instructions[shift_idx]
 
                     if (
-                        shift_instr.name == "v_lshlrev_b32"
+                        shift_instr.name == Instruction.V_LSHLREV_B32
                         and len(shift_instr.uses) == 2
                         and isinstance(shift_instr.uses[0], KImm)
                         and shift_idx not in to_delete
@@ -309,7 +295,7 @@ class _CompilationPasses:
                         if uses_of_shift == 0:
                             # Can fuse!
                             fused = KInstr(
-                                "v_lshl_add_u32",
+                                Instruction.V_LSHL_ADD_U32,
                                 (dst,),
                                 (shift_src, shift_amt, src_a),
                                 comment=f"fused: ({shift_src} << {shift_amt.value}) + {src_a}",
@@ -321,7 +307,7 @@ class _CompilationPasses:
             # Pattern: v_or_b32 vD, vA, vB where vA was produced by v_lshlrev_b32
             # Fuse to: v_lshl_or_b32 vD, src, shift, vB
             if (
-                instr.name == "v_or_b32"
+                instr.name == Instruction.V_OR_B32
                 and len(instr.uses) == 2
                 and len(instr.defs) == 1
             ):
@@ -334,7 +320,7 @@ class _CompilationPasses:
                     shift_instr = instructions[shift_idx]
 
                     if (
-                        shift_instr.name == "v_lshlrev_b32"
+                        shift_instr.name == Instruction.V_LSHLREV_B32
                         and len(shift_instr.uses) == 2
                         and isinstance(shift_instr.uses[0], KImm)
                         and shift_idx not in to_delete
@@ -354,7 +340,7 @@ class _CompilationPasses:
 
                         if uses_of_shift == 0:
                             fused = KInstr(
-                                "v_lshl_or_b32",
+                                Instruction.V_LSHL_OR_B32,
                                 (dst,),
                                 (shift_src, shift_amt, src_b),
                                 comment=f"fused: ({shift_src} << {shift_amt.value}) | {src_b}",

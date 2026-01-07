@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
 
 from .kernel_compilation_context import KernelCompilationContext
 
@@ -146,10 +146,3 @@ class KernelModuleCompiler:
                 all_lines.extend(epilogue_lines)
 
         return "\n".join(all_lines)
-
-    def _extract_kernel_metadata(self, fn) -> Tuple[Tuple[int, int, int], int]:
-        """Deprecated: use mlir_analysis.extract_translation_info instead."""
-        from .mlir_analysis import extract_translation_info
-
-        ti = extract_translation_info(fn)
-        return ti.wg_size, ti.subgroup_size

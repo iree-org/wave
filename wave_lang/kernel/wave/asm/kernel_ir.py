@@ -342,6 +342,49 @@ class KInstr:
     def is_raw_asm(self) -> bool:
         return self.name == "_raw_asm"
 
+    # Category-based helpers (using registry lookup)
+    @property
+    def category(self) -> "InstructionCategory":
+        """Get the instruction category from the registry."""
+        from .instruction_registry import get_instruction_category
+
+        return get_instruction_category(self.name)
+
+    @property
+    def is_valu(self) -> bool:
+        """Check if this is a VALU instruction."""
+        from .instruction_categories import InstructionCategory
+
+        return self.category == InstructionCategory.VALU
+
+    @property
+    def is_mfma(self) -> bool:
+        """Check if this is an MFMA instruction."""
+        from .instruction_categories import InstructionCategory
+
+        return self.category == InstructionCategory.MFMA
+
+    @property
+    def is_vmem(self) -> bool:
+        """Check if this is a VMEM (buffer) instruction."""
+        from .instruction_categories import InstructionCategory
+
+        return self.category == InstructionCategory.VMEM
+
+    @property
+    def is_branch(self) -> bool:
+        """Check if this is a branch instruction."""
+        from .instruction_registry import is_branch_instruction
+
+        return is_branch_instruction(self.name)
+
+    @property
+    def is_conditional_branch(self) -> bool:
+        """Check if this is a conditional branch."""
+        from .instruction_registry import is_conditional_branch
+
+        return is_conditional_branch(self.name)
+
 
 # =============================================================================
 # Kernel Program
@@ -407,6 +450,11 @@ class KernelProgram:
     _next_vreg_id: int = field(default=0, repr=False)
     _next_sreg_id: int = field(default=0, repr=False)
 
+    # Loop control registers - these are exempt from SSA validation because
+    # loop counters are naturally re-defined in the latch. The allocator
+    # still assigns physical registers normally.
+    _loop_control_sregs: Set[int] = field(default_factory=set, repr=False)
+
     def alloc_vreg(self) -> KVReg:
         """Allocate a new virtual VGPR."""
         vreg = KVReg(self._next_vreg_id)
@@ -441,7 +489,23 @@ class KernelProgram:
 
     def emit_comment(self, text: str):
         """Emit a comment."""
-        self.emit(KInstr("_comment", (), (KImm(0),), comment=text))
+        from .instruction_registry import Instruction
+
+        self.emit(KInstr(Instruction._COMMENT, (), (KImm(0),), comment=text))
+
+    def register_loop_control_sreg(self, sreg: KSReg) -> None:
+        """
+        Mark an SGPR as a loop control register.
+
+        Loop control registers (counter, step, bound) are exempt from SSA
+        validation because they are naturally re-defined in the latch.
+        They still go through normal register allocation.
+        """
+        self._loop_control_sregs.add(sreg.id)
+
+    def is_loop_control_sreg(self, sreg: KSReg) -> bool:
+        """Check if an SGPR is a loop control register."""
+        return sreg.id in self._loop_control_sregs
 
     def __len__(self) -> int:
         return len(self.instructions)
@@ -498,124 +562,3 @@ class KernelBuilder:
     def comment(self, text: str):
         """Emit a comment."""
         self.program.emit_comment(text)
-
-    # Essential instruction emission helpers
-    # These are kept for backwards compatibility and common patterns
-
-    def v_mov_b32(self, src: KOperand, comment: str = None) -> KVReg:
-        """Emit v_mov_b32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(KInstr("v_mov_b32", (dst,), (src,), comment=comment))
-        return dst
-
-    def v_add_u32(self, src1: KOperand, src2: KOperand, comment: str = None) -> KVReg:
-        """Emit v_add_u32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(KInstr("v_add_u32", (dst,), (src1, src2), comment=comment))
-        return dst
-
-    def v_mul_lo_u32(
-        self, src1: KOperand, src2: KOperand, comment: str = None
-    ) -> KVReg:
-        """Emit v_mul_lo_u32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(KInstr("v_mul_lo_u32", (dst,), (src1, src2), comment=comment))
-        return dst
-
-    def v_and_b32(self, src1: KOperand, src2: KOperand, comment: str = None) -> KVReg:
-        """Emit v_and_b32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(KInstr("v_and_b32", (dst,), (src1, src2), comment=comment))
-        return dst
-
-    def v_or_b32(self, src1: KOperand, src2: KOperand, comment: str = None) -> KVReg:
-        """Emit v_or_b32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(KInstr("v_or_b32", (dst,), (src1, src2), comment=comment))
-        return dst
-
-    def v_lshlrev_b32(
-        self, shift: KOperand, src: KOperand, comment: str = None
-    ) -> KVReg:
-        """Emit v_lshlrev_b32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(
-            KInstr("v_lshlrev_b32", (dst,), (shift, src), comment=comment)
-        )
-        return dst
-
-    def v_lshrrev_b32(
-        self, shift: KOperand, src: KOperand, comment: str = None
-    ) -> KVReg:
-        """Emit v_lshrrev_b32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(
-            KInstr("v_lshrrev_b32", (dst,), (shift, src), comment=comment)
-        )
-        return dst
-
-    def v_bfe_u32(
-        self, src: KOperand, offset: KOperand, width: KOperand, comment: str = None
-    ) -> KVReg:
-        """Emit v_bfe_u32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(
-            KInstr("v_bfe_u32", (dst,), (src, offset, width), comment=comment)
-        )
-        return dst
-
-    def v_lshl_add_u32(
-        self, src: KOperand, shift: KOperand, addend: KOperand, comment: str = None
-    ) -> KVReg:
-        """Emit v_lshl_add_u32 and return destination vreg."""
-        dst = self.vreg()
-        self.program.emit(
-            KInstr("v_lshl_add_u32", (dst,), (src, shift, addend), comment=comment)
-        )
-        return dst
-
-    def s_mov_b32(self, src: KOperand, comment: str = None) -> KSReg:
-        """Emit s_mov_b32 and return destination sreg."""
-        dst = self.sreg()
-        self.program.emit(KInstr("s_mov_b32", (dst,), (src,), comment=comment))
-        return dst
-
-    def s_load_dwordx2(
-        self, base: KRegRange, offset: KImm, comment: str = None
-    ) -> KRegRange:
-        """Emit s_load_dwordx2 and return destination sreg range."""
-        dst = self.sreg_pair()
-        self.program.emit(
-            KInstr("s_load_dwordx2", (dst,), (base, offset), comment=comment)
-        )
-        return dst
-
-    def ds_read_b64(
-        self, addr: KVReg, offset: int = 0, comment: str = None
-    ) -> KRegRange:
-        """Emit ds_read_b64 and return destination vreg range."""
-        dst = self.vreg_pair()
-        uses = (addr,) if offset == 0 else (addr, KMemOffset(offset))
-        self.program.emit(KInstr("ds_read_b64", (dst,), uses, comment=comment))
-        return dst
-
-    def ds_write_b64(
-        self, addr: KVReg, src: KRegRange, offset: int = 0, comment: str = None
-    ):
-        """Emit ds_write_b64."""
-        uses = (addr, src) if offset == 0 else (addr, src, KMemOffset(offset))
-        self.program.emit(KInstr("ds_write_b64", (), uses, comment=comment))
-
-    def s_waitcnt(self, vmcnt: int = 0, lgkmcnt: int = 0, comment: str = None):
-        """Emit s_waitcnt."""
-        # Encode wait counts as immediate
-        waitcnt = (vmcnt & 0x3F) | ((lgkmcnt & 0xF) << 8)
-        self.program.emit(KInstr("s_waitcnt", (), (KImm(waitcnt),), comment=comment))
-
-    def s_barrier(self, comment: str = None):
-        """Emit s_barrier."""
-        self.program.emit(KInstr("s_barrier", (), (), comment=comment))
-
-    def s_endpgm(self, comment: str = None):
-        """Emit s_endpgm."""
-        self.program.emit(KInstr("s_endpgm", (), (), comment=comment))

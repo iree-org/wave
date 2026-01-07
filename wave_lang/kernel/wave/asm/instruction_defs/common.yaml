@@ -963,6 +963,58 @@ instructions:
     special:
       branch: true
 
+  s_cbranch_vccz:
+    mnemonic: s_cbranch_vccz
+    category: control
+    format: sopp
+    defs: []
+    uses:
+      - {name: label, type: label}
+    latency: 0
+    special:
+      branch: true
+      conditional: true
+      reads_vcc: true
+
+  s_cbranch_vccnz:
+    mnemonic: s_cbranch_vccnz
+    category: control
+    format: sopp
+    defs: []
+    uses:
+      - {name: label, type: label}
+    latency: 0
+    special:
+      branch: true
+      conditional: true
+      reads_vcc: true
+
+  s_cbranch_execz:
+    mnemonic: s_cbranch_execz
+    category: control
+    format: sopp
+    defs: []
+    uses:
+      - {name: label, type: label}
+    latency: 0
+    special:
+      branch: true
+      conditional: true
+      reads_exec: true
+
+  s_cbranch_execnz:
+    mnemonic: s_cbranch_execnz
+    category: control
+    format: sopp
+    defs: []
+    uses:
+      - {name: label, type: label}
+    latency: 0
+    special:
+      branch: true
+      conditional: true
+      reads_exec: true
+
   # ===========================================================================
   # Pseudo-ops (not real instructions)
   # ===========================================================================
@@ -996,3 +1048,81 @@ instructions:
     latency: 0
     special:
       raw: true
+
+  # Internal pseudo-ops for code generation
+  _srd_define:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs:
+      - {name: srd, type: sgpr_quad}
+    uses: []
+    latency: 0
+
+  _srd_copy_define:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs:
+      - {name: srd, type: sgpr_quad}
+    uses: []
+    latency: 0
+
+  _g2s_srd_copy:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _srd_load_base:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _srd_fill_size:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _srd_fill_stride:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _loop_inc:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs:
+      - {name: counter, type: sgpr}
+    uses:
+      - {name: counter, type: sgpr}
+      - {name: step, type: imm}
+    latency: 0
+
+  _mfma_acc:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0
+
+  _init_acc_quad:
+    mnemonic: ""
+    category: pseudo
+    format: pseudo
+    defs: []
+    uses: []
+    latency: 0

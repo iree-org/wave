@@ -18,7 +18,6 @@ These tests verify:
 import pytest
 from wave_lang.kernel.wave.asm.kernel_ir import (
     KernelProgram,
-    KernelBuilder,
     KInstr,
     KVReg,
     KSReg,
@@ -34,6 +33,7 @@ from wave_lang.kernel.wave.asm.kernel_ir import (
     is_sgpr,
     get_reg_class,
 )
+from wave_lang.kernel.wave.asm.instruction_registry import Instruction
 from wave_lang.kernel.wave.asm.kernel_liveness import (
     compute_liveness,
     LiveRange,
@@ -99,25 +99,29 @@ class TestKernelIR:
     def test_instruction_emission(self):
         """Test instruction emission."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
-        v1 = builder.v_mov_b32(KImm(42))
-        v2 = builder.v_add_u32(v1, KImm(1))
+        v1 = prog.alloc_vreg()
+        v2 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v1,), (KImm(42),)))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v2,), (v1, KImm(1))))
 
         assert len(prog) == 2
-        assert prog.instructions[0].name == "v_mov_b32"
-        assert prog.instructions[1].name == "v_add_u32"
+        assert prog.instructions[0].name == Instruction.V_MOV_B32
+        assert prog.instructions[1].name == Instruction.V_ADD_U32
 
-    def test_builder_helpers(self):
-        """Test builder helper methods."""
+    def test_multiple_instructions(self):
+        """Test emitting multiple instructions with KernelProgram."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
-        # Test various instruction helpers
-        v1 = builder.v_mov_b32(KImm(10))
-        v2 = builder.v_mul_lo_u32(v1, KImm(4))
-        v3 = builder.v_lshlrev_b32(KImm(2), v1)
-        v4 = builder.v_and_b32(v2, KImm(0xFF))
+        # Test register allocation and instruction emission
+        v1 = prog.alloc_vreg()
+        v2 = prog.alloc_vreg()
+        v3 = prog.alloc_vreg()
+        v4 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v1,), (KImm(10),)))
+        prog.emit(KInstr(Instruction.V_MUL_LO_U32, (v2,), (v1, KImm(4))))
+        prog.emit(KInstr(Instruction.V_LSHLREV_B32, (v3,), (KImm(2), v1)))
+        prog.emit(KInstr(Instruction.V_AND_B32, (v4,), (v2, KImm(0xFF))))
 
         assert len(prog) == 4
         assert all(isinstance(v, KVReg) for v in [v1, v2, v3, v4])
@@ -157,12 +161,13 @@ class TestLiveness:
     def test_simple_liveness(self):
         """Test liveness for a simple program."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
         # v0 = 42 (instr 0, used at 1)
         # v1 = v0 + 1 (instr 1)
-        v0 = builder.v_mov_b32(KImm(42))
-        v1 = builder.v_add_u32(v0, KImm(1))
+        v0 = prog.alloc_vreg()
+        v1 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(42),)))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
         info = compute_liveness(prog)
 
@@ -180,14 +185,16 @@ class TestLiveness:
     def test_longer_liveness(self):
         """Test liveness with longer live ranges."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
         # v0 = 10 (instr 0)
         # v1 = v0 * 2 (instr 1)
         # v2 = v0 + v1 (instr 2) <- v0 used again
-        v0 = builder.v_mov_b32(KImm(10))
-        v1 = builder.v_mul_lo_u32(v0, KImm(2))
-        v2 = builder.v_add_u32(v0, v1)
+        v0 = prog.alloc_vreg()
+        v1 = prog.alloc_vreg()
+        v2 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(10),)))
+        prog.emit(KInstr(Instruction.V_MUL_LO_U32, (v1,), (v0, KImm(2))))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v2,), (v0, v1)))
 
         info = compute_liveness(prog)
 
@@ -205,8 +212,8 @@ class TestLiveness:
 
         # Manually create an SSA violation (same reg defined twice)
         v0 = prog.alloc_vreg()
-        prog.emit(KInstr("v_mov_b32", (v0,), (KImm(1),)))
-        prog.emit(KInstr("v_mov_b32", (v0,), (KImm(2),)))  # Violation!
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(2),)))  # Violation!
 
         errors = validate_ssa(prog)
         assert len(errors) > 0
@@ -215,15 +222,17 @@ class TestLiveness:
     def test_register_pressure(self):
         """Test register pressure computation."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
         # Create overlapping live ranges to test pressure
         # v0 = 1 (def 0)
         # v1 = 2 (def 1)
         # v2 = v0 + v1 (def 2, uses v0, v1) <- pressure 3 at this point
-        v0 = builder.v_mov_b32(KImm(1))
-        v1 = builder.v_mov_b32(KImm(2))
-        v2 = builder.v_add_u32(v0, v1)
+        v0 = prog.alloc_vreg()
+        v1 = prog.alloc_vreg()
+        v2 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v1,), (KImm(2),)))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v2,), (v0, v1)))
 
         info = compute_liveness(prog)
 
@@ -238,10 +247,11 @@ class TestRegAlloc:
     def test_simple_allocation(self):
         """Test simple allocation without constraints."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
-        v0 = builder.v_mov_b32(KImm(42))
-        v1 = builder.v_add_u32(v0, KImm(1))
+        v0 = prog.alloc_vreg()
+        v1 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(42),)))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
         mapping, stats = allocate_kernel(prog)
 
@@ -257,11 +267,13 @@ class TestRegAlloc:
     def test_reserved_registers(self):
         """Test that reserved registers are not allocated."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
-        v0 = builder.v_mov_b32(KImm(42))
-        v1 = builder.v_add_u32(v0, KImm(1))
-        v2 = builder.v_add_u32(v1, KImm(2))
+        v0 = prog.alloc_vreg()
+        v1 = prog.alloc_vreg()
+        v2 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(42),)))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v2,), (v1, KImm(2))))
 
         # Reserve v0 (ABI flat tid)
         mapping, stats = allocate_kernel(prog, reserved_vgprs={0})
@@ -273,14 +285,14 @@ class TestRegAlloc:
     def test_range_allocation(self):
         """Test contiguous range allocation."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
         # Allocate a pair for ds_read_b64
-        pair = builder.vreg_pair()
-        addr = builder.v_mov_b32(KImm(0))
+        pair = prog.alloc_vreg_range(2, alignment=2)
+        addr = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (addr,), (KImm(0),)))
 
         # Emit ds_read_b64 that defines the pair
-        prog.emit(KInstr("ds_read_b64", (pair,), (addr,)))
+        prog.emit(KInstr(Instruction.DS_READ_B64, (pair,), (addr,)))
 
         mapping, stats = allocate_kernel(prog)
 
@@ -337,17 +349,22 @@ class TestRegAlloc:
         of peak_vgprs/peak_sgprs when register ranges were allocated.
         """
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
         # Allocate a single VGPR
-        v0 = builder.v_mov_b32(KImm(1))
+        v0 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(1),)))
 
         # Allocate a quad (4 VGPRs), which should push peak to at least 5
-        quad = builder.vreg_quad()
-        addr = builder.v_mov_b32(KImm(0))
+        quad = prog.alloc_vreg_range(4, alignment=4)
+        addr = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (addr,), (KImm(0),)))
 
         # Emit buffer_load_dwordx4 that defines the quad
-        prog.emit(KInstr("buffer_load_dwordx4", (quad,), (addr, KPhysSReg(4), KImm(0))))
+        prog.emit(
+            KInstr(
+                Instruction.BUFFER_LOAD_DWORDX4, (quad,), (addr, KPhysSReg(4), KImm(0))
+            )
+        )
 
         mapping, stats = allocate_kernel(prog, reserved_vgprs={0})
 
@@ -372,17 +389,21 @@ class TestRegAlloc:
     def test_allocation_failure(self):
         """Test that allocation fails gracefully with no spilling."""
         prog = KernelProgram(max_vgprs=4)
-        builder = KernelBuilder(prog)
 
         # Create many overlapping live ranges to exhaust registers
         regs = []
         for i in range(6):
-            regs.append(builder.v_mov_b32(KImm(i)))
+            v = prog.alloc_vreg()
+            prog.emit(KInstr(Instruction.V_MOV_B32, (v,), (KImm(i),)))
+            regs.append(v)
 
         # Use all of them at once to prevent reuse
-        result = builder.v_add_u32(regs[0], regs[1])
+        result = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_ADD_U32, (result,), (regs[0], regs[1])))
         for r in regs[2:]:
-            result = builder.v_add_u32(result, r)
+            new_result = prog.alloc_vreg()
+            prog.emit(KInstr(Instruction.V_ADD_U32, (new_result,), (result, r)))
+            result = new_result
 
         # With only 4 VGPRs, this should fail
         with pytest.raises(AllocationError):
@@ -395,10 +416,11 @@ class TestRenderer:
     def test_simple_render(self):
         """Test rendering a simple program."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
-        v0 = builder.v_mov_b32(KImm(42))
-        v1 = builder.v_add_u32(v0, KImm(1))
+        v0 = prog.alloc_vreg()
+        v1 = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (v0,), (KImm(42),)))
+        prog.emit(KInstr(Instruction.V_ADD_U32, (v1,), (v0, KImm(1))))
 
         mapping, _ = allocate_kernel(prog, reserved_vgprs={0})
         asm = render_program(prog, mapping)
@@ -410,10 +432,11 @@ class TestRenderer:
     def test_render_with_ranges(self):
         """Test rendering instructions with register ranges."""
         prog = KernelProgram()
-        builder = KernelBuilder(prog)
 
-        addr = builder.v_mov_b32(KImm(0))
-        pair = builder.ds_read_b64(addr, offset=8)
+        addr = prog.alloc_vreg()
+        prog.emit(KInstr(Instruction.V_MOV_B32, (addr,), (KImm(0),)))
+        pair = prog.alloc_vreg_range(2, alignment=2)
+        prog.emit(KInstr(Instruction.DS_READ_B64, (pair,), (addr, KMemOffset(8))))
 
         mapping, _ = allocate_kernel(prog, reserved_vgprs={0})
         asm = render_program(prog, mapping)
